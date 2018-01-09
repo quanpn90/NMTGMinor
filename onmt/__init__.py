@@ -1,5 +1,4 @@
 import onmt.Constants
-import onmt.Models
 from onmt.Translator import Translator
 from onmt.OnlineTranslator import OnlineTranslator
 from onmt.Dataset import Dataset
