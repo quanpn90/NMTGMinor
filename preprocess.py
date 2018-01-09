@@ -56,10 +56,12 @@ parser.add_argument('-tgt_seq_length_trunc', type=int, default=0,
 
 parser.add_argument('-shuffle',    type=int, default=1,
                     help="Shuffle data")
+                    
 parser.add_argument('-seed',       type=int, default=3435,
                     help="Random seed")
 
 parser.add_argument('-lower', action='store_true', help='lowercase data')
+parser.add_argument('-join_vocab', action='store_true', help='Using one dictionary for both source and target')
 
 parser.add_argument('-report_every', type=int, default=100000,
                     help="Report status every this many sentences")
@@ -67,6 +69,26 @@ parser.add_argument('-report_every', type=int, default=100000,
 opt = parser.parse_args()
 
 torch.manual_seed(opt.seed)
+
+def makeJoinVocabulary(filenames, size):
+    
+    vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
+                       onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
+                      lower=opt.lower)
+    
+    for filename in filenames:
+        print("Reading file %s ... " % filename)
+        with open(filename) as f:
+            for sent in f.readlines():
+                for word in sent.split():
+                    vocab.add(word)
+
+    originalSize = vocab.size()
+    vocab = vocab.prune(size)
+    print('Created dictionary of size %d (pruned from %d)' %
+          (vocab.size(), originalSize))
+
+    return vocab
 
 
 def makeVocabulary(filename, size):
@@ -87,7 +109,7 @@ def makeVocabulary(filename, size):
     return vocab
 
 
-def initVocabulary(name, dataFile, vocabFile, vocabSize):
+def initVocabulary(name, dataFile, vocabFile, vocabSize, join=False):
 
     vocab = None
     if vocabFile is not None:
@@ -98,9 +120,15 @@ def initVocabulary(name, dataFile, vocabFile, vocabSize):
         print('Loaded ' + str(vocab.size()) + ' ' + name + ' words')
 
     if vocab is None:
+        
         # If a dictionary is still missing, generate it.
-        print('Building ' + name + ' vocabulary...')
-        genWordVocab = makeVocabulary(dataFile, vocabSize)
+        if join:
+            
+            print('Building ' + 'shared' + ' vocabulary...')
+            genWordVocab = makeJoinVocabulary(dataFile, vocabSize)
+        else:
+            print('Building ' + name + ' vocabulary...')
+            genWordVocab = makeVocabulary(dataFile, vocabSize)
 
         vocab = genWordVocab
 
@@ -202,12 +230,17 @@ def main():
 
     dicts = {}
     
-    dicts['src'] = initVocabulary('source', opt.train_src, opt.src_vocab,
-                                  opt.src_vocab_size)
+    if opt.join_vocab:
+        dicts['src'] = initVocabulary('source', [opt.train_src, opt.train_tgt], opt.src_vocab,
+                                      opt.src_vocab_size, join=True)
+        dicts['tgt'] = dicts['src']
+    else:
+        dicts['src'] = initVocabulary('source', opt.train_src, opt.src_vocab,
+                                      opt.src_vocab_size)
 
-    dicts['tgt'] = initVocabulary('target', opt.train_tgt, opt.tgt_vocab,
-                                  opt.tgt_vocab_size)
-
+        dicts['tgt'] = initVocabulary('target', opt.train_tgt, opt.tgt_vocab,
+                                      opt.tgt_vocab_size)
+                                      
     print('Preparing training ...')
     train = {}
     train['src'], train['tgt'] = makeData(opt.train_src, opt.train_tgt,
@@ -219,8 +252,8 @@ def main():
     valid = {}
     valid['src'], valid['tgt'] = makeData(opt.valid_src, opt.valid_tgt,
                                           dicts['src'], dicts['tgt'], 
-                                          max_src_length=256, 
-                                          max_tgt_length=256)
+                                          max_src_length=max(256,opt.src_seq_length), 
+                                          max_tgt_length=max(256,opt.tgt_seq_length))
 
     if opt.src_vocab is None:
         saveVocabulary('source', dicts['src'], opt.save_data + '.src.dict')

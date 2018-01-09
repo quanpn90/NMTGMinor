@@ -79,12 +79,14 @@ class Optim(object):
         self.lr_decay = lr_decay
         self.start_decay_at = start_decay_at
         self.start_decay = False
+        self._step = 0
 
     def step(self):
         "Compute gradients norm."
         if self.max_grad_norm:
             clip_grad_norm(self.params, self.max_grad_norm)
         self.optimizer.step()
+        self._step += 1
 
     def updateLearningRate(self, ppl, epoch):
         """
@@ -107,4 +109,3 @@ class Optim(object):
     def setLearningRate(self, lr):
         self.optimizer.param_groups[0]['lr'] = lr
         self.lr = lr
-        

@@ -94,7 +94,8 @@ parser.add_argument('-curriculum', action="store_true",
 parser.add_argument('-extra_shuffle', action="store_true",
                     help="""By default only shuffle mini-batch order; when true,
                     shuffle and re-assign mini-batches""")
-
+parser.add_argument('-virtual_gpu', type=int, default=1,
+                    help='Number of virtual gpus. The trainer will try to mimic asynchronous multi-gpu training')
 # learning rate
 parser.add_argument('-learning_rate', type=float, default=1.0,
                     help="""Starting learning rate. If adagrad/adadelta/adam is
@@ -120,6 +121,8 @@ parser.add_argument('-beta2', type=float, default=0.98,
 # pretrained word vectors
 parser.add_argument('-tie_weights', action='store_true',
                     help='Tie the weights of the encoder and decoder layer')
+parser.add_argument('-join_embedding', action='store_true',
+                    help='Jointly train the embedding of encoder and decoder in one weight')
 parser.add_argument('-pre_word_vecs_enc',
                     help="""If a valid path is specified, then this will load
                     pretrained word embeddings on the encoder side.
@@ -139,8 +142,7 @@ parser.add_argument('-log_interval', type=int, default=100,
                     help="Print stats at this interval.")
 parser.add_argument('-save_every', type=int, default=-1,
                     help="Save every this interval.")
-parser.add_argument('-uneven_batch', action='store_true',
-                    help='Use imbalance mini_batches (default: all source sentences have the same length)')
+
 opt = parser.parse_args()
 
 print(opt)
@@ -152,168 +154,6 @@ if opt.gpus:
     cuda.set_device(opt.gpus[0])
 
 torch.manual_seed(opt.seed)
-
-
-
-def eval(model, criterion, data):
-    total_loss = 0
-    total_words = 0
-    
-
-    model.eval()
-    with torch.no_grad():
-        for i in range(len(data)):
-            batch = data[i]
-            outputs = model(batch)
-            # exclude <s> from targets
-            targets = batch[1][1:]
-            
-            loss_data, _ = criterion(outputs, targets, backward=False)
-
-            total_loss += loss_data
-            total_words += targets.data.ne(onmt.Constants.PAD).sum()
-
-    model.train()
-    return total_loss / total_words
-
-
-def trainModel(model, trainData, validData, dataset, optim):
-    print(model)
-    model.train()
-
-    # Define criterion of each GPU.
-    criterion = NMTLossFunc(model.generator, dataset['dicts']['tgt'].size(), 
-                                        label_smoothing=opt.label_smoothing,
-                                        shard_size=opt.max_generator_batches)
-    
-    print(criterion)    
-    
-    if len(opt.gpus) >= 1:
-        criterion = criterion.cuda()
-
-    start_time = time.time()
-
-    def trainEpoch(epoch, batchOrder=None):
-
-        if opt.extra_shuffle and epoch > opt.curriculum:
-            trainData.shuffle()
-
-        # Shuffle mini batch order.
-        
-        if not batchOrder:
-            batchOrder = torch.randperm(len(trainData))
-
-        total_loss, total_words = 0, 0
-        report_loss, report_tgt_words = 0, 0
-        report_src_words = 0
-        start = time.time()
-        nSamples = len(trainData)
-        for i in range(nSamples):
-
-            batchIdx = batchOrder[i] if epoch > opt.curriculum else i
-            # Exclude original indices.
-            batch = trainData[batchIdx]
-
-            model.zero_grad()
-            
-            hiddens = model(batch)
-            # Exclude <s> from targets.
-            targets = batch[1][1:]
-            
-            loss_data, grad_hiddens = criterion(hiddens, targets, backward=True)
-            
-            hiddens.backward(grad_hiddens)
-            
-
-            # Update the parameters.
-            optim.step()
-
-            num_words = targets.data.ne(onmt.Constants.PAD).sum()
-            report_loss += loss_data
-            report_tgt_words += num_words
-            report_src_words += batch[0].data.ne(onmt.Constants.PAD).sum()
-            total_loss += loss_data
-            total_words += num_words
-            
-            
-            if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
-                print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ;" +
-                       "%5.0f src tok/s; %5.0f tgt tok/s; %6.0f s elapsed") %
-                      (epoch, i+1, len(trainData),
-                       math.exp(report_loss / report_tgt_words),
-                       optim.getLearningRate(),
-                       report_src_words/(time.time()-start),
-                       report_tgt_words/(time.time()-start),
-                       time.time()-start_time))
-
-                report_loss, report_tgt_words = 0, 0
-                report_src_words = 0
-                start = time.time()
-            
-            if opt.save_every > 0 and i % opt.save_every == -1 % opt.save_every :
-                valid_loss = eval(model, criterion, validData)
-                valid_ppl = math.exp(min(valid_loss, 100))
-                print('Validation perplexity: %g' % valid_ppl)
-                
-                
-                model_state_dict = (model.module.state_dict() if len(opt.gpus) > 1
-                else model.state_dict())
-                
-                #  drop a checkpoint
-                ep = float(epoch) - 1 + (i + 1) / nSamples
-                checkpoint = {
-                        'model': model_state_dict,
-                        'dicts': dataset['dicts'],
-                        'opt': opt,
-                        'epoch': ep,
-                        'iteration' : i,
-                        'batchOrder' : batchOrder,
-                        'optim': optim
-                }
-                
-                file_name = '%s_ppl_%.2f_e%.2f.pt'
-                print('Writing to %s_ppl_%.2f_e%.2f.pt' % (opt.save_model, valid_ppl, ep))
-                torch.save(checkpoint,
-                         file_name
-                         % (opt.save_model, valid_ppl, epoch))
-        return total_loss / total_words
-    
-    valid_loss = eval(model, criterion, validData)
-    valid_ppl = math.exp(min(valid_loss, 100))
-    print('Validation perplexity: %g' % valid_ppl)
-
-    for epoch in range(opt.start_epoch, opt.start_epoch + opt.epochs):
-        print('')
-
-        #  (1) train for one epoch on the training set
-        train_loss = trainEpoch(epoch)
-        train_ppl = math.exp(min(train_loss, 100))
-        print('Train perplexity: %g' % train_ppl)
-
-        #  (2) evaluate on the validation set
-        valid_loss = eval(model, criterion, validData)
-        valid_ppl = math.exp(min(valid_loss, 100))
-        print('Validation perplexity: %g' % valid_ppl)
-
-        model_state_dict = (model.module.state_dict() if len(opt.gpus) > 1
-                            else model.state_dict())
-        
-        #  (3) drop a checkpoint
-        checkpoint = {
-            'model': model_state_dict,
-            'dicts': dataset['dicts'],
-            'opt': opt,
-            'epoch': epoch,
-            'iteration' : -1,
-            'batchOrder' : None,
-            'optim': optim
-        }
-        
-			
-        print('Writing to %s_ppl_%.2f_e%d.pt' % (opt.save_model, valid_ppl, epoch))
-        torch.save(checkpoint,
-                   '%s_ppl_%.2f_e%d.pt' 
-                   % (opt.save_model, valid_ppl, epoch))
 
 
 def main():
@@ -371,14 +211,26 @@ def main():
         optim = checkpoint['optim']
         print(optim)
         
+    loss_function = NMTLossFunc(model.generator, dataset['dicts']['tgt'].size(), 
+                                        label_smoothing=opt.label_smoothing,
+                                        shard_size=opt.max_generator_batches)
     
-
+    if len(opt.gpus) >= 1:
+        loss_function = loss_function.cuda()
+    
     optim.set_parameters(model.parameters())
+    
+    print(model)
+    print(loss_function)
 
     nParams = sum([p.nelement() for p in model.parameters()])
     print('* number of parameters: %d' % nParams)
+    
+    trainer = XETrainer(model, loss_function, trainData, validData, dataset, optim, opt)
+    
+    trainer.run()
         
-    trainModel(model, trainData, validData, dataset, optim)
+    #~ trainModel(model, trainData, validData, dataset, optim)
 
 
 if __name__ == "__main__":

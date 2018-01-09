@@ -12,8 +12,8 @@ class TransformerEncoder(nn.Module):
     """Encoder in 'Attention is all you need'
     
     Args:
-        opt
-        dicts 
+        opt: list of options ( see train.py )
+        dicts : dictionary (for source language)
         
     """
     

@@ -34,3 +34,7 @@ class NMTModel(nn.Module):
         
     def tie_weights(self):
         self.generator.linear.weight = self.decoder.word_lut.weight
+        
+    
+    def share_enc_dec_embedding(self):
+        self.encoder.word_lut.weight = self.decoder.word_lut.weight

@@ -48,7 +48,11 @@ def build_model(opt, dicts):
         
      # Weight tying between decoder input and output embedding:
     if opt.tie_weights:  
-       model.tie_weights()
+        model.tie_weights()
+       
+    if opt.join_embedding:
+        print("Joining the weights of encoder and decoder word embeddings")
+        model.share_enc_dec_embedding()
     
     return model
     
@@ -58,6 +62,7 @@ def init_model_parameters(model, opt):
         for p in model.parameters():
             p.data.uniform_(-opt.param_init, opt.param_init)
     else:
+        # We initialize the model parameters with Xavier init
         xavier = torch.nn.init.xavier_uniform
         xavier(model.generator.linear.weight)
         xavier(model.encoder.word_lut.weight)
