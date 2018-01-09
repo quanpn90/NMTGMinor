@@ -64,7 +64,7 @@ class XETrainer(BaseTrainer):
                 'optim': optim
         }
         
-        file_name = '%s_ppl_%.2f_e%.2f.pt' % (opt.save_model, valid_ppl, ep)
+        file_name = '%s_ppl_%.2f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
         print('Writing to %s' % filename)
         torch.save(checkpoint, file_name)
         
@@ -213,7 +213,7 @@ class XETrainer(BaseTrainer):
             print('Validation perplexity: %g' % valid_ppl)
             
             
-            self.save(epoch, valid_ppl, batchOrder=batchOrder)
+            self.save(epoch, valid_ppl)
             
 
         
