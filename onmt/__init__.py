@@ -7,4 +7,4 @@ from onmt.Dict import Dict
 from onmt.Beam import Beam
 
 # For flake8 compatibility.
-__all__ = [onmt.Constants, onmt.Models, Translator, OnlineTranslator, Dataset, Optim, NoamOptim, Dict, Beam]
+__all__ = [onmt.Constants, Translator, OnlineTranslator, Dataset, Optim, NoamOptim, Dict, Beam]
