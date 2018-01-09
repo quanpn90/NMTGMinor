@@ -65,7 +65,7 @@ class XETrainer(BaseTrainer):
         }
         
         file_name = '%s_ppl_%.2f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
-        print('Writing to %s' % filename)
+        print('Writing to %s' % file_name)
         torch.save(checkpoint, file_name)
         
     def eval(self, data):
