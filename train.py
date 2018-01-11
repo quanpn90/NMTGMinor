@@ -166,6 +166,8 @@ def main():
         print('Loading dicts from checkpoint at %s' % dict_checkpoint)
         checkpoint = torch.load(dict_checkpoint)
         dataset['dicts'] = checkpoint['dicts']
+    else:
+        checkpoint = None
 
     trainData = onmt.Dataset(dataset['train']['src'],
                              dataset['train']['tgt'], opt.batch_size, opt.gpus,
@@ -191,10 +193,10 @@ def main():
         model.load_state_dict(checkpoint['model'])
         opt.start_epoch = checkpoint['epoch'] + 1
 
-    if len(opt.gpus) >= 1:
-        model.cuda()
-    else:
-        model.cpu()
+    #~ if len(opt.gpus) >= 1:
+        #~ model.cuda()
+    #~ else:
+        #~ model.cpu()
     
     
 
@@ -202,20 +204,20 @@ def main():
         
         init_model_parameters(model, opt)
 
-        optim = onmt.NoamOptim(opt)
-    else:
-        print('Loading optimizer from checkpoint:')
-        optim = checkpoint['optim']
-        print(optim)
+        #~ optim = onmt.NoamOptim(opt)
+    #~ else:
+        #~ print('Loading optimizer from checkpoint:')
+        #~ optim = checkpoint['optim']
+        #~ print(optim)
         
     loss_function = NMTLossFunc(dataset['dicts']['tgt'].size(), 
                                         label_smoothing=opt.label_smoothing,
                                         shard_size=opt.max_generator_batches)
     
-    if len(opt.gpus) >= 1:
-        loss_function = loss_function.cuda()
+    #~ if len(opt.gpus) >= 1:
+        #~ loss_function = loss_function.cuda()
     
-    optim.set_parameters(model.parameters())
+    #~ optim.set_parameters(model.parameters())
     
     print(model)
     print(loss_function)
@@ -223,9 +225,11 @@ def main():
     nParams = sum([p.nelement() for p in model.parameters()])
     print('* number of parameters: %d' % nParams)
     
+    optim = None
+    
     trainer = XETrainer(model, loss_function, trainData, validData, dataset, optim, opt)
     
-    trainer.run()
+    trainer.run(checkpoint=checkpoint)
         
     #~ trainModel(model, trainData, validData, dataset, optim)
 

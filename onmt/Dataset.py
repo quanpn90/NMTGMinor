@@ -10,8 +10,8 @@ class Dataset(object):
     '''
     batchSize is now changed to have word semantic (probably better)
     '''
-    def __init__(self, srcData, tgtData, batchSize, cuda,
-                 volatile=False, data_type="text", balance=False, n_gpu=1, max_seq_num=128):
+    def __init__(self, srcData, tgtData, batchSize, gpus,
+                 volatile=False, data_type="text", balance=False, max_seq_num=128):
         self.src = srcData
         self._type = data_type
         if tgtData:
@@ -19,9 +19,9 @@ class Dataset(object):
             assert(len(self.src) == len(self.tgt))
         else:
             self.tgt = None
-        self.cuda = cuda
+        self.cuda = (len(gpus) > 0)
         self.fullSize = len(self.src)
-        self.n_gpu = n_gpu
+        self.n_gpu = len(gpus)
 
         self.batchSize = batchSize
         #~ self.numBatches = math.ceil(len(self.src)/batchSize)
@@ -159,10 +159,7 @@ class Dataset(object):
         batch_split = zip(batch[0].split(split_size, dim=1), 
                           batch[1].split(split_size, dim=1))
                           
-        #~ variable_batch_split = []
         
-        #~ for i, b in enumerate(batch_split):
-            #~ variable_batch_split.append([Variable(b[0]), Variable(b[1])])
         batch_split = [ [b[0], b[1]] for  i, b in enumerate(batch_split) ] 
        
         return batch_split

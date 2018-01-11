@@ -128,7 +128,7 @@ class NMTLossFunc(LossFuncBase):
             # actual loss function between the predictive distribution and target
             loss_t, loss_data_t = self._compute_loss(dist_t, target_t)
 
-            loss_data += loss_data_t
+            loss_data += loss_data_t[0]
             
             # backward from loss
             # note: we only compute the gradients w.r.t the outputs 

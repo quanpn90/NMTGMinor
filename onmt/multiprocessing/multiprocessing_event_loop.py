@@ -17,7 +17,9 @@ class MultiprocessingEventLoop(object):
 
     def __init__(self, device_ids=None, multiprocessing_method='spawn'):
         super().__init__()
+        
         self.device_ids = tuple(device_ids)
+        # print(device_ids)
         self.num_replicas = len(device_ids)
         self.rank = None
 

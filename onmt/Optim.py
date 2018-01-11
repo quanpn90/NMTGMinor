@@ -55,12 +55,19 @@ class NoamOptim(object):
         return self.lr
         
     def state_dict(self):
-        return self.optimizer.state_dict()
+        state_dict = self.optimizer.state_dict()
+        state_dict['_step'] = self._step
+        return state_dict
         
     def load_state_dict(self, state_dict):
         
+        self._step = state_dict['_step']
+        
+        state_dict.pop('_step', None)
         self.optimizer.load_state_dict(state_dict)
       
+    def zero_grad(self):
+        self.optimizer.zero_grad()
       
 class Optim(object):
 

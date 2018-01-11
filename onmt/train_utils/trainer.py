@@ -13,6 +13,7 @@ import math
 import time, datetime
 import random 
 import numpy as np
+from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 
 class BaseTrainer(object):
     
@@ -29,6 +30,8 @@ class BaseTrainer(object):
         
         self.loss_function = loss_function
         self.start_time = 0
+        
+        self.runner = MultiprocessingRunner(opt, model, loss_function, device_ids=opt.gpus)
         
     def run(self, *args,**kwargs):
         
@@ -53,10 +56,9 @@ class XETrainer(BaseTrainer):
 
     def save(self, epoch, valid_ppl, batchOrder=None, iteration=-1):
         
-        model, opt, dataset = self.model, self.opt, self.dataset
-        optim = self.optim
+        opt, dataset = self.opt, self.dataset
         
-        model_state_dict = model.state_dict()
+        model_state_dict, optim_state_dict = self.runner.state_dict()
                 
         #  drop a checkpoint
         checkpoint = {
@@ -66,7 +68,7 @@ class XETrainer(BaseTrainer):
                 'epoch': epoch,
                 'iteration' : iteration,
                 'batchOrder' : batchOrder,
-                'optim': optim
+                'optim': optim_state_dict
         }
         
         file_name = '%s_ppl_%.2f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
@@ -77,42 +79,48 @@ class XETrainer(BaseTrainer):
         total_loss = 0
         total_words = 0
         
-        self.model.eval()
+        #~ self.model.eval()
         
         batch_order = data.create_order(random=False)
         """ New semantics of PyTorch: save space by not creating gradients """
         with torch.no_grad():
             for i in range(len(data)):
-                batch = data.next()[0]
+                #~ batch = data.next()[0]
                 
-                self.to_variable(batch)
+                #~ self.to_variable(batch)
                     
+                samples = data.next()
                 
                 """ outputs can be either 
                         hidden states from decoder or
                         prob distribution from decoder generator
                 """
-                outputs = self.model(batch)
-                # exclude <s> from targets
-                targets = batch[1][1:]
                 
-                loss_data, _ = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
-
+                logging_outputs = self.runner.step(samples, eval=True)
+                
+                loss_data = logging_outputs['loss']
+                ooms = logging_outputs['oom']
+                #~ outputs = self.model(batch)
+                #~ # exclude <s> from targets
+                #~ targets = batch[1][1:]
+                #~ 
+                #~ loss_data, _ = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
+#~ 
                 total_loss += loss_data
-                total_words += targets.data.ne(onmt.Constants.PAD).sum()
+                total_words += logging_outputs['tgt_size']
 
-        self.model.train()
+        #~ self.model.train()
         return total_loss / total_words
         
     def train_epoch(self, epoch, batchOrder=None, iteration=None):
         
         opt = self.opt
         trainData = self.trainData
-        model = self.model
-        optim = self.optim
+        #~ model = self.model
+        #~ optim = self.optim
         
         # Clear the gradients of the model
-        model.zero_grad()
+        self.runner.zero_grad()
 
         if opt.extra_shuffle and epoch > opt.curriculum:
             trainData.shuffle()
@@ -142,32 +150,20 @@ class XETrainer(BaseTrainer):
             #~ batch = trainData[batchIdx]
             curriculum = (epoch < opt.curriculum)
             
-            batch = trainData.next(curriculum=curriculum)[0]
+            samples = trainData.next(curriculum=curriculum)
             
-            #~ if self.cuda:
-            #~ self.to_cuda(batch)
-            self.to_variable(batch)
-
-
-            hiddens = model(batch)
-            # Exclude <s> from targets.
-            targets = batch[1][1:]
+            logging_outputs = self.runner.step(samples)
+            loss_data = logging_outputs['loss']
+            ooms = logging_outputs['oom']
             
-            # Compute loss with the loss function
-            loss_data, grad_hiddens = self.loss_function(hiddens, targets, generator=self.model.generator, backward=True)
-            
-            # We only compute the gradients of loss w.r.t to the hiddens in the last step
-            # So we continue to backward from there
-            hiddens.backward(grad_hiddens)
-            
-            counter = counter + 1
+            counter = counter + 1 
             
             # We only update the parameters after getting gradients from n mini-batches
             # simulating the multi-gpu situation
             if counter == opt.virtual_gpu:
                 # Update the parameters.
-                optim.step()
-                model.zero_grad()
+                self.runner.update_parameters()
+                self.runner.zero_grad()
                 counter = 0
                 if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
                     valid_loss = self.eval(self.validData)
@@ -179,13 +175,14 @@ class XETrainer(BaseTrainer):
                     self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
             
 
-            num_words = targets.data.ne(onmt.Constants.PAD).sum()
+            num_words = logging_outputs['tgt_size']
             report_loss += loss_data
             report_tgt_words += num_words
-            report_src_words += batch[0].data.ne(onmt.Constants.PAD).sum()
+            report_src_words += logging_outputs['src_size']
             total_loss += loss_data
             total_words += num_words
             
+            optim = self.runner.get_optim()
             num_updates = optim._step
             
             
@@ -209,7 +206,7 @@ class XETrainer(BaseTrainer):
     
     
     
-    def run(self):
+    def run(self, checkpoint=None):
         valid_loss = self.eval(self.validData)
         valid_ppl = math.exp(min(valid_loss, 100))
         print('Validation perplexity: %g' % valid_ppl)
