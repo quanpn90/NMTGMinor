@@ -87,7 +87,7 @@ parser.add_argument('-label_smoothing', type=float, default=0.0,
                     help='Label smoothing value for loss functions.')
 parser.add_argument('-scheduled_sampling_rate', type=float, default=0.0,
                     help='Scheduled sampling rate.')
-parser.add_argument('-curriculum', action="store_true",
+parser.add_argument('-curriculum', type=int, default=-1,
                     help="""For this many epochs, order the minibatches based
                     on source sequence length. Sometimes setting this to 1 will
                     increase convergence speed.""")
@@ -196,9 +196,6 @@ def main():
     else:
         model.cpu()
     
-
-    if len(opt.gpus) > 1:
-        model = nn.DataParallel(model, device_ids=opt.gpus, dim=1)
     
 
     if not opt.load_from:
@@ -211,7 +208,7 @@ def main():
         optim = checkpoint['optim']
         print(optim)
         
-    loss_function = NMTLossFunc(model.generator, dataset['dicts']['tgt'].size(), 
+    loss_function = NMTLossFunc(dataset['dicts']['tgt'].size(), 
                                         label_smoothing=opt.label_smoothing,
                                         shard_size=opt.max_generator_batches)
     

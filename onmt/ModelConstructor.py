@@ -27,7 +27,7 @@ def build_model(opt, dicts):
     elif opt.model == 'transformer':
         # raise NotImplementedError
         
-        max_size = 256
+        max_size = 256 # This should be the longest sentence from the dataset
         
         from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer
         from onmt.modules.Transformer.Layers import PositionalEncoding
@@ -45,6 +45,8 @@ def build_model(opt, dicts):
         
     else:
         raise NotImplementedError
+        
+    #~ model.generator = generator 
         
      # Weight tying between decoder input and output embedding:
     if opt.tie_weights:  

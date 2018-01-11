@@ -11,7 +11,7 @@ class Dataset(object):
     batchSize is now changed to have word semantic (probably better)
     '''
     def __init__(self, srcData, tgtData, batchSize, cuda,
-                 volatile=False, data_type="text", balance=False, max_seq_num=128):
+                 volatile=False, data_type="text", balance=False, n_gpu=1, max_seq_num=128):
         self.src = srcData
         self._type = data_type
         if tgtData:
@@ -21,6 +21,7 @@ class Dataset(object):
             self.tgt = None
         self.cuda = cuda
         self.fullSize = len(self.src)
+        self.n_gpu = n_gpu
 
         self.batchSize = batchSize
         #~ self.numBatches = math.ceil(len(self.src)/batchSize)
@@ -36,19 +37,20 @@ class Dataset(object):
 
     #~ # This function allocates the mini-batches (grouping sentences with the same size)
     def allocateBatch(self):
-			
+            
         # The sentence pairs are sorted by source already (cool)
         self.batches = []
         
         cur_batch = [0]
-        cur_batch_size = self.src[0].size(0)
+        cur_batch_size = self.tgt[0].size(0)
         
         for i in range(1, self.fullSize):
             
-            sentence_length = self.src[i].size(0)
+            sentence_length = self.tgt[i].size(0)
+            
+            
             # if the current length makes the batch exceeds
             # the we create a new batch
-            
             if ( cur_batch_size + sentence_length > self.batchSize ) or len(cur_batch) == self.max_seq_num:
                 self.batches.append(cur_batch) # add this batch into the batch list
                 cur_batch = [] # reset the current batch
@@ -63,7 +65,7 @@ class Dataset(object):
             self.batches.append(cur_batch)
         
         self.numBatches = len(self.batches)
-				
+                
     def _batchify(self, data, align_right=False,
                   include_lengths=False, dtype="text"):
         lengths = [x.size(0) for x in data]
@@ -78,8 +80,8 @@ class Dataset(object):
         else:
             return out
         
-				
-				
+                
+                
     def __getitem__(self, index):
         assert index < self.numBatches, "%d > %d" % (index, self.numBatches)
         
@@ -104,23 +106,75 @@ class Dataset(object):
             b = torch.stack(b, 0)
             if dtype == "text":
                 b = b.t().contiguous()
-            if self.cuda:
-                b = b.cuda()
-            b = Variable(b)
+            #~ if self.cuda:
+                #~ b = b.cuda()
+            #~ b = Variable(b)
             return b
 
         srcTensor = wrap(srcBatch, self._type)
         tgtTensor = wrap(tgtBatch, "text")
         
         
-        return (srcTensor, tgtTensor)
+        return [srcTensor, tgtTensor]
        
 
     def __len__(self):
         return self.numBatches
+        
+    def create_order(self, random=True):
+        
+        if random:
+            self.batchOrder = torch.randperm(self.numBatches)
+        else:
+            self.batchOrder = torch.arange(self.numBatches).long()
+        self.cur_index = 0
+        
+        return self.batchOrder
+        
+    def next(self, curriculum=False, reset=True, split_sizes=1):
+        
+         # reset iterator if reach data size limit
+        if self.cur_index >= self.numBatches:
+            
+            if reset:
+                self.cur_index = 0
+            else: return None
+        
+        if curriculum:
+            batch_index = self.cur_index
+        else:
+            batch_index = self.batchOrder[self.cur_index]
+            
+        batch = self[batch_index]
+        
+        # move the iterator one step
+        self.cur_index += 1
+        
+        #split that batch to number of gpus
+        
+        samples = []
+        split_size = int(math.ceil(batch[0].size(1) / self.n_gpu))  
+        
+        #~ batch_split_0
+        batch_split = zip(batch[0].split(split_size, dim=1), 
+                          batch[1].split(split_size, dim=1))
+                          
+        #~ variable_batch_split = []
+        
+        #~ for i, b in enumerate(batch_split):
+            #~ variable_batch_split.append([Variable(b[0]), Variable(b[1])])
+        batch_split = [ [b[0], b[1]] for  i, b in enumerate(batch_split) ] 
+       
+        return batch_split
+    
 
     def shuffle(self):
         data = list(zip(self.src, self.tgt))
         self.src, self.tgt = zip(*[data[i] for i in torch.randperm(len(data))])
+        
+    def setIndex(iteration):
+        
+        assert iteration >= 0 and iteration < self.numBatches
+        self.cur_index = iteration
 
 # class AugmentedDataset(object):

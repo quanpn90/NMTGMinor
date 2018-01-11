@@ -18,11 +18,10 @@ class LossFuncBase(nn.Module):
         output_size: number of words in vocabulary()
     """
     
-    def __init__(self, generator, output_size):
+    def __init__(self, output_size):
         super(LossFuncBase, self).__init__()
         self.output_size = output_size
         self.padding_idx = onmt.Constants.PAD
-        self.generator = generator
     
     def _compute_loss(self, scores, targets):
         return NotImplementedError
@@ -46,8 +45,8 @@ class NMTLossFunc(LossFuncBase):
     """
     Standard NMT Loss Computation.
     """
-    def __init__(self, generator, output_size, label_smoothing=0.0, shard_size=1):
-        super(NMTLossFunc, self).__init__(generator, output_size)
+    def __init__(self, output_size, label_smoothing=0.0, shard_size=1):
+        super(NMTLossFunc, self).__init__(output_size)
         self.shard_split = shard_size
         
         if label_smoothing > 0:
@@ -99,32 +98,43 @@ class NMTLossFunc(LossFuncBase):
         return (loss, loss_data)
         
    
-    def forward(self, hiddens, targets, backward=False):
+    def forward(self, outputs, targets, generator=None, backward=False):
         """
         Compute the loss. Subclass must define this method.
         Args:
              
-            dists: the predict output from the model. time x batch x vocab_size
+            outputs: the predictive output from the model. time x batch x vocab_size
+                                                   or time x batch x hidden_size 
             target: the validate target to compare output with. time x batch
+            generator: in case we want to save memory and 
             **kwargs(optional): additional info for computing loss.
         """
-        hiddens = torch.autograd.Variable(hiddens.data, requires_grad=(backward))
         
-        hiddens_split = torch.split(hiddens, self.shard_split)
+        if generator is not None:
+            outputs = torch.autograd.Variable(outputs.data, requires_grad=(backward))
+        
+        outputs_split = torch.split(outputs, self.shard_split)
         targets_split = torch.split(targets, self.shard_split)
         
         loss_data = 0
-        for i, (hiddens_t, target_t) in enumerate(zip(hiddens_split, targets_split)):
-        
-            dist_t = self.generator(hiddens_t)
+        for i, (outputs_t, target_t) in enumerate(zip(outputs_split, targets_split)):
             
+            # if the generator is provided then transform
+            if generator is not None:
+                dist_t = generator(outputs_t)
+            else:
+                dist_t = outputs_t 
+            
+            # actual loss function between the predictive distribution and target
             loss_t, loss_data_t = self._compute_loss(dist_t, target_t)
 
             loss_data += loss_data_t
-
+            
+            # backward from loss
+            # note: we only compute the gradients w.r.t the outputs 
             if backward:
                 loss_t.backward()
             
-        grad_hiddens = None if hiddens.grad is None else hiddens.grad.data
+        grad_outputs = None if outputs.grad is None else outputs.grad.data
         
-        return loss_data, grad_hiddens
+        return loss_data, grad_outputs

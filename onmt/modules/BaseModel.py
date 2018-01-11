@@ -26,13 +26,14 @@ class Generator(nn.Module):
 
 class NMTModel(nn.Module):
 
-    def __init__(self, encoder, decoder, generator):
+    def __init__(self, encoder, decoder, generator=None):
         super(NMTModel, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.generator = generator        
         
     def tie_weights(self):
+        assert self.generator is not None, "The generator needs to be created before sharing weights"
         self.generator.linear.weight = self.decoder.word_lut.weight
         
     

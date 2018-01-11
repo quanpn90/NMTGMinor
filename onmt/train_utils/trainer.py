@@ -25,6 +25,7 @@ class BaseTrainer(object):
         self.dataset = dataset
         self.optim = optim 
         self.opt = opt
+        self.cuda = (len(opt.gpus) >= 1)
         
         self.loss_function = loss_function
         self.start_time = 0
@@ -37,21 +38,25 @@ class BaseTrainer(object):
         
         raise NotImplementedError
         
+    def to_variable(self, data):
+        
+        for i, t in enumerate(data):
+            if self.cuda:
+                data[i] = Variable(data[i].cuda())
+            else:
+                data[i] = Variable(data[i])
+        
+        
        
 
 class XETrainer(BaseTrainer):
 
-    #~ def __init__(self, model, loss_function, trainSets, validSets, dataset, optim, opt):
-        
-        #~ super(BaseTrainer, self).__init__(model, loss_function, trainSets, validSets, dataset, optim,opt)
-        #~ BaseTrainer.__init__(self, model, loss_function, trainSets, validSets, dataset, optim, opt)
     def save(self, epoch, valid_ppl, batchOrder=None, iteration=-1):
         
         model, opt, dataset = self.model, self.opt, self.dataset
         optim = self.optim
         
-        model_state_dict = (model.module.state_dict() if len(opt.gpus) > 1
-                else model.state_dict())
+        model_state_dict = model.state_dict()
                 
         #  drop a checkpoint
         checkpoint = {
@@ -73,10 +78,15 @@ class XETrainer(BaseTrainer):
         total_words = 0
         
         self.model.eval()
+        
+        batch_order = data.create_order(random=False)
         """ New semantics of PyTorch: save space by not creating gradients """
         with torch.no_grad():
             for i in range(len(data)):
-                batch = data[i]
+                batch = data.next()[0]
+                
+                self.to_variable(batch)
+                    
                 
                 """ outputs can be either 
                         hidden states from decoder or
@@ -86,7 +96,7 @@ class XETrainer(BaseTrainer):
                 # exclude <s> from targets
                 targets = batch[1][1:]
                 
-                loss_data, _ = self.loss_function(outputs, targets, backward=False)
+                loss_data, _ = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
 
                 total_loss += loss_data
                 total_words += targets.data.ne(onmt.Constants.PAD).sum()
@@ -94,7 +104,7 @@ class XETrainer(BaseTrainer):
         self.model.train()
         return total_loss / total_words
         
-    def train_epoch(self, epoch, batchOrder=None):
+    def train_epoch(self, epoch, batchOrder=None, iteration=None):
         
         opt = self.opt
         trainData = self.trainData
@@ -109,7 +119,12 @@ class XETrainer(BaseTrainer):
 
         # Shuffle mini batch order.
         if not batchOrder:
-            batchOrder = torch.randperm(len(trainData))
+            batchOrder = trainData.create_order()
+        else:
+            trainData.batchOrder = batchOrder
+            
+        if iteration is not None and iteration > -1:
+            trainData.set_index(iteration)
 
         total_loss, total_words = 0, 0
         report_loss, report_tgt_words = 0, 0
@@ -122,9 +137,16 @@ class XETrainer(BaseTrainer):
         
         for i in range(nSamples):
 
-            batchIdx = batchOrder[i] if epoch > opt.curriculum else i
+            #~ batchIdx = batchOrder[i] if epoch > opt.curriculum else i
             # Exclude original indices.
-            batch = trainData[batchIdx]
+            #~ batch = trainData[batchIdx]
+            curriculum = (epoch < opt.curriculum)
+            
+            batch = trainData.next(curriculum=curriculum)[0]
+            
+            #~ if self.cuda:
+            #~ self.to_cuda(batch)
+            self.to_variable(batch)
 
 
             hiddens = model(batch)
@@ -132,7 +154,7 @@ class XETrainer(BaseTrainer):
             targets = batch[1][1:]
             
             # Compute loss with the loss function
-            loss_data, grad_hiddens = self.loss_function(hiddens, targets, backward=True)
+            loss_data, grad_hiddens = self.loss_function(hiddens, targets, generator=self.model.generator, backward=True)
             
             # We only compute the gradients of loss w.r.t to the hiddens in the last step
             # So we continue to backward from there
