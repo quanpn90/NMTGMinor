@@ -14,67 +14,22 @@ import time, datetime
 import random 
 import numpy as np
 from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
-
-class BaseTrainer(object):
-    
-    def __init__(self, model, loss_function, trainData, validData, dataset, optim, opt):
-        
-        self.model = model
-        self.trainData = trainData
-        self.validData = validData
-        self.dicts = dataset['dicts']
-        self.dataset = dataset
-        # self.optim = optim 
-        self.opt = opt
-        self.cuda = (len(opt.gpus) >= 1)
-        
-        self.loss_function = loss_function
-        self.start_time = 0
-        
-        
-        
-    def run(self, *args,**kwargs):
-        
-        raise NotImplementedError    
-    
-    def eval(self, data):
-        
-        raise NotImplementedError
-        
-    def to_variable(self, data):
-        
-        for i, t in enumerate(data):
-            if self.cuda:
-                data[i] = Variable(data[i].cuda())
-            else:
-                data[i] = Variable(data[i])
-
-        return data
-            
+from onmt.train_utils.trainer import BaseTrainer
 
 
-class XETrainer(BaseTrainer):
+class MultiGPUXETrainer(BaseTrainer):
 
     def __init__(self, model, loss_function, trainData, validData, dataset, optim, opt):
         super().__init__(model, loss_function, trainData, validData, dataset, optim, opt)
-        self.optim = onmt.NoamOptim(opt)
         
-        if self.cuda:
-           torch.cuda.set_device(self.opt.gpus[0])
-           torch.manual_seed(self.opt.seed)
-           self.loss_function = self.loss_function.cuda()
-           self.model = self.model.cuda()
-        
-        self.optim.set_parameters(self.model.parameters())
+        # create a multi-gpu runner here 
+        self.runner = MultiprocessingRunner(opt, model, loss_function, device_ids=opt.gpus)
 
     def save(self, epoch, valid_ppl, batchOrder=None, iteration=-1):
         
         opt, dataset = self.opt, self.dataset
-        model = self.model
-        
 
-        model_state_dict = self.model.state_dict()
-        optim_state_dict = self.optim.state_dict()
+        model_state_dict, optim_state_dict = self.runner.state_dict()
                 
         #  drop a checkpoint
         checkpoint = {
@@ -96,29 +51,27 @@ class XETrainer(BaseTrainer):
         total_words = 0
                 
         batch_order = data.create_order(random=False)
-        self.model.eval()
         """ New semantics of PyTorch: save space by not creating gradients """
         with torch.no_grad():
             for i in range(len(data)):
                     
                 samples = data.next()
                 
-                batch = self.to_variable(samples[0])
-                
                 """ outputs can be either 
                         hidden states from decoder or
                         prob distribution from decoder generator
                 """
-                outputs = self.model(batch)
-                targets = batch[1][1:]
                 
-                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
+                logging_outputs = self.runner.step(samples, eval=True)
+                
+                loss_data = logging_outputs['loss']
+                ooms = logging_outputs['oom']
                 
 #~ 
                 total_loss += loss_data
-                total_words += targets.data.ne(onmt.Constants.PAD).sum()
+                total_words += logging_outputs['tgt_size']
 
-        self.model.train()
+        #~ self.model.train()
         return total_loss / total_words
         
     def train_epoch(self, epoch, batchOrder=None, iteration=None):
@@ -127,8 +80,7 @@ class XETrainer(BaseTrainer):
         trainData = self.trainData
         
         # Clear the gradients of the model
-        # self.runner.zero_grad()
-        self.model.zero_grad()
+        self.runner.zero_grad()
 
         if opt.extra_shuffle and epoch > opt.curriculum:
             trainData.shuffle()
@@ -141,7 +93,6 @@ class XETrainer(BaseTrainer):
             
         if iteration is not None and iteration > -1:
             trainData.set_index(iteration)
-            print("Resuming from iteration: %d" % iteration)
 
         total_loss, total_words = 0, 0
         report_loss, report_tgt_words = 0, 0
@@ -154,22 +105,16 @@ class XETrainer(BaseTrainer):
         
         for i in range(nSamples):
 
+            #~ batchIdx = batchOrder[i] if epoch > opt.curriculum else i
+            # Exclude original indices.
+            #~ batch = trainData[batchIdx]
             curriculum = (epoch < opt.curriculum)
             
             samples = trainData.next(curriculum=curriculum)
-                        
-            batch = self.to_variable(samples[0])
             
-            outputs = self.model(batch)
-                
-            targets = batch[1][1:]
-            
-            loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=True)
-            
-            outputs.backward(grad_outputs)
-            
-            src_size = batch[0].data.ne(onmt.Constants.PAD).sum()
-            tgt_size = targets.data.ne(onmt.Constants.PAD).sum()
+            logging_outputs = self.runner.step(samples)
+            loss_data = logging_outputs['loss']
+            ooms = logging_outputs['oom']
             
             counter = counter + 1 
             
@@ -177,8 +122,8 @@ class XETrainer(BaseTrainer):
             # simulating the multi-gpu situation
             if counter == opt.virtual_gpu:
                 # Update the parameters.
-                self.optim.step()
-                self.model.zero_grad()
+                self.runner.update_parameters()
+                self.runner.zero_grad()
                 counter = 0
                 if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
                     valid_loss = self.eval(self.validData)
@@ -190,14 +135,14 @@ class XETrainer(BaseTrainer):
                     self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
             
 
-            num_words = tgt_size
+            num_words = logging_outputs['tgt_size']
             report_loss += loss_data
             report_tgt_words += num_words
-            report_src_words += src_size
+            report_src_words += logging_outputs['src_size']
             total_loss += loss_data
             total_words += num_words
             
-            optim = self.optim
+            optim = self.runner.get_optim()
             num_updates = optim._step
             
             
@@ -227,22 +172,12 @@ class XETrainer(BaseTrainer):
         opt = self.opt
         model = self.model
         dataset = self.dataset
-        optim = self.optim
+        # optim = self.optim
         
         if checkpoint is not None:
             print('Loading model and optim from checkpoint at %s' % opt.load_from)
-            self.model.load_state_dict(checkpoint['model'])
-            self.optim.load_state_dict(checkpoint['optim'])
-            batchOrder = checkpoint['batchOrder']
-            iteration = checkpoint['iteration'] + 1
-            opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))   
-            del checkpoint['model']
-            del checkpoint['optim']
-            del checkpoint
-        else:
-            batchOrder = None
-            iteration = None
-        
+                  
+            self.runner.load_state_dict(checkpoint)
         
         valid_loss = self.eval(self.validData)
         valid_ppl = math.exp(min(valid_loss, 100))
@@ -254,8 +189,7 @@ class XETrainer(BaseTrainer):
             print('')
 
             #  (1) train for one epoch on the training set
-            train_loss = self.train_epoch(epoch, batchOrder=batchOrder,
-                                                 iteration=iteration)
+            train_loss = self.train_epoch(epoch)
             train_ppl = math.exp(min(train_loss, 100))
             print('Train perplexity: %g' % train_ppl)
 
@@ -266,11 +200,3 @@ class XETrainer(BaseTrainer):
             
             
             self.save(epoch, valid_ppl)
-            batchOrder = None
-            iteration = None
-        
-        
-        
-    
-    
-    

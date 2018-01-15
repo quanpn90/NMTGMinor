@@ -42,11 +42,11 @@ class Dataset(object):
         self.batches = []
         
         cur_batch = [0]
-        cur_batch_size = self.tgt[0].size(0)
+        cur_batch_size = self.src[0].size(0)
         
         for i in range(1, self.fullSize):
             
-            sentence_length = self.tgt[i].size(0)
+            sentence_length = self.src[i].size(0)
             
             
             # if the current length makes the batch exceeds
@@ -106,9 +106,7 @@ class Dataset(object):
             b = torch.stack(b, 0)
             if dtype == "text":
                 b = b.t().contiguous()
-            #~ if self.cuda:
-                #~ b = b.cuda()
-            #~ b = Variable(b)
+           
             return b
 
         srcTensor = wrap(srcBatch, self._type)
@@ -155,12 +153,12 @@ class Dataset(object):
         samples = []
         split_size = int(math.ceil(batch[0].size(1) / self.n_gpu))  
         
-        #~ batch_split_0
+        # maybe we need a more smart splitting function ?
         batch_split = zip(batch[0].split(split_size, dim=1), 
                           batch[1].split(split_size, dim=1))
                           
         
-        batch_split = [ [b[0], b[1]] for  i, b in enumerate(batch_split) ] 
+        batch_split = [ [b[0], b[1]] for i, b in enumerate(batch_split) ] 
        
         return batch_split
     

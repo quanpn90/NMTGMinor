@@ -43,6 +43,7 @@ def build_model(opt, dicts):
         model = Transformer(encoder, decoder, generator)    
         
         
+        
     else:
         raise NotImplementedError
         
@@ -69,3 +70,4 @@ def init_model_parameters(model, opt):
         xavier(model.generator.linear.weight)
         xavier(model.encoder.word_lut.weight)
         xavier(model.decoder.word_lut.weight)
+    

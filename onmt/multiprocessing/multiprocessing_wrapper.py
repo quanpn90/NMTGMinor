@@ -70,8 +70,9 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         if not torch.cuda.is_available():
             raise NotImplementedError('Training on CPU is not supported')
             
+        print("Initializing multi-gpu training with %d devices" % self.num_replicas)
+            
         model = model.share_memory()    
-        #~ loss_function = loss_function.share_memory() # is this necessary ? maybe not 
         nccl_uid = nccl.get_unique_id()
         self.loss_function = loss_function
         
@@ -82,6 +83,10 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         ])
         
         self._grads_initialized = False
+        
+        self.initialize_gradients()
+        
+        self.set_seed(opt.seed)
         
     def _async_init(self, rank, device_id, args, model, loss_function, nccl_uid):
         """Initialize child processes."""
@@ -104,7 +109,7 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         self.loss = None
         self._max_bsz_seen = 0    
     
-        print("GPU %d initialized successfully" % device_id)
+        # print("GPU %d initialized successfully" % device_id)
     
     def _build_optimizer(self):
         
@@ -130,9 +135,9 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         
     def state_dict(self):
         """Save a checkpoint for the current model."""
-        return self.call_async(0, '_async_state_dict', filename=filename, extra_info=extra_info).gen()
+        return self.call_async(0, '_async_state_dict').gen()
     
-    def _async_state_dict(self, rank, device_id, filename, extra_info):
+    def _async_state_dict(self, rank, device_id):
         
         model_state_dict = self.model.state_dict()
         optim_state_dict = self.optimizer.state_dict()
@@ -174,6 +179,8 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
             self.model.train()
 
         logging_output, loss_data, oom = {}, 0, False
+        logging_output['src_size'] = 0
+        logging_output['tgt_size'] = 0
         if self._sample is not None:
             try:
                 # calculate loss and sample size
@@ -200,8 +207,6 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
                     print('| WARNING: ran out of memory on GPU #{}, skipping batch'.format(device_id))
                     sys.stdout.flush()
                     oom = True
-                    logging_output['src_size'] = 0
-                    logging_output['tgt_size'] = 0
                     if hasattr(torch.cuda, 'empty_cache'):
                         torch.cuda.empty_cache()
                 else:
@@ -212,8 +217,7 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         return loss_data, logging_output, oom
         
     def update_parameters(self):
-        #~ for rank in range(self.num_replicas):
-            #~ self.call_async(rank, '_async_update')  
+ 
         Future.gen_tuple_list([
             self.call_async(rank, '_async_update')
             for rank in range(self.num_replicas)
@@ -222,6 +226,7 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
     def _async_update(self, rank, device_id):
         
         try:
+            self._all_reduce_and_rescale_grads()
             self.optimizer.step()
         except RuntimeError as e:
             if 'out of memory' in str(e):
@@ -232,9 +237,6 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         return [0]
         
     def zero_grad(self):
-        
-        #~ for rank in range(self.num_replicas):
-            #~ self.call_async(rank, '_async_zero_grad')
         
         Future.gen_tuple_list([
             self.call_async(rank, '_async_zero_grad')
@@ -248,16 +250,15 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         
     def step(self, samples, eval=False):
         
-        self._scatter_samples(samples)
+        self._scatter_samples(samples,replace_empty_samples=False)
         
         # call the async forward function
         losses, logging_outputs, ooms = Future.gen_tuple_list([
-            self.call_async(rank, '_async_forward')
+            self.call_async(rank, '_async_forward', eval=eval)
             for rank in range(self.num_replicas)
         ])
         
         logging_output = aggregate_logging_outputs(logging_outputs)
-        # print(losses)
         loss = aggregate_loss(losses)
         
         logging_output['oom'] = sum(ooms)
@@ -274,7 +275,9 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         else:
             # pad by cycling through the given samples
             samples = list(islice(cycle(samples), self.num_replicas))
-
+        
+        assert len(samples) == self.num_replicas
+        
         Future.gen_list([
             self.call_async(rank, '_async_prepare_sample', sample=samples[rank])
             for rank in range(self.num_replicas)
@@ -292,13 +295,37 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
 
             self._sample = prepare_sample(sample, device=device_id)
     
+    def initialize_gradients(self):
+    
+        Future.gen_tuple_list([
+            self.call_async(rank, '_async_initialize_gradients')
+            for rank in range(self.num_replicas)
+        ])
+        self._grads_initialized = True
+        
             
+    def _async_initialize_gradients(self, rank, device_id):
+        """
+        Since Torch lazily initialize the gradients with None
+        We need a dummy forward / backward pass to get all variables' gradients initialized
+        """
+        for p in self.model.parameters():
+            # p.grad = Variable(p.data.new(*p.size()).zero_())
+            if not hasattr(p.grad, 'data'):
+                dummy_loss = 0
+                for this_para in self.model.parameters():
+                    dummy_loss += torch.mean(this_para)
+                dummy_loss.backward()
+                break
+        self.model.zero_grad()    
+        return [0]
+        
     
     
-    
-    def _all_reduce_and_rescale_grads(self, grad_denom=1, buffer_size=10485760):
+    def _all_reduce_and_rescale_grads(self, grad_denom=1, buffer_size=1048576000):
         """All-reduce and rescale gradients in chunks of the specified size."""
         grads = [p.grad.data for p in self.model.parameters() if p.requires_grad]
+        # sys.stdout.flush()
         buffer_t = grads[0].new(math.ceil(buffer_size / grads[0].element_size())).zero_()
         buffer = []
 

@@ -5,22 +5,33 @@ from torch.autograd import Variable
 from onmt.modules.LayerNorm import LayerNorm
 import torch.nn.init as init
 import torch.nn.utils.weight_norm as WeightNorm
+import onmt 
 
 class XavierLinear(nn.Module):
     
     ''' Simple Linear layer with xavier init '''
-    def __init__(self, d_in, d_out, bias=True, weight_norm=True):
+    def __init__(self, d_in, d_out, bias=True):
         super(Linear, self).__init__()
         linear = nn.Linear(d_in, d_out, bias=bias)
+        self.weight_norm = onmt.Constants.weight_norm
         
-        if weight_norm:
+        if self.weight_norm:
             self.linear = WeightNorm(linear, name='weight')
         else:
             self.linear = linear
             
         init.xavier_uniform(self.linear.weight)
+        
+
     def forward(self, x):
         return self.linear(x)
+        
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + 'in_features=' + str(self.linear.in_features) \
+            + ', out_features=' + str(self.linear.out_features) \
+            + ', bias=' + str(self.linear.bias is not None) \
+            + ', weight_norm=' + str(self.weight_norm) + ')'
         
 
 Linear = XavierLinear

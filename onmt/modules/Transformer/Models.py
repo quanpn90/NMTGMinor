@@ -33,7 +33,7 @@ class TransformerEncoder(nn.Module):
                                      self.model_size,
                                      padding_idx=onmt.Constants.PAD)
         
-        self.emb_drop_layer = nn.Dropout(opt.dropout)
+        self.emb_drop_layer = nn.Dropout(opt.emb_dropout)
         
         self.positional_encoder = positional_encoder
         
@@ -91,7 +91,7 @@ class TransformerDecoder(nn.Module):
         self.word_dropout = opt.word_dropout 
         self.attn_dropout = opt.attn_dropout
         
-        self.emb_drop_layer = nn.Dropout(opt.dropout)
+        self.emb_drop_layer = nn.Dropout(opt.emb_dropout)
         
         self.word_lut = nn.Embedding(dicts.size(),
                                      self.model_size,
