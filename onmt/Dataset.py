@@ -32,6 +32,8 @@ class Dataset(object):
         
         # if self.balance:
         self.allocateBatch()
+        self.cur_index = 0
+        self.batchOrder = None
         # else:
             # self.numBatches = math.ceil(len(self.src)/batchSize)
 
@@ -138,7 +140,7 @@ class Dataset(object):
                 self.cur_index = 0
             else: return None
         
-        if curriculum:
+        if curriculum or self.batchOrder is None:
             batch_index = self.cur_index
         else:
             batch_index = self.batchOrder[self.cur_index]
@@ -167,7 +169,7 @@ class Dataset(object):
         data = list(zip(self.src, self.tgt))
         self.src, self.tgt = zip(*[data[i] for i in torch.randperm(len(data))])
         
-    def setIndex(iteration):
+    def set_index(self, iteration):
         
         assert iteration >= 0 and iteration < self.numBatches
         self.cur_index = iteration

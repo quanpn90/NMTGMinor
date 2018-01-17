@@ -46,6 +46,10 @@ parser.add_argument('-dump_beam', type=str, default="",
 parser.add_argument('-n_best', type=int, default=1,
                     help="""If verbose is set, will output the n_best
                     decoded sentences""")
+parser.add_argument('-alpha', type=float, default=0.6,
+                    help="""Length Penalty coefficient""")
+parser.add_argument('-beta', type=float, default=0.3,
+                    help="""Coverage penalty coefficient""")
 parser.add_argument('-print_nbest', action='store_true',
                     help='Output the n-best list instead of a single sentence')
 parser.add_argument('-normalize', action='store_true',
@@ -74,7 +78,7 @@ def main():
     
     # Always pick n_best
     opt.n_best = opt.beam_size
-		
+        
     
     if opt.output == "stdout":
         outF = sys.stdout
@@ -92,17 +96,17 @@ def main():
     if opt.dump_beam != "":
         import json
         translator.initBeamAccum()
-		
-		# here we are trying to 
+        
+        # here we are trying to 
     inFile = None
     if(opt.src == "stdin"):
-			inFile = sys.stdin
-			opt.batch_size = 1
+            inFile = sys.stdin
+            opt.batch_size = 1
     else:
       inFile = open(opt.src)
-		
+        
     translator = onmt.Translator(opt)
-		
+        
     for line in addone(inFile):
         if line is not None:
             srcTokens = line.split()
@@ -137,9 +141,9 @@ def main():
             goldWordsTotal += numGoldWords
             
         for b in range(len(predBatch)):
-						
+                        
             count += 1
-						
+                        
             if not opt.print_nbest:
                 outF.write(" ".join(predBatch[b][0]) + '\n')
                 outF.flush()
@@ -169,10 +173,10 @@ def main():
                 print('')
 
         srcBatch, tgtBatch = [], []
-		
+        
     if opt.verbose:
-			reportScore('PRED', predScoreTotal, predWordsTotal)
-			if tgtF: reportScore('GOLD', goldScoreTotal, goldWordsTotal)
+            reportScore('PRED', predScoreTotal, predWordsTotal)
+            if tgtF: reportScore('GOLD', goldScoreTotal, goldWordsTotal)
                 
 
     if tgtF:

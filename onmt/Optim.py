@@ -1,12 +1,27 @@
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm
 
+def normalize_gradients(parameters, denom):
+    
+    """ early return if no need to normalize """
+    if denom == 1:
+        return
+    
+    parameters = list(filter(lambda p: p.grad is not None, parameters))
+    
+    denom = float(denom)
+    
+    for p in parameters:
+        p.grad.data.div_(denom)
+
 
 class NoamOptim(object):
 
     def set_parameters(self, params):
         self.params = list(params)  # careful: params may be a generator
-        self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9)
+        self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                                    weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+        print(self.optimizer)
         
     # def __init__(self, lr, max_grad_norm=0,
                  # model_size=512, warmup_steps=4096):
@@ -20,16 +35,34 @@ class NoamOptim(object):
         self.warmup_steps=opt.warmup_steps
         self.beta1 = opt.beta1
         self.beta2 = opt.beta2
-    
-    def step(self):
+        self.weight_decay = opt.weight_decay
+        self.amsgrad = opt.amsgrad 
+            
+    def step(self, grad_denom=None):
+        
+        "Normalize gradients by batch size"
+        self.normalize_grad(denom=grad_denom)
+        
         "Compute gradients norm."
         if self.max_grad_norm:
             clip_grad_norm(self.params, self.max_grad_norm)
+            
             
         "Automatically scale learning rate over learning period"
         self.updateLearningRate()
         self.optimizer.step()
         
+        """Reset the denom for normalization"""
+    def normalize_grad(self, denom=None):
+        
+        if denom is None:
+            denom = 1
+        
+        #~ if self.num_accumulated_samples == 0:
+            #~ denom = 1
+        #~ else:
+            #~ denom = self.num_accumulated_samples
+        normalize_gradients(self.params, denom)
     
     def updateLearningRate(self):
         """

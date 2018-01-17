@@ -15,12 +15,17 @@ import random
 import numpy as np
 from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 from onmt.train_utils.trainer import BaseTrainer
+from onmt.utils import torch_persistent_save
+from onmt.ModelConstructor import init_model_parameters
 
 
 class MultiGPUXETrainer(BaseTrainer):
 
-    def __init__(self, model, loss_function, trainData, validData, dataset, optim, opt):
-        super().__init__(model, loss_function, trainData, validData, dataset, optim, opt)
+    def __init__(self, model, loss_function, trainData, validData, dataset, opt):
+        super().__init__(model, loss_function, trainData, validData, dataset, opt)
+        
+        print('Initializing model parameters')
+        init_model_parameters(model, opt)
         
         # create a multi-gpu runner here 
         self.runner = MultiprocessingRunner(opt, model, loss_function, device_ids=opt.gpus)
@@ -29,22 +34,24 @@ class MultiGPUXETrainer(BaseTrainer):
         
         opt, dataset = self.opt, self.dataset
 
-        model_state_dict, optim_state_dict = self.runner.state_dict()
+        #~ model_state_dict, optim_state_dict = self.runner.state_dict()
                 
         #  drop a checkpoint
         checkpoint = {
-                'model': model_state_dict,
+                #~ 'model': model_state_dict,
                 'dicts': dataset['dicts'],
                 'opt': opt,
                 'epoch': epoch,
                 'iteration' : iteration,
                 'batchOrder' : batchOrder,
-                'optim': optim_state_dict
+                #~ 'optim': optim_state_dict
         }
         
         file_name = '%s_ppl_%.2f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
         print('Writing to %s' % file_name)
-        torch.save(checkpoint, file_name)
+        
+        self.runner.save_checkpoint(checkpoint, file_name)
+        #~ torch.save(checkpoint, file_name)
         
     def eval(self, data):
         total_loss = 0
@@ -102,6 +109,7 @@ class MultiGPUXETrainer(BaseTrainer):
         dataset = self.dataset
         
         counter = 0
+        num_accumulated_words = 0
         
         for i in range(nSamples):
 
@@ -117,14 +125,20 @@ class MultiGPUXETrainer(BaseTrainer):
             ooms = logging_outputs['oom']
             
             counter = counter + 1 
+            num_accumulated_words += logging_outputs['tgt_size']
             
             # We only update the parameters after getting gradients from n mini-batches
             # simulating the multi-gpu situation
             if counter == opt.virtual_gpu:
                 # Update the parameters.
-                self.runner.update_parameters()
+                grad_denom = 1
+                if self.opt.normalize_gradient:
+                    grad_denom = num_accumulated_words
+                
+                self.runner.update_parameters(grad_denom=grad_denom)
                 self.runner.zero_grad()
                 counter = 0
+                num_accumulated_words = 0
                 if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
                     valid_loss = self.eval(self.validData)
                     valid_ppl = math.exp(min(valid_loss, 100))
@@ -166,18 +180,23 @@ class MultiGPUXETrainer(BaseTrainer):
     
     
     
-    def run(self, checkpoint=None):
+    def run(self, save_file=None):
         
         
         opt = self.opt
         model = self.model
         dataset = self.dataset
-        # optim = self.optim
         
-        if checkpoint is not None:
-            print('Loading model and optim from checkpoint at %s' % opt.load_from)
-                  
-            self.runner.load_state_dict(checkpoint)
+        if save_file:
+            print('Loading model and optim from checkpoint at %s' % save_file) 
+            checkpoint = self.runner.load_checkpoint(save_file)
+            batchOrder = checkpoint['batchOrder']
+            iteration = checkpoint['iteration'] + 1
+            opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))   
+        else:
+            batchOrder = None
+            iteration = None
+            
         
         valid_loss = self.eval(self.validData)
         valid_ppl = math.exp(min(valid_loss, 100))
@@ -189,7 +208,8 @@ class MultiGPUXETrainer(BaseTrainer):
             print('')
 
             #  (1) train for one epoch on the training set
-            train_loss = self.train_epoch(epoch)
+            train_loss = self.train_epoch(epoch, batchOrder=batchOrder,
+                                                 iteration=iteration)
             train_ppl = math.exp(min(train_loss, 100))
             print('Train perplexity: %g' % train_ppl)
 
@@ -200,3 +220,5 @@ class MultiGPUXETrainer(BaseTrainer):
             
             
             self.save(epoch, valid_ppl)
+            batchOrder = None
+            iteration = None

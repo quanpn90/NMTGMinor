@@ -19,8 +19,8 @@ class Translator(object):
         self.opt = opt
         self.tt = torch.cuda if opt.cuda else torch
         self.beam_accum = None
-        self.beta = 0.3
-        self.alpha = 0.1
+        self.beta = opt.beta
+        self.alpha = opt.alpha
         
         if opt.verbose:
             print('Loading model from %s' % opt.model)
@@ -30,8 +30,10 @@ class Translator(object):
         
 
         model_opt = checkpoint['opt']
+        print(model_opt)
         self.src_dict = checkpoint['dicts']['src']
         self.tgt_dict = checkpoint['dicts']['tgt']
+        onmt.Constants.weight_norm = model_opt.weight_norm
         self._type = model_opt.encoder_type \
             if "encoder_type" in model_opt else "text"
 
@@ -50,6 +52,8 @@ class Translator(object):
             model.cuda()
         else:
             model.cpu()
+        
+        self.cuda = opt.cuda
             
         self.model_type = model_opt.model
 
@@ -71,6 +75,16 @@ class Translator(object):
             return batch.size(1)
         else:
             return batch.size(0)
+            
+    def to_variable(self, data):
+        
+        for i, t in enumerate(data):
+            if self.cuda:
+                data[i] = Variable(data[i].cuda())
+            else:
+                data[i] = Variable(data[i])
+
+        return data
 
     def buildData(self, srcBatch, goldBatch):
         # This needs to be the same as preprocess.py.
@@ -91,7 +105,7 @@ class Translator(object):
                        onmt.Constants.EOS_WORD) for b in goldBatch]
 
         return onmt.Dataset(srcData, tgtData, 9999,
-                            self.opt.cuda, volatile=True,
+                            [self.opt.gpu], volatile=True,
                             data_type=self._type, balance=False, max_seq_num =self.opt.batch_size)
 
     def buildTargetTokens(self, pred, src, attn):
@@ -391,7 +405,8 @@ class Translator(object):
     def translate(self, srcBatch, goldBatch):
         #  (1) convert words to indexes
         dataset = self.buildData(srcBatch, goldBatch)
-        src, tgt = dataset[0]
+        batch = self.to_variable(dataset.next()[0])
+        src, tgt = batch
         batchSize = self._getBatchSize(src)
 
         #  (2) translate

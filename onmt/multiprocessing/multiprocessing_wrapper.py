@@ -13,12 +13,15 @@ Train a network on multiple GPUs using multiprocessing.
 from itertools import cycle, islice
 import math
 import torch
+import logging
 
 from onmt.multiprocessing.multiprocessing_event_loop import MultiprocessingEventLoop, Future
 import onmt
 import onmt.multiprocessing.nccl as nccl
 from torch.autograd import Variable
 import sys
+from onmt.utils import torch_persistent_save
+from torch.serialization import default_restore_location
 
 """
 An utility function to send the data to the GPU
@@ -137,6 +140,22 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         """Save a checkpoint for the current model."""
         return self.call_async(0, '_async_state_dict').gen()
     
+    def save_checkpoint(self, checkpoint, filename):
+        """Save a checkpoint for the current model."""
+        self.call_async(0, '_async_save_checkpoint', checkpoint=checkpoint, filename=filename).gen()
+    
+    def _async_save_checkpoint(self, rank, device_id, checkpoint, filename):
+        
+        model_state_dict = self.model.state_dict()
+        optim_state_dict = self.optimizer.state_dict()
+        #~ 
+        checkpoint['model'] = model_state_dict
+        checkpoint['optim'] = optim_state_dict
+        
+        torch_persistent_save(checkpoint, filename)
+        
+        return [0]
+    
     def _async_state_dict(self, rank, device_id):
         
         model_state_dict = self.model.state_dict()
@@ -144,21 +163,39 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         
         return model_state_dict, optim_state_dict
         
-    def load_checkpoint(self, checkpoint):
+    def load_checkpoint(self, filename):
         """Load a checkpoint into the model replicas in each process."""
         results = Future.gen_list([
-            self.call_async(rank, '_async_load_checkpoint', checkpoint=checkpoint)
+            self.call_async(rank, '_async_load_checkpoint', filename=filename)
             for rank in range(self.num_replicas)
         ])
         
+        return results[0]
         
-    def _async_load_checkpoint(self, rank, device_id, checkpoint):
         
-        self.model.load_state_dict(checkpoint['model'])
+    def _async_load_checkpoint(self, rank, device_id, filename):
         
-        self.optimizer.load_state_dict(checkpoint['optim'])
+        checkpoint = torch.load(
+            filename,
+            map_location=lambda s, l: default_restore_location(s, 'cuda:{}'.format(device_id))
+        )
         
-        return 0
+        try:
+            self.model.load_state_dict(checkpoint['model'])
+        except:
+            raise Exception('Cannot load model parameters from checkpoint, '
+                            'please ensure that the architectures match')
+        
+        
+        try:
+            self.optimizer.load_state_dict(checkpoint['optim'])
+        except:
+            raise Exception('Cannot load optimizer parameters for some reason.')    
+        
+        del checkpoint['model']
+        del checkpoint['optim']    
+            
+        return checkpoint
         
         
     def set_seed(self, seed):
@@ -216,17 +253,17 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
 
         return loss_data, logging_output, oom
         
-    def update_parameters(self):
+    def update_parameters(self, grad_denom=1):
  
         Future.gen_tuple_list([
-            self.call_async(rank, '_async_update')
+            self.call_async(rank, '_async_update', grad_denom=grad_denom)
             for rank in range(self.num_replicas)
         ])
         
-    def _async_update(self, rank, device_id):
+    def _async_update(self, rank, device_id, grad_denom):
         
         try:
-            self._all_reduce_and_rescale_grads()
+            self._all_reduce_and_rescale_grads(grad_denom=grad_denom)
             self.optimizer.step()
         except RuntimeError as e:
             if 'out of memory' in str(e):

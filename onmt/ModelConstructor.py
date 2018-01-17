@@ -28,6 +28,7 @@ def build_model(opt, dicts):
         # raise NotImplementedError
         
         max_size = 256 # This should be the longest sentence from the dataset
+        onmt.Constants.weight_norm = opt.weight_norm
         
         from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer
         from onmt.modules.Transformer.Layers import PositionalEncoding
