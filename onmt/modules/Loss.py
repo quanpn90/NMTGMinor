@@ -1,7 +1,8 @@
 import onmt
 import onmt.modules
 import torch.nn as nn
-import torch
+import torch, math
+
 
 
 
@@ -57,10 +58,12 @@ class NMTLossFunc(LossFuncBase):
             # is equivalent to NLLLoss or CrossEntropyLoss.
             # All non-true labels are uniformly set to low-confidence.
             self.func = nn.KLDivLoss(size_average=False)
+            self.smoothing_value = label_smoothing / (output_size - 2)
             one_hot = torch.randn(1, output_size)
-            one_hot.fill_(label_smoothing / (output_size - 2))
+            one_hot.fill_(self.smoothing_value)
             one_hot[0][self.padding_idx] = 0
             self.register_buffer('one_hot', one_hot)
+            
         else:
             weight = torch.ones(output_size)
             weight[self.padding_idx] = 0
@@ -92,7 +95,7 @@ class NMTLossFunc(LossFuncBase):
         if self.confidence < 1:
             loss_data = - likelihood.sum(0)
         else:
-            loss_data = loss.data[0]
+            loss_data = loss.data
         
 
         return (loss, loss_data)
@@ -112,9 +115,13 @@ class NMTLossFunc(LossFuncBase):
         
         if generator is not None:
             outputs = torch.autograd.Variable(outputs.data, requires_grad=(backward))
+            
+        batch_size = outputs.size(1)
+        split_size = int(math.ceil(self.shard_split / batch_size))
+        #~ split_size = self.shard_split
         
-        outputs_split = torch.split(outputs, self.shard_split)
-        targets_split = torch.split(targets, self.shard_split)
+        outputs_split = torch.split(outputs, split_size)
+        targets_split = torch.split(targets, split_size)
         
         loss_data = 0
         for i, (outputs_t, target_t) in enumerate(zip(outputs_split, targets_split)):

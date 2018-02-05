@@ -57,7 +57,7 @@ class XETrainer(BaseTrainer):
 
     def __init__(self, model, loss_function, trainData, validData, dataset, opt):
         super().__init__(model, loss_function, trainData, validData, dataset, opt)
-        self.optim = onmt.NoamOptim(opt)
+        self.optim = onmt.Optim(opt)
         
         if self.cuda:
            torch.cuda.set_device(self.opt.gpus[0])
@@ -169,64 +169,76 @@ class XETrainer(BaseTrainer):
                         
             batch = self.to_variable(samples[0])
             
-            outputs = self.model(batch)
+            oom = False
+            try:
+            
+                outputs = self.model(batch)
+                    
+                targets = batch[1][1:]
                 
-            targets = batch[1][1:]
-            
-            loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=True)
-            
-            outputs.backward(grad_outputs)
-            
-            src_size = batch[0].data.ne(onmt.Constants.PAD).sum()
-            tgt_size = targets.data.ne(onmt.Constants.PAD).sum()
-            
-            counter = counter + 1 
-            num_accumulated_words += tgt_size
-            
-            # We only update the parameters after getting gradients from n mini-batches
-            # simulating the multi-gpu situation
-            if counter == opt.virtual_gpu:
-                # Update the parameters.
-                grad_denom=num_accumulated_words if self.opt.normalize_gradient else 1
-                self.optim.step(grad_denom=grad_denom)
-                self.model.zero_grad()
-                counter = 0
-                num_accumulated_words = 0
-                if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
-                    valid_loss = self.eval(self.validData)
-                    valid_ppl = math.exp(min(valid_loss, 100))
-                    print('Validation perplexity: %g' % valid_ppl)
-                    
-                    ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
-                    
-                    self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
-            
+                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=True)
+                
+                outputs.backward(grad_outputs)
+            except RuntimeError as e:
+                if 'out of memory' in str(e):
+                    print('| WARNING: ran out of memory on GPU , skipping batch')
+                    oom = True
+                    torch.cuda.empty_cache()
+                else:
+                    raise e        
+                
+            if not oom:
+                src_size = batch[0].data.ne(onmt.Constants.PAD).sum()
+                tgt_size = targets.data.ne(onmt.Constants.PAD).sum()
+                
+                counter = counter + 1 
+                num_accumulated_words += tgt_size
+                
+                # We only update the parameters after getting gradients from n mini-batches
+                # simulating the multi-gpu situation
+                #~ if counter == opt.virtual_gpu:
+                if num_accumulated_words >= opt.batch_size_update:
+                    # Update the parameters.
+                    grad_denom=num_accumulated_words if self.opt.normalize_gradient else 1
+                    self.optim.step(grad_denom=grad_denom)
+                    self.model.zero_grad()
+                    counter = 0
+                    num_accumulated_words = 0
+                    if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
+                        valid_loss = self.eval(self.validData)
+                        valid_ppl = math.exp(min(valid_loss, 100))
+                        print('Validation perplexity: %g' % valid_ppl)
+                        
+                        ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
+                        
+                        self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
+                
 
-            num_words = tgt_size
-            report_loss += loss_data
-            report_tgt_words += num_words
-            report_src_words += src_size
-            total_loss += loss_data
-            total_words += num_words
-            
-            optim = self.optim
-            num_updates = optim._step
-            
-            
-            if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
-                print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
-                       "%5.0f src tok/s; %5.0f tgt tok/s; %s elapsed") %
-                      (epoch, i+1, len(trainData),
-                       math.exp(report_loss / report_tgt_words),
-                       optim.getLearningRate(),
-                       optim._step,
-                       report_src_words/(time.time()-start),
-                       report_tgt_words/(time.time()-start),
-                       str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
+                num_words = tgt_size
+                report_loss += loss_data
+                report_tgt_words += num_words
+                report_src_words += src_size
+                total_loss += loss_data
+                total_words += num_words
+                
+                optim = self.optim
+                num_updates = optim._step
+                
+                
+                if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
+                    print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
+                           "%5.0f src tok/s; %5.0f tgt tok/s; %s elapsed") %
+                          (epoch, i+1, len(trainData),
+                           math.exp(report_loss / report_tgt_words),
+                           optim.getLearningRate(),
+                           optim._step,
+                           report_src_words/(time.time()-start),
+                           report_tgt_words/(time.time()-start),
+                           str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
 
-                report_loss, report_tgt_words = 0, 0
-                report_src_words = 0
-                start = time.time()
+                    report_loss, report_tgt_words = 0, 0
+                    report_src_words = 0
+                    start = time.time()
             
             
         return total_loss / total_words

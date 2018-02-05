@@ -21,6 +21,7 @@ class Translator(object):
         self.beam_accum = None
         self.beta = opt.beta
         self.alpha = opt.alpha
+        self.start_with_bos = opt.start_with_bos
         
         if opt.verbose:
             print('Loading model from %s' % opt.model)
@@ -33,15 +34,18 @@ class Translator(object):
         print(model_opt)
         self.src_dict = checkpoint['dicts']['src']
         self.tgt_dict = checkpoint['dicts']['tgt']
-        onmt.Constants.weight_norm = model_opt.weight_norm
         self._type = model_opt.encoder_type \
             if "encoder_type" in model_opt else "text"
 
         # Build model from the saved option
         model = build_model(model_opt, checkpoint['dicts'])
+        
+        print(model)
 
         
         model.load_state_dict(checkpoint['model'])
+        
+        model.eval()
         
         if model_opt.model == 'transformer':
             if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:
@@ -88,13 +92,15 @@ class Translator(object):
 
     def buildData(self, srcBatch, goldBatch):
         # This needs to be the same as preprocess.py.
-        if self._type == "text":
+        
+        if self.start_with_bos:
+            srcData = [self.src_dict.convertToIdx(b,
+                              onmt.Constants.UNK_WORD,
+                              onmt.Constants.BOS_WORD)
+                       for b in srcBatch]
+        else:
             srcData = [self.src_dict.convertToIdx(b,
                               onmt.Constants.UNK_WORD)
-                       for b in srcBatch]
-        elif self._type == "img":
-            srcData = [transforms.ToTensor()(
-                Image.open(self.opt.src_img_dir + "/" + b[0]))
                        for b in srcBatch]
 
         tgtData = None
@@ -106,7 +112,7 @@ class Translator(object):
 
         return onmt.Dataset(srcData, tgtData, 9999,
                             [self.opt.gpu], volatile=True,
-                            data_type=self._type, balance=False, max_seq_num =self.opt.batch_size)
+                            data_type=self._type, max_seq_num =self.opt.batch_size)
 
     def buildTargetTokens(self, pred, src, attn):
         tokens = self.tgt_dict.convertToLabels(pred, onmt.Constants.EOS)
@@ -272,7 +278,7 @@ class Translator(object):
             torch.set_grad_enabled(True)
             
             return allHyp, allScores, allAttn, allLengths, goldScores, goldWords
-        elif self.model_type == 'transformer':
+        elif self.model_type in ['transformer', 'stochastic_transformer']:
 
             assert self.opt.batch_size == 1, "Transformer only works with batch_size 1 atm"
             vocab_size = self.tgt_dict.size()
@@ -308,9 +314,7 @@ class Translator(object):
                     goldWords += tgt_t.ne(onmt.Constants.PAD).sum()
             
                 #  (3) Start decoding
-                                                
-                # print(src_mask.size())
-                mask_src = src_mask 
+                mask_src = src_mask # size: batch x time 
                 remaining_beams = beamSize
                 logLikelihoods = []
                 preds = []
@@ -335,9 +339,13 @@ class Translator(object):
                 while step < self.opt.max_sent_length and remaining_beams>0:
                     step += 1
                     decoder_hidden, coverage = self.model.decoder(decode_input, context, mask_src)
-                    out = self.model.generator(decoder_hidden.view(-1, decoder_hidden.size(-1)))
-                    out = out.view(remaining_beams, -1, vocab_size)
-                    out = scores.unsqueeze(1) + out[:, -1, :] # Add up the scores from previous steps
+                    
+                    decoder_hidden = decoder_hidden[:, -1, :]
+                    
+                    decoder_hidden = decoder_hidden.squeeze(1)
+                    out = self.model.generator(decoder_hidden)
+
+                    out = scores.unsqueeze(1).expand_as(out) + out # Add up the scores from previous steps
                     scores, scores_id = out.view(-1).topk(remaining_beams)
                     beam_id = scores_id / vocab_size
                     pred_id = (scores_id - beam_id*vocab_size).view(remaining_beams, -1)
@@ -351,8 +359,7 @@ class Translator(object):
                     finished_index = check.nonzero().squeeze()
                     continue_index = (1-check).nonzero().squeeze()
                     # continue_index = 1 - finished_index
-                    
-                    # length_
+                
                     for idx in finished_index:
                         logLikelihoods.append(scores[idx].data[0])
                         pred = decode_input[idx,:].data.tolist()
@@ -372,24 +379,20 @@ class Translator(object):
                         decode_input = Variable(decode_input.data.index_select(0, continue_index))
                         context = Variable(context.data.index_select(0, continue_index))
             # normalize the final scores by length and coverage 
-            len_penalties = [math.pow(len(pred), self.alpha) for pred in preds]
+            len_penalties = [math.pow(len(pred), self.alpha)   for pred in preds]
             final_scores = [logLikelihoods[i]/len_penalties[i] + coverage_penalties[i] for i in range(len(preds))]
             sorted_scores_arg = sorted(range(len(preds)), key=lambda i:-final_scores[i])
             
+            # get the sorted results 
             sorted_preds = [ preds[sorted_scores_arg[i]] for i in range(beamSize) ]
             sorted_logLikelihoods = [ logLikelihoods[sorted_scores_arg[i]] for i in range(beamSize) ]
             sorted_attn_probs = [ atten_probs[sorted_scores_arg[i]] for i in range(beamSize) ]
             sorted_lengths = [ lengths[sorted_scores_arg[i]] for i in range(beamSize) ]
-            #~ best_beam = sorted_scores_arg[0]
-            # tgt_id = ' '.join(map(str, preds[best_beam]))
-            # target = self.id2word(tgt_id)
-            # tgt_pieces = [self.id2word(str(i)) for i in preds[best_beam]]
-            # attn = [atten_probs[best_beam], src_pieces, tgt_pieces]
-            # return target, attn                         
+            
+            # gather the results
             allHyp += [sorted_preds]
             allScores += [sorted_logLikelihoods]
             allAttn.append(sorted_attn_probs)
-
             allLengths.append(sorted_lengths)
             
             
@@ -398,8 +401,9 @@ class Translator(object):
             
             return allHyp, allScores, allAttn, allLengths, goldScores, goldWords
                                 
-                    
-            # raise NotImplementedError
+        else:            
+            print("Model type %s is not supported" % self.model_type)
+            raise NotImplementedError
             
 
     def translate(self, srcBatch, goldBatch):

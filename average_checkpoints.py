@@ -31,7 +31,7 @@ def main():
     # opt.model should be a string of models, split by |
         
     models = opt.models.split("|")
-    print(models)
+    # print(models)
     n_models = len(models)
     
     print("Loading main model from %s ..." % models[0])

@@ -2,7 +2,10 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
-# import onmt.modules.Transformer.Layers.XavierLinear as Linear
+import onmt
+
+
+#~ from onmt.modules.Transformer.Layers import XavierLinear
 
 class Generator(nn.Module):
 
@@ -11,7 +14,7 @@ class Generator(nn.Module):
         super(Generator, self).__init__()
         self.hidden_size = hidden_size
         self.output_size = output_size
-        self.linear = nn.Linear(hidden_size, output_size)
+        self.linear = onmt.modules.Transformer.Layers.XavierLinear(hidden_size, output_size)
         
     def forward(self, input, log_softmax=True):
         
@@ -39,3 +42,14 @@ class NMTModel(nn.Module):
     
     def share_enc_dec_embedding(self):
         self.encoder.word_lut.weight = self.decoder.word_lut.weight
+
+
+class Reconstructor(nn.Module):
+    
+    def __init__(self, decoder, generator=None):
+        super(Reconstructor, self).__init__()
+        self.decoder = decoder
+        self.generator = generator        
+    
+    
+    

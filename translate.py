@@ -35,6 +35,8 @@ parser.add_argument('-replace_unk', action="store_true",
                     give the corresponding target token. If it is not provided
                     (or the identified source token does not exist in the
                     table) then it will copy the source token""")
+parser.add_argument('-start_with_bos', action="store_true",
+                    help="""Add BOS token to the top of the source sentence""")
 # parser.add_argument('-phrase_table',
 #                     help="""Path to source-target dictionary to replace UNK
 #                     tokens. See README.md for the format of this file.""")
@@ -48,7 +50,7 @@ parser.add_argument('-n_best', type=int, default=1,
                     decoded sentences""")
 parser.add_argument('-alpha', type=float, default=0.6,
                     help="""Length Penalty coefficient""")
-parser.add_argument('-beta', type=float, default=0.3,
+parser.add_argument('-beta', type=float, default=0.0,
                     help="""Coverage penalty coefficient""")
 parser.add_argument('-print_nbest', action='store_true',
                     help='Output the n-best list instead of a single sentence')

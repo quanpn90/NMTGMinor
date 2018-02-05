@@ -1,14 +1,15 @@
 import numpy as np
 import torch, math
 import torch.nn as nn
-from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, PositionalEncoding, variational_dropout, PrePostProcessing
+from onmt.modules.Transformer.Layers import PositionalEncoding
+from onmt.modules.StochasticTransformer.Layers import StochasticEncoderLayer, StochasticDecoderLayer
 from onmt.modules.BaseModel import NMTModel, Reconstructor
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
 
 
 
-class TransformerEncoder(nn.Module):
+class StochasticTransformerEncoder(nn.Module):
     """Encoder in 'Attention is all you need'
     
     Args:
@@ -19,7 +20,7 @@ class TransformerEncoder(nn.Module):
     
     def __init__(self, opt, dicts, positional_encoder):
     
-        super(TransformerEncoder, self).__init__()
+        super(StochasticTransformerEncoder, self).__init__()
         
         self.model_size = opt.model_size
         self.n_heads = opt.n_heads
@@ -28,20 +29,18 @@ class TransformerEncoder(nn.Module):
         self.dropout = opt.dropout
         self.word_dropout = opt.word_dropout
         self.attn_dropout = opt.attn_dropout
-        self.emb_dropout = opt.emb_dropout
+        self.death_rate = opt.death_rate
         
         self.word_lut = nn.Embedding(dicts.size(),
                                      self.model_size,
                                      padding_idx=onmt.Constants.PAD)
         
-        #~ self.emb_drop_layer = nn.Dropout(opt.emb_dropout)
-        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d')
-        
-        self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
+        self.emb_drop_layer = nn.Dropout(opt.emb_dropout)
         
         self.positional_encoder = positional_encoder
         
-        self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
+        self.layer_modules = nn.ModuleList([StochasticEncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, 
+                                                                self.attn_dropout, self.death_rate) for _ in range(self.layers)])
 
     def forward(self, input):
         """
@@ -58,29 +57,22 @@ class TransformerEncoder(nn.Module):
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         """ Scale the emb by sqrt(d_model) """
         emb = emb * math.sqrt(self.model_size)
-        emb = self.preprocess_layer(emb)
         """ Adding positional encoding """
         emb = self.positional_encoder(emb)
         
-        
+        emb = self.emb_drop_layer(emb)
         
         mask_src = input.data.eq(onmt.Constants.PAD).unsqueeze(1)
         
         context = emb
         
         for layer in self.layer_modules:                          
-            context = layer(context, mask_src)      # batch_size x len_src x d_model
-        
-        # From Google T2T
-        # if normalization is done in layer_preprocess, then it should also be done
-        # on the output, since the output can grow very large, being the sum of
-        # a whole stack of unnormalized layer outputs.    
-        context = self.postprocess_layer(context)
+            context = layer(context, context, context, mask_src)      # batch_size x len_src x d_model
         
         return context, mask_src
         
 
-class TransformerDecoder(nn.Module):
+class StochasticTransformerDecoder(nn.Module):
     """Encoder in 'Attention is all you need'
     
     Args:
@@ -92,7 +84,7 @@ class TransformerDecoder(nn.Module):
     
     def __init__(self, opt, dicts, positional_encoder):
     
-        super(TransformerDecoder, self).__init__()
+        super(StochasticTransformerDecoder, self).__init__()
         
         self.model_size = opt.model_size
         self.n_heads = opt.n_heads
@@ -101,11 +93,9 @@ class TransformerDecoder(nn.Module):
         self.dropout = opt.dropout
         self.word_dropout = opt.word_dropout 
         self.attn_dropout = opt.attn_dropout
-        self.emb_dropout = opt.emb_dropout
+        self.death_rate = opt.death_rate
         
-        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d')
-        
-        self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
+        self.emb_drop_layer = nn.Dropout(opt.emb_dropout)
         
         self.word_lut = nn.Embedding(dicts.size(),
                                      self.model_size,
@@ -113,7 +103,9 @@ class TransformerDecoder(nn.Module):
         
         self.positional_encoder = positional_encoder
         
-        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
+        self.layer_modules = nn.ModuleList([StochasticDecoderLayer(self.n_heads, self.model_size, self.dropout, 
+                                                                self.inner_size, self.attn_dropout, self.death_rate) 
+                                                                                        for _ in range(self.layers)])
         
         len_max = self.positional_encoder.len_max
         mask = torch.ByteTensor(np.triu(np.ones((len_max,len_max)), k=1).astype('uint8'))
@@ -139,13 +131,12 @@ class TransformerDecoder(nn.Module):
         
         """ Embedding: batch_size x len_src x d_model """
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
-        emb = self.preprocess_layer(emb)
         """ Scale the emb by sqrt(d_model) """
         emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
         emb = self.positional_encoder(emb)
         
-        
+        emb = self.emb_drop_layer(emb)
         
         len_tgt = input.size(1)
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
@@ -153,17 +144,14 @@ class TransformerDecoder(nn.Module):
         
         output = emb
         
-        
         for layer in self.layer_modules:
-            output, coverage = layer(output, context, mask_tgt, mask_src) # batch_size x len_src x d_model
-            
-        output = self.postprocess_layer(output)
+            output, coverage = layer(output, output, output, context, mask_tgt, mask_src) # batch_size x len_src x d_model
         
         return output, coverage
 
   
         
-class Transformer(NMTModel):
+class StochasticTransformer(NMTModel):
     """Main model in 'Attention is all you need' """
     
         

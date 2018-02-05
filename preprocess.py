@@ -49,7 +49,7 @@ parser.add_argument('-src_seq_length', type=int, default=64,
                     help="Maximum source sequence length")
 parser.add_argument('-src_seq_length_trunc', type=int, default=0,
                     help="Truncate source sequence length.")
-parser.add_argument('-tgt_seq_length', type=int, default=64,
+parser.add_argument('-tgt_seq_length', type=int, default=66,
                     help="Maximum target sequence length to keep.")
 parser.add_argument('-tgt_seq_length_trunc', type=int, default=0,
                     help="Truncate target sequence length.")
@@ -182,14 +182,12 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
                 srcWords = srcWords[:opt.src_seq_length_trunc]
             if opt.tgt_seq_length_trunc != 0:
                 tgtWords = tgtWords[:opt.tgt_seq_length_trunc]
-
-            if opt.src_type == "text":
-                src += [srcDicts.convertToIdx(srcWords,
+            
+            
+            # For src text, we use BOS for possible reconstruction
+            src += [srcDicts.convertToIdx(srcWords,
                                               onmt.Constants.UNK_WORD)]
-            elif opt.src_type == "img":
-                loadImageLibs()
-                src += [transforms.ToTensor()(
-                    Image.open(opt.src_img_dir + "/" + srcWords[0]))]
+                                              
 
             tgt += [tgtDicts.convertToIdx(tgtWords,
                                           onmt.Constants.UNK_WORD,

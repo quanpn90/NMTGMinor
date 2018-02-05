@@ -30,7 +30,7 @@ parser.add_argument('-load_from', default='', type=str,
                     help="""If training from a checkpoint then this is the
                     path to the pretrained model.""")
 parser.add_argument('-model', default='recurrent',
-                    help="Optimization method. [recurrent|transformer]")
+                    help="Optimization method. [recurrent|transformer|stochastic_transformer]")
 parser.add_argument('-layers', type=int, default=2,
                     help='Number of layers in the LSTM encoder/decoder')                   
 # Recurrent Model options
@@ -61,20 +61,24 @@ parser.add_argument('-emb_dropout', type=float, default=0.1,
                     help='Dropout probability; applied on top of embedding.')    
 parser.add_argument('-weight_norm', action='store_true',
                   help='Apply weight normalization on linear modules')
-                    
+parser.add_argument('-death_rate', type=float, default=0.5,
+                    help='Stochastic layer death rate')                        
                     
                     
 # Optimization options
 parser.add_argument('-encoder_type', default='text',
                     help="Type of encoder to use. Options are [text|img].")
-parser.add_argument('-batch_size', type=int, default=1024,
-                    help='Maximum batch size')
-parser.add_argument('-max_seq_num', type=int, default=64,
-                    help='Maximum batch size')
+parser.add_argument('-batch_size_words', type=int, default=2048,
+                    help='Maximum batch size in word dimension')
+parser.add_argument('-batch_size_sents', type=int, default=128,
+                    help='Maximum number of sentences in a batch')
 parser.add_argument('-max_generator_batches', type=int, default=32,
                     help="""Maximum batches of words in a sequence to run
                     the generator on in parallel. Higher is faster, but uses
                     more memory.""")
+parser.add_argument('-batch_size_update', type=int, default=2048,
+                    help='Maximum number of words per update')                    
+
 parser.add_argument('-epochs', type=int, default=13,
                     help='Number of training epochs')
 parser.add_argument('-start_epoch', type=int, default=1,
@@ -130,7 +134,9 @@ parser.add_argument('-beta2', type=float, default=0.98,
 parser.add_argument('-weight_decay', type=float, default=0.0,
                     help="""weight decay (L2 penalty)""")
 parser.add_argument('-amsgrad', action='store_true',
-                    help='Using AMSGRad for adam')                    
+                    help='Using AMSGRad for adam')    
+parser.add_argument('-update_method', default='regular',
+                    help="Type of update rule to use. Options are [regular|noam].")                                    
 # pretrained word vectors
 parser.add_argument('-tie_weights', action='store_true',
                     help='Tie the weights of the encoder and decoder layer')
@@ -191,19 +197,19 @@ def main():
     
 
     trainData = onmt.Dataset(dataset['train']['src'],
-                             dataset['train']['tgt'], opt.batch_size, opt.gpus,
-                             data_type=dataset.get("type", "text"), max_seq_num=opt.max_seq_num)
+                             dataset['train']['tgt'], opt.batch_size_words, opt.gpus,
+                             data_type=dataset.get("type", "text"), max_seq_num=opt.batch_size_sents)
     validData = onmt.Dataset(dataset['valid']['src'],
-                             dataset['valid']['tgt'], opt.batch_size, opt.gpus,
+                             dataset['valid']['tgt'], opt.batch_size_words, opt.gpus,
                              volatile=True,
-                             data_type=dataset.get("type", "text"), max_seq_num=128)
+                             data_type=dataset.get("type", "text"), max_seq_num=opt.batch_size_sents)
 
     dicts = dataset['dicts']
     print(' * vocabulary size. source = %d; target = %d' %
           (dicts['src'].size(), dicts['tgt'].size()))
     print(' * number of training sentences. %d' %
           len(dataset['train']['src']))
-    print(' * maximum batch size (words per batch). %d' % opt.batch_size)
+    print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
 
     print('Building model...')
     model = build_model(opt, dicts)
@@ -228,7 +234,7 @@ def main():
         print("Warning! Multi-GPU training is used. Not fully tested and potential bugs can happen.")
     else:
         trainer = XETrainer(model, loss_function, trainData, validData, dataset, opt)
-    # 
+
     
     trainer.run(save_file=opt.load_from)
         

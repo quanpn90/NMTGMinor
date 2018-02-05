@@ -6,11 +6,35 @@ from onmt.modules.LayerNorm import LayerNorm
 import torch.nn.init as init
 import torch.nn.utils.weight_norm as WeightNorm
 import onmt 
+import torch.nn.functional as F
+
+
+def uniform_unit_scaling(tensor, nonlinearity="linear", gain=1.0):
+    
+    size = 1.
+    # Estimate the input size. This won't work perfectly,
+    # but it covers almost all use cases where this initialiser
+    # would be expected to be useful, i.e in large linear and
+    # convolutional layers, as the last dimension will almost
+    # always be the output size.
+    
+    if isinstance(tensor, Variable):
+        uniform_unit_scaling(tensor.data, nonlinearity)
+        return tensor
+    
+    for dimension in list(tensor.size())[:-1]:
+        size *= dimension
+        
+    activation_scaling = torch.nn.init.calculate_gain(nonlinearity, tensor)
+    
+    max_value = math.sqrt(3 / size) * activation_scaling
+    
+    return tensor.uniform_(-max_value, max_value)
 
 class XavierLinear(nn.Module):
     
     ''' Simple Linear layer with xavier init '''
-    def __init__(self, d_in, d_out, bias=True):
+    def __init__(self, d_in, d_out, bias=True, nonlinearity="linear"):
         super(Linear, self).__init__()
         linear = nn.Linear(d_in, d_out, bias=bias)
         self.weight_norm = onmt.Constants.weight_norm
@@ -19,8 +43,12 @@ class XavierLinear(nn.Module):
             self.linear = WeightNorm(linear, name='weight')
         else:
             self.linear = linear
-            
-        init.xavier_uniform(self.linear.weight)
+        
+        #~ init.xavier_uniform(self.linear.weight)
+        uniform_unit_scaling(self.linear.weight, nonlinearity=nonlinearity)
+        #~ init = torch.nn.init.uniform
+        #~ init(self.linear.weight, -onmt.Constants.init_value,
+                                  #~ onmt.Constants.init_value)
         
 
     def forward(self, x):
@@ -55,7 +83,43 @@ def variational_dropout(input, p, training=False):
         return output
     # if eval then return the input
     return input
+
+class PrePostProcessing(nn.Module):
+    
+    """Applies processing to tensors 
+    Args:
+        d_model: dimension of model
+        p:       dropout probabolity  
+        sequence of processing steps: 
+            n = normalization
+            d = dropout
+            a = adding previous input to output (residual)
+    """
+    
+    def __init__(self, d_model, dropout_p, sequence='nda'):
+        super(PrePostProcessing, self).__init__() 
+        self.d_model = d_model
+        self.dropout_p = dropout_p     
         
+        self.steps = list(sequence)
+        
+        if 'n' in self.steps:
+            self.layer_norm = LayerNorm(self.d_model)
+        if 'd' in self.steps:
+            self.dropout = nn.Dropout(self.dropout_p)
+    
+    def forward(self, tensor, input_tensor=None):
+        
+        output = tensor
+        for step in self.steps:
+            if step == 'n':
+                output = self.layer_norm(output)
+            if step == 'd':
+                output = self.dropout(output)
+            if step == 'a':
+                output = output + input_tensor
+                
+        return output
         
 class MultiHeadAttention(nn.Module):
     """Applies multi-head attentions to inputs (query, key, value)
@@ -82,7 +146,7 @@ class MultiHeadAttention(nn.Module):
         
     """
     
-    def __init__(self, h, d_model, p, attn_p=0.1):
+    def __init__(self, h, d_model, attn_p=0.1):
         super(MultiHeadAttention, self).__init__()      
         self.h = h
         self.d = d_model
@@ -92,10 +156,11 @@ class MultiHeadAttention(nn.Module):
         self.fc_value = Linear(d_model, h*self.d_head, bias=False)
         self.fc_concat = Linear(h*self.d_head, d_model, bias=False)
         self.sm = nn.Softmax(dim=1)
-        self.dropout = nn.Dropout(p)
-        self.p = p
         self.attn_dropout = nn.Dropout(attn_p)
-        self.layernorm = LayerNorm(d_model)
+        #~ self.dropout = nn.Dropout(p)
+        #~ self.p = p
+        
+        #~ self.layernorm = LayerNorm(d_model)
       
     def _prepare_proj(self, x):
         """Reshape the projectons to apply softmax on each head
@@ -117,14 +182,16 @@ class MultiHeadAttention(nn.Module):
         proj_key = self._prepare_proj(key)           # batch_size*h x len_key x d_head
         proj_value = self._prepare_proj(value)       # batch_size*h x len_key x d_head
         
+        proj_query = proj_query * (self.d_head**-0.5)
+        
         # get dotproduct softmax attns for each head
         attns = torch.bmm(proj_query, proj_key.transpose(1,2))  # batch_size*h x len_query x len_key
-        attns = attns / math.sqrt(self.d_head) 
+        
         attns = attns.view(b, self.h, len_query, len_key) 
         attns = attns.masked_fill_(Variable(mask.unsqueeze(-3), requires_grad=False), -float('inf'))
         attns = self.sm(attns.view(-1, len_key))
         # return mean attention from all heads as coverage 
-        coverage = torch.mean(attns.view(b, self.h, len_query, len_key), dim=1)
+        coverage = torch.mean(attns.view(b, self.h, len_query, len_key), dim=1) 
         attns = self.attn_dropout(attns)
         attns = attns.view(b*self.h, len_query, len_key)
         
@@ -133,9 +200,8 @@ class MultiHeadAttention(nn.Module):
         out = out.view(b, self.h, len_query, self.d_head).transpose(1,2).contiguous() 
         out = out.view(b, len_query, self.h*self.d_head)
         out = self.fc_concat(out)
-        # out = query + variational_dropout(out, self.p, training=self.training)
-        out = query + self.dropout(out)
-        out = self.layernorm(out)
+        
+        
         return out, coverage
 
     
@@ -162,20 +228,15 @@ class FeedForward(nn.Module):
         super(FeedForward, self).__init__()
         self.d_model = d_model
         self.d_ff = d_ff
-        self.fc_1 = Linear(d_model, d_ff)
+        self.fc_1 = Linear(d_model, d_ff, nonlinearity="relu")
         self.fc_2 = Linear(d_ff, d_model)
         self.dropout = nn.Dropout(p)
-        # self.p = p
-        self.layernorm = LayerNorm(d_model)
-        self.relu = nn.ReLU()
         
     def forward(self, input):
-        out = self.fc_2(self.relu(self.fc_1(input)))
-        out = self.dropout(out)
-        # out = variational_dropout(out, self.p, training = self.training)
-        out = out + input
-        out = self.layernorm(out)
-        # out = self.layernorm(out + input)
+        
+        out = self.fc_1(input)
+        out = self.dropout(F.relu(out))
+        out = self.fc_2(out)
         return out
 
     
@@ -204,13 +265,31 @@ class EncoderLayer(nn.Module):
     
     def __init__(self, h, d_model, p, d_ff, attn_p=0.1):
         super(EncoderLayer, self).__init__()
-        self.multihead = MultiHeadAttention(h, d_model, p, attn_p=attn_p)
+        
+        self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
+        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da')
+        self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
+        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da')
+        self.multihead = MultiHeadAttention(h, d_model, attn_p=attn_p)
         self.feedforward = FeedForward(d_model, d_ff, p)
     
-    def forward(self, query, key, value, mask):
-        out, _ = self.multihead(query, key, value, mask)
-        out = self.feedforward(out)
-        return out
+    def forward(self, input, mask):
+        
+        """ Self attention layer 
+            layernorm > attn > dropout > residual
+        """
+        
+        query = self.preprocess_attn(input)
+        out, _ = self.multihead(query, query, query, mask)
+        input = self.postprocess_attn(out, input)
+        
+        """ Feed forward layer 
+            layernorm > ffn > dropout > residual
+        """
+        out = self.feedforward(self.preprocess_ffn(input))
+        input = self.postprocess_attn(out, input)
+        
+        return input
     
     
 class DecoderLayer(nn.Module):
@@ -243,15 +322,49 @@ class DecoderLayer(nn.Module):
     
     def __init__(self, h, d_model, p, d_ff, attn_p=0.1):
         super(DecoderLayer, self).__init__()
-        self.multihead_tgt = MultiHeadAttention(h, d_model, p, attn_p=attn_p)
-        self.multihead_src = MultiHeadAttention(h, d_model, p, attn_p=attn_p)
+        
+        self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
+        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da')
+        
+        self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
+        self.postprocess_src_attn = PrePostProcessing(d_model, p, sequence='da')
+        
+        self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
+        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da')
+        
+        
+        self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p)
+        self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p)
         self.feedforward = FeedForward(d_model, d_ff, p)
     
-    def forward(self, query, key, value, context, mask_tgt, mask_src):
-        out, _ = self.multihead_tgt(query, key, value, mask_tgt)
-        out, coverage = self.multihead_src(out, context, context, mask_src)
-        out = self.feedforward(out)
-        return out, coverage
+    def forward(self, input, context, mask_tgt, mask_src):
+        #~ out, _ = self.multihead_tgt(query, key, value, mask_tgt)
+        #~ out, coverage = self.multihead_src(out, context, context, mask_src)
+        #~ out = self.feedforward(out)
+        
+        """ Self attention layer 
+            layernorm > attn > dropout > residual
+        """
+        
+        query = self.preprocess_attn(input)
+        out, _ = self.multihead_tgt(query, query, query, mask_tgt)
+        input = self.postprocess_attn(out, input)
+        
+        """ Context Attention layer 
+            layernorm > attn > dropout > residual
+        """
+        
+        query = self.preprocess_src_attn(input)
+        out, coverage = self.multihead_src(query, context, context, mask_src)
+        input = self.postprocess_src_attn(out, input)
+        
+        """ Feed forward layer 
+            layernorm > ffn > dropout > residual
+        """
+        out = self.feedforward(self.preprocess_ffn(input))
+        input = self.postprocess_attn(out, input)
+        
+        return input, coverage
 
 class PositionalEncoding(nn.Module):
     """Adds positional embeddings to standard word embeddings 
@@ -273,21 +386,29 @@ class PositionalEncoding(nn.Module):
         # save a fixed positional embedding matrix up to len_max,
         # so that no need to recreate it everytime
         super(PositionalEncoding, self).__init__()
-        position = torch.arange(0,len_max)                      
-        num_timescales = d_model // 2
-        log_timescale_increment = math.log(10000) / (num_timescales-1)
-        inv_timescales = torch.exp(torch.arange(0, num_timescales) * -log_timescale_increment)
-        scaled_time = position.unsqueeze(1) * inv_timescales.unsqueeze(0)
-        pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 1)
-        # wrap in a buffer so that model can be moved to GPU
-        self.register_buffer('pos_emb', pos_emb)
-        # self.dropout = nn.Dropout(p)
         self.len_max=len_max
         self.d_model = d_model
+        #~ position = torch.arange(0,len_max)                      
+        #~ num_timescales = d_model // 2
+        #~ log_timescale_increment = math.log(10000) / (num_timescales-1)
+        #~ inv_timescales = torch.exp(torch.arange(0, num_timescales) * -log_timescale_increment)
+        #~ scaled_time = position.unsqueeze(1) * inv_timescales.unsqueeze(0)
+        #~ pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 1)
+        # wrap in a buffer so that model can be moved to GPU
+        #~ self.register_buffer('pos_emb', pos_emb)
+        # self.dropout = nn.Dropout(p)
+        
+        self.renew(len_max)
+        
         self.p = p
     
     def renew(self, new_max_len):
-        self.pos_emb = None
+        
+        #~ if self.pos_emb is not None:
+        #~ self.pos_emb = None
+            #~ del self.pos_emb
+        if hasattr(self, 'pos_emb'):
+            del self.pos_emb
         position = torch.arange(0,new_max_len)                      
         num_timescales = self.d_model // 2
         log_timescale_increment = math.log(10000) / (num_timescales-1)
@@ -299,6 +420,5 @@ class PositionalEncoding(nn.Module):
         
     def forward(self, word_emb):
         len_seq = word_emb.size(1)
-        out = word_emb + Variable(self.pos_emb[:len_seq, :])
-        # out = self.dropout(out)
+        out = word_emb + Variable(self.pos_emb[:len_seq, :], requires_grad=False)
         return out

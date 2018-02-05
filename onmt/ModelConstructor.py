@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 import onmt
-
+from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer
+from onmt.modules.Transformer.Layers import PositionalEncoding
 
 def build_model(opt, dicts):
 
@@ -29,9 +30,8 @@ def build_model(opt, dicts):
         
         max_size = 256 # This should be the longest sentence from the dataset
         onmt.Constants.weight_norm = opt.weight_norm
+        onmt.Constants.init_value = opt.param_init
         
-        from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer
-        from onmt.modules.Transformer.Layers import PositionalEncoding
         
         positional_encoder = PositionalEncoding(opt.model_size, len_max=max_size)
         
@@ -43,7 +43,26 @@ def build_model(opt, dicts):
         
         model = Transformer(encoder, decoder, generator)    
         
+    elif opt.model == 'stochastic_transformer':
         
+        from onmt.modules.StochasticTransformer.Models import StochasticTransformerEncoder, StochasticTransformerDecoder
+
+        
+        max_size = 256 # This should be the longest sentence from the dataset
+        onmt.Constants.weight_norm = opt.weight_norm
+        onmt.Constants.init_value = opt.param_init
+        
+        
+        
+        positional_encoder = PositionalEncoding(opt.model_size, len_max=max_size)
+        
+        encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder)
+        
+        decoder = StochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
+        
+        generator = onmt.modules.BaseModel.Generator(opt.rnn_size, dicts['tgt'].size())
+        
+        model = Transformer(encoder, decoder, generator)        
         
     else:
         raise NotImplementedError
@@ -66,9 +85,24 @@ def init_model_parameters(model, opt):
         for p in model.parameters():
             p.data.uniform_(-opt.param_init, opt.param_init)
     else:
+        from onmt.modules.Transformer.Layers import uniform_unit_scaling
+
         # We initialize the model parameters with Xavier init
-        xavier = torch.nn.init.xavier_uniform
-        xavier(model.generator.linear.weight)
-        xavier(model.encoder.word_lut.weight)
-        xavier(model.decoder.word_lut.weight)
+        init = torch.nn.init.xavier_uniform
+        #~ init(model.encoder.word_lut.weight)
+        #~ init(model.decoder.word_lut.weight)
+        uniform_unit_scaling(model.encoder.word_lut.weight.data)
+        uniform_unit_scaling(model.decoder.word_lut.weight.data)
+        #~ 
+        #~ init = torch.nn.init.uniform
+        #~ 
+        #~ init(model.generator.linear.weight, -onmt.Constants.init_value, 
+                                             #~ onmt.Constants.init_value)
+        #~ init(model.encoder.word_lut.weight, -onmt.Constants.init_value, 
+                                             #~ onmt.Constants.init_value)
+        #~ init(model.decoder.word_lut.weight, -onmt.Constants.init_value, 
+                                             #~ onmt.Constants.init_value)
+def build_reconstructor(opt, dicts, positional_encoder):
+    decoder = TransformerDecoder(opt, dicts['src'], positional_encoder)
     
+    #~ reconstructor = 
