@@ -15,7 +15,7 @@ class Generator(nn.Module):
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.linear = onmt.modules.Transformer.Layers.XavierLinear(hidden_size, output_size)
-        
+        #~ self.linear = nn.Linear(hidden_size, output_size)
     def forward(self, input, log_softmax=True):
         
         logits = self.linear(input)

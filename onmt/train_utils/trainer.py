@@ -160,6 +160,7 @@ class XETrainer(BaseTrainer):
         
         counter = 0
         num_accumulated_words = 0
+        num_accumulated_sents = 0
         
         for i in range(iteration, nSamples):
 
@@ -175,10 +176,12 @@ class XETrainer(BaseTrainer):
                 outputs = self.model(batch)
                     
                 targets = batch[1][1:]
+                batch_size = targets.size(1)
                 
                 loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=True)
                 
                 outputs.backward(grad_outputs)
+                
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     print('| WARNING: ran out of memory on GPU , skipping batch')
@@ -191,19 +194,24 @@ class XETrainer(BaseTrainer):
                 src_size = batch[0].data.ne(onmt.Constants.PAD).sum()
                 tgt_size = targets.data.ne(onmt.Constants.PAD).sum()
                 
+                
                 counter = counter + 1 
                 num_accumulated_words += tgt_size
+                num_accumulated_sents += batch_size
                 
                 # We only update the parameters after getting gradients from n mini-batches
                 # simulating the multi-gpu situation
                 #~ if counter == opt.virtual_gpu:
-                if num_accumulated_words >= opt.batch_size_update:
+                #~ if counter >= opt.batch_size_update:
+                if num_accumulated_words >= opt.batch_size_update * 0.95:
                     # Update the parameters.
-                    grad_denom=num_accumulated_words if self.opt.normalize_gradient else 1
+                    grad_denom=num_accumulated_sents if self.opt.normalize_gradient else 1
                     self.optim.step(grad_denom=grad_denom)
                     self.model.zero_grad()
                     counter = 0
                     num_accumulated_words = 0
+                    num_accumulated_sents = 0
+                    num_updates = self.optim._step
                     if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
                         valid_loss = self.eval(self.validData)
                         valid_ppl = math.exp(min(valid_loss, 100))
@@ -222,7 +230,7 @@ class XETrainer(BaseTrainer):
                 total_words += num_words
                 
                 optim = self.optim
-                num_updates = optim._step
+                
                 
                 
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
@@ -261,7 +269,9 @@ class XETrainer(BaseTrainer):
         if checkpoint is not None:
             print('Loading model and optim from checkpoint at %s' % save_file)
             self.model.load_state_dict(checkpoint['model'])
-            self.optim.load_state_dict(checkpoint['optim'])
+            
+            if opt.reset_optim == False:
+                self.optim.load_state_dict(checkpoint['optim'])
             batchOrder = checkpoint['batchOrder']
             iteration = checkpoint['iteration'] + 1
             opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))   

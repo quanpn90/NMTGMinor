@@ -127,6 +127,8 @@ parser.add_argument('-start_decay_at', type=int, default=99999,
 parser.add_argument('-warmup_steps', type=int, default=4096,
                     help="""Start decaying every epoch after and including this
                     epoch""")
+parser.add_argument('-reset_optim', action='store_true',
+                    help='Reset the optimizer running variables')
 parser.add_argument('-beta1', type=float, default=0.9,
                     help="""beta_1 value for adam""")
 parser.add_argument('-beta2', type=float, default=0.98,

@@ -1,0 +1,58 @@
+import math
+import torch
+import torch.nn as nn
+from torch.autograd import Variable
+
+"""
+Class Bottle:
+When working with masked tensors, bottles extract the "true" tensors 
+using masks to avoid unnecessary computation
+"""
+
+class Bottle(nn.Module):
+    
+    def __init__(self, function):
+        
+        super(Bottle, self).__init__()
+        self.function = function
+    
+    
+    def forward(self, input, mask=None):
+        """
+        input: batch x time x hidden
+        mask: batch x time
+        """
+        # remember the original shape
+        original_shape = input.size()
+        
+        flattened_input = input.view(-1, input.size(-1))
+        
+        dim = original_shape[-1]
+        
+        if mask is not None:
+            flattened_mask = mask.view(-1)
+            
+            non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
+            
+            #~ print(flattened_input.size())
+            #~ print(flattened_mask.size())
+            #~ print(non_pad_indices.size())
+            
+            clean_input = flattened_input.index_select(0, non_pad_indices )
+            #~ clean_input = flattened_input.masked_select(flattened_mask)
+        else:
+            clean_input = flattened_input
+        
+        # forward pass on the clean input only
+        clean_output = self.function(clean_input)
+        
+        if mask is not None:
+            # after that, scatter the output (the position where we don't scatter are masked zeros anyways)
+            flattened_output = Variable(flattened_input.data.clone().zero_())
+            flattened_output.index_copy_(0, non_pad_indices, clean_output)
+        else:
+            flattened_output = clean_output
+        
+        output = flattened_output.view(*original_shape)
+        
+        return output

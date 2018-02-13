@@ -144,8 +144,13 @@ class Optim(object):
         self.params = list(params)  # careful: params may be a generator
         #~ self.optimizer = Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
                                     #~ weight_decay=self.weight_decay, amsgrad=self.amsgrad)
-        self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-                                    weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+        if self.method == 'sgd':
+            self.optimizer = optim.SGD(self.params, lr=self.lr, weight_decay=self.weight_decay)
+        elif self.method == 'adam':
+            self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                                        weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+        else:
+            raise RuntimeError("Invalid optim method: " + self.method)
         print(self.optimizer)
         
     
@@ -154,6 +159,7 @@ class Optim(object):
         self.model_size = opt.model_size
         self.max_grad_norm = opt.max_grad_norm
         self.update_method = opt.update_method
+        self.method = opt.optim
         
         if self.update_method == 'noam':
             self.init_lr = self.model_size**(-0.5) * self.lr

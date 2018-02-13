@@ -64,12 +64,15 @@ class TransformerEncoder(nn.Module):
         
         
         
-        mask_src = input.data.eq(onmt.Constants.PAD).unsqueeze(1)
+        mask_src = input.data.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x len_src x 1 for broadcasting
+        
+        pad_mask = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
+        #~ pad_mask = None
         
         context = emb
         
         for layer in self.layer_modules:                          
-            context = layer(context, mask_src)      # batch_size x len_src x d_model
+            context = layer(context, mask_src, pad_mask=pad_mask)      # batch_size x len_src x d_model
         
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -77,7 +80,7 @@ class TransformerEncoder(nn.Module):
         # a whole stack of unnormalized layer outputs.    
         context = self.postprocess_layer(context)
         
-        return context, mask_src
+        return context, mask_src    
         
 
 class TransformerDecoder(nn.Module):
@@ -125,7 +128,7 @@ class TransformerDecoder(nn.Module):
         mask = torch.ByteTensor(np.triu(np.ones((new_len,new_len)), k=1).astype('uint8'))
         self.register_buffer('mask', mask)
         
-    def forward(self, input, context, mask_src):
+    def forward(self, input, context, src):
         """
         Inputs Shapes: 
             input: (Variable) batch_size x len_tgt (wanna tranpose)
@@ -145,7 +148,9 @@ class TransformerDecoder(nn.Module):
         """ Adding positional encoding """
         emb = self.positional_encoder(emb)
         
+        mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
         
+        pad_mask_src = torch.autograd.Variable(src.data.ne(onmt.Constants.PAD))
         
         len_tgt = input.size(1)
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
@@ -153,10 +158,18 @@ class TransformerDecoder(nn.Module):
         
         output = emb
         
+        pad_mask_tgt = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
+        pad_mask_src = torch.autograd.Variable(1 - mask_src.squeeze(1))
+        
         
         for layer in self.layer_modules:
-            output, coverage = layer(output, context, mask_tgt, mask_src) # batch_size x len_src x d_model
-            
+            output, coverage = layer(output, context, mask_tgt, mask_src, 
+                                        pad_mask_tgt=pad_mask_tgt, pad_mask_src=pad_mask_src) # batch_size x len_src x d_model
+        
+        # From Google T2T
+        # if normalization is done in layer_preprocess, then it should also be done
+        # on the output, since the output can grow very large, being the sum of
+        # a whole stack of unnormalized layer outputs.    
         output = self.postprocess_layer(output)
         
         return output, coverage
@@ -184,38 +197,38 @@ class Transformer(NMTModel):
         src = src.transpose(0, 1) # transpose to have batch first
         tgt = tgt.transpose(0, 1)
         
-        context, src_mask = self.encoder(src)
+        context, src_mask= self.encoder(src)
         
-        output, coverage = self.decoder(tgt, context, src_mask)
+        output, coverage = self.decoder(tgt, context, src)
         
         output = output.transpose(0, 1) # transpose to have time first, like RNN models
         
         return output
 
 
-class TrasnformerReconstructor(Reconstructor):
-    
-    def forward(self, src, contexts, context_mask):
-        
-        """
-        Inputs Shapes: 
-            src: len_src x batch_size
-            context: batch_size x len_tgt x model_size
-            context_mask: batch_size x len_tgt
-        
-        Outputs Shapes:
-            output:      batch_size*(len_src-1) x model_size
-            
-            
-        """
-        src_input = src[:-1] # exclude last unit from source
-        
-        src_input = src_input.transpose(0, 1) # transpose to have batch first
-        output, coverage = self.decoder(src, context, context_mask)
-        
-        output = output.transpose(0, 1) # transpose to have time first, like RNN models
-        
-        return output
+#~ class TrasnformerReconstructor(Reconstructor):
+    #~ 
+    #~ def forward(self, src, contexts, context_mask):
+        #~ 
+        #~ """
+        #~ Inputs Shapes: 
+            #~ src: len_src x batch_size
+            #~ context: batch_size x len_tgt x model_size
+            #~ context_mask: batch_size x len_tgt
+        #~ 
+        #~ Outputs Shapes:
+            #~ output:      batch_size*(len_src-1) x model_size
+            #~ 
+            #~ 
+        #~ """
+        #~ src_input = src[:-1] # exclude last unit from source
+        #~ 
+        #~ src_input = src_input.transpose(0, 1) # transpose to have batch first
+        #~ output, coverage = self.decoder(src, context, context_mask)
+        #~ 
+        #~ output = output.transpose(0, 1) # transpose to have time first, like RNN models
+        #~ 
+        #~ return output
         #~ source = source.transpose(0, 1)
         
         

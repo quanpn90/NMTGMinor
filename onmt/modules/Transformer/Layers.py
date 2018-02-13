@@ -7,6 +7,7 @@ import torch.nn.init as init
 import torch.nn.utils.weight_norm as WeightNorm
 import onmt 
 import torch.nn.functional as F
+from onmt.modules.Bottle import Bottle
 
 
 def uniform_unit_scaling(tensor, nonlinearity="linear", gain=1.0):
@@ -34,22 +35,22 @@ def uniform_unit_scaling(tensor, nonlinearity="linear", gain=1.0):
 class XavierLinear(nn.Module):
     
     ''' Simple Linear layer with xavier init '''
-    def __init__(self, d_in, d_out, bias=True, nonlinearity="linear"):
+    def __init__(self, d_in, d_out, bias=True, nonlinearity='linear'):
         super(Linear, self).__init__()
         linear = nn.Linear(d_in, d_out, bias=bias)
-        self.weight_norm = onmt.Constants.weight_norm
         
-        if self.weight_norm:
+        weight_norm = onmt.Constants.weight_norm
+        self.weight_norm = weight_norm
+        
+        if weight_norm:
             self.linear = WeightNorm(linear, name='weight')
         else:
             self.linear = linear
+            
         
-        #~ init.xavier_uniform(self.linear.weight)
-        uniform_unit_scaling(self.linear.weight, nonlinearity=nonlinearity)
-        #~ init = torch.nn.init.uniform
-        #~ init(self.linear.weight, -onmt.Constants.init_value,
-                                  #~ onmt.Constants.init_value)
-        
+            
+        init.xavier_uniform(self.linear.weight)
+    
 
     def forward(self, x):
         return self.linear(x)
@@ -151,10 +152,10 @@ class MultiHeadAttention(nn.Module):
         self.h = h
         self.d = d_model
         self.d_head = d_model//h
-        self.fc_query = Linear(d_model, h*self.d_head, bias=False)
-        self.fc_key = Linear(d_model, h*self.d_head, bias=False)
-        self.fc_value = Linear(d_model, h*self.d_head, bias=False)
-        self.fc_concat = Linear(h*self.d_head, d_model, bias=False)
+        self.fc_query = Bottle(Linear(d_model, h*self.d_head, bias=False))
+        self.fc_key = Bottle(Linear(d_model, h*self.d_head, bias=False))
+        self.fc_value = Bottle(Linear(d_model, h*self.d_head, bias=False))
+        self.fc_concat = Bottle(Linear(h*self.d_head, d_model, bias=False))
         self.sm = nn.Softmax(dim=1)
         self.attn_dropout = nn.Dropout(attn_p)
         #~ self.dropout = nn.Dropout(p)
@@ -168,14 +169,19 @@ class MultiHeadAttention(nn.Module):
         b, l, d = x.size()
         return x.view(b, l, self.h, self.d_head).transpose(1,2).contiguous().view(b*self.h, l, self.d_head)
         
-    def forward(self, query, key, value, mask):
+    def forward(self, query, key, value, mask, query_mask=None, value_mask=None):
         b, len_query = query.size(0), query.size(1)
         len_key = key.size(1)
         
+        #~ if value_mask is not None:
+            #~ key_mask = value_mask
+        #~ else:
+        key_mask = None
+        
         # project inputs to multi-heads
-        proj_query = self.fc_query(query)       # batch_size x len_query x h*d_head
-        proj_key = self.fc_key(key)             # batch_size x len_key x h*d_head
-        proj_value = self.fc_value(value)       # batch_size x len_key x h*d_head
+        proj_query = self.fc_query(query, mask=query_mask)       # batch_size x len_query x h*d_head
+        proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
+        proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
         
         # prepare the shape for applying softmax
         proj_query = self._prepare_proj(proj_query)  # batch_size*h x len_query x d_head
@@ -199,7 +205,8 @@ class MultiHeadAttention(nn.Module):
         out = torch.bmm(attns, proj_value)      # batch_size*h x len_query x d_head
         out = out.view(b, self.h, len_query, self.d_head).transpose(1,2).contiguous() 
         out = out.view(b, len_query, self.h*self.d_head)
-        out = self.fc_concat(out)
+        out = self.fc_concat(out, mask=value_mask)
+        #~ out = F.relu(out)
         
         
         return out, coverage
@@ -234,8 +241,8 @@ class FeedForward(nn.Module):
         
     def forward(self, input):
         
-        out = self.fc_1(input)
-        out = self.dropout(F.relu(out))
+        out = F.relu(self.fc_1(input), inplace=True)
+        out = self.dropout(out)
         out = self.fc_2(out)
         return out
 
@@ -271,23 +278,27 @@ class EncoderLayer(nn.Module):
         self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
         self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da')
         self.multihead = MultiHeadAttention(h, d_model, attn_p=attn_p)
-        self.feedforward = FeedForward(d_model, d_ff, p)
+        feedforward = FeedForward(d_model, d_ff, p)
+        self.feedforward = Bottle(feedforward)
+        #~ self.feedforward = feedforward
     
-    def forward(self, input, mask):
+    def forward(self, input, attn_mask, pad_mask=None):
         
         """ Self attention layer 
             layernorm > attn > dropout > residual
         """
         
         query = self.preprocess_attn(input)
-        out, _ = self.multihead(query, query, query, mask)
+        out, _ = self.multihead(query, query, query, attn_mask, 
+                                query_mask=pad_mask, value_mask=pad_mask)
         input = self.postprocess_attn(out, input)
         
         """ Feed forward layer 
             layernorm > ffn > dropout > residual
         """
-        out = self.feedforward(self.preprocess_ffn(input))
-        input = self.postprocess_attn(out, input)
+        out = self.feedforward(self.preprocess_ffn(input), mask=pad_mask)
+        #~ out = self.feedforward(self.preprocess_ffn(input))
+        input = self.postprocess_ffn(out, input)
         
         return input
     
@@ -335,19 +346,22 @@ class DecoderLayer(nn.Module):
         
         self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p)
         self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p)
-        self.feedforward = FeedForward(d_model, d_ff, p)
+        #~ self.feedforward = FeedForward(d_model, d_ff, p)
+        
+        feedforward = FeedForward(d_model, d_ff, p)
+        self.feedforward = Bottle(feedforward)
+        #~ self.feedforward = feedforward
     
-    def forward(self, input, context, mask_tgt, mask_src):
-        #~ out, _ = self.multihead_tgt(query, key, value, mask_tgt)
-        #~ out, coverage = self.multihead_src(out, context, context, mask_src)
-        #~ out = self.feedforward(out)
+    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None):
         
         """ Self attention layer 
             layernorm > attn > dropout > residual
         """
         
         query = self.preprocess_attn(input)
-        out, _ = self.multihead_tgt(query, query, query, mask_tgt)
+        out, _ = self.multihead_tgt(query, query, query, mask_tgt, 
+                                    query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
+        
         input = self.postprocess_attn(out, input)
         
         """ Context Attention layer 
@@ -355,14 +369,15 @@ class DecoderLayer(nn.Module):
         """
         
         query = self.preprocess_src_attn(input)
-        out, coverage = self.multihead_src(query, context, context, mask_src)
+        out, coverage = self.multihead_src(query, context, context, mask_src, 
+                                           query_mask=pad_mask_tgt, value_mask=None)
         input = self.postprocess_src_attn(out, input)
         
         """ Feed forward layer 
             layernorm > ffn > dropout > residual
         """
-        out = self.feedforward(self.preprocess_ffn(input))
-        input = self.postprocess_attn(out, input)
+        out = self.feedforward(self.preprocess_ffn(input), mask=pad_mask_tgt)
+        input = self.postprocess_ffn(out, input)
         
         return input, coverage
 
