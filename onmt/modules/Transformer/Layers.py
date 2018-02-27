@@ -8,6 +8,8 @@ import torch.nn.utils.weight_norm as WeightNorm
 import onmt 
 import torch.nn.functional as F
 from onmt.modules.Bottle import Bottle
+#~ from onmt.modules.MaxOut import MaxOut
+
 
 
 def uniform_unit_scaling(tensor, nonlinearity="linear", gain=1.0):
@@ -84,6 +86,29 @@ def variational_dropout(input, p, training=False):
         return output
     # if eval then return the input
     return input
+    
+class MaxOut(nn.Module):
+    def __init__(self, d, m, k):
+        super(MaxOut, self).__init__()
+        self.d_in, self.d_out, self.pool_size = d, m, k
+        self.lin = Linear(d, m * k)
+
+    def forward(self, inputs):
+        
+        original_size = inputs.size()
+        
+        inputs = inputs.view(-1, inputs.size(-1))
+        
+        shape = list(inputs.size())
+        shape[-1] = self.d_out
+        shape.append(self.pool_size)
+        max_dim = len(shape) - 1
+        out = self.lin(inputs)
+        m, i = out.view(*shape).max(dim=max_dim)
+        
+        m = m.view(*original_size[:-1], m.size(-1))
+        
+        return m
 
 class PrePostProcessing(nn.Module):
     
@@ -105,16 +130,23 @@ class PrePostProcessing(nn.Module):
         self.steps = list(sequence)
         
         if 'n' in self.steps:
-            self.layer_norm = LayerNorm(self.d_model)
+            if onmt.Constants.layer_norm == 'slow':
+                ln = LayerNorm(self.d_model)
+                self.layer_norm = Bottle(ln)
+            else:
+                ln = nn.LayerNorm((self.d_model,))
+                ln.weight.data.fill_(1)
+                self.layer_norm = Bottle(ln)
         if 'd' in self.steps:
-            self.dropout = nn.Dropout(self.dropout_p)
+            self.dropout = nn.Dropout(self.dropout_p, inplace=False)
     
-    def forward(self, tensor, input_tensor=None):
+    def forward(self, tensor, input_tensor=None, mask=None):
         
         output = tensor
         for step in self.steps:
             if step == 'n':
-                output = self.layer_norm(output)
+                output = self.layer_norm(output, mask=mask)
+                output = output
             if step == 'd':
                 output = self.dropout(output)
             if step == 'a':
@@ -206,7 +238,6 @@ class MultiHeadAttention(nn.Module):
         out = out.view(b, self.h, len_query, self.d_head).transpose(1,2).contiguous() 
         out = out.view(b, len_query, self.h*self.d_head)
         out = self.fc_concat(out, mask=value_mask)
-        #~ out = F.relu(out)
         
         
         return out, coverage
@@ -241,7 +272,7 @@ class FeedForward(nn.Module):
         
     def forward(self, input):
         
-        out = F.relu(self.fc_1(input), inplace=True)
+        out = F.relu(self.fc_1(input), inplace=False)
         out = self.dropout(out)
         out = self.fc_2(out)
         return out
@@ -270,35 +301,59 @@ class EncoderLayer(nn.Module):
         out: batch_size x len_query x d_model
     """
     
-    def __init__(self, h, d_model, p, d_ff, attn_p=0.1):
+    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0):
         super(EncoderLayer, self).__init__()
+        self.version = version
         
         self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
         self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da')
         self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
         self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da')
         self.multihead = MultiHeadAttention(h, d_model, attn_p=attn_p)
-        feedforward = FeedForward(d_model, d_ff, p)
+        
+        if onmt.Constants.activation_layer == 'linear_relu_linear':
+            if version == 2.0:
+                ff_p = 0 # 2.0 version doesn't have dropout at middle layer
+            else:
+                ff_p = p
+            feedforward = FeedForward(d_model, d_ff, ff_p)
+        elif onmt.Constants.activation_layer == 'maxout':
+            k = int(math.ceil(d_ff / d_model))
+            feedforward = MaxOut(d_model, d_model, k)
         self.feedforward = Bottle(feedforward)
-        #~ self.feedforward = feedforward
-    
+            
     def forward(self, input, attn_mask, pad_mask=None):
         
-        """ Self attention layer 
-            layernorm > attn > dropout > residual
-        """
         
-        query = self.preprocess_attn(input)
-        out, _ = self.multihead(query, query, query, attn_mask, 
-                                query_mask=pad_mask, value_mask=pad_mask)
-        input = self.postprocess_attn(out, input)
-        
-        """ Feed forward layer 
-            layernorm > ffn > dropout > residual
-        """
-        out = self.feedforward(self.preprocess_ffn(input), mask=pad_mask)
-        #~ out = self.feedforward(self.preprocess_ffn(input))
-        input = self.postprocess_ffn(out, input)
+        if self.version == 1.0:
+            """ Self attention layer 
+                layernorm > attn > dropout > residual
+            """
+            
+            query = self.preprocess_attn(input)
+            out, _ = self.multihead(query, query, query, attn_mask, 
+                                    query_mask=pad_mask, value_mask=pad_mask)
+            input = self.postprocess_attn(out, input, mask=pad_mask)
+            
+            """ Feed forward layer 
+                layernorm > ffn > dropout > residual
+            """
+            out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask), 
+                                   mask=pad_mask)
+            #~ out = self.feedforward(self.preprocess_ffn(input))
+            input = self.postprocess_ffn(out, input, mask=pad_mask)
+        else:
+            query = input
+            """ attn > dropout > residual > layer norm """
+            out, _ = self.multihead(query, query, query, attn_mask, 
+                                    query_mask=pad_mask, value_mask=pad_mask)
+            input = self.postprocess_attn(out, input, mask=pad_mask)
+            input = self.preprocess_ffn(input, mask=pad_mask)
+            
+            """ feedforward > dropout > residual > layer norm """
+            out = self.feedforward(input)
+            input = self.postprocess_ffn(out, input, mask=pad_mask)
+            input = self.preprocess_attn(input)
         
         return input
     
@@ -331,8 +386,9 @@ class DecoderLayer(nn.Module):
         
     """    
     
-    def __init__(self, h, d_model, p, d_ff, attn_p=0.1):
+    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0):
         super(DecoderLayer, self).__init__()
+        self.version = version
         
         self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
         self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da')
@@ -346,38 +402,62 @@ class DecoderLayer(nn.Module):
         
         self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p)
         self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p)
-        #~ self.feedforward = FeedForward(d_model, d_ff, p)
         
-        feedforward = FeedForward(d_model, d_ff, p)
+        if onmt.Constants.activation_layer == 'linear_relu_linear':
+            if version == 2.0:
+                ff_p = 0 # 2.0 version doesn't have dropout at middle layer
+            else:
+                ff_p = p
+            feedforward = FeedForward(d_model, d_ff, ff_p)
+        elif onmt.Constants.activation_layer == 'maxout':
+            k = int(math.ceil(d_ff / d_model))
+            feedforward = MaxOut(d_model, d_model, k)
         self.feedforward = Bottle(feedforward)
-        #~ self.feedforward = feedforward
     
     def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None):
         
-        """ Self attention layer 
-            layernorm > attn > dropout > residual
-        """
+        if self.version == 1.0:
+            """ Self attention layer 
+                layernorm > attn > dropout > residual
+            """
+            query = self.preprocess_attn(input, mask=pad_mask_tgt)
+            out, _ = self.multihead_tgt(query, query, query, mask_tgt, 
+                                        query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
+            
+            input = self.postprocess_attn(out, input)
+            
+            """ Context Attention layer 
+                layernorm > attn > dropout > residual
+            """
+            
+            query = self.preprocess_src_attn(input, mask=pad_mask_tgt)
+            out, coverage = self.multihead_src(query, context, context, mask_src, 
+                                               query_mask=pad_mask_tgt, value_mask=None)
+            input = self.postprocess_src_attn(out, input)
+            
+            """ Feed forward layer 
+                layernorm > ffn > dropout > residual
+            """
+            out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask_tgt), 
+                                               mask=pad_mask_tgt)
+            input = self.postprocess_ffn(out, input)
         
-        query = self.preprocess_attn(input)
-        out, _ = self.multihead_tgt(query, query, query, mask_tgt, 
-                                    query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
-        
-        input = self.postprocess_attn(out, input)
-        
-        """ Context Attention layer 
-            layernorm > attn > dropout > residual
-        """
-        
-        query = self.preprocess_src_attn(input)
-        out, coverage = self.multihead_src(query, context, context, mask_src, 
-                                           query_mask=pad_mask_tgt, value_mask=None)
-        input = self.postprocess_src_attn(out, input)
-        
-        """ Feed forward layer 
-            layernorm > ffn > dropout > residual
-        """
-        out = self.feedforward(self.preprocess_ffn(input), mask=pad_mask_tgt)
-        input = self.postprocess_ffn(out, input)
+        elif self.version == 2.0:
+            out, _ = self.multihead_tgt(input, input, input, mask_tgt, 
+                                        query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
+            input = self.postprocess_attn(out, input)
+            input = self.preprocess_src_attn(input, mask=pad_mask_tgt)
+            
+            out, coverage = self.multihead_src(input, context, context, mask_src, 
+                                               query_mask=pad_mask_tgt, value_mask=None)
+            
+            input = self.postprocess_src_attn(out, input)
+            input = self.preprocess_ffn(input, mask=pad_mask_tgt)
+            
+            
+            out = self.feedforward(input,  mask=pad_mask_tgt)
+            input = self.postprocess_ffn(out, input)
+            input = self.preprocess_attn(input)
         
         return input, coverage
 

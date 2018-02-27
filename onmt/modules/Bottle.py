@@ -25,7 +25,8 @@ class Bottle(nn.Module):
         # remember the original shape
         original_shape = input.size()
         
-        flattened_input = input.view(-1, input.size(-1))
+        # flattned the tensor to 2D
+        flattened_input = input.contiguous().view(-1, input.size(-1))
         
         dim = original_shape[-1]
         
@@ -34,9 +35,6 @@ class Bottle(nn.Module):
             
             non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
             
-            #~ print(flattened_input.size())
-            #~ print(flattened_mask.size())
-            #~ print(non_pad_indices.size())
             
             clean_input = flattened_input.index_select(0, non_pad_indices )
             #~ clean_input = flattened_input.masked_select(flattened_mask)
@@ -53,6 +51,7 @@ class Bottle(nn.Module):
         else:
             flattened_output = clean_output
         
+        # restore the tensor original size
         output = flattened_output.view(*original_shape)
         
         return output

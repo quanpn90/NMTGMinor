@@ -1,4 +1,4 @@
-import torch
+import torch, copy
 import torch.nn as nn
 from torch.autograd import Variable
 import onmt
@@ -9,8 +9,16 @@ def build_model(opt, dicts):
 
     model = None
     
+    onmt.Constants.layer_norm = opt.layer_norm
+    onmt.Constants.weight_norm = opt.weight_norm
+    onmt.Constants.activation_layer = opt.activation_layer
+    onmt.Constants.version = 1.0
+    
     if not hasattr(opt, 'model'):
         opt.model = 'recurrent'
+        
+    if not hasattr(opt, 'layer_norm'):
+        opt.layer_norm = 'slow'
 
     
     if opt.model == 'recurrent' or opt.model == 'rnn':
@@ -29,14 +37,18 @@ def build_model(opt, dicts):
         # raise NotImplementedError
         
         max_size = 256 # This should be the longest sentence from the dataset
-        onmt.Constants.weight_norm = opt.weight_norm
         onmt.Constants.init_value = opt.param_init
         
-        
-        positional_encoder = PositionalEncoding(opt.model_size, len_max=max_size)
+        if opt.time == 'positional_encoding':
+            positional_encoder = PositionalEncoding(opt.model_size, len_max=max_size)
+        else:
+            positional_encoder = None
+        #~ elif opt.time == 'gru':
+            #~ positional_encoder = nn.GRU(opt.model_size, opt.model_size, 1, batch_first=True)
+        #~ elif opt.time == 'lstm':
+            #~ positional_encoder = nn.LSTM(opt.model_size, opt.model_size, 1, batch_first=True)
         
         encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
-        
         decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder)
         
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
@@ -54,7 +66,8 @@ def build_model(opt, dicts):
         
         
         
-        positional_encoder = PositionalEncoding(opt.model_size, len_max=max_size)
+        #~ positional_encoder = PositionalEncoding(opt.model_size, len_max=max_size)
+        positional_encoder = None
         
         encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder)
         
@@ -89,6 +102,7 @@ def init_model_parameters(model, opt):
         init = torch.nn.init.xavier_uniform
         init(model.encoder.word_lut.weight)
         init(model.decoder.word_lut.weight)
+        init(model.generator.linear.weight)
         #~ uniform_unit_scaling(model.encoder.word_lut.weight.data)
         #~ uniform_unit_scaling(model.decoder.word_lut.weight.data)
         

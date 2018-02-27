@@ -61,9 +61,16 @@ parser.add_argument('-emb_dropout', type=float, default=0.1,
                     help='Dropout probability; applied on top of embedding.')    
 parser.add_argument('-weight_norm', action='store_true',
                   help='Apply weight normalization on linear modules')
+parser.add_argument('-layer_norm', default='fast',
+                  help='Layer normalization type')
 parser.add_argument('-death_rate', type=float, default=0.5,
-                    help='Stochastic layer death rate')                        
-                    
+                    help='Stochastic layer death rate')  
+parser.add_argument('-activation_layer', default='linear_relu_linear', type=str,
+                    help='The activation layer in each transformer block')                        
+parser.add_argument('-time', default='positional_encoding', type=str,
+                    help='Type of time representation positional_encoding|gru|lstm')                        
+parser.add_argument('-version', type=float, default=1.0,
+                    help='Transformer version. 1.0 = Google type | 2.0 is different')                    
                     
 # Optimization options
 parser.add_argument('-encoder_type', default='text',
@@ -224,7 +231,7 @@ def main():
     
 
     print(model)
-    print(loss_function)
+    #~ print(loss_function)
 
     nParams = sum([p.nelement() for p in model.parameters()])
     print('* number of parameters: %d' % nParams)

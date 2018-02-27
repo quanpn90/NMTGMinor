@@ -66,7 +66,7 @@ class NMTLossFunc(LossFuncBase):
             
         else:
             weight = torch.ones(output_size)
-            weight[self.padding_idx] = 0
+            weight[self.padding_idx] = 0     
             self.func = nn.NLLLoss(weight, size_average=False)
         self.confidence = 1.0 - label_smoothing
         self.label_smoothing = label_smoothing
@@ -101,7 +101,7 @@ class NMTLossFunc(LossFuncBase):
         return (loss, loss_data)
         
    
-    def forward(self, outputs, targets, generator=None, backward=False):
+    def forward(self, outputs, targets, generator=None, backward=False, mask=None):
         """
         Compute the loss. Subclass must define this method.
         Args:
@@ -113,15 +113,42 @@ class NMTLossFunc(LossFuncBase):
             **kwargs(optional): additional info for computing loss.
         """
         
-        if generator is not None:
-            outputs = torch.autograd.Variable(outputs.data, requires_grad=(backward))
-            
         batch_size = outputs.size(1)
-        split_size = int(math.ceil(self.shard_split / batch_size))
-        #~ split_size = self.shard_split
+        h_size = outputs.size(-1)
+        
+        # flatten the output
+        outputs = outputs.contiguous().view(-1, outputs.size(-1))
+        targets = targets.view(-1)
+        
+        if mask is not None:
+            """ We remove all positions with PAD """
+            flattened_mask = mask.view(-1)
+            
+            non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
+            
+            clean_input = outputs.index_select(0, non_pad_indices)
+            
+            clean_targets = targets.index_select(0, non_pad_indices)
+        
+        else:
+            clean_input = outputs
+            clean_targets = targets
+        
+        detached_outputs = clean_input
+        """ detaching makes backward pass split into two steps:
+            one in the linear softmax (big)
+            one in the rest of the network
+            saving a lot of memory 
+        """
+        if generator is not None:
+            outputs = torch.autograd.Variable(detached_outputs.data, requires_grad=(backward))
+            
+        
+        #~ split_size = int(math.ceil(self.shard_split / batch_size))
+        split_size = self.shard_split
         
         outputs_split = torch.split(outputs, split_size)
-        targets_split = torch.split(targets, split_size)
+        targets_split = torch.split(clean_targets, split_size)
         
         loss_data = 0
         for i, (outputs_t, target_t) in enumerate(zip(outputs_split, targets_split)):
@@ -143,5 +170,8 @@ class NMTLossFunc(LossFuncBase):
                 loss_t.backward()
             
         grad_outputs = None if outputs.grad is None else outputs.grad.data
+        
+        if grad_outputs is not None:
+            detached_outputs.backward(grad_outputs)
         
         return loss_data, grad_outputs

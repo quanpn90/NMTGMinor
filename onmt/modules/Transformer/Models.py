@@ -29,19 +29,27 @@ class TransformerEncoder(nn.Module):
         self.word_dropout = opt.word_dropout
         self.attn_dropout = opt.attn_dropout
         self.emb_dropout = opt.emb_dropout
+        self.time = opt.time
+        self.version = opt.version
         
         self.word_lut = nn.Embedding(dicts.size(),
                                      self.model_size,
                                      padding_idx=onmt.Constants.PAD)
         
-        #~ self.emb_drop_layer = nn.Dropout(opt.emb_dropout)
+        if opt.time == 'positional_encoding':
+            self.time_transformer = positional_encoder
+        elif opt.time == 'gru':
+            self.time_transformer = nn.GRU(self.model_size, self.model_size, 1, batch_first=True)
+        elif opt.time == 'lstm':
+            self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
+        
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d')
         
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
         
         self.positional_encoder = positional_encoder
         
-        self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
+        self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, version=self.version) for _ in range(self.layers)])
 
     def forward(self, input):
         """
@@ -57,11 +65,16 @@ class TransformerEncoder(nn.Module):
         """ Embedding: batch_size x len_src x d_model """
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         """ Scale the emb by sqrt(d_model) """
-        emb = emb * math.sqrt(self.model_size)
-        emb = self.preprocess_layer(emb)
-        """ Adding positional encoding """
-        emb = self.positional_encoder(emb)
         
+        if self.time == 'positional_encoding':
+            emb = emb * math.sqrt(self.model_size)
+        """ Adding positional encoding """
+        emb = self.time_transformer(emb)
+        if isinstance(emb, tuple):
+            emb = emb[0]
+        emb = self.preprocess_layer(emb)
+        
+       
         
         
         mask_src = input.data.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x len_src x 1 for broadcasting
@@ -69,16 +82,17 @@ class TransformerEncoder(nn.Module):
         pad_mask = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
         #~ pad_mask = None
         
-        context = emb
+        context = emb.contiguous()
         
         for layer in self.layer_modules:                          
-            context = layer(context, mask_src, pad_mask=pad_mask)      # batch_size x len_src x d_model
+            context = layer(context, mask_src, pad_mask=None)      # batch_size x len_src x d_model
         
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.    
-        context = self.postprocess_layer(context)
+        if self.version == 1.0:
+            context = self.postprocess_layer(context)
         
         return context, mask_src    
         
@@ -105,10 +119,19 @@ class TransformerDecoder(nn.Module):
         self.word_dropout = opt.word_dropout 
         self.attn_dropout = opt.attn_dropout
         self.emb_dropout = opt.emb_dropout
+        self.time = opt.time
+        self.version = opt.version
+        
+        if opt.time == 'positional_encoding':
+            self.time_transformer = positional_encoder
+        elif opt.time == 'gru':
+            self.time_transformer = nn.GRU(self.model_size, self.model_size, 1, batch_first=True)
+        elif opt.time == 'lstm':
+            self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
         
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d')
-        
-        self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
+        if self.version == 1.0:
+            self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
         
         self.word_lut = nn.Embedding(dicts.size(),
                                      self.model_size,
@@ -116,7 +139,7 @@ class TransformerDecoder(nn.Module):
         
         self.positional_encoder = positional_encoder
         
-        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
+        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, version=self.version) for _ in range(self.layers)])
         
         len_max = self.positional_encoder.len_max
         mask = torch.ByteTensor(np.triu(np.ones((len_max,len_max)), k=1).astype('uint8'))
@@ -142,11 +165,15 @@ class TransformerDecoder(nn.Module):
         
         """ Embedding: batch_size x len_src x d_model """
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
-        emb = self.preprocess_layer(emb)
-        """ Scale the emb by sqrt(d_model) """
-        emb = emb * math.sqrt(self.model_size)
+        if self.time == 'positional_encoding':
+            emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
-        emb = self.positional_encoder(emb)
+        emb = self.time_transformer(emb)
+        if isinstance(emb, tuple):
+            emb = emb[0]
+        emb = self.preprocess_layer(emb)
+        
+        
         
         mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
         
@@ -156,7 +183,7 @@ class TransformerDecoder(nn.Module):
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
         
-        output = emb
+        output = emb.contiguous()
         
         pad_mask_tgt = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
         pad_mask_src = torch.autograd.Variable(1 - mask_src.squeeze(1))
@@ -164,13 +191,14 @@ class TransformerDecoder(nn.Module):
         
         for layer in self.layer_modules:
             output, coverage = layer(output, context, mask_tgt, mask_src, 
-                                        pad_mask_tgt=pad_mask_tgt, pad_mask_src=pad_mask_src) # batch_size x len_src x d_model
+                                        pad_mask_tgt=pad_mask_tgt, pad_mask_src=None) # batch_size x len_src x d_model
         
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.    
-        output = self.postprocess_layer(output)
+        if self.version == 1.0:
+            output = self.postprocess_layer(output)
         
         return output, coverage
 

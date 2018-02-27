@@ -176,11 +176,16 @@ class XETrainer(BaseTrainer):
                 outputs = self.model(batch)
                     
                 targets = batch[1][1:]
+                tgt_inputs = batch[1][:-1]
+                
                 batch_size = targets.size(1)
                 
-                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=True)
+                tgt_mask = torch.autograd.Variable(targets.data.ne(onmt.Constants.PAD))
+                #~ tgt_mask = None
                 
-                outputs.backward(grad_outputs)
+                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=True, mask=tgt_mask)
+                
+                #~ outputs.backward(grad_outputs)
                 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
@@ -205,7 +210,7 @@ class XETrainer(BaseTrainer):
                 #~ if counter >= opt.batch_size_update:
                 if num_accumulated_words >= opt.batch_size_update * 0.95:
                     # Update the parameters.
-                    grad_denom=num_accumulated_sents if self.opt.normalize_gradient else 1
+                    grad_denom=num_accumulated_words if self.opt.normalize_gradient else 1
                     self.optim.step(grad_denom=grad_denom)
                     self.model.zero_grad()
                     counter = 0
