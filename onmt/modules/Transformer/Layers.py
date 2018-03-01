@@ -38,7 +38,7 @@ class XavierLinear(nn.Module):
     
     ''' Simple Linear layer with xavier init '''
     def __init__(self, d_in, d_out, bias=True, nonlinearity='linear'):
-        super(Linear, self).__init__()
+        super(XavierLinear, self).__init__()
         linear = nn.Linear(d_in, d_out, bias=bias)
         
         weight_norm = onmt.Constants.weight_norm
@@ -50,8 +50,13 @@ class XavierLinear(nn.Module):
             self.linear = linear
             
         
+        stdv = 1. / math.sqrt(self.linear.weight.size(1))
             
-        init.xavier_uniform(self.linear.weight)
+        #~ init.xavier_uniform(self.linear.weight)
+        init.uniform(self.linear.weight, -stdv, stdv)
+        
+        if bias:
+            self.linear.bias.data.zero_()
     
 
     def forward(self, x):
@@ -183,11 +188,19 @@ class MultiHeadAttention(nn.Module):
         super(MultiHeadAttention, self).__init__()      
         self.h = h
         self.d = d_model
+        
+        assert d_model % h == 0
+        
         self.d_head = d_model//h
         self.fc_query = Bottle(Linear(d_model, h*self.d_head, bias=False))
         self.fc_key = Bottle(Linear(d_model, h*self.d_head, bias=False))
         self.fc_value = Bottle(Linear(d_model, h*self.d_head, bias=False))
-        self.fc_concat = Bottle(Linear(h*self.d_head, d_model, bias=False))
+        
+        self.attention_out = onmt.Constants.attention_out
+        if self.attention_out == 'default':
+            self.fc_concat = Bottle(Linear(h*self.d_head, d_model, bias=False))
+        elif self.attention_out == 'combine':
+            self.fc_concat = Bottle(Linear(2 * d_model, d_model, bias=False))
         self.sm = nn.Softmax(dim=1)
         self.attn_dropout = nn.Dropout(attn_p)
         #~ self.dropout = nn.Dropout(p)
@@ -237,8 +250,12 @@ class MultiHeadAttention(nn.Module):
         out = torch.bmm(attns, proj_value)      # batch_size*h x len_query x d_head
         out = out.view(b, self.h, len_query, self.d_head).transpose(1,2).contiguous() 
         out = out.view(b, len_query, self.h*self.d_head)
-        out = self.fc_concat(out, mask=value_mask)
-        
+            
+        if self.attention_out == 'default':
+            out = self.fc_concat(out, mask=value_mask)
+        else:
+            concat = torch.cat([out, query], dim=2)
+            out = F.tanh(self.fc_concat(concat, mask = value_mask))
         
         return out, coverage
 

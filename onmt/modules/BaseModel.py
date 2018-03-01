@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
-import onmt
+import onmt, math
 
 
 #~ from onmt.modules.Transformer.Layers import XavierLinear
@@ -16,6 +16,13 @@ class Generator(nn.Module):
         self.output_size = output_size
         #~ self.linear = onmt.modules.Transformer.Layers.XavierLinear(hidden_size, output_size)
         self.linear = nn.Linear(hidden_size, output_size)
+        
+        stdv = 1. / math.sqrt(self.linear.weight.size(1))
+        
+        torch.nn.init.uniform(self.linear.weight, -stdv, stdv)
+        
+        self.linear.bias.data.zero_()
+            
         
         
     def forward(self, input, log_softmax=True):

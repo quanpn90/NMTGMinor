@@ -71,7 +71,8 @@ parser.add_argument('-time', default='positional_encoding', type=str,
                     help='Type of time representation positional_encoding|gru|lstm')                        
 parser.add_argument('-version', type=float, default=1.0,
                     help='Transformer version. 1.0 = Google type | 2.0 is different')                    
-                    
+parser.add_argument('-attention_out', default='default',
+                  help='Type of attention out. default|combine')
 # Optimization options
 parser.add_argument('-encoder_type', default='text',
                     help="Type of encoder to use. Options are [text|img].")

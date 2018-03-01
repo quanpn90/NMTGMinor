@@ -9,16 +9,22 @@ def build_model(opt, dicts):
 
     model = None
     
-    onmt.Constants.layer_norm = opt.layer_norm
-    onmt.Constants.weight_norm = opt.weight_norm
-    onmt.Constants.activation_layer = opt.activation_layer
-    onmt.Constants.version = 1.0
-    
     if not hasattr(opt, 'model'):
         opt.model = 'recurrent'
         
     if not hasattr(opt, 'layer_norm'):
         opt.layer_norm = 'slow'
+        
+    if not hasattr(opt, 'attention_out'):
+        opt.attention_out = 'default'
+    
+    onmt.Constants.layer_norm = opt.layer_norm
+    onmt.Constants.weight_norm = opt.weight_norm
+    onmt.Constants.activation_layer = opt.activation_layer
+    onmt.Constants.version = 1.0
+    onmt.Constants.attention_out = opt.attention_out
+    
+    
 
     
     if opt.model == 'recurrent' or opt.model == 'rnn':
@@ -99,10 +105,10 @@ def init_model_parameters(model, opt):
         from onmt.modules.Transformer.Layers import uniform_unit_scaling
 
         # We initialize the model parameters with Xavier init
-        init = torch.nn.init.xavier_uniform
-        init(model.encoder.word_lut.weight)
-        init(model.decoder.word_lut.weight)
-        init(model.generator.linear.weight)
+        init = torch.nn.init
+        init.xavier_uniform(model.encoder.word_lut.weight)
+        init.xavier_uniform(model.decoder.word_lut.weight)
+        #~ init.xavier_uniform(model.generator.linear.weight)
         #~ uniform_unit_scaling(model.encoder.word_lut.weight.data)
         #~ uniform_unit_scaling(model.decoder.word_lut.weight.data)
         
