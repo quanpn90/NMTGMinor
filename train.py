@@ -133,8 +133,10 @@ parser.add_argument('-start_decay_at', type=int, default=99999,
                     help="""Start decaying every epoch after and including this
                     epoch""")
 parser.add_argument('-warmup_steps', type=int, default=4096,
-                    help="""Start decaying every epoch after and including this
-                    epoch""")
+                    help="""Number of steps to increase the lr in noam""")
+parser.add_argument('-noam_step_interval', type=int, default=1,
+                    help="""How many steps before updating the parameters""")
+
 parser.add_argument('-reset_optim', action='store_true',
                     help='Reset the optimizer running variables')
 parser.add_argument('-beta1', type=float, default=0.9,

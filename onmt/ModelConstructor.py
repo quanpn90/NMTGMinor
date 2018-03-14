@@ -42,7 +42,7 @@ def build_model(opt, dicts):
     elif opt.model == 'transformer':
         # raise NotImplementedError
         
-        max_size = 256 # This should be the longest sentence from the dataset
+        max_size = 262 # This should be the longest sentence from the dataset
         onmt.Constants.init_value = opt.param_init
         
         if opt.time == 'positional_encoding':

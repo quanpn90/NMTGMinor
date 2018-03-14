@@ -101,7 +101,7 @@ class NMTLossFunc(LossFuncBase):
         return (loss, loss_data)
         
    
-    def forward(self, outputs, targets, generator=None, backward=False, mask=None):
+    def forward(self, outputs, targets, generator=None, backward=False, mask=None, normalizer=1):
         """
         Compute the loss. Subclass must define this method.
         Args:
@@ -119,6 +119,7 @@ class NMTLossFunc(LossFuncBase):
         # flatten the output
         outputs = outputs.contiguous().view(-1, outputs.size(-1))
         targets = targets.view(-1)
+        #~ mask = None
         
         if mask is not None:
             """ We remove all positions with PAD """
@@ -171,7 +172,11 @@ class NMTLossFunc(LossFuncBase):
             
         grad_outputs = None if outputs.grad is None else outputs.grad.data
         
+       
+        
         if grad_outputs is not None:
-            detached_outputs.backward(grad_outputs)
+            #~ print(grad_outputs.size())
+            #~ print(detached_outputs.size())
+            detached_outputs.backward(grad_outputs.resize_as_(detached_outputs.data))
         
         return loss_data, grad_outputs

@@ -7,163 +7,158 @@ from onmt.modules.WordDrop import embedded_dropout
 import torch.nn.functional as F
 import random
 from onmt.modules.BaseModel import NMTModel
+from onmt.modules.rnn.Layers import EncoderLayer, DecoderLayer
+from torch.nn.utils.rnn import pack_padded_sequence as pack
+from torch.nn.utils.rnn import pad_packed_sequence as unpack
+from torch.nn.utils.rnn import PackedSequence
+from onmt.modules.Transformer.Layers import PrePostProcessing 
 
-        
 
-class CuDNNEncoder(nn.Module):
-
-    def __init__(self, opt, dicts):
-        self.layers = opt.layers
-        self.num_directions = 2 if opt.brnn else 1
-        self.word_dropout = opt.word_dropout
-        assert opt.rnn_size % self.num_directions == 0
-        self.hidden_size = opt.rnn_size // self.num_directions
-        input_size = opt.word_vec_size
-
-        super(Encoder, self).__init__()
-        self.word_lut = nn.Embedding(dicts.size(),
-                                     opt.word_vec_size,
-                                     padding_idx=onmt.Constants.PAD)
-        self.rnn = nn.LSTM(input_size, self.hidden_size,
-                           num_layers=opt.layers,
-                           dropout=opt.dropout,
-                           bidirectional=opt.brnn)
-
-    def load_pretrained_vectors(self, opt):
-        if opt.pre_word_vecs_enc is not None:
-            pretrained = torch.load(opt.pre_word_vecs_enc)
-            self.word_lut.weight.data.copy_(pretrained)
-
-    def forward(self, input, hidden=None):
-        if isinstance(input, tuple):
-            # Lengths data is wrapped inside a Variable.
-            lengths = input[1].data.view(-1).tolist()
-            emb = pack(self.word_lut(input[0]), lengths)
-        else:
-            emb = self.word_lut(input)
-        outputs, hidden_t = self.rnn(emb, hidden)
-        if isinstance(input, tuple):
-            outputs = unpack(outputs)[0]
-        return hidden_t, outputs
-
-def flip(x, dim):
-    xsize = x.size()
-    dim = x.dim() + dim if dim < 0 else dim
-    x = x.view(-1, *xsize[dim:])
-    x = x.view(x.size(0), x.size(1), -1)[:, getattr(torch.arange(x.size(1)-1, 
-                      -1, -1), ('cpu','cuda')[x.is_cuda])().long(), :]
-    return x.view(xsize)
+def unsort(input, indices, dim=1):
+    
+    """ unsort the tensor based on indices which are created by sort """
+    
+    """ dim is the dimension of batch size """
+    output = input.new(*input.size())
+    
+    output.scatter_(dim, indices.unsqueeze(0).unsqueeze(2), input)
+    
+    return output
+    
+    
 
 class RecurrentEncoder(nn.Module):
 
     def __init__(self, opt, dicts):
         self.layers = opt.layers
-        self.num_directions = 2 if opt.brnn else 1
-        assert opt.rnn_size % self.num_directions == 0
-        self.hidden_size = opt.rnn_size // self.num_directions
-        input_size = opt.word_vec_size
+        self.model_size = opt.model_size
+        self.inner_size = opt.inner_size
+        self.layers = opt.layers
+        self.dropout = opt.dropout
         self.word_dropout = opt.word_dropout
-
+        self.attn_dropout = opt.attn_dropout
+        self.emb_dropout = opt.emb_dropout
+        self.n_heads = opt.n_heads
         super(RecurrentEncoder, self).__init__()
+
+        
         self.word_lut = nn.Embedding(dicts.size(),
-                                     opt.word_vec_size,
+                                     self.model_size,
                                      padding_idx=onmt.Constants.PAD)
-                                     
-        self.forward_rnn = RecurrentSequential('mlstm', opt.layers, input_size,
-                               self.hidden_size, dropout=opt.dropout)
-                               
-        self.backward_rnn = RecurrentSequential('mlstm', opt.layers, input_size,
-                               self.hidden_size, dropout=opt.dropout)                  
         
-
-    def load_pretrained_vectors(self, opt):
-        if opt.pre_word_vecs_enc is not None:
-            pretrained = torch.load(opt.pre_word_vecs_enc)
-            self.word_lut.weight.data.copy_(pretrained)
-
-    def forward(self, input, hidden=None):
-    
-        # embedding
-        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d')
+        
+        self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
+        
+        self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
+                                                                                                                                    
+        
+        
+    def forward(self, input):
+        
+        """
+        Inputs Shapes: 
+            input: len_src x batch_size  (wanna tranpose)
+        """
+        
+        # first, create the inputs for packed sequence 
+        mask = input.data.ne(onmt.Constants.PAD)
+        
+        lengths = Variable(torch.sum(mask, dim=0)) 
+        
+        # sort the lengths by descending order
+        # remember the ind to unsort the output tensors
+        sorted_lengths, ind = torch.sort(lengths, 0, descending=True)
+        
+        # sort the input by length
+        sorted_input = input.index_select(1, ind)
+        
+        packed_input = pack(sorted_input, sorted_lengths)
+        batch_sizes = packed_input.batch_sizes
+        
+        emb = embedded_dropout(self.word_lut, packed_input.data, dropout=self.word_dropout if self.training else 0)
+        
+        # add dropout ( works on 2D tensor)
+        emb = self.preprocess_layer(emb)
+        
+        # pack the input in a PackedSequence
+        packed_input = PackedSequence(emb, batch_sizes)
+        
+        rnn_hiddens = []
+        
+        output = packed_input
+        
+        for layer in self.layer_modules:                          
+            output, rnn_hidden = layer(output)      # len_src x batch_size x d_model
+            rnn_hiddens.append(rnn_hidden)
             
-        emb_split = emb.split(1)
+            
+        output = PackedSequence(self.postprocess_layer(output.data), batch_sizes) 
         
-        seq_mask = input.ne(onmt.Constants.PAD) # time x batch
+        # restore the mask to the tensor 
+        context = unpack(output)[0]
         
-        seq_mask = seq_mask.split(1) # convert into a list
+        # unsort the context and the rnn_hiddens 
+        context = unsort(context, ind, dim=1)
+        #~ 
+        #~ for i, hidden in rnn_hiddens:
+            #~ rnn_hiddens[i] = unsort(hidden, ind, dim=1)
         
-        forward_output, forward_hidden = self.forward_rnn(emb_split, seq_masks=seq_mask)
-        
-        # reverse input and mask for the backward RNN
-        rev_input = flip(input, 0)
-        
-        rev_seq_mask = rev_input.ne(onmt.Constants.PAD) # time x batch
-        rev_seq_mask = rev_seq_mask.split(1)
-        
-        backward_output, backward_hidden = self.backward_rnn(reversed(emb_split), seq_masks=rev_seq_mask)
-        
-        # reverse the backward output to match forward's timeline
-        backward_output = flip(backward_output, 0)
-
-        # brnn output is concatenation of two 
-        outputs = torch.cat((forward_output, backward_output), dim=2)
-        
-        
-        # also concatenation the hidden states
-        hidden_t = []
-        
-        h_t = torch.cat((forward_hidden[0], backward_hidden[0]), dim=2) # layers * batch_size * dim
-        c_t = torch.cat((forward_hidden[1], backward_hidden[1]), dim=2)
-        
-        hidden_t = (h_t, c_t)
-        
-        return hidden_t, outputs
-
+        return context, rnn_hiddens
 
 class RecurrentDecoder(nn.Module):
 
     def __init__(self, opt, dicts):
+        self.model_size = opt.model_size
+        self.n_heads = opt.n_heads
+        self.inner_size = opt.inner_size
         self.layers = opt.layers
-        self.input_feed = opt.input_feed
-        input_size = opt.word_vec_size
-        if self.input_feed:
-            input_size += opt.rnn_size
-
+        self.dropout = opt.dropout
+        self.word_dropout = opt.word_dropout 
+        self.attn_dropout = opt.attn_dropout
+        self.emb_dropout = opt.emb_dropout
+        
         super(RecurrentDecoder, self).__init__()
+        
         self.word_lut = nn.Embedding(dicts.size(),
-                                     opt.word_vec_size,
+                                     self.model_size,
                                      padding_idx=onmt.Constants.PAD)
-        self.rnn = StackedLSTM(mLSTMCell, opt.layers, input_size,
-                               opt.rnn_size, dropout=opt.dropout)
-        self.attn = onmt.modules.GlobalAttention(opt.rnn_size)
-        self.dropout = nn.Dropout(opt.dropout)
-        self.word_dropout = opt.word_dropout
-        self.hidden_size = opt.rnn_size
+        
+        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d')
+        
+        self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
+        
+        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
 
-    def load_pretrained_vectors(self, opt):
-        if opt.pre_word_vecs_dec is not None:
-            pretrained = torch.load(opt.pre_word_vecs_dec)
-            self.word_lut.weight.data.copy_(pretrained)
 
-    def forward(self, input, hidden, context, init_output, attn_mask=None):
+    def forward(self, input, context, src, hidden=None):
+        """ Inputs:
+        context (Variable): len_src * batch_size * H
+        input ( Variable): len_tgt * batch_size
+        src ( Variable) : len_src * batch_size
+        
+        """
         
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        
+        # transpose to have batch first to fit attention format
+        mask_src = src.data.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(1)
+        
+        # normalize the embedding 
+        emb = self.preprocess_layer(emb)
+        
+        output = emb
+        
+        rnn_hiddens = list()
+        
+        for layer in self.layer_modules:
+            output, rnn_hidden, coverage = layer(output, context, mask_src)
+            
+            rnn_hiddens.append(rnn_hidden)
 
-        outputs = []
-        output = init_output
-        for emb_t in emb.split(1):
-            emb_t = emb_t.squeeze(0)
-            if self.input_feed:
-                emb_t = torch.cat([emb_t, output], 1)
-
-            output, hidden = self.rnn(emb_t, hidden)
-            output, attn = self.attn(output, context.transpose(0, 1), attn_mask=attn_mask)
-            output = self.dropout(output)
-            outputs += [output]
-
-        outputs = torch.stack(outputs)
-        return outputs, hidden, attn
-
+        output = self.postprocess_layer(output)
+        
+        return output, rnn_hiddens, coverage
 
 
         
@@ -188,14 +183,25 @@ class RecurrentModel(NMTModel):
         src = input[0]
         tgt = input[1][:-1]  # exclude last target from inputs
         
-        attn_mask = src.eq(onmt.Constants.PAD).t() # batch x time
         
-        enc_hidden, context = self.encoder(src)
-        init_output = self.make_init_decoder_output(context)
+        
+        #~ attn_mask = src.eq(onmt.Constants.PAD).t() # batch x time
+        #~ print(tgt.size())
+        
+        # to debug: detach the context
+        
+        context, hiddens = self.encoder(src)
+        
+        context = Variable(context.data)
+        
+        out, hiddens, coverage = self.decoder(tgt, context, src)
+        #~ init_output = self.make_init_decoder_output(context)
 
-        out, dec_hidden, _attn = self.decoder(tgt, enc_hidden,
-                                              context, init_output, attn_mask=attn_mask)
-
+        #~ out, dec_hidden, _attn = self.decoder(tgt, enc_hidden,
+                                              #~ context, init_output, attn_mask=attn_mask)
+        
+        #~ print(out.size())
+        
         return out
-		
+
     

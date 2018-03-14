@@ -2,11 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class Bottle(nn.Module):
+class 3DBottle(nn.Module):
 	
 		def __init__(self, m):
 	
-			super(Bottle, self).__init__()
+			super(3DBottle, self).__init__()
 			
 			self.module = m() # we initialize the module using lambda 
 			
@@ -24,3 +24,4 @@ class Bottle(nn.Module):
 			resizedOut = output.contiguous().view(B, L, -1)
 			
 			return resizedOut
+

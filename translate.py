@@ -73,8 +73,8 @@ def addone(f):
     
 def len_penalty(s, l, alpha):
     
-    #~ l_term = (((5 + l) ** alpha) /
-                  #~ ((5 + 1) ** alpha))
+    # l_term = (((5 + l) ** alpha) /
+                  # ((5 + 1) ** alpha))
     l_term = math.pow(l, alpha)
     return s / l_term
 
@@ -133,15 +133,14 @@ def main():
         predBatch, predScore, predLength, goldScore, numGoldWords  = translator.translate(srcBatch,
                                                                                     tgtBatch)
         if opt.normalize:
-            print("hello")
             predBatch_ = []
             predScore_ = []
             for bb, ss, ll in zip(predBatch, predScore, predLength):
                 #~ ss_ = [s_/numpy.maximum(1.,len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
-                ss_ = [len_penalty(s_, len(b_), opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
+                ss_ = [len_penalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
                 ss_origin = [(s_, len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
                 sidx = numpy.argsort(ss_)[::-1]
-                print(ss_, sidx, ss_origin)
+                #~ print(ss_, sidx, ss_origin)
                 predBatch_.append([bb[s] for s in sidx])
                 predScore_.append([ss_[s] for s in sidx])
             predBatch = predBatch_

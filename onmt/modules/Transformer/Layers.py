@@ -10,6 +10,12 @@ import torch.nn.functional as F
 from onmt.modules.Bottle import Bottle
 #~ from onmt.modules.MaxOut import MaxOut
 
+def contiguous(tensor):
+
+    if tensor.is_contiguous():
+        return tensor
+    else:
+        return tensor.contiguous()
 
 
 def uniform_unit_scaling(tensor, nonlinearity="linear", gain=1.0):
@@ -212,7 +218,7 @@ class MultiHeadAttention(nn.Module):
         """Reshape the projectons to apply softmax on each head
         """
         b, l, d = x.size()
-        return x.view(b, l, self.h, self.d_head).transpose(1,2).contiguous().view(b*self.h, l, self.d_head)
+        return contiguous(x.view(b, l, self.h, self.d_head).transpose(1,2)).view(b*self.h, l, self.d_head)
         
     def forward(self, query, key, value, mask, query_mask=None, value_mask=None):
         b, len_query = query.size(0), query.size(1)
@@ -239,7 +245,9 @@ class MultiHeadAttention(nn.Module):
         attns = torch.bmm(proj_query, proj_key.transpose(1,2))  # batch_size*h x len_query x len_key
         
         attns = attns.view(b, self.h, len_query, len_key) 
-        attns = attns.masked_fill_(Variable(mask.unsqueeze(-3), requires_grad=False), -float('inf'))
+        
+        mask_ = Variable(mask.unsqueeze(-3)).repeat(1, self.h, 1, 1)
+        attns = attns.masked_fill_(mask_, -float('inf'))
         attns = self.sm(attns.view(-1, len_key))
         # return mean attention from all heads as coverage 
         coverage = torch.mean(attns.view(b, self.h, len_query, len_key), dim=1) 
@@ -248,7 +256,7 @@ class MultiHeadAttention(nn.Module):
         
         # apply attns on value
         out = torch.bmm(attns, proj_value)      # batch_size*h x len_query x d_head
-        out = out.view(b, self.h, len_query, self.d_head).transpose(1,2).contiguous() 
+        out = contiguous(out.view(b, self.h, len_query, self.d_head).transpose(1,2))
         out = out.view(b, len_query, self.h*self.d_head)
             
         if self.attention_out == 'default':
@@ -375,6 +383,8 @@ class EncoderLayer(nn.Module):
         return input
     
     
+    
+    
 class DecoderLayer(nn.Module):
     """Wraps multi-head attentions and position-wise feed forward into one layer of decoder
     
@@ -431,14 +441,21 @@ class DecoderLayer(nn.Module):
             feedforward = MaxOut(d_model, d_model, k)
         self.feedforward = Bottle(feedforward)
     
-    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None):
+    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, buffer=None):
         
         if self.version == 1.0:
             """ Self attention layer 
                 layernorm > attn > dropout > residual
             """
             query = self.preprocess_attn(input, mask=pad_mask_tgt)
-            out, _ = self.multihead_tgt(query, query, query, mask_tgt, 
+            
+            
+            if buffer is not None:
+                self_context = torch.cat([buffer, query], dim=1)
+            else:
+                self_context = query
+            
+            out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt, 
                                         query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
             
             input = self.postprocess_attn(out, input)
@@ -477,6 +494,72 @@ class DecoderLayer(nn.Module):
             input = self.preprocess_attn(input)
         
         return input, coverage
+        
+    def step(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, buffer=None):
+        """ Function to use during decoding """
+        
+        if self.version == 1.0:
+            """ Self attention layer 
+                layernorm > attn > dropout > residual
+            """
+            query = self.preprocess_attn(input, mask=pad_mask_tgt)
+            
+            
+            if buffer is not None:
+                buffer = torch.cat([buffer, query], dim=1)
+            else:
+                buffer = query
+                
+
+            
+            out, _ = self.multihead_tgt(query, buffer, buffer, mask_tgt, 
+                                        query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
+            
+            
+            
+            input = self.postprocess_attn(out, input)
+            
+            """ Context Attention layer 
+                layernorm > attn > dropout > residual
+            """
+            
+            query = self.preprocess_src_attn(input, mask=pad_mask_tgt)
+            out, coverage = self.multihead_src(query, context, context, mask_src, 
+                                               query_mask=pad_mask_tgt, value_mask=None)
+            input = self.postprocess_src_attn(out, input)
+            
+            """ Feed forward layer 
+                layernorm > ffn > dropout > residual
+            """
+            out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask_tgt), 
+                                               mask=pad_mask_tgt)
+            input = self.postprocess_ffn(out, input)
+        
+        elif self.version == 2.0:
+            
+            if buffer is not None:
+                buffer = torch.cat([buffer, input], dim=1)
+            else:
+                buffer = input
+            
+            out, _ = self.multihead_tgt(buffer, buffer, buffer, mask_tgt, 
+                                        query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
+            input = self.postprocess_attn(out, input)
+            input = self.preprocess_src_attn(input, mask=pad_mask_tgt)
+            
+            out, coverage = self.multihead_src(input, context, context, mask_src, 
+                                               query_mask=pad_mask_tgt, value_mask=None)
+            
+            input = self.postprocess_src_attn(out, input)
+            input = self.preprocess_ffn(input, mask=pad_mask_tgt)
+            
+            
+            out = self.feedforward(input,  mask=pad_mask_tgt)
+            input = self.postprocess_ffn(out, input)
+            input = self.preprocess_attn(input)
+        
+        return input, coverage, buffer
+        #~ pass
 
 class PositionalEncoding(nn.Module):
     """Adds positional embeddings to standard word embeddings 
@@ -500,15 +583,6 @@ class PositionalEncoding(nn.Module):
         super(PositionalEncoding, self).__init__()
         self.len_max=len_max
         self.d_model = d_model
-        #~ position = torch.arange(0,len_max)                      
-        #~ num_timescales = d_model // 2
-        #~ log_timescale_increment = math.log(10000) / (num_timescales-1)
-        #~ inv_timescales = torch.exp(torch.arange(0, num_timescales) * -log_timescale_increment)
-        #~ scaled_time = position.unsqueeze(1) * inv_timescales.unsqueeze(0)
-        #~ pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 1)
-        # wrap in a buffer so that model can be moved to GPU
-        #~ self.register_buffer('pos_emb', pos_emb)
-        # self.dropout = nn.Dropout(p)
         
         self.renew(len_max)
         
@@ -516,9 +590,7 @@ class PositionalEncoding(nn.Module):
     
     def renew(self, new_max_len):
         
-        #~ if self.pos_emb is not None:
-        #~ self.pos_emb = None
-            #~ del self.pos_emb
+        ## detele the old variable to avoid Pytorch's error when register new buffer
         if hasattr(self, 'pos_emb'):
             del self.pos_emb
         position = torch.arange(0,new_max_len)                      
@@ -530,7 +602,15 @@ class PositionalEncoding(nn.Module):
         # wrap in a buffer so that model can be moved to GPU
         self.register_buffer('pos_emb', pos_emb)
         
-    def forward(self, word_emb):
-        len_seq = word_emb.size(1)
-        out = word_emb + Variable(self.pos_emb[:len_seq, :], requires_grad=False)
+    def forward(self, word_emb, t=None):
+        len_seq = t if t else word_emb.size(1)
+        # print(self.pos_emb.size())
+        if word_emb.size(1) == len_seq:
+            out = word_emb + Variable(self.pos_emb[:len_seq, :], requires_grad=False)
+        else:
+            # print('hello')
+            # out = word_emb + Variable(self.pos_emb[:len_seq, :][-1, :], requires_grad=False)
+            time_emb = Variable(self.pos_emb[len_seq-1, :], requires_grad=False) # 1 x dim
+            # out should have size bs x 1 x dim
+            out = word_emb + time_emb.unsqueeze(0).repeat(word_emb.size(0), 1, 1)
         return out

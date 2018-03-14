@@ -284,191 +284,6 @@ class Translator(object):
             return allHyp, allScores, allAttn, allLengths, goldScores, goldWords
         elif self.model_type in ['transformer', 'stochastic_transformer']:
             
-            #~ vocab_size = self.tgt_dict.size()
-            #~ allHyp, allScores, allAttn, allLengths = [], [], [], []
-            #~ 
-            #~ # srcBatch should have size len x batch
-            #~ # tgtBatch should have size len x batch
-            #~ 
-            #~ src = srcBatch.transpose(0, 1)
-            #~ context, src_mask = self.model.encoder(src)
-            #~ 
-            #~ goldScores = context.data.new(batchSize).zero_()
-            #~ goldWords = 0
-            #~ 
-            #~ if tgtBatch is not None:
-            #~ 
-                #~ tgtBatchInput = tgtBatch[:-1]
-                #~ tgtBatchOutput = tgtBatch[1:]
-                #~ tgtBatchInput = tgtBatchInput.transpose(0,1)
-                #~ 
-                #~ output, coverage = self.model.decoder(tgtBatchInput, context, src)
-                #~ output = output.transpose(0, 1) # transpose to have time first, like RNN models
-                #~ 
-                #~ 
-                #~ #  (2) if a target is specified, compute the 'goldScore'
-                #~ #  (i.e. log likelihood) of the target under the model
-                #~ for dec_t, tgt_t in zip(output, tgtBatchOutput.data):
-                    #~ gen_t = self.model.generator(dec_t)
-                    #~ tgt_t = tgt_t.unsqueeze(1)
-                    #~ scores = gen_t.data.gather(1, tgt_t)
-                    #~ scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
-                    #~ goldScores += scores
-                    #~ goldWords += tgt_t.ne(onmt.Constants.PAD).sum()
-                #~ 
-                #~ 
-            #~ #  (3) Start decoding
-                #~ 
-            #~ # time x batch * beam
-            #~ src = Variable(srcBatch.data.repeat(1, beamSize))
-            #~ 
-            #~ # context size : time x batch*beam x hidden
-            #~ context = context.transpose(0, 1)
-            #~ context = Variable(context.data.repeat(1, beamSize, 1))
-            #~ 
-            #~ # initialize the beam
-            #~ beam = [onmt.Beam(beamSize, self.opt.cuda) for k in range(batchSize)]
-            #~ 
-            #~ batchIdx = list(range(batchSize))
-            #~ remainingSents = batchSize
-            #~ 
-            #~ input_seq = None
-            #~ 
-            #~ for i in range(self.opt.max_sent_length):
-                #~ # Prepare decoder input.
-                #~ 
-                #~ # input size: 1 x ( batch * beam )
-                #~ input = torch.stack([b.getCurrentState() for b in beam
-                                     #~ if not b.done]).t().contiguous().view(1, -1)
-                #~ 
-                #~ """  
-                    #~ Inefficient decoding implementation
-                    #~ We re-compute all states for every time step
-                    #~ A better buffering algorithm will be implemented
-                #~ """
-                #~ if input_seq is None:
-                    #~ input_seq = input
-                #~ else:
-                    #~ # concatenate the last input to the previous input sequence
-                    #~ input_seq = torch.cat([input_seq, input], 0)
-                #~ 
-                #~ # require batch first for everything
-                #~ decoder_input = Variable(input_seq)
-                #~ decoder_hidden, coverage = self.model.decoder(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1))
-                #~ 
-                #~ # take the last decoder state
-                #~ decoder_hidden = decoder_hidden[:, -1, :].squeeze(1)
-                #~ attn = coverage[:, -1, :].squeeze(1) # batch * beam x src_len
-                #~ 
-                #~ # batch * beam x vocab_size 
-                #~ out = self.model.generator(decoder_hidden)
-                #~ 
-                #~ wordLk = out.view(beamSize, remainingSents, -1) \
-                            #~ .transpose(0, 1).contiguous()
-                #~ attn = attn.view(beamSize, remainingSents, -1) \
-                           #~ .transpose(0, 1).contiguous()
-                #~ active = []
-                #~ 
-                #~ for b in range(batchSize):
-                    #~ if beam[b].done:
-                        #~ continue
-                    #~ 
-                    #~ idx = batchIdx[b]
-                    #~ if not beam[b].advance(wordLk.data[idx], attn.data[idx]):
-                        #~ active += [b]
-                        #~ 
-                    #~ # update the decoding states
-                    #~ 
-                    #~ for tensor in [src, input_seq]  :
-                    #~ 
-                        #~ t_, br = tensor.size()
-                        #~ sent_states = tensor.view(t_, beamSize, remainingSents)[:, :, idx]
-                        #~ 
-                        #~ if isinstance(tensor, Variable):
-                            #~ sent_states.data.copy_(sent_states.data.index_select(
-                                        #~ 1, beam[b].getCurrentOrigin()))
-                        #~ else:
-                            #~ sent_states.copy_(sent_states.index_select(
-                                        #~ 1, beam[b].getCurrentOrigin()))
-                    #~ 
-                    #~ 
-                #~ if not active:
-                    #~ break
-                    #~ 
-                #~ # in this section, the sentences that are still active are
-                #~ # compacted so that the decoder is not run on completed sentences
-                #~ activeIdx = self.tt.LongTensor([batchIdx[k] for k in active])
-                #~ batchIdx = {beam: idx for idx, beam in enumerate(active)}
-                #~ 
-                #~ model_size = context.size(-1)
-#~ 
-                #~ def updateActive(t):
-                    #~ # select only the remaining active sentences
-                    #~ view = t.data.view(-1, remainingSents, model_size)
-                    #~ newSize = list(t.size())
-                    #~ newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
-                    #~ return Variable(view.index_select(1, activeIdx)
-                                    #~ .view(*newSize))
-                #~ 
-                #~ def updateActive2D(t):
-                    #~ if isinstance(t, Variable):
-                        #~ # select only the remaining active sentences
-                        #~ view = t.data.view(-1, remainingSents)
-                        #~ newSize = list(t.size())
-                        #~ newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
-                        #~ return Variable(view.index_select(1, activeIdx)
-                                        #~ .view(*newSize))
-                    #~ else:
-                        #~ view = t.view(-1, remainingSents)
-                        #~ newSize = list(t.size())
-                        #~ newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
-                        #~ new_t = view.index_select(1, activeIdx).view(*newSize)
-                                        #~ 
-                        #~ return new_t
-                        #~ 
-                #~ context = updateActive(context)
-                #~ 
-                #~ src = updateActive2D(src)
-                #~ 
-                #~ input_seq = updateActive2D(input_seq)
-                #~ 
-                #~ 
-                #~ 
-                #~ remainingSents = len(active)
-                #~ 
-            #~ #  (4) package everything up
-            #~ allHyp, allScores, allAttn = [], [], []
-            #~ n_best = self.opt.n_best
-            #~ allLengths = []
-#~ 
-            #~ for b in range(batchSize):
-                #~ scores, ks = beam[b].sortBest()
-#~ 
-                #~ allScores += [scores[:n_best]]
-                #~ hyps, attn, length = zip(*[beam[b].getHyp(k) for k in ks[:n_best]])
-                #~ allHyp += [hyps]
-                #~ allLengths += [length]
-                #~ valid_attn = srcBatch.data[:, b].ne(onmt.Constants.PAD) \
-                                                #~ .nonzero().squeeze(1)
-                #~ attn = [a.index_select(1, valid_attn) for a in attn]
-                #~ allAttn += [attn]
-#~ 
-                #~ if self.beam_accum:
-                    #~ self.beam_accum["beam_parent_ids"].append(
-                        #~ [t.tolist()
-                         #~ for t in beam[b].prevKs])
-                    #~ self.beam_accum["scores"].append([
-                        #~ ["%4f" % s for s in t.tolist()]
-                        #~ for t in beam[b].allScores][1:])
-                    #~ self.beam_accum["predicted_ids"].append(
-                        #~ [[self.tgt_dict.getLabel(id)
-                          #~ for id in t.tolist()]
-                         #~ for t in beam[b].nextYs][1:])
-                
-            """" ----------------- OLD IMPLEMENTATION -----------------"""
-            
-            
-            assert self.opt.batch_size == 1, "Transformer only works with batch_size 1 atm"
             vocab_size = self.tgt_dict.size()
             allHyp, allScores, allAttn, allLengths = [], [], [], []
             
@@ -479,14 +294,13 @@ class Translator(object):
             context, src_mask = self.model.encoder(src)
             
             goldScores = context.data.new(batchSize).zero_()
-            
             goldWords = 0
+            
             if tgtBatch is not None:
             
                 tgtBatchInput = tgtBatch[:-1]
                 tgtBatchOutput = tgtBatch[1:]
                 tgtBatchInput = tgtBatchInput.transpose(0,1)
-                src = srcBatch.transpose(0, 1)
                 
                 output, coverage = self.model.decoder(tgtBatchInput, context, src)
                 output = output.transpose(0, 1) # transpose to have time first, like RNN models
@@ -501,92 +315,302 @@ class Translator(object):
                     scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
                     goldScores += scores
                     goldWords += tgt_t.ne(onmt.Constants.PAD).sum()
+                
+                
+            #  (3) Start decoding
+                
+            # time x batch * beam
+            src = Variable(srcBatch.data.repeat(1, beamSize))
             
-                #  (3) Start decoding
-                mask_src = src_mask # size: batch x time 
-                remaining_beams = beamSize
-                logLikelihoods = []
-                preds = []
-                atten_probs = []
-                coverage_penalties = []
-                lengths = []
+            # context size : time x batch*beam x hidden
+            context = context.transpose(0, 1)
+            context = Variable(context.data.repeat(1, beamSize, 1))
+            
+            # initialize the beam
+            beam = [onmt.Beam(beamSize, self.opt.cuda) for k in range(batchSize)]
+            
+            batchIdx = list(range(batchSize))
+            remainingSents = batchSize
+            
+            input_seq = None
+            
+            buffer = list()
+            
+            for i in range(self.opt.max_sent_length):
+                # Prepare decoder input.
                 
-                # predict the first word
-                decode_input = torch.LongTensor([onmt.Constants.BOS]).unsqueeze(1)
-                if self.opt.cuda: decode_input = decode_input.cuda()
-                decode_input = Variable(decode_input)
-                decoder_hidden, coverage = self.model.decoder(decode_input, context, src)
-                dist = self.model.generator(decoder_hidden.view(-1, decoder_hidden.size(-1)))
-                scores, scores_id = dist.view(-1).topk(beamSize)
-                beam_index = scores_id / vocab_size
-                pred_id = (scores_id - beam_index*vocab_size).view(beamSize, -1)
-                decode_input = torch.cat((decode_input.repeat(beamSize ,1), pred_id), 1)
-                context = context.repeat(beamSize, 1, 1)
-                src = src.repeat(beamSize, 1)
+                # input size: 1 x ( batch * beam )
+                input = torch.stack([b.getCurrentState() for b in beam
+                                     if not b.done]).t().contiguous().view(1, -1)
                 
-                # continus to predict next work until <EOS>
-                step = 1
-                while step < self.opt.max_sent_length and remaining_beams>0:
-                    step += 1
-                    decoder_hidden, coverage = self.model.decoder(decode_input, context, src)
-                    
-                    decoder_hidden = decoder_hidden[:, -1, :]
-                    
-                    decoder_hidden = decoder_hidden.squeeze(1)
-                    out = self.model.generator(decoder_hidden)
-
-                    out = scores.unsqueeze(1).expand_as(out) + out # Add up the scores from previous steps
-                    scores, scores_id = out.view(-1).topk(remaining_beams)
-                    beam_id = scores_id / vocab_size
-                    pred_id = (scores_id - beam_id*vocab_size).view(remaining_beams, -1)
-                    decode_input = torch.cat((decode_input[beam_id], pred_id), 1) 
-                    # remove finished beams
-                    check = decode_input[:, -1].eq(onmt.Constants.EOS).data
-                    
-                    if step == self.opt.max_sent_length -1:
-                        check.fill_(1)
-                    
-                    finished_index = check.nonzero().squeeze()
-                    continue_index = (1-check).nonzero().squeeze()
-                    # continue_index = 1 - finished_index
+                """  
+                    Inefficient decoding implementation
+                    We re-compute all states for every time step
+                    A better buffering algorithm will be implemented
+                """
+                if input_seq is None:
+                    input_seq = input
+                else:
+                    # concatenate the last input to the previous input sequence
+                    input_seq = torch.cat([input_seq, input], 0)
                 
-                    for idx in finished_index:
-                        logLikelihoods.append(scores[idx].data[0])
-                        pred = decode_input[idx,:].data.tolist()
-                        pred = pred[1:] # remove BOS
-                        preds.append(pred)
-                        lengths.append(len(preds[-1]))
+                # require batch first for everything
+                decoder_input = Variable(input_seq)
+                decoder_hidden, coverage = self.model.decoder(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1))
+                # decoder_hidden, coverage, buffer = self.model.decoder.step(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1), buffer=buffer)
+                
+                # take the last decoder state
+                decoder_hidden = decoder_hidden[:, -1, :].squeeze(1)
+                # decoder_hidden = decoder_hidden.squeeze(1)
+                attn = coverage[:, -1, :].squeeze(1) # batch * beam x src_len
+                
+                # batch * beam x vocab_size 
+                out = self.model.generator(decoder_hidden)
+                
+                wordLk = out.view(beamSize, remainingSents, -1) \
+                            .transpose(0, 1).contiguous()
+                attn = attn.view(beamSize, remainingSents, -1) \
+                           .transpose(0, 1).contiguous()
+                active = []
+                
+                for b in range(batchSize):
+                    if beam[b].done:
+                        continue
+                    
+                    idx = batchIdx[b]
+                    if not beam[b].advance(wordLk.data[idx], attn.data[idx]):
+                        active += [b]
                         
-                        atten_prob = torch.sum(coverage[idx,:,:], dim=0)
-                        atten_probs.append(coverage[idx,:,:])
-                        coverage_penalty = torch.log(atten_prob.masked_select(atten_prob.le(1)))
-                        coverage_penalty = self.beta * torch.sum(coverage_penalty).data[0]
-                        coverage_penalties.append(coverage_penalty)       
-                        remaining_beams -= 1
-                    if len(continue_index) > 0:
-                        # var = Variable(continue_index)
-                        scores = Variable(scores.data.index_select(0, continue_index))
-                        decode_input = Variable(decode_input.data.index_select(0, continue_index))
-                        context = Variable(context.data.index_select(0, continue_index))
-                        src = Variable(src.data.index_select(0, continue_index))
-            # normalize the final scores by length and coverage 
-            len_penalties = [math.pow(len(pred), self.alpha)   for pred in preds]
-            final_scores = [logLikelihoods[i]/len_penalties[i] + coverage_penalties[i] for i in range(len(preds))]
-            sorted_scores_arg = sorted(range(len(preds)), key=lambda i:-final_scores[i])
+                    # update the decoding states
+                    
+                    for tensor in [src, input_seq]  :
+                    
+                        t_, br = tensor.size()
+                        sent_states = tensor.view(t_, beamSize, remainingSents)[:, :, idx]
+                        
+                        if isinstance(tensor, Variable):
+                            sent_states.data.copy_(sent_states.data.index_select(
+                                        1, beam[b].getCurrentOrigin()))
+                        else:
+                            sent_states.copy_(sent_states.index_select(
+                                        1, beam[b].getCurrentOrigin()))
+                                        
+                    for tensor in buffer:
+                        
+                        br_, t, d = tensor.size()
+                        
+                        sent_states = tensor.view(beamSize, remainingSents, t_, d)[:, idx, :, :]
+                        
+                        sent_states.data.copy_(sent_states.data.index_select(
+                                        0, beam[b].getCurrentOrigin()))
+                    
+                    
+                if not active:
+                    break
+                    
+                # in this section, the sentences that are still active are
+                # compacted so that the decoder is not run on completed sentences
+                activeIdx = self.tt.LongTensor([batchIdx[k] for k in active])
+                batchIdx = {beam: idx for idx, beam in enumerate(active)}
+                
+                model_size = context.size(-1)
+
+                def updateActive(t):
+                    # select only the remaining active sentences
+                    view = t.data.view(-1, remainingSents, model_size)
+                    newSize = list(t.size())
+                    newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
+                    return Variable(view.index_select(1, activeIdx)
+                                    .view(*newSize))
+                
+                def updateActive2(t):
+                    # select only the remaining active sentences
+                    view = t.data.view(remainingSents, -1, model_size)
+                    newSize = list(t.size())
+                    newSize[0] = newSize[0] * len(activeIdx) // remainingSents
+                    return Variable(view.index_select(0, activeIdx)
+                                    .view(*newSize)) 
+                
+                def updateActive2D(t):
+                    if isinstance(t, Variable):
+                        # select only the remaining active sentences
+                        view = t.data.view(-1, remainingSents)
+                        newSize = list(t.size())
+                        newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
+                        return Variable(view.index_select(1, activeIdx)
+                                        .view(*newSize))
+                    else:
+                        view = t.view(-1, remainingSents)
+                        newSize = list(t.size())
+                        newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
+                        new_t = view.index_select(1, activeIdx).view(*newSize)
+                                        
+                        return new_t
+                        
+                context = updateActive(context)
+                
+                src = updateActive2D(src)
+                
+                input_seq = updateActive2D(input_seq)
+                
+                
+                for i, tensor in enumerate(buffer):
+                    buffer[i] = updateActive2(tensor)
+                
+                
+                remainingSents = len(active)
+                
+            #  (4) package everything up
+            allHyp, allScores, allAttn = [], [], []
+            n_best = self.opt.n_best
+            allLengths = []
+
+            for b in range(batchSize):
+                scores, ks = beam[b].sortBest()
+
+                allScores += [scores[:n_best]]
+                hyps, attn, length = zip(*[beam[b].getHyp(k) for k in ks[:n_best]])
+                allHyp += [hyps]
+                allLengths += [length]
+                valid_attn = srcBatch.data[:, b].ne(onmt.Constants.PAD) \
+                                                .nonzero().squeeze(1)
+                attn = [a.index_select(1, valid_attn) for a in attn]
+                allAttn += [attn]
+
+                if self.beam_accum:
+                    self.beam_accum["beam_parent_ids"].append(
+                        [t.tolist()
+                         for t in beam[b].prevKs])
+                    self.beam_accum["scores"].append([
+                        ["%4f" % s for s in t.tolist()]
+                        for t in beam[b].allScores][1:])
+                    self.beam_accum["predicted_ids"].append(
+                        [[self.tgt_dict.getLabel(id)
+                          for id in t.tolist()]
+                         for t in beam[b].nextYs][1:])
+                
+            """" ----------------- OLD IMPLEMENTATION -----------------"""
             
-            # get the sorted results 
-            sorted_preds = [ preds[sorted_scores_arg[i]] for i in range(beamSize) ]
-            sorted_logLikelihoods = [ logLikelihoods[sorted_scores_arg[i]] for i in range(beamSize) ]
-            sorted_attn_probs = [ atten_probs[sorted_scores_arg[i]] for i in range(beamSize) ]
-            sorted_lengths = [ lengths[sorted_scores_arg[i]] for i in range(beamSize) ]
             
-            # gather the results
-            allHyp += [sorted_preds]
-            allScores += [sorted_logLikelihoods]
-            allAttn.append(sorted_attn_probs)
-            allLengths.append(sorted_lengths)
+            #~ assert self.opt.batch_size == 1, "Transformer only works with batch_size 1 atm"
+            #~ vocab_size = self.tgt_dict.size()
+            #~ allHyp, allScores, allAttn, allLengths = [], [], [], []
+            #~ 
+            #~ # srcBatch should have size len x batch
+            #~ # tgtBatch should have size len x batch
+            #~ 
+            #~ src = srcBatch.transpose(0, 1)
+            #~ context, src_mask = self.model.encoder(src)
+            #~ 
+            #~ goldScores = context.data.new(batchSize).zero_()
+            #~ 
+            #~ goldWords = 0
+            #~ if tgtBatch is not None:
+            #~ 
+                #~ tgtBatchInput = tgtBatch[:-1]
+                #~ tgtBatchOutput = tgtBatch[1:]
+                #~ tgtBatchInput = tgtBatchInput.transpose(0,1)
+                #~ src = srcBatch.transpose(0, 1)
+                #~ 
+                #~ output, coverage = self.model.decoder(tgtBatchInput, context, src)
+                #~ output = output.transpose(0, 1) # transpose to have time first, like RNN models
+                #~ 
+                #~ 
+                #~ #  (2) if a target is specified, compute the 'goldScore'
+                #~ #  (i.e. log likelihood) of the target under the model
+                #~ for dec_t, tgt_t in zip(output, tgtBatchOutput.data):
+                    #~ gen_t = self.model.generator(dec_t)
+                    #~ tgt_t = tgt_t.unsqueeze(1)
+                    #~ scores = gen_t.data.gather(1, tgt_t)
+                    #~ scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
+                    #~ goldScores += scores
+                    #~ goldWords += tgt_t.ne(onmt.Constants.PAD).sum()
+            #~ 
+                #~ #  (3) Start decoding
+                #~ mask_src = src_mask # size: batch x time 
+                #~ remaining_beams = beamSize
+                #~ logLikelihoods = []
+                #~ preds = []
+                #~ atten_probs = []
+                #~ coverage_penalties = []
+                #~ lengths = []
+                #~ 
+                #~ # predict the first word
+                #~ decode_input = torch.LongTensor([onmt.Constants.BOS]).unsqueeze(1)
+                #~ if self.opt.cuda: decode_input = decode_input.cuda()
+                #~ decode_input = Variable(decode_input)
+                #~ decoder_hidden, coverage = self.model.decoder(decode_input, context, src)
+                #~ dist = self.model.generator(decoder_hidden.view(-1, decoder_hidden.size(-1)))
+                #~ scores, scores_id = dist.view(-1).topk(beamSize)
+                #~ beam_index = scores_id / vocab_size
+                #~ pred_id = (scores_id - beam_index*vocab_size).view(beamSize, -1)
+                #~ decode_input = torch.cat((decode_input.repeat(beamSize ,1), pred_id), 1)
+                #~ context = context.repeat(beamSize, 1, 1)
+                #~ src = src.repeat(beamSize, 1)
+                #~ 
+                #~ # continus to predict next work until <EOS>
+                #~ step = 1
+                #~ while step < self.opt.max_sent_length and remaining_beams>0:
+                    #~ step += 1
+                    #~ decoder_hidden, coverage = self.model.decoder(decode_input, context, src)
+                    #~ 
+                    #~ decoder_hidden = decoder_hidden[:, -1, :]
+                    #~ 
+                    #~ decoder_hidden = decoder_hidden.squeeze(1)
+                    #~ out = self.model.generator(decoder_hidden)
+#~ 
+                    #~ out = scores.unsqueeze(1).expand_as(out) + out # Add up the scores from previous steps
+                    #~ scores, scores_id = out.view(-1).topk(remaining_beams)
+                    #~ beam_id = scores_id / vocab_size
+                    #~ pred_id = (scores_id - beam_id*vocab_size).view(remaining_beams, -1)
+                    #~ decode_input = torch.cat((decode_input[beam_id], pred_id), 1) 
+                    #~ # remove finished beams
+                    #~ check = decode_input[:, -1].eq(onmt.Constants.EOS).data
+                    #~ 
+                    #~ if step == self.opt.max_sent_length -1:
+                        #~ check.fill_(1)
+                    #~ 
+                    #~ finished_index = check.nonzero().squeeze()
+                    #~ continue_index = (1-check).nonzero().squeeze()
+                    #~ # continue_index = 1 - finished_index
+                #~ 
+                    #~ for idx in finished_index:
+                        #~ logLikelihoods.append(scores[idx].data[0])
+                        #~ pred = decode_input[idx,:].data.tolist()
+                        #~ pred = pred[1:] # remove BOS
+                        #~ preds.append(pred)
+                        #~ lengths.append(len(preds[-1]))
+                        #~ 
+                        #~ atten_prob = torch.sum(coverage[idx,:,:], dim=0)
+                        #~ atten_probs.append(coverage[idx,:,:])
+                        #~ coverage_penalty = torch.log(atten_prob.masked_select(atten_prob.le(1)))
+                        #~ coverage_penalty = self.beta * torch.sum(coverage_penalty).data[0]
+                        #~ coverage_penalties.append(coverage_penalty)       
+                        #~ remaining_beams -= 1
+                    #~ if len(continue_index) > 0:
+                        #~ # var = Variable(continue_index)
+                        #~ scores = Variable(scores.data.index_select(0, continue_index))
+                        #~ decode_input = Variable(decode_input.data.index_select(0, continue_index))
+                        #~ context = Variable(context.data.index_select(0, continue_index))
+                        #~ src = Variable(src.data.index_select(0, continue_index))
+            #~ # normalize the final scores by length and coverage 
+            #~ len_penalties = [math.pow(len(pred), self.alpha)   for pred in preds]
+            #~ final_scores = [logLikelihoods[i]/len_penalties[i] + coverage_penalties[i] for i in range(len(preds))]
+            #~ sorted_scores_arg = sorted(range(len(preds)), key=lambda i:-final_scores[i])
+            #~ 
+            #~ # get the sorted results 
+            #~ sorted_preds = [ preds[sorted_scores_arg[i]] for i in range(beamSize) ]
+            #~ sorted_logLikelihoods = [ logLikelihoods[sorted_scores_arg[i]] for i in range(beamSize) ]
+            #~ sorted_attn_probs = [ atten_probs[sorted_scores_arg[i]] for i in range(beamSize) ]
+            #~ sorted_lengths = [ lengths[sorted_scores_arg[i]] for i in range(beamSize) ]
+            #~ 
+            #~ # gather the results
+            #~ allHyp += [sorted_preds]
+            #~ allScores += [sorted_logLikelihoods]
+            #~ allAttn.append(sorted_attn_probs)
+            #~ allLengths.append(sorted_lengths)
             
-            
+            """ ------------------------------------------------------------------ """
             
             torch.set_grad_enabled(True)
 

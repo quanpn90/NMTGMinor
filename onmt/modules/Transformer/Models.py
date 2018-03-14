@@ -163,7 +163,7 @@ class TransformerDecoder(nn.Module):
             
         """
         
-        """ Embedding: batch_size x len_src x d_model """
+        """ Embedding: batch_size x len_tgt x d_model """
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         if self.time == 'positional_encoding':
             emb = emb * math.sqrt(self.model_size)
@@ -173,8 +173,7 @@ class TransformerDecoder(nn.Module):
             emb = emb[0]
         emb = self.preprocess_layer(emb)
         
-        
-        
+
         mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
         
         pad_mask_src = torch.autograd.Variable(src.data.ne(onmt.Constants.PAD))
@@ -201,7 +200,99 @@ class TransformerDecoder(nn.Module):
             output = self.postprocess_layer(output)
         
         return output, coverage
+    
+    def step(self, input, context, src, buffer=None):
+        """
+        Inputs Shapes: 
+            input: (Variable) batch_size x len_tgt (wanna tranpose)
+            context: (Variable) batch_size x len_src x d_model
+            mask_src (Tensor) batch_size x len_src
+            buffer (List of tensors) List of batch_size * len_tgt-1 * d_model for self-attention recomputing
+        Outputs Shapes:
+            out: batch_size x len_tgt x d_model
+            coverage: batch_size x len_tgt x len_src
+            
+        """
+        
+            
+        # output_buffer = list()
+        if buffer is None:
+            buffer = list()
+            
+        batch_size = input.size(0)
+        
+        
+        #~ emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        input_ = input[:,-1].unsqueeze(1)
+        # print(input_.size())
+        """ Embedding: batch_size x 1 x d_model """
+        emb = self.word_lut(input_)
+        
+        # print(emb.size())
+        
+        if self.time == 'positional_encoding':
+            emb = emb * math.sqrt(self.model_size)
+        """ Adding positional encoding """
+        if self.time == 'positional_encoding':
+            emb = self.time_transformer(emb, t=input.size(1))
+        else:
+            prev_h = buffer[0] if buffer is None else None
+            emb = self.time_transformer(emb, prev_h)
+            # output_buffer.append(emb[1])
+            buffer[0] = emb[1]
+            
+        if isinstance(emb, tuple):
+            emb = emb[0]
+        # emb should be batch_size x 1 x dim
+            
+        # Preprocess layer: adding dropout
+        emb = self.preprocess_layer(emb)
+        
+        # batch_size x 1 x len_src
+        mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
+        
+        pad_mask_src = torch.autograd.Variable(src.data.ne(onmt.Constants.PAD))
+        
+        len_tgt = input.size(1)
+        mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
+        # mask_tgt = self.mask[:len_tgt, :len_tgt].unsqueeze(0).repeat(batch_size, 1, 1)
+        mask_tgt = torch.gt(mask_tgt, 0)
+        mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
+        
+        # print(mask_tgt.size())
+        
+        output = emb.contiguous()
+        
+        pad_mask_tgt = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
+        pad_mask_src = torch.autograd.Variable(1 - mask_src.squeeze(1))
+        
+        
+        for i, layer in enumerate(self.layer_modules):
+            
+            buffer_ = buffer[i] if len(buffer) >= (i+1) else None
+            assert(output.size(1) == 1)
+            output, coverage, buffer_ = layer.step(output, context, mask_tgt, mask_src, 
+                                        pad_mask_tgt=None, pad_mask_src=None, buffer=buffer_) # batch_size x len_src x d_model
+            
 
+            # if i == 1:
+                # print(buffer_.size())
+            # output_buffer.append(updated_buffer)
+            
+            if len(buffer) >= i+1:
+                buffer[i] = buffer_
+            else:
+                buffer.append(buffer_)
+        
+        # From Google T2T
+        # if normalization is done in layer_preprocess, then it should also be done
+        # on the output, since the output can grow very large, being the sum of
+        # a whole stack of unnormalized layer outputs.    
+        if self.version == 1.0:
+            output = self.postprocess_layer(output)
+        
+        return output, coverage, buffer
+    
   
         
 class Transformer(NMTModel):

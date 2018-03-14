@@ -20,6 +20,8 @@ parser.add_argument('-config',    help="Read options from this file")
 
 parser.add_argument('-src_type', default="text",
                     help="Type of the source input. Options are [text|img].")
+parser.add_argument('-sort_type', default="ascending",
+                    help="Type of sorting. Options are [ascending|descending].")
 parser.add_argument('-src_img_dir', default=".",
                     help="Location of source images")
 
@@ -175,7 +177,7 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
         tgtWords = tline.split()
 
         if len(srcWords) <= max_src_length \
-           and len(tgtWords) <= max_tgt_length:
+           and len(tgtWords) <= max_tgt_length - 2:
 
             # Check truncation condition.
             if opt.src_seq_length_trunc != 0:
@@ -213,7 +215,7 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
         sizes = [sizes[idx] for idx in perm]
 
     print('... sorting sentences by size')
-    _, perm = torch.sort(torch.Tensor(sizes))
+    _, perm = torch.sort(torch.Tensor(sizes), descending=(opt.sort_type == 'descending'))
     src = [src[idx] for idx in perm]
     tgt = [tgt[idx] for idx in perm]
 
