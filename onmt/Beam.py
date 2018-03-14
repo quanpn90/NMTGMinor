@@ -21,7 +21,8 @@ class Beam(object):
     def __init__(self, size, cuda=False):
 
         self.size = size
-        self.done = False
+        #~ self.done = False
+        self.n_best = self.size
 
         self.tt = torch.cuda if cuda else torch
 
@@ -38,6 +39,10 @@ class Beam(object):
 
         # The attentions (matrix) for each time.
         self.attn = []
+        self.finished = []
+        
+        self._eos = onmt.Constants.EOS
+        self.eos_top = False
 
     def getCurrentState(self):
         "Get the outputs for the current timestep."
@@ -64,6 +69,11 @@ class Beam(object):
         # Sum the previous scores.
         if len(self.prevKs) > 0:
             beamLk = wordLk + self.scores.unsqueeze(1).expand_as(wordLk)
+            
+            # Don't let EOS have children.
+            for i in range(self.nextYs[-1].size(0)):
+                if self.nextYs[-1][i] == onmt.Constants.EOS:
+                    beamLk[i] = -1e20
         else:
             beamLk = wordLk[0]
 
@@ -79,23 +89,49 @@ class Beam(object):
         self.prevKs.append(prevK)
         self.nextYs.append(bestScoresId - prevK * numWords)
         self.attn.append(attnOut.index_select(0, prevK))
+        
+        for i in range(self.nextYs[-1].size(0)):
+            if self.nextYs[-1][i] == self._eos:
+                #~ global_scores = self.global_scorer.score(self, self.scores)
+                global_scores = self.scores
+                s = global_scores[i]
+                self.finished.append((s, len(self.nextYs) - 1, i))
 
         # End condition is when top-of-beam is EOS.
         if self.nextYs[-1][0] == onmt.Constants.EOS:
-            self.done = True
+            #~ self.done = True
+            self.eos_top = True
             self.allScores.append(self.scores)
 
         return self.done
+        
+    def done(self):
+        return self.eos_top and len(self.finished) >= self.n_best
 
-    def sortBest(self):
-        return torch.sort(self.scores, 0, True)
+    #~ def sortBest(self):
+        #~ return torch.sort(self.scores, 0, True)
+#~ 
+    #~ def getBest(self):
+        #~ "Get the score of the best in the beam."
+        #~ scores, ids = self.sortBest()
+        #~ return scores[1], ids[1]
+        
+    def sort_finished(self, minimum=None):
+        if minimum is not None:
+            i = 0
+            # Add from beam until we have minimum outputs.
+            while len(self.finished) < minimum:
+                global_scores = self.scores
+                s = global_scores[i]
+                self.finished.append((s, len(self.nextYs) - 1, i))
+                i += 1
 
-    def getBest(self):
-        "Get the score of the best in the beam."
-        scores, ids = self.sortBest()
-        return scores[1], ids[1]
+        self.finished.sort(key=lambda a: -a[0])
+        scores = [sc for sc, _, _ in self.finished]
+        ks = [(t, k) for _, t, k in self.finished]
+        return scores, ks
 
-    def getHyp(self, k):
+    def get_hyp(self, timestep, k):
         """
         Walk back to construct the full hypothesis.
 
@@ -110,7 +146,7 @@ class Beam(object):
         """
         hyp, attn = [], []
         lengths = []
-        for j in range(len(self.prevKs) - 1, -1, -1):
+        for j in range(len(self.prevKs[:timestep]) - 1, -1, -1):
             hyp.append(self.nextYs[j+1][k])
             attn.append(self.attn[j][k])
             k = self.prevKs[j][k]

@@ -215,9 +215,8 @@ class TransformerDecoder(nn.Module):
         """
         
             
-        # output_buffer = list()
-        if buffer is None:
-            buffer = list()
+        output_buffer = list()
+
             
         batch_size = input.size(0)
         
@@ -226,7 +225,7 @@ class TransformerDecoder(nn.Module):
         input_ = input[:,-1].unsqueeze(1)
         # print(input_.size())
         """ Embedding: batch_size x 1 x d_model """
-        emb = self.word_lut(input_)
+        emb = self.word_lut(input)
         
         # print(emb.size())
         
@@ -234,16 +233,18 @@ class TransformerDecoder(nn.Module):
             emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
         if self.time == 'positional_encoding':
-            emb = self.time_transformer(emb, t=input.size(1))
+            emb = self.time_transformer(emb)
         else:
             prev_h = buffer[0] if buffer is None else None
             emb = self.time_transformer(emb, prev_h)
             # output_buffer.append(emb[1])
-            buffer[0] = emb[1]
+            #~ buffer[0] = emb[1]
             
         if isinstance(emb, tuple):
             emb = emb[0]
         # emb should be batch_size x 1 x dim
+        emb = emb[:, -1, :].unsqueeze(1)
+        assert emb.dim() == 3
             
         # Preprocess layer: adding dropout
         emb = self.preprocess_layer(emb)
@@ -261,15 +262,16 @@ class TransformerDecoder(nn.Module):
         
         # print(mask_tgt.size())
         
-        output = emb.contiguous()
+        output = emb.contiguous()        
         
         pad_mask_tgt = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
         pad_mask_src = torch.autograd.Variable(1 - mask_src.squeeze(1))
+
         
         
         for i, layer in enumerate(self.layer_modules):
             
-            buffer_ = buffer[i] if len(buffer) >= (i+1) else None
+            buffer_ = buffer[i] if buffer is not None else None
             assert(output.size(1) == 1)
             output, coverage, buffer_ = layer.step(output, context, mask_tgt, mask_src, 
                                         pad_mask_tgt=None, pad_mask_src=None, buffer=buffer_) # batch_size x len_src x d_model
@@ -277,12 +279,11 @@ class TransformerDecoder(nn.Module):
 
             # if i == 1:
                 # print(buffer_.size())
-            # output_buffer.append(updated_buffer)
+            output_buffer.append(buffer_)
             
-            if len(buffer) >= i+1:
-                buffer[i] = buffer_
-            else:
-                buffer.append(buffer_)
+        
+        buffer = torch.stack(output_buffer) 
+        #~ print(buffer.size())
         
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done

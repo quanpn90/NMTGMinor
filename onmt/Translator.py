@@ -230,7 +230,7 @@ class Translator(object):
                 # in this section, the sentences that are still active are
                 # compacted so that the decoder is not run on completed sentences
                 activeIdx = self.tt.LongTensor([batchIdx[k] for k in active])
-                batchIdx = {beam: idx for idx, beam in enumerate(active)}
+                #~ batchIdx = {beam: idx for idx, beam in enumerate(active)}
 
                 def updateActive(t):
                     # select only the remaining active sentences
@@ -334,14 +334,19 @@ class Translator(object):
             
             input_seq = None
             
-            buffer = list()
+            buffer = None
             
             for i in range(self.opt.max_sent_length):
+                
+                if all((b.done()   for b in beam)):
+                    break
                 # Prepare decoder input.
                 
                 # input size: 1 x ( batch * beam )
-                input = torch.stack([b.getCurrentState() for b in beam
-                                     if not b.done]).t().contiguous().view(1, -1)
+                #~ input = torch.stack([b.getCurrentState() for b in beam
+                                     #~ if not b.done]).t().contiguous().view(1, -1)
+                input = torch.stack([b.getCurrentState() for b in beam]).t().contiguous().view(1, -1)
+                                     
                 
                 """  
                     Inefficient decoding implementation
@@ -354,14 +359,14 @@ class Translator(object):
                     # concatenate the last input to the previous input sequence
                     input_seq = torch.cat([input_seq, input], 0)
                 
-                # require batch first for everything
+                ## require batch first for everything
                 decoder_input = Variable(input_seq)
-                decoder_hidden, coverage = self.model.decoder(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1))
-                # decoder_hidden, coverage, buffer = self.model.decoder.step(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1), buffer=buffer)
+                #~ decoder_hidden, coverage = self.model.decoder(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1))
+                decoder_hidden, coverage, buffer = self.model.decoder.step(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1), buffer=buffer)
                 
-                # take the last decoder state
+                ## take the last decoder state
                 decoder_hidden = decoder_hidden[:, -1, :].squeeze(1)
-                # decoder_hidden = decoder_hidden.squeeze(1)
+                #~ decoder_hidden = decoder_hidden.squeeze(1)
                 attn = coverage[:, -1, :].squeeze(1) # batch * beam x src_len
                 
                 # batch * beam x vocab_size 
@@ -373,45 +378,52 @@ class Translator(object):
                            .transpose(0, 1).contiguous()
                 active = []
                 
-                for b in range(batchSize):
-                    if beam[b].done:
-                        continue
+                #~ for b in range(batchSize):
+                for j, b in enumerate(beam):
+                    #~ if beam[b].done:
+                        #~ continue
                     
-                    idx = batchIdx[b]
-                    if not beam[b].advance(wordLk.data[idx], attn.data[idx]):
-                        active += [b]
+                    #~ idx = batchIdx[b]
+                    #~ if not beam[b].advance(wordLk.data[idx], attn.data[idx]):
+                        #~ active += [b]
+                    b.advance(wordLk.data[j], attn.data[j])
                         
                     # update the decoding states
                     
                     for tensor in [src, input_seq]  :
                     
                         t_, br = tensor.size()
-                        sent_states = tensor.view(t_, beamSize, remainingSents)[:, :, idx]
+                        sent_states = tensor.view(t_, beamSize, remainingSents)[:, :, j]
                         
                         if isinstance(tensor, Variable):
                             sent_states.data.copy_(sent_states.data.index_select(
-                                        1, beam[b].getCurrentOrigin()))
+                                        1, b.getCurrentOrigin()))
                         else:
                             sent_states.copy_(sent_states.index_select(
-                                        1, beam[b].getCurrentOrigin()))
+                                        1, b.getCurrentOrigin()))
                                         
-                    for tensor in buffer:
+                    #~ for tensor in buffer:
+                        #~ 
+                        #~ br_, t, d = tensor.size()
+                        #~ 
+                        #~ sent_states = tensor.view(beamSize, remainingSents, t_, d)[:, j, :, :]
+                        #~ 
+                        #~ sent_states.data.copy_(sent_states.data.index_select(
+                                        #~ 0, beam[b].getCurrentOrigin()))
+                        #~ print(buffer.size)
+                        nl, br_, tt, d = buffer.size()
                         
-                        br_, t, d = tensor.size()
-                        
-                        sent_states = tensor.view(beamSize, remainingSents, t_, d)[:, idx, :, :]
-                        
+                        sent_states = buffer.view(nl, beamSize, remainingSents, tt, d)[:, :, j, :, :]
                         sent_states.data.copy_(sent_states.data.index_select(
-                                        0, beam[b].getCurrentOrigin()))
+                                                    1, b.getCurrentOrigin()))
                     
-                    
-                if not active:
-                    break
+                #~ if not active:
+                    #~ break
                     
                 # in this section, the sentences that are still active are
                 # compacted so that the decoder is not run on completed sentences
-                activeIdx = self.tt.LongTensor([batchIdx[k] for k in active])
-                batchIdx = {beam: idx for idx, beam in enumerate(active)}
+                #~ activeIdx = self.tt.LongTensor([batchIdx[k] for k in active])
+                #~ batchIdx = {beam: idx for idx, beam in enumerate(active)}
                 
                 model_size = context.size(-1)
 
@@ -423,12 +435,13 @@ class Translator(object):
                     return Variable(view.index_select(1, activeIdx)
                                     .view(*newSize))
                 
-                def updateActive2(t):
+                def updateActive4(t):
+                    nl, br_, tt, d = t.size()
                     # select only the remaining active sentences
-                    view = t.data.view(remainingSents, -1, model_size)
+                    view = t.data.view(nl, remainingSents, -1, model_size)
                     newSize = list(t.size())
-                    newSize[0] = newSize[0] * len(activeIdx) // remainingSents
-                    return Variable(view.index_select(0, activeIdx)
+                    newSize[1] = newSize[1] * len(activeIdx) // remainingSents
+                    return Variable(view.index_select(1, activeIdx)
                                     .view(*newSize)) 
                 
                 def updateActive2D(t):
@@ -447,47 +460,52 @@ class Translator(object):
                                         
                         return new_t
                         
-                context = updateActive(context)
+                #~ context = updateActive(context)
+                #~ 
+                #~ src = updateActive2D(src)
+                #~ 
+                #~ input_seq = updateActive2D(input_seq)
+                #~ 
+                #~ buffer = updateActive4(buffer)
                 
-                src = updateActive2D(src)
-                
-                input_seq = updateActive2D(input_seq)
-                
-                
-                for i, tensor in enumerate(buffer):
-                    buffer[i] = updateActive2(tensor)
-                
-                
-                remainingSents = len(active)
                 
             #  (4) package everything up
             allHyp, allScores, allAttn = [], [], []
             n_best = self.opt.n_best
             allLengths = []
+            
+            ret = self._from_beam(beam)
+            
+            allHyp = ret["predictions"]
+            allScores = ret["scores"]
+            allAttn = ret["attention"]
+            allLengths = ret["lengths"]
+            
+            
 
-            for b in range(batchSize):
-                scores, ks = beam[b].sortBest()
-
-                allScores += [scores[:n_best]]
-                hyps, attn, length = zip(*[beam[b].getHyp(k) for k in ks[:n_best]])
-                allHyp += [hyps]
-                allLengths += [length]
-                valid_attn = srcBatch.data[:, b].ne(onmt.Constants.PAD) \
-                                                .nonzero().squeeze(1)
-                attn = [a.index_select(1, valid_attn) for a in attn]
-                allAttn += [attn]
-
-                if self.beam_accum:
-                    self.beam_accum["beam_parent_ids"].append(
-                        [t.tolist()
-                         for t in beam[b].prevKs])
-                    self.beam_accum["scores"].append([
-                        ["%4f" % s for s in t.tolist()]
-                        for t in beam[b].allScores][1:])
-                    self.beam_accum["predicted_ids"].append(
-                        [[self.tgt_dict.getLabel(id)
-                          for id in t.tolist()]
-                         for t in beam[b].nextYs][1:])
+            #~ for b in range(batchSize):
+                #~ scores, ks = beam[b].sortBest()
+#~ 
+                #~ allScores += [scores[:n_best]]
+                #~ hyps, attn, length = zip(*[beam[b].getHyp(k) for k in ks[:n_best]])
+                #~ allHyp += [hyps]
+                #~ allLengths += [length]
+                #~ valid_attn = srcBatch.data[:, b].ne(onmt.Constants.PAD) \
+                                                #~ .nonzero().squeeze(1)
+                #~ attn = [a.index_select(1, valid_attn) for a in attn]
+                #~ allAttn += [attn]
+#~ 
+                #~ if self.beam_accum:
+                    #~ self.beam_accum["beam_parent_ids"].append(
+                        #~ [t.tolist()
+                         #~ for t in beam[b].prevKs])
+                    #~ self.beam_accum["scores"].append([
+                        #~ ["%4f" % s for s in t.tolist()]
+                        #~ for t in beam[b].allScores][1:])
+                    #~ self.beam_accum["predicted_ids"].append(
+                        #~ [[self.tgt_dict.getLabel(id)
+                          #~ for id in t.tolist()]
+                         #~ for t in beam[b].nextYs][1:])
                 
             """" ----------------- OLD IMPLEMENTATION -----------------"""
             
@@ -619,7 +637,26 @@ class Translator(object):
         else:            
             print("Model type %s is not supported" % self.model_type)
             raise NotImplementedError
-            
+        
+    def _from_beam(self, beam):
+        ret = {"predictions": [],
+               "scores": [],
+               "attention": [],
+               "lengths": []}
+        for b in beam:
+            n_best = self.opt.n_best
+            scores, ks = b.sort_finished(minimum=n_best)
+            hyps, attn, length = [], [], []
+            for i, (times, k) in enumerate(ks[:n_best]):
+                hyp, att, l = b.get_hyp(times, k)
+                hyps.append(hyp)
+                attn.append(att)
+                length.append(l)
+            ret["predictions"].append(hyps)
+            ret["scores"].append(scores)
+            ret["attention"].append(attn)
+            ret["lengths"].append(length)
+        return ret
 
     def translate(self, srcBatch, goldBatch):
         #  (1) convert words to indexes
