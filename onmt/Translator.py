@@ -334,7 +334,7 @@ class Translator(object):
             
             input_seq = None
             
-            buffer = list()
+            buffer = None
             
             for i in range(self.opt.max_sent_length):
                 # Prepare decoder input.
@@ -356,12 +356,12 @@ class Translator(object):
                 
                 # require batch first for everything
                 decoder_input = Variable(input_seq)
-                decoder_hidden, coverage = self.model.decoder(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1))
-                # decoder_hidden, coverage, buffer = self.model.decoder.step(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1), buffer=buffer)
+                #~ decoder_hidden, coverage = self.model.decoder(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1))
+                decoder_hidden, coverage, buffer = self.model.decoder.step(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1), buffer=buffer)
                 
                 # take the last decoder state
-                decoder_hidden = decoder_hidden[:, -1, :].squeeze(1)
-                # decoder_hidden = decoder_hidden.squeeze(1)
+                #~ decoder_hidden = decoder_hidden[:, -1, :].squeeze(1)
+                decoder_hidden = decoder_hidden.squeeze(1)
                 attn = coverage[:, -1, :].squeeze(1) # batch * beam x src_len
                 
                 # batch * beam x vocab_size 
@@ -394,15 +394,21 @@ class Translator(object):
                         else:
                             sent_states.copy_(sent_states.index_select(
                                         1, beam[b].getCurrentOrigin()))
-                                        
-                    for tensor in buffer:
-                        
-                        br_, t, d = tensor.size()
-                        
-                        sent_states = tensor.view(beamSize, remainingSents, t_, d)[:, idx, :, :]
-                        
-                        sent_states.data.copy_(sent_states.data.index_select(
-                                        0, beam[b].getCurrentOrigin()))
+                    
+                    nl, br_, t_, d_ = buffer.size()
+                    
+                    sent_states = buffer.view(nl, beamSize, remainingSents, t_, d_)[:, :, idx, :, :]
+                    
+                    sent_states.data.copy_(sent_states.data.index_select(
+                                        1, beam[b].getCurrentOrigin()))
+                    #~ for tensor in buffer:
+                        #~ 
+                        #~ br_, t, d = tensor.size()
+                        #~ 
+                        #~ sent_states = tensor.view(beamSize, remainingSents, t_, d)[:, idx, :, :]
+                        #~ 
+                        #~ sent_states.data.copy_(sent_states.data.index_select(
+                                        #~ 0, beam[b].getCurrentOrigin()))
                     
                     
                 if not active:
@@ -423,12 +429,13 @@ class Translator(object):
                     return Variable(view.index_select(1, activeIdx)
                                     .view(*newSize))
                 
-                def updateActive2(t):
+                def updateActive4D(t):
                     # select only the remaining active sentences
-                    view = t.data.view(remainingSents, -1, model_size)
+                    nl, br_, t_, d_ = t.size()
+                    view = t.data.view(nl, -1, remainingSents, t_, model_size)
                     newSize = list(t.size())
-                    newSize[0] = newSize[0] * len(activeIdx) // remainingSents
-                    return Variable(view.index_select(0, activeIdx)
+                    newSize[1] = newSize[1] * len(activeIdx) // remainingSents
+                    return Variable(view.index_select(2, activeIdx)
                                     .view(*newSize)) 
                 
                 def updateActive2D(t):
@@ -453,11 +460,9 @@ class Translator(object):
                 
                 input_seq = updateActive2D(input_seq)
                 
+                buffer = updateActive4D(buffer)
                 
-                for i, tensor in enumerate(buffer):
-                    buffer[i] = updateActive2(tensor)
-                
-                
+               
                 remainingSents = len(active)
                 
             #  (4) package everything up

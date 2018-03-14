@@ -215,9 +215,9 @@ class TransformerDecoder(nn.Module):
         """
         
             
-        # output_buffer = list()
-        if buffer is None:
-            buffer = list()
+        output_buffer = list()
+        #~ if buffer is None:
+            #~ buffer = list()
             
         batch_size = input.size(0)
         
@@ -269,7 +269,7 @@ class TransformerDecoder(nn.Module):
         
         for i, layer in enumerate(self.layer_modules):
             
-            buffer_ = buffer[i] if len(buffer) >= (i+1) else None
+            buffer_ = buffer[i] if buffer is not None else None
             assert(output.size(1) == 1)
             output, coverage, buffer_ = layer.step(output, context, mask_tgt, mask_src, 
                                         pad_mask_tgt=None, pad_mask_src=None, buffer=buffer_) # batch_size x len_src x d_model
@@ -277,13 +277,14 @@ class TransformerDecoder(nn.Module):
 
             # if i == 1:
                 # print(buffer_.size())
-            # output_buffer.append(updated_buffer)
+            output_buffer.append(buffer_)
             
-            if len(buffer) >= i+1:
-                buffer[i] = buffer_
-            else:
-                buffer.append(buffer_)
+            #~ if len(buffer) >= i+1:
+                #~ buffer[i] = buffer_
+            #~ else:
+                #~ buffer.append(buffer_)
         
+        buffer = torch.stack(output_buffer)
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
         # on the output, since the output can grow very large, being the sum of
