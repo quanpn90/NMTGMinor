@@ -203,11 +203,11 @@ class MultiHeadAttention(nn.Module):
         self.fc_value = Bottle(Linear(d_model, h*self.d_head, bias=False))
         
         self.attention_out = onmt.Constants.attention_out
-        if self.attention_out == 'default':
-            self.fc_concat = Bottle(Linear(h*self.d_head, d_model, bias=False))
-        elif self.attention_out == 'combine':
-            self.fc_concat = Bottle(Linear(2 * d_model, d_model, bias=False))
-        self.sm = nn.Softmax(dim=1)
+        #~ if self.attention_out == 'default':
+        self.fc_concat = Bottle(Linear(h*self.d_head, d_model, bias=False))
+        #~ elif self.attention_out == 'combine':
+            #~ self.fc_concat = Bottle(Linear(2 * d_model, d_model, bias=False))
+        self.sm = nn.Softmax(dim=-1)
         self.attn_dropout = nn.Dropout(attn_p)
         #~ self.dropout = nn.Dropout(p)
         #~ self.p = p
@@ -219,15 +219,59 @@ class MultiHeadAttention(nn.Module):
         """
         b, l, d = x.size()
         return contiguous(x.view(b, l, self.h, self.d_head).transpose(1,2)).view(b*self.h, l, self.d_head)
+    
+    def shape(self, x):
         
+        b, l, d = x.size()
+        return x.view(b, l, self.h, self.d_head) \
+                .transpose(1, 2)
+    
+    #~ def unshape(x):
+            #~ return x.transpose(1, 2).contiguous() \
+                    #~ .view(batch_size, -1, head_count * dim_per_head)
+        
+    def forward1(self, query, key, value, mask, query_mask=None, value_mask=None):
+        b, len_query = query.size(0), query.size(1)
+        len_key = key.size(1)
+        
+        key_mask = value_mask
+        
+        # project inputs to multi-heads
+        proj_query = self.fc_query(query, mask=query_mask)       # batch_size x len_query x h*d_head
+        proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
+        proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
+        
+        # prepare the shape for applying softmax
+        proj_query = self.shape(proj_query)  # batch_size*h x len_query x d_head
+        proj_key = self.shape(proj_key)           # batch_size*h x len_key x d_head
+        proj_value = self.shape(proj_value)       # batch_size*h x len_key x d_head
+        
+        proj_query = proj_query * (self.d_head**-0.5)
+        
+        # get dotproduct softmax attns for each head
+        attns = torch.matmul(proj_query, proj_key.transpose(2,3)) # b, self.h, len_query, len_key
+                
+        mask_ = Variable(mask.unsqueeze(-3))        
+        attns = attns.masked_fill_(mask_, -float('inf'))
+        attns = self.sm(attns)
+        # return mean attention from all heads as coverage 
+        coverage = torch.mean(attns, dim=1) 
+        attns = self.attn_dropout(attns)
+        
+        # apply attns on value
+        out = torch.matmul(attns, proj_value)
+        out = out.transpose(1, 2).contiguous().view(b, -1, self.h * self.d_head)
+            
+        out = self.fc_concat(out, mask=query_mask)
+       
+        
+        return out, coverage
+
     def forward(self, query, key, value, mask, query_mask=None, value_mask=None):
         b, len_query = query.size(0), query.size(1)
         len_key = key.size(1)
         
-        #~ if value_mask is not None:
-            #~ key_mask = value_mask
-        #~ else:
-        key_mask = None
+        key_mask = value_mask
         
         # project inputs to multi-heads
         proj_query = self.fc_query(query, mask=query_mask)       # batch_size x len_query x h*d_head
@@ -236,8 +280,8 @@ class MultiHeadAttention(nn.Module):
         
         # prepare the shape for applying softmax
         proj_query = self._prepare_proj(proj_query)  # batch_size*h x len_query x d_head
-        proj_key = self._prepare_proj(key)           # batch_size*h x len_key x d_head
-        proj_value = self._prepare_proj(value)       # batch_size*h x len_key x d_head
+        proj_key = self._prepare_proj(proj_key)           # batch_size*h x len_key x d_head
+        proj_value = self._prepare_proj(proj_value)       # batch_size*h x len_key x d_head
         
         proj_query = proj_query * (self.d_head**-0.5)
         
@@ -245,12 +289,11 @@ class MultiHeadAttention(nn.Module):
         attns = torch.bmm(proj_query, proj_key.transpose(1,2))  # batch_size*h x len_query x len_key
         
         attns = attns.view(b, self.h, len_query, len_key) 
-        
-        mask_ = Variable(mask.unsqueeze(-3)).repeat(1, self.h, 1, 1)
+        mask_ = Variable(mask.unsqueeze(-3))        
         attns = attns.masked_fill_(mask_, -float('inf'))
-        attns = self.sm(attns.view(-1, len_key))
+        attns = self.sm(attns)
         # return mean attention from all heads as coverage 
-        coverage = torch.mean(attns.view(b, self.h, len_query, len_key), dim=1) 
+        coverage = torch.mean(attns, dim=1) 
         attns = self.attn_dropout(attns)
         attns = attns.view(b*self.h, len_query, len_key)
         
@@ -259,14 +302,9 @@ class MultiHeadAttention(nn.Module):
         out = contiguous(out.view(b, self.h, len_query, self.d_head).transpose(1,2))
         out = out.view(b, len_query, self.h*self.d_head)
             
-        if self.attention_out == 'default':
-            out = self.fc_concat(out, mask=value_mask)
-        else:
-            concat = torch.cat([out, query], dim=2)
-            out = F.tanh(self.fc_concat(concat, mask = value_mask))
-        
+        out = self.fc_concat(out, mask=query_mask)
+       
         return out, coverage
-
     
 class FeedForward(nn.Module):
     """Applies position-wise feed forward to inputs
@@ -441,7 +479,7 @@ class DecoderLayer(nn.Module):
             feedforward = MaxOut(d_model, d_model, k)
         self.feedforward = Bottle(feedforward)
     
-    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, buffer=None):
+    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None):
         
         if self.version == 1.0:
             """ Self attention layer 
@@ -449,11 +487,7 @@ class DecoderLayer(nn.Module):
             """
             query = self.preprocess_attn(input, mask=pad_mask_tgt)
             
-            
-            if buffer is not None:
-                self_context = torch.cat([buffer, query], dim=1)
-            else:
-                self_context = query
+            self_context = query
             
             out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt, 
                                         query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
@@ -466,7 +500,7 @@ class DecoderLayer(nn.Module):
             
             query = self.preprocess_src_attn(input, mask=pad_mask_tgt)
             out, coverage = self.multihead_src(query, context, context, mask_src, 
-                                               query_mask=pad_mask_tgt, value_mask=None)
+                                               query_mask=pad_mask_tgt, value_mask=pad_mask_src)
             input = self.postprocess_src_attn(out, input)
             
             """ Feed forward layer 

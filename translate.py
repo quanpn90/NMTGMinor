@@ -73,8 +73,6 @@ def addone(f):
     
 def len_penalty(s, l, alpha):
     
-    # l_term = (((5 + l) ** alpha) /
-                  # ((5 + 1) ** alpha))
     l_term = math.pow(l, alpha)
     return s / l_term
 

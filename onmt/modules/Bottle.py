@@ -35,10 +35,8 @@ class Bottle(nn.Module):
             flattened_mask = mask.view(-1)
             
             non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
-            
-            
+
             clean_input = flattened_input.index_select(0, non_pad_indices )
-            #~ clean_input = flattened_input.masked_select(flattened_mask)
         else:
             clean_input = flattened_input
         

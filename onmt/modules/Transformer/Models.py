@@ -258,9 +258,7 @@ class TransformerDecoder(nn.Module):
         # mask_tgt = self.mask[:len_tgt, :len_tgt].unsqueeze(0).repeat(batch_size, 1, 1)
         mask_tgt = torch.gt(mask_tgt, 0)
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
-        
-        # print(mask_tgt.size())
-        
+                
         output = emb.contiguous()
         
         pad_mask_tgt = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
@@ -274,15 +272,7 @@ class TransformerDecoder(nn.Module):
             output, coverage, buffer_ = layer.step(output, context, mask_tgt, mask_src, 
                                         pad_mask_tgt=None, pad_mask_src=None, buffer=buffer_) # batch_size x len_src x d_model
             
-
-            # if i == 1:
-                # print(buffer_.size())
             output_buffer.append(buffer_)
-            
-            #~ if len(buffer) >= i+1:
-                #~ buffer[i] = buffer_
-            #~ else:
-                #~ buffer.append(buffer_)
         
         buffer = torch.stack(output_buffer)
         # From Google T2T

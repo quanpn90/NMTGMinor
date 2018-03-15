@@ -401,15 +401,6 @@ class Translator(object):
                     
                     sent_states.data.copy_(sent_states.data.index_select(
                                         1, beam[b].getCurrentOrigin()))
-                    #~ for tensor in buffer:
-                        #~ 
-                        #~ br_, t, d = tensor.size()
-                        #~ 
-                        #~ sent_states = tensor.view(beamSize, remainingSents, t_, d)[:, idx, :, :]
-                        #~ 
-                        #~ sent_states.data.copy_(sent_states.data.index_select(
-                                        #~ 0, beam[b].getCurrentOrigin()))
-                    
                     
                 if not active:
                     break
@@ -462,7 +453,6 @@ class Translator(object):
                 
                 buffer = updateActive4D(buffer)
                 
-               
                 remainingSents = len(active)
                 
             #  (4) package everything up
