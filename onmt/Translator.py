@@ -121,11 +121,13 @@ class Translator(object):
     def buildTargetTokens(self, pred, src, attn):
         tokens = self.tgt_dict.convertToLabels(pred, onmt.Constants.EOS)
         tokens = tokens[:-1]  # EOS
-        if self.opt.replace_unk:
-            for i in range(len(tokens)):
-                if tokens[i] == onmt.Constants.UNK_WORD:
-                    _, maxIndex = attn[i].max(0)
-                    tokens[i] = src[maxIndex[0]]
+        
+        #~ print(tokens)
+        #~ if self.opt.replace_unk:
+            #~ for i in range(len(tokens)):
+                #~ if tokens[i] == onmt.Constants.UNK_WORD:
+                    #~ _, maxIndex = attn[i].max(0)
+                    #~ tokens[i] = src[maxIndex[0]]
         return tokens
 
     def translateBatch(self, srcBatch, tgtBatch):
@@ -166,7 +168,7 @@ class Translator(object):
                     tgt_t = tgt_t.unsqueeze(1)
                     scores = gen_t.data.gather(1, tgt_t)
                     scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
-                    goldScores += scores
+                    goldScores += scores.squeeze(1)
                     goldWords += tgt_t.ne(onmt.Constants.PAD).sum()
 
             #  (3) run the decoder to generate sentences, using beam search
@@ -313,7 +315,7 @@ class Translator(object):
                     tgt_t = tgt_t.unsqueeze(1)
                     scores = gen_t.data.gather(1, tgt_t)
                     scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
-                    goldScores += scores
+                    goldScores += scores.squeeze(1)
                     goldWords += tgt_t.ne(onmt.Constants.PAD).sum()
                 
                 
@@ -629,6 +631,7 @@ class Translator(object):
 
         #  (3) convert indexes to words
         predBatch = []
+        #~ print(pred)
         for b in range(batchSize):
             predBatch.append(
                 [self.buildTargetTokens(pred[b][n], srcBatch[b], attn[b][n])

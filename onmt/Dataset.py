@@ -105,9 +105,9 @@ class Dataset(object):
         def wrap(b, dtype="text"):
             if b is None:
                 return b
-            b = torch.stack(b, 0)
-            if dtype == "text":
-                b = b.t().contiguous()
+            #~ print (b)
+            #~ b = torch.stack(b, 0)
+            b = b.t().contiguous()
            
             return b
 

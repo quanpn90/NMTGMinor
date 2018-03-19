@@ -55,6 +55,8 @@ parser.add_argument('-inner_size', type=int, default=2048,
     help='Size of inner feed forward layer')  
 parser.add_argument('-n_heads', type=int, default=8,
     help='Number of heads for multi-head attention') 
+parser.add_argument('-checkpoints', type=int, default=0,
+    help='Number of checkpointed layers in the Transformer') 
 parser.add_argument('-attn_dropout', type=float, default=0.1,
                     help='Dropout probability; applied on multi-head attention.')   
 parser.add_argument('-emb_dropout', type=float, default=0.1,

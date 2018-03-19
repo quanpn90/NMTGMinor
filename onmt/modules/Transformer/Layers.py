@@ -8,8 +8,10 @@ import torch.nn.utils.weight_norm as WeightNorm
 import onmt 
 import torch.nn.functional as F
 from onmt.modules.Bottle import Bottle
+#~ 
 #~ from onmt.modules.MaxOut import MaxOut
-
+from onmt.modules.StaticDropout import StaticDropout
+#~ from onmt.modules.Checkpoint import checkpoint
 def contiguous(tensor):
 
     if tensor.is_contiguous():
@@ -133,7 +135,7 @@ class PrePostProcessing(nn.Module):
             a = adding previous input to output (residual)
     """
     
-    def __init__(self, d_model, dropout_p, sequence='nda'):
+    def __init__(self, d_model, dropout_p, sequence='nda', static=False):
         super(PrePostProcessing, self).__init__() 
         self.d_model = d_model
         self.dropout_p = dropout_p     
@@ -149,7 +151,10 @@ class PrePostProcessing(nn.Module):
                 ln.weight.data.fill_(1)
                 self.layer_norm = Bottle(ln)
         if 'd' in self.steps:
-            self.dropout = nn.Dropout(self.dropout_p, inplace=False)
+            if static:
+                self.dropout = StaticDropout(self.dropout_p)
+            else:
+                self.dropout = nn.Dropout(self.dropout_p, inplace=False)
     
     def forward(self, tensor, input_tensor=None, mask=None):
         
@@ -203,16 +208,11 @@ class MultiHeadAttention(nn.Module):
         self.fc_value = Bottle(Linear(d_model, h*self.d_head, bias=False))
         
         self.attention_out = onmt.Constants.attention_out
-        #~ if self.attention_out == 'default':
         self.fc_concat = Bottle(Linear(h*self.d_head, d_model, bias=False))
-        #~ elif self.attention_out == 'combine':
-            #~ self.fc_concat = Bottle(Linear(2 * d_model, d_model, bias=False))
+
         self.sm = nn.Softmax(dim=-1)
-        self.attn_dropout = nn.Dropout(attn_p)
-        #~ self.dropout = nn.Dropout(p)
-        #~ self.p = p
-        
-        #~ self.layernorm = LayerNorm(d_model)
+        #~ self.attn_dropout = nn.Dropout(attn_p)
+        self.attn_dropout = StaticDropout(attn_p)
       
     def _prepare_proj(self, x):
         """Reshape the projectons to apply softmax on each head
@@ -331,7 +331,8 @@ class FeedForward(nn.Module):
         self.d_ff = d_ff
         self.fc_1 = Linear(d_model, d_ff, nonlinearity="relu")
         self.fc_2 = Linear(d_ff, d_model)
-        self.dropout = nn.Dropout(p)
+        #~ self.dropout = nn.Dropout(p)
+        self.dropout = StaticDropout(p)
         
     def forward(self, input):
         
@@ -369,9 +370,9 @@ class EncoderLayer(nn.Module):
         self.version = version
         
         self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da')
+        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', static=True)
         self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da')
+        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', static=True)
         self.multihead = MultiHeadAttention(h, d_model, attn_p=attn_p)
         
         if onmt.Constants.activation_layer == 'linear_relu_linear':
@@ -456,13 +457,13 @@ class DecoderLayer(nn.Module):
         self.version = version
         
         self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da')
+        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', static=True)
         
         self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_src_attn = PrePostProcessing(d_model, p, sequence='da')
+        self.postprocess_src_attn = PrePostProcessing(d_model, p, sequence='da', static=True)
         
         self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da')
+        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', static=True)
         
         
         self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p)

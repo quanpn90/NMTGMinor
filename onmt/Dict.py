@@ -27,6 +27,8 @@ class Dict(object):
             label = fields[0]
             idx = int(fields[1])
             self.add(label, idx)
+        
+        
 
     def writeFile(self, filename):
         "Write entries to a file."
@@ -126,11 +128,12 @@ class Dict(object):
         Convert `idx` to labels.
         If index `stop` is reached, convert it and return.
         """
-
+        #~ print(self.idxToLabel)
         labels = []
 
         for i in idx:
-            labels += [self.getLabel(i)]
+            
+            labels += [self.getLabel(int(i))]
             if i == stop:
                 break
 

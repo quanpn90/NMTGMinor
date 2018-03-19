@@ -155,6 +155,7 @@ def main():
             count += 1
                         
             if not opt.print_nbest:
+                #~ print(predBatch[b][0])
                 outF.write(" ".join(predBatch[b][0]) + '\n')
                 outF.flush()
 
@@ -185,8 +186,8 @@ def main():
         srcBatch, tgtBatch = [], []
         
     if opt.verbose:
-            reportScore('PRED', predScoreTotal, predWordsTotal)
-            if tgtF: reportScore('GOLD', goldScoreTotal, goldWordsTotal)
+        reportScore('PRED', predScoreTotal, predWordsTotal)
+        if tgtF: reportScore('GOLD', goldScoreTotal, goldWordsTotal)
                 
 
     if tgtF:

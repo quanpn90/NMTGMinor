@@ -74,9 +74,6 @@ class TransformerEncoder(nn.Module):
             emb = emb[0]
         emb = self.preprocess_layer(emb)
         
-       
-        
-        
         mask_src = input.data.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x len_src x 1 for broadcasting
         
         pad_mask = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
