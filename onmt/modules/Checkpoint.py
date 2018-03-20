@@ -6,6 +6,8 @@ def wrap_variable(inputs):
         return Variable(inputs)
     elif isinstance(inputs, tuple):
         return tuple(wrap_variable(v) for v in inputs)
+    elif isinstance(inputs, Variable):
+        return inputs
     else:
         raise RuntimeError("Unsupported input type: ", type(inputs).__name__)
         
@@ -24,7 +26,7 @@ def unpack_variables(inputs):
 class CheckpointFunction(Function):
 
     @staticmethod
-    def forward(ctx, run_function, *args):
+    def forward(ctx, run_function, *args, **kargs):
         ctx.run_function = run_function
         
         # save all of the inputs for the backward pass
@@ -71,7 +73,7 @@ class CheckpointFunction(Function):
             return (None,) + tuple(
                 next(grads_it) if i.requires_grad else None for i in inputs)
 
-+def checkpoint(run_function, *args):
+def checkpoint(run_function, *args):
      r"""Checkpoint a model or part of the model
 +
 +    Checkpoint works by trading compute for memory. It can be applied on any

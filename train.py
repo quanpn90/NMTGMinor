@@ -55,7 +55,7 @@ parser.add_argument('-inner_size', type=int, default=2048,
     help='Size of inner feed forward layer')  
 parser.add_argument('-n_heads', type=int, default=8,
     help='Number of heads for multi-head attention') 
-parser.add_argument('-checkpoints', type=int, default=0,
+parser.add_argument('-checkpointing', type=int, default=0,
     help='Number of checkpointed layers in the Transformer') 
 parser.add_argument('-attn_dropout', type=float, default=0.1,
                     help='Dropout probability; applied on multi-head attention.')   
@@ -182,6 +182,7 @@ print(opt)
 
 # An ugly hack to have weight norm on / off
 onmt.Constants.weight_norm = opt.weight_norm
+onmt.Constants.checkpointing = opt.checkpointing
 
 if torch.cuda.is_available() and not opt.gpus:
     print("WARNING: You have a CUDA device, should run with -gpus 0")
@@ -235,7 +236,7 @@ def main():
                                         shard_size=opt.max_generator_batches)
     
 
-    print(model)
+    #~ print(model)
     #~ print(loss_function)
 
     nParams = sum([p.nelement() for p in model.parameters()])

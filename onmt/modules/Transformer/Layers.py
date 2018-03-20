@@ -135,7 +135,7 @@ class PrePostProcessing(nn.Module):
             a = adding previous input to output (residual)
     """
     
-    def __init__(self, d_model, dropout_p, sequence='nda', static=False):
+    def __init__(self, d_model, dropout_p, sequence='nda', static=True):
         super(PrePostProcessing, self).__init__() 
         self.d_model = d_model
         self.dropout_p = dropout_p     
@@ -250,8 +250,11 @@ class MultiHeadAttention(nn.Module):
         
         # get dotproduct softmax attns for each head
         attns = torch.matmul(proj_query, proj_key.transpose(2,3)) # b, self.h, len_query, len_key
-                
-        mask_ = Variable(mask.unsqueeze(-3))        
+        
+        if isinstance(mask, Variable):
+            mask_ = mask.unsqueeze(-3)
+        elif torch.is_tensor(mask):
+            mask_ = Variable(mask.unsqueeze(-3))
         attns = attns.masked_fill_(mask_, -float('inf'))
         attns = self.sm(attns)
         # return mean attention from all heads as coverage 
@@ -289,7 +292,13 @@ class MultiHeadAttention(nn.Module):
         attns = torch.bmm(proj_query, proj_key.transpose(1,2))  # batch_size*h x len_query x len_key
         
         attns = attns.view(b, self.h, len_query, len_key) 
-        mask_ = Variable(mask.unsqueeze(-3))        
+        
+        # preprocessing mask
+        if isinstance(mask, Variable):
+            mask_ = mask.unsqueeze(-3)
+        elif torch.is_tensor(mask):
+            mask_ = Variable(mask.unsqueeze(-3))
+                
         attns = attns.masked_fill_(mask_, -float('inf'))
         attns = self.sm(attns)
         # return mean attention from all heads as coverage 
@@ -386,13 +395,14 @@ class EncoderLayer(nn.Module):
             feedforward = MaxOut(d_model, d_model, k)
         self.feedforward = Bottle(feedforward)
             
-    def forward(self, input, attn_mask, pad_mask=None):
+    def forward(self, input, attn_mask, pad_mask):
         
         
         if self.version == 1.0:
             """ Self attention layer 
                 layernorm > attn > dropout > residual
             """
+            #~ pad_mask = None
             
             query = self.preprocess_attn(input)
             out, _ = self.multihead(query, query, query, attn_mask, 
@@ -480,12 +490,15 @@ class DecoderLayer(nn.Module):
             feedforward = MaxOut(d_model, d_model, k)
         self.feedforward = Bottle(feedforward)
     
-    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None):
+    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt, pad_mask_src):
         
         if self.version == 1.0:
             """ Self attention layer 
                 layernorm > attn > dropout > residual
             """
+            #~ pad_mask_tgt = None
+            #~ pad_mask_src = None
+            
             query = self.preprocess_attn(input, mask=pad_mask_tgt)
             
             self_context = query
