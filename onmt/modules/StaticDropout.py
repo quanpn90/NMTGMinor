@@ -7,31 +7,31 @@ import torch.nn as nn
 class StaticDropoutFunction(Function):
 
     @staticmethod
-    def forward(ctx, input, module):
+    def forward(ctx, input, module, train=False):
         
         
-        ctx.train = module.training
+        ctx.train = train
         ctx.module = module
         ctx.p = module.p
-        
+
         if ctx.p == 0 or not ctx.train:
             return input
-
+            
         ctx.noise = module.noise
-        output = input.clone()
 
-        output.mul_(ctx.noise)
+        output = input * ctx.noise
 
         return output
 
     @staticmethod
     def backward(ctx, grad_output):
+        #~ print("BACKWARD PASS")
         ctx.module.noise_created = False
         ctx.module.noise = None
         if ctx.p > 0 and ctx.train:
-            return grad_output * ctx.noise, None
+            return grad_output * ctx.noise, None, None
         else:
-            return grad_output, None
+            return grad_output, None, None
 
 class StaticDropout(nn.Module):
 
@@ -54,7 +54,7 @@ class StaticDropout(nn.Module):
             self.noise = self.noise.expand_as(input)
             self.noise_created = True
      
-        return StaticDropoutFunction.apply(input, self)
+        return StaticDropoutFunction.apply(input, self, self.training)
 
     def __repr__(self):
         return self.__class__.__name__ + '(' \

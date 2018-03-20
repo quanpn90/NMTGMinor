@@ -42,8 +42,7 @@ class NMTModel(nn.Module):
         super(NMTModel, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
-        self.generator = generator 
-        self.saved_for_backward = dict()      
+        self.generator = generator        
         
     def tie_weights(self):
         assert self.generator is not None, "The generator needs to be created before sharing weights"

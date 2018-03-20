@@ -1,13 +1,20 @@
 import torch
 from torch.autograd import Variable, Function
 
+def requires_grad(obj):
+    
+    if not hasattr(obj, 'requires_grad'):
+        return False
+    
+    return obj.requires_grad
+
 def wrap_variable(inputs):
     if torch.is_tensor(inputs):
         return Variable(inputs)
+    elif isinstance(inputs, Variable):
+        return Variable(inputs.data, requires_grad=True)
     elif isinstance(inputs, tuple):
         return tuple(wrap_variable(v) for v in inputs)
-    elif isinstance(inputs, Variable):
-        return inputs
     else:
         raise RuntimeError("Unsupported input type: ", type(inputs).__name__)
         
@@ -21,27 +28,35 @@ def unpack_variables(inputs):
         return tuple(unpack_variables(v) for v in inputs)
     else:
         raise RuntimeError("Unsupported input type: ", type(inputs).__name__)
-        
+
 
 class CheckpointFunction(Function):
 
     @staticmethod
-    def forward(ctx, run_function, *args, **kargs):
+    def forward(ctx, run_function, *args):
         ctx.run_function = run_function
         
         # save all of the inputs for the backward pass
         ctx.save_for_backward(*args)
         var_args = wrap_variable(args)
+        
         # on the forward pass: don't compute the gradients
         with torch.no_grad():
             outputs = run_function(*var_args)
-        return unpack_variables(outputs)
+            #~ ctx.outputs = outputs
+            
+        out = unpack_variables(outputs)
+        
+        return out
     
     
     @staticmethod
     def backward(ctx, *grads):
         with torch.enable_grad():
             real_inputs = ctx.saved_variables
+            #~ real_inputs = ctx.inputs
+            #~ print(grads[0].size())
+            #~ print(len(grads))
             # We need to create new Variables to mark this place in the graph.
             # Reusing real_inputs would be incorrect if a case like this:
             #
@@ -55,23 +70,33 @@ class CheckpointFunction(Function):
             # still get all correctness checks, but uniquely marks the place up to
             # which we want to differentiate, because all views are independent nodes
             # (i.e. there is no path from one to another via .grad_fn chain).
-            inputs = [i[:] for i in real_inputs]
+            inputs = [wrap_variable(i) for i in real_inputs]
             outputs = ctx.run_function(*inputs)
+            
+            #~ assert torch.equal(outputs, ctx.outputs)
+            
             if isinstance(outputs, Variable):
                 outputs = (outputs,)
 
-            # Some inputs might not need gradients so we filter them out
-            # and later return None as grad for those inputs
-            filtered_inputs = [i for i in inputs if i.requires_grad]
-            if not filtered_inputs:
-                return (None,) * (1 + len(inputs))
-            grads = torch.autograd.grad(outputs, filtered_inputs, grads)
+            torch.autograd.backward(outputs, grads)
+            
+            output = (None,)
+            
+            for i, input_ in enumerate(inputs):
+                
+                if requires_grad(input_):
+                    
+                    if input_.grad is not None:
+                        output += (input_.grad, )
+                    else:
+                        output += (None, )
+                
+                else:
+                    output += (None, )
+            
+            return output
+           
 
-            # Append None for input grads which don't require grad. The first input
-            # is a run_function whose grad is None
-            grads_it = iter(grads)
-            return (None,) + tuple(
-                next(grads_it) if i.requires_grad else None for i in inputs)
 
 def checkpoint(run_function, *args):
      r"""Checkpoint a model or part of the model

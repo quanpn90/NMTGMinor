@@ -181,10 +181,11 @@ class XETrainer(BaseTrainer):
                 batch_size = targets.size(1)
                 
                 tgt_mask = torch.autograd.Variable(targets.data.ne(onmt.Constants.PAD))
+                #~ tgt_mask = None
                 
                 loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=True, mask=tgt_mask)
                 
-                self.model.backward(outputs, grad_outputs)
+                #~ outputs.backward(grad_outputs)
                 
             except RuntimeError as e:
                 if 'out of memory' in str(e):

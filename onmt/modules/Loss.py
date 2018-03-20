@@ -163,6 +163,7 @@ class NMTLossFunc(LossFuncBase):
             generator: in case we want to save memory and 
             **kwargs(optional): additional info for computing loss.
         """
+        
         original_outputs = outputs
         batch_size = outputs.size(1)
         h_size = outputs.size(-1)
@@ -226,7 +227,8 @@ class NMTLossFunc(LossFuncBase):
         
         
         if grad_outputs is not None:
-            grad_outputs = torch.autograd.grad(detached_outputs, original_outputs, grad_outputs=grad_outputs)
-            #~ detached_outputs.backward(grad_outputs)
+            #~ print(type(detached_outputs))
+            #~ grad_outputs = torch.autograd.grad(detached_outputs, original_outputs, grad_outputs=grad_outputs)
+            detached_outputs.backward(grad_outputs)
         
         return loss_data, grad_outputs
