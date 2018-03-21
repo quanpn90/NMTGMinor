@@ -493,6 +493,8 @@ class DecoderLayer(nn.Module):
         """ Self attention layer 
             layernorm > attn > dropout > residual
         """
+        #~ print(buffer)
+        
         query = self.preprocess_attn(input, mask=pad_mask_tgt)
         
         if buffer is not None:
@@ -522,6 +524,8 @@ class DecoderLayer(nn.Module):
         out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask_tgt), 
                                            mask=pad_mask_tgt)
         input = self.postprocess_ffn(out, input)
+        
+        return input, coverage, buffer
 
 class PositionalEncoding(nn.Module):
     """Adds positional embeddings to standard word embeddings 

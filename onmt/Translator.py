@@ -40,7 +40,7 @@ class Translator(object):
         # Build model from the saved option
         model = build_model(model_opt, checkpoint['dicts'])
         
-        print(model)
+        #~ print(model)
 
         
         model.load_state_dict(checkpoint['model'])
