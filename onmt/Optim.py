@@ -16,6 +16,18 @@ def normalize_gradients(parameters, denom):
     
     for p in parameters:
         p.grad.data.div_(denom)
+        
+def detech_nan(parameters):
+    
+    parameters = list(filter(lambda p: p.grad is not None, parameters))
+    
+    for p in parameters:        
+        if (torch.equal(p.grad.data, p.grad.data)):
+            continue
+        else:
+            return True
+            
+    return False
 
 def clip_grad_norm(parameters, max_norm, norm_type=2):
     r"""Clips gradient norm of an iterable of parameters.
@@ -176,6 +188,10 @@ class Optim(object):
             
     def step(self, grad_denom=None):
         
+        if detech_nan(self.params):
+            self.zero_grad()
+            return 0
+        
         "Normalize gradients by batch size"
         self.normalize_grad(denom=grad_denom)
         
@@ -198,10 +214,6 @@ class Optim(object):
         if denom is None:
             denom = 1
         
-        #~ if self.num_accumulated_samples == 0:
-            #~ denom = 1
-        #~ else:
-            #~ denom = self.num_accumulated_samples
         normalize_gradients(self.params, denom)
     
     def updateLearningRate(self):
