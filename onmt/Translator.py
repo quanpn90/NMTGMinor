@@ -27,11 +27,8 @@ class Translator(object):
             print('Loading model from %s' % opt.model)
         checkpoint = torch.load(opt.model,
                                map_location=lambda storage, loc: storage)
-        
-        
 
         model_opt = checkpoint['opt']
-        #~ print(model_opt)
         self.src_dict = checkpoint['dicts']['src']
         self.tgt_dict = checkpoint['dicts']['tgt']
         self._type = model_opt.encoder_type \
@@ -39,9 +36,6 @@ class Translator(object):
 
         # Build model from the saved option
         model = build_model(model_opt, checkpoint['dicts'])
-        
-        #~ print(model)
-
         
         model.load_state_dict(checkpoint['model'])
         
@@ -64,9 +58,6 @@ class Translator(object):
 
         self.model = model
         self.model.eval()
-        
-        
-        #~ self.global_scorer = onmt.Beam.GNMTGlobalScorer(self.alpha, self.beta)
         
         if opt.verbose:
             print('Done')
@@ -122,12 +113,6 @@ class Translator(object):
         tokens = self.tgt_dict.convertToLabels(pred, onmt.Constants.EOS)
         tokens = tokens[:-1]  # EOS
         
-        #~ print(tokens)
-        #~ if self.opt.replace_unk:
-            #~ for i in range(len(tokens)):
-                #~ if tokens[i] == onmt.Constants.UNK_WORD:
-                    #~ _, maxIndex = attn[i].max(0)
-                    #~ tokens[i] = src[maxIndex[0]]
         return tokens
 
     def translateBatch(self, srcBatch, tgtBatch):
@@ -384,7 +369,6 @@ class Translator(object):
                         active += [b]
                         
                     # update the decoding states
-                    
                     for tensor in [src, input_seq]  :
                     
                         t_, br = tensor.size()

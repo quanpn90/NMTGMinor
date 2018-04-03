@@ -121,7 +121,7 @@ class XETrainer(BaseTrainer):
         self.model.train()
         return total_loss / total_words
         
-    def train_epoch(self, epoch, resume=False, batchOrder=None, iteration=None):
+    def train_epoch(self, epoch, resume=False, batchOrder=None, iteration=0):
         
         opt = self.opt
         trainData = self.trainData
@@ -277,16 +277,22 @@ class XETrainer(BaseTrainer):
             
             if opt.reset_optim == False:
                 self.optim.load_state_dict(checkpoint['optim'])
-            batchOrder = checkpoint['batchOrder']
-            iteration = checkpoint['iteration'] + 1
-            opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))   
+                batchOrder = checkpoint['batchOrder']
+                iteration = checkpoint['iteration'] + 1
+                opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
+                resume=True  
+            else:
+                batchOrder = None
+                iteration = 0
+                resume=False
+                
+            
             del checkpoint['model']
             del checkpoint['optim']
             del checkpoint
-            resume=True
         else:
             batchOrder = None
-            iteration = None
+            iteration = 0
             print('Initializing model parameters')
             init_model_parameters(model, opt)
             resume=False
