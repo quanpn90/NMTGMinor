@@ -29,10 +29,13 @@ class Bottle(nn.Module):
         flattened_input = input.contiguous().view(-1, input.size(-1))
         flattened_size = flattened_input.size()
         
+        
         dim = original_shape[-1]
         
         if mask is not None:
-            flattened_mask = mask.view(-1)
+            #~ print(input.size())
+            #~ print(mask.size())
+            flattened_mask = mask.expand_as(input).view(-1)
             
             non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
 

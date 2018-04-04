@@ -5,6 +5,8 @@ import onmt
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer
 from onmt.modules.Transformer.Layers import PositionalEncoding
 
+
+
 def build_model(opt, dicts):
 
     model = None
@@ -72,8 +74,8 @@ def build_model(opt, dicts):
         
         
         
-        #~ positional_encoder = PositionalEncoding(opt.model_size, len_max=max_size)
-        positional_encoder = None
+        positional_encoder = PositionalEncoding(opt.model_size, len_max=max_size)
+        #~ positional_encoder = None
         
         encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder)
         
@@ -81,13 +83,37 @@ def build_model(opt, dicts):
         
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         
-        model = Transformer(encoder, decoder, generator)        
+        model = Transformer(encoder, decoder, generator)       
         
+    elif opt.model == 'fctransformer':
+    
+        from onmt.modules.FCTransformer.Models import FCTransformerEncoder
+        
+        max_size = 256 # This should be the longest sentence from the dataset
+        onmt.Constants.weight_norm = opt.weight_norm
+        onmt.Constants.init_value = opt.param_init
+        
+        positional_encoder = PositionalEncoding(opt.model_size, len_max=max_size)
+        
+        encoder = FCTransformerEncoder(opt, dicts['src'], positional_encoder)
+        decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder)
+        
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        
+        model = Transformer(encoder, decoder, generator)    
+
     else:
         raise NotImplementedError
         
+        #~ 
+    #~ init = torch.nn.init
+        #~ 
+    #~ init.xavier_uniform(model.encoder.word_lut.weight)
+    #~ init.xavier_uniform(model.decoder.word_lut.weight)
+        
      # Weight tying between decoder input and output embedding:
     if opt.tie_weights:  
+        print("Joining the weights of decoder input and output embeddings")
         model.tie_weights()
        
     if opt.join_embedding:
@@ -105,9 +131,8 @@ def init_model_parameters(model, opt):
         from onmt.modules.Transformer.Layers import uniform_unit_scaling
 
         # We initialize the model parameters with Xavier init
-        init = torch.nn.init
-        init.xavier_uniform(model.encoder.word_lut.weight)
-        init.xavier_uniform(model.decoder.word_lut.weight)
+        
+        
         #~ init.xavier_uniform(model.generator.linear.weight)
         #~ uniform_unit_scaling(model.encoder.word_lut.weight.data)
         #~ uniform_unit_scaling(model.decoder.word_lut.weight.data)

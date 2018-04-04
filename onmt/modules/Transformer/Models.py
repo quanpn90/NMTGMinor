@@ -172,6 +172,9 @@ class TransformerDecoder(nn.Module):
         """
         
         """ Embedding: batch_size x len_tgt x d_model """
+        #~ print(context.size())
+        #~ print(input.size())
+        
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         if self.time == 'positional_encoding':
             emb = emb * math.sqrt(self.model_size)

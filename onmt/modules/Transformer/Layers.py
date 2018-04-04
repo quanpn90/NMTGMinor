@@ -243,8 +243,8 @@ class MultiHeadAttention(nn.Module):
         
         # prepare the shape for applying softmax
         proj_query = self.shape(proj_query)  # batch_size*h x len_query x d_head
-        proj_key = self.shape(proj_key)           # batch_size*h x len_key x d_head
-        proj_value = self.shape(proj_value)       # batch_size*h x len_key x d_head
+        proj_key = self.shape(proj_key)           # batch_size x h x len_key x d_head
+        proj_value = self.shape(proj_value)       # batch_size x h x len_key x d_head
         
         proj_query = proj_query * (self.d_head**-0.5)
         
@@ -462,6 +462,10 @@ class DecoderLayer(nn.Module):
         """ Self attention layer 
             layernorm > attn > dropout > residual
         """
+        #~ print(input.size())
+        #~ print(context.size())
+        #~ print(pad_mask_tgt.size())
+        
         query = self.preprocess_attn(input, mask=pad_mask_tgt)
         
         self_context = query
