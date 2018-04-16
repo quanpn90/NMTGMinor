@@ -11,4 +11,4 @@ This is an implementation of the transformer for the paper
 + Checkpointing models for better Memory/Speed trade-off
 + Research ideas 
 
-- The code is based on the very early version of ["Attention is all you need"](https://github.com/OpenNMT/OpenNMT-py)
+- The code is based on several modules (Dictionary and Loss functions) of ["OpenNMT-py"](https://github.com/OpenNMT/OpenNMT-py)
