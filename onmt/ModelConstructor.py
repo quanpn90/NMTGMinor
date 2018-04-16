@@ -87,7 +87,7 @@ def build_model(opt, dicts):
         
     elif opt.model == 'fctransformer':
     
-        from onmt.modules.FCTransformer.Models import FCTransformerEncoder
+        from onmt.modules.FCTransformer.Models import FCTransformerEncoder, FCTransformerDecoder
         
         max_size = 256 # This should be the longest sentence from the dataset
         onmt.Constants.weight_norm = opt.weight_norm
@@ -96,11 +96,13 @@ def build_model(opt, dicts):
         positional_encoder = PositionalEncoding(opt.model_size, len_max=max_size)
         
         encoder = FCTransformerEncoder(opt, dicts['src'], positional_encoder)
-        decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder)
+        decoder = FCTransformerDecoder(opt, dicts['tgt'], positional_encoder)
         
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         
         model = Transformer(encoder, decoder, generator)    
+        
+        #~ print(encoder)
 
     else:
         raise NotImplementedError
@@ -131,11 +133,11 @@ def init_model_parameters(model, opt):
         from onmt.modules.Transformer.Layers import uniform_unit_scaling
 
         # We initialize the model parameters with Xavier init
+        init = torch.nn.init
         
-        
-        #~ init.xavier_uniform(model.generator.linear.weight)
-        #~ uniform_unit_scaling(model.encoder.word_lut.weight.data)
-        #~ uniform_unit_scaling(model.decoder.word_lut.weight.data)
+        init.xavier_uniform(model.generator.linear.weight)
+        init.xavier_uniform(model.encoder.word_lut.weight.data)
+        init.xavier_uniform(model.decoder.word_lut.weight.data)
         
         #~ init = torch.nn.init.uniform
         #~ 

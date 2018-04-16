@@ -7,13 +7,6 @@ from torch.autograd import Variable
 from onmt.ModelConstructor import build_model
 
 
-def loadImageLibs():
-    "Conditional import of torch image libs."
-    global Image, transforms
-    from PIL import Image
-    from torchvision import transforms
-
-
 class Translator(object):
     def __init__(self, opt):
         self.opt = opt
@@ -269,7 +262,7 @@ class Translator(object):
             torch.set_grad_enabled(True)
             
             return allHyp, allScores, allAttn, allLengths, goldScores, goldWords
-        elif self.model_type in ['transformer', 'stochastic_transformer']:
+        elif self.model_type in ['transformer', 'stochastic_transformer', 'fctransformer']:
             
             vocab_size = self.tgt_dict.size()
             allHyp, allScores, allAttn, allLengths = [], [], [], []
@@ -470,128 +463,6 @@ class Translator(object):
                           for id in t.tolist()]
                          for t in beam[b].nextYs][1:])
                 
-            """" ----------------- OLD IMPLEMENTATION -----------------"""
-            
-            
-            #~ assert self.opt.batch_size == 1, "Transformer only works with batch_size 1 atm"
-            #~ vocab_size = self.tgt_dict.size()
-            #~ allHyp, allScores, allAttn, allLengths = [], [], [], []
-            #~ 
-            #~ # srcBatch should have size len x batch
-            #~ # tgtBatch should have size len x batch
-            #~ 
-            #~ src = srcBatch.transpose(0, 1)
-            #~ context, src_mask = self.model.encoder(src)
-            #~ 
-            #~ goldScores = context.data.new(batchSize).zero_()
-            #~ 
-            #~ goldWords = 0
-            #~ if tgtBatch is not None:
-            #~ 
-                #~ tgtBatchInput = tgtBatch[:-1]
-                #~ tgtBatchOutput = tgtBatch[1:]
-                #~ tgtBatchInput = tgtBatchInput.transpose(0,1)
-                #~ src = srcBatch.transpose(0, 1)
-                #~ 
-                #~ output, coverage = self.model.decoder(tgtBatchInput, context, src)
-                #~ output = output.transpose(0, 1) # transpose to have time first, like RNN models
-                #~ 
-                #~ 
-                #~ #  (2) if a target is specified, compute the 'goldScore'
-                #~ #  (i.e. log likelihood) of the target under the model
-                #~ for dec_t, tgt_t in zip(output, tgtBatchOutput.data):
-                    #~ gen_t = self.model.generator(dec_t)
-                    #~ tgt_t = tgt_t.unsqueeze(1)
-                    #~ scores = gen_t.data.gather(1, tgt_t)
-                    #~ scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
-                    #~ goldScores += scores
-                    #~ goldWords += tgt_t.ne(onmt.Constants.PAD).sum()
-            #~ 
-                #~ #  (3) Start decoding
-                #~ mask_src = src_mask # size: batch x time 
-                #~ remaining_beams = beamSize
-                #~ logLikelihoods = []
-                #~ preds = []
-                #~ atten_probs = []
-                #~ coverage_penalties = []
-                #~ lengths = []
-                #~ 
-                #~ # predict the first word
-                #~ decode_input = torch.LongTensor([onmt.Constants.BOS]).unsqueeze(1)
-                #~ if self.opt.cuda: decode_input = decode_input.cuda()
-                #~ decode_input = Variable(decode_input)
-                #~ decoder_hidden, coverage = self.model.decoder(decode_input, context, src)
-                #~ dist = self.model.generator(decoder_hidden.view(-1, decoder_hidden.size(-1)))
-                #~ scores, scores_id = dist.view(-1).topk(beamSize)
-                #~ beam_index = scores_id / vocab_size
-                #~ pred_id = (scores_id - beam_index*vocab_size).view(beamSize, -1)
-                #~ decode_input = torch.cat((decode_input.repeat(beamSize ,1), pred_id), 1)
-                #~ context = context.repeat(beamSize, 1, 1)
-                #~ src = src.repeat(beamSize, 1)
-                #~ 
-                #~ # continus to predict next work until <EOS>
-                #~ step = 1
-                #~ while step < self.opt.max_sent_length and remaining_beams>0:
-                    #~ step += 1
-                    #~ decoder_hidden, coverage = self.model.decoder(decode_input, context, src)
-                    #~ 
-                    #~ decoder_hidden = decoder_hidden[:, -1, :]
-                    #~ 
-                    #~ decoder_hidden = decoder_hidden.squeeze(1)
-                    #~ out = self.model.generator(decoder_hidden)
-#~ 
-                    #~ out = scores.unsqueeze(1).expand_as(out) + out # Add up the scores from previous steps
-                    #~ scores, scores_id = out.view(-1).topk(remaining_beams)
-                    #~ beam_id = scores_id / vocab_size
-                    #~ pred_id = (scores_id - beam_id*vocab_size).view(remaining_beams, -1)
-                    #~ decode_input = torch.cat((decode_input[beam_id], pred_id), 1) 
-                    #~ # remove finished beams
-                    #~ check = decode_input[:, -1].eq(onmt.Constants.EOS).data
-                    #~ 
-                    #~ if step == self.opt.max_sent_length -1:
-                        #~ check.fill_(1)
-                    #~ 
-                    #~ finished_index = check.nonzero().squeeze()
-                    #~ continue_index = (1-check).nonzero().squeeze()
-                    #~ # continue_index = 1 - finished_index
-                #~ 
-                    #~ for idx in finished_index:
-                        #~ logLikelihoods.append(scores[idx].data[0])
-                        #~ pred = decode_input[idx,:].data.tolist()
-                        #~ pred = pred[1:] # remove BOS
-                        #~ preds.append(pred)
-                        #~ lengths.append(len(preds[-1]))
-                        #~ 
-                        #~ atten_prob = torch.sum(coverage[idx,:,:], dim=0)
-                        #~ atten_probs.append(coverage[idx,:,:])
-                        #~ coverage_penalty = torch.log(atten_prob.masked_select(atten_prob.le(1)))
-                        #~ coverage_penalty = self.beta * torch.sum(coverage_penalty).data[0]
-                        #~ coverage_penalties.append(coverage_penalty)       
-                        #~ remaining_beams -= 1
-                    #~ if len(continue_index) > 0:
-                        #~ # var = Variable(continue_index)
-                        #~ scores = Variable(scores.data.index_select(0, continue_index))
-                        #~ decode_input = Variable(decode_input.data.index_select(0, continue_index))
-                        #~ context = Variable(context.data.index_select(0, continue_index))
-                        #~ src = Variable(src.data.index_select(0, continue_index))
-            #~ # normalize the final scores by length and coverage 
-            #~ len_penalties = [math.pow(len(pred), self.alpha)   for pred in preds]
-            #~ final_scores = [logLikelihoods[i]/len_penalties[i] + coverage_penalties[i] for i in range(len(preds))]
-            #~ sorted_scores_arg = sorted(range(len(preds)), key=lambda i:-final_scores[i])
-            #~ 
-            #~ # get the sorted results 
-            #~ sorted_preds = [ preds[sorted_scores_arg[i]] for i in range(beamSize) ]
-            #~ sorted_logLikelihoods = [ logLikelihoods[sorted_scores_arg[i]] for i in range(beamSize) ]
-            #~ sorted_attn_probs = [ atten_probs[sorted_scores_arg[i]] for i in range(beamSize) ]
-            #~ sorted_lengths = [ lengths[sorted_scores_arg[i]] for i in range(beamSize) ]
-            #~ 
-            #~ # gather the results
-            #~ allHyp += [sorted_preds]
-            #~ allScores += [sorted_logLikelihoods]
-            #~ allAttn.append(sorted_attn_probs)
-            #~ allLengths.append(sorted_lengths)
-            
-            """ ------------------------------------------------------------------ """
             
             torch.set_grad_enabled(True)
 

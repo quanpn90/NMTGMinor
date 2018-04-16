@@ -188,9 +188,9 @@ class Optim(object):
             
     def step(self, grad_denom=None):
         
-        if detech_nan(self.params):
-            self.zero_grad()
-            return 0
+        #~ if detech_nan(self.params):
+            #~ self.zero_grad()
+            #~ return 0
         
         "Normalize gradients by batch size"
         self.normalize_grad(denom=grad_denom)

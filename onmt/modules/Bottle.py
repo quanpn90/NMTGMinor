@@ -33,9 +33,7 @@ class Bottle(nn.Module):
         dim = original_shape[-1]
         
         if mask is not None:
-            #~ print(input.size())
-            #~ print(mask.size())
-            flattened_mask = mask.expand_as(input).view(-1)
+            flattened_mask = mask.view(-1)
             
             non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
 

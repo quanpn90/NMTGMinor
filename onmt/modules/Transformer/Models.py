@@ -298,8 +298,8 @@ class TransformerDecoder(nn.Module):
         # if normalization is done in layer_preprocess, then it should also be done
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.    
-        if self.version == 1.0:
-            output = self.postprocess_layer(output)
+        output = self.postprocess_layer(output)
+            
         
         return output, coverage, buffer
     
@@ -326,7 +326,7 @@ class Transformer(NMTModel):
         src = src.transpose(0, 1) # transpose to have batch first
         tgt = tgt.transpose(0, 1)
         
-        context, src_mask= self.encoder(src)
+        context, src_mask = self.encoder(src)
         
         output, coverage = self.decoder(tgt, context, src)
         

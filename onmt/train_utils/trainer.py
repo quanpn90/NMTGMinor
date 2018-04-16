@@ -180,10 +180,18 @@ class XETrainer(BaseTrainer):
                 
                 batch_size = targets.size(1)
                 
-                tgt_mask = torch.autograd.Variable(targets.data.ne(onmt.Constants.PAD))
-                #~ tgt_mask = None
+                tgt_mask = targets.data.ne(onmt.Constants.PAD)
+                tgt_size = tgt_mask.sum()
                 
-                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=True, mask=tgt_mask)
+                tgt_mask = torch.autograd.Variable(tgt_mask)
+                #~ tgt_mask = None
+                normalizer = 1
+                
+                if self.opt.normalize_gradient:
+                    normalizer = tgt_size
+                
+                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, 
+                                                             backward=True, mask=tgt_mask, normalizer=normalizer)
                 
                 #~ outputs.backward(grad_outputs)
                 
@@ -210,8 +218,7 @@ class XETrainer(BaseTrainer):
                 #~ if counter >= opt.batch_size_update:
                 if num_accumulated_words >= opt.batch_size_update * 0.95:
                     # Update the parameters.
-                    grad_denom=num_accumulated_words if self.opt.normalize_gradient else 1
-                    self.optim.step(grad_denom=grad_denom)
+                    self.optim.step(grad_denom=1)
                     self.model.zero_grad()
                     counter = 0
                     num_accumulated_words = 0

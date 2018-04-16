@@ -221,7 +221,7 @@ class NMTLossFunc(LossFuncBase):
             # backward from loss
             # note: we only compute the gradients w.r.t the outputs 
             if backward:
-                loss_t.backward()
+                loss_t.div(normalizer).backward()
             
         grad_outputs = None if outputs.grad is None else outputs.grad.data
         
