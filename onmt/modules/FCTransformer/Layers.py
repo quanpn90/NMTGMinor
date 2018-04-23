@@ -92,6 +92,10 @@ class UniformMultiHeadAttention(nn.Module):
         
     def forward(self, query, key, mask=None, query_mask=None, value_mask=None):
         
+        
+        if torch.is_tensor(mask):
+            mask = Variable(mask)    
+        
         n_layer, b, len_key = key.size(0), key.size(1), key.size(2)
         if value_mask is not None:
             value_mask = value_mask.unsqueeze(0).repeat(n_layer, 1, 1)
@@ -118,7 +122,7 @@ class UniformMultiHeadAttention(nn.Module):
         scores = torch.matmul(proj_query, proj_key.transpose(2,3)) # b x self.h x len_query x n_layer*len_key
         
         # applying mask using broadcasting
-        mask_ = Variable(mask.unsqueeze(-3).unsqueeze(-2))
+        mask_ = mask.unsqueeze(-3).unsqueeze(-2)
         
         scores = scores.view(b, self.h, len_query, n_layer, len_key)
         scores = scores.masked_fill_(mask_, -float('inf'))
@@ -185,17 +189,17 @@ class HierarchicalMultiHeadAttention(nn.Module):
         
         
         # second attention for layers
-        self.fc_query_2 = Bottle(Linear(d_model, h*self.d_head, bias=False))
+        #~ self.fc_query_2 = Bottle(Linear(d_model, h*self.d_head, bias=False))
         #~ self.fc_key_2 = Bottle(Linear(d_model, h*self.d_head, bias=False))
         #~ self.fc_value_2 = Bottle(Linear(d_model, h*self.d_head, bias=False))
         
         # for output
         self.fc_concat = Bottle(Linear(h*self.d_head, d_model, bias=False))
-        self.fc_concat_2 = Bottle(Linear(d_model, d_model, bias=False))
+        #~ self.fc_concat_2 = Bottle(Linear(d_model, d_model, bias=False))
         
 
-        self.sm = nn.Softmax(dim=-1)
-        self.sm_2 = nn.Softmax(dim=-1)
+        #~ self.sm = nn.Softmax(dim=-1)
+        #~ self.sm_2 = nn.Softmax(dim=-1)
         #~ self.attn_dropout = nn.Dropout(attn_p)
         
         self.attn_dropout = StaticDropout(attn_p)
@@ -217,20 +221,15 @@ class HierarchicalMultiHeadAttention(nn.Module):
     def forward(self, query, key, mask=None, query_mask=None, value_mask=None):
         
         n_layer, b, len_key = key.size(0), key.size(1), key.size(2)
-        #~ query_mask = None
-        #~ value_mask = None
         if value_mask is not None:
             value_mask = value_mask.unsqueeze(0).repeat(n_layer, 1, 1)
         
-        key_mask = value_mask # n_layer x B x T 
+        key_mask = value_mask # B x T 
         
         b, len_query = query.size(0), query.size(1)
         
-        #~ key = key.transpose(0,1).contiguous().view(b, n_layer * len_key, -1)
         
-        value = key
-        # FIRST ATTENTION STEP 
-        
+        value = key        
         # project inputs to multi-heads
         proj_query = self.fc_query(query, mask=query_mask)       # batch_size x len_query x h*d_head
         proj_key   = self.fc_key(key, mask=key_mask).transpose(0,1).contiguous().view(b, -1, self.h * self.d_head)            # batch_size x (n_layer x len_key) x h*d_head
@@ -321,6 +320,137 @@ class HierarchicalMultiHeadAttention(nn.Module):
         coverage = None
         
         return out, coverage
+        
+class FlatSumMultiHeadAttention(nn.Module):
+    """Applies multi-head attentions to inputs (query, key, value)
+    Args:
+        h:       number of heads
+        d_model: dimension of model
+        p:       dropout probabolity  
+        
+    Params:
+        fc_query:  FC layer to project query, d_model x (h x d_head)
+        fc_key:    FC layer to project key,   d_model x (h x d_head)
+        fc_value:  FC layer to project value, d_model x (h x d_head)
+        fc_concat: FC layer to concat and project multiheads, d_model x (h x d_head)
+        
+    Inputs Shapes: 
+        query: batch_size x len_query x d_model 
+        key:   batch_size x len_key x d_model   
+        value: batch_size x len_key x d_model
+        mask:  batch_size x len_query x len_key or broadcastable 
+        
+    Outputs Shapes:
+        out:      batch_size x len_query x d_model
+        coverage: batch_size x len_query x len_key
+        
+    """
+    
+    def __init__(self, h, d_model, attn_p=0.1):
+        super(FlatSumMultiHeadAttention, self).__init__()      
+        self.h = h
+        self.d = d_model
+        
+        assert d_model % h == 0
+        
+        self.d_head = d_model//h
+        
+        # first attention layer for states
+        self.fc_query = Bottle(Linear(d_model, h*self.d_head, bias=False))
+        self.fc_key = Bottle(Linear(d_model, h*self.d_head, bias=False))
+        self.fc_value = Bottle(Linear(d_model, h*self.d_head, bias=False))
+        
+        
+        # second attention for layers
+        #~ self.fc_query_2 = Bottle(Linear(d_model, h*self.d_head, bias=False))
+        #~ self.fc_key_2 = Bottle(Linear(d_model, h*self.d_head, bias=False))
+        #~ self.fc_value_2 = Bottle(Linear(d_model, h*self.d_head, bias=False))
+        
+        # for output
+        self.fc_concat = Bottle(Linear(h*self.d_head, d_model, bias=False))
+        #~ self.fc_concat_2 = Bottle(Linear(d_model, d_model, bias=False))
+        
+
+        #~ self.sm = nn.Softmax(dim=-1)
+        #~ self.sm_2 = nn.Softmax(dim=-1)
+        #~ self.attn_dropout = nn.Dropout(attn_p)
+        
+        self.attn_dropout = StaticDropout(attn_p)
+        self.attn_dropout_2 = StaticDropout(attn_p)
+        
+      
+    def _prepare_proj(self, x):
+        """Reshape the projectons to apply softmax on each head
+        """
+        b, l, d = x.size()
+        return contiguous(x.view(b, l, self.h, self.d_head).transpose(1,2)).view(b*self.h, l, self.d_head)
+        
+    def shape(self, x):
+        
+        b, l, d = x.size()
+        return x.view(b, l, self.h, self.d_head) \
+                .transpose(1, 2)
+        
+    def forward(self, query, key, mask=None, query_mask=None, value_mask=None):
+        
+        if torch.is_tensor(mask):
+            mask = Variable(mask)   
+        
+        n_layer, b, len_key = key.size(0), key.size(1), key.size(2)
+        if value_mask is not None:
+            value_mask = value_mask.unsqueeze(0).repeat(n_layer, 1, 1)
+        
+        key_mask = value_mask # B x T 
+        
+        b, len_query = query.size(0), query.size(1)
+        
+        
+        value = key        
+        # project inputs to multi-heads
+        proj_query = self.fc_query(query, mask=query_mask)       # batch_size x len_query x h*d_head
+        proj_key   = self.fc_key(key, mask=key_mask).transpose(0,1).contiguous().view(b, -1, self.h * self.d_head)            # batch_size x (n_layer x len_key) x h*d_head
+        proj_value = self.fc_value(value, mask=value_mask).transpose(0,1).contiguous().view(b, -1, self.h * self.d_head)        # batch_size x (n_layer x len_key) x h*d_head
+        
+        # prepare the shape for applying softmax
+        proj_query = self.shape(proj_query)  # batch_size x h x len_query x d_head
+        proj_key = self.shape(proj_key)           # batch_size x h x (n_layer * len_key) x d_head
+        proj_value = self.shape(proj_value)       # batch_size x h x (n_layer * len_key) x d_head
+        
+        proj_query = proj_query * (self.d_head**-0.5)
+        
+        # get dotproduct softmax attns for each head
+        scores = torch.matmul(proj_query, proj_key.transpose(2,3)) # b x self.h x len_query x n_layer*len_key
+        
+        # unshape to softmax on only the len_key dimension
+        scores = scores.view(b, self.h, len_query, n_layer, len_key)
+        
+        mask_ = mask.unsqueeze(1).unsqueeze(-2) # b x 1 x len_query x 1 x len_key
+        #~ mask_ = Variable(mask.unsqueeze(-3))        
+        scores = scores.masked_fill_(mask_, -float('inf'))
+        
+        # softmax on the last dimension (len_key)
+        #~ attns = self.sm(scores) # b x self.h x len_query x n_layer x len_key
+        attns = F.softmax(scores, dim=-1)
+        
+        attns = self.attn_dropout(attns)
+        
+        # apply attns on value
+        proj_value = proj_value.view(b, self.h, n_layer, len_key, self.d_head)
+        
+        attns = attns.transpose(2, 3) # b, self.h, n_layer, len_query, len_key
+        
+        out = torch.matmul(attns, proj_value) # b x self.h x n_layer x len_query x self.d_head
+        
+        out = out.transpose(1, 3).contiguous().view(b, len_query, n_layer, self.h * self.d_head)
+        
+        # sum over the n_layer
+        out = torch.sum(out, 2) # b x len_query x h*d_head
+        
+        out = self.fc_concat(out, query_mask)
+        
+        coverage = attns
+        
+        return out, coverage
 
 
 class FCTEncoderLayer(nn.Module):
@@ -354,6 +484,7 @@ class FCTEncoderLayer(nn.Module):
         self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', static=True)
         #~ self.multihead = HierarchicalMultiHeadAttention(h, d_model, attn_p=attn_p)
         self.multihead = UniformMultiHeadAttention(h, d_model, attn_p=attn_p)
+        #~ self.multihead = FlatSumMultiHeadAttention(h, d_model, attn_p=attn_p)
         
         
         self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
@@ -437,8 +568,10 @@ class FCTDecoderLayer(nn.Module):
         
         #~ self.multihead_tgt = HierarchicalMultiHeadAttention(h, d_model, attn_p=attn_p)
         self.multihead_tgt = UniformMultiHeadAttention(h, d_model, attn_p=attn_p)
+        #~ self.multihead_tgt = FlatSumMultiHeadAttention(h, d_model, attn_p=attn_p)
         #~ self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p)
         self.multihead_src = UniformMultiHeadAttention(h, d_model, attn_p=attn_p)
+        #~ self.multihead_src = FlatSumMultiHeadAttention(h, d_model, attn_p=attn_p)
         
         if onmt.Constants.activation_layer == 'linear_relu_linear':
             ff_p = p

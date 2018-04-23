@@ -8,7 +8,7 @@ import onmt
 from onmt.modules.WordDrop import embedded_dropout
 
 from onmt.modules.Transformer.Layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
-
+from onmt.modules.Checkpoint import checkpoint
 
 def custom_layer(module):
     def custom_forward(*args):

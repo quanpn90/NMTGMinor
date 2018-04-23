@@ -34,10 +34,11 @@ class Translator(object):
         
         model.eval()
         
-        if model_opt.model == 'transformer':
+        self.model_type = model_opt.model
+        if self.model_type in ['transformer', 'stochastic_transformer', 'fctransformer', 'ptransformer']:
             if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:
                 print("Not enough len to decode. Renewing .. ")    
-                model.decoder.renew_buffer(self.opt.max_sent_length)
+                model.decoder.renew_buffer(self.opt.max_sent_length+1)
            
         if opt.cuda:
             model.cuda()
@@ -262,7 +263,7 @@ class Translator(object):
             torch.set_grad_enabled(True)
             
             return allHyp, allScores, allAttn, allLengths, goldScores, goldWords
-        elif self.model_type in ['transformer', 'stochastic_transformer', 'fctransformer']:
+        elif self.model_type in ['transformer', 'stochastic_transformer', 'fctransformer', 'ptransformer']:
             
             vocab_size = self.tgt_dict.size()
             allHyp, allScores, allAttn, allLengths = [], [], [], []
@@ -303,8 +304,12 @@ class Translator(object):
             src = Variable(srcBatch.data.repeat(1, beamSize))
             
             # context size : time x batch*beam x hidden
-            context = context.transpose(0, 1)
-            context = Variable(context.data.repeat(1, beamSize, 1))
+            if context.dim() == 3:
+                context = context.transpose(0, 1)
+                context = Variable(context.data.repeat(1, beamSize, 1))
+            elif context.dim() == 4:
+                context = context.transpose(1, 2)
+                context = Variable(context.data.repeat(1, 1, beamSize, 1))
             
             # initialize the beam
             beam = [onmt.Beam(beamSize, self.opt.cuda) for k in range(batchSize)]
@@ -337,7 +342,11 @@ class Translator(object):
                 # require batch first for everything
                 decoder_input = Variable(input_seq)
                 #~ decoder_hidden, coverage = self.model.decoder(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1))
-                decoder_hidden, coverage, buffer = self.model.decoder.step(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1), buffer=buffer)
+                if context.dim() == 4:
+                    context_ = context.transpose(1, 2)
+                else:
+                    context_ = context.transpose(0, 1)
+                decoder_hidden, coverage, buffer = self.model.decoder.step(decoder_input.transpose(0,1) , context_, src.transpose(0, 1), buffer=buffer)
                 
                 # take the last decoder state
                 #~ decoder_hidden = decoder_hidden[:, -1, :].squeeze(1)
@@ -407,6 +416,14 @@ class Translator(object):
                     newSize[1] = newSize[1] * len(activeIdx) // remainingSents
                     return Variable(view.index_select(2, activeIdx)
                                     .view(*newSize)) 
+                def updateActive4D_time_first(t):
+                    # select only the remaining active sentences
+                    nl, t_, br_, d_ = t.size()
+                    view = t.data.view(nl, t_, -1, remainingSents, model_size)
+                    newSize = list(t.size())
+                    newSize[2] = newSize[2] * len(activeIdx) // remainingSents
+                    return Variable(view.index_select(3, activeIdx)
+                                    .view(*newSize)) 
                 
                 def updateActive2D(t):
                     if isinstance(t, Variable):
@@ -423,8 +440,11 @@ class Translator(object):
                         new_t = view.index_select(1, activeIdx).view(*newSize)
                                         
                         return new_t
-                        
-                context = updateActive(context)
+                
+                if context.dim() == 2 :
+                    context = updateActive(context)
+                elif context.dim() == 4:
+                    context = updateActive4D_time_first(context)
                 
                 src = updateActive2D(src)
                 
