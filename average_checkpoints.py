@@ -25,6 +25,9 @@ def main():
     opt = parser.parse_args()
     
     opt.cuda = opt.gpu > -1
+    
+    
+    
     if opt.cuda:
         torch.cuda.set_device(opt.gpu)
     
@@ -44,6 +47,11 @@ def main():
     model_opt = checkpoint['opt']
     dicts = checkpoint['dicts']
     
+    #~ if hasattr(model_opt, 'grow_layer'):
+        #~ model_opt.layers = model_opt.layers + model_opt.grow_layer
+        
+    print(model_opt.layers)
+    
     main_model = build_model(model_opt, checkpoint['dicts'])
     
     main_model.load_state_dict(checkpoint['model'])
@@ -58,6 +66,8 @@ def main():
         checkpoint = torch.load(model, map_location=lambda storage, loc: storage)
 
         model_opt = checkpoint['opt']
+        
+            
 
         # delete optim information to save GPU memory
         if 'optim' in checkpoint:
