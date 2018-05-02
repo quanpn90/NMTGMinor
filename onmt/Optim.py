@@ -173,12 +173,14 @@ class Optim(object):
         self.update_method = opt.update_method
         self.method = opt.optim
         
-        if self.update_method == 'noam':
+        if 'noam' in self.update_method:
             self.init_lr = self.model_size**(-0.5) * self.lr
         else:
             self.init_lr = self.lr
         self.lr = self.init_lr
         self._step = 0 
+        if self.update_method == 'noam2':
+            self._step = opt.warmup_steps
         self.warmup_steps=opt.warmup_steps
         self.beta1 = opt.beta1
         self.beta2 = opt.beta2
@@ -201,7 +203,7 @@ class Optim(object):
             
         "Automatically scale learning rate over learning period"
         self._step += 1
-        if self.update_method == 'noam':
+        if 'noam' in self.update_method:
             self.updateLearningRate()
             
         self.optimizer.step()

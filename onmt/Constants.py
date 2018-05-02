@@ -10,3 +10,4 @@ BOS_WORD = '<s>'
 EOS_WORD = '</s>'
 
 checkpointing = 0
+static = False

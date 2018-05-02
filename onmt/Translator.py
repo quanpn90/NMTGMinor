@@ -107,6 +107,19 @@ class Translator(object):
         tokens = tokens[:-1]  # EOS
         
         return tokens
+        
+    def _replicate_context(self, context):
+    
+        # context size : time x batch*beam x hidden
+        beamSize = self.opt.beam_size
+        if context.dim() == 3:
+            context = context.transpose(0, 1)
+            context = Variable(context.data.repeat(1, beamSize, 1))
+        elif context.dim() == 4:
+            context = context.transpose(1, 2)
+            context = Variable(context.data.repeat(1, 1, beamSize, 1))
+    
+        return context
 
     def translateBatch(self, srcBatch, tgtBatch):
         
@@ -262,7 +275,7 @@ class Translator(object):
             torch.set_grad_enabled(True)
             
             return allHyp, allScores, allAttn, allLengths, goldScores, goldWords
-        elif self.model_type in ['transformer', 'stochastic_transformer', 'fctransformer']:
+        elif self.model_type in ['transformer', 'ptransformer', 'fctransformer']:
             
             vocab_size = self.tgt_dict.size()
             allHyp, allScores, allAttn, allLengths = [], [], [], []
@@ -303,8 +316,7 @@ class Translator(object):
             src = Variable(srcBatch.data.repeat(1, beamSize))
             
             # context size : time x batch*beam x hidden
-            context = context.transpose(0, 1)
-            context = Variable(context.data.repeat(1, beamSize, 1))
+            context = self._replicate_context(context)
             
             # initialize the beam
             beam = [onmt.Beam(beamSize, self.opt.cuda) for k in range(batchSize)]
@@ -337,7 +349,11 @@ class Translator(object):
                 # require batch first for everything
                 decoder_input = Variable(input_seq)
                 #~ decoder_hidden, coverage = self.model.decoder(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1))
-                decoder_hidden, coverage, buffer = self.model.decoder.step(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1), buffer=buffer)
+                if context.dim() == 4:
+                    context_ = context.transpose(1, 2)
+                else:
+                    context_ = context.transpose(0, 1)
+                decoder_hidden, coverage, buffer = self.model.decoder.step(decoder_input.transpose(0,1) , context_, src.transpose(0, 1), buffer=buffer)
                 
                 # take the last decoder state
                 #~ decoder_hidden = decoder_hidden[:, -1, :].squeeze(1)
@@ -408,6 +424,15 @@ class Translator(object):
                     return Variable(view.index_select(2, activeIdx)
                                     .view(*newSize)) 
                 
+                def updateActive4D_time_first(t):
+                    # select only the remaining active sentences
+                    nl, t_, br_, d_ = t.size()
+                    view = t.data.view(nl, t_, -1, remainingSents, model_size)
+                    newSize = list(t.size())
+                    newSize[2] = newSize[2] * len(activeIdx) // remainingSents
+                    return Variable(view.index_select(3, activeIdx)
+                                    .view(*newSize)) 
+                
                 def updateActive2D(t):
                     if isinstance(t, Variable):
                         # select only the remaining active sentences
@@ -424,7 +449,10 @@ class Translator(object):
                                         
                         return new_t
                         
-                context = updateActive(context)
+                if context.dim() == 3 :
+                    context = updateActive(context)
+                elif context.dim() == 4:
+                    context = updateActive4D_time_first(context)
                 
                 src = updateActive2D(src)
                 

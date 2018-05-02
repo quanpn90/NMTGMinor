@@ -55,9 +55,32 @@ class TransformerEncoder(nn.Module):
         
         self.positional_encoder = positional_encoder
         
-        self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, version=self.version) for _ in range(self.layers)])
+        self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
+    
+        self.pretrained_point = -1
+        
+    def mark_pretrained(self):
+        
+        self.pretrained_point = self.layers
+        
+    
+    def add_layers(self, n_new_layer):
+        
+        self.new_modules = list()
+        self.layers += n_new_layer
+        
+        for i in range(n_new_layer):
+            layer = EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) 
+            
+            # the first layer will use the preprocessing which is the last postprocessing
+            if i == 0:
+                layer.preprocess_attn = self.postprocess_layer
+                # replace the last postprocessing layer with a new one
+                self.postprocess_layer = PrePostProcessing(d_model, 0, sequence='n')
+            
+            self.layer_modules.append(layer)
 
-    def forward(self, input):
+    def forward(self, input, **kwargs):
         """
         Inputs Shapes: 
             input: batch_size x len_src (wanna tranpose)
@@ -70,6 +93,7 @@ class TransformerEncoder(nn.Module):
         
         """ Embedding: batch_size x len_src x d_model """
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        
         """ Scale the emb by sqrt(d_model) """
         
         if self.time == 'positional_encoding':
@@ -88,19 +112,21 @@ class TransformerEncoder(nn.Module):
         context = emb.contiguous()
         
         for i, layer in enumerate(self.layer_modules):
+            
             if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:        
                 context = checkpoint(custom_layer(layer), context, mask_src, pad_mask)
                 
                 #~ print(type(context))
             else:
                 context = layer(context, mask_src, pad_mask=None)      # batch_size x len_src x d_model
+            
         
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.    
-        if self.version == 1.0:
-            context = self.postprocess_layer(context)
+        context = self.postprocess_layer(context)
+            
         
         return context, mask_src    
         
@@ -138,8 +164,8 @@ class TransformerDecoder(nn.Module):
             self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
         
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
-        if self.version == 1.0:
-            self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
+        
+        self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
         
         self.word_lut = nn.Embedding(dicts.size(),
                                      self.model_size,
@@ -147,7 +173,7 @@ class TransformerDecoder(nn.Module):
         
         self.positional_encoder = positional_encoder
         
-        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, version=self.version) for _ in range(self.layers)])
+        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
         
         len_max = self.positional_encoder.len_max
         mask = torch.ByteTensor(np.triu(np.ones((len_max,len_max)), k=1).astype('uint8'))
@@ -158,8 +184,29 @@ class TransformerDecoder(nn.Module):
         self.positional_encoder.renew(new_len)
         mask = torch.ByteTensor(np.triu(np.ones((new_len,new_len)), k=1).astype('uint8'))
         self.register_buffer('mask', mask)
+    
+    def mark_pretrained(self):
         
-    def forward(self, input, context, src):
+        self.pretrained_point = self.layers
+        
+    
+    def add_layers(self, n_new_layer):
+        
+        self.new_modules = list()
+        self.layers += n_new_layer
+        
+        for i in range(n_new_layer):
+            layer = EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) 
+            
+            # the first layer will use the preprocessing which is the last postprocessing
+            if i == 0:
+                layer.preprocess_attn = self.postprocess_layer
+                # replace the last postprocessing layer with a new one
+                self.postprocess_layer = PrePostProcessing(d_model, 0, sequence='n')
+            
+            self.layer_modules.append(layer)
+        
+    def forward(self, input, context, src, **kwargs):
         """
         Inputs Shapes: 
             input: (Variable) batch_size x len_tgt (wanna tranpose)
@@ -172,8 +219,7 @@ class TransformerDecoder(nn.Module):
         """
         
         """ Embedding: batch_size x len_tgt x d_model """
-        #~ print(context.size())
-        #~ print(input.size())
+        
         
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         if self.time == 'positional_encoding':
@@ -215,8 +261,8 @@ class TransformerDecoder(nn.Module):
         # if normalization is done in layer_preprocess, then it should also be done
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.    
-        if self.version == 1.0:
-            output = self.postprocess_layer(output)
+        output = self.postprocess_layer(output)
+            
         
         return output, coverage
     
@@ -309,7 +355,7 @@ class Transformer(NMTModel):
     """Main model in 'Attention is all you need' """
     
         
-    def forward(self, input):
+    def forward(self, input, grow=False):
         """
         Inputs Shapes: 
             src: len_src x batch_size
@@ -326,9 +372,9 @@ class Transformer(NMTModel):
         src = src.transpose(0, 1) # transpose to have batch first
         tgt = tgt.transpose(0, 1)
         
-        context, src_mask = self.encoder(src)
+        context, src_mask = self.encoder(src, grow=grow)
         
-        output, coverage = self.decoder(tgt, context, src)
+        output, coverage = self.decoder(tgt, context, src, grow=grow)
         
         output = output.transpose(0, 1) # transpose to have time first, like RNN models
         

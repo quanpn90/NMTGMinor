@@ -17,6 +17,10 @@ class StaticDropoutFunction(Function):
         if ctx.p == 0 or not ctx.train:
             return input
             
+        if torch.numel(module.noise) != torch.numel(input):
+            module.gen_noise(input)
+            
+            
         ctx.noise = module.noise
 
         output = input * ctx.noise
@@ -42,17 +46,27 @@ class StaticDropout(nn.Module):
                              "but got {}".format(p))
         self.p = p
         self.noise_created = False
+    
+    def gen_noise(self, input):
+        self.noise = input.new().resize_as_(input)
+        if self.p == 1:
+            self.noise.fill_(0)
+        else:
+            self.noise.bernoulli_(1 - self.p).div_(1 - self.p)
+        self.noise = self.noise.expand_as(input)
+        self.noise_created = True
 
     def forward(self, input):
         
         if self.noise_created == False and self.training:
-            self.noise = input.new().resize_as_(input)
-            if self.p == 1:
-                self.noise.fill_(0)
-            else:
-                self.noise.bernoulli_(1 - self.p).div_(1 - self.p)
-            self.noise = self.noise.expand_as(input)
-            self.noise_created = True
+            self.gen_noise(input)
+            #~ self.noise = input.new().resize_as_(input)
+            #~ if self.p == 1:
+                #~ self.noise.fill_(0)
+            #~ else:
+                #~ self.noise.bernoulli_(1 - self.p).div_(1 - self.p)
+            #~ self.noise = self.noise.expand_as(input)
+            #~ self.noise_created = True
      
         return StaticDropoutFunction.apply(input, self, self.training)
 

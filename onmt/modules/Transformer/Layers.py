@@ -58,10 +58,10 @@ class XavierLinear(nn.Module):
             self.linear = linear
             
         
-        stdv = 1. / math.sqrt(self.linear.weight.size(1))
+        #~ stdv = 1. / math.sqrt(self.linear.weight.size(1))
             
-        #~ init.xavier_uniform(self.linear.weight)
-        init.uniform(self.linear.weight, -stdv, stdv)
+        init.xavier_uniform(self.linear.weight)
+        #~ init.uniform(self.linear.weight, -stdv, stdv)
         
         if bias:
             self.linear.bias.data.zero_()
@@ -195,7 +195,7 @@ class MultiHeadAttention(nn.Module):
         
     """
     
-    def __init__(self, h, d_model, attn_p=0.1):
+    def __init__(self, h, d_model, attn_p=0.1, static=True):
         super(MultiHeadAttention, self).__init__()      
         self.h = h
         self.d = d_model
@@ -211,8 +211,12 @@ class MultiHeadAttention(nn.Module):
         self.fc_concat = Bottle(Linear(h*self.d_head, d_model, bias=False))
 
         self.sm = nn.Softmax(dim=-1)
-        #~ self.attn_dropout = nn.Dropout(attn_p)
-        self.attn_dropout = StaticDropout(attn_p)
+        
+        if static:
+            self.attn_dropout = StaticDropout(attn_p)
+        else:
+            self.attn_dropout = nn.Dropout(attn_p)
+        
       
     def _prepare_proj(self, x):
         """Reshape the projectons to apply softmax on each head
@@ -328,14 +332,17 @@ class FeedForward(nn.Module):
         out: batch_size x len x d_model
     """
     
-    def __init__(self, d_model, d_ff, p):
+    def __init__(self, d_model, d_ff, p, static=True):
         super(FeedForward, self).__init__()
         self.d_model = d_model
         self.d_ff = d_ff
         self.fc_1 = Linear(d_model, d_ff, nonlinearity="relu")
         self.fc_2 = Linear(d_ff, d_model)
-        #~ self.dropout = nn.Dropout(p)
-        self.dropout = StaticDropout(p)
+
+        if static:
+            self.dropout = StaticDropout(p)
+        else:
+            self.dropout = nn.Dropout(p)
         
     def forward(self, input):
         
@@ -373,14 +380,14 @@ class EncoderLayer(nn.Module):
         self.version = version
         
         self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', static=True)
+        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
         self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', static=True)
-        self.multihead = MultiHeadAttention(h, d_model, attn_p=attn_p)
+        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
+        self.multihead = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static)
         
         if onmt.Constants.activation_layer == 'linear_relu_linear':
             ff_p = p
-            feedforward = FeedForward(d_model, d_ff, ff_p)
+            feedforward = FeedForward(d_model, d_ff, ff_p,static=onmt.Constants.static)
         elif onmt.Constants.activation_layer == 'maxout':
             k = int(math.ceil(d_ff / d_model))
             feedforward = MaxOut(d_model, d_model, k)
@@ -437,21 +444,21 @@ class DecoderLayer(nn.Module):
         self.version = version
         
         self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', static=True)
+        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
         
         self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_src_attn = PrePostProcessing(d_model, p, sequence='da', static=True)
+        self.postprocess_src_attn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
         
         self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', static=True)
+        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
         
         
-        self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p)
-        self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p)
+        self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static)
+        self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static)
         
         if onmt.Constants.activation_layer == 'linear_relu_linear':
             ff_p = p
-            feedforward = FeedForward(d_model, d_ff, ff_p)
+            feedforward = FeedForward(d_model, d_ff, ff_p, static=onmt.Constants.static)
         elif onmt.Constants.activation_layer == 'maxout':
             k = int(math.ceil(d_ff / d_model))
             feedforward = MaxOut(d_model, d_model, k)

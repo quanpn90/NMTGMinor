@@ -63,6 +63,8 @@ def build_model(opt, dicts):
         
         model = Transformer(encoder, decoder, generator)    
         
+        print(encoder)
+        
     elif opt.model == 'stochastic_transformer':
         
         from onmt.modules.StochasticTransformer.Models import StochasticTransformerEncoder, StochasticTransformerDecoder
@@ -85,6 +87,8 @@ def build_model(opt, dicts):
         
         model = Transformer(encoder, decoder, generator)       
         
+        
+        
     elif opt.model == 'fctransformer':
     
         from onmt.modules.FCTransformer.Models import FCTransformerEncoder, FCTransformerDecoder
@@ -101,8 +105,26 @@ def build_model(opt, dicts):
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         
         model = Transformer(encoder, decoder, generator)    
+    elif opt.model == 'ptransformer':
+    
+        from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder
         
-        #~ print(encoder)
+        max_size = 256 # This should be the longest sentence from the dataset
+        onmt.Constants.weight_norm = opt.weight_norm
+        onmt.Constants.init_value = opt.param_init
+        
+        positional_encoder = PositionalEncoding(opt.model_size, len_max=max_size)
+        
+        encoder = ParallelTransformerEncoder(opt, dicts['src'], positional_encoder)
+        decoder = ParallelTransformerDecoder(opt, dicts['tgt'], positional_encoder)
+        
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        
+        model = Transformer(encoder, decoder, generator)    
+        
+        
+        
+        print(encoder)
 
     else:
         raise NotImplementedError

@@ -184,6 +184,10 @@ print(opt)
 onmt.Constants.weight_norm = opt.weight_norm
 onmt.Constants.checkpointing = opt.checkpointing
 
+# Use static dropout if checkpointing > 0
+if opt.checkpointing > 0:
+    onmt.Constants.static = True
+
 if torch.cuda.is_available() and not opt.gpus:
     print("WARNING: You have a CUDA device, should run with -gpus 0")
 

@@ -51,6 +51,13 @@ class NMTModel(nn.Module):
     
     def share_enc_dec_embedding(self):
         self.encoder.word_lut.weight = self.decoder.word_lut.weight
+        
+    def mark_pretrained(self):
+        
+        self.encoder.mark_pretrained()
+        self.decoder.mark_pretrained()
+        
+    
 
 
 class Reconstructor(nn.Module):
