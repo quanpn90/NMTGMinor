@@ -58,7 +58,7 @@ class ParallelEncoderLayer(nn.Module):
         
         if onmt.Constants.activation_layer == 'linear_relu_linear':
             ff_p = p
-            feedforward = FeedForward(d_model, d_ff, ff_p)
+            feedforward = FeedForward(d_model, d_ff, ff_p, static=onmt.Constants.static)
         elif onmt.Constants.activation_layer == 'maxout':
             k = int(math.ceil(d_ff / d_model))
             feedforward = MaxOut(d_model, d_model, k)

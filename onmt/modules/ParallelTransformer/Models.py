@@ -1,4 +1,4 @@
-import numpy as np
+import numpy as np  
 import torch, math
 import torch.nn as nn
 from onmt.modules.Transformer.Layers import PositionalEncoding
@@ -53,7 +53,8 @@ class ParallelTransformerEncoder(nn.Module):
         elif opt.time == 'lstm':
             self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
         
-        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
+        #~ self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=True)
+        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=onmt.Constants.static)
         
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
         
@@ -241,7 +242,8 @@ class ParallelTransformerDecoder(nn.Module):
         elif opt.time == 'lstm':
             self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
         
-        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
+        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=onmt.Constants.static)
+        #~ self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=True)
         if self.version == 1.0:
             self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
         
