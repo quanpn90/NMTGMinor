@@ -40,7 +40,9 @@ class ParallelTransformerEncoder(nn.Module):
         self.attn_dropout = opt.attn_dropout
         self.emb_dropout = opt.emb_dropout
         self.time = opt.time
-        self.version = opt.version
+        
+        if hasattr(opt, 'grow_dropout'):
+            self.grow_dropout = opt.grow_dropout
         
         self.word_lut = nn.Embedding(dicts.size(),
                                      self.model_size,
@@ -53,7 +55,8 @@ class ParallelTransformerEncoder(nn.Module):
         elif opt.time == 'lstm':
             self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
         
-        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
+        #~ self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
+        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=onmt.Constants.static)
         
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
         
@@ -72,6 +75,10 @@ class ParallelTransformerEncoder(nn.Module):
             # the first layer will use the preprocessing which is the last postprocessing
             if i == 0:
                 layer.preprocess_attn.load_state_dict(self.postprocess_layer.state_dict())
+                #~ layer.preprocess_attn.layer_norm.function.weight.requires_grad = False
+                #~ layer.preprocess_attn.layer_norm.function.bias.requires_grad = False
+                
+                
                 # replace the last postprocessing layer with a new one
                 self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
             
@@ -189,9 +196,14 @@ class ParallelTransformerEncoder(nn.Module):
                     
         
         for i in range(self.layers - self.pretrained_point):
+            
+            res_drop_rate = 0.0
+            if i == 0:
+                res_drop_rate = self.grow_dropout
+            
             layer = self.layer_modules[self.pretrained_point + i]
             
-            context, norm_input = layer(context, mask_src, pad_mask)      # batch_size x len_src x d_model
+            context, norm_input = layer(context, mask_src, pad_mask, residual_dropout=res_drop_rate)      # batch_size x len_src x d_model
             
             memory_bank.append(norm_input)
         
@@ -232,7 +244,9 @@ class ParallelTransformerDecoder(nn.Module):
         self.attn_dropout = opt.attn_dropout
         self.emb_dropout = opt.emb_dropout
         self.time = opt.time
-        self.version = opt.version
+        
+        if hasattr(opt, 'grow_dropout'):
+            self.grow_dropout = opt.grow_dropout
         
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
@@ -241,9 +255,9 @@ class ParallelTransformerDecoder(nn.Module):
         elif opt.time == 'lstm':
             self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
         
-        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
-        if self.version == 1.0:
-            self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
+        #~ self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
+        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=onmt.Constants.static)
+        self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
         
         self.word_lut = nn.Embedding(dicts.size(),
                                      self.model_size,
@@ -275,11 +289,12 @@ class ParallelTransformerDecoder(nn.Module):
         
         for i in range(n_new_layer):
             layer = DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) 
-            
             # the first layer will use the preprocessing which is the last postprocessing
             if i == 0:
                 # layer.preprocess_attn = self.postprocess_layer
                 layer.preprocess_attn.load_state_dict(self.postprocess_layer.state_dict())
+                #~ layer.preprocess_attn.layer_norm.function.weight.requires_grad = False
+                #~ layer.preprocess_attn.layer_norm.function.bias.requires_grad = False
                 # replace the last postprocessing layer with a new one
                 self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
             
@@ -398,9 +413,14 @@ class ParallelTransformerDecoder(nn.Module):
             
         
         for i in range(self.layers - self.pretrained_point):
+            
+            res_drop_rate = 0.0
+            if i == 0:
+                res_drop_rate = self.grow_dropout
+            
             layer = self.layer_modules[self.pretrained_point + i]    
             output, coverage = layer(output, context[self.pretrained_point + i], mask_tgt, mask_src, 
-                                                pad_mask_tgt, pad_mask_src) # batch_size x len_src x d_model
+                                                pad_mask_tgt, pad_mask_src, residual_dropout=res_drop_rate) # batch_size x len_src x d_model
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
         # on the output, since the output can grow very large, being the sum of

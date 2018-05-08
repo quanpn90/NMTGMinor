@@ -53,53 +53,49 @@ class CheckpointFunction(Function):
     @staticmethod
     def backward(ctx, *grads):
         
-        prev = torch.is_grad_enabled()
         
-        #~ with torch.enable_grad():
-        torch.set_grad_enabled(prev)
+       	with torch.enable_grad():
         
-        real_inputs = ctx.saved_variables
-        #~ real_inputs = ctx.inputs
-        #~ print(grads[0].size())
-        #~ print(len(grads))
-        # We need to create new Variables to mark this place in the graph.
-        # Reusing real_inputs would be incorrect if a case like this:
-        #
-        # y = checkpoint(lambda x: x + 1, x)
-        # z = checkpoint(lambda x, y: x + y, x, y)
-        #
-        # This would fail, because when grad((x + y), (x, y)) is called in
-        # the second checkpoint, autograd would traverse all paths from (x + y)
-        # to the definition of x, which includes the first checkpoint. To
-        # prevent this situation, we create views of the inputs, which lets us
-        # still get all correctness checks, but uniquely marks the place up to
-        # which we want to differentiate, because all views are independent nodes
-        # (i.e. there is no path from one to another via .grad_fn chain).
-        inputs = [wrap_variable(i) for i in real_inputs]
-        outputs = ctx.run_function(*inputs)
-        
-        #~ assert torch.equal(outputs, ctx.outputs)
-        
-        if isinstance(outputs, Variable):
-            outputs = (outputs,)
+            real_inputs = ctx.saved_variables
+            #~ real_inputs = ctx.inputs
+            #~ print(grads[0].size())
+            #~ print(len(grads))
+            # We need to create new Variables to mark this place in the graph.
+            # Reusing real_inputs would be incorrect if a case like this:
+            #
+            # y = checkpoint(lambda x: x + 1, x)
+            # z = checkpoint(lambda x, y: x + y, x, y)
+            #
+            # This would fail, because when grad((x + y), (x, y)) is called in
+            # the second checkpoint, autograd would traverse all paths from (x + y)
+            # to the definition of x, which includes the first checkpoint. To
+            # prevent this situation, we create views of the inputs, which lets us
+            # still get all correctness checks, but uniquely marks the place up to
+            # which we want to differentiate, because all views are independent nodes
+            # (i.e. there is no path from one to another via .grad_fn chain).
+            inputs = [wrap_variable(i) for i in real_inputs]
+            outputs = ctx.run_function(*inputs)
+                        
+            if isinstance(outputs, Variable):
+                outputs = (outputs,)
 
-        torch.autograd.backward(outputs, grads)
-        
-        output = (None,)
-        
-        for i, input_ in enumerate(inputs):
+            torch.autograd.backward(outputs, grads)
             
-            if requires_grad(input_):
+            output = (None,)
+            
+            for i, input_ in enumerate(inputs):
                 
-                if input_.grad is not None:
-                    output += (input_.grad, )
+                if requires_grad(input_):
+                    
+                    if input_.grad is not None:
+                        output += (input_.grad, )
+                    else:
+                        output += (None, )
+                
                 else:
                     output += (None, )
             
-            else:
-                output += (None, )
-        
-        return output
+            return output
            
 
 

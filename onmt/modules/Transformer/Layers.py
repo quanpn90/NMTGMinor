@@ -166,7 +166,8 @@ class PrePostProcessing(nn.Module):
             if step == 'd':
                 output = self.dropout(output)
             if step == 'a':
-                output = output + input_tensor
+                if input_tensor is not None:
+                    output = output + input_tensor
                 
         return output
         
@@ -464,7 +465,7 @@ class DecoderLayer(nn.Module):
             feedforward = MaxOut(d_model, d_model, k)
         self.feedforward = Bottle(feedforward)
     
-    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None):
+    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, residual_dropout=0.0):
         
         """ Self attention layer 
             layernorm > attn > dropout > residual
@@ -473,14 +474,22 @@ class DecoderLayer(nn.Module):
         #~ print(context.size())
         #~ print(pad_mask_tgt.size())
         
-        query = self.preprocess_attn(input, mask=pad_mask_tgt)
+        query = self.preprocess_attn(input)
         
         self_context = query
         
         out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt, 
                                     query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
         
-        input = self.postprocess_attn(out, input)
+        if residual_dropout > 0:
+            input_ = F.dropout(input, residual_dropout, self.training, False)
+            input = self.postprocess_attn(out, input_)
+            #~ input = out
+            #~ input = self.postprocess_attn(out) + input
+        else:
+            input = self.postprocess_attn(out, input)
+        
+        
         
         """ Context Attention layer 
             layernorm > attn > dropout > residual

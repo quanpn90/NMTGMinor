@@ -64,19 +64,25 @@ class ParallelEncoderLayer(nn.Module):
             feedforward = MaxOut(d_model, d_model, k)
         self.feedforward = Bottle(feedforward)
             
-    def forward(self, input, attn_mask, pad_mask=None):
+    def forward(self, input, attn_mask, pad_mask=None, residual_dropout=0.0):
         
         query = self.preprocess_attn(input)
         out, _ = self.multihead(query, query, query, attn_mask, 
                                 query_mask=pad_mask, value_mask=pad_mask)
-        input = self.postprocess_attn(out, input, mask=pad_mask)
+                                
+        if residual_dropout > 0:
+            input_ = F.dropout(input, residual_dropout, self.training, False)
+            input = self.postprocess_attn(out, input_, mask=pad_mask)
+            #~ input = self.postprocess_attn(out) + input
+        else:
+            input = self.postprocess_attn(out, input, mask=pad_mask)
         
         """ Feed forward layer 
             layernorm > ffn > dropout > residual
         """
-        out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask), 
+        out = self.feedforward(self.preprocess_ffn(input), 
                                mask=pad_mask)
-        input = self.postprocess_ffn(out, input, mask=pad_mask)
+        input = self.postprocess_ffn(out, input)
         
         # return the query which is the normalized input
         return input, query

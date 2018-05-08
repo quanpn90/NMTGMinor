@@ -153,7 +153,9 @@ class Adam(Optimizer):
 class Optim(object):
 
     def set_parameters(self, params):
-        self.params = list(params)  # careful: params may be a generator
+    
+        params_ = filter(lambda p: p.requires_grad, params)
+        self.params = list(params_)  # careful: params may be a generator
         #~ self.optimizer = Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
                                     #~ weight_decay=self.weight_decay, amsgrad=self.amsgrad)
         if self.method == 'sgd':
