@@ -8,6 +8,9 @@ from onmt.modules.BaseModel import NMTModel, Reconstructor
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
 from onmt.modules.Checkpoint import checkpoint
+from onmt.modules.BaseModel import NMTModel, Reconstructor, DecoderState
+from torch.autograd import Variable
+
 
 from onmt.modules.Transformer.Layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
 
@@ -77,7 +80,8 @@ class ParallelTransformerEncoder(nn.Module):
                 layer.preprocess_attn.load_state_dict(self.postprocess_layer.state_dict())
                 #~ layer.preprocess_attn.layer_norm.function.weight.requires_grad = False
                 #~ layer.preprocess_attn.layer_norm.function.bias.requires_grad = False
-                
+                #~ if hasattr(layer.postprocess_attn, 'k'):
+                    #~ layer.postprocess_attn.k.data.fill_(0.01)
                 
                 # replace the last postprocessing layer with a new one
                 self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
@@ -296,6 +300,9 @@ class ParallelTransformerDecoder(nn.Module):
                 #~ layer.preprocess_attn.layer_norm.function.weight.requires_grad = False
                 #~ layer.preprocess_attn.layer_norm.function.bias.requires_grad = False
                 # replace the last postprocessing layer with a new one
+                #~ if hasattr(layer.postprocess_attn, 'k'):
+                    #~ layer.postprocess_attn.k.data.fill_(0.01)
+                
                 self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
             
             self.layer_modules.append(layer)
@@ -429,7 +436,8 @@ class ParallelTransformerDecoder(nn.Module):
         
         return output, coverage
 
-    def step(self, input, context, src, buffer=None):
+    #~ def step(self, input, context, src, buffer=None):
+    def step(self, input, decoder_state):
         """
         Inputs Shapes: 
             input: (Variable) batch_size x len_tgt (wanna tranpose)
@@ -441,7 +449,18 @@ class ParallelTransformerDecoder(nn.Module):
             coverage: batch_size x len_tgt x len_src
             
         """
+        # note: transpose 1-2 because the first dimension (0) is the number of layer
+        context = decoder_state.context.transpose(1, 2)
+        buffer = decoder_state.buffer
+        src = decoder_state.src.transpose(0, 1)
         
+        if decoder_state.input_seq is None:
+            decoder_state.input_seq = input
+        else:
+            # concatenate the last input to the previous input sequence
+            decoder_state.input_seq = torch.cat([decoder_state.input_seq, input], 0)
+        input = decoder_state.input_seq.transpose(0, 1)
+        input_ = input[:,-1].unsqueeze(1)
             
         output_buffer = list()
             
@@ -506,9 +525,96 @@ class ParallelTransformerDecoder(nn.Module):
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.    
         output = self.postprocess_layer(output)
-            
         
-        return output, coverage, buffer
+        decoder_state._update_state(buffer)    
+        
+        return output, coverage
 
 
-
+class ParallelTransformerDecodingState(DecoderState):
+    
+    def __init__(self, src, context, beamSize=1):
+        
+        self.src = src
+        self.context = context
+        self.beamSize = beamSize
+        
+        self.buffer = None
+        self.input_seq = None
+        
+        self.context = context.transpose(1, 2)
+        self.context = Variable(self.context.data.repeat(1, 1, beamSize, 1))
+        
+    def _update_state(self, buffer):
+        
+        self.buffer = buffer
+        
+    def _update_beam(self, beam, b, remainingSents, idx):
+        
+        for tensor in [self.src, self.input_seq]  :
+                    
+            t_, br = tensor.size()
+            sent_states = tensor.view(t_, self.beamSize, remainingSents)[:, :, idx]
+            
+            if isinstance(tensor, Variable):
+                sent_states.data.copy_(sent_states.data.index_select(
+                            1, beam[b].getCurrentOrigin()))
+            else:
+                sent_states.copy_(sent_states.index_select(
+                            1, beam[b].getCurrentOrigin()))
+                            
+                            
+        nl, br_, t_, d_ = self.buffer.size()
+                    
+        sent_states = self.buffer.view(nl, self.beamSize, remainingSents, t_, d_)[:, :, idx, :, :]
+        
+        sent_states.data.copy_(sent_states.data.index_select(
+                            1, beam[b].getCurrentOrigin()))
+    
+    # in this section, the sentences that are still active are
+    # compacted so that the decoder is not run on completed sentences
+    def _prune_complete_beam(self, activeIdx, remainingSents):
+        
+        model_size = self.context.size(-1)
+        
+        def updateActive4D_time_first(t):
+            # select only the remaining active sentences
+            nl, t_, br_, d_ = t.size()
+            view = t.data.view(nl, t_, -1, remainingSents, model_size)
+            newSize = list(t.size())
+            newSize[2] = newSize[2] * len(activeIdx) // remainingSents
+            return Variable(view.index_select(3, activeIdx)
+                            .view(*newSize)) 
+        
+        def updateActive2D(t):
+            if isinstance(t, Variable):
+                # select only the remaining active sentences
+                view = t.data.view(-1, remainingSents)
+                newSize = list(t.size())
+                newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
+                return Variable(view.index_select(1, activeIdx)
+                                .view(*newSize))
+            else:
+                view = t.view(-1, remainingSents)
+                newSize = list(t.size())
+                newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
+                new_t = view.index_select(1, activeIdx).view(*newSize)
+                                
+                return new_t
+        
+        def updateActive4D(t):
+            # select only the remaining active sentences
+            nl, br_, t_, d_ = t.size()
+            view = t.data.view(nl, -1, remainingSents, t_, model_size)
+            newSize = list(t.size())
+            newSize[1] = newSize[1] * len(activeIdx) // remainingSents
+            return Variable(view.index_select(2, activeIdx)
+                            .view(*newSize)) 
+        
+        self.context = updateActive4D_time_first(self.context)
+        
+        self.input_seq = updateActive2D(self.input_seq)
+        
+        self.src = updateActive2D(self.src)
+        
+        self.buffer = updateActive4D(self.buffer)

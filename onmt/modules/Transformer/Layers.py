@@ -142,6 +142,11 @@ class PrePostProcessing(nn.Module):
         
         self.steps = list(sequence)
         
+        if onmt.Constants.residual_type == 'gated':
+            # gated residual
+            # initialize k with one 
+            self.k = nn.Parameter(torch.ones(1))
+        
         if 'n' in self.steps:
             if onmt.Constants.layer_norm == 'slow':
                 ln = LayerNorm(self.d_model)
@@ -155,6 +160,9 @@ class PrePostProcessing(nn.Module):
                 self.dropout = StaticDropout(self.dropout_p)
             else:
                 self.dropout = nn.Dropout(self.dropout_p, inplace=False)
+        #~ if 'g' in self.steps: # gated residual
+            #~ # initialize k with one 
+            #~ self.k = nn.Parameter(torch.ones(1))
     
     def forward(self, tensor, input_tensor=None, mask=None):
         
@@ -167,8 +175,15 @@ class PrePostProcessing(nn.Module):
                 output = self.dropout(output)
             if step == 'a':
                 if input_tensor is not None:
-                    output = output + input_tensor
-                
+                    if onmt.Constants.residual_type != 'gated':
+                        output = output + input_tensor
+                    else:
+                        output = F.relu(self.k) * output + input_tensor
+            #~ if step == 'g':
+                #~ # gated residual using the 'relu' function as g (diminishing as soon as k goes to 0)
+                #~ # u = g(k) * f(x) + x 
+                #~ if input_tensor is not None:
+                    #~ output = torch.relu(self.k) * output + input_tensor
         return output
         
 class MultiHeadAttention(nn.Module):
@@ -397,16 +412,15 @@ class EncoderLayer(nn.Module):
     def forward(self, input, attn_mask, pad_mask=None):
         
         query = self.preprocess_attn(input)
-        out, _ = self.multihead(query, query, query, attn_mask, 
-                                query_mask=pad_mask, value_mask=pad_mask)
-        input = self.postprocess_attn(out, input, mask=pad_mask)
+        out, _ = self.multihead(query, query, query, attn_mask)
+        input = self.postprocess_attn(out, input)
         
         """ Feed forward layer 
             layernorm > ffn > dropout > residual
         """
-        out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask), 
+        out = self.feedforward(self.preprocess_ffn(input), 
                                mask=pad_mask)
-        input = self.postprocess_ffn(out, input, mask=pad_mask)
+        input = self.postprocess_ffn(out, input)
         
         return input
     

@@ -156,11 +156,18 @@ class Dataset(object):
         split_size = int(math.ceil(batch[0].size(1) / self.n_gpu))  
         
         # maybe we need a more smart splitting function ?
-        batch_split = zip(batch[0].split(split_size, dim=1), 
-                          batch[1].split(split_size, dim=1))
-                          
         
-        batch_split = [ [b[0], b[1]] for i, b in enumerate(batch_split) ] 
+        if batch[1] is not None:
+            batch_split = zip(batch[0].split(split_size, dim=1), 
+                              batch[1].split(split_size, dim=1))
+                              
+            
+            batch_split = [ [b[0], b[1]] for i, b in enumerate(batch_split) ] 
+        else:
+            batch_split = zip(batch[0].split(split_size, dim=1))
+                              
+            
+            batch_split = [ [b[0], None] for i, b in enumerate(batch_split) ] 
        
         return batch_split
     

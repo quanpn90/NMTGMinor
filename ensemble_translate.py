@@ -54,6 +54,7 @@ parser.add_argument('-beta', type=float, default=0.0,
                     help="""Coverage penalty coefficient""")
 parser.add_argument('-print_nbest', action='store_true',
                     help='Output the n-best list instead of a single sentence')
+parser.add_argument('-ensemble_op', default='mean', help="""Ensembling operator""")
 parser.add_argument('-normalize', action='store_true',
                     help='To normalize the scores based on output length')
 parser.add_argument('-gpu', type=int, default=-1,

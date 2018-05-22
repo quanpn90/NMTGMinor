@@ -67,5 +67,13 @@ class Reconstructor(nn.Module):
         self.decoder = decoder
         self.generator = generator        
     
+
+class DecoderState(object):
+    """Interface for grouping together the current state of a recurrent
+    decoder. In the simplest case just represents the hidden state of
+    the model.  But can also be used for implementing various forms of
+    input_feeding and non-recurrent models.
+    Modules need to implement this to utilize beam search decoding.
+    """
     
     

@@ -18,6 +18,8 @@ parser.add_argument('-output', default='model.averaged',
                     help="""Path to output averaged model""")
 parser.add_argument('-gpu', type=int, default=-1,
                     help="Device to run on")
+parser.add_argument('-method', default='mean',
+                    help="method to average: mean|gmean")
                     
 
 def main():
@@ -81,13 +83,24 @@ def main():
             current_model = current_model.cuda()
         
         
-        # Sum the parameter values 
-        for (main_param, param) in zip(main_model.parameters(), current_model.parameters()):
-            main_param.data.add_(param.data)
+        if opt.method == 'mean':
+            # Sum the parameter values 
+            for (main_param, param) in zip(main_model.parameters(), current_model.parameters()):
+                main_param.data.add_(param.data)
+        elif opt.method == 'gmean':
+            # Take the geometric mean of parameter values
+            for (main_param, param) in zip(main_model.parameters(), current_model.parameters()):
+                main_param.data.mul_(param.data)
+        else:
+            raise NotImplementedError
     
     # Normalizing
-    for main_param in main_model.parameters():
-        main_param.data.div_(n_models) 
+    if opt.method == 'mean':
+        for main_param in main_model.parameters():
+            main_param.data.div_(n_models) 
+    elif opt.method == 'gmean':
+        for main_param in main_model.parameters():
+            main_param.data.pow_(1./n_models) 
     
     # Saving
     model_state_dict = main_model.state_dict()

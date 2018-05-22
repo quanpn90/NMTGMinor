@@ -324,9 +324,16 @@ class Translator(object):
             batchIdx = list(range(batchSize))
             remainingSents = batchSize
             
-            input_seq = None
+            #~ input_seq = None
+            #~ 
+            #~ buffer = None
+            #~ 
             
-            buffer = None
+            ## Create a new decoding state
+            ## I use a method from the model because I don't want to directly access to the decoder state object
+            ## Currently it doesn't share anything with the main model though
+            decoder_state = self.model.create_decoder_state(src, context, beamSize)
+            
             
             for i in range(self.opt.max_sent_length):
                 # Prepare decoder input.
@@ -340,23 +347,24 @@ class Translator(object):
                     We re-compute all states for every time step
                     A better buffering algorithm will be implemented
                 """
-                if input_seq is None:
-                    input_seq = input
-                else:
-                    # concatenate the last input to the previous input sequence
-                    input_seq = torch.cat([input_seq, input], 0)
+                #~ input_seq = decoder_state.input_seq
+                #~ if input_seq is None:
+                    #~ input_seq = input
+                #~ else:
+                    #~ # concatenate the last input to the previous input sequence
+                    #~ input_seq = torch.cat([input_seq, input], 0)
+                #~ decoder_state.input_seq = input_seq
                 
                 # require batch first for everything
-                decoder_input = Variable(input_seq)
-                #~ decoder_hidden, coverage = self.model.decoder(decoder_input.transpose(0,1) , context.transpose(0, 1), src.transpose(0, 1))
-                if context.dim() == 4:
-                    context_ = context.transpose(1, 2)
-                else:
-                    context_ = context.transpose(0, 1)
-                decoder_hidden, coverage, buffer = self.model.decoder.step(decoder_input.transpose(0,1) , context_, src.transpose(0, 1), buffer=buffer)
+                decoder_input = Variable(input)
+                #~ if context.dim() == 4:
+                    #~ context_ = context.transpose(1, 2)
+                #~ else:
+                    #~ context_ = context.transpose(0, 1)
+                #~ decoder_hidden, coverage, buffer = self.model.decoder.step(decoder_input.transpose(0,1) , context_, src.transpose(0, 1), buffer=buffer)
+                decoder_hidden, coverage = self.model.decoder.step(decoder_input, decoder_state)
                 
                 # take the last decoder state
-                #~ decoder_hidden = decoder_hidden[:, -1, :].squeeze(1)
                 decoder_hidden = decoder_hidden.squeeze(1)
                 attn = coverage[:, -1, :].squeeze(1) # batch * beam x src_len
                 
@@ -377,25 +385,29 @@ class Translator(object):
                     if not beam[b].advance(wordLk.data[idx], attn.data[idx]):
                         active += [b]
                         
-                    # update the decoding states
-                    for tensor in [src, input_seq]  :
+                    decoder_state._update_beam(beam, b, remainingSents, idx)
                     
-                        t_, br = tensor.size()
-                        sent_states = tensor.view(t_, beamSize, remainingSents)[:, :, idx]
+                    
                         
-                        if isinstance(tensor, Variable):
-                            sent_states.data.copy_(sent_states.data.index_select(
-                                        1, beam[b].getCurrentOrigin()))
-                        else:
-                            sent_states.copy_(sent_states.index_select(
-                                        1, beam[b].getCurrentOrigin()))
-                    
-                    nl, br_, t_, d_ = buffer.size()
-                    
-                    sent_states = buffer.view(nl, beamSize, remainingSents, t_, d_)[:, :, idx, :, :]
-                    
-                    sent_states.data.copy_(sent_states.data.index_select(
-                                        1, beam[b].getCurrentOrigin()))
+                    # update the decoding states
+                    #~ for tensor in [src, input_seq]  :
+                    #~ 
+                        #~ t_, br = tensor.size()
+                        #~ sent_states = tensor.view(t_, beamSize, remainingSents)[:, :, idx]
+                        #~ 
+                        #~ if isinstance(tensor, Variable):
+                            #~ sent_states.data.copy_(sent_states.data.index_select(
+                                        #~ 1, beam[b].getCurrentOrigin()))
+                        #~ else:
+                            #~ sent_states.copy_(sent_states.index_select(
+                                        #~ 1, beam[b].getCurrentOrigin()))
+                    #~ 
+                    #~ nl, br_, t_, d_ = buffer.size()
+                    #~ 
+                    #~ sent_states = buffer.view(nl, beamSize, remainingSents, t_, d_)[:, :, idx, :, :]
+                    #~ 
+                    #~ sent_states.data.copy_(sent_states.data.index_select(
+                                        #~ 1, beam[b].getCurrentOrigin()))
                     
                 if not active:
                     break
@@ -405,61 +417,63 @@ class Translator(object):
                 activeIdx = self.tt.LongTensor([batchIdx[k] for k in active])
                 batchIdx = {beam: idx for idx, beam in enumerate(active)}
                 
-                model_size = context.size(-1)
+                #~ model_size = context.size(-1)
+                
+                decoder_state._prune_complete_beam(activeIdx, remainingSents)
 
-                def updateActive(t):
-                    # select only the remaining active sentences
-                    view = t.data.view(-1, remainingSents, model_size)
-                    newSize = list(t.size())
-                    newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
-                    return Variable(view.index_select(1, activeIdx)
-                                    .view(*newSize))
-                
-                def updateActive4D(t):
-                    # select only the remaining active sentences
-                    nl, br_, t_, d_ = t.size()
-                    view = t.data.view(nl, -1, remainingSents, t_, model_size)
-                    newSize = list(t.size())
-                    newSize[1] = newSize[1] * len(activeIdx) // remainingSents
-                    return Variable(view.index_select(2, activeIdx)
-                                    .view(*newSize)) 
-                
-                def updateActive4D_time_first(t):
-                    # select only the remaining active sentences
-                    nl, t_, br_, d_ = t.size()
-                    view = t.data.view(nl, t_, -1, remainingSents, model_size)
-                    newSize = list(t.size())
-                    newSize[2] = newSize[2] * len(activeIdx) // remainingSents
-                    return Variable(view.index_select(3, activeIdx)
-                                    .view(*newSize)) 
-                
-                def updateActive2D(t):
-                    if isinstance(t, Variable):
-                        # select only the remaining active sentences
-                        view = t.data.view(-1, remainingSents)
-                        newSize = list(t.size())
-                        newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
-                        return Variable(view.index_select(1, activeIdx)
-                                        .view(*newSize))
-                    else:
-                        view = t.view(-1, remainingSents)
-                        newSize = list(t.size())
-                        newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
-                        new_t = view.index_select(1, activeIdx).view(*newSize)
-                                        
-                        return new_t
-                        
-                if context.dim() == 3 :
-                    context = updateActive(context)
-                elif context.dim() == 4:
-                    context = updateActive4D_time_first(context)
-                
-                src = updateActive2D(src)
-                
-                input_seq = updateActive2D(input_seq)
-                
-                buffer = updateActive4D(buffer)
-                
+                #~ def updateActive(t):
+                    #~ # select only the remaining active sentences
+                    #~ view = t.data.view(-1, remainingSents, model_size)
+                    #~ newSize = list(t.size())
+                    #~ newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
+                    #~ return Variable(view.index_select(1, activeIdx)
+                                    #~ .view(*newSize))
+                #~ 
+                #~ def updateActive4D(t):
+                    #~ # select only the remaining active sentences
+                    #~ nl, br_, t_, d_ = t.size()
+                    #~ view = t.data.view(nl, -1, remainingSents, t_, model_size)
+                    #~ newSize = list(t.size())
+                    #~ newSize[1] = newSize[1] * len(activeIdx) // remainingSents
+                    #~ return Variable(view.index_select(2, activeIdx)
+                                    #~ .view(*newSize)) 
+                #~ 
+                #~ def updateActive4D_time_first(t):
+                    #~ # select only the remaining active sentences
+                    #~ nl, t_, br_, d_ = t.size()
+                    #~ view = t.data.view(nl, t_, -1, remainingSents, model_size)
+                    #~ newSize = list(t.size())
+                    #~ newSize[2] = newSize[2] * len(activeIdx) // remainingSents
+                    #~ return Variable(view.index_select(3, activeIdx)
+                                    #~ .view(*newSize)) 
+                #~ 
+                #~ def updateActive2D(t):
+                    #~ if isinstance(t, Variable):
+                        #~ # select only the remaining active sentences
+                        #~ view = t.data.view(-1, remainingSents)
+                        #~ newSize = list(t.size())
+                        #~ newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
+                        #~ return Variable(view.index_select(1, activeIdx)
+                                        #~ .view(*newSize))
+                    #~ else:
+                        #~ view = t.view(-1, remainingSents)
+                        #~ newSize = list(t.size())
+                        #~ newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
+                        #~ new_t = view.index_select(1, activeIdx).view(*newSize)
+                                        #~ 
+                        #~ return new_t
+                        #~ 
+                #~ if context.dim() == 3 :
+                    #~ context = updateActive(context)
+                #~ elif context.dim() == 4:
+                    #~ context = updateActive4D_time_first(context)
+                #~ 
+                #~ src = updateActive2D(src)
+                #~ 
+                #~ input_seq = updateActive2D(input_seq)
+                #~ 
+                #~ buffer = updateActive4D(buffer)
+                #~ 
                 remainingSents = len(active)
                 
             #  (4) package everything up

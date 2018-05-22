@@ -75,6 +75,8 @@ parser.add_argument('-version', type=float, default=1.0,
                     help='Transformer version. 1.0 = Google type | 2.0 is different')                    
 parser.add_argument('-attention_out', default='default',
                   help='Type of attention out. default|combine')
+parser.add_argument('-residual_type', default='regular',
+                  help='Type of residual type. regular|gated')
 # Optimization options
 parser.add_argument('-encoder_type', default='text',
                     help="Type of encoder to use. Options are [text|img].")
@@ -248,7 +250,7 @@ def main():
     
     optim = None
     
-    if len(opt.gpus) > 1 :
+    if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
         trainer = MultiGPUXETrainer(model, loss_function, trainData, validData, dataset, opt)
         print("Warning! Multi-GPU training is used. Not fully tested and potential bugs can happen.")
     else:

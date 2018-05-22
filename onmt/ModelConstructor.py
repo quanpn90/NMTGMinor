@@ -20,12 +20,15 @@ def build_model(opt, dicts):
     if not hasattr(opt, 'attention_out'):
         opt.attention_out = 'default'
     
+    if not hasattr(opt, 'residual_type'):
+        opt.residual_type = 'regular'
+    
     onmt.Constants.layer_norm = opt.layer_norm
     onmt.Constants.weight_norm = opt.weight_norm
     onmt.Constants.activation_layer = opt.activation_layer
     onmt.Constants.version = 1.0
     onmt.Constants.attention_out = opt.attention_out
-    
+    onmt.Constants.residual_type = opt.residual_type
     
 
     
@@ -63,7 +66,7 @@ def build_model(opt, dicts):
         
         model = Transformer(encoder, decoder, generator)    
         
-        print(encoder)
+        #~ print(encoder)
         
     elif opt.model == 'stochastic_transformer':
         
@@ -124,7 +127,7 @@ def build_model(opt, dicts):
         
         
         
-        print(encoder)
+        #~ print(encoder)
 
     else:
         raise NotImplementedError

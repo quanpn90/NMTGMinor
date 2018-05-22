@@ -112,8 +112,11 @@ parser.add_argument('-dropout', type=float, default=0.3,
                     help='Dropout probability; applied between LSTM stacks.')
 parser.add_argument('-word_dropout', type=float, default=0.0,
                     help='Dropout probability; applied on embedding indices.')
-parser.add_argument('-grow_dropout', type=float, default=0.5,
+parser.add_argument('-grow_dropout', type=float, default=0.0,
                     help='Dropout probability; applied on embedding indices.')
+parser.add_argument('-residual_type', default='regular',
+                  help='Type of residual type. regular|gated')
+
 parser.add_argument('-continue_training', action='store_true',
                     help='Use a bidirectional encoder')
                     

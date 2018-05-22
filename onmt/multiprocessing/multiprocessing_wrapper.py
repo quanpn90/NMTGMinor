@@ -116,7 +116,7 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
     
     def _build_optimizer(self):
         
-        optimizer = onmt.NoamOptim(self.args)
+        optimizer = onmt.Optim(self.args)
         
         return optimizer
     
@@ -224,13 +224,19 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
                 #~ self.loss, sample_size, logging_output = self.loss_function(self.model, self._sample)
                 outputs = self.model(self._sample)
                 
+                
+                
                 targets = self._sample[1][1:]
                 
-                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=(not eval))
+                tgt_mask = targets.data.ne(onmt.Constants.PAD)
+                tgt_mask = torch.autograd.Variable(tgt_mask)
                 
-                if not eval:
-                    outputs.backward(grad_outputs)
-                    
+                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, 
+                                                             mask=tgt_mask, backward=(not eval))
+                
+                #~ if not eval:
+                    #~ outputs.backward(grad_outputs)
+                    #~ 
                 self.loss = loss_data
                 
                 src_size = self._sample[0].data.ne(onmt.Constants.PAD).sum()
@@ -254,7 +260,7 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         return loss_data, logging_output, oom
         
     def update_parameters(self, grad_denom=1):
- 
+    
         Future.gen_tuple_list([
             self.call_async(rank, '_async_update', grad_denom=grad_denom)
             for rank in range(self.num_replicas)

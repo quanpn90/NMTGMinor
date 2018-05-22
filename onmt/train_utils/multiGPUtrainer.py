@@ -187,12 +187,15 @@ class MultiGPUXETrainer(BaseTrainer):
         model = self.model
         dataset = self.dataset
         
+        # Try to load the save_file
+        checkpoint = None
         if save_file:
+            checkpoint = torch.load(save_file)        
+        if checkpoint is not None:
             print('Loading model and optim from checkpoint at %s' % save_file) 
-            checkpoint = self.runner.load_checkpoint(save_file)
             batchOrder = checkpoint['batchOrder']
             iteration = checkpoint['iteration'] + 1
-            opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))   
+            opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
         else:
             batchOrder = None
             iteration = None

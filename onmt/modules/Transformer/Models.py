@@ -2,10 +2,12 @@ import numpy as np
 import torch, math
 import torch.nn as nn
 from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, PositionalEncoding, variational_dropout, PrePostProcessing
-from onmt.modules.BaseModel import NMTModel, Reconstructor
+from onmt.modules.BaseModel import NMTModel, Reconstructor, DecoderState
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
 from onmt.modules.Checkpoint import checkpoint
+from torch.autograd import Variable
+
 
 
 def custom_layer(module):
@@ -266,7 +268,8 @@ class TransformerDecoder(nn.Module):
         
         return output, coverage
     
-    def step(self, input, context, src, buffer=None):
+    #~ def step(self, input, context, src, buffer=None):
+    def step(self, input, decoder_state):
         """
         Inputs Shapes: 
             input: (Variable) batch_size x len_tgt (wanna tranpose)
@@ -278,22 +281,28 @@ class TransformerDecoder(nn.Module):
             coverage: batch_size x len_tgt x len_src
             
         """
+        context = decoder_state.context.transpose(0, 1)
+        buffer = decoder_state.buffer
+        src = decoder_state.src.transpose(0, 1)
         
-            
-        output_buffer = list()
-        #~ if buffer is None:
-            #~ buffer = list()
-            
-        batch_size = input.size(0)
-        
-        
-        #~ emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        if decoder_state.input_seq is None:
+            decoder_state.input_seq = input
+        else:
+            # concatenate the last input to the previous input sequence
+            decoder_state.input_seq = torch.cat([decoder_state.input_seq, input], 0)
+        input = decoder_state.input_seq.transpose(0, 1)
         input_ = input[:,-1].unsqueeze(1)
-        # print(input_.size())
+        
+        
+        output_buffer = list()
+            
+        batch_size = input_.size(0)
+        
+        
+        
         """ Embedding: batch_size x 1 x d_model """
         emb = self.word_lut(input_)
-        
-        # print(emb.size())
+       
         
         if self.time == 'positional_encoding':
             emb = emb * math.sqrt(self.model_size)
@@ -345,9 +354,10 @@ class TransformerDecoder(nn.Module):
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.    
         output = self.postprocess_layer(output)
-            
         
-        return output, coverage, buffer
+        decoder_state._update_state(buffer)    
+        
+        return output, coverage
     
   
         
@@ -379,6 +389,108 @@ class Transformer(NMTModel):
         output = output.transpose(0, 1) # transpose to have time first, like RNN models
         
         return output
+        
+    def create_decoder_state(self, src, context, beamSize=1):
+        
+        from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder
+        
+        if isinstance(self.decoder, TransformerDecoder):
+            decoder_state = TransformerDecodingState(src, context, beamSize=beamSize)
+        elif isinstance(self.decoder, ParallelTransformerDecoder):
+            from onmt.modules.ParallelTransformer.Models import ParallelTransformerDecodingState
+            decoder_state = ParallelTransformerDecodingState(src, context, beamSize=beamSize)
+        return decoder_state
+
+
+class TransformerDecodingState(DecoderState):
+    
+    def __init__(self, src, context, beamSize=1):
+        
+        self.src = src
+        
+        #~ context = 
+        
+        self.context = context.transpose(0, 1)
+        self.context = Variable(self.context.data.repeat(1, beamSize, 1))
+        self.beamSize = beamSize
+        
+        self.buffer = None
+        self.input_seq = None
+        
+    def _update_state(self, buffer):
+        
+        self.buffer = buffer
+        
+    def _update_beam(self, beam, b, remainingSents, idx):
+        
+        for tensor in [self.src, self.input_seq]  :
+                    
+            t_, br = tensor.size()
+            sent_states = tensor.view(t_, self.beamSize, remainingSents)[:, :, idx]
+            
+            if isinstance(tensor, Variable):
+                sent_states.data.copy_(sent_states.data.index_select(
+                            1, beam[b].getCurrentOrigin()))
+            else:
+                sent_states.copy_(sent_states.index_select(
+                            1, beam[b].getCurrentOrigin()))
+                            
+                            
+        nl, br_, t_, d_ = self.buffer.size()
+                    
+        sent_states = self.buffer.view(nl, self.beamSize, remainingSents, t_, d_)[:, :, idx, :, :]
+        
+        sent_states.data.copy_(sent_states.data.index_select(
+                            1, beam[b].getCurrentOrigin()))
+    
+    # in this section, the sentences that are still active are
+    # compacted so that the decoder is not run on completed sentences
+    def _prune_complete_beam(self, activeIdx, remainingSents):
+        
+        model_size = self.context.size(-1)
+        
+        def updateActive(t):
+            # select only the remaining active sentences
+            view = t.data.view(-1, remainingSents, model_size)
+            newSize = list(t.size())
+            newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
+            return Variable(view.index_select(1, activeIdx)
+                            .view(*newSize))
+        
+        def updateActive2D(t):
+            if isinstance(t, Variable):
+                # select only the remaining active sentences
+                view = t.data.view(-1, remainingSents)
+                newSize = list(t.size())
+                newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
+                return Variable(view.index_select(1, activeIdx)
+                                .view(*newSize))
+            else:
+                view = t.view(-1, remainingSents)
+                newSize = list(t.size())
+                newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
+                new_t = view.index_select(1, activeIdx).view(*newSize)
+                                
+                return new_t
+        
+        def updateActive4D(t):
+            # select only the remaining active sentences
+            nl, br_, t_, d_ = t.size()
+            view = t.data.view(nl, -1, remainingSents, t_, model_size)
+            newSize = list(t.size())
+            newSize[1] = newSize[1] * len(activeIdx) // remainingSents
+            return Variable(view.index_select(2, activeIdx)
+                            .view(*newSize)) 
+        
+        self.context = updateActive(self.context)
+        
+        self.input_seq = updateActive2D(self.input_seq)
+        
+        self.src = updateActive2D(self.src)
+        
+        self.buffer = updateActive4D(self.buffer)
+
+
 
 
 #~ class TrasnformerReconstructor(Reconstructor):
