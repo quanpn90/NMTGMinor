@@ -122,11 +122,12 @@ class NMTLossFunc(LossFuncBase):
             tdata = gtruth.data
             
             # squeeze is a trick to know if mask has dimension or not
-            mask = torch.nonzero(tdata.eq(self.padding_idx)).squeeze() 
+            mask = torch.nonzero(tdata.eq(self.padding_idx)).squeeze()
             likelihood = torch.gather(scores.data, 1, tdata.unsqueeze(1))
             tmp_ = self.one_hot.repeat(gtruth.size(0), 1)
             tmp_.scatter_(1, tdata.unsqueeze(1), self.confidence)
-            if mask.dim() > 0:
+            if mask.numel() > 0:
+                #~ print(mask)
                 likelihood.index_fill_(0, mask, 0)
                 tmp_.index_fill_(0, mask, 0)
            
@@ -147,7 +148,7 @@ class NMTLossFunc(LossFuncBase):
             
         else:
             loss = self.func(scores, gtruth)
-            loss_data = loss.data
+            loss_data = loss.data.item()
 
         return (loss, loss_data)
         
@@ -216,12 +217,12 @@ class NMTLossFunc(LossFuncBase):
             # actual loss function between the predictive distribution and target
             loss_t, loss_data_t = self._compute_loss(dist_t, target_t)
 
-            loss_data += loss_data_t[0]
+            loss_data += loss_data_t
             
             # backward from loss
             # note: we only compute the gradients w.r.t the outputs 
             if backward:
-                loss_t.div(normalizer).backward()
+                loss_t.div(normalizer).backward(retain_graph=True)
             
         grad_outputs = None if outputs.grad is None else outputs.grad.data
         

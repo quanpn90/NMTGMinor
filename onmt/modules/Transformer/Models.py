@@ -5,7 +5,8 @@ from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, Position
 from onmt.modules.BaseModel import NMTModel, Reconstructor, DecoderState
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
-from onmt.modules.Checkpoint import checkpoint
+#~ from onmt.modules.Checkpoint import checkpoint
+from torch.utils.checkpoint import checkpoint
 from torch.autograd import Variable
 
 
@@ -117,8 +118,7 @@ class TransformerEncoder(nn.Module):
             
             if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:        
                 context = checkpoint(custom_layer(layer), context, mask_src, pad_mask)
-                
-                #~ print(type(context))
+
             else:
                 context = layer(context, mask_src, pad_mask=None)      # batch_size x len_src x d_model
             

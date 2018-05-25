@@ -60,7 +60,7 @@ class XavierLinear(nn.Module):
         
         #~ stdv = 1. / math.sqrt(self.linear.weight.size(1))
             
-        init.xavier_uniform(self.linear.weight)
+        init.xavier_uniform_(self.linear.weight)
         #~ init.uniform(self.linear.weight, -stdv, stdv)
         
         if bias:

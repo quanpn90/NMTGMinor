@@ -160,9 +160,9 @@ def init_model_parameters(model, opt):
         # We initialize the model parameters with Xavier init
         init = torch.nn.init
         
-        init.xavier_uniform(model.generator.linear.weight)
-        init.xavier_uniform(model.encoder.word_lut.weight.data)
-        init.xavier_uniform(model.decoder.word_lut.weight.data)
+        init.xavier_uniform_(model.generator.linear.weight)
+        init.xavier_uniform_(model.encoder.word_lut.weight.data)
+        init.xavier_uniform_(model.decoder.word_lut.weight.data)
         
         #~ init = torch.nn.init.uniform
         #~ 

@@ -145,11 +145,11 @@ def main():
             predBatch = predBatch_
             predScore = predScore_    
                                                               
-        predScoreTotal += sum(score[0] for score in predScore)
+        predScoreTotal += sum(score[0].item() for score in predScore)
         predWordsTotal += sum(len(x[0]) for x in predBatch)
         if tgtF is not None:
-            goldScoreTotal += sum(goldScore)
-            goldWordsTotal += numGoldWords
+            goldScoreTotal += sum(goldScore).item()
+            goldWordsTotal += numGoldWords.item()
             
         for b in range(len(predBatch)):
                         
