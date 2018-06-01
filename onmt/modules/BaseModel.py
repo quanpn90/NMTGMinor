@@ -19,7 +19,7 @@ class Generator(nn.Module):
         
         stdv = 1. / math.sqrt(self.linear.weight.size(1))
         
-        torch.nn.init.uniform(self.linear.weight, -stdv, stdv)
+        torch.nn.init.uniform_(self.linear.weight, -stdv, stdv)
         
         self.linear.bias.data.zero_()
             

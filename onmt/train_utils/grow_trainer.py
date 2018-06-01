@@ -82,7 +82,7 @@ class GrowTrainer(BaseTrainer):
                 
 #~ 
                 total_loss += loss_data
-                total_words += targets.data.ne(onmt.Constants.PAD).sum()
+                total_words += targets.data.ne(onmt.Constants.PAD).sum().item()
 
         self.model.train()
         return total_loss / total_words
@@ -171,8 +171,8 @@ class GrowTrainer(BaseTrainer):
                     raise e        
                 
             if not oom:
-                src_size = batch[0].data.ne(onmt.Constants.PAD).sum()
-                tgt_size = targets.data.ne(onmt.Constants.PAD).sum()
+                src_size = batch[0].data.ne(onmt.Constants.PAD).sum().item()
+                tgt_size = targets.data.ne(onmt.Constants.PAD).sum().item()
                 
                 
                 counter = counter + 1 

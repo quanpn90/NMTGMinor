@@ -54,6 +54,7 @@ parser.add_argument('-beta', type=float, default=0.0,
                     help="""Coverage penalty coefficient""")
 parser.add_argument('-print_nbest', action='store_true',
                     help='Output the n-best list instead of a single sentence')
+parser.add_argument('-ensemble_op', default='mean', help="""Ensembling operator""")
 parser.add_argument('-normalize', action='store_true',
                     help='To normalize the scores based on output length')
 parser.add_argument('-gpu', type=int, default=-1,
@@ -111,7 +112,7 @@ def main():
     else:
       inFile = open(opt.src)
         
-    translator = onmt.Translator(opt)
+    translator = onmt.EnsembleTranslator(opt)
         
     for line in addone(inFile):
         if line is not None:
@@ -144,11 +145,11 @@ def main():
             predBatch = predBatch_
             predScore = predScore_    
                                                               
-        predScoreTotal += sum(score[0] for score in predScore)
+        predScoreTotal += sum(score[0].item() for score in predScore)
         predWordsTotal += sum(len(x[0]) for x in predBatch)
         if tgtF is not None:
-            goldScoreTotal += sum(goldScore)
-            goldWordsTotal += numGoldWords
+            goldScoreTotal += sum(goldScore).item()
+            goldWordsTotal += numGoldWords.item()
             
         for b in range(len(predBatch)):
                         
@@ -201,3 +202,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
