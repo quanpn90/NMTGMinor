@@ -266,7 +266,7 @@ class GrowTrainer(BaseTrainer):
         
         if opt.continue_training:
             self.model.load_state_dict(checkpoint['model'])
-        
+
         
         if self.cuda:
             self.model = self.model.cuda()
@@ -279,6 +279,9 @@ class GrowTrainer(BaseTrainer):
         
         # important: assign parameters to optim after growing the layers
         self.optim.set_parameters(self.model.parameters())
+        
+        if opt.continue_training:
+            self.optim.load_state_dict(checkpoint['optim'])
         
         batchOrder = None
         iteration = 0
