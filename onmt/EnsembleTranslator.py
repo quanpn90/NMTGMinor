@@ -8,6 +8,8 @@ from onmt.ModelConstructor import build_model
 import torch.nn.functional as F
 
 
+model_list = ['transformer', 'stochastic_transformer']
+
 class EnsembleTranslator(object):
     def __init__(self, opt):
         self.opt = opt
@@ -44,7 +46,7 @@ class EnsembleTranslator(object):
             
             model.load_state_dict(checkpoint['model'])
             
-            if model_opt.model == 'transformer':
+            if model_opt.model in model_list:
                 if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:
                     print("Not enough len to decode. Renewing .. ")    
                     model.decoder.renew_buffer(self.opt.max_sent_length)
@@ -233,20 +235,11 @@ class EnsembleTranslator(object):
         # time x batch * beam
         src = Variable(srcBatch.data.repeat(1, beamSize))
         
-        # context size : time x batch*beam x hidden
-        #~ for i in contexts:
-            #~ contexts[i] = contexts[i].transpose(0, 1)
-            #~ contexts[i] = Variable(contexts[i].data.repeat(1, beamSize, 1))
-        
         # initialize the beam
         beam = [onmt.Beam(beamSize, self.opt.cuda) for k in range(batchSize)]
         
         batchIdx = list(range(batchSize))
         remainingSents = batchSize
-        
-        #~ input_seq = None
-        #~ 
-        #~ buffers = dict()
         
         decoder_states = dict()
         
@@ -267,15 +260,10 @@ class EnsembleTranslator(object):
                 We re-compute all states for every time step
                 A better buffering algorithm will be implemented
             """
-            #~ if input_seq is None:
-                #~ input_seq = input
-            #~ else:
-                #~ # concatenate the last input to the previous input sequence
-                #~ input_seq = torch.cat([input_seq, input], 0)
+           
             decoder_input = Variable(input)
             
             # require batch first for everything
-            
             outs = dict()
             attns = dict()
             
@@ -310,26 +298,7 @@ class EnsembleTranslator(object):
                     
                 for i in range(self.n_models):
                     decoder_states[i]._update_beam(beam, b, remainingSents, idx)
-                # update the decoding states
-                #~ for tensor in [src, input_seq]  :
-                #~ 
-                    #~ t_, br = tensor.size()
-                    #~ sent_states = tensor.view(t_, beamSize, remainingSents)[:, :, idx]
-                    #~ 
-                    #~ if isinstance(tensor, Variable):
-                        #~ sent_states.data.copy_(sent_states.data.index_select(
-                                    #~ 1, beam[b].getCurrentOrigin()))
-                    #~ else:
-                        #~ sent_states.copy_(sent_states.index_select(
-                                    #~ 1, beam[b].getCurrentOrigin()))
-                #~ 
-                #~ for i in range(self.n_models):
-                    #~ nl, br_, t_, d_ = buffers[i].size()
-                    #~ 
-                    #~ sent_states = buffers[i].view(nl, beamSize, remainingSents, t_, d_)[:, :, idx, :, :]
-                    #~ 
-                    #~ sent_states.data.copy_(sent_states.data.index_select(
-                                        #~ 1, beam[b].getCurrentOrigin()))
+               
                 
             if not active:
                 break
@@ -339,50 +308,10 @@ class EnsembleTranslator(object):
             activeIdx = self.tt.LongTensor([batchIdx[k] for k in active])
             batchIdx = {beam: idx for idx, beam in enumerate(active)}
             
-            #~ model_size = contexts[0].size(-1)
-
-            #~ def updateActive(t, model_size):
-                #~ # select only the remaining active sentences
-                #~ view = t.data.view(-1, remainingSents, model_size)
-                #~ newSize = list(t.size())
-                #~ newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
-                #~ return Variable(view.index_select(1, activeIdx)
-                                #~ .view(*newSize))
-            #~ 
-            #~ def updateActive4D(t, model_size):
-                #~ # select only the remaining active sentences
-                #~ nl, br_, t_, d_ = t.size()
-                #~ view = t.data.view(nl, -1, remainingSents, t_, model_size)
-                #~ newSize = list(t.size())
-                #~ newSize[1] = newSize[1] * len(activeIdx) // remainingSents
-                #~ return Variable(view.index_select(2, activeIdx)
-                                #~ .view(*newSize)) 
-            #~ 
-            #~ def updateActive2D(t):
-                #~ if isinstance(t, Variable):
-                    #~ # select only the remaining active sentences
-                    #~ view = t.data.view(-1, remainingSents)
-                    #~ newSize = list(t.size())
-                    #~ newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
-                    #~ return Variable(view.index_select(1, activeIdx)
-                                    #~ .view(*newSize))
-                #~ else:
-                    #~ view = t.view(-1, remainingSents)
-                    #~ newSize = list(t.size())
-                    #~ newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
-                    #~ new_t = view.index_select(1, activeIdx).view(*newSize)
-                                    #~ 
-                    #~ return new_t
-            #~ 
+            
             for i in range(self.n_models):
                 decoder_states[i]._prune_complete_beam(activeIdx, remainingSents)
-                #~ contexts[i] = updateActive(contexts[i], contexts[i].size(-1))
-                #~ buffers[i] = updateActive4D(buffers[i], contexts[i].size(-1))
-            #~ 
-            #~ src = updateActive2D(src)
-            #~ 
-            #~ input_seq = updateActive2D(input_seq)
-            
+               
             
             
             remainingSents = len(active)
@@ -420,11 +349,6 @@ class EnsembleTranslator(object):
         torch.set_grad_enabled(True)
 
         return allHyp, allScores, allAttn, allLengths, goldScores, goldWords
-                                
-        #~ else:            
-            #~ print("Model type %s is not supported" % self.model_type)
-            #~ raise NotImplementedError
-            
 
     def translate(self, srcBatch, goldBatch):
         #  (1) convert words to indexes
@@ -439,7 +363,6 @@ class EnsembleTranslator(object):
 
         #  (3) convert indexes to words
         predBatch = []
-        #~ print(pred)
         for b in range(batchSize):
             predBatch.append(
                 [self.buildTargetTokens(pred[b][n], srcBatch[b], attn[b][n])

@@ -183,6 +183,7 @@ class TransformerDecoder(nn.Module):
     
     def renew_buffer(self, new_len):
         
+        print(new_len)
         self.positional_encoder.renew(new_len)
         mask = torch.ByteTensor(np.triu(np.ones((new_len,new_len)), k=1).astype('uint8'))
         self.register_buffer('mask', mask)
@@ -393,8 +394,9 @@ class Transformer(NMTModel):
     def create_decoder_state(self, src, context, beamSize=1):
         
         from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder
+        from onmt.modules.StochasticTransformer.Models import StochasticTransformerEncoder, StochasticTransformerDecoder
         
-        if isinstance(self.decoder, TransformerDecoder):
+        if isinstance(self.decoder, TransformerDecoder) or isinstance(self.decoder, StochasticTransformerDecoder) :
             decoder_state = TransformerDecodingState(src, context, beamSize=beamSize)
         elif isinstance(self.decoder, ParallelTransformerDecoder):
             from onmt.modules.ParallelTransformer.Models import ParallelTransformerDecodingState

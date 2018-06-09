@@ -135,7 +135,7 @@ class PrePostProcessing(nn.Module):
             a = adding previous input to output (residual)
     """
     
-    def __init__(self, d_model, dropout_p, sequence='nda', static=True):
+    def __init__(self, d_model, dropout_p, sequence='nda', static=True, elementwise_affine=True):
         super(PrePostProcessing, self).__init__() 
         self.d_model = d_model
         self.dropout_p = dropout_p     
@@ -148,13 +148,10 @@ class PrePostProcessing(nn.Module):
             self.k = nn.Parameter(torch.ones(1))
         
         if 'n' in self.steps:
-            if onmt.Constants.layer_norm == 'slow':
-                ln = LayerNorm(self.d_model)
-                self.layer_norm = Bottle(ln)
-            else:
-                ln = nn.LayerNorm((self.d_model,))
-                ln.weight.data.fill_(1)
-                self.layer_norm = Bottle(ln)
+            
+            ln = nn.LayerNorm((self.d_model,),elementwise_affine=elementwise_affine)
+            #~ ln.weight.data.fill_(1)
+            self.layer_norm = Bottle(ln)
         if 'd' in self.steps:
             if static:
                 self.dropout = StaticDropout(self.dropout_p)
@@ -601,6 +598,7 @@ class PositionalEncoding(nn.Module):
         pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 1)
         # wrap in a buffer so that model can be moved to GPU
         self.register_buffer('pos_emb', pos_emb)
+
         
     def forward(self, word_emb, t=None):
         len_seq = t if t else word_emb.size(1)
