@@ -5,7 +5,7 @@ import onmt
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer
 from onmt.modules.Transformer.Layers import PositionalEncoding
 
-
+MAX_SIZE=1024
 
 def build_model(opt, dicts):
 
@@ -47,7 +47,7 @@ def build_model(opt, dicts):
     elif opt.model == 'transformer':
         # raise NotImplementedError
         
-        max_size = 262 # This should be the longest sentence from the dataset
+        max_size = MAX_SIZE # This should be the longest sentence from the dataset
         onmt.Constants.init_value = opt.param_init
         
         if opt.time == 'positional_encoding':
@@ -73,7 +73,7 @@ def build_model(opt, dicts):
         from onmt.modules.StochasticTransformer.Models import StochasticTransformerEncoder, StochasticTransformerDecoder
 
         
-        max_size = 256 # This should be the longest sentence from the dataset
+        max_size = MAX_SIZE # This should be the longest sentence from the dataset
         onmt.Constants.weight_norm = opt.weight_norm
         onmt.Constants.init_value = opt.param_init
         
@@ -96,7 +96,7 @@ def build_model(opt, dicts):
     
         from onmt.modules.FCTransformer.Models import FCTransformerEncoder, FCTransformerDecoder
         
-        max_size = 256 # This should be the longest sentence from the dataset
+        max_size = MAX_SIZE # This should be the longest sentence from the dataset
         onmt.Constants.weight_norm = opt.weight_norm
         onmt.Constants.init_value = opt.param_init
         
@@ -112,7 +112,7 @@ def build_model(opt, dicts):
     
         from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder
         
-        max_size = 256 # This should be the longest sentence from the dataset
+        max_size = MAX_SIZE # This should be the longest sentence from the dataset
         onmt.Constants.weight_norm = opt.weight_norm
         onmt.Constants.init_value = opt.param_init
         

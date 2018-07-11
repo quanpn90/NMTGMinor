@@ -82,8 +82,11 @@ def makeJoinVocabulary(filenames, size):
         print("Reading file %s ... " % filename)
         with open(filename) as f:
             for sent in f.readlines():
-                for word in sent.split():
-                    vocab.add(word)
+                sent = sent.strip()
+                for char in sent:
+                    vocab.add(char)
+                #~ for word in sent.split():
+                    #~ vocab.add(word)
 
     originalSize = vocab.size()
     vocab = vocab.prune(size)
@@ -100,8 +103,12 @@ def makeVocabulary(filename, size):
 
     with open(filename) as f:
         for sent in f.readlines():
-            for word in sent.split():
-                vocab.add(word)
+            sent = sent.strip()
+            for char in sent:
+                vocab.add(char)
+            #~ for word in sent.split():
+                #~ vocab.add(word)
+                
 
     originalSize = vocab.size()
     vocab = vocab.prune(size)
@@ -173,8 +180,8 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
             print('WARNING: ignoring an empty line ('+str(count+1)+')')
             continue
 
-        srcWords = sline.split()
-        tgtWords = tline.split()
+        srcWords = list(sline)
+        tgtWords = list(tline)
 
         if len(srcWords) <= max_src_length \
            and len(tgtWords) <= max_tgt_length - 2:
@@ -252,8 +259,8 @@ def main():
     valid = {}
     valid['src'], valid['tgt'] = makeData(opt.valid_src, opt.valid_tgt,
                                           dicts['src'], dicts['tgt'], 
-                                          max_src_length=max(256,opt.src_seq_length), 
-                                          max_tgt_length=max(256,opt.tgt_seq_length))
+                                          max_src_length=max(1024,opt.src_seq_length), 
+                                          max_tgt_length=max(1024,opt.tgt_seq_length))
 
     if opt.src_vocab is None:
         saveVocabulary('source', dicts['src'], opt.save_data + '.src.dict')
@@ -270,3 +277,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    

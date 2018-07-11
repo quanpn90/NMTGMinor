@@ -26,7 +26,7 @@ parser.add_argument('-beam_size',  type=int, default=5,
                     help='Beam size')
 parser.add_argument('-batch_size', type=int, default=30,
                     help='Batch size')
-parser.add_argument('-max_sent_length', type=int, default=512,
+parser.add_argument('-max_sent_length', type=int, default=2048,
                     help='Maximum sentence length.')
 parser.add_argument('-replace_unk', action="store_true",
                     help="""Replace the generated UNK tokens with the source
@@ -116,10 +116,12 @@ def main():
         
     for line in addone(inFile):
         if line is not None:
-            srcTokens = line.split()
+            #~ srcTokens = line.split()
+            srcTokens = list(line.strip())
             srcBatch += [srcTokens]
             if tgtF:
-                tgtTokens = tgtF.readline().split() if tgtF else None
+                #~ tgtTokens = tgtF.readline().split() if tgtF else None
+                tgtTokens = list(tgtF.readline().strip()) if tgtF else None
                 tgtBatch += [tgtTokens]
 
             if len(srcBatch) < opt.batch_size:
@@ -157,19 +159,20 @@ def main():
                         
             if not opt.print_nbest:
                 #~ print(predBatch[b][0])
-                outF.write(" ".join(predBatch[b][0]) + '\n')
+                outF.write(''.join(predBatch[b][0]) + '\n')
                 outF.flush()
 
             if opt.verbose:
-                srcSent = ' '.join(srcBatch[b])
+                #~ srcSent = ' '.join(srcBatch[b])
+                srcSent = ''.join(srcBatch[b])
                 if translator.tgt_dict.lower:
                     srcSent = srcSent.lower()
                 print('SENT %d: %s' % (count, srcSent))
-                print('PRED %d: %s' % (count, " ".join(predBatch[b][0])))
+                print('PRED %d: %s' % (count, ''.join(predBatch[b][0])))
                 print("PRED SCORE: %.4f" %  predScore[b][0])
 
                 if tgtF is not None:
-                    tgtSent = ' '.join(tgtBatch[b])
+                    tgtSent = ''.join(tgtBatch[b])
                     if translator.tgt_dict.lower:
                         tgtSent = tgtSent.lower()
                     print('GOLD %d: %s ' % (count, tgtSent))

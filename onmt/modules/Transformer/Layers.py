@@ -19,6 +19,9 @@ def contiguous(tensor):
     else:
         return tensor.contiguous()
 
+def swish(input):
+    
+    return input * F.sigmoid(input)
 
 def uniform_unit_scaling(tensor, nonlinearity="linear", gain=1.0):
     
@@ -359,7 +362,45 @@ class FeedForward(nn.Module):
         
     def forward(self, input):
         
-        out = F.relu(self.fc_1(input), inplace=False)
+        out = F.relu(self.fc_1(input))
+        out = self.dropout(out)
+        out = self.fc_2(out)
+        return out
+        
+class FeedForwardSwish(nn.Module):
+    """Applies position-wise feed forward to inputs
+    
+    Args:
+        d_model: dimension of model 
+        d_ff:    dimension of feed forward
+        p:       dropout probability 
+        
+    Params:
+        fc_1: FC layer from d_model to d_ff
+        fc_2: FC layer from d_ff to d_model
+        
+    Input Shapes:
+        input: batch_size x len x d_model
+        
+    Output Shapes:
+        out: batch_size x len x d_model
+    """
+    
+    def __init__(self, d_model, d_ff, p, static=True):
+        super(FeedForwardSwish, self).__init__()
+        self.d_model = d_model
+        self.d_ff = d_ff
+        self.fc_1 = Linear(d_model, d_ff, nonlinearity="relu")
+        self.fc_2 = Linear(d_ff, d_model)
+
+        if static:
+            self.dropout = StaticDropout(p)
+        else:
+            self.dropout = nn.Dropout(p)
+        
+    def forward(self, input):
+        
+        out = swish(self.fc_1(input))
         out = self.dropout(out)
         out = self.fc_2(out)
         return out
@@ -404,6 +445,9 @@ class EncoderLayer(nn.Module):
         elif onmt.Constants.activation_layer == 'maxout':
             k = int(math.ceil(d_ff / d_model))
             feedforward = MaxOut(d_model, d_model, k)
+        elif onmt.Constants.activation_layer == 'linear_swish_linear':
+            ff_p = p
+            feedforward = FeedForwardSwish(d_model, d_ff, ff_p,static=onmt.Constants.static)
         self.feedforward = Bottle(feedforward)
             
     def forward(self, input, attn_mask, pad_mask=None):
@@ -474,6 +518,9 @@ class DecoderLayer(nn.Module):
         elif onmt.Constants.activation_layer == 'maxout':
             k = int(math.ceil(d_ff / d_model))
             feedforward = MaxOut(d_model, d_model, k)
+        elif onmt.Constants.activation_layer == 'linear_swish_linear':
+            ff_p = p
+            feedforward = FeedForwardSwish(d_model, d_ff, ff_p,static=onmt.Constants.static)
         self.feedforward = Bottle(feedforward)
     
     def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, residual_dropout=0.0):
