@@ -79,7 +79,7 @@ parser.add_argument('-residual_type', default='regular',
                   help='Type of residual type. regular|gated')
 # Optimization options
 parser.add_argument('-encoder_type', default='text',
-                    help="Type of encoder to use. Options are [text|img].")
+                    help="Type of encoder to use. Options are [text|img|audio].")
 parser.add_argument('-batch_size_words', type=int, default=2048,
                     help='Maximum batch size in word dimension')
 parser.add_argument('-batch_size_sents', type=int, default=128,
@@ -226,8 +226,13 @@ def main():
                              data_type=dataset.get("type", "text"), max_seq_num=opt.batch_size_sents)
 
     dicts = dataset['dicts']
-    print(' * vocabulary size. source = %d; target = %d' %
+    if("src" in dicts):
+        print(' * vocabulary size. source = %d; target = %d' %
           (dicts['src'].size(), dicts['tgt'].size()))
+    else:
+        print(' * vocabulary size. target = %d' %
+          (dicts['tgt'].size()))
+
     print(' * number of training sentences. %d' %
           len(dataset['train']['src']))
     print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)

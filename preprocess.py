@@ -2,7 +2,8 @@ import onmt
 import onmt.Markdown
 import argparse
 import torch
-
+import h5py as h5
+import numpy as np
 
 def loadImageLibs():
     "Conditional import of torch image libs."
@@ -19,7 +20,7 @@ onmt.Markdown.add_md_help_argument(parser)
 parser.add_argument('-config',    help="Read options from this file")
 
 parser.add_argument('-src_type', default="text",
-                    help="Type of the source input. Options are [text|img].")
+                    help="Type of the source input. Options are [text|img|audio].")
 parser.add_argument('-sort_type', default="ascending",
                     help="Type of sorting. Options are [ascending|descending].")
 parser.add_argument('-src_img_dir', default=".",
@@ -59,6 +60,9 @@ parser.add_argument('-tgt_seq_length_trunc', type=int, default=0,
 parser.add_argument('-shuffle',    type=int, default=1,
                     help="Shuffle data")
                     
+parser.add_argument('-asr',    type=int, default=0,
+                    help="h5 input")
+
 parser.add_argument('-seed',       type=int, default=3435,
                     help="Random seed")
 
@@ -233,14 +237,95 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
     return src, tgt
 
 
+def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64):
+    src, tgt = [], []
+    sizes = []
+    count, ignored = 0, 0
+
+    print('Processing %s & %s ...' % (srcFile, tgtFile))
+
+    #srcF = open(srcFile)
+    srcF = h5.File(srcFile)
+    tgtF = open(tgtFile)
+
+    index = 0;
+
+    while True:
+        tline = tgtF.readline()
+        sline = torch.from_numpy(np.array(srcF[str(index)]))
+        index += 1;
+
+        # normal end of file
+        if tline == "":
+            break
+
+
+        tline = tline.strip()
+
+        # source and/or target are empty
+        if tline == "":
+            print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
+            continue
+
+        tgtWords = list(tline)
+
+        if len(tgtWords) <= max_tgt_length - 2:
+
+            # Check truncation condition.
+            if opt.tgt_seq_length_trunc != 0:
+                tgtWords = tgtWords[:opt.tgt_seq_length_trunc]
+
+            # For src text, we use BOS for possible reconstruction
+            src += [sline]
+            tgt += [tgtDicts.convertToIdx(tgtWords,
+                                          onmt.Constants.UNK_WORD,
+                                          onmt.Constants.BOS_WORD,
+                                          onmt.Constants.EOS_WORD)]
+            sizes += [len(sline)]
+        else:
+            ignored += 1
+
+        count += 1
+
+        if count % opt.report_every == 0:
+            print('... %d sentences prepared' % count)
+
+    srcF.close()
+    tgtF.close()
+
+    if opt.shuffle == 1:
+        print('... shuffling sentences')
+        perm = torch.randperm(len(src))
+        src = [src[idx] for idx in perm]
+        tgt = [tgt[idx] for idx in perm]
+        sizes = [sizes[idx] for idx in perm]
+
+    print('... sorting sentences by size')
+    _, perm = torch.sort(torch.Tensor(sizes), descending=(opt.sort_type == 'descending'))
+    src = [src[idx] for idx in perm]
+    tgt = [tgt[idx] for idx in perm]
+
+    print(('Prepared %d sentences ' +
+           '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
+          (len(src), ignored, max_src_length, max_tgt_length))
+
+    return src, tgt
+
+
 def main():
 
     dicts = {}
-    
-    if opt.join_vocab:
+
+
+    if opt.asr:
+        dicts['tgt'] = initVocabulary('target', opt.train_tgt, opt.tgt_vocab,
+                                      opt.tgt_vocab_size)
+
+    elif opt.join_vocab:
         dicts['src'] = initVocabulary('source', [opt.train_src, opt.train_tgt], opt.src_vocab,
                                       opt.src_vocab_size, join=True)
         dicts['tgt'] = dicts['src']
+
     else:
         dicts['src'] = initVocabulary('source', opt.train_src, opt.src_vocab,
                                       opt.src_vocab_size)
@@ -248,21 +333,37 @@ def main():
         dicts['tgt'] = initVocabulary('target', opt.train_tgt, opt.tgt_vocab,
                                       opt.tgt_vocab_size)
                                       
-    print('Preparing training ...')
-    train = {}
-    train['src'], train['tgt'] = makeData(opt.train_src, opt.train_tgt,
+    if opt.asr == 1:
+        print('Preparing training ...')
+        train = {}
+        train['src'], train['tgt'] = makeASRData(opt.train_src, opt.train_tgt,
+                                           dicts['tgt'],
+                                          max_src_length=opt.src_seq_length,
+                                          max_tgt_length=opt.tgt_seq_length)
+
+        print('Preparing validation ...')
+        valid = {}
+        valid['src'], valid['tgt'] = makeASRData(opt.valid_src, opt.valid_tgt,
+                                             dicts['tgt'],
+                                          max_src_length=max(1024,opt.src_seq_length),
+                                          max_tgt_length=max(1024,opt.tgt_seq_length))
+
+    else:
+        print('Preparing training ...')
+        train = {}
+        train['src'], train['tgt'] = makeData(opt.train_src, opt.train_tgt,
                                           dicts['src'], dicts['tgt'],
                                           max_src_length=opt.src_seq_length,
                                           max_tgt_length=opt.tgt_seq_length)
 
-    print('Preparing validation ...')
-    valid = {}
-    valid['src'], valid['tgt'] = makeData(opt.valid_src, opt.valid_tgt,
+        print('Preparing validation ...')
+        valid = {}
+        valid['src'], valid['tgt'] = makeData(opt.valid_src, opt.valid_tgt,
                                           dicts['src'], dicts['tgt'], 
                                           max_src_length=max(1024,opt.src_seq_length), 
                                           max_tgt_length=max(1024,opt.tgt_seq_length))
 
-    if opt.src_vocab is None:
+    if opt.src_vocab is None and opt.asr == 0:
         saveVocabulary('source', dicts['src'], opt.save_data + '.src.dict')
     if opt.tgt_vocab is None:
         saveVocabulary('target', dicts['tgt'], opt.save_data + '.tgt.dict')

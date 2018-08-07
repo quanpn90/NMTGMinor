@@ -72,11 +72,19 @@ class Dataset(object):
                   include_lengths=False, dtype="text"):
         lengths = [x.size(0) for x in data]
         max_length = max(lengths)
-        out = data[0].new(len(data), max_length).fill_(onmt.Constants.PAD)
+        if dtype == "audio" :
+            out = data[0].new(len(data), max_length,data[0].size(1)+1).fill_(onmt.Constants.PAD)
+        else:
+            out = data[0].new(len(data), max_length).fill_(onmt.Constants.PAD)
         for i in range(len(data)):
             data_length = data[i].size(0)
             offset = max_length - data_length if align_right else 0
-            out[i].narrow(0, offset, data_length).copy_(data[i])
+            if(dtype == "audio"):
+                out[i].narrow(0, offset, data_length).narrow(1,1,data[0].size(1)).copy_(data[i])
+                out[i].narrow(0, offset, data_length).narrow(1,0,1).fill_(1)
+            else:
+                out[i].narrow(0, offset, data_length).copy_(data[i])
+
         if include_lengths:
             return out, lengths 
         else:
@@ -153,7 +161,7 @@ class Dataset(object):
         #split that batch to number of gpus
         
         samples = []
-        split_size = int(math.ceil(batch[0].size(1) / self.n_gpu))  
+        split_size = int(math.ceil(batch[0].size(1) / max(1,self.n_gpu)))
         
         # maybe we need a more smart splitting function ?
         

@@ -52,11 +52,15 @@ class StochasticTransformerEncoder(nn.Module):
         self.emb_dropout = opt.emb_dropout
         self.time = opt.time
         self.death_rate = opt.death_rate
+        self.input_type = opt.encoder_type
         
         if hasattr(opt, 'grow_dropout'):
             self.grow_dropout = opt.grow_dropout
-        
-        self.word_lut = nn.Embedding(dicts.size(),
+
+        if opt.encoder_type != "text":
+            self.audio_trans = nn.Linear(dicts,self.model_size)
+        else:
+            self.word_lut = nn.Embedding(dicts.size(),
                                      self.model_size,
                                      padding_idx=onmt.Constants.PAD)
         
@@ -129,9 +133,17 @@ class StochasticTransformerEncoder(nn.Module):
         
         
         """ Embedding: batch_size x len_src x d_model """
-        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        if(self.input_type == "text"):
+            mask_src = input.data.eq(onmt.Constants.PAD).unsqueeze(1)  # batch_size x len_src x 1 for broadcasting
+            pad_mask = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD))  # batch_size x len_src
+            emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        else:
+            mask_src = input.narrow(2,0,1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+            pad_mask = torch.autograd.Variable(input.narrow(2,0,1).squeeze(2).data.ne(onmt.Constants.PAD))  # batch_size x len_src
+            input = input.narrow(2,1,input.size(2)-1)
+            emb = self.audio_trans.forward(input.contiguous().view(-1,input.size(2))).view(input.size(0),input.size(1),-1)
         """ Scale the emb by sqrt(d_model) """
-        
+
         if self.time == 'positional_encoding':
             emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
@@ -139,14 +151,11 @@ class StochasticTransformerEncoder(nn.Module):
         if isinstance(emb, tuple):
             emb = emb[0]
         emb = self.preprocess_layer(emb)
-        
-        mask_src = input.data.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x len_src x 1 for broadcasting
-        
-        pad_mask = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
+
         #pad_mask = None
         
         context = emb.contiguous()
-        
+
         memory_bank = list()
         
         for i, layer in enumerate(self.layer_modules):
@@ -197,7 +206,9 @@ class StochasticTransformerDecoder(nn.Module):
         self.emb_dropout = opt.emb_dropout
         self.time = opt.time
         self.death_rate = opt.death_rate
-        
+        self.encoder_type = opt.encoder_type
+
+
         if hasattr(opt, 'grow_dropout'):
             self.grow_dropout = opt.grow_dropout
         
@@ -272,12 +283,17 @@ class StochasticTransformerDecoder(nn.Module):
         if isinstance(emb, tuple):
             emb = emb[0]
         emb = self.preprocess_layer(emb)
-        
 
-        mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
+        if(self.encoder_type == "audio"):
+            mask_src = src.data.narrow(2,0,1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+            pad_mask_src = torch.autograd.Variable(src.data.narrow(2,0,1).squeeze(2).ne(onmt.Constants.PAD))  # batch_size x len_src
+        else:
+
+            mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
         
-        pad_mask_src = torch.autograd.Variable(src.data.ne(onmt.Constants.PAD))
-        
+            pad_mask_src = torch.autograd.Variable(src.data.ne(onmt.Constants.PAD))
+
+
         len_tgt = input.size(1)
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)

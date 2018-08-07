@@ -5,7 +5,7 @@ import onmt
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer
 from onmt.modules.Transformer.Layers import PositionalEncoding
 
-MAX_SIZE=1024
+MAX_SIZE=2048
 
 def build_model(opt, dicts):
 
@@ -58,8 +58,12 @@ def build_model(opt, dicts):
             #~ positional_encoder = nn.GRU(opt.model_size, opt.model_size, 1, batch_first=True)
         #~ elif opt.time == 'lstm':
             #~ positional_encoder = nn.LSTM(opt.model_size, opt.model_size, 1, batch_first=True)
-        
-        encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
+
+        if opt.encoder_type == "text":
+            encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
+        else:
+            encoder = TransformerEncoder(opt, 40, positional_encoder)
+
         decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder)
         
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
@@ -82,8 +86,11 @@ def build_model(opt, dicts):
         positional_encoder = PositionalEncoding(opt.model_size, len_max=max_size)
         #~ positional_encoder = None
         
-        encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder)
-        
+        if opt.encoder_type == "text":
+            encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder)
+        else:
+            encoder = StochasticTransformerEncoder(opt, 40, positional_encoder)
+
         decoder = StochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
         
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
@@ -161,7 +168,10 @@ def init_model_parameters(model, opt):
         init = torch.nn.init
         
         init.xavier_uniform_(model.generator.linear.weight)
-        init.xavier_uniform_(model.encoder.word_lut.weight.data)
+        if(opt.encoder_type == "audio"):
+            init.xavier_uniform_(model.encoder.audio_trans.weight.data)
+        else:
+            init.xavier_uniform_(model.encoder.word_lut.weight.data)
         init.xavier_uniform_(model.decoder.word_lut.weight.data)
         
         #~ init = torch.nn.init.uniform
