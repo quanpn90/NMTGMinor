@@ -11,6 +11,7 @@ from torch.autograd import Variable
 import math
 import time, datetime
 from onmt.train_utils.trainer import XETrainer
+from onmt.train_utils.fp16_trainer import FP16XETrainer
 from onmt.train_utils.multiGPUtrainer import MultiGPUXETrainer
 from onmt.modules.Loss import NMTLossFunc
 from onmt.ModelConstructor import build_model, init_model_parameters
@@ -170,6 +171,8 @@ parser.add_argument('-pre_word_vecs_dec',
 # GPU
 parser.add_argument('-gpus', default=[], nargs='+', type=int,
                     help="Use CUDA on the listed devices.")
+parser.add_argument('-fp16', action='store_true',
+                    help='Use half precision training')                    
 parser.add_argument('-seed', default=9999, type=int,
                     help="Seed for deterministic runs.")
 
@@ -192,6 +195,8 @@ if opt.checkpointing > 0:
 
 if torch.cuda.is_available() and not opt.gpus:
     print("WARNING: You have a CUDA device, should run with -gpus 0")
+    
+
 
 
 
@@ -254,7 +259,10 @@ def main():
         trainer = MultiGPUXETrainer(model, loss_function, trainData, validData, dataset, opt)
         print("Warning! Multi-GPU training is used. Not fully tested and potential bugs can happen.")
     else:
-        trainer = XETrainer(model, loss_function, trainData, validData, dataset, opt)
+        if opt.fp16:
+            trainer = FP16XETrainer(model, loss_function, trainData, validData, dataset, opt)
+        else:
+            trainer = XETrainer(model, loss_function, trainData, validData, dataset, opt)
 
     
     trainer.run(save_file=opt.load_from)

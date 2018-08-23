@@ -15,79 +15,87 @@ import random
 import numpy as np
 from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 from onmt.ModelConstructor import init_model_parameters
-
-class BaseTrainer(object):
+from onmt.train_utils.trainer import BaseTrainer
     
-    def __init__(self, model, loss_function, trainData, validData, dataset, opt):
-        
-        self.model = model
-        self.trainData = trainData
-        self.validData = validData
-        self.dicts = dataset['dicts']
-        self.dataset = dataset
-        self.opt = opt
-        self.cuda = (len(opt.gpus) >= 1)
-        
-        self.loss_function = loss_function
-        self.start_time = 0
-        
-        
-        
-    def run(self, *args,**kwargs):
-        
-        raise NotImplementedError    
     
-    def eval(self, data):
-        
-        raise NotImplementedError
-        
-    def to_variable(self, data):
-        
-        for i, t in enumerate(data):
-            if self.cuda:
-                data[i] = Variable(data[i].cuda())
-            else:
-                data[i] = Variable(data[i])
 
-        return data
-            
+class DynamicLossScaler:
 
-    def _get_grads(self):
-        grads = []
-        for name, p in self.model.named_parameters():
-            if not p.requires_grad:
-                continue
-            if p.grad is None:
-                raise RuntimeError('Model parameter did not receive gradient: ' + name + '. '
-                                   'Use the param in the forward pass or set requires_grad=False')
-            grads.append(p.grad.data)
-        return grads
+    def __init__(self, init_scale=1, scale_factor=2., scale_window=2000):
+        self.loss_scale = init_scale
+        self.scale_factor = scale_factor
+        self.scale_window = scale_window
+        self._iter = 0
+        self._last_overflow_iter = -1
+    
+    # we will pass the iter of optim to here
+    def update_scale(self, overflow, iter_=1):
         
-    def _get_flat_grads(self, out=None):
-        grads = self._get_grads()
-        if out is None:
-            grads_size = sum(g.numel() for g in grads)
-            out = grads[0].new(grads_size).zero_()
-        offset = 0
-        for g in grads:
-            numel = g.numel()
-            out[offset:offset+numel].copy_(g.view(-1))
-            offset += numel
-        return out[:offset]
+        self._iter = iter_
+        if overflow:
+            self.loss_scale /= self.scale_factor
+            self._last_overflow_iter = self._iter
+        elif (self._iter - self._last_overflow_iter) % self.scale_window == 0:
+            self.loss_scale *= self.scale_factor
+        
+
+    @staticmethod
+    def has_overflow(grad_norm):
+        # detect inf and nan
+        if grad_norm == float('inf') or grad_norm != grad_norm:
+            return True
+        return False
 
 
-class XETrainer(BaseTrainer):
+class FP16XETrainer(BaseTrainer):
 
     def __init__(self, model, loss_function, trainData, validData, dataset, opt):
         super().__init__(model, loss_function, trainData, validData, dataset, opt)
         self.optim = onmt.Optim(opt)
+        self.scaler = DynamicLossScaler()
         
         if self.cuda:
            torch.cuda.set_device(self.opt.gpus[0])
            torch.manual_seed(self.opt.seed)
+           
+           print(torch.cuda.get_device_capability(0)[0])
+           
+           # Important:
+           # Loss function needs to be in fp32
+           
            self.loss_function = self.loss_function.cuda()
-           self.model = self.model.cuda()
+           #~ self.model = self.model.cuda()
+           self.model = self.model.cuda().half()
+           
+        params = [p for p in self.model.parameters() if p.requires_grad]
+        total_param_size = sum(p.data.numel() for p in params)
         
+        #~ self.fp32_params = list()
+        
+        
+        #~ self.fp32_params = params[0].new(0).float().new(total_param_size)
+        
+        # now we transfer the params from fp16 over fp32
+        offset = 0
+        #~ for p in params:
+            #~ numel = p.data.numel()
+            #~ fp32_p = p.new(*p.size()).float()
+            #~ fp32_p.copy_(p.data)
+            #~ fp32_p = torch.nn.Parameter(fp32_p)
+            #~ 
+            #~ # create new gradient
+            #~ fp32_p.grad = fp32_p.data.new(*fp32_p.data.size()).zero_()
+            #~ 
+            #~ # put in the list
+            #~ self.fp32_params.append(fp32_p)
+            
+        #~ self.fp32_params = torch.nn.Parameter(self.fp32_params)
+        #~ self.fp32_params.grad = self.fp32_params.data.new(total_param_size)
+
+
+        # we optimize on the fp32 params
+        #~ self.optim.set_parameters([self.fp32_params])
+        #~ self.optim.set_parameters(self.fp32_params)
         self.optim.set_parameters(self.model.parameters())
 
     def save(self, epoch, valid_ppl, batchOrder=None, iteration=-1):
@@ -95,7 +103,7 @@ class XETrainer(BaseTrainer):
         opt, dataset = self.opt, self.dataset
         model = self.model
         
-
+        
         model_state_dict = self.model.state_dict()
         optim_state_dict = self.optim.state_dict()
                 
@@ -152,6 +160,7 @@ class XETrainer(BaseTrainer):
         # Clear the gradients of the model
         # self.runner.zero_grad()
         self.model.zero_grad()
+        self.optim.zero_grad() 
 
         if opt.extra_shuffle and epoch > opt.curriculum:
             trainData.shuffle()
@@ -204,14 +213,16 @@ class XETrainer(BaseTrainer):
                 batch_size = targets.size(1)
                 
                 tgt_mask = targets.data.ne(onmt.Constants.PAD)
-                tgt_size = tgt_mask.sum()
+                tgt_size = tgt_mask.sum().item()
                 
                 tgt_mask = torch.autograd.Variable(tgt_mask)
                 #~ tgt_mask = None
-                normalizer = 1
+                
+                # Scale UP the loss so that the gradients are not cutoff
+                normalizer = 1.0 / self.scaler.loss_scale 
                 
                 if self.opt.normalize_gradient:
-                    normalizer = tgt_size
+                    normalizer = tgt_size / self.scaler.loss_scale
                 
                 loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, 
                                                              backward=True, mask=tgt_mask, normalizer=normalizer)
@@ -241,8 +252,81 @@ class XETrainer(BaseTrainer):
                 #~ if counter >= opt.batch_size_update:
                 if num_accumulated_words >= opt.batch_size_update * 0.95:
                     # Update the parameters.
-                    self.optim.step(grad_denom=1)
+                    
+                    # First we have to copy the grads from fp16 to fp32
+                    #~ self._get_flat_grads(out=self.fp32_params.grad)
+                    #~ grad_norm = 0
+                    #~ for i, p in enumerate(self.model.parameters()):
+                        #~ if not p.requires_grad:
+                            #~ continue
+                        #~ if p.grad is None:
+                            #~ raise RuntimeError('Model parameter did not receive gradient: ' + name + '. '
+                                               #~ 'Use the param in the forward pass or set requires_grad=False')
+                        #~ 
+                        #~ self.fp32_params[i].grad.data.copy_(p.grad.data).div_(self.scaler.loss_scale)
+                        #~ 
+                        #~ param_norm = self.fp32_params[i].grad.data.norm(2)
+                        #~ grad_norm += param_norm ** 2
+                    #~ grad_norm = (grad_norm ** (1. / 2)).item()
+                    #~ 
+                    #~ max_norm = 10
+                    #~ clip_coef = max_norm / (grad_norm + 1e-6)
+                    #~ if clip_coef < 1:
+                        #~ grad_norm = 0
+                        #~ for p in self.fp32_params:
+                            #~ p.grad.data.mul_(clip_coef)
+                            #~ param_norm = p.grad.data.norm(2)
+                            #~ grad_norm += param_norm ** 2
+                        #~ 
+                    #~ grad_norm = (grad_norm ** (1. / 2)).item()
+                        
+                    # rescale and clip grads
+                    #~ self.fp32_params.grad.data.div_(self.scaler.loss_scale)
+                    
+                    
+                    #~ max_norm = 10
+                    #~ grad_norm = torch.norm(self.fp32_params.grad.data).item()
+                    #~ print(grad_norm)
+                    #~ if grad_norm > max_norm > 0 :
+                        #~ clip_coef = max_norm / (grad_norm + 1e-6)
+                        #~ self.fp32_params.grad.data.mul_(clip_coef)
+                    
+                    #~ overflow = DynamicLossScaler.has_overflow(grad_norm)
+                    #~ self.scaler.update_scale(overflow, iter_=self.optim._step)
+                    
+                    #~ if overflow:
+                        #~ if self.scaler.loss_scale <= 1e-4:
+                            #~ raise Exception((
+                                #~ 'Minimum loss scale reached ({}). Your loss is probably exploding. '
+                                #~ 'Try lowering the learning rate, using gradient clipping or '
+                                #~ 'increasing the batch size.'
+                            #~ ).format(1e-4))
+                        #~ raise OverflowError('setting loss scale to: ' + str(self.scaler.loss_scale))
+                        
+                    
+                    
+                    #~ print(self.fp32_params[10].data.size(), self.fp32_params[10].data)
+                    #~ params = [p for p in self.model.parameters() if p.requires_grad]
+                    #~ print(params[10].data)
+                    # Update the parameters.
+                    self.optim.step(grad_denom=num_accumulated_words)
+                    
+                    
+                    # copy the parameters back to fp16
+                    #~ for i, p in enumerate(self.model.parameters()):
+                        #~ if not p.requires_grad:
+                            #~ continue
+                            
+                        #~ p.data.copy_(self.fp32_params[i].data)
+                        #~ p.data.copy_(self.fp32_params[i].data)
+                        #~ self.fp32_params[i].data.copy_(p.data)
+                    #~ params = [p for p in self.model.parameters() if p.requires_grad]
+                    #~ print(params[10].data)
+                    #~ print(params[10].data, self.fp32_params[10].data)
+                    
                     self.model.zero_grad()
+                    self.optim.zero_grad()
+                    #~ print(self.fp32_params[10].data.size(), self.fp32_params[10].grad.data)
                     counter = 0
                     num_accumulated_words = 0
                     num_accumulated_sents = 0
@@ -298,7 +382,7 @@ class XETrainer(BaseTrainer):
         # Try to load the save_file
         checkpoint = None
         if save_file:
-            checkpoint = torch.load(save_file, map_location=lambda storage, loc: storage)
+            checkpoint = torch.load(save_file)
         
         
         if checkpoint is not None:
@@ -331,7 +415,7 @@ class XETrainer(BaseTrainer):
         valid_loss = self.eval(self.validData)
         valid_ppl = math.exp(min(valid_loss, 100))
         print('Validation perplexity: %g' % valid_ppl)
-        
+        #~ 
         self.start_time = time.time()
         
         for epoch in range(opt.start_epoch, opt.start_epoch + opt.epochs):

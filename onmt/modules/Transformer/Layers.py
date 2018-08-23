@@ -162,7 +162,7 @@ class PrePostProcessing(nn.Module):
             #~ self.k = nn.Parameter(torch.ones(1))
     
     def forward(self, tensor, input_tensor=None, mask=None):
-        
+        #~ mask = None
         output = tensor
         for step in self.steps:
             if step == 'n':
@@ -250,7 +250,7 @@ class MultiHeadAttention(nn.Module):
     def forward1(self, query, key, value, mask, query_mask=None, value_mask=None):
         b, len_query = query.size(0), query.size(1)
         len_key = key.size(1)
-        
+
         key_mask = value_mask
         
         # project inputs to multi-heads
@@ -310,7 +310,11 @@ class MultiHeadAttention(nn.Module):
             mask_ = mask.unsqueeze(-3)
         elif torch.is_tensor(mask):
             mask_ = Variable(mask.unsqueeze(-3))    
-        attns = attns.masked_fill_(mask_, -float('inf'))
+        #~ attns = attns.masked_fill_(mask_, -float('inf'))
+        # FP16 support: cast to float and back
+        attns = attns.float().masked_fill_(mask_, -float('inf')).type_as(attns)
+        #~ attns = 
+        #~ attns = attns.masked_fill_(mask_, -0)
         attns = self.sm(attns)
         # return mean attention from all heads as coverage 
         coverage = torch.mean(attns, dim=1) 
@@ -407,7 +411,7 @@ class EncoderLayer(nn.Module):
         self.feedforward = Bottle(feedforward)
             
     def forward(self, input, attn_mask, pad_mask=None):
-        
+        pad_mask = None
         query = self.preprocess_attn(input)
         out, _ = self.multihead(query, query, query, attn_mask)
         input = self.postprocess_attn(out, input)
@@ -590,10 +594,10 @@ class PositionalEncoding(nn.Module):
         ## detele the old variable to avoid Pytorch's error when register new buffer
         if hasattr(self, 'pos_emb'):
             del self.pos_emb
-        position = torch.arange(0,new_max_len)                      
+        position = torch.arange(0,new_max_len).float()                      
         num_timescales = self.d_model // 2
         log_timescale_increment = math.log(10000) / (num_timescales-1)
-        inv_timescales = torch.exp(torch.arange(0, num_timescales) * -log_timescale_increment)
+        inv_timescales = torch.exp(torch.arange(0, num_timescales).float() * -log_timescale_increment)
         scaled_time = position.unsqueeze(1) * inv_timescales.unsqueeze(0)
         pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 1)
         # wrap in a buffer so that model can be moved to GPU

@@ -121,13 +121,12 @@ class NMTLossFunc(LossFuncBase):
         if self.confidence < 1: # label smoothing
             tdata = gtruth.data
             
-            # squeeze is a trick to know if mask has dimension or not
+            #~ # squeeze is a trick to know if mask has dimension or not
             mask = torch.nonzero(tdata.eq(self.padding_idx)).squeeze()
             likelihood = torch.gather(scores.data, 1, tdata.unsqueeze(1))
             tmp_ = self.one_hot.repeat(gtruth.size(0), 1)
             tmp_.scatter_(1, tdata.unsqueeze(1), self.confidence)
             if mask.numel() > 0:
-                #~ print(mask)
                 likelihood.index_fill_(0, mask, 0)
                 tmp_.index_fill_(0, mask, 0)
            
@@ -143,11 +142,11 @@ class NMTLossFunc(LossFuncBase):
             #~ smooth_loss = smooth_loss.sum()
             #~ 
             #~ eps_i = self.smoothing_value
-            #~ loss = (1. - self.label_smoothing) * nll_loss + eps_i * smooth_loss
-            #~ loss_data = nll_loss.data
+            #~ loss = (1. - self.label_smoothing)   * nll_loss + eps_i * smooth_loss
+            #~ loss_data = nll_loss.data.item()
             
         else:
-            loss = self.func(scores, gtruth)
+            loss = self.func(scores.float(), gtruth)
             loss_data = loss.data.item()
 
         return (loss, loss_data)
@@ -173,7 +172,6 @@ class NMTLossFunc(LossFuncBase):
         outputs = outputs.contiguous().view(-1, outputs.size(-1))
         targets = targets.view(-1)
         
-        #~ mask = None
         
         if mask is not None:
             """ We remove all positions with PAD """

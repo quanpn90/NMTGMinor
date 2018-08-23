@@ -124,7 +124,27 @@ def build_model(opt, dicts):
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         
         model = Transformer(encoder, decoder, generator)    
+    
+    elif opt.model in ['universal_transformer', 'utransformer'] :
+    
+        #~ from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder
+        from onmt.modules.UniversalTransformer.Models import UniversalTransformerDecoder, UniversalTransformerEncoder
+        from onmt.modules.UniversalTransformer.Layers import TimeEncoding
         
+        max_size = 256 # This should be the longest sentence from the dataset
+        onmt.Constants.weight_norm = opt.weight_norm
+        onmt.Constants.init_value = opt.param_init
+        
+        positional_encoder = PositionalEncoding(opt.model_size, len_max=max_size)
+        time_encoder = TimeEncoding(opt.model_size, len_max=32)
+
+        
+        encoder = UniversalTransformerEncoder(opt, dicts['src'], positional_encoder, time_encoder)
+        decoder = UniversalTransformerDecoder(opt, dicts['tgt'], positional_encoder, time_encoder)
+        
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        
+        model = Transformer(encoder, decoder, generator)    
         
         
         #~ print(encoder)
