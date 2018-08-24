@@ -98,7 +98,7 @@ class NMTLossFunc(LossFuncBase):
             # If label smoothing value is set to zero, the loss
             # is equivalent to NLLLoss or CrossEntropyLoss.
             # All non-true labels are uniformly set to low-confidence.
-            self.func = nn.KLDivLoss(size_average=False)
+            self.func = nn.KLDivLoss(reduction='sum')
             self.smoothing_value = label_smoothing / (output_size - 2)
             one_hot = torch.randn(1, output_size)
             one_hot.fill_(self.smoothing_value)
@@ -108,7 +108,7 @@ class NMTLossFunc(LossFuncBase):
         else:
             weight = torch.ones(output_size)
             weight[self.padding_idx] = 0     
-            self.func = nn.NLLLoss(weight, size_average=False)
+            self.func = nn.NLLLoss(weight, reduction='sum')
         self.confidence = 1.0 - label_smoothing
         self.label_smoothing = label_smoothing
 

@@ -442,8 +442,9 @@ class Transformer(NMTModel):
         
         from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder
         from onmt.modules.StochasticTransformer.Models import StochasticTransformerEncoder, StochasticTransformerDecoder
+        from onmt.modules.UniversalTransformer.Models import UniversalTransformerDecoder
         
-        if isinstance(self.decoder, TransformerDecoder) or isinstance(self.decoder, StochasticTransformerDecoder) :
+        if isinstance(self.decoder, TransformerDecoder) or isinstance(self.decoder, StochasticTransformerDecoder) or isinstance(self.decoder, UniversalTransformerDecoder) :
             decoder_state = TransformerDecodingState(src, context, beamSize=beamSize)
         elif isinstance(self.decoder, ParallelTransformerDecoder):
             from onmt.modules.ParallelTransformer.Models import ParallelTransformerDecodingState

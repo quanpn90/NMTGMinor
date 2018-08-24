@@ -91,8 +91,7 @@ class UniversalEncoderLayer(nn.Module):
                                mask=pad_mask)
         input = self.postprocess_ffn(out, input)
         
-        # return the query which is the normalized input
-        return input, query
+        return input
 
 
 class UniversalDecoderLayer(nn.Module):
@@ -192,13 +191,16 @@ class UniversalDecoderLayer(nn.Module):
     
         return input, coverage
         
-    def step(self, input, context, t, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, buffer=None):
+    def step(self, input, context, pos_step, t, mask_tgt,  mask_src, pad_mask_tgt=None, pad_mask_src=None, buffer=None):
         """ Self attention layer 
             layernorm > attn > dropout > residual
         """
-        #~ print(buffer)
+        
         
         query = self.preprocess_attn(input, mask=pad_mask_tgt)
+        
+        # add position encoding and time encoding (before the buffer because the previous steps are already added)
+        query = self.position_encoder(query, t=pos_step) + self.time_encoder(t)
         
         if buffer is not None:
             buffer = torch.cat([buffer, query], dim=1)
@@ -215,6 +217,7 @@ class UniversalDecoderLayer(nn.Module):
         """ Context Attention layer 
             layernorm > attn > dropout > residual
         """
+        
         
         query = self.preprocess_src_attn(input, mask=pad_mask_tgt)
         out, coverage = self.multihead_src(query, context, context, mask_src, 
