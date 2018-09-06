@@ -161,10 +161,8 @@ class Optim(object):
         if self.method == 'sgd':
             self.optimizer = optim.SGD(self.params, lr=self.lr, weight_decay=self.weight_decay, momentum=0.0)
         elif self.method == 'adam':
-            self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-5,
+            self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
                                         weight_decay=self.weight_decay, amsgrad=self.amsgrad)
-            #~ self.optimizer =  Adam16(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-                                        #~ weight_decay=self.weight_decay)
         else:
             raise RuntimeError("Invalid optim method: " + self.method)
         print(self.optimizer)
