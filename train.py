@@ -242,9 +242,11 @@ def main():
     
     
     """ Building the loss function """
-    loss_function = NMTLossFunc(dataset['dicts']['tgt'].size(), 
-                                        label_smoothing=opt.label_smoothing,
-                                        shard_size=opt.max_generator_batches)
+    #~ loss_function = NMTLossFunc(dataset['dicts']['tgt'].size(), 
+                                        #~ label_smoothing=opt.label_smoothing,
+                                        #~ shard_size=opt.max_generator_batches)
+    loss_function = onmt.modules.Loss.LabelSmoothedCrossEntropyCriterion(dataset['dicts']['tgt'].size(), 
+                                        label_smoothing=opt.label_smoothing)
     
 
     #~ print(model)

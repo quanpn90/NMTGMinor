@@ -17,9 +17,11 @@ class Generator(nn.Module):
         #~ self.linear = onmt.modules.Transformer.Layers.XavierLinear(hidden_size, output_size)
         self.linear = nn.Linear(hidden_size, output_size)
         
-        stdv = 1. / math.sqrt(self.linear.weight.size(1))
+        #~ stdv = 1. / math.sqrt(self.linear.weight.size(1))
         
-        torch.nn.init.uniform_(self.linear.weight, -stdv, stdv)
+        #~ torch.nn.init.uniform_(self.linear.weight, -stdv, stdv)
+        
+        torch.nn.init.xavier_uniform_(self.linear.weight)
         
         self.linear.bias.data.zero_()
             

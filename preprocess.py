@@ -195,7 +195,8 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
                                           onmt.Constants.UNK_WORD,
                                           onmt.Constants.BOS_WORD,
                                           onmt.Constants.EOS_WORD)]
-            sizes += [len(srcWords)]
+            #~ sizes += [len(srcWords)]
+            sizes += [len(tgtWords)]
         else:
             ignored += 1
 

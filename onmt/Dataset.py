@@ -44,22 +44,48 @@ class Dataset(object):
         self.batches = []
         
         cur_batch = [0]
-        cur_batch_size = self.src[0].size(0)
+        cur_batch_size = self.tgt[0].size(0)
+        cur_batch_sizes = [self.tgt[0].size(0)]
         
-        for i in range(1, self.fullSize):
+        i = 1
+        #~ for i in range(1, self.fullSize):
+        while i <  self.fullSize:
             
-            sentence_length = self.src[i].size(0)
+            sentence_length = self.tgt[i].size(0)
+            #~ print(sentence_length)
             
+            oversized_batch = False
+            
+            if ( max(max(cur_batch_sizes), sentence_length) * (len(cur_batch)+1)> self.batchSize ) or len(cur_batch) == self.max_seq_num:
+                oversized_batch = True
             
             # if the current length makes the batch exceeds
             # the we create a new batch
-            if ( cur_batch_size + sentence_length > self.batchSize ) or len(cur_batch) == self.max_seq_num:
-                self.batches.append(cur_batch) # add this batch into the batch list
+            #~ if ( cur_batch_size + sentence_length > self.batchSize ) or len(cur_batch) == self.max_seq_num:
+            if oversized_batch:
+                #~ self.batches.append(cur_batch) # add this batch into the batch list
+                #~ cur_batch = [] # reset the current batch
+                #~ cur_batch_size = 0
+                #~ cur_batch_sizes = []
+                rescaled_size = max(
+                                    8 * (len(cur_batch) // 8),
+                                    len(cur_batch) % 8,
+                                )
+                
+                current_size = len(cur_batch)
+                batch_ = cur_batch[:rescaled_size]
+                self.batches.append(batch_)
+                
                 cur_batch = [] # reset the current batch
                 cur_batch_size = 0
+                cur_batch_sizes = []
+                i = i - current_size + rescaled_size
+                
             
             cur_batch.append(i)
             cur_batch_size += sentence_length
+            cur_batch_sizes.append(sentence_length)
+            i = i + 1 
                 
             
         # catch the last batch
@@ -107,7 +133,8 @@ class Dataset(object):
                 return b
             #~ print (b)
             #~ b = torch.stack(b, 0)
-            b = b.t().contiguous()
+            #~ b = b.t().contiguous()
+            b = b.contiguous()
            
             return b
 

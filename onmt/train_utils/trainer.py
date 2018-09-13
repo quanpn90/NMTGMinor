@@ -33,6 +33,8 @@ class BaseTrainer(object):
         
         
         
+        
+        
     def run(self, *args,**kwargs):
         
         raise NotImplementedError    
@@ -45,9 +47,9 @@ class BaseTrainer(object):
         
         for i, t in enumerate(data):
             if self.cuda:
-                data[i] = Variable(data[i].cuda())
+                data[i] = data[i].cuda()
             else:
-                data[i] = Variable(data[i])
+                data[i] = data[i]
 
         return data
             
@@ -113,6 +115,13 @@ class XETrainer(BaseTrainer):
         file_name = '%s_ppl_%.2f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
         print('Writing to %s' % file_name)
         torch.save(checkpoint, file_name)
+    
+    def set_seed(self):
+    
+        # seed assigning for reproducible results ?
+        seed = self.opt.seed + self.optim._step
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
         
     def eval(self, data):
         total_loss = 0
@@ -133,9 +142,9 @@ class XETrainer(BaseTrainer):
                         prob distribution from decoder generator
                 """
                 outputs = self.model(batch)
-                targets = batch[1][1:]
+                targets = batch[1][:,1:]
                 
-                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
+                loss, loss_data = self.loss_function(outputs, targets)
                 
 #~ 
                 total_loss += loss_data
@@ -184,8 +193,11 @@ class XETrainer(BaseTrainer):
         counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
+        oom_count = 0
         
         for i in range(iteration, nSamples):
+            
+            self.set_seed()
 
             curriculum = (epoch < opt.curriculum)
             
@@ -193,42 +205,53 @@ class XETrainer(BaseTrainer):
                         
             batch = self.to_variable(samples[0])
             
+            tgt_size = 0
+            
+            targets = batch[1][:,1:]
+            tgt_inputs = batch[1][:,:-1]
+            
+            batch_size = targets.size(1)
+            
+            tgt_size = targets.data.ne(onmt.Constants.PAD).sum().item()
+            src_size = batch[0].data.ne(onmt.Constants.PAD).sum().item()
+            
+            normalizer = 1
+            
+            if self.opt.normalize_gradient:
+                normalizer = tgt_size
+            
             oom = False
             try:
             
                 outputs = self.model(batch)
-                    
-                targets = batch[1][1:]
-                tgt_inputs = batch[1][:-1]
+
+                loss, loss_data = self.loss_function(outputs, targets)
                 
-                batch_size = targets.size(1)
+                loss.div(normalizer).backward()
                 
-                tgt_mask = targets.data.ne(onmt.Constants.PAD)
-                tgt_size = tgt_mask.sum()
-                
-                tgt_mask = torch.autograd.Variable(tgt_mask)
-                #~ tgt_mask = None
-                normalizer = 1
-                
-                if self.opt.normalize_gradient:
-                    normalizer = tgt_size
-                
-                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, 
-                                                             backward=True, mask=tgt_mask, normalizer=normalizer)
+                del loss
+                del targets
+                del tgt_inputs
+                del batch
+                del samples
+                #~ torch.cuda.empty_cache()
+                #~ loss_data = self.loss_function(outputs, targets, generator=self.model.generator, 
+                                                             #~ backward=True, normalizer=normalizer)
                 
                 #~ outputs.backward(grad_outputs)
                 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
-                    print('| WARNING: ran out of memory on GPU , skipping batch')
+                    #~ print('| WARNING: ran out of memory on GPU , skipping batch')
                     oom = True
+                    oom_count += 1
                     torch.cuda.empty_cache()
                 else:
                     raise e        
                 
-            if not oom:
-                src_size = batch[0].data.ne(onmt.Constants.PAD).sum().item()
-                tgt_size = targets.data.ne(onmt.Constants.PAD).sum().item()
+            if oom == False:
+                #~ src_size = batch[0].data.ne(onmt.Constants.PAD).sum().item()
+                #~ tgt_size = targets.data.ne(onmt.Constants.PAD).sum().item()
                 
                 
                 counter = counter + 1 
@@ -270,19 +293,21 @@ class XETrainer(BaseTrainer):
                 
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
                     print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
-                           "%5.0f src tok/s; %5.0f tgt tok/s; %s elapsed") %
+                           "%5.0f src tok/s; %5.0f tgt tok/s; %3d oom; %s elapsed") %
                           (epoch, i+1, len(trainData),
                            math.exp(report_loss / report_tgt_words),
                            optim.getLearningRate(),
                            optim._step,
                            report_src_words/(time.time()-start),
                            report_tgt_words/(time.time()-start),
+                           oom_count,
                            str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
 
                     report_loss, report_tgt_words = 0, 0
                     report_src_words = 0
                     start = time.time()
-            
+            else:
+                torch.cuda.empty_cache()
             
         return total_loss / total_words
     

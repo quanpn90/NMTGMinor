@@ -46,6 +46,9 @@ class TransformerEncoder(nn.Module):
         self.word_lut = nn.Embedding(dicts.size(),
                                      self.model_size,
                                      padding_idx=onmt.Constants.PAD)
+                                     
+        nn.init.normal_(self.word_lut.weight, mean=0, std=self.model_size ** -0.5)
+        nn.init.constant_(self.word_lut.weight[onmt.Constants.PAD], 0)
         
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
@@ -114,9 +117,9 @@ class TransformerEncoder(nn.Module):
         mask_src = input.data.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x len_src x 1 for broadcasting
         
         pad_mask = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
-        #~ pad_mask = None
+        pad_mask = None
         
-        context = emb.contiguous()
+        context = emb
         
         def run_function(layers, start, end):
             def forward(*inputs):
@@ -129,22 +132,17 @@ class TransformerEncoder(nn.Module):
             return forward
             
         # checkpoint    
-        if self.training:
-            context = checkpoint(run_function(self.layer_modules, 0, onmt.Constants.checkpointing), context, mask_src, pad_mask)
-        else:
-            context = run_function(self.layer_modules, 0, onmt.Constants.checkpointing)(context, mask_src, pad_mask)
+        #~ if self.training:
+            #~ context = checkpoint(run_function(self.layer_modules, 0, onmt.Constants.checkpointing), context, mask_src, pad_mask)
+        #~ else:
+            #~ context = run_function(self.layer_modules, 0, onmt.Constants.checkpointing)(context, mask_src, pad_mask)
         
         # non-checkpoint
-        context = run_function(self.layer_modules, onmt.Constants.checkpointing, len(self.layer_modules))(    context, mask_src, pad_mask)
+        #~ context = runs_function(self.layer_modules, onmt.Constants.checkpointing, len(self.layer_modules))(    context, mask_src, pad_mask)
             
         
-        #~ for i, layer in enumerate(self.layer_modules):
-            #~ 
-            #~ if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:        
-                #~ context = checkpoint(custom_layer(layer), context, mask_src, pad_mask)
-#~ 
-            #~ else:
-                #~ context = layer(context, mask_src, pad_mask)      # batch_size x len_src x d_model
+        for i, layer in enumerate(self.layer_modules):
+            context = layer(context, mask_src, pad_mask)      # batch_size x len_src x d_model
             
         
         # From Google T2T
@@ -196,6 +194,9 @@ class TransformerDecoder(nn.Module):
         self.word_lut = nn.Embedding(dicts.size(),
                                      self.model_size,
                                      padding_idx=onmt.Constants.PAD)
+                                     
+        nn.init.normal_(self.word_lut.weight, mean=0, std=self.model_size ** -0.5)
+        nn.init.constant_(self.word_lut.weight[onmt.Constants.PAD], 0)
         
         self.positional_encoder = positional_encoder
         
@@ -249,9 +250,10 @@ class TransformerDecoder(nn.Module):
         
         
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
-        if self.time == 'positional_encoding':
-            emb = emb * math.sqrt(self.model_size)
+        #~ if self.time == 'positional_encoding':
+        emb.mul_(math.sqrt(self.model_size))
         """ Adding positional encoding """
+        #~ print(emb.size())
         emb = self.time_transformer(emb)
         if isinstance(emb, tuple):
             emb = emb[0]
@@ -266,10 +268,10 @@ class TransformerDecoder(nn.Module):
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
         
-        output = emb.contiguous()
+        output = emb
         
-        pad_mask_tgt = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
-        pad_mask_src = torch.autograd.Variable(1 - mask_src.squeeze(1))
+        #~ pad_mask_tgt = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
+        #~ pad_mask_src = torch.autograd.Variable(1 - mask_src.squeeze(1))
         
         def run_function(layers, start, end):
             
@@ -282,30 +284,23 @@ class TransformerDecoder(nn.Module):
                 return input
             return forward
         
-        # checkpoint    
-        #~ if self.training:
-        #~ output = checkpoint(run_function(self.layer_modules, 0, onmt.Constants.checkpointing), 
-                                #~ output, context, mask_tgt, mask_src, pad_mask_tgt, pad_mask_src)
-        #~ else:
-            #~ output = run_function(self.layer_modules, 0, onmt.Constants.checkpointing)(
-                                #~ output, context, mask_tgt, mask_src, pad_mask_tgt, pad_mask_src)
-        #~ 
-        # non-checkpoint
-        #~ output = run_function(self.layer_modules, onmt.Constants.checkpointing, len(self.layer_modules))(
-                                #~ output, context, mask_tgt, mask_src, pad_mask_tgt, pad_mask_src)
+        pad_mask_tgt = None
+        pad_mask_src = None
+        
         for i, layer in enumerate(self.layer_modules):
-            
-            if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:           
-                
-                output, coverage = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src, 
+            output, coverage = layer(output, context, mask_tgt, mask_src, 
                                             pad_mask_tgt, pad_mask_src) # batch_size x len_src x d_model
-                
-            else:
+            #~ if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:           
+                #~ 
+                #~ output, coverage = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src, 
+                                            #~ pad_mask_tgt, pad_mask_src) # batch_size x len_src x d_model
+                #~ 
+            #~ else:
                 #~ output, coverage = layer(output, context, mask_tgt, mask_src, 
                                             #~ pad_mask_tgt, pad_mask_src) # batch_size x len_src x d_model
-                output, coverage = layer(output, context, mask_tgt, mask_src, 
-                                            pad_mask_tgt, pad_mask_src) # batch_size x len_src x d_model
-            
+                #~ output, coverage = layer(output, context, mask_tgt, mask_src, 
+                                            #~ pad_mask_tgt, pad_mask_src) # batch_size x len_src x d_model
+            #~ 
             
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -352,8 +347,8 @@ class TransformerDecoder(nn.Module):
         emb = self.word_lut(input_)
        
         
-        if self.time == 'positional_encoding':
-            emb = emb * math.sqrt(self.model_size)
+        #~ if self.time == 'positional_encoding':
+        emb.mul_(emb * math.sqrt(self.model_size))
         """ Adding positional encoding """
         if self.time == 'positional_encoding':
             emb = self.time_transformer(emb, t=input.size(1))
@@ -381,10 +376,10 @@ class TransformerDecoder(nn.Module):
         mask_tgt = torch.gt(mask_tgt, 0)
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
                 
-        output = emb.contiguous()
+        output = emb
         
-        pad_mask_tgt = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
-        pad_mask_src = torch.autograd.Variable(1 - mask_src.squeeze(1))
+        #~ pad_mask_tgt = input.data.ne(onmt.Constants.PAD) # batch_size x len_src
+        #~ pad_mask_src = 1 - mask_src.squeeze(1)
         
         
         for i, layer in enumerate(self.layer_modules):
@@ -413,7 +408,7 @@ class Transformer(NMTModel):
     """Main model in 'Attention is all you need' """
     
         
-    def forward(self, input, grow=False):
+    def forward(self, input, grow=False, gen_softmax=True):
         """
         Inputs Shapes: 
             src: len_src x batch_size
@@ -425,16 +420,18 @@ class Transformer(NMTModel):
             
         """
         src = input[0]
-        tgt = input[1][:-1]  # exclude last target from inputs
-        
-        src = src.transpose(0, 1) # transpose to have batch first
-        tgt = tgt.transpose(0, 1)
+        #~ tgt = input[1][:-1]  # exclude last target from inputs
+        tgt = input[1][:,:-1]
+        #~ src = src.transpose(0, 1) # transpose to have batch first
+        #~ tgt = tgt.transpose(0, 1)
         
         context, src_mask = self.encoder(src, grow=grow)
         
         output, coverage = self.decoder(tgt, context, src, grow=grow)
         
-        output = output.transpose(0, 1) # transpose to have time first, like RNN models
+        if gen_softmax:
+            output = self.generator(output)
+        #~ output = output.transpose(0, 1) # transpose to have time first, like RNN models
         
         return output
         
