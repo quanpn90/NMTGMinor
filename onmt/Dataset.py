@@ -11,7 +11,8 @@ class Dataset(object):
     batchSize is now changed to have word semantic (probably better)
     '''
     def __init__(self, srcData, tgtData, batchSize, gpus,
-                 volatile=False, data_type="text", balance=False, max_seq_num=128):
+                 volatile=False, data_type="text", balance=False, max_seq_num=128,
+                 multiplier=8, pad_count=True):
         self.src = srcData
         self._type = data_type
         if tgtData:
@@ -30,6 +31,9 @@ class Dataset(object):
         self.balance = balance
         self.max_seq_num = max_seq_num 
         
+        self.multiplier = multiplier
+        
+        
         # if self.balance:
         self.allocateBatch()
         self.cur_index = 0
@@ -46,21 +50,29 @@ class Dataset(object):
         cur_batch = [0]
         cur_batch_size = self.src[0].size(0)
         
-        for i in range(1, self.fullSize):
+        i = 1
+        while i < self.fullSize:
+        #~ for i in range(1, self.fullSize):
             
             sentence_length = self.src[i].size(0)
             
+            oversized = False
             
+            if ( cur_batch_size + sentence_length > self.batchSize ) or len(cur_batch) == self.max_seq_num:
+                oversized = True
             # if the current length makes the batch exceeds
             # the we create a new batch
-            if ( cur_batch_size + sentence_length > self.batchSize ) or len(cur_batch) == self.max_seq_num:
+            if oversized:
                 self.batches.append(cur_batch) # add this batch into the batch list
                 cur_batch = [] # reset the current batch
                 cur_batch_size = 0
+                
+                
             
             cur_batch.append(i)
             cur_batch_size += sentence_length
-                
+            
+            i = i + 1
             
         # catch the last batch
         if len(cur_batch) > 0:

@@ -8,10 +8,7 @@ import torch.nn.utils.weight_norm as WeightNorm
 import onmt 
 import torch.nn.functional as F
 from onmt.modules.Bottle import Bottle
-#~ 
-#~ from onmt.modules.MaxOut import MaxOut
 from onmt.modules.StaticDropout import StaticDropout
-#~ from onmt.modules.Checkpoint import checkpoint
 def contiguous(tensor):
 
     if tensor.is_contiguous():
@@ -57,11 +54,7 @@ class XavierLinear(nn.Module):
         else:
             self.linear = linear
             
-        
-        #~ stdv = 1. / math.sqrt(self.linear.weight.size(1))
-            
         init.xavier_uniform_(self.linear.weight)
-        #~ init.uniform(self.linear.weight, -stdv, stdv)
         
         if bias:
             self.linear.bias.data.zero_()
@@ -85,7 +78,6 @@ def variational_dropout(input, p, training=False):
     Inputs:
         input: Variable - batch_size * time_steps * hidden
     """
-    
     if training:
         bsize = input.size(0)
         hsize = input.size(2)
@@ -150,16 +142,12 @@ class PrePostProcessing(nn.Module):
         if 'n' in self.steps:
             
             ln = nn.LayerNorm((self.d_model,),elementwise_affine=elementwise_affine)
-            #~ ln.weight.data.fill_(1)
             self.layer_norm = Bottle(ln)
         if 'd' in self.steps:
             if static:
                 self.dropout = StaticDropout(self.dropout_p)
             else:
                 self.dropout = nn.Dropout(self.dropout_p, inplace=False)
-        #~ if 'g' in self.steps: # gated residual
-            #~ # initialize k with one 
-            #~ self.k = nn.Parameter(torch.ones(1))
     
     def forward(self, tensor, input_tensor=None, mask=None):
         #~ mask = None
@@ -176,11 +164,6 @@ class PrePostProcessing(nn.Module):
                         output = output + input_tensor
                     else:
                         output = F.relu(self.k) * output + input_tensor
-            #~ if step == 'g':
-                #~ # gated residual using the 'relu' function as g (diminishing as soon as k goes to 0)
-                #~ # u = g(k) * f(x) + x 
-                #~ if input_tensor is not None:
-                    #~ output = torch.relu(self.k) * output + input_tensor
         return output
         
 class MultiHeadAttention(nn.Module):
@@ -243,46 +226,6 @@ class MultiHeadAttention(nn.Module):
         return x.view(b, l, self.h, self.d_head) \
                 .transpose(1, 2)
     
-    #~ def unshape(x):
-            #~ return x.transpose(1, 2).contiguous() \
-                    #~ .view(batch_size, -1, head_count * dim_per_head)
-        
-    def forward1(self, query, key, value, mask, query_mask=None, value_mask=None):
-        b, len_query = query.size(0), query.size(1)
-        len_key = key.size(1)
-
-        key_mask = value_mask
-        
-        # project inputs to multi-heads
-        proj_query = self.fc_query(query, mask=query_mask)       # batch_size x len_query x h*d_head
-        proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
-        proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
-        
-        # prepare the shape for applying softmax
-        proj_query = self.shape(proj_query)  # batch_size*h x len_query x d_head
-        proj_key = self.shape(proj_key)           # batch_size x h x len_key x d_head
-        proj_value = self.shape(proj_value)       # batch_size x h x len_key x d_head
-        
-        proj_query = proj_query * (self.d_head**-0.5)
-        
-        # get dotproduct softmax attns for each head
-        attns = torch.matmul(proj_query, proj_key.transpose(2,3)) # b, self.h, len_query, len_key
-                
-        mask_ = Variable(mask.unsqueeze(-3))        
-        attns = attns.masked_fill_(mask_, -float('inf'))
-        attns = self.sm(attns)
-        # return mean attention from all heads as coverage 
-        coverage = torch.mean(attns, dim=1) 
-        attns = self.attn_dropout(attns)
-        
-        # apply attns on value
-        out = torch.matmul(attns, proj_value)
-        out = out.transpose(1, 2).contiguous().view(b, -1, self.h * self.d_head)
-            
-        out = self.fc_concat(out, mask=query_mask)
-       
-        
-        return out, coverage
 
     def forward(self, query, key, value, mask, query_mask=None, value_mask=None):
         b, len_query = query.size(0), query.size(1)
@@ -310,11 +253,8 @@ class MultiHeadAttention(nn.Module):
             mask_ = mask.unsqueeze(-3)
         elif torch.is_tensor(mask):
             mask_ = Variable(mask.unsqueeze(-3))    
-        #~ attns = attns.masked_fill_(mask_, -float('inf'))
         # FP16 support: cast to float and back
         attns = attns.float().masked_fill_(mask_, -float('inf')).type_as(attns)
-        #~ attns = 
-        #~ attns = attns.masked_fill_(mask_, -0)
         attns = self.sm(attns)
         # return mean attention from all heads as coverage 
         coverage = torch.mean(attns, dim=1) 
@@ -499,8 +439,6 @@ class DecoderLayer(nn.Module):
         if residual_dropout > 0:
             input_ = F.dropout(input, residual_dropout, self.training, False)
             input = self.postprocess_attn(out, input_)
-            #~ input = out
-            #~ input = self.postprocess_attn(out) + input
         else:
             input = self.postprocess_attn(out, input)
         
@@ -606,11 +544,9 @@ class PositionalEncoding(nn.Module):
         
     def forward(self, word_emb, t=None):
         len_seq = t if t else word_emb.size(1)
-        # print(self.pos_emb.size())
         if word_emb.size(1) == len_seq:
             out = word_emb + Variable(self.pos_emb[:len_seq, :], requires_grad=False)
         else:
-            # print('hello')
             # out = word_emb + Variable(self.pos_emb[:len_seq, :][-1, :], requires_grad=False)
             time_emb = Variable(self.pos_emb[len_seq-1, :], requires_grad=False) # 1 x dim
             # out should have size bs x 1 x dim
