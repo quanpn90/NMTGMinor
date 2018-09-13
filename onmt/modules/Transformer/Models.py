@@ -48,7 +48,7 @@ class TransformerEncoder(nn.Module):
                                      padding_idx=onmt.Constants.PAD)
                                      
         #~ nn.init.normal_(self.word_lut.weight, mean=0, std=self.model_size ** -0.5)
-        init.xavier_uniform_(self.word_lut.weight)
+        nn.init.xavier_uniform_(self.word_lut.weight)
         nn.init.constant_(self.word_lut.weight[onmt.Constants.PAD], 0)
         
         if opt.time == 'positional_encoding':
@@ -197,7 +197,7 @@ class TransformerDecoder(nn.Module):
                                      padding_idx=onmt.Constants.PAD)
                                      
         #~ nn.init.normal_(self.word_lut.weight, mean=0, std=self.model_size ** -0.5)
-        init.xavier_uniform_(self.word_lut.weight)
+        nn.init.xavier_uniform_(self.word_lut.weight)
         nn.init.constant_(self.word_lut.weight[onmt.Constants.PAD], 0)
         
         self.positional_encoder = positional_encoder
