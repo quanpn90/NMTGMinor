@@ -269,6 +269,50 @@ class MultiHeadAttention(nn.Module):
         out = self.fc_concat(out, mask=query_mask)
        
         return out, coverage
+        
+        
+    def step(self, query, key, value, mask, query_mask=None, value_mask=None):
+        b, len_query = query.size(0), query.size(1)
+        len_key = key.size(1)
+        
+        key_mask = value_mask
+        
+        # project inputs to multi-heads
+        proj_query = self.fc_query(query, mask=query_mask)       # batch_size x len_query x h*d_head
+        proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
+        proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
+        
+        # prepare the shape for applying softmax
+        proj_query = self._prepare_proj(proj_query)  # batch_size*h x len_query x d_head
+        proj_key = self._prepare_proj(proj_key)           # batch_size*h x len_key x d_head
+        proj_value = self._prepare_proj(proj_value)       # batch_size*h x len_key x d_head
+        
+        proj_query = proj_query * (self.d_head**-0.5)
+        
+        # get dotproduct softmax attns for each head
+        attns = torch.bmm(proj_query, proj_key.transpose(1,2))  # batch_size*h x len_query x len_key
+        
+        attns = attns.view(b, self.h, len_query, len_key) 
+        if isinstance(mask, Variable):
+            mask_ = mask.unsqueeze(-3)
+        elif torch.is_tensor(mask):
+            mask_ = Variable(mask.unsqueeze(-3))    
+        # FP16 support: cast to float and back
+        attns = attns.float().masked_fill_(mask_, -float('inf')).type_as(attns)
+        attns = self.sm(attns)
+        # return mean attention from all heads as coverage 
+        coverage = torch.mean(attns, dim=1) 
+        attns = self.attn_dropout(attns)
+        attns = attns.view(b*self.h, len_query, len_key)
+        
+        # apply attns on value
+        out = torch.bmm(attns, proj_value)      # batch_size*h x len_query x d_head
+        out = contiguous(out.view(b, self.h, len_query, self.d_head).transpose(1,2))
+        out = out.view(b, len_query, self.h*self.d_head)
+            
+        out = self.fc_concat(out, mask=query_mask)
+       
+        return out, coverage
     
 class FeedForward(nn.Module):
     """Applies position-wise feed forward to inputs
@@ -433,8 +477,7 @@ class DecoderLayer(nn.Module):
         
         self_context = query
         
-        out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt, 
-                                    query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
+        out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt)
         
         if residual_dropout > 0:
             input_ = F.dropout(input, residual_dropout, self.training, False)
@@ -448,16 +491,14 @@ class DecoderLayer(nn.Module):
             layernorm > attn > dropout > residual
         """
         
-        query = self.preprocess_src_attn(input, mask=pad_mask_tgt)
-        out, coverage = self.multihead_src(query, context, context, mask_src, 
-                                           query_mask=pad_mask_tgt, value_mask=pad_mask_src)
+        query = self.preprocess_src_attn(input)
+        out, coverage = self.multihead_src.step(query, context, context, mask_src)
         input = self.postprocess_src_attn(out, input)
         
         """ Feed forward layer 
             layernorm > ffn > dropout > residual
         """
-        out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask_tgt), 
-                                           mask=pad_mask_tgt)
+        out = self.feedforward(self.preprocess_ffn(input))
         input = self.postprocess_ffn(out, input)
     
         return input, coverage
@@ -466,9 +507,8 @@ class DecoderLayer(nn.Module):
         """ Self attention layer 
             layernorm > attn > dropout > residual
         """
-        #~ print(buffer)
         
-        query = self.preprocess_attn(input, mask=pad_mask_tgt)
+        query = self.preprocess_attn(input)
         
         if buffer is not None:
             buffer = torch.cat([buffer, query], dim=1)
@@ -476,8 +516,7 @@ class DecoderLayer(nn.Module):
             buffer = query
             
 
-        out, _ = self.multihead_tgt(query, buffer, buffer, mask_tgt, 
-                                    query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
+        out, _ = self.multihead_tgt(query, buffer, buffer, mask_tgt)
         
 
         input = self.postprocess_attn(out, input)
@@ -486,16 +525,14 @@ class DecoderLayer(nn.Module):
             layernorm > attn > dropout > residual
         """
         
-        query = self.preprocess_src_attn(input, mask=pad_mask_tgt)
-        out, coverage = self.multihead_src(query, context, context, mask_src, 
-                                           query_mask=pad_mask_tgt, value_mask=None)
+        query = self.preprocess_src_attn(input)
+        out, coverage = self.multihead_src(query, context, context, mask_src)
         input = self.postprocess_src_attn(out, input)
         
         """ Feed forward layer 
             layernorm > ffn > dropout > residual
         """
-        out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask_tgt), 
-                                           mask=pad_mask_tgt)
+        out = self.feedforward(self.preprocess_ffn(input))
         input = self.postprocess_ffn(out, input)
         
         return input, coverage, buffer
