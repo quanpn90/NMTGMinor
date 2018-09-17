@@ -58,8 +58,10 @@ class BaseTrainer(object):
             if not p.requires_grad:
                 continue
             if p.grad is None:
-                raise RuntimeError('Model parameter did not receive gradient: ' + name + '. '
-                                   'Use the param in the forward pass or set requires_grad=False')
+                total_param_size = p.data.numel()
+                p.grad = p.data.new(total_param_size).view_as(p.data)
+                # raise RuntimeError('Model parameter did not receive gradient: ' + name + '. '
+                #                   'Use the param in the forward pass or set requires_grad=False')
             grads.append(p.grad.data)
         return grads
         

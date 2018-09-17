@@ -283,32 +283,32 @@ class FP16XETrainer(XETrainer):
                             self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
                 
 
-                        num_words = tgt_size
-                        report_loss += loss_data
-                        report_tgt_words += num_words
-                        report_src_words += src_size
-                        total_loss += loss_data
-                        total_words += num_words
-                        
-                        optim = self.optim
-                        
-                        
-                        
-                        if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
-                            print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
-                                   "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; %s elapsed") %
-                                  (epoch, i+1, len(trainData),
-                                   math.exp(report_loss / report_tgt_words),
-                                   optim.getLearningRate(),
-                                   optim._step,
-                                   report_src_words/(time.time()-start),
-                                   report_tgt_words/(time.time()-start),
-                                   self.scaler.loss_scale,
-                                   str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
+                num_words = tgt_size
+                report_loss += loss_data
+                report_tgt_words += num_words
+                report_src_words += src_size
+                total_loss += loss_data
+                total_words += num_words
+                
+                optim = self.optim
+                
+                
+                
+                if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
+                    print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
+                           "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; %s elapsed") %
+                          (epoch, i+1, len(trainData),
+                           math.exp(report_loss / report_tgt_words),
+                           optim.getLearningRate(),
+                           optim._step,
+                           report_src_words/(time.time()-start),
+                           report_tgt_words/(time.time()-start),
+                           self.scaler.loss_scale,
+                           str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
 
-                            report_loss, report_tgt_words = 0, 0
-                            report_src_words = 0
-                            start = time.time()
+                    report_loss, report_tgt_words = 0, 0
+                    report_src_words = 0
+                    start = time.time()
             
             
         return total_loss / total_words
