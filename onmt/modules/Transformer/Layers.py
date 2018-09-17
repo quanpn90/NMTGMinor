@@ -10,6 +10,20 @@ import torch.nn.functional as F
 from onmt.modules.Bottle import Bottle
 from onmt.modules.StaticDropout import StaticDropout
 
+def group_linear(linears, input, bias=False):
+            
+        weights = [linear.weight for linear in linears]
+        
+        weight = torch.cat(weights, dim=0)
+        
+        if bias:
+            biases = [linear.bias for linear in linears]
+            bias_ = torch.cat(biases)
+        else:
+            bias_ = None
+        
+        return F.linear(input, weight, bias_)
+
 
 class XavierLinear(nn.Module):
     
@@ -185,24 +199,32 @@ class MultiHeadAttention(nn.Module):
             self.attn_dropout = StaticDropout(attn_p)
         else:
             self.attn_dropout = nn.Dropout(attn_p)
+    
+    
         
     def forward(self, query, key, value, mask, query_mask=None, value_mask=None):
+    
+        
         
         len_query, b = query.size(0), query.size(1)
         len_key,  b_ = key.size(0), key.size(1)
         
         key_mask = value_mask
         
-        proj_query = self.fc_query(query, mask=query_mask)   # batch_size*h x len_query x d_head
+         # batch_size*h x len_query x d_head
         # project inputs to multi-heads
         if self.share == 1:
+            proj_query = self.fc_query(query, mask=query_mask)  
             proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
             proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
         elif self.share == 2:
+            proj_query = self.fc_query(query, mask=query_mask)  
             proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
             proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
         else:
-            raise NotImplementedError
+            proj_query = self.fc_query(query, mask=query_mask)  
+            proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
+            proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
         
         q, k, v = proj_query, proj_key, proj_value
         # prepare the shape for applying softmax
@@ -241,10 +263,13 @@ class MultiHeadAttention(nn.Module):
         key_mask = value_mask
         
         # project inputs to multi-heads
-        proj_query = self.fc_query(query, mask=query_mask)   # batch_size*h x len_query x d_head
+        
         if self.share == 1:
-            proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
-            proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
+            # proj_query = self.fc_query(query, mask=query_mask)   # batch_size*h x len_query x d_head
+            # proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
+            # proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
+            shared_qkv = group_linear([self.fc_query.function.linear, self.fc_key.function.linear, self.fc_value.function.linear], query)
+            proj_query, proj_key, proj_value = shared_qkv.chunk(3, dim=-1)
             if buffer is not None and 'k' in buffer and 'v' in buffer:
                 proj_key = torch.cat([buffer['k'], proj_key], dim=0) # time first
                 buffer['k'] = proj_key
@@ -257,15 +282,15 @@ class MultiHeadAttention(nn.Module):
                 buffer['k'] = proj_key
                 buffer['v'] = proj_value
         elif self.share == 2:
-            #~ proj_query = self.fc_query(query) # batch_size x len_query x h*d_head
+            proj_query = self.fc_query(query) # batch_size x len_query x h*d_head
             if buffer is not None and 'c_k' in buffer and 'c_v' in buffer:
                 proj_key = buffer['c_k']
                 proj_value = buffer['c_v']
             else:
                 if buffer is None:
                     buffer = dict()
-                proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
-                proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
+                shared_kv = group_linear([self.fc_key.function.linear, self.fc_value.function.linear], key)
+                proj_key, proj_value = shared_kv.chunk(2, dim=-1)
                 buffer['c_k'] = proj_key
                 buffer['c_v'] = proj_value
         else:
