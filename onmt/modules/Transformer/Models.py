@@ -113,7 +113,6 @@ class TransformerEncoder(nn.Module):
         mask_src = input.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x len_src x 1 for broadcasting
         
         #~ pad_mask = input.ne(onmt.Constants.PAD)) # batch_size x len_src
-        #~ pad_mask = None
         
         context = emb.transpose(0, 1).contiguous()
         
@@ -245,11 +244,7 @@ class TransformerDecoder(nn.Module):
         mask_tgt = torch.gt(mask_tgt, 0)
         
         output = emb.transpose(0, 1).contiguous()
-        
-        #~ pad_mask_tgt = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
-        #~ pad_mask_src = torch.autograd.Variable(1 - mask_src.squeeze(1))
-        
-        
+
         for i, layer in enumerate(self.layer_modules):
             
             if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:           
@@ -270,7 +265,7 @@ class TransformerDecoder(nn.Module):
         
         return output, None
     
-    #~ def step(self, input, context, src, buffer=None):
+
     def step(self, input, decoder_state):
         """
         Inputs Shapes: 
@@ -284,7 +279,8 @@ class TransformerDecoder(nn.Module):
             
         """
         context = decoder_state.context
-        buffer = decoder_state.buffer
+        #~ buffer = decoder_state.buffer
+        buffers = decoder_state.attention_buffers
         src = decoder_state.src.transpose(0, 1)
         
         if decoder_state.input_seq is None:
@@ -312,7 +308,6 @@ class TransformerDecoder(nn.Module):
         else:
             prev_h = buffer[0] if buffer is None else None
             emb = self.time_transformer(emb, prev_h)
-            # output_buffer.append(emb[1])
             buffer[0] = emb[1]
             
         if isinstance(emb, tuple):
@@ -330,34 +325,26 @@ class TransformerDecoder(nn.Module):
         
         len_tgt = input.size(1)
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
-        # mask_tgt = self.mask[:len_tgt, :len_tgt].unsqueeze(0).repeat(batch_size, 1, 1)
         mask_tgt = torch.gt(mask_tgt, 0)
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
                 
         output = emb.contiguous()
         
-        #~ pad_mask_tgt = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
-        #~ pad_mask_src = torch.autograd.Variable(1 - mask_src.squeeze(1))
-        
-        
+    
         for i, layer in enumerate(self.layer_modules):
             
-            buffer_ = buffer[i] if buffer is not None else None
+            buffer = buffers[i] if i in buffers else None
             assert(output.size(0) == 1)
-            output, coverage, buffer_ = layer.step(output, context, mask_tgt, mask_src, buffer=buffer_) 
-                                                                # len_tgt x batch_size x d_model
+            output, coverage, buffer = layer.step(output, context, mask_tgt, mask_src, buffer=buffer) # batch_size x len_src x d_model
             
-            output_buffer.append(buffer_)
+            decoder_state._update_attention_buffer(buffer, i)
         
-        buffer = torch.stack(output_buffer)
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.    
         output = self.postprocess_layer(output)
-        
-        decoder_state._update_state(buffer)    
-        
+
         return output, coverage
     
   
@@ -386,9 +373,7 @@ class Transformer(NMTModel):
         context, src_mask = self.encoder(src, grow=grow)
         
         output, coverage = self.decoder(tgt, context, src, grow=grow)
-        
-        #~ output = output.transpose(0, 1) # transpose to have time first, like RNN models
-        
+                
         return output
         
     def create_decoder_state(self, src, context, beamSize=1):
@@ -409,20 +394,17 @@ class TransformerDecodingState(DecoderState):
     
     def __init__(self, src, context, beamSize=1):
         
-        self.src = src
-        
-        #~ context = 
-        
-        self.context = context
-        self.context = Variable(self.context.data.repeat(1, beamSize, 1))
+        self.src = src.repeat(1, beamSize)
+        self.context = context.repeat(1, beamSize, 1)
         self.beamSize = beamSize
         
-        self.buffer = None
         self.input_seq = None
+        self.attention_buffers = dict()
         
-    def _update_state(self, buffer):
         
-        self.buffer = buffer
+    def _update_attention_buffer(self, buffer, layer):
+        
+        self.attention_buffers[layer] = buffer # dict of 2 keys (k, v) : T x B x H
         
     def _update_beam(self, beam, b, remainingSents, idx):
         
@@ -438,13 +420,15 @@ class TransformerDecodingState(DecoderState):
                 sent_states.copy_(sent_states.index_select(
                             1, beam[b].getCurrentOrigin()))
                             
-                            
-        nl, t_, br_, d_ = self.buffer.size()
-                    
-        sent_states = self.buffer.view(nl, t_, self.beamSize, remainingSents, d_)[:, :,:, idx, :]
-        
-        sent_states.data.copy_(sent_states.data.index_select(
-                            2, beam[b].getCurrentOrigin()))
+        for l in self.attention_buffers:
+            buffer_ = self.attention_buffers[l]
+            
+            for k in buffer_:
+                t_, br_, d_ = buffer_[k].size()
+                sent_states = buffer_[k].view(t_, self.beamSize, remainingSents, d_)[:, :, idx, :]
+                
+                sent_states.data.copy_(sent_states.data.index_select(
+                            1, beam[b].getCurrentOrigin()))
     
     # in this section, the sentences that are still active are
     # compacted so that the decoder is not run on completed sentences
@@ -491,34 +475,9 @@ class TransformerDecodingState(DecoderState):
         
         self.src = updateActive2D(self.src)
         
-        self.buffer = updateActive4D(self.buffer)
-
-
-
-
-#~ class TrasnformerReconstructor(Reconstructor):
-    #~ 
-    #~ def forward(self, src, contexts, context_mask):
-        #~ 
-        #~ """
-        #~ Inputs Shapes: 
-            #~ src: len_src x batch_size
-            #~ context: batch_size x len_tgt x model_size
-            #~ context_mask: batch_size x len_tgt
-        #~ 
-        #~ Outputs Shapes:
-            #~ output:      batch_size*(len_src-1) x model_size
-            #~ 
-            #~ 
-        #~ """
-        #~ src_input = src[:-1] # exclude last unit from source
-        #~ 
-        #~ src_input = src_input.transpose(0, 1) # transpose to have batch first
-        #~ output, coverage = self.decoder(src, context, context_mask)
-        #~ 
-        #~ output = output.transpose(0, 1) # transpose to have time first, like RNN models
-        #~ 
-        #~ return output
-        #~ source = source.transpose(0, 1)
-        
+        for l in self.attention_buffers:
+            buffer_ = self.attention_buffers[l]
+            
+            for k in buffer_:
+                buffer_[k] = updateActive(buffer_[k])
         

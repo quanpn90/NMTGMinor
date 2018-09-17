@@ -22,7 +22,7 @@ class Generator(nn.Module):
         torch.nn.init.uniform_(self.linear.weight, -stdv, stdv)
         
         self.linear.bias.data.zero_()
-            
+        
         
         
     def forward(self, input, log_softmax=True):
@@ -57,6 +57,50 @@ class NMTModel(nn.Module):
         
         self.encoder.mark_pretrained()
         self.decoder.mark_pretrained()
+        
+    def load_state_dict(self, state_dict, strict=True):
+        
+        def condition(param_name):
+            
+            if 'positional_encoder' in param_name:
+                return False
+            if 'time_transformer' in param_name and self.encoder.time == 'positional_encoding':
+                return False
+            if param_name == 'decoder.mask':
+                return False
+            
+            return True
+        
+        #~ filtered_dict = dict()
+        
+        #~ for
+        filtered = {k: v for k, v in state_dict.items() if condition(k)}
+        
+        #~ for k, v in filtered.items():
+            #~ print(k, type(k))
+        model_dict = self.state_dict()
+        #~ 
+        #~ model_dict.update(filtered)
+        #~ filtered.update(model_dict)
+        for k,v in model_dict.items():
+            if k not in filtered:
+                filtered[k] = v
+        #~ 
+        super().load_state_dict(filtered)   
+
+        #~ for name, param in state_dict.items():
+            #~ 
+            #~ 
+            #~ if isinstance(param, Parameter):
+                #~ # backwards compatibility for serialized parameters
+                #~ param = param.data
+                #~ 
+                #~ 
+            #~ else:
+                #~ continue
+        #~ pretrained_dict = {k: v for k, v in state_dict.items() if v}
+
+        
         
     
 

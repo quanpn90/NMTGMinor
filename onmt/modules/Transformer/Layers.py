@@ -9,35 +9,7 @@ import onmt
 import torch.nn.functional as F
 from onmt.modules.Bottle import Bottle
 from onmt.modules.StaticDropout import StaticDropout
-def contiguous(tensor):
 
-    if tensor.is_contiguous():
-        return tensor
-    else:
-        return tensor.contiguous()
-
-
-def uniform_unit_scaling(tensor, nonlinearity="linear", gain=1.0):
-    
-    size = 1.
-    # Estimate the input size. This won't work perfectly,
-    # but it covers almost all use cases where this initialiser
-    # would be expected to be useful, i.e in large linear and
-    # convolutional layers, as the last dimension will almost
-    # always be the output size.
-    
-    if isinstance(tensor, Variable):
-        uniform_unit_scaling(tensor.data, nonlinearity)
-        return tensor
-    
-    for dimension in list(tensor.size())[:-1]:
-        size *= dimension
-        
-    activation_scaling = torch.nn.init.calculate_gain(nonlinearity, tensor)
-    
-    max_value = math.sqrt(3 / size) * activation_scaling
-    
-    return tensor.uniform_(-max_value, max_value)
 
 class XavierLinear(nn.Module):
     
@@ -191,7 +163,7 @@ class MultiHeadAttention(nn.Module):
         
     """
     
-    def __init__(self, h, d_model, attn_p=0.1, static=True, share=2):
+    def __init__(self, h, d_model, attn_p=0.1, static=True, share=3):
         super(MultiHeadAttention, self).__init__()      
         self.h = h
         self.d = d_model
@@ -214,68 +186,8 @@ class MultiHeadAttention(nn.Module):
         else:
             self.attn_dropout = nn.Dropout(attn_p)
         
-      
-    def _prepare_proj(self, x):
-        """Reshape the projectons to apply softmax on each head
-        """
-        b, l, d = x.size()
-        return contiguous(x.view(b, l, self.h, self.d_head).transpose(1,2)).view(b*self.h, l, self.d_head)
-    
-    def shape(self, x):
-        
-        b, l, d = x.size()
-        return x.view(b, l, self.h, self.d_head) \
-                .transpose(1, 2)
-    
-
-    def forward_bf(self, query, key, value, mask, query_mask=None, value_mask=None):
-        b, len_query = query.size(0), query.size(1)
-        len_key = key.size(1)
-        
-        key_mask = value_mask
-        
-        # project inputs to multi-heads
-        proj_query = self.fc_query(query, mask=query_mask)       # batch_size x len_query x h*d_head
-        proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
-        proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
-        
-        # prepare the shape for applying softmax
-        proj_query = self._prepare_proj(proj_query)  # batch_size*h x len_query x d_head
-        proj_key = self._prepare_proj(proj_key)           # batch_size*h x len_key x d_head
-        proj_value = self._prepare_proj(proj_value)       # batch_size*h x len_key x d_head
-        
-        proj_query = proj_query * (self.d_head**-0.5)
-        
-        # get dotproduct softmax attns for each head
-        attns = torch.bmm(proj_query, proj_key.transpose(1,2))  # batch_size*h x len_query x len_key
-        
-        attns = attns.view(b, self.h, len_query, len_key) 
-        if isinstance(mask, Variable):
-            mask_ = mask.unsqueeze(-3)
-        elif torch.is_tensor(mask):
-            mask_ = Variable(mask.unsqueeze(-3))    
-        # FP16 support: cast to float and back
-        attns = attns.float().masked_fill_(mask_, -float('inf')).type_as(attns)
-        attns = self.sm(attns)
-        # return mean attention from all heads as coverage 
-        coverage = torch.mean(attns, dim=1) 
-        attns = self.attn_dropout(attns)
-        attns = attns.view(b*self.h, len_query, len_key)
-        
-        # apply attns on value
-        out = torch.bmm(attns, proj_value)      # batch_size*h x len_query x d_head
-        out = contiguous(out.view(b, self.h, len_query, self.d_head).transpose(1,2))
-        out = out.view(b, len_query, self.h*self.d_head)
-            
-        out = self.fc_concat(out, mask=query_mask)
-       
-        return out, coverage
-        
     def forward(self, query, key, value, mask, query_mask=None, value_mask=None):
         
-        #~ query = query.transpose(0, 1)
-        #~ key = key.transpose(0, 1)
-        #~ value = value.transpose(0, 1)
         len_query, b = query.size(0), query.size(1)
         len_key,  b_ = key.size(0), key.size(1)
         
@@ -287,11 +199,75 @@ class MultiHeadAttention(nn.Module):
             proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
             proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
         elif self.share == 2:
-            #~ proj_query = self.fc_query(query)      # batch_size x len_query x h*d_head
-            #~ shared_kv = self.fc_kv(key)
-            #~ proj_key, proj_value = shared_kv.chunk(2, dim=-1)
             proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
             proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
+        else:
+            raise NotImplementedError
+        
+        q, k, v = proj_query, proj_key, proj_value
+        # prepare the shape for applying softmax
+        q = q.contiguous().view(len_query, b*self.h, self.d_head).transpose(0, 1)
+        k = k.contiguous().view(len_key,   b*self.h, self.d_head).transpose(0, 1)
+        v = v.contiguous().view(len_key,   b*self.h, self.d_head).transpose(0, 1)
+        
+        q = q * (self.d_head**-0.5)
+        
+        # get dotproduct softmax attns for each head
+        attns = torch.bmm(q, k.transpose(1,2))  # batch_size*h x len_query x len_key
+        
+        attns = attns.view(b, self.h, len_query, len_key) 
+        mask_ = mask.unsqueeze(-3)
+        # FP16 support: cast to float and back
+        attns = attns.float().masked_fill_(mask_, -float('inf')).type_as(attns)
+        attns = F.softmax(attns.float(), dim=-1).type_as(attns)
+        # return mean attention from all heads as coverage 
+        coverage = torch.mean(attns, dim=1) 
+        attns = self.attn_dropout(attns)
+        attns = attns.view(b*self.h, len_query, len_key)
+        
+        # apply attns on value
+        out = torch.bmm(attns, v)      # batch_size*h x len_query x d_head
+        out = out.transpose(0, 1).contiguous().view(len_query, b, self.d)
+            
+        out = self.fc_concat(out)
+               
+        return out, coverage
+        
+    def step(self, query, key, value, mask, query_mask=None, value_mask=None, buffer=None):
+    
+        len_query, b = query.size(0), query.size(1)
+        len_key,  b_ = key.size(0), key.size(1)
+        
+        key_mask = value_mask
+        
+        # project inputs to multi-heads
+        proj_query = self.fc_query(query, mask=query_mask)   # batch_size*h x len_query x d_head
+        if self.share == 1:
+            proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
+            proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
+            if buffer is not None and 'k' in buffer and 'v' in buffer:
+                proj_key = torch.cat([buffer['k'], proj_key], dim=0) # time first
+                buffer['k'] = proj_key
+                proj_value = torch.cat([buffer['v'], proj_value], dim=0) # time first
+                buffer['v'] = proj_value
+                len_key,  b_ = proj_key.size(0), proj_key.size(1)
+            else:
+                if buffer is None:
+                    buffer = dict()
+                buffer['k'] = proj_key
+                buffer['v'] = proj_value
+        elif self.share == 2:
+            #~ proj_query = self.fc_query(query) # batch_size x len_query x h*d_head
+            if buffer is not None and 'c_k' in buffer and 'c_v' in buffer:
+                proj_key = buffer['c_k']
+                proj_value = buffer['c_v']
+            else:
+                if buffer is None:
+                    buffer = dict()
+                proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
+                proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
+                buffer['c_k'] = proj_key
+                buffer['c_v'] = proj_value
         else:
             raise NotImplementedError
         
@@ -322,54 +298,8 @@ class MultiHeadAttention(nn.Module):
         out = out.transpose(0, 1).contiguous().view(len_query, b, self.d)
             
         out = self.fc_concat(out)
-        
-        #~ out = out.transpose(0, 1).contiguous()
        
-        return out, coverage
-        
-        
-    #~ def step(self, query, key, value, mask, query_mask=None, value_mask=None):
-        #~ b, len_query = query.size(0), query.size(1)
-        #~ len_key = key.size(1)
-        #~ 
-        #~ key_mask = value_mask
-        #~ 
-        #~ # project inputs to multi-heads
-        #~ proj_query = self.fc_query(query)       # batch_size x len_query x h*d_head
-        #~ proj_key   = self.fc_key(key)             # batch_size x len_key x h*d_head
-        #~ proj_value = self.fc_value(value)       # batch_size x len_key x h*d_head
-        #~ 
-        #~ # prepare the shape for applying softmax
-        #~ proj_query = self._prepare_proj(proj_query)  # batch_size*h x len_query x d_head
-        #~ proj_key = self._prepare_proj(proj_key)           # batch_size*h x len_key x d_head
-        #~ proj_value = self._prepare_proj(proj_value)       # batch_size*h x len_key x d_head
-        #~ 
-        #~ proj_query = proj_query * (self.d_head**-0.5)
-        #~ 
-        #~ # get dotproduct softmax attns for each head
-        #~ attns = torch.bmm(proj_query, proj_key.transpose(1,2))  # batch_size*h x len_query x len_key
-        #~ 
-        #~ attns = attns.view(b, self.h, len_query, len_key) 
-        #~ if isinstance(mask, Variable):
-            #~ mask_ = mask.unsqueeze(-3)
-        #~ elif torch.is_tensor(mask):
-            #~ mask_ = Variable(mask.unsqueeze(-3))    
-        #~ # FP16 support: cast to float and back
-        #~ attns = attns.float().masked_fill_(mask_, -float('inf')).type_as(attns)
-        #~ attns = self.sm(attns)
-        #~ # return mean attention from all heads as coverage 
-        #~ coverage = torch.mean(attns, dim=1) 
-        #~ attns = self.attn_dropout(attns)
-        #~ attns = attns.view(b*self.h, len_query, len_key)
-        #~ 
-        #~ # apply attns on value
-        #~ out = torch.bmm(attns, proj_value)      # batch_size*h x len_query x d_head
-        #~ out = contiguous(out.view(b, self.h, len_query, self.d_head).transpose(1,2))
-        #~ out = out.view(b, len_query, self.h*self.d_head)
-            #~ 
-        #~ out = self.fc_concat(out)
-       #~ 
-        #~ return out, coverage
+        return out, coverage, buffer
     
 class FeedForward(nn.Module):
     """Applies position-wise feed forward to inputs
@@ -564,13 +494,8 @@ class DecoderLayer(nn.Module):
         
         query = self.preprocess_attn(input)
         
-        if buffer is not None:
-            buffer = torch.cat([buffer, query], dim=0)
-        else:
-            buffer = query
-            
-
-        out, _ = self.multihead_tgt(query, buffer, buffer, mask_tgt)
+        out, _, buffer = self.multihead_tgt.step(query, query, query, mask_tgt, buffer=buffer)
+                                   
         
 
         input = self.postprocess_attn(out, input)
@@ -580,18 +505,19 @@ class DecoderLayer(nn.Module):
         """
         
         query = self.preprocess_src_attn(input)
-        #~ print(query.size())
-        #~ print(context.size())
-        out, coverage = self.multihead_src(query, context, context, mask_src)
+        out, coverage, buffer = self.multihead_src.step(query, context, context, mask_src, buffer=buffer)
+                                           
         input = self.postprocess_src_attn(out, input)
         
         """ Feed forward layer 
             layernorm > ffn > dropout > residual
         """
         out = self.feedforward(self.preprocess_ffn(input))
+                                           
         input = self.postprocess_ffn(out, input)
         
         return input, coverage, buffer
+
 
 class PositionalEncoding(nn.Module):
     """Adds positional embeddings to standard word embeddings 

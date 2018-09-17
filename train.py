@@ -98,6 +98,8 @@ parser.add_argument('-batch_size_update', type=int, default=2048,
                     help='Maximum number of words per update')                    
 parser.add_argument('-batch_size_multiplier', type=int, default=1,
                     help='Maximum number of words per update')                    
+parser.add_argument('-max_position_length', type=int, default=1024,
+    help='Maximum length for positional embedding')    
 
 parser.add_argument('-epochs', type=int, default=13,
                     help='Number of training epochs')
@@ -195,6 +197,7 @@ print(opt)
 # An ugly hack to have weight norm on / off
 onmt.Constants.weight_norm = opt.weight_norm
 onmt.Constants.checkpointing = opt.checkpointing
+onmt.Constants.max_position_length = opt.max_position_length
 
 # Use static dropout if checkpointing > 0
 if opt.checkpointing > 0:

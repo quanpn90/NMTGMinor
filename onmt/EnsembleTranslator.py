@@ -238,7 +238,7 @@ class EnsembleTranslator(object):
         #  (3) Start decoding
             
         # time x batch * beam
-        src = srcBatch.data.repeat(1, beamSize)
+        src = srcBatch # this is time first again (before transposing)
         
         # initialize the beam
         beam = [onmt.Beam(beamSize, self.opt.cuda) for k in range(batchSize)]
@@ -251,7 +251,7 @@ class EnsembleTranslator(object):
         decoder_hiddens = dict()
         
         for i in range(self.n_models):
-            decoder_states[i] = self.models[i].create_decoder_state(src.clone(), contexts[i], beamSize)
+            decoder_states[i] = self.models[i].create_decoder_state(src, contexts[i], beamSize)
         
         for i in range(self.opt.max_sent_length):
             # Prepare decoder input.
