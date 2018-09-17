@@ -29,9 +29,9 @@ class DynamicLossScaler:
         self._last_overflow_iter = -1
     
     # we will pass the iter of optim to here
-    def update_scale(self, overflow, iter_=1):
+    def update_scale(self, overflow):
         
-        self._iter = iter_
+        self._iter += 1
         if overflow:
             self.loss_scale /= self.scale_factor
             self._last_overflow_iter = self._iter
@@ -196,10 +196,9 @@ class FP16XETrainer(XETrainer):
                 if self.opt.normalize_gradient:
                     normalizer = tgt_size / self.scaler.loss_scale
                 
-                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, 
+                loss_data, _ = self.loss_function(outputs, targets, generator=self.model.generator, 
                                                              backward=True, mask=tgt_mask, normalizer=normalizer)
                 
-                #~ outputs.backward(grad_outputs)
                 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
@@ -243,7 +242,7 @@ class FP16XETrainer(XETrainer):
                         #~ self.fp32_params.grad.data.mul_(clip_coef)
                     
                     overflow = DynamicLossScaler.has_overflow(grad_norm)
-                    self.scaler.update_scale(overflow, iter_=self.optim._step)
+                    self.scaler.update_scale(overflow)
                     
                     if overflow:
                         if self.scaler.loss_scale <= 1e-4:
@@ -253,62 +252,63 @@ class FP16XETrainer(XETrainer):
                                 'increasing the batch size.'
                             ).format(1e-4))
                         print('setting loss scale to: ' + str(self.scaler.loss_scale))
+                        self.model.zero_grad()
+                        self.optim.zero_grad()
+                        loss_data = 0
+                    
+                    else:
+                        self.optim.step(grad_denom=1)
+
+                        offset = 0
+                        for p in self.model.parameters():
+                            if not p.requires_grad:
+                                continue
+                            numel = p.data.numel()
+                            p.data.copy_(self.fp32_params.data[offset:offset+numel].view_as(p.data))
+                            offset += numel
                         
-                    
-                    
-                    self.optim.step(grad_denom=1)
-                    
-                    
-                    offset = 0
-                    for p in self.model.parameters():
-                        if not p.requires_grad:
-                            continue
-                        numel = p.data.numel()
-                        p.data.copy_(self.fp32_params.data[offset:offset+numel].view_as(p.data))
-                        offset += numel
-                    
-                    self.model.zero_grad()
-                    self.optim.zero_grad()
-                    counter = 0
-                    num_accumulated_words = 0
-                    num_accumulated_sents = 0
-                    num_updates = self.optim._step
-                    if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
-                        valid_loss = self.eval(self.validData)
-                        valid_ppl = math.exp(min(valid_loss, 100))
-                        print('Validation perplexity: %g' % valid_ppl)
-                        
-                        ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
-                        
-                        self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
+                        self.model.zero_grad()
+                        self.optim.zero_grad()
+                        counter = 0
+                        num_accumulated_words = 0
+                        num_accumulated_sents = 0
+                        num_updates = self.optim._step
+                        if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
+                            valid_loss = self.eval(self.validData)
+                            valid_ppl = math.exp(min(valid_loss, 100))
+                            print('Validation perplexity: %g' % valid_ppl)
+                            
+                            ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
+                            
+                            self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
                 
 
-                num_words = tgt_size
-                report_loss += loss_data
-                report_tgt_words += num_words
-                report_src_words += src_size
-                total_loss += loss_data
-                total_words += num_words
-                
-                optim = self.optim
-                
-                
-                
-                if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
-                    print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
-                           "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; %s elapsed") %
-                          (epoch, i+1, len(trainData),
-                           math.exp(report_loss / report_tgt_words),
-                           optim.getLearningRate(),
-                           optim._step,
-                           report_src_words/(time.time()-start),
-                           report_tgt_words/(time.time()-start),
-                           self.scaler.loss_scale,
-                           str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
+                        num_words = tgt_size
+                        report_loss += loss_data
+                        report_tgt_words += num_words
+                        report_src_words += src_size
+                        total_loss += loss_data
+                        total_words += num_words
+                        
+                        optim = self.optim
+                        
+                        
+                        
+                        if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
+                            print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
+                                   "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; %s elapsed") %
+                                  (epoch, i+1, len(trainData),
+                                   math.exp(report_loss / report_tgt_words),
+                                   optim.getLearningRate(),
+                                   optim._step,
+                                   report_src_words/(time.time()-start),
+                                   report_tgt_words/(time.time()-start),
+                                   self.scaler.loss_scale,
+                                   str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
 
-                    report_loss, report_tgt_words = 0, 0
-                    report_src_words = 0
-                    start = time.time()
+                            report_loss, report_tgt_words = 0, 0
+                            report_src_words = 0
+                            start = time.time()
             
             
         return total_loss / total_words
