@@ -220,7 +220,8 @@ class EnsembleTranslator(object):
             tgtBatchInput = tgtBatchInput.transpose(0,1)
             
             output, coverage = model_.decoder(tgtBatchInput, contexts[0], src)
-            output = output.transpose(0, 1) # transpose to have time first, like RNN models
+            # output should have size time x batch x dim
+            #~ output = output.transpose(0, 1) # transpose to have time first, like RNN models
             
             
             #  (2) if a target is specified, compute the 'goldScore'

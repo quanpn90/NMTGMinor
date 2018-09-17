@@ -103,48 +103,27 @@ class TransformerEncoder(nn.Module):
         
         """ Scale the emb by sqrt(d_model) """
         
-        if self.time == 'positional_encoding':
-            emb = emb * math.sqrt(self.model_size)
+        emb = emb * math.sqrt(self.model_size)
+            
         """ Adding positional encoding """
         emb = self.time_transformer(emb)
-        if isinstance(emb, tuple):
-            emb = emb[0]
+        
         emb = self.preprocess_layer(emb)
         
-        mask_src = input.data.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x len_src x 1 for broadcasting
+        mask_src = input.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x len_src x 1 for broadcasting
         
-        pad_mask = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
+        #~ pad_mask = input.ne(onmt.Constants.PAD)) # batch_size x len_src
         #~ pad_mask = None
         
-        context = emb.contiguous()
+        context = emb.transpose(0, 1).contiguous()
         
-        def run_function(layers, start, end):
-            def forward(*inputs):
-                input = inputs[0]
-                mask_src = inputs[1]
-                pad_mask = inputs[2]
-                for j in range(start, end):
-                    input = layers[j](input, mask_src, pad_mask)
-                return input
-            return forward
+        for i, layer in enumerate(self.layer_modules):
             
-        # checkpoint    
-        if self.training:
-            context = checkpoint(run_function(self.layer_modules, 0, onmt.Constants.checkpointing), context, mask_src, pad_mask)
-        else:
-            context = run_function(self.layer_modules, 0, onmt.Constants.checkpointing)(context, mask_src, pad_mask)
-        
-        # non-checkpoint
-        context = run_function(self.layer_modules, onmt.Constants.checkpointing, len(self.layer_modules))(    context, mask_src, pad_mask)
-            
-        
-        #~ for i, layer in enumerate(self.layer_modules):
-            #~ 
-            #~ if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:        
-                #~ context = checkpoint(custom_layer(layer), context, mask_src, pad_mask)
-#~ 
-            #~ else:
-                #~ context = layer(context, mask_src, pad_mask)      # batch_size x len_src x d_model
+            if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:        
+                context = checkpoint(custom_layer(layer), context, mask_src)
+
+            else:
+                context = layer(context, mask_src)      # batch_size x len_src x d_model
             
         
         # From Google T2T
@@ -257,54 +236,29 @@ class TransformerDecoder(nn.Module):
             emb = emb[0]
         emb = self.preprocess_layer(emb)
         
-
-        mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
+        mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
         
-        pad_mask_src = torch.autograd.Variable(src.data.ne(onmt.Constants.PAD))
+        pad_mask_src = src.data.ne(onmt.Constants.PAD)
         
         len_tgt = input.size(1)
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
         
-        output = emb.contiguous()
+        output = emb.transpose(0, 1).contiguous()
         
-        pad_mask_tgt = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
-        pad_mask_src = torch.autograd.Variable(1 - mask_src.squeeze(1))
+        #~ pad_mask_tgt = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
+        #~ pad_mask_src = torch.autograd.Variable(1 - mask_src.squeeze(1))
         
-        def run_function(layers, start, end):
-            
-            def forward(*inputs):
-                input = inputs[0]
-                context = inputs[1]
-                #~ _ = None
-                for j in range(start, end):
-                    input, _ = layers[j](input, context, inputs[2], inputs[3], inputs[4], inputs[5])
-                return input
-            return forward
         
-        # checkpoint    
-        #~ if self.training:
-        #~ output = checkpoint(run_function(self.layer_modules, 0, onmt.Constants.checkpointing), 
-                                #~ output, context, mask_tgt, mask_src, pad_mask_tgt, pad_mask_src)
-        #~ else:
-            #~ output = run_function(self.layer_modules, 0, onmt.Constants.checkpointing)(
-                                #~ output, context, mask_tgt, mask_src, pad_mask_tgt, pad_mask_src)
-        #~ 
-        # non-checkpoint
-        #~ output = run_function(self.layer_modules, onmt.Constants.checkpointing, len(self.layer_modules))(
-                                #~ output, context, mask_tgt, mask_src, pad_mask_tgt, pad_mask_src)
         for i, layer in enumerate(self.layer_modules):
             
             if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:           
                 
-                output, coverage = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src, 
-                                            pad_mask_tgt, pad_mask_src) # batch_size x len_src x d_model
+                output, coverage = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src) 
+                                                                              # batch_size x len_src x d_model
                 
             else:
-                #~ output, coverage = layer(output, context, mask_tgt, mask_src, 
-                                            #~ pad_mask_tgt, pad_mask_src) # batch_size x len_src x d_model
-                output, coverage = layer(output, context, mask_tgt, mask_src, 
-                                            pad_mask_tgt, pad_mask_src) # batch_size x len_src x d_model
+                output, coverage = layer(output, context, mask_tgt, mask_src) # batch_size x len_src x d_model
             
             
         # From Google T2T
@@ -329,7 +283,7 @@ class TransformerDecoder(nn.Module):
             coverage: batch_size x len_tgt x len_src
             
         """
-        context = decoder_state.context.transpose(0, 1)
+        context = decoder_state.context
         buffer = decoder_state.buffer
         src = decoder_state.src.transpose(0, 1)
         
@@ -345,8 +299,6 @@ class TransformerDecoder(nn.Module):
         output_buffer = list()
             
         batch_size = input_.size(0)
-        
-        
         
         """ Embedding: batch_size x 1 x d_model """
         emb = self.word_lut(input_)
@@ -370,10 +322,11 @@ class TransformerDecoder(nn.Module):
         # Preprocess layer: adding dropout
         emb = self.preprocess_layer(emb)
         
+        emb = emb.transpose(0, 1)
+        
         # batch_size x 1 x len_src
         mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
         
-        pad_mask_src = torch.autograd.Variable(src.data.ne(onmt.Constants.PAD))
         
         len_tgt = input.size(1)
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
@@ -383,16 +336,16 @@ class TransformerDecoder(nn.Module):
                 
         output = emb.contiguous()
         
-        pad_mask_tgt = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
-        pad_mask_src = torch.autograd.Variable(1 - mask_src.squeeze(1))
+        #~ pad_mask_tgt = torch.autograd.Variable(input.data.ne(onmt.Constants.PAD)) # batch_size x len_src
+        #~ pad_mask_src = torch.autograd.Variable(1 - mask_src.squeeze(1))
         
         
         for i, layer in enumerate(self.layer_modules):
             
             buffer_ = buffer[i] if buffer is not None else None
-            assert(output.size(1) == 1)
-            output, coverage, buffer_ = layer.step(output, context, mask_tgt, mask_src, 
-                                        pad_mask_tgt=None, pad_mask_src=None, buffer=buffer_) # batch_size x len_src x d_model
+            assert(output.size(0) == 1)
+            output, coverage, buffer_ = layer.step(output, context, mask_tgt, mask_src, buffer=buffer_) 
+                                                                # len_tgt x batch_size x d_model
             
             output_buffer.append(buffer_)
         
@@ -434,7 +387,7 @@ class Transformer(NMTModel):
         
         output, coverage = self.decoder(tgt, context, src, grow=grow)
         
-        output = output.transpose(0, 1) # transpose to have time first, like RNN models
+        #~ output = output.transpose(0, 1) # transpose to have time first, like RNN models
         
         return output
         
@@ -460,7 +413,7 @@ class TransformerDecodingState(DecoderState):
         
         #~ context = 
         
-        self.context = context.transpose(0, 1)
+        self.context = context
         self.context = Variable(self.context.data.repeat(1, beamSize, 1))
         self.beamSize = beamSize
         
@@ -486,12 +439,12 @@ class TransformerDecodingState(DecoderState):
                             1, beam[b].getCurrentOrigin()))
                             
                             
-        nl, br_, t_, d_ = self.buffer.size()
+        nl, t_, br_, d_ = self.buffer.size()
                     
-        sent_states = self.buffer.view(nl, self.beamSize, remainingSents, t_, d_)[:, :, idx, :, :]
+        sent_states = self.buffer.view(nl, t_, self.beamSize, remainingSents, d_)[:, :,:, idx, :]
         
         sent_states.data.copy_(sent_states.data.index_select(
-                            1, beam[b].getCurrentOrigin()))
+                            2, beam[b].getCurrentOrigin()))
     
     # in this section, the sentences that are still active are
     # compacted so that the decoder is not run on completed sentences
@@ -525,10 +478,10 @@ class TransformerDecodingState(DecoderState):
         
         def updateActive4D(t):
             # select only the remaining active sentences
-            nl, br_, t_, d_ = t.size()
-            view = t.data.view(nl, -1, remainingSents, t_, model_size)
+            nl, t_, br_, d_ = t.size()
+            view = t.data.view(nl, -1, remainingSents, model_size)
             newSize = list(t.size())
-            newSize[1] = newSize[1] * len(activeIdx) // remainingSents
+            newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
             return Variable(view.index_select(2, activeIdx)
                             .view(*newSize)) 
         

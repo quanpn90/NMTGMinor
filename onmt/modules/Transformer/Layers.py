@@ -273,9 +273,9 @@ class MultiHeadAttention(nn.Module):
         
     def forward(self, query, key, value, mask, query_mask=None, value_mask=None):
         
-        query = query.transpose(0, 1)
-        key = key.transpose(0, 1)
-        value = value.transpose(0, 1)
+        #~ query = query.transpose(0, 1)
+        #~ key = key.transpose(0, 1)
+        #~ value = value.transpose(0, 1)
         len_query, b = query.size(0), query.size(1)
         len_key,  b_ = key.size(0), key.size(1)
         
@@ -323,7 +323,7 @@ class MultiHeadAttention(nn.Module):
             
         out = self.fc_concat(out)
         
-        out = out.transpose(0, 1).contiguous()
+        #~ out = out.transpose(0, 1).contiguous()
        
         return out, coverage
         
@@ -526,9 +526,8 @@ class DecoderLayer(nn.Module):
         """ Self attention layer 
             layernorm > attn > dropout > residual
         """
-        #~ print(input.size())
-        #~ print(context.size())
-        #~ print(pad_mask_tgt.size())
+        
+        # input and context should be time first ?
         
         query = self.preprocess_attn(input)
         
@@ -541,9 +540,7 @@ class DecoderLayer(nn.Module):
             input = self.postprocess_attn(out, input_)
         else:
             input = self.postprocess_attn(out, input)
-        
-        
-        
+
         """ Context Attention layer 
             layernorm > attn > dropout > residual
         """
@@ -568,7 +565,7 @@ class DecoderLayer(nn.Module):
         query = self.preprocess_attn(input)
         
         if buffer is not None:
-            buffer = torch.cat([buffer, query], dim=1)
+            buffer = torch.cat([buffer, query], dim=0)
         else:
             buffer = query
             
@@ -583,6 +580,8 @@ class DecoderLayer(nn.Module):
         """
         
         query = self.preprocess_src_attn(input)
+        #~ print(query.size())
+        #~ print(context.size())
         out, coverage = self.multihead_src(query, context, context, mask_src)
         input = self.postprocess_src_attn(out, input)
         
