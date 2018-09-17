@@ -57,6 +57,8 @@ parser.add_argument('-print_nbest', action='store_true',
 parser.add_argument('-ensemble_op', default='mean', help="""Ensembling operator""")
 parser.add_argument('-normalize', action='store_true',
                     help='To normalize the scores based on output length')
+parser.add_argument('-fp16', action='store_true',
+                    help='To use floating point 16 in decoding')
 parser.add_argument('-gpu', type=int, default=-1,
                     help="Device to run on")
 
@@ -149,7 +151,7 @@ def main():
         predWordsTotal += sum(len(x[0]) for x in predBatch)
         if tgtF is not None:
             goldScoreTotal += sum(goldScore).item()
-            goldWordsTotal += numGoldWords.item()
+            goldWordsTotal += numGoldWords
             
         for b in range(len(predBatch)):
                         

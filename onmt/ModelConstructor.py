@@ -22,6 +22,9 @@ def build_model(opt, dicts):
     
     if not hasattr(opt, 'residual_type'):
         opt.residual_type = 'regular'
+        
+    if not hasattr(opt, 'init_embedding'):
+        opt.init_embedding = 'xavier'
     
     onmt.Constants.layer_norm = opt.layer_norm
     onmt.Constants.weight_norm = opt.weight_norm
@@ -166,6 +169,18 @@ def build_model(opt, dicts):
     if opt.join_embedding:
         print("Joining the weights of encoder and decoder word embeddings")
         model.share_enc_dec_embedding()
+        
+    init = torch.nn.init
+        
+    init.xavier_uniform_(model.generator.linear.weight)
+    
+    if opt.init_embedding == 'xavier':
+        init.xavier_uniform_(model.encoder.word_lut.weight)
+        init.xavier_uniform_(model.decoder.word_lut.weight)
+    elif opt.init_embedding == 'normal':
+        init.normal_(model.encoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
+        init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
+            
     
     return model
     
@@ -178,11 +193,7 @@ def init_model_parameters(model, opt):
         from onmt.modules.Transformer.Layers import uniform_unit_scaling
 
         # We initialize the model parameters with Xavier init
-        init = torch.nn.init
-        
-        init.xavier_uniform_(model.generator.linear.weight)
-        init.xavier_uniform_(model.encoder.word_lut.weight.data)
-        init.xavier_uniform_(model.decoder.word_lut.weight.data)
+       
         
         #~ init = torch.nn.init.uniform
         #~ 

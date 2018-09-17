@@ -18,6 +18,7 @@ class EnsembleTranslator(object):
         self.beta = opt.beta
         self.alpha = opt.alpha
         self.start_with_bos = opt.start_with_bos
+        self.fp16 = opt.fp16
         
         self.models = list()
         self.model_types = list()
@@ -55,6 +56,9 @@ class EnsembleTranslator(object):
                 model = model.cuda()
             else:
                 model = model.cpu()
+                
+            if opt.fp16:
+                model = model.half()
             
             model.eval()
             
@@ -172,8 +176,8 @@ class EnsembleTranslator(object):
                        onmt.Constants.EOS_WORD) for b in goldBatch]
 
         return onmt.Dataset(srcData, tgtData, 9999,
-                            [self.opt.gpu], volatile=True,
-                            data_type=self._type, max_seq_num =self.opt.batch_size)
+                            [self.opt.gpu], 
+                            max_seq_num =self.opt.batch_size)
 
     def buildTargetTokens(self, pred, src, attn):
         tokens = self.tgt_dict.convertToLabels(pred, onmt.Constants.EOS)
@@ -226,14 +230,14 @@ class EnsembleTranslator(object):
                 tgt_t = tgt_t.unsqueeze(1)
                 scores = gen_t.data.gather(1, tgt_t)
                 scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
-                goldScores += scores.squeeze(1)
-                goldWords += tgt_t.ne(onmt.Constants.PAD).sum()
+                goldScores += scores.squeeze(1).type_as(goldScores)
+                goldWords += tgt_t.ne(onmt.Constants.PAD).sum().item()
             
             
         #  (3) Start decoding
             
         # time x batch * beam
-        src = Variable(srcBatch.data.repeat(1, beamSize))
+        src = srcBatch.data.repeat(1, beamSize)
         
         # initialize the beam
         beam = [onmt.Beam(beamSize, self.opt.cuda) for k in range(batchSize)]
@@ -261,14 +265,13 @@ class EnsembleTranslator(object):
                 A better buffering algorithm will be implemented
             """
            
-            decoder_input = Variable(input)
+            decoder_input = input
             
             # require batch first for everything
             outs = dict()
             attns = dict()
             
             for i in range(self.n_models):
-                #~ decoder_hidden, coverage, buffers[i] = self.models[i].decoder.step(decoder_input.transpose(0,1) , contexts[i].transpose(0, 1), src.transpose(0, 1), buffer=buffers[i])
                 decoder_hidden, coverage = self.models[i].decoder.step(decoder_input.clone(), decoder_states[i])
                 
                 # take the last decoder state

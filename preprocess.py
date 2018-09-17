@@ -63,6 +63,7 @@ parser.add_argument('-seed',       type=int, default=3435,
                     help="Random seed")
 
 parser.add_argument('-lower', action='store_true', help='lowercase data')
+parser.add_argument('-sort_by_target', action='store_true', help='lowercase data')
 parser.add_argument('-join_vocab', action='store_true', help='Using one dictionary for both source and target')
 
 parser.add_argument('-report_every', type=int, default=100000,
@@ -143,7 +144,7 @@ def saveVocabulary(name, vocab, file):
     vocab.writeFile(file)
 
 
-def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_length=64):
+def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_length=64, sort_by_target=False):
     src, tgt = [], []
     sizes = []
     count, ignored = 0, 0
@@ -195,7 +196,10 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
                                           onmt.Constants.UNK_WORD,
                                           onmt.Constants.BOS_WORD,
                                           onmt.Constants.EOS_WORD)]
-            sizes += [len(srcWords)]
+            if sort_by_target:
+                sizes += [len(tgtWords)]
+            else:
+                sizes += [len(srcWords)]
         else:
             ignored += 1
 
@@ -246,7 +250,8 @@ def main():
     train['src'], train['tgt'] = makeData(opt.train_src, opt.train_tgt,
                                           dicts['src'], dicts['tgt'],
                                           max_src_length=opt.src_seq_length,
-                                          max_tgt_length=opt.tgt_seq_length)
+                                          max_tgt_length=opt.tgt_seq_length, 
+                                          sort_by_target=opt.sort_by_target)
 
     print('Preparing validation ...')
     valid = {}

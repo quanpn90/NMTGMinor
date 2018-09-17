@@ -23,6 +23,10 @@ onmt.Markdown.add_md_help_argument(parser)
 
 parser.add_argument('-data', required=True,
                     help='Path to the *-train.pt file from preprocess.py')
+parser.add_argument('-sort_by_target', action='store_true',
+                    help='Training data sorted by target')                    
+parser.add_argument('-pad_count', action='store_true',
+                    help='Training data sorted by target')                    
 parser.add_argument('-save_model', default='model',
                     help="""Model filename (the model will be saved as
                     <save_model>_epochN_PPL.pt where PPL is the
@@ -43,8 +47,7 @@ parser.add_argument('-input_feed', type=int, default=1,
                     help="""Feed the context vector at each time step as
                     additional input (via concatenation with the word
                     embeddings) to the decoder.""")
-parser.add_argument('-brnn', action='store_true',
-                    help='Use a bidirectional encoder')
+
 parser.add_argument('-brnn_merge', default='concat',
                     help="""Merge action for the bidirectional hidden states:
                     [concat|sum]""")
@@ -81,6 +84,8 @@ parser.add_argument('-residual_type', default='regular',
 # Optimization options
 parser.add_argument('-encoder_type', default='text',
                     help="Type of encoder to use. Options are [text|img].")
+parser.add_argument('-init_embedding', default='normal',
+                    help="How to init the embedding matrices. Xavier or Normal.")
 parser.add_argument('-batch_size_words', type=int, default=2048,
                     help='Maximum batch size in word dimension')
 parser.add_argument('-batch_size_sents', type=int, default=128,
@@ -90,6 +95,8 @@ parser.add_argument('-max_generator_batches', type=int, default=32,
                     the generator on in parallel. Higher is faster, but uses
                     more memory.""")
 parser.add_argument('-batch_size_update', type=int, default=2048,
+                    help='Maximum number of words per update')                    
+parser.add_argument('-batch_size_multiplier', type=int, default=1,
                     help='Maximum number of words per update')                    
 
 parser.add_argument('-epochs', type=int, default=13,
@@ -224,11 +231,13 @@ def main():
 
     trainData = onmt.Dataset(dataset['train']['src'],
                              dataset['train']['tgt'], opt.batch_size_words, opt.gpus,
-                             data_type=dataset.get("type", "text"), max_seq_num=opt.batch_size_sents)
+                             max_seq_num=opt.batch_size_sents,
+                             pad_count = opt.pad_count,
+                             multiplier = opt.batch_size_multiplier,
+                             sort_by_target=opt.sort_by_target)
     validData = onmt.Dataset(dataset['valid']['src'],
                              dataset['valid']['tgt'], opt.batch_size_words, opt.gpus,
-                             volatile=True,
-                             data_type=dataset.get("type", "text"), max_seq_num=opt.batch_size_sents)
+                             max_seq_num=opt.batch_size_sents)
 
     dicts = dataset['dicts']
     print(' * vocabulary size. source = %d; target = %d' %

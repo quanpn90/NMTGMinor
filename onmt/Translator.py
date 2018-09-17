@@ -99,8 +99,8 @@ class Translator(object):
                        onmt.Constants.EOS_WORD) for b in goldBatch]
 
         return onmt.Dataset(srcData, tgtData, 9999,
-                            [self.opt.gpu], volatile=True,
-                            data_type=self._type, max_seq_num =self.opt.batch_size)
+                            [self.opt.gpu], 
+                            max_seq_num =self.opt.batch_size)
 
     def buildTargetTokens(self, pred, src, attn):
         tokens = self.tgt_dict.convertToLabels(pred, onmt.Constants.EOS)
