@@ -142,6 +142,7 @@ class FP16XETrainer(XETrainer):
         counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
+        oom_count = 0
         
         for i in range(iteration, nSamples):
 
@@ -176,9 +177,10 @@ class FP16XETrainer(XETrainer):
                 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
-                    print('| WARNING: ran out of memory on GPU , skipping batch')
+                    #~ print('| WARNING: ran out of memory on GPU , skipping batch')
                     oom = True
                     torch.cuda.empty_cache()
+                    oom_count += 1
                 else:
                     raise e        
                 
@@ -270,7 +272,7 @@ class FP16XETrainer(XETrainer):
                 
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
                     print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
-                           "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; %s elapsed") %
+                           "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; oom %d; %s elapsed") %
                           (epoch, i+1, len(trainData),
                            math.exp(report_loss / report_tgt_words),
                            optim.getLearningRate(),
@@ -278,6 +280,7 @@ class FP16XETrainer(XETrainer):
                            report_src_words/(time.time()-start),
                            report_tgt_words/(time.time()-start),
                            self.scaler.loss_scale,
+                           oom_count, 
                            str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
 
                     report_loss, report_tgt_words = 0, 0

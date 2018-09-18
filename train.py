@@ -185,10 +185,7 @@ parser.add_argument('-gpus', default=[], nargs='+', type=int,
 parser.add_argument('-fp16', action='store_true',
                     help='Use half precision training')     
 parser.add_argument('-loss_scale', type=float, default=16,
-                    help="""If update_learning_rate, decay learning rate by
-                    this much if (i) perplexity does not decrease on the
-                    validation set or (ii) epoch has gone past
-                    start_decay_at""")
+                    help="""Loss scale for fp16 loss (to avoid overflowing in fp16).""")
 parser.add_argument('-seed', default=9999, type=int,
                     help="Seed for deterministic runs.")
 
