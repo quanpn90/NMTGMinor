@@ -23,6 +23,8 @@ onmt.Markdown.add_md_help_argument(parser)
 
 parser.add_argument('-data', required=True,
                     help='Path to the *-train.pt file from preprocess.py')
+parser.add_argument('-data_format', required=True, default='bin',
+                    help='Default data format: raw')
 parser.add_argument('-sort_by_target', action='store_true',
                     help='Training data sorted by target')                    
 parser.add_argument('-pad_count', action='store_true',
@@ -181,7 +183,12 @@ parser.add_argument('-pre_word_vecs_dec',
 parser.add_argument('-gpus', default=[], nargs='+', type=int,
                     help="Use CUDA on the listed devices.")
 parser.add_argument('-fp16', action='store_true',
-                    help='Use half precision training')                    
+                    help='Use half precision training')     
+parser.add_argument('-loss_scale', type=float, default=16,
+                    help="""If update_learning_rate, decay learning rate by
+                    this much if (i) perplexity does not decrease on the
+                    validation set or (ii) epoch has gone past
+                    start_decay_at""")
 parser.add_argument('-seed', default=9999, type=int,
                     help="Seed for deterministic runs.")
 
@@ -219,67 +226,81 @@ def main():
     
     start = time.time()
     print("Loading data from '%s'" % opt.data)
-    dataset = torch.load(opt.data)
-    elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
-    print("Done after %s" % elapse )
     
-    #~ dict_checkpoint = opt.load_from 
-    #~ if dict_checkpoint:
-        #~ print('Loading dicts from checkpoint at %s' % dict_checkpoint)
-        #~ checkpoint = torch.load(dict_checkpoint, map_location=lambda storage, loc: storage)
-        #~ dataset['dicts'] = checkpoint['dicts']
-    #~ else:
-        #~ checkpoint = None
+    if opt.data_format == 'raw':
+        dataset = torch.load(opt.data)
+        elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
+        print("Done after %s" % elapse )
+      
+
+        trainData = onmt.Dataset(dataset['train']['src'],
+                                 dataset['train']['tgt'], opt.batch_size_words, opt.gpus,
+                                 max_seq_num=opt.batch_size_sents,
+                                 pad_count = opt.pad_count,
+                                 multiplier = opt.batch_size_multiplier,
+                                 sort_by_target=opt.sort_by_target)
+        validData = onmt.Dataset(dataset['valid']['src'],
+                                 dataset['valid']['tgt'], opt.batch_size_words, opt.gpus,
+                                 max_seq_num=opt.batch_size_sents)
+
+        dicts = dataset['dicts']
+        print(' * vocabulary size. source = %d; target = %d' %
+              (dicts['src'].size(), dicts['tgt'].size()))
+        print(' * number of training sentences. %d' %
+              len(dataset['train']['src']))
+        print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
+    elif opt.data_format == 'bin':
+        from onmt.data_utils.IndexedDataset import IndexedInMemoryDataset
+
+        dicts = torch.load(opt.data + ".dict.pt")
+        
+        #~ train = {}
+        train_path = opt.data + '.train'
+        train_src = IndexedInMemoryDataset(train_path + '.src')
+        train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
+        
+        trainData = onmt.Dataset(train_src,
+                                 train_tgt, opt.batch_size_words, opt.gpus,
+                                 max_seq_num=opt.batch_size_sents,
+                                 pad_count = opt.pad_count,
+                                 multiplier = opt.batch_size_multiplier,
+                                 sort_by_target=opt.sort_by_target)
+                                 
+        valid_path = opt.data + '.valid'
+        valid_src = IndexedInMemoryDataset(valid_path + '.src')
+        valid_tgt = IndexedInMemoryDataset(valid_path + '.tgt')
+        
+        validData = onmt.Dataset(valid_src,
+                                 valid_tgt, opt.batch_size_words, opt.gpus,
+                                 max_seq_num=opt.batch_size_sents)
     
-
-    trainData = onmt.Dataset(dataset['train']['src'],
-                             dataset['train']['tgt'], opt.batch_size_words, opt.gpus,
-                             max_seq_num=opt.batch_size_sents,
-                             pad_count = opt.pad_count,
-                             multiplier = opt.batch_size_multiplier,
-                             sort_by_target=opt.sort_by_target)
-    validData = onmt.Dataset(dataset['valid']['src'],
-                             dataset['valid']['tgt'], opt.batch_size_words, opt.gpus,
-                             max_seq_num=opt.batch_size_sents)
-
-    dicts = dataset['dicts']
-    print(' * vocabulary size. source = %d; target = %d' %
-          (dicts['src'].size(), dicts['tgt'].size()))
-    print(' * number of training sentences. %d' %
-          len(dataset['train']['src']))
-    print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
-
+    else:
+        raise NotImplementedError
+    
     print('Building model...')
     model = build_model(opt, dicts)
     
     
     """ Building the loss function """
-    loss_function = NMTLossFunc(dataset['dicts']['tgt'].size(), 
-                                        label_smoothing=opt.label_smoothing,
-                                        shard_size=opt.max_generator_batches)
+    loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+                                
     
-
-    #~ print(model)
-    #~ print(loss_function)
-
     nParams = sum([p.nelement() for p in model.parameters()])
     print('* number of parameters: %d' % nParams)
     
     optim = None
     
     if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
-        trainer = MultiGPUXETrainer(model, loss_function, trainData, validData, dataset, opt)
-        print("Warning! Multi-GPU training is used. Not fully tested and potential bugs can happen.")
+        #~ trainer = MultiGPUXETrainer(model, loss_function, trainData, validData, dataset, opt)
+        raise NotImplementedError("Warning! Multi-GPU training is not fully tested and potential bugs can happen.")
     else:
         if opt.fp16:
-            trainer = FP16XETrainer(model, loss_function, trainData, validData, dataset, opt)
+            trainer = FP16XETrainer(model, loss_function, trainData, validData, dicts, opt)
         else:
-            trainer = XETrainer(model, loss_function, trainData, validData, dataset, opt)
+            trainer = XETrainer(model, loss_function, trainData, validData, dicts, opt)
 
     
     trainer.run(save_file=opt.load_from)
-        
-
 
 if __name__ == "__main__":
     main()

@@ -49,8 +49,8 @@ class DynamicLossScaler:
 
 class FP16XETrainer(XETrainer):
 
-    def __init__(self, model, loss_function, trainData, validData, dataset, opt):
-        super().__init__(model, loss_function, trainData, validData, dataset, opt)
+    def __init__(self, model, loss_function, trainData, validData, dicts, opt):
+        super().__init__(model, loss_function, trainData, validData, dicts, opt)
         self.optim = onmt.Optim(opt)
         self.scaler = DynamicLossScaler()
         
@@ -81,31 +81,6 @@ class FP16XETrainer(XETrainer):
         self.fp32_params.grad = self.fp32_params.data.new(total_param_size)
         # we optimize on the fp32 params
         self.optim.set_parameters([self.fp32_params])
-        
-        
-    #~ def save(self, epoch, valid_ppl, batchOrder=None, iteration=-1):
-        #~ 
-        #~ opt, dataset = self.opt, self.dataset
-        #~ model = self.model
-        #~ 
-        #~ 
-        #~ model_state_dict = self.model.state_dict()
-        #~ optim_state_dict = self.optim.state_dict()
-                #~ 
-        #~ #  drop a checkpoint
-        #~ checkpoint = {
-                #~ 'model': model_state_dict,
-                #~ 'dicts': dataset['dicts'],
-                #~ 'opt': opt,
-                #~ 'epoch': epoch,
-                #~ 'iteration' : iteration,
-                #~ 'batchOrder' : batchOrder,
-                #~ 'optim': optim_state_dict
-        #~ }
-        #~ 
-        #~ file_name = '%s_ppl_%.2f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
-        #~ print('Writing to %s' % file_name)
-        #~ torch.save(checkpoint, file_name)
         
     def eval(self, data):
         total_loss = 0
@@ -163,7 +138,6 @@ class FP16XETrainer(XETrainer):
         report_src_words = 0
         start = time.time()
         nSamples = len(trainData)
-        dataset = self.dataset
         
         counter = 0
         num_accumulated_words = 0
@@ -197,7 +171,7 @@ class FP16XETrainer(XETrainer):
                     normalizer = tgt_size / self.scaler.loss_scale
                 
                 loss_data, _ = self.loss_function(outputs, targets, generator=self.model.generator, 
-                                                             backward=True, mask=tgt_mask, normalizer=normalizer)
+                                                             backward=True, mask=None, normalizer=normalizer)
                 
                 
             except RuntimeError as e:
@@ -319,7 +293,6 @@ class FP16XETrainer(XETrainer):
         
         opt = self.opt
         model = self.model
-        dataset = self.dataset
         optim = self.optim
         
         # Try to load the save_file

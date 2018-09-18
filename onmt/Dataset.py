@@ -50,7 +50,7 @@ class Dataset(object):
         
         cur_batch = []
         cur_batch_size = 0
-        cur_batch_sizes = [-1]
+        cur_batch_sizes = [0]
         
         def oversize_(cur_batch):
             
@@ -81,17 +81,18 @@ class Dataset(object):
                 current_size = len(cur_batch)
                 scaled_size = max(
                     self.multiplier * (current_size // self.multiplier),
-                    current_size % self.multiplier,
-                )
+                    current_size % self.multiplier)
+               
                 
                 batch_ =  cur_batch[:scaled_size]
+                if self.multiplier > 1:
+                    assert(len(batch_) % self.multiplier == 0, "batch size is not multiplied, current batch_size is %d " % len(batch_))
                 self.batches.append(batch_) # add this batch into the batch list
                 
-                cur_batch = [] # reset the current batch
-                cur_batch_size = 0
-                cur_batch_sizes = [-1]
+                cur_batch = cur_batch[scaled_size:] # reset the current batch
+                cur_batch_sizes = cur_batch_sizes[:-scaled_size]
+                cur_batch_size  = sum(cur_batch_sizes)
                 
-                i = i + scaled_size - current_size
             
             cur_batch.append(i)
             cur_batch_size += sentence_length
@@ -191,23 +192,23 @@ class Dataset(object):
         
         #split that batch to number of gpus
         samples = []
-        split_size = int(math.ceil(batch[0].size(1) / self.n_gpu))  
+        split_size = 1
         
         # maybe we need a more smart splitting function ?
         
-        if batch[1] is not None:
-            batch_split = zip(batch[0].split(split_size, dim=1), 
-                              batch[1].split(split_size, dim=1))
+        # if batch[1] is not None:
+            # batch_split = zip(batch[0].split(split_size, dim=1), 
+                              # batch[1].split(split_size, dim=1))
                               
             
-            batch_split = [ [b[0], b[1]] for i, b in enumerate(batch_split) ] 
-        else:
-            batch_split = zip(batch[0].split(split_size, dim=1))
+            # batch_split = [ [b[0], b[1]] for i, b in enumerate(batch_split) ] 
+        # else:
+            # batch_split = zip(batch[0].split(split_size, dim=1))
                               
             
-            batch_split = [ [b[0], None] for i, b in enumerate(batch_split) ] 
+            # batch_split = [ [b[0], None] for i, b in enumerate(batch_split) ] 
        
-        return batch_split
+        return [[batch[0], batch[1]]]
     
 
     def shuffle(self):

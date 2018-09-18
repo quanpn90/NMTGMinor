@@ -28,6 +28,7 @@ class Generator(nn.Module):
     def forward(self, input, log_softmax=True):
         
         # added float to the end 
+        # print(input.size())
         logits = self.linear(input).float() 
         
         if log_softmax:

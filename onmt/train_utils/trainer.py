@@ -18,13 +18,12 @@ from onmt.ModelConstructor import init_model_parameters
 
 class BaseTrainer(object):
     
-    def __init__(self, model, loss_function, trainData, validData, dataset, opt):
+    def __init__(self, model, loss_function, trainData, validData, dicts, opt):
         
         self.model = model
         self.trainData = trainData
         self.validData = validData
-        self.dicts = dataset['dicts']
-        self.dataset = dataset
+        self.dicts = dicts
         self.opt = opt
         self.cuda = (len(opt.gpus) >= 1)
         
@@ -80,8 +79,8 @@ class BaseTrainer(object):
 
 class XETrainer(BaseTrainer):
 
-    def __init__(self, model, loss_function, trainData, validData, dataset, opt):
-        super().__init__(model, loss_function, trainData, validData, dataset, opt)
+    def __init__(self, model, loss_function, trainData, validData, dicts, opt):
+        super().__init__(model, loss_function, trainData, validData, dicts, opt)
         self.optim = onmt.Optim(opt)
         
         if self.cuda:
@@ -94,8 +93,9 @@ class XETrainer(BaseTrainer):
 
     def save(self, epoch, valid_ppl, batchOrder=None, iteration=-1):
         
-        opt, dataset = self.opt, self.dataset
+        opt = self.opt
         model = self.model
+        dicts = self.dicts
         
 
         model_state_dict = self.model.state_dict()
@@ -104,7 +104,7 @@ class XETrainer(BaseTrainer):
         #  drop a checkpoint
         checkpoint = {
                 'model': model_state_dict,
-                'dicts': dataset['dicts'],
+                'dicts': dicts,
                 'opt': opt,
                 'epoch': epoch,
                 'iteration' : iteration,
@@ -181,7 +181,6 @@ class XETrainer(BaseTrainer):
         report_src_words = 0
         start = time.time()
         nSamples = len(trainData)
-        dataset = self.dataset
         
         counter = 0
         num_accumulated_words = 0
@@ -294,7 +293,6 @@ class XETrainer(BaseTrainer):
         
         opt = self.opt
         model = self.model
-        dataset = self.dataset
         optim = self.optim
         
         # Try to load the save_file

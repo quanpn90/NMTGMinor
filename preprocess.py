@@ -3,6 +3,8 @@ import onmt.Markdown
 import argparse
 import torch
 
+from onmt.data_utils.IndexedDataset import IndexedDatasetBuilder
+
 
 def loadImageLibs():
     "Conditional import of torch image libs."
@@ -23,7 +25,9 @@ parser.add_argument('-src_type', default="text",
 parser.add_argument('-sort_type', default="ascending",
                     help="Type of sorting. Options are [ascending|descending].")
 parser.add_argument('-input_type', default="word",
-                    help="Location of source images")
+                    help="Input type: word/char")
+parser.add_argument('-format', default="bin",
+                    help="Save data format: binary or raw. Binary should be used to load faster")
 
 
 parser.add_argument('-train_src', required=True,
@@ -103,15 +107,22 @@ def makeJoinVocabulary(filenames, size, input_type="word"):
     return vocab
 
 
-def makeVocabulary(filename, size):
+def makeVocabulary(filename, size, input_type='word'):
     vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
                       lower=opt.lower)
 
     with open(filename) as f:
         for sent in f.readlines():
-            for word in sent.split():
-                vocab.add(word)
+            if input_type == "word":
+                for word in sent.split():
+                    vocab.add(word)
+            elif input_type == "char":
+                sent = sent.strip()
+                for char in sent:
+                    vocab.add(char)
+            else:
+                raise NotImplementedError("Input type not implemented")
 
     originalSize = vocab.size()
     vocab = vocab.prune(size)
@@ -249,7 +260,7 @@ def main():
     
     if opt.join_vocab:
         dicts['src'] = initVocabulary('source', [opt.train_src, opt.train_tgt], opt.src_vocab,
-                                      opt.src_vocab_size, join=True, input_type=opt.input_type)
+                                      opt.tgt_vocab_size, join=True, input_type=opt.input_type)
         dicts['tgt'] = dicts['src']
     else:
         dicts['src'] = initVocabulary('source', opt.train_src, opt.src_vocab,
@@ -257,9 +268,11 @@ def main():
 
         dicts['tgt'] = initVocabulary('target', opt.train_tgt, opt.tgt_vocab,
                                       opt.tgt_vocab_size, input_type=opt.input_type)
-                                      
-    print('Preparing training ...')
     train = {}
+    valid = {}
+    
+    print('Preparing training ...')
+        
     train['src'], train['tgt'] = makeData(opt.train_src, opt.train_tgt,
                                           dicts['src'], dicts['tgt'],
                                           max_src_length=opt.src_seq_length,
@@ -268,24 +281,54 @@ def main():
                                           input_type=opt.input_type)
 
     print('Preparing validation ...')
-    valid = {}
+   
     valid['src'], valid['tgt'] = makeData(opt.valid_src, opt.valid_tgt,
                                           dicts['src'], dicts['tgt'], 
                                           max_src_length=max(1024,opt.src_seq_length), 
                                           max_tgt_length=max(1024,opt.tgt_seq_length),
                                           input_type=opt.input_type)
+    
+    if opt.format == 'raw':                                  
+        
 
-    if opt.src_vocab is None:
-        saveVocabulary('source', dicts['src'], opt.save_data + '.src.dict')
-    if opt.tgt_vocab is None:
-        saveVocabulary('target', dicts['tgt'], opt.save_data + '.tgt.dict')
+        if opt.src_vocab is None:
+            saveVocabulary('source', dicts['src'], opt.save_data + '.src.dict')
+        if opt.tgt_vocab is None:
+            saveVocabulary('target', dicts['tgt'], opt.save_data + '.tgt.dict')
 
-    print('Saving data to \'' + opt.save_data + '.train.pt\'...')
-    save_data = {'dicts': dicts,
-                 'type':  opt.src_type,
-                 'train': train,
-                 'valid': valid}
-    torch.save(save_data, opt.save_data + '.train.pt')
+        print('Saving data to \'' + opt.save_data + '.train.pt\'...')
+        save_data = {'dicts': dicts,
+                     'type':  opt.src_type,
+                     'train': train,
+                     'valid': valid}
+        torch.save(save_data, opt.save_data + '.train.pt')
+        print("Done")
+    elif opt.format == 'bin':
+        # save the dictionary first
+        torch.save(dicts, opt.save_data + '.dict.pt')
+        
+        train_bin = dict()
+        
+        # binarize the data now
+        for set in ['src', 'tgt']:
+            train_bin[set] = IndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set )
+            
+            for tensor_sent in train[set]:
+                train_bin[set].add_item(tensor_sent)
+                
+            train_bin[set].finalize(opt.save_data + ".train.%s.idx" % set)
+            
+        valid_bin = dict()
+        for set in ['src', 'tgt']:
+            valid_bin[set] = IndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set )
+            
+            for tensor_sent in valid[set]:
+                valid_bin[set].add_item(tensor_sent)
+                
+            valid_bin[set].finalize(opt.save_data + ".valid.%s.idx" % set)
+        
+        print("Done")
+    else: raise NotImplementedError
 
 
 if __name__ == "__main__":

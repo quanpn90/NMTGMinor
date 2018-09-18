@@ -95,11 +95,12 @@ class Dict(object):
 
         newDict = Dict()
         newDict.lower = self.lower
-
+        
         # Add special entries in all cases.
         for i in self.special:
             newDict.addSpecial(self.idxToLabel[i])
 
+        size = size - len(self.special) - 1
         for i in idx[:size].tolist():
             newDict.add(self.idxToLabel[i])
 
