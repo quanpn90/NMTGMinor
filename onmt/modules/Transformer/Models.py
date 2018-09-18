@@ -59,33 +59,12 @@ class TransformerEncoder(nn.Module):
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
         
         self.positional_encoder = positional_encoder
+    
+        self.build_modules()
+        
+    def build_modules(self):
         
         self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
-    
-        self.pretrained_point = -1
-        
-    def mark_pretrained(self):
-        
-        self.pretrained_point = self.layers
-        
-    
-    def add_layers(self, n_new_layer):
-        
-        
-        
-        self.new_modules = list()
-        self.layers += n_new_layer
-        
-        for i in range(n_new_layer):
-            layer = EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) 
-            
-            # the first layer will use the preprocessing which is the last postprocessing
-            if i == 0:
-                layer.preprocess_attn = self.postprocess_layer
-                # replace the last postprocessing layer with a new one
-                self.postprocess_layer = PrePostProcessing(d_model, 0, sequence='n')
-            
-            self.layer_modules.append(layer)
 
     def forward(self, input, **kwargs):
         """
@@ -97,7 +76,7 @@ class TransformerEncoder(nn.Module):
             mask_src 
             
         """
-        
+
         """ Embedding: batch_size x len_src x d_model """
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         
@@ -177,11 +156,15 @@ class TransformerDecoder(nn.Module):
         
         self.positional_encoder = positional_encoder
         
-        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
         
         len_max = self.positional_encoder.len_max
         mask = torch.ByteTensor(np.triu(np.ones((len_max,len_max)), k=1).astype('uint8'))
         self.register_buffer('mask', mask)
+        
+        self.build_modules()
+        
+    def build_modules(self):
+        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
     
     def renew_buffer(self, new_len):
         

@@ -41,27 +41,27 @@ class StochasticTransformerEncoder(TransformerEncoder):
     
     def __init__(self, opt, dicts, positional_encoder):
     
+        self.death_rate = opt.death_rate
+        
+        # build_modules will be called from the inherited constructor
         super(StochasticTransformerEncoder, self).__init__(opt, dicts, positional_encoder)
             
+        e_length = expected_length(self.layers, self.death_rate)    
         
-        self.death_rate = opt.death_rate
+        print("Stochastic Encoder with %.2f expected layers" % e_length) 
+       
+    def build_modules(self):
+        
         self.layer_modules = nn.ModuleList()
 
         for l in range(self.layers):
             
             # linearly decay the death rate
-            
             death_r = ( l + 1.0 ) / self.layers * self.death_rate
             
             block = StochasticEncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, death_rate=death_r)
             
             self.layer_modules.append(block)
-        
-        e_length = expected_length(self.layers, self.death_rate)    
-        
-        print("Stochastic Encoder with %.2f expected layers" % e_length) 
-       
-        
 
 class StochasticTransformerDecoder(TransformerDecoder):
     """Encoder in 'Attention is all you need'
@@ -75,12 +75,20 @@ class StochasticTransformerDecoder(TransformerDecoder):
     
     def __init__(self, opt, dicts, positional_encoder):
     
-        super(StochasticTransformerDecoder, self).__init__(opt, dicts, positional_encoder)
-            
-        
         self.death_rate = opt.death_rate
         
-        self.layer_modules = nn.ModuleList()       
+        # build_modules will be called from the inherited constructor
+        super(StochasticTransformerDecoder, self).__init__(opt, dicts, positional_encoder)
+        
+        e_length = expected_length(self.layers, self.death_rate)    
+        
+        print("Stochastic Decoder with %.2f expected layers" % e_length) 
+        
+    
+    def build_modules(self):
+        
+        self.layer_modules = nn.ModuleList()
+        
         for l in range(self.layers):
             
             # linearly decay the death rate
@@ -90,18 +98,8 @@ class StochasticTransformerDecoder(TransformerDecoder):
             
             self.layer_modules.append(block)
             
-        e_length = expected_length(self.layers, self.death_rate)    
-        
-        print("Stochastic Decoder with %.2f expected layers" % e_length) 
-        # self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(e_length)])
         
         
-    
-        
-
-    
-
-
 class StochasticTransformer(NMTModel):
     """Main model in 'Attention is all you need' """
     
