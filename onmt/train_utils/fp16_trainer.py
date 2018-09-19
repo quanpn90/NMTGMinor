@@ -168,8 +168,8 @@ class FP16XETrainer(XETrainer):
                 # Scale UP the loss so that the gradients are not cutoff
                 normalizer = 1.0 / self.scaler.loss_scale 
                 
-                if self.opt.normalize_gradient:
-                    normalizer = tgt_size / self.scaler.loss_scale
+                #~ if self.opt.normalize_gradient:
+                    #~ normalizer = tgt_size / self.scaler.loss_scale
                 
                 loss_data, _ = self.loss_function(outputs, targets, generator=self.model.generator, 
                                                              backward=True, mask=None, normalizer=normalizer)
