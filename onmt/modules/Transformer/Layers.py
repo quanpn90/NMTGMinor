@@ -565,28 +565,41 @@ class PositionalEncoding(nn.Module):
         super(PositionalEncoding, self).__init__()
         self.len_max=len_max
         self.d_model = d_model
+        self.data_type = None
         
         self.renew(len_max)
         
         self.p = p
+        
     
     def renew(self, new_max_len):
-        
         ## detele the old variable to avoid Pytorch's error when register new buffer
         if hasattr(self, 'pos_emb'):
             del self.pos_emb
-        position = torch.arange(0,new_max_len).float()                      
+        position = torch.arange(0,new_max_len).float()  
+        
+                            
         num_timescales = self.d_model // 2
         log_timescale_increment = math.log(10000) / (num_timescales-1)
         inv_timescales = torch.exp(torch.arange(0, num_timescales).float() * -log_timescale_increment)
         scaled_time = position.unsqueeze(1) * inv_timescales.unsqueeze(0)
         pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 1)
+        
+        if self.data_type is not None:
+            pos_emb.type(self.data_type)
         # wrap in a buffer so that model can be moved to GPU
-        self.register_buffer('pos_emb', pos_emb)
+        self.register_buffer('pos_emb', pos_emb)        
+        self.data_type = self.pos_emb.type()
+        self.len_max = new_max_len
 
         
     def forward(self, word_emb, t=None):
+    
         len_seq = t if t else word_emb.size(1)
+        
+        if len_seq > self.len_max:
+            self.renew(len_seq)
+        
         if word_emb.size(1) == len_seq:
             out = word_emb + Variable(self.pos_emb[:len_seq, :], requires_grad=False)
         else:

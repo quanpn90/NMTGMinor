@@ -13,10 +13,10 @@ onmt.Markdown.add_md_help_argument(parser)
 
 parser.add_argument('-model', required=True,
                     help='Path to model .pt file')
+parser.add_argument('-input_type', default="word",
+                    help="Input type: word/char")                    
 parser.add_argument('-src',   required=True,
                     help='Source sequence to decode (one line per sequence)')
-parser.add_argument('-src_img_dir',   default="",
-                    help='Source image directory')
 parser.add_argument('-tgt',
                     help='True target sequence (optional)')
 parser.add_argument('-output', default='pred.txt',
@@ -74,10 +74,20 @@ def addone(f):
         yield line
     yield None
     
-def len_penalty(s, l, alpha):
+def lenPenalty(s, l, alpha):
     
     l_term = math.pow(l, alpha)
     return s / l_term
+    
+def getSentenceFromTokens(tokens, input_type):
+    
+    if input_type == 'word':
+        sent = " ".join(tokens)
+    elif input_type == 'char':
+        sent = "".join(tokens)
+    else:
+        raise NotImplementedError
+    return sent
 
 def main():
     opt = parser.parse_args()
@@ -118,11 +128,21 @@ def main():
         
     for line in addone(inFile):
         if line is not None:
-            srcTokens = line.split()
-            srcBatch += [srcTokens]
-            if tgtF:
-                tgtTokens = tgtF.readline().split() if tgtF else None
-                tgtBatch += [tgtTokens]
+            if opt.input_type == 'word':
+                srcTokens = line.split()
+                srcBatch += [srcTokens]
+                if tgtF:
+                    tgtTokens = tgtF.readline().split() if tgtF else None
+                    tgtBatch += [tgtTokens]
+            elif opt.input_type == 'char':
+                srcTokens = list(line.strip())
+                srcBatch += [srcTokens]
+                if tgtF:
+                    #~ tgtTokens = tgtF.readline().split() if tgtF else None
+                    tgtTokens = list(tgtF.readline().strip()) if tgtF else None
+                    tgtBatch += [tgtTokens]
+            else:
+                raise NotImplementedError("Input type unknown")
 
             if len(srcBatch) < opt.batch_size:
                 continue
@@ -138,7 +158,7 @@ def main():
             predScore_ = []
             for bb, ss, ll in zip(predBatch, predScore, predLength):
                 #~ ss_ = [s_/numpy.maximum(1.,len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
-                ss_ = [len_penalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
+                ss_ = [lenPenalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
                 ss_origin = [(s_, len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
                 sidx = numpy.argsort(ss_)[::-1]
                 #~ print(ss_, sidx, ss_origin)
@@ -156,22 +176,29 @@ def main():
         for b in range(len(predBatch)):
                         
             count += 1
-                        
+            
+            bestHyp =  getSentenceFromTokens(predBatch[b][0], opt.input_type)            
             if not opt.print_nbest:
                 #~ print(predBatch[b][0])
-                outF.write(" ".join(predBatch[b][0]) + '\n')
+                outF.write(bestHyp + '\n')
                 outF.flush()
 
             if opt.verbose:
-                srcSent = ' '.join(srcBatch[b])
+                srcSent = getSentenceFromTokens(srcBatch[b], opt.input_type)
                 if translator.tgt_dict.lower:
                     srcSent = srcSent.lower()
                 print('SENT %d: %s' % (count, srcSent))
-                print('PRED %d: %s' % (count, " ".join(predBatch[b][0])))
+                
+                
+                print('PRED %d: %s' % (count, bestHyp))
                 print("PRED SCORE: %.4f" %  predScore[b][0])
 
                 if tgtF is not None:
-                    tgtSent = ' '.join(tgtBatch[b])
+                    #~ if opt.input_type == 'word':
+                        #~ tgtSent = ' '.join(tgtBatch[b]) 
+                    #~ elif opt.input_type == 'char':
+                        #~ tgtSent = ''.join(tgtBatch[b])
+                    tgtSent = getSentenceFromTokens(tgtBatch[b], opt.input_type)
                     if translator.tgt_dict.lower:
                         tgtSent = tgtSent.lower()
                     print('GOLD %d: %s ' % (count, tgtSent))
@@ -181,8 +208,9 @@ def main():
                     print('\nBEST HYP:')
                     for n in range(opt.n_best):
                         idx = n
-                        print("[%.4f] %s" % (predScore[b][idx],
-                            " ".join(predBatch[b][idx])))
+                        sent = getSentenceFromTokens(predBatch[b][idx], opt.input_type)
+                        print("[%.4f] %s" % (predScore[b][idx], sent))
+                            
 
                 print('')
 

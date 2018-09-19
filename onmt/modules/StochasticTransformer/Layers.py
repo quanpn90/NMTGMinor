@@ -164,39 +164,39 @@ class StochasticDecoderLayer(DecoderLayer):
     
         return input, coverage
         
-    def step(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, buffer=None):
-        """ Self attention layer 
-            layernorm > attn > dropout > residual
-        """        
-        query = self.preprocess_attn(input, mask=pad_mask_tgt)
-        
-        if buffer is not None:
-            buffer = torch.cat([buffer, query], dim=1)
-        else:
-            buffer = query
-            
-
-        out, _ = self.multihead_tgt(query, buffer, buffer, mask_tgt, 
-                                    query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
-        
-
-        input = self.postprocess_attn(out, input)
-        
-        """ Context Attention layer 
-            layernorm > attn > dropout > residual
-        """
-        
-        query = self.preprocess_src_attn(input, mask=pad_mask_tgt)
-        out, coverage = self.multihead_src(query, context, context, mask_src, 
-                                           query_mask=pad_mask_tgt, value_mask=None)
-        input = self.postprocess_src_attn(out, input)
-        
-        """ Feed forward layer 
-            layernorm > ffn > dropout > residual
-        """
-        out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask_tgt), 
-                                           mask=pad_mask_tgt)
-        input = self.postprocess_ffn(out, input)
-        
-        
-        return input, coverage, buffer
+    #~ def step(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, buffer=None):
+        #~ """ Self attention layer 
+            #~ layernorm > attn > dropout > residual
+        #~ """        
+        #~ query = self.preprocess_attn(input, mask=pad_mask_tgt)
+        #~ 
+        #~ if buffer is not None:
+            #~ buffer = torch.cat([buffer, query], dim=1)
+        #~ else:
+            #~ buffer = query
+            #~ 
+#~ 
+        #~ out, _ = self.multihead_tgt(query, buffer, buffer, mask_tgt, 
+                                    #~ query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
+        #~ 
+#~ 
+        #~ input = self.postprocess_attn(out, input)
+        #~ 
+        #~ """ Context Attention layer 
+            #~ layernorm > attn > dropout > residual
+        #~ """
+        #~ 
+        #~ query = self.preprocess_src_attn(input, mask=pad_mask_tgt)
+        #~ out, coverage = self.multihead_src(query, context, context, mask_src, 
+                                           #~ query_mask=pad_mask_tgt, value_mask=None)
+        #~ input = self.postprocess_src_attn(out, input)
+        #~ 
+        #~ """ Feed forward layer 
+            #~ layernorm > ffn > dropout > residual
+        #~ """
+        #~ out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask_tgt), 
+                                           #~ mask=pad_mask_tgt)
+        #~ input = self.postprocess_ffn(out, input)
+        #~ 
+        #~ 
+        #~ return input, coverage, buffer

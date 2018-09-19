@@ -116,6 +116,8 @@ class XETrainer(BaseTrainer):
         print('Writing to %s' % file_name)
         torch.save(checkpoint, file_name)
         
+        # check te save directory here
+        
     def eval(self, data):
         total_loss = 0
         total_words = 0
