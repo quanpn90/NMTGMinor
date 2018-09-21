@@ -102,6 +102,20 @@ class Translator(object):
                             [self.opt.gpu], volatile=True,
                             data_type=self._type, max_seq_num =self.opt.batch_size)
 
+    def buildASRData(self, srcData, goldBatch):
+        # This needs to be the same as preprocess.py.
+        
+        tgtData = None
+        if goldBatch:
+            tgtData = [self.tgt_dict.convertToIdx(b,
+                       onmt.Constants.UNK_WORD,
+                       onmt.Constants.BOS_WORD,
+                       onmt.Constants.EOS_WORD) for b in goldBatch]
+
+        return onmt.Dataset(srcData, tgtData, 9999,
+                            [self.opt.gpu], volatile=True,
+                            data_type=self._type, max_seq_num =self.opt.batch_size)
+
     def buildTargetTokens(self, pred, src, attn):
         tokens = self.tgt_dict.convertToLabels(pred, onmt.Constants.EOS)
         tokens = tokens[:-1]  # EOS
@@ -518,6 +532,28 @@ class Translator(object):
     def translate(self, srcBatch, goldBatch):
         #  (1) convert words to indexes
         dataset = self.buildData(srcBatch, goldBatch)
+        batch = self.to_variable(dataset.next()[0])
+        src, tgt = batch
+        batchSize = self._getBatchSize(src)
+
+        #  (2) translate
+        pred, predScore, attn, predLength, goldScore, goldWords = self.translateBatch(src, tgt)
+        
+
+        #  (3) convert indexes to words
+        predBatch = []
+        #~ print(pred)
+        for b in range(batchSize):
+            predBatch.append(
+                [self.buildTargetTokens(pred[b][n], srcBatch[b], attn[b][n])
+                 for n in range(self.opt.n_best)]
+            )
+
+        return predBatch, predScore, predLength, goldScore, goldWords
+
+    def translateASR(self, srcBatch, goldBatch):
+        #  (1) convert words to indexes
+        dataset = self.buildASRData(srcBatch, goldBatch)
         batch = self.to_variable(dataset.next()[0])
         src, tgt = batch
         batchSize = self._getBatchSize(src)

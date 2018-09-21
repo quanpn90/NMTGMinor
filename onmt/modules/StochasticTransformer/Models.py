@@ -142,6 +142,8 @@ class StochasticTransformerEncoder(nn.Module):
             pad_mask = torch.autograd.Variable(input.narrow(2,0,1).squeeze(2).data.ne(onmt.Constants.PAD))  # batch_size x len_src
             input = input.narrow(2,1,input.size(2)-1)
             emb = self.audio_trans.forward(input.contiguous().view(-1,input.size(2))).view(input.size(0),input.size(1),-1)
+
+
         """ Scale the emb by sqrt(d_model) """
 
         if self.time == 'positional_encoding':
@@ -357,7 +359,6 @@ class StochasticTransformerDecoder(nn.Module):
         batch_size = input_.size(0)
         
         
-        
         """ Embedding: batch_size x 1 x d_model """
         emb = self.word_lut(input_)
        
@@ -368,7 +369,7 @@ class StochasticTransformerDecoder(nn.Module):
         if self.time == 'positional_encoding':
             emb = self.time_transformer(emb, t=input.size(1))
         else:
-            prev_h = buffer[0] if buffer is None else None
+            prev_h = buffer[0] if buffer is not None else None
             emb = self.time_transformer(emb, prev_h)
             # output_buffer.append(emb[1])
             buffer[0] = emb[1]
@@ -381,9 +382,13 @@ class StochasticTransformerDecoder(nn.Module):
         emb = self.preprocess_layer(emb)
         
         # batch_size x 1 x len_src
-        mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
+        if(self.encoder_type == "audio" and src.data.dim() == 3):
+            mask_src = src.data.narrow(2,0,1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+            pad_mask_src = torch.autograd.Variable(src.data.narrow(2,0,1).squeeze(2).ne(onmt.Constants.PAD))  # batch_size x len_src
+        else:
+            mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
         
-        pad_mask_src = torch.autograd.Variable(src.data.ne(onmt.Constants.PAD))
+            pad_mask_src = torch.autograd.Variable(src.data.ne(onmt.Constants.PAD))
         
         len_tgt = input.size(1)
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]

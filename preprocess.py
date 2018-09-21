@@ -25,6 +25,10 @@ parser.add_argument('-sort_type', default="ascending",
                     help="Type of sorting. Options are [ascending|descending].")
 parser.add_argument('-src_img_dir', default=".",
                     help="Location of source images")
+parser.add_argument('-stride', type=int, default=1,
+                    help="Stride on input features")
+parser.add_argument('-concat', type=int, default=1,
+                    help="Concate sequential audio features to decrease sequence length")
 
 
 parser.add_argument('-train_src', required=True,
@@ -237,7 +241,7 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
     return src, tgt
 
 
-def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64):
+def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64,stride=1,concat=1):
     src, tgt = [], []
     sizes = []
     count, ignored = 0, 0
@@ -245,19 +249,30 @@ def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64
     print('Processing %s & %s ...' % (srcFile, tgtFile))
 
     #srcF = open(srcFile)
-    srcF = h5.File(srcFile)
+    srcF = h5.File(srcFile,'r')
     tgtF = open(tgtFile)
 
     index = 0;
 
     while True:
         tline = tgtF.readline()
-        sline = torch.from_numpy(np.array(srcF[str(index)]))
-        index += 1;
-
         # normal end of file
         if tline == "":
             break
+
+        if(stride == 1):
+            sline = torch.from_numpy(np.array(srcF[str(index)]))
+        else:
+            sline = torch.from_numpy(np.array(srcF[str(index)])[0::opt.stride])
+
+        
+        if(concat != 1):
+            add = (concat-sline.size()[0]%concat)%concat
+            z= torch.FloatTensor(add, sline.size()[1]).zero_()
+            sline = torch.cat((sline,z),0)
+            sline = sline.reshape((sline.size()[0]/concat,sline.size()[1]*concat))
+        index += 1;
+
 
 
         tline = tline.strip()
@@ -269,7 +284,7 @@ def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64
 
         tgtWords = list(tline)
 
-        if len(tgtWords) <= max_tgt_length - 2:
+        if len(tgtWords) <= max_tgt_length - 2 and sline.size(0) <= max_src_length:
 
             # Check truncation condition.
             if opt.tgt_seq_length_trunc != 0:
@@ -339,14 +354,16 @@ def main():
         train['src'], train['tgt'] = makeASRData(opt.train_src, opt.train_tgt,
                                            dicts['tgt'],
                                           max_src_length=opt.src_seq_length,
-                                          max_tgt_length=opt.tgt_seq_length)
+                                                 max_tgt_length=opt.tgt_seq_length,
+                                                 stride=opt.stride,concat=opt.concat)
 
         print('Preparing validation ...')
         valid = {}
         valid['src'], valid['tgt'] = makeASRData(opt.valid_src, opt.valid_tgt,
                                              dicts['tgt'],
                                           max_src_length=max(1024,opt.src_seq_length),
-                                          max_tgt_length=max(1024,opt.tgt_seq_length))
+                                                 max_tgt_length=max(1024,opt.tgt_seq_length),
+                                                 stride=opt.stride,concat=opt.concat)
 
     else:
         print('Preparing training ...')

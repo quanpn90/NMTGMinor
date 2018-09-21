@@ -38,7 +38,10 @@ class EnsembleTranslator(object):
             model_opt = checkpoint['opt']
             
             if i == 0:
-                self.src_dict = checkpoint['dicts']['src']
+                if("src" in checkpoint['dicts']):
+                    self.src_dict = checkpoint['dicts']['src']
+                else:
+                    self._type = "audio"
                 self.tgt_dict = checkpoint['dicts']['tgt']
             
             # Build model from the saved option
@@ -134,13 +137,12 @@ class EnsembleTranslator(object):
         return attn
 
     def _getBatchSize(self, batch):
-        if self._type == "text":
+#        if self._type == "text":
             return batch.size(1)
-        else:
-            return batch.size(0)
+#        else:
+#            return batch.size(0)
             
     def to_variable(self, data):
-        
         for i, t in enumerate(data):
             if data[i] is not None:
                 if self.cuda:
@@ -175,6 +177,20 @@ class EnsembleTranslator(object):
                             [self.opt.gpu], volatile=True,
                             data_type=self._type, max_seq_num =self.opt.batch_size)
 
+    def buildASRData(self, srcData, goldBatch):
+        # This needs to be the same as preprocess.py.
+        
+        tgtData = None
+        if goldBatch:
+            tgtData = [self.tgt_dict.convertToIdx(b,
+                       onmt.Constants.UNK_WORD,
+                       onmt.Constants.BOS_WORD,
+                       onmt.Constants.EOS_WORD) for b in goldBatch]
+
+        return onmt.Dataset(srcData, tgtData, 9999,
+                            [self.opt.gpu], volatile=True,
+                            data_type=self._type, max_seq_num =self.opt.batch_size)
+
     def buildTargetTokens(self, pred, src, attn):
         tokens = self.tgt_dict.convertToLabels(pred, onmt.Constants.EOS)
         tokens = tokens[:-1]  # EOS
@@ -188,7 +204,7 @@ class EnsembleTranslator(object):
 
         beamSize = self.opt.beam_size
         batchSize = self._getBatchSize(srcBatch)
-                    
+            
         vocab_size = self.tgt_dict.size()
         allHyp, allScores, allAttn, allLengths = [], [], [], []
         
@@ -233,7 +249,11 @@ class EnsembleTranslator(object):
         #  (3) Start decoding
             
         # time x batch * beam
-        src = Variable(srcBatch.data.repeat(1, beamSize))
+        if(srcBatch.dim() == 3):
+            #src = Variable(torch.zeros(srcBatch.size(0),srcBatch.size(1),beamSize))
+            src = Variable(srcBatch.data.repeat(1, beamSize,1))
+        else:
+            src = Variable(srcBatch.data.repeat(1, beamSize))
         
         # initialize the beam
         beam = [onmt.Beam(beamSize, self.opt.cuda) for k in range(batchSize)]
@@ -254,7 +274,6 @@ class EnsembleTranslator(object):
             # input size: 1 x ( batch * beam )
             input = torch.stack([b.getCurrentState() for b in beam
                                  if not b.done]).t().contiguous().view(1, -1)
-            
             """  
                 Inefficient decoding implementation
                 We re-compute all states for every time step
@@ -328,7 +347,11 @@ class EnsembleTranslator(object):
             hyps, attn, length = zip(*[beam[b].getHyp(k) for k in ks[:n_best]])
             allHyp += [hyps]
             allLengths += [length]
-            valid_attn = srcBatch.data[:, b].ne(onmt.Constants.PAD) \
+            if(srcBatch.data.dim() == 3):
+                valid_attn = srcBatch.data.narrow(2,0,1).squeeze(2)[:, b].ne(onmt.Constants.PAD) \
+                                            .nonzero().squeeze(1)            
+            else:
+                valid_attn = srcBatch.data[:, b].ne(onmt.Constants.PAD) \
                                             .nonzero().squeeze(1)
             attn = [a.index_select(1, valid_attn) for a in attn]
             allAttn += [attn]
@@ -353,6 +376,27 @@ class EnsembleTranslator(object):
     def translate(self, srcBatch, goldBatch):
         #  (1) convert words to indexes
         dataset = self.buildData(srcBatch, goldBatch)
+        batch = self.to_variable(dataset.next()[0])
+        src, tgt = batch
+        batchSize = self._getBatchSize(src)
+
+        #  (2) translate
+        pred, predScore, attn, predLength, goldScore, goldWords = self.translateBatch(src, tgt)
+        
+
+        #  (3) convert indexes to words
+        predBatch = []
+        for b in range(batchSize):
+            predBatch.append(
+                [self.buildTargetTokens(pred[b][n], srcBatch[b], attn[b][n])
+                 for n in range(self.opt.n_best)]
+            )
+
+        return predBatch, predScore, predLength, goldScore, goldWords
+
+    def translateASR(self, srcBatch, goldBatch):
+        #  (1) convert words to indexes
+        dataset = self.buildASRData(srcBatch, goldBatch)
         batch = self.to_variable(dataset.next()[0])
         src, tgt = batch
         batchSize = self._getBatchSize(src)

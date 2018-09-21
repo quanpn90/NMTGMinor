@@ -80,6 +80,8 @@ parser.add_argument('-residual_type', default='regular',
 # Optimization options
 parser.add_argument('-encoder_type', default='text',
                     help="Type of encoder to use. Options are [text|img|audio].")
+parser.add_argument('-input_size', type=int, default=2048,
+    help='Size of input features')  
 parser.add_argument('-batch_size_words', type=int, default=2048,
                     help='Maximum batch size in word dimension')
 parser.add_argument('-batch_size_sents', type=int, default=128,

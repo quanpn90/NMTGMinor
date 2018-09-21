@@ -5,7 +5,7 @@ import onmt
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer
 from onmt.modules.Transformer.Layers import PositionalEncoding
 
-MAX_SIZE=2048
+MAX_SIZE=8192
 
 def build_model(opt, dicts):
 
@@ -22,6 +22,9 @@ def build_model(opt, dicts):
     
     if not hasattr(opt, 'residual_type'):
         opt.residual_type = 'regular'
+
+    if not hasattr(opt, 'input_size'):
+        opt.input_size = 40
     
     onmt.Constants.layer_norm = opt.layer_norm
     onmt.Constants.weight_norm = opt.weight_norm
@@ -56,13 +59,13 @@ def build_model(opt, dicts):
             positional_encoder = None
         #~ elif opt.time == 'gru':
             #~ positional_encoder = nn.GRU(opt.model_size, opt.model_size, 1, batch_first=True)
-        #~ elif opt.time == 'lstm':
-            #~ positional_encoder = nn.LSTM(opt.model_size, opt.model_size, 1, batch_first=True)
+        #elif opt.time == 'lstm':
+        #    positional_encoder = nn.LSTM(opt.model_size, opt.model_size, 1, batch_first=True)
 
         if opt.encoder_type == "text":
             encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
         else:
-            encoder = TransformerEncoder(opt, 40, positional_encoder)
+            encoder = TransformerEncoder(opt, opt.input_size, positional_encoder)
 
         decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder)
         
@@ -89,7 +92,7 @@ def build_model(opt, dicts):
         if opt.encoder_type == "text":
             encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder)
         else:
-            encoder = StochasticTransformerEncoder(opt, 40, positional_encoder)
+            encoder = StochasticTransformerEncoder(opt, opt.input_size, positional_encoder)
 
         decoder = StochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
         

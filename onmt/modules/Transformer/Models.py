@@ -408,7 +408,11 @@ class TransformerDecodingState(DecoderState):
     
     def __init__(self, src, context, beamSize=1):
         
-        self.src = src
+        #if audio only toake one dimesion since only used for mask
+        if(src.dim() == 3):
+            self.src = src.narrow(2,0,1).squeeze(2)
+        else:
+            self.src = src
         
         #~ context = 
         

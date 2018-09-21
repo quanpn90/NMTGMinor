@@ -47,7 +47,7 @@ from torch.nn.modules.loss import _Loss
         #~ return loss, sample_size, logging_output
 
 
-class LossFuncBase(nn.Module):
+class LossFuncBase(_Loss):
 
     """
     Class for managing efficient loss computation. Handles
@@ -108,7 +108,7 @@ class NMTLossFunc(LossFuncBase):
         else:
             weight = torch.ones(output_size)
             weight[self.padding_idx] = 0     
-            self.func = nn.NLLLoss(weight, size_average=False)
+            self.func = nn.NLLLoss(weight, reduction='sum')
         self.confidence = 1.0 - label_smoothing
         self.label_smoothing = label_smoothing
 
@@ -121,13 +121,12 @@ class NMTLossFunc(LossFuncBase):
         if self.confidence < 1: # label smoothing
             tdata = gtruth.data
             
-            # squeeze is a trick to know if mask has dimension or not
+            #~ # squeeze is a trick to know if mask has dimension or not
             mask = torch.nonzero(tdata.eq(self.padding_idx)).squeeze()
             likelihood = torch.gather(scores.data, 1, tdata.unsqueeze(1))
             tmp_ = self.one_hot.repeat(gtruth.size(0), 1)
             tmp_.scatter_(1, tdata.unsqueeze(1), self.confidence)
             if mask.numel() > 0:
-                #~ print(mask)
                 likelihood.index_fill_(0, mask, 0)
                 tmp_.index_fill_(0, mask, 0)
            
@@ -143,11 +142,11 @@ class NMTLossFunc(LossFuncBase):
             #~ smooth_loss = smooth_loss.sum()
             #~ 
             #~ eps_i = self.smoothing_value
-            #~ loss = (1. - self.label_smoothing) * nll_loss + eps_i * smooth_loss
-            #~ loss_data = nll_loss.data
+            #~ loss = (1. - self.label_smoothing)   * nll_loss + eps_i * smooth_loss
+            #~ loss_data = nll_loss.data.item()
             
         else:
-            loss = self.func(scores, gtruth)
+            loss = self.func(scores.float(), gtruth)
             loss_data = loss.data.item()
 
         return (loss, loss_data)
@@ -173,7 +172,6 @@ class NMTLossFunc(LossFuncBase):
         outputs = outputs.contiguous().view(-1, outputs.size(-1))
         targets = targets.view(-1)
         
-        #~ mask = None
         
         if mask is not None:
             """ We remove all positions with PAD """
@@ -195,41 +193,47 @@ class NMTLossFunc(LossFuncBase):
             one in the rest of the network
             saving a lot of memory 
         """
-        if generator is not None:
-            outputs = torch.autograd.Variable(detached_outputs.data, requires_grad=(backward))
+        dists = generator(clean_input)
+        
+        loss, loss_data = self._compute_loss(dists, clean_targets)
+        
+        if backward:
+            loss.div(normalizer).backward()
+        #~ if generator is not None:
+            #~ outputs = torch.autograd.Variable(detached_outputs.data, requires_grad=(backward))
             
         
         #~ split_size = int(math.ceil(self.shard_split / batch_size))
         split_size = self.shard_split
         
-        outputs_split = torch.split(outputs, split_size)
-        targets_split = torch.split(clean_targets, split_size)
+        #~ outputs_split = torch.split(outputs, split_size)
+        #~ targets_split = torch.split(clean_targets, split_size)
         
-        loss_data = 0
-        for i, (outputs_t, target_t) in enumerate(zip(outputs_split, targets_split)):
-            
-            # if the generator is provided then transform
-            if generator is not None:
-                dist_t = generator(outputs_t)
-            else:
-                dist_t = outputs_t 
-            
-            # actual loss function between the predictive distribution and target
-            loss_t, loss_data_t = self._compute_loss(dist_t, target_t)
-
-            loss_data += loss_data_t
-            
-            # backward from loss
-            # note: we only compute the gradients w.r.t the outputs 
-            if backward:
-                loss_t.div(normalizer).backward(retain_graph=True)
-            
-        grad_outputs = None if outputs.grad is None else outputs.grad.data
+        #~ loss_data = 0
+        #~ for i, (outputs_t, target_t) in enumerate(zip(outputs_split, targets_split)):
+            #~ 
+            #~ # if the generator is provided then transform
+            #~ if generator is not None:
+                #~ dist_t = generator(outputs_t)
+            #~ else:
+                #~ dist_t = outputs_t 
+            #~ 
+            #~ # actual loss function between the predictive distribution and target
+            #~ loss_t, loss_data_t = self._compute_loss(dist_t, target_t)
+#~ 
+            #~ loss_data += loss_data_t
+            #~ 
+            #~ # backward from loss
+            #~ # note: we only compute the gradients w.r.t the outputs 
+            #~ if backward:
+                #~ loss_t.backward(retain_graph=True)
+            #~ 
+        #~ grad_outputs = None if outputs.grad is None else outputs.grad.data
         
         
-        if grad_outputs is not None:
+        #~ if grad_outputs is not None:
             #~ print(type(detached_outputs))
             #~ grad_outputs = torch.autograd.grad(detached_outputs, original_outputs, grad_outputs=grad_outputs)
-            detached_outputs.backward(grad_outputs)
+            #~ detached_outputs.backward(grad_outputs)
         
-        return loss_data, grad_outputs
+        return loss_data, None

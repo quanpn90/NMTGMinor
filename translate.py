@@ -7,6 +7,8 @@ import argparse
 import math
 import numpy
 import sys
+import h5py as h5
+import numpy as np
 
 parser = argparse.ArgumentParser(description='translate.py')
 onmt.Markdown.add_md_help_argument(parser)
@@ -17,6 +19,13 @@ parser.add_argument('-src',   required=True,
                     help='Source sequence to decode (one line per sequence)')
 parser.add_argument('-src_img_dir',   default="",
                     help='Source image directory')
+parser.add_argument('-stride', type=int, default=1,
+                    help="Stride on input features")
+parser.add_argument('-concat', type=int, default=1,
+                    help="Concate sequential audio features to decrease sequence length")
+parser.add_argument('-encoder_type', default='text',
+                    help="Type of encoder to use. Options are [text|img|audio].")
+
 parser.add_argument('-tgt',
                     help='True target sequence (optional)')
 parser.add_argument('-output', default='pred.txt',
@@ -106,89 +115,83 @@ def main():
         
         # here we are trying to 
     inFile = None
+
+    translator = onmt.EnsembleTranslator(opt)
+
     if(opt.src == "stdin"):
             inFile = sys.stdin
             opt.batch_size = 1
+    elif(opt.encoder_type == "audio"):
+        inFile = h5.File(opt.src,'r')
     else:
       inFile = open(opt.src)
-        
-    translator = onmt.EnsembleTranslator(opt)
-        
-    for line in addone(inFile):
-        if line is not None:
-            #~ srcTokens = line.split()
-            srcTokens = list(line.strip())
-            srcBatch += [srcTokens]
-            if tgtF:
-                #~ tgtTokens = tgtF.readline().split() if tgtF else None
-                tgtTokens = list(tgtF.readline().strip()) if tgtF else None
-                tgtBatch += [tgtTokens]
-
-            if len(srcBatch) < opt.batch_size:
-                continue
-        else:
-            # at the end of file, check last batch
-            if len(srcBatch) == 0:
-                break
-
-        predBatch, predScore, predLength, goldScore, numGoldWords  = translator.translate(srcBatch,
-                                                                                    tgtBatch)
-        if opt.normalize:
-            predBatch_ = []
-            predScore_ = []
-            for bb, ss, ll in zip(predBatch, predScore, predLength):
-                #~ ss_ = [s_/numpy.maximum(1.,len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
-                ss_ = [len_penalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
-                ss_origin = [(s_, len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
-                sidx = numpy.argsort(ss_)[::-1]
-                #~ print(ss_, sidx, ss_origin)
-                predBatch_.append([bb[s] for s in sidx])
-                predScore_.append([ss_[s] for s in sidx])
-            predBatch = predBatch_
-            predScore = predScore_    
-                                                              
-        predScoreTotal += sum(score[0].item() for score in predScore)
-        predWordsTotal += sum(len(x[0]) for x in predBatch)
-        if tgtF is not None:
-            goldScoreTotal += sum(goldScore).item()
-            goldWordsTotal += numGoldWords.item()
+      
+    if(opt.encoder_type == "audio"):
+        for i in range(len(inFile)):
+            if(opt.stride == 1):
+                line = torch.from_numpy(np.array(inFile[str(i)]))
+            else:
+                line = torch.from_numpy(np.array(inFile[str(i)])[0::opt.stride])
+            if(opt.concat != 1):
+                add = (opt.concat-line.size()[0]%opt.concat)%opt.concat
+                z= torch.FloatTensor(add, line.size()[1]).zero_()
+                line = torch.cat((line,z),0)
+                line = line.reshape((line.size()[0]/opt.concat,line.size()[1]*opt.concat))
             
-        for b in range(len(predBatch)):
-                        
-            count += 1
-                        
-            if not opt.print_nbest:
-                #~ print(predBatch[b][0])
-                outF.write(''.join(predBatch[b][0]) + '\n')
-                outF.flush()
+            if line is not None:
+                #~ srcTokens = line.split()
+                srcBatch += [line]
+                if tgtF:
+                    #~ tgtTokens = tgtF.readline().split() if tgtF else None
+                    tgtTokens = list(tgtF.readline().strip()) if tgtF else None
+                    tgtBatch += [tgtTokens]
 
-            if opt.verbose:
-                #~ srcSent = ' '.join(srcBatch[b])
-                srcSent = ''.join(srcBatch[b])
-                if translator.tgt_dict.lower:
-                    srcSent = srcSent.lower()
-                print('SENT %d: %s' % (count, srcSent))
-                print('PRED %d: %s' % (count, ''.join(predBatch[b][0])))
-                print("PRED SCORE: %.4f" %  predScore[b][0])
+                if len(srcBatch) < opt.batch_size:
+                    continue
+            else:
+                # at the end of file, check last batch
+                if len(srcBatch) == 0:
+                    break
 
-                if tgtF is not None:
-                    tgtSent = ''.join(tgtBatch[b])
-                    if translator.tgt_dict.lower:
-                        tgtSent = tgtSent.lower()
-                    print('GOLD %d: %s ' % (count, tgtSent))
-                    print("GOLD SCORE: %.4f" % goldScore[b])
 
-                if opt.print_nbest:
-                    print('\nBEST HYP:')
-                    for n in range(opt.n_best):
-                        idx = n
-                        print("[%.4f] %s" % (predScore[b][idx],
-                            " ".join(predBatch[b][idx])))
+            predBatch, predScore, predLength, goldScore, numGoldWords  = translator.translateASR(srcBatch,
+                                                                                    tgtBatch)
+            count,predScore,predWords,goldScore,goldWords = translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords)
+            predScoreTotal += predScore
+            predWordsTotal += predWords
+            goldScoreTotal += goldScore
+            goldWordsTotal += goldWords
+            srcBatch, tgtBatch = [], []
 
-                print('')
-
-        srcBatch, tgtBatch = [], []
+    else:
         
+        for line in addone(inFile):
+            if line is not None:
+                #~ srcTokens = line.split()
+                srcTokens = list(line.strip())
+                srcBatch += [srcTokens]
+                if tgtF:
+                    #~ tgtTokens = tgtF.readline().split() if tgtF else None
+                    tgtTokens = list(tgtF.readline().strip()) if tgtF else None
+                    tgtBatch += [tgtTokens]
+
+                if len(srcBatch) < opt.batch_size:
+                    continue
+            else:
+                # at the end of file, check last batch
+                if len(srcBatch) == 0:
+                    break
+
+
+            predBatch, predScore, predLength, goldScore, numGoldWords  = translator.translate(srcBatch,
+                                                                                    tgtBatch)
+            count,predScore,predWords,goldScore,goldWords = translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords)
+            predScoreTotal += predScore
+            predWordsTotal += predWords
+            goldScoreTotal += goldScore
+            goldWordsTotal += goldWords
+            srcBatch, tgtBatch = [], []
+
     if opt.verbose:
         reportScore('PRED', predScoreTotal, predWordsTotal)
         if tgtF: reportScore('GOLD', goldScoreTotal, goldWordsTotal)
@@ -199,6 +202,65 @@ def main():
 
     if opt.dump_beam:
         json.dump(translator.beam_accum, open(opt.dump_beam, 'w'))
+
+def translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords):
+    if opt.normalize:
+        predBatch_ = []
+        predScore_ = []
+        for bb, ss, ll in zip(predBatch, predScore, predLength):
+            #~ ss_ = [s_/numpy.maximum(1.,len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
+            ss_ = [len_penalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
+            ss_origin = [(s_, len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
+            sidx = numpy.argsort(ss_)[::-1]
+            #~ print(ss_, sidx, ss_origin)
+            predBatch_.append([bb[s] for s in sidx])
+            predScore_.append([ss_[s] for s in sidx])
+        predBatch = predBatch_
+        predScore = predScore_    
+                                                              
+    predScoreTotal = sum(score[0].item() for score in predScore)
+    predWordsTotal = sum(len(x[0]) for x in predBatch)
+    goldScoreTotal = 0
+    goldWordsTotal = 0
+    if tgtF is not None:
+        goldScoreTotal = sum(goldScore).item()
+        goldWordsTotal = numGoldWords.item()
+            
+    for b in range(len(predBatch)):
+                        
+        count += 1
+                        
+        if not opt.print_nbest:
+            #~ print(predBatch[b][0])
+            outF.write(''.join(predBatch[b][0]) + '\n')
+            outF.flush()
+
+        if opt.verbose:
+            #~ srcSent = ' '.join(srcBatch[b])
+            #srcSent = ''.join(srcBatch[b])
+            #if translator.tgt_dict.lower:
+            #    srcSent = srcSent.lower()
+            #print('SENT %d: %s' % (count, srcSent))
+            print('PRED %d: %s' % (count, ''.join(predBatch[b][0])))
+            print("PRED SCORE: %.4f" %  predScore[b][0])
+
+            if tgtF is not None:
+                tgtSent = ''.join(tgtBatch[b])
+                if translator.tgt_dict.lower:
+                    tgtSent = tgtSent.lower()
+                print('GOLD %d: %s ' % (count, tgtSent))
+                print("GOLD SCORE: %.4f" % goldScore[b])
+
+            if opt.print_nbest:
+                print('\nBEST HYP:')
+                for n in range(opt.n_best):
+                    idx = n
+                    print("[%.4f] %s" % (predScore[b][idx],
+                                         " ".join(predBatch[b][idx])))
+
+            print('')
+
+    return count,predScoreTotal,predWordsTotal,goldScoreTotal,goldWordsTotal    
     
     
 

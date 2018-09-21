@@ -173,6 +173,7 @@ class XETrainer(BaseTrainer):
             oom = False
             try:
             
+                #print("Input size:",batch[0].size())
                 outputs = self.model(batch)
                     
                 targets = batch[1][1:]
