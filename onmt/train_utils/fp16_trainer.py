@@ -52,7 +52,7 @@ class FP16XETrainer(XETrainer):
     def __init__(self, model, loss_function, trainData, validData, dicts, opt):
         super().__init__(model, loss_function, trainData, validData, dicts, opt)
         self.optim = onmt.Optim(opt)
-        self.scaler = DynamicLossScaler()
+        self.scaler = DynamicLossScaler(opt.fp16_loss_scale)
         
         if self.cuda:
            torch.cuda.set_device(self.opt.gpus[0])
