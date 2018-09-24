@@ -105,7 +105,6 @@ class FP16XETrainer(XETrainer):
                 
                 loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
                 
-#~ 
                 total_loss += loss_data
                 total_words += targets.data.ne(onmt.Constants.PAD).sum().item()
 
@@ -168,12 +167,8 @@ class FP16XETrainer(XETrainer):
                 # Scale UP the loss so that the gradients are not cutoff
                 normalizer = 1.0 / self.scaler.loss_scale 
                 
-                #~ if self.opt.normalize_gradient:
-                    #~ normalizer = tgt_size / self.scaler.loss_scale
-                
                 loss_data, _ = self.loss_function(outputs, targets, generator=self.model.generator, 
                                                              backward=True, mask=None, normalizer=normalizer)
-                
                 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
@@ -208,14 +203,9 @@ class FP16XETrainer(XETrainer):
                     normalizer = normalizer * self.scaler.loss_scale 
                     # rescale and clip grads
                     self.fp32_params.grad.data.div_(normalizer)
-                    
-                    
-                    #~ max_norm = 10
+
                     grad_norm = torch.norm(self.fp32_params.grad.data).item()
-                    #~ print(grad_norm)
-                    #~ if grad_norm > max_norm > 0 :
-                        #~ clip_coef = max_norm / (grad_norm + 1e-6)
-                        #~ self.fp32_params.grad.data.mul_(clip_coef)
+                    
                     
                     overflow = DynamicLossScaler.has_overflow(grad_norm)
                     self.scaler.update_scale(overflow)

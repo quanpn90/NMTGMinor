@@ -98,12 +98,13 @@ class NMTLossFunc(LossFuncBase):
             # If label smoothing value is set to zero, the loss
             # is equivalent to NLLLoss or CrossEntropyLoss.
             # All non-true labels are uniformly set to low-confidence.
-            self.func = nn.KLDivLoss(size_average=False)
+            #~ self.func = nn.KLDivLoss(size_average=False)
+            #~ one_hot = torch.randn(1, output_size)
+            #~ one_hot.fill_(self.smoothing_value)
+            #~ one_hot[0][self.padding_idx] = 0
+            #~ self.register_buffer('one_hot', one_hot)
             self.smoothing_value = label_smoothing / (output_size - 2)
-            one_hot = torch.randn(1, output_size)
-            one_hot.fill_(self.smoothing_value)
-            one_hot[0][self.padding_idx] = 0
-            self.register_buffer('one_hot', one_hot)
+
             
         else:
             weight = torch.ones(output_size)
@@ -122,28 +123,28 @@ class NMTLossFunc(LossFuncBase):
             tdata = gtruth.data
             
             #~ # squeeze is a trick to know if mask has dimension or not
-            mask = torch.nonzero(tdata.eq(self.padding_idx)).squeeze()
-            likelihood = torch.gather(scores.data, 1, tdata.unsqueeze(1))
-            tmp_ = self.one_hot.repeat(gtruth.size(0), 1)
-            tmp_.scatter_(1, tdata.unsqueeze(1), self.confidence)
-            if mask.numel() > 0:
-                likelihood.index_fill_(0, mask, 0)
-                tmp_.index_fill_(0, mask, 0)
+            #~ mask = torch.nonzero(tdata.eq(self.padding_idx)).squeeze()
+            #~ likelihood = torch.gather(scores.data, 1, tdata.unsqueeze(1))
+            #~ tmp_ = self.one_hot.repeat(gtruth.size(0), 1)
+            #~ tmp_.scatter_(1, tdata.unsqueeze(1), self.confidence)
+            #~ if mask.numel() > 0:
+                #~ likelihood.index_fill_(0, mask, 0)
+                #~ tmp_.index_fill_(0, mask, 0)
            
-            gtruth = torch.autograd.Variable(tmp_, requires_grad=False)
-            loss = self.func(scores, gtruth)
-            loss_data = - likelihood.sum(0)
+            #~ gtruth = torch.autograd.Variable(tmp_, requires_grad=False)
+            #~ loss = self.func(scores, gtruth)
+            #~ oss_data = - likelihood.sum(0)
             
-            #~ lprobs = scores
-            #~ non_pad_mask = gtruth.ne(self.padding_idx)
-            #~ nll_loss = -lprobs.gather(1, gtruth.unsqueeze(1))[non_pad_mask]
-            #~ smooth_loss = -lprobs.sum(dim=-1, keepdim=True)[non_pad_mask]
-            #~ nll_loss = nll_loss.sum()
-            #~ smooth_loss = smooth_loss.sum()
-            #~ 
-            #~ eps_i = self.smoothing_value
-            #~ loss = (1. - self.label_smoothing)   * nll_loss + eps_i * smooth_loss
-            #~ loss_data = nll_loss.data.item()
+            lprobs = scores
+            non_pad_mask = gtruth.ne(self.padding_idx)
+            nll_loss = -lprobs.gather(1, gtruth.unsqueeze(1))[non_pad_mask]
+            smooth_loss = -lprobs.sum(dim=-1, keepdim=True)[non_pad_mask]
+            nll_loss = nll_loss.sum()
+            smooth_loss = smooth_loss.sum()
+             
+            eps_i = self.smoothing_value
+            loss = (1. - self.label_smoothing)   * nll_loss + eps_i * smooth_loss
+            loss_data = nll_loss.data.item()
             
         else:
             loss = self.func(scores.float(), gtruth)

@@ -44,12 +44,14 @@ class IIDStochasticEncoderLayer(EncoderLayer):
         last_layer = input
         
         batch_size, input_length = input.size(1), input.size(0)
+        h_size = (input_length, batch_size)
         
         # 1 - death rate because the bernoulli function would sample
-        probs = input.new((input_length, batch_size)).fill_(1 - self.death_rate)
+        probs = input.new(*h_size).fill_(1 - self.death_rate).float()
         
         coins = torch.bernoulli(probs) # 1 = alive 
                                        # 0 = death
+        
         
         # we always perform computation
         
@@ -74,12 +76,17 @@ class IIDStochasticEncoderLayer(EncoderLayer):
         
         # if training: residual connection to the next layer
         if self.training:
+            #~ print(input.size())
+            #~ print(coins.size())
+            #~ print(last_layer.size())
+            #~ print("------------------")
+            coins = coins.unsqueeze(-1).type_as(input)
             input = coins * input + ( 1 - coins ) * last_layer
         
         return input
     
     
-class StochasticDecoderLayer(DecoderLayer):
+class IIDStochasticDecoderLayer(DecoderLayer):
     """Wraps multi-head attentions and position-wise feed forward into one layer of decoder
     
     Args:
@@ -132,9 +139,10 @@ class StochasticDecoderLayer(DecoderLayer):
         
         batch_size, input_length = input.size(1), input.size(0)
         
-        # 1 - death rate because the bernoulli function would sample
-        probs = input.new((input_length, batch_size)).fill_(1 - self.death_rate)
+        h_size = (input_length, batch_size)
         
+        # 1 - death rate because the bernoulli function would sample
+        probs = input.new(*h_size).fill_(1 - self.death_rate).float()
         coins = torch.bernoulli(probs) # 1 = alive 
                                        # 0 = death
         
@@ -178,6 +186,7 @@ class StochasticDecoderLayer(DecoderLayer):
         
         # if training: residual connection to the next layer
         if self.training:
+            coins = coins.unsqueeze(-1).type_as(input)
             input = coins * input + ( 1 - coins ) * last_layer
     
         return input, coverage

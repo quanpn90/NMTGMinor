@@ -57,10 +57,6 @@ def build_model(opt, dicts):
             positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
         else:
             positional_encoder = None
-        #~ elif opt.time == 'gru':
-            #~ positional_encoder = nn.GRU(opt.model_size, opt.model_size, 1, batch_first=True)
-        #~ elif opt.time == 'lstm':
-            #~ positional_encoder = nn.LSTM(opt.model_size, opt.model_size, 1, batch_first=True)
         
         encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
         decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder)
@@ -142,6 +138,24 @@ def build_model(opt, dicts):
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         
         model = Transformer(encoder, decoder, generator)    
+
+    elif opt.model in ['iid_stochastic_transformer'] :
+    
+        from onmt.modules.IIDStochasticTransformer.Models import IIDStochasticTransformerEncoder, IIDStochasticTransformerDecoder
+                
+        onmt.Constants.weight_norm = opt.weight_norm
+        onmt.Constants.init_value = opt.param_init
+        
+        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
+        #~ positional_encoder = None
+        
+        encoder = IIDStochasticTransformerEncoder(opt, dicts['src'], positional_encoder)
+        
+        decoder = IIDStochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
+        
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        
+        model = Transformer(encoder, decoder, generator)       
 
 
     else:
