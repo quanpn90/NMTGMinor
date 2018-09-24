@@ -57,10 +57,10 @@ class BaseTrainer(object):
             if not p.requires_grad:
                 continue
             if p.grad is None:
-                total_param_size = p.data.numel()
-                p.grad = p.data.new(total_param_size).view_as(p.data)
-                # raise RuntimeError('Model parameter did not receive gradient: ' + name + '. '
-                #                   'Use the param in the forward pass or set requires_grad=False')
+                raise RuntimeError('Model parameter did not receive gradient: ' + name + '. '
+                                   'Use the param in the forward pass or set requires_grad=False.' +
+                                   ' If you are using Stochastic model + fp16 - try to increase the number of minibatches' +
+                                   ' each update to avoid uninitialized gradients.' )
             grads.append(p.grad.data)
         return grads
         
@@ -169,14 +169,6 @@ class XETrainer(BaseTrainer):
         else:
             batchOrder = trainData.create_order()
             iteration = 0
-        # if batchOrder is not None:
-            # batchOrder = trainData.create_order()
-        # else:
-            # trainData.batchOrder = batchOrder
-            
-        # if iteration is not None and iteration > -1:
-            # trainData.set_index(iteration)
-            # print("Resuming from iteration: %d" % iteration)
 
         total_loss, total_words = 0, 0
         report_loss, report_tgt_words = 0, 0
@@ -210,14 +202,10 @@ class XETrainer(BaseTrainer):
                 tgt_size = tgt_mask.sum()
                 
                 tgt_mask = torch.autograd.Variable(tgt_mask)
-                #~ tgt_mask = None
                 normalizer = 1
                 
-                if self.opt.normalize_gradient:
-                    normalizer = tgt_size
-                
                 loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, 
-                                                             backward=True, mask=tgt_mask, normalizer=normalizer)
+                                                             backward=True, mask=tgt_mask)
                 
                 #~ outputs.backward(grad_outputs)
                 
@@ -242,9 +230,13 @@ class XETrainer(BaseTrainer):
                 # simulating the multi-gpu situation
                 #~ if counter == opt.virtual_gpu:
                 #~ if counter >= opt.batch_size_update:
+                
                 if num_accumulated_words >= opt.batch_size_update * 0.95:
+                    grad_denom = 1
+                    if self.opt.normalize_gradient:
+                        grad_denom = num_accumulated_words
                     # Update the parameters.
-                    self.optim.step(grad_denom=1)
+                    self.optim.step(grad_denom=grad_denom)
                     self.model.zero_grad()
                     counter = 0
                     num_accumulated_words = 0
