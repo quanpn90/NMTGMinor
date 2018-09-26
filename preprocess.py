@@ -2,6 +2,9 @@ import onmt
 import onmt.Markdown
 import argparse
 import torch
+
+from onmt.data_utils.IndexedDataset import IndexedDatasetBuilder
+
 import h5py as h5
 import numpy as np
 
@@ -29,6 +32,10 @@ parser.add_argument('-stride', type=int, default=1,
                     help="Stride on input features")
 parser.add_argument('-concat', type=int, default=1,
                     help="Concate sequential audio features to decrease sequence length")
+parser.add_argument('-input_type', default="word",
+                    help="Input type: word/char")
+parser.add_argument('-format', default="bin",
+                    help="Save data format: binary or raw. Binary should be used to load faster")
 
 
 parser.add_argument('-train_src', required=True,
@@ -71,6 +78,7 @@ parser.add_argument('-seed',       type=int, default=3435,
                     help="Random seed")
 
 parser.add_argument('-lower', action='store_true', help='lowercase data')
+parser.add_argument('-sort_by_target', action='store_true', help='lowercase data')
 parser.add_argument('-join_vocab', action='store_true', help='Using one dictionary for both source and target')
 
 parser.add_argument('-report_every', type=int, default=100000,
@@ -80,7 +88,7 @@ opt = parser.parse_args()
 
 torch.manual_seed(opt.seed)
 
-def makeJoinVocabulary(filenames, size):
+def makeJoinVocabulary(filenames, size, input_type="word"):
     
     vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
@@ -90,11 +98,17 @@ def makeJoinVocabulary(filenames, size):
         print("Reading file %s ... " % filename)
         with open(filename) as f:
             for sent in f.readlines():
-                sent = sent.strip()
-                for char in sent:
-                    vocab.add(char)
-                #~ for word in sent.split():
-                    #~ vocab.add(word)
+
+                if input_type == "word":
+                    for word in sent.split():
+                        vocab.add(word)
+                elif input_type == "char":
+                    sent = sent.strip()
+                    for char in sent:
+                        vocab.add(char)
+                else:
+                    raise NotImplementedError("Input type not implemented")
+
 
     originalSize = vocab.size()
     vocab = vocab.prune(size)
@@ -104,19 +118,22 @@ def makeJoinVocabulary(filenames, size):
     return vocab
 
 
-def makeVocabulary(filename, size):
+def makeVocabulary(filename, size, input_type='word'):
     vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
                       lower=opt.lower)
 
     with open(filename) as f:
         for sent in f.readlines():
-            sent = sent.strip()
-            for char in sent:
-                vocab.add(char)
-            #~ for word in sent.split():
-                #~ vocab.add(word)
-                
+            if input_type == "word":
+                for word in sent.split():
+                    vocab.add(word)
+            elif input_type == "char":
+                sent = sent.strip()
+                for char in sent:
+                    vocab.add(char)
+            else:
+                raise NotImplementedError("Input type not implemented")
 
     originalSize = vocab.size()
     vocab = vocab.prune(size)
@@ -126,7 +143,7 @@ def makeVocabulary(filename, size):
     return vocab
 
 
-def initVocabulary(name, dataFile, vocabFile, vocabSize, join=False):
+def initVocabulary(name, dataFile, vocabFile, vocabSize, join=False, input_type='word'):
 
     vocab = None
     if vocabFile is not None:
@@ -142,10 +159,10 @@ def initVocabulary(name, dataFile, vocabFile, vocabSize, join=False):
         if join:
             
             print('Building ' + 'shared' + ' vocabulary...')
-            genWordVocab = makeJoinVocabulary(dataFile, vocabSize)
+            genWordVocab = makeJoinVocabulary(dataFile, vocabSize, input_type=input_type)
         else:
             print('Building ' + name + ' vocabulary...')
-            genWordVocab = makeVocabulary(dataFile, vocabSize)
+            genWordVocab = makeVocabulary(dataFile, vocabSize, input_type=input_type)
 
         vocab = genWordVocab
 
@@ -158,7 +175,7 @@ def saveVocabulary(name, vocab, file):
     vocab.writeFile(file)
 
 
-def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_length=64):
+def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_length=64, sort_by_target=False, input_type='word'):
     src, tgt = [], []
     sizes = []
     count, ignored = 0, 0
@@ -188,8 +205,12 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
             print('WARNING: ignoring an empty line ('+str(count+1)+')')
             continue
 
-        srcWords = list(sline)
-        tgtWords = list(tline)
+        if input_type == 'word':
+            srcWords = sline.split()
+            tgtWords = tline.split()
+        elif input_type == 'char':
+            srcWords = list(sline)
+            tgtWords = list(tline)
 
         if len(srcWords) <= max_src_length \
            and len(tgtWords) <= max_tgt_length - 2:
@@ -210,7 +231,10 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
                                           onmt.Constants.UNK_WORD,
                                           onmt.Constants.BOS_WORD,
                                           onmt.Constants.EOS_WORD)]
-            sizes += [len(srcWords)]
+            if sort_by_target:
+                sizes += [len(tgtWords)]
+            else:
+                sizes += [len(srcWords)]
         else:
             ignored += 1
 
@@ -241,7 +265,7 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
     return src, tgt
 
 
-def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64,stride=1,concat=1):
+def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64,sort_by_target=False, input_type='word',stride=1,concat=1):
     src, tgt = [], []
     sizes = []
     count, ignored = 0, 0
@@ -265,7 +289,7 @@ def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64
         else:
             sline = torch.from_numpy(np.array(srcF[str(index)])[0::opt.stride])
 
-        
+
         if(concat != 1):
             add = (concat-sline.size()[0]%concat)%concat
             z= torch.FloatTensor(add, sline.size()[1]).zero_()
@@ -282,7 +306,10 @@ def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64
             print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
             continue
 
-        tgtWords = list(tline)
+        if input_type == 'word':
+            tgtWords = tline.split()
+        elif input_type == 'char':
+            tgtWords = list(tline)
 
         if len(tgtWords) <= max_tgt_length - 2 and sline.size(0) <= max_src_length:
 
@@ -334,20 +361,25 @@ def main():
 
     if opt.asr:
         dicts['tgt'] = initVocabulary('target', opt.train_tgt, opt.tgt_vocab,
-                                      opt.tgt_vocab_size)
+                                      opt.tgt_vocab_size, input_type=opt.input_type)
 
     elif opt.join_vocab:
         dicts['src'] = initVocabulary('source', [opt.train_src, opt.train_tgt], opt.src_vocab,
-                                      opt.src_vocab_size, join=True)
+                                      opt.tgt_vocab_size, join=True, input_type=opt.input_type)
         dicts['tgt'] = dicts['src']
 
     else:
         dicts['src'] = initVocabulary('source', opt.train_src, opt.src_vocab,
-                                      opt.src_vocab_size)
+                                      opt.src_vocab_size, input_type=opt.input_type)
 
         dicts['tgt'] = initVocabulary('target', opt.train_tgt, opt.tgt_vocab,
-                                      opt.tgt_vocab_size)
-                                      
+                                      opt.tgt_vocab_size, input_type=opt.input_type)
+    train = {}
+    valid = {}
+
+    print('Preparing training ...')
+
+
     if opt.asr == 1:
         print('Preparing training ...')
         train = {}
@@ -355,6 +387,8 @@ def main():
                                            dicts['tgt'],
                                           max_src_length=opt.src_seq_length,
                                                  max_tgt_length=opt.tgt_seq_length,
+                                                 sort_by_target=opt.sort_by_target,
+                                                 input_type=opt.input_type
                                                  stride=opt.stride,concat=opt.concat)
 
         print('Preparing validation ...')
@@ -363,6 +397,8 @@ def main():
                                              dicts['tgt'],
                                           max_src_length=max(1024,opt.src_seq_length),
                                                  max_tgt_length=max(1024,opt.tgt_seq_length),
+                                                 sort_by_target=opt.sort_by_target,
+                                                 input_type=opt.input_type,
                                                  stride=opt.stride,concat=opt.concat)
 
     else:
@@ -371,28 +407,61 @@ def main():
         train['src'], train['tgt'] = makeData(opt.train_src, opt.train_tgt,
                                           dicts['src'], dicts['tgt'],
                                           max_src_length=opt.src_seq_length,
-                                          max_tgt_length=opt.tgt_seq_length)
+                                          max_tgt_length=opt.tgt_seq_length,
+                                          sort_by_target=opt.sort_by_target,
+                                          input_type=opt.input_type)
 
         print('Preparing validation ...')
-        valid = {}
+
         valid['src'], valid['tgt'] = makeData(opt.valid_src, opt.valid_tgt,
                                           dicts['src'], dicts['tgt'], 
-                                          max_src_length=max(1024,opt.src_seq_length), 
-                                          max_tgt_length=max(1024,opt.tgt_seq_length))
+                                          max_src_length=max(1024,opt.src_seq_length),
+                                          max_tgt_length=max(1024,opt.tgt_seq_length),
+                                          input_type=opt.input_type)
 
-    if opt.src_vocab is None and opt.asr == 0:
-        saveVocabulary('source', dicts['src'], opt.save_data + '.src.dict')
-    if opt.tgt_vocab is None:
-        saveVocabulary('target', dicts['tgt'], opt.save_data + '.tgt.dict')
+    if opt.format == 'raw':
 
-    print('Saving data to \'' + opt.save_data + '.train.pt\'...')
-    save_data = {'dicts': dicts,
-                 'type':  opt.src_type,
-                 'train': train,
-                 'valid': valid}
-    torch.save(save_data, opt.save_data + '.train.pt')
+
+        if opt.src_vocab is None and opt.asr == 0:
+            saveVocabulary('source', dicts['src'], opt.save_data + '.src.dict')
+        if opt.tgt_vocab is None:
+            saveVocabulary('target', dicts['tgt'], opt.save_data + '.tgt.dict')
+
+        print('Saving data to \'' + opt.save_data + '.train.pt\'...')
+        save_data = {'dicts': dicts,
+                     'type':  opt.src_type,
+                     'train': train,
+                     'valid': valid}
+        torch.save(save_data, opt.save_data + '.train.pt')
+        print("Done")
+    elif opt.format == 'bin':
+        # save the dictionary first
+        torch.save(dicts, opt.save_data + '.dict.pt')
+
+        train_bin = dict()
+
+        # binarize the data now
+        for set in ['src', 'tgt']:
+            train_bin[set] = IndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set )
+
+            for tensor_sent in train[set]:
+                train_bin[set].add_item(tensor_sent)
+
+            train_bin[set].finalize(opt.save_data + ".train.%s.idx" % set)
+
+        valid_bin = dict()
+        for set in ['src', 'tgt']:
+            valid_bin[set] = IndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set )
+
+            for tensor_sent in valid[set]:
+                valid_bin[set].add_item(tensor_sent)
+
+            valid_bin[set].finalize(opt.save_data + ".valid.%s.idx" % set)
+
+        print("Done")
+    else: raise NotImplementedError
 
 
 if __name__ == "__main__":
     main()
-    
+

@@ -2,6 +2,7 @@ import math
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
+from onmt.modules.LayerNorm import LayerNorm
 import torch.nn.init as init
 import torch.nn.utils.weight_norm as WeightNorm
 import onmt 

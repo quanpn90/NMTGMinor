@@ -15,6 +15,8 @@ onmt.Markdown.add_md_help_argument(parser)
 
 parser.add_argument('-model', required=True,
                     help='Path to model .pt file')
+parser.add_argument('-input_type', default="word",
+                    help="Input type: word/char")
 parser.add_argument('-src',   required=True,
                     help='Source sequence to decode (one line per sequence)')
 parser.add_argument('-src_img_dir',   default="",
@@ -66,6 +68,8 @@ parser.add_argument('-print_nbest', action='store_true',
 parser.add_argument('-ensemble_op', default='mean', help="""Ensembling operator""")
 parser.add_argument('-normalize', action='store_true',
                     help='To normalize the scores based on output length')
+parser.add_argument('-fp16', action='store_true',
+                    help='To use floating point 16 in decoding')
 parser.add_argument('-gpu', type=int, default=-1,
                     help="Device to run on")
 
@@ -81,10 +85,20 @@ def addone(f):
         yield line
     yield None
     
-def len_penalty(s, l, alpha):
+def lenPenalty(s, l, alpha):
     
     l_term = math.pow(l, alpha)
     return s / l_term
+
+def getSentenceFromTokens(tokens, input_type):
+
+    if input_type == 'word':
+        sent = " ".join(tokens)
+    elif input_type == 'char':
+        sent = "".join(tokens)
+    else:
+        raise NotImplementedError
+    return sent
 
 def main():
     opt = parser.parse_args()
@@ -125,7 +139,7 @@ def main():
         inFile = h5.File(opt.src,'r')
     else:
       inFile = open(opt.src)
-      
+
     if(opt.encoder_type == "audio"):
         for i in range(len(inFile)):
             if(opt.stride == 1):
@@ -137,13 +151,18 @@ def main():
                 z= torch.FloatTensor(add, line.size()[1]).zero_()
                 line = torch.cat((line,z),0)
                 line = line.reshape((line.size()[0]/opt.concat,line.size()[1]*opt.concat))
-            
+
             if line is not None:
                 #~ srcTokens = line.split()
                 srcBatch += [line]
                 if tgtF:
                     #~ tgtTokens = tgtF.readline().split() if tgtF else None
-                    tgtTokens = list(tgtF.readline().strip()) if tgtF else None
+                    if opt.input_type == 'word':
+                        tgtTokens = tgtF.readline().split() if tgtF else None
+                    elif opt.input_type == 'char':
+                        tgtTokens = list(tgtF.readline().strip()) if tgtF else None
+                    else:
+                        raise NotImplementedError("Input type unknown")
                     tgtBatch += [tgtTokens]
 
                 if len(srcBatch) < opt.batch_size:
@@ -167,12 +186,21 @@ def main():
         
         for line in addone(inFile):
             if line is not None:
-                #~ srcTokens = line.split()
-                srcTokens = list(line.strip())
+                if opt.input_type == 'word':
+                    srcTokens = line.split()
+                elif opt.input_type == 'char':
+                    srcTokens = list(line.strip())
+                else:
+                    raise NotImplementedError("Input type unknown")
                 srcBatch += [srcTokens]
                 if tgtF:
                     #~ tgtTokens = tgtF.readline().split() if tgtF else None
-                    tgtTokens = list(tgtF.readline().strip()) if tgtF else None
+                    if opt.input_type == 'word':
+                        tgtTokens = tgtF.readline().split() if tgtF else None
+                    elif opt.input_type == 'char':
+                        tgtTokens = list(tgtF.readline().strip()) if tgtF else None
+                    else:
+                        raise NotImplementedError("Input type unknown")
                     tgtBatch += [tgtTokens]
 
                 if len(srcBatch) < opt.batch_size:
@@ -195,7 +223,7 @@ def main():
     if opt.verbose:
         reportScore('PRED', predScoreTotal, predWordsTotal)
         if tgtF: reportScore('GOLD', goldScoreTotal, goldWordsTotal)
-                
+
 
     if tgtF:
         tgtF.close()
@@ -216,7 +244,7 @@ def translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, p
             predBatch_.append([bb[s] for s in sidx])
             predScore_.append([ss_[s] for s in sidx])
         predBatch = predBatch_
-        predScore = predScore_    
+        predScore = predScore_
                                                               
     predScoreTotal = sum(score[0].item() for score in predScore)
     predWordsTotal = sum(len(x[0]) for x in predBatch)
@@ -229,7 +257,7 @@ def translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, p
     for b in range(len(predBatch)):
                         
         count += 1
-                        
+
         if not opt.print_nbest:
             #~ print(predBatch[b][0])
             outF.write(''.join(predBatch[b][0]) + '\n')
@@ -260,7 +288,7 @@ def translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, p
 
             print('')
 
-    return count,predScoreTotal,predWordsTotal,goldScoreTotal,goldWordsTotal    
+    return count,predScoreTotal,predWordsTotal,goldScoreTotal,goldWordsTotal
     
     
 

@@ -15,108 +15,72 @@ import random
 import numpy as np
 from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 from onmt.ModelConstructor import init_model_parameters
-
-class BaseTrainer(object):
+from onmt.train_utils.trainer import BaseTrainer, XETrainer
     
-    def __init__(self, model, loss_function, trainData, validData, dicts, opt):
-        
-        self.model = model
-        self.trainData = trainData
-        self.validData = validData
-        self.dicts = dicts
-        self.opt = opt
-        self.cuda = (len(opt.gpus) >= 1)
-        
-        self.loss_function = loss_function
-        self.start_time = 0
-        
-        
-        
-    def run(self, *args,**kwargs):
-        
-        raise NotImplementedError    
     
-    def eval(self, data):
-        
-        raise NotImplementedError
-        
-    def to_variable(self, data):
-        
-        for i, t in enumerate(data):
-            if self.cuda:
-                data[i] = Variable(data[i].cuda())
-            else:
-                data[i] = Variable(data[i])
 
-        return data
-            
+class DynamicLossScaler:
 
-    def _get_grads(self):
-        grads = []
-        for name, p in self.model.named_parameters():
-            if not p.requires_grad:
-                continue
-            if p.grad is None:
-                raise RuntimeError('Model parameter did not receive gradient: ' + name + '. '
-                                   'Use the param in the forward pass or set requires_grad=False.' +
-                                   ' If you are using Stochastic model + fp16 - try to increase the number of minibatches' +
-                                   ' each update to avoid uninitialized gradients.' )
-            grads.append(p.grad.data)
-        return grads
+    def __init__(self, init_scale=2**7, scale_factor=2., scale_window=2000):
+        self.loss_scale = init_scale
+        self.scale_factor = scale_factor
+        self.scale_window = scale_window
+        self._iter = 0
+        self._last_overflow_iter = -1
+    
+    # we will pass the iter of optim to here
+    def update_scale(self, overflow):
         
-    def _get_flat_grads(self, out=None):
-        grads = self._get_grads()
-        if out is None:
-            grads_size = sum(g.numel() for g in grads)
-            out = grads[0].new(grads_size).zero_()
-        offset = 0
-        for g in grads:
-            numel = g.numel()
-            out[offset:offset+numel].copy_(g.view(-1))
-            offset += numel
-        return out[:offset]
+        self._iter += 1
+        if overflow:
+            self.loss_scale /= self.scale_factor
+            self._last_overflow_iter = self._iter
+        elif (self._iter - self._last_overflow_iter) % self.scale_window == 0:
+            self.loss_scale *= self.scale_factor
+        
+
+    @staticmethod
+    def has_overflow(grad_norm):
+        # detect inf and nan
+        if grad_norm == float('inf') or grad_norm != grad_norm:
+            return True
+        return False
 
 
-class XETrainer(BaseTrainer):
+class FP16XETrainer(XETrainer):
 
     def __init__(self, model, loss_function, trainData, validData, dicts, opt):
         super().__init__(model, loss_function, trainData, validData, dicts, opt)
         self.optim = onmt.Optim(opt)
+        self.scaler = DynamicLossScaler(opt.fp16_loss_scale)
         
         if self.cuda:
            torch.cuda.set_device(self.opt.gpus[0])
            torch.manual_seed(self.opt.seed)
+           
+           #~ print(torch.cuda.get_device_capability(0)[0])
+           
+           # Important:
+           # Loss function needs to be in fp32
            self.loss_function = self.loss_function.cuda()
-           self.model = self.model.cuda()
+           self.model = self.model.cuda().half()
+           
+        params = [p for p in self.model.parameters() if p.requires_grad]
+        total_param_size = sum(p.data.numel() for p in params)
         
-        self.optim.set_parameters(self.model.parameters())
-
-    def save(self, epoch, valid_ppl, batchOrder=None, iteration=-1):
+        self.fp32_params = params[0].new(0).float().new(total_param_size)
         
-        opt = self.opt
-        model = self.model
-        dicts = self.dicts
+        # now we transfer the params from fp16 over fp32
+        offset = 0
+        for p in params:
+            numel = p.data.numel()
+            self.fp32_params[offset:offset+numel].copy_(p.data.view(-1))
+            offset += numel
         
-
-        model_state_dict = self.model.state_dict()
-        optim_state_dict = self.optim.state_dict()
-                
-        #  drop a checkpoint
-        checkpoint = {
-                'model': model_state_dict,
-                'dicts': dicts,
-                'opt': opt,
-                'epoch': epoch,
-                'iteration' : iteration,
-                'batchOrder' : batchOrder,
-                'optim': optim_state_dict
-        }
-        
-        file_name = '%s_ppl_%.2f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
-        print('Writing to %s' % file_name)
-        torch.save(checkpoint, file_name)
-        
-        # check te save directory here
+        self.fp32_params = torch.nn.Parameter(self.fp32_params)
+        self.fp32_params.grad = self.fp32_params.data.new(total_param_size)
+        # we optimize on the fp32 params
+        self.optim.set_parameters([self.fp32_params])
         
     def eval(self, data):
         total_loss = 0
@@ -141,7 +105,6 @@ class XETrainer(BaseTrainer):
                 
                 loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
                 
-#~ 
                 total_loss += loss_data
                 total_words += targets.data.ne(onmt.Constants.PAD).sum().item()
 
@@ -154,14 +117,13 @@ class XETrainer(BaseTrainer):
         trainData = self.trainData
         
         # Clear the gradients of the model
-        # self.runner.zero_grad()
         self.model.zero_grad()
+        self.optim.zero_grad() 
 
         if opt.extra_shuffle and epoch > opt.curriculum:
             trainData.shuffle()
 
         # Shuffle mini batch order.
-        
         if resume:
             trainData.batchOrder = batchOrder
             trainData.set_index(iteration)
@@ -179,6 +141,7 @@ class XETrainer(BaseTrainer):
         counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
+        oom_count = 0
         
         for i in range(iteration, nSamples):
 
@@ -191,7 +154,6 @@ class XETrainer(BaseTrainer):
             oom = False
             try:
             
-                #print("Input size:",batch[0].size())
                 outputs = self.model(batch)
                     
                 targets = batch[1][1:]
@@ -200,21 +162,20 @@ class XETrainer(BaseTrainer):
                 batch_size = targets.size(1)
                 
                 tgt_mask = targets.data.ne(onmt.Constants.PAD)
-                tgt_size = tgt_mask.sum()
+                tgt_size = tgt_mask.sum().item()
+                                
+                # Scale UP the loss so that the gradients are not cutoff
+                normalizer = 1.0 / self.scaler.loss_scale 
                 
-                tgt_mask = torch.autograd.Variable(tgt_mask)
-                normalizer = 1
-                
-                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, 
-                                                             backward=True, mask=tgt_mask)
-                
-                #~ outputs.backward(grad_outputs)
+                loss_data, _ = self.loss_function(outputs, targets, generator=self.model.generator, 
+                                                             backward=True, mask=None, normalizer=normalizer)
                 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
-                    print('| WARNING: ran out of memory on GPU , skipping batch')
+                    #~ print('| WARNING: ran out of memory on GPU , skipping batch')
                     oom = True
                     torch.cuda.empty_cache()
+                    oom_count += 1
                 else:
                     raise e        
                 
@@ -231,26 +192,61 @@ class XETrainer(BaseTrainer):
                 # simulating the multi-gpu situation
                 #~ if counter == opt.virtual_gpu:
                 #~ if counter >= opt.batch_size_update:
-                
+                normalizer = num_accumulated_words if opt.normalize_gradient else 1
                 if num_accumulated_words >= opt.batch_size_update * 0.95:
-                    grad_denom = 1
-                    if self.opt.normalize_gradient:
-                        grad_denom = num_accumulated_words
                     # Update the parameters.
-                    self.optim.step(grad_denom=grad_denom)
-                    self.model.zero_grad()
-                    counter = 0
-                    num_accumulated_words = 0
-                    num_accumulated_sents = 0
-                    num_updates = self.optim._step
-                    if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
-                        valid_loss = self.eval(self.validData)
-                        valid_ppl = math.exp(min(valid_loss, 100))
-                        print('Validation perplexity: %g' % valid_ppl)
+                    
+                    # First we have to copy the grads from fp16 to fp32
+                    self._get_flat_grads(out=self.fp32_params.grad)
+                    
+                    
+                    normalizer = normalizer * self.scaler.loss_scale 
+                    # rescale and clip grads
+                    self.fp32_params.grad.data.div_(normalizer)
+
+                    grad_norm = torch.norm(self.fp32_params.grad.data).item()
+                    
+                    
+                    overflow = DynamicLossScaler.has_overflow(grad_norm)
+                    self.scaler.update_scale(overflow)
+                    
+                    if overflow:
+                        if self.scaler.loss_scale <= 1e-4:
+                            raise Exception((
+                                'Minimum loss scale reached ({}). Your loss is probably exploding. '
+                                'Try lowering the learning rate, using gradient clipping or '
+                                'increasing the batch size.'
+                            ).format(1e-4))
+                        print('setting loss scale to: ' + str(self.scaler.loss_scale))
+                        self.model.zero_grad()
+                        self.optim.zero_grad()
+                        loss_data = 0
+                    
+                    else:
+                        self.optim.step(grad_denom=1)
+
+                        offset = 0
+                        for p in self.model.parameters():
+                            if not p.requires_grad:
+                                continue
+                            numel = p.data.numel()
+                            p.data.copy_(self.fp32_params.data[offset:offset+numel].view_as(p.data))
+                            offset += numel
                         
-                        ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
-                        
-                        self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
+                        self.model.zero_grad()
+                        self.optim.zero_grad()
+                        counter = 0
+                        num_accumulated_words = 0
+                        num_accumulated_sents = 0
+                        num_updates = self.optim._step
+                        if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
+                            valid_loss = self.eval(self.validData)
+                            valid_ppl = math.exp(min(valid_loss, 100))
+                            print('Validation perplexity: %g' % valid_ppl)
+                            
+                            ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
+                            
+                            self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
                 
 
                 num_words = tgt_size
@@ -266,13 +262,15 @@ class XETrainer(BaseTrainer):
                 
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
                     print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
-                           "%5.0f src tok/s; %5.0f tgt tok/s; %s elapsed") %
+                           "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; oom %d; %s elapsed") %
                           (epoch, i+1, len(trainData),
                            math.exp(report_loss / report_tgt_words),
                            optim.getLearningRate(),
                            optim._step,
                            report_src_words/(time.time()-start),
                            report_tgt_words/(time.time()-start),
+                           self.scaler.loss_scale,
+                           oom_count, 
                            str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
 
                     report_loss, report_tgt_words = 0, 0
@@ -293,7 +291,7 @@ class XETrainer(BaseTrainer):
         # Try to load the save_file
         checkpoint = None
         if save_file:
-            checkpoint = torch.load(save_file, map_location=lambda storage, loc: storage)
+            checkpoint = torch.load(save_file)
         
         
         if checkpoint is not None:
@@ -326,7 +324,7 @@ class XETrainer(BaseTrainer):
         valid_loss = self.eval(self.validData)
         valid_ppl = math.exp(min(valid_loss, 100))
         print('Validation perplexity: %g' % valid_ppl)
-        
+        #~ 
         self.start_time = time.time()
         
         for epoch in range(opt.start_epoch, opt.start_epoch + opt.epochs):

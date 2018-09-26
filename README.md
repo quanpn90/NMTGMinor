@@ -12,3 +12,11 @@ This is an implementation of the transformer for the paper
 + Research ideas 
 
 - The code is based on several modules (Dictionary and Loss functions) of ["OpenNMT-py"](https://github.com/OpenNMT/OpenNMT-py)
+
+- Recipe for WMT 2018 (incoming)
+
+.............................
+
+- Recipe for IWSLT 2018 (incoming)
+
+----------------------------
