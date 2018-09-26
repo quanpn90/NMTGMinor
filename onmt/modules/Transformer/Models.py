@@ -42,11 +42,15 @@ class TransformerEncoder(nn.Module):
         self.emb_dropout = opt.emb_dropout
         self.time = opt.time
         self.version = opt.version
-        
-        self.word_lut = nn.Embedding(dicts.size(),
-                                     self.model_size,
-                                     padding_idx=onmt.Constants.PAD)
-        
+        self.input_type = opt.encoder_type
+
+        if opt.encoder_type != "text":
+            self.audio_trans = nn.Linear(dicts, self.model_size)
+        else:
+            self.word_lut = nn.Embedding(dicts.size(),
+                                         self.model_size,
+                                         padding_idx=onmt.Constants.PAD)
+
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
         elif opt.time == 'gru':
@@ -78,8 +82,16 @@ class TransformerEncoder(nn.Module):
         """
 
         """ Embedding: batch_size x len_src x d_model """
-        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
-        
+        if (self.input_type == "text"):
+            mask_src = input.data.eq(onmt.Constants.PAD).unsqueeze(1)  # batch_size x len_src x 1 for broadcasting
+            emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        else:
+            mask_src = input.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+            input = input.narrow(2, 1, input.size(2) - 1)
+            emb = self.audio_trans.forward(input.contiguous().view(-1, input.size(2))).view(input.size(0),
+                                                                                            input.size(1), -1)
+
+
         """ Scale the emb by sqrt(d_model) """
         
         emb = emb * math.sqrt(self.model_size)
@@ -88,9 +100,8 @@ class TransformerEncoder(nn.Module):
         emb = self.time_transformer(emb)
 
         emb = self.preprocess_layer(emb)
-        
-        mask_src = input.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x len_src x 1 for broadcasting
-        
+
+
         #~ pad_mask = input.ne(onmt.Constants.PAD)) # batch_size x len_src
         
         context = emb.transpose(0, 1).contiguous()
@@ -138,7 +149,8 @@ class TransformerDecoder(nn.Module):
         self.emb_dropout = opt.emb_dropout
         self.time = opt.time
         self.version = opt.version
-        
+        self.input_type = opt.encoder_type
+
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
         elif opt.time == 'gru':
@@ -217,11 +229,17 @@ class TransformerDecoder(nn.Module):
         if isinstance(emb, tuple):
             emb = emb[0]
         emb = self.preprocess_layer(emb)
-        
-        mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
-        
-        pad_mask_src = src.data.ne(onmt.Constants.PAD)
-        
+
+        if (self.encoder_type == "audio"):
+            mask_src = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+            pad_mask_src = src.data.narrow(2, 0, 1).squeeze(2).ne(onmt.Constants.PAD)  # batch_size x len_src
+        else:
+
+            mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
+
+            pad_mask_src = src.data.ne(onmt.Constants.PAD)
+
+
         len_tgt = input.size(1)
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
@@ -303,9 +321,12 @@ class TransformerDecoder(nn.Module):
         emb = emb.transpose(0, 1)
 
         # batch_size x 1 x len_src
-        mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
 
-        
+        if (self.encoder_type == "audio" and src.data.dim() == 3):
+            mask_src = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+        else:
+            mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
+
         len_tgt = input.size(1)
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)

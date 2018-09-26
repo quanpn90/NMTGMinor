@@ -12,4 +12,4 @@ EOS_WORD = '</s>'
 checkpointing = 0
 static = False
 residual_type = 'regular'
-max_position_length = 512
+max_position_length = 8192
