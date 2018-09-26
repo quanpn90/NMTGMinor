@@ -95,13 +95,19 @@ class Dict(object):
 
         newDict = Dict()
         newDict.lower = self.lower
-
+        
+        count = 0
         # Add special entries in all cases.
         for i in self.special:
             newDict.addSpecial(self.idxToLabel[i])
+            count = count + 1
 
-        for i in idx[:size]:
+        for i in idx.tolist():
             newDict.add(self.idxToLabel[i])
+            count = count + 1
+            
+            if count >= size:
+                break
 
         return newDict
 

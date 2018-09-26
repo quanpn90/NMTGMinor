@@ -18,7 +18,8 @@ class EnsembleTranslator(object):
         self.beta = opt.beta
         self.alpha = opt.alpha
         self.start_with_bos = opt.start_with_bos
-        
+        self.fp16 = opt.fp16
+
         self.models = list()
         self.model_types = list()
         
@@ -58,7 +59,10 @@ class EnsembleTranslator(object):
                 model = model.cuda()
             else:
                 model = model.cpu()
-            
+
+            if opt.fp16:
+                model = model.half()
+
             model.eval()
             
             self.models.append(model)
@@ -174,12 +178,12 @@ class EnsembleTranslator(object):
                        onmt.Constants.EOS_WORD) for b in goldBatch]
 
         return onmt.Dataset(srcData, tgtData, 9999,
-                            [self.opt.gpu], volatile=True,
-                            data_type=self._type, max_seq_num =self.opt.batch_size)
+                            [self.opt.gpu], data_type=self._type,
+                            max_seq_num =self.opt.batch_size)
 
     def buildASRData(self, srcData, goldBatch):
         # This needs to be the same as preprocess.py.
-        
+
         tgtData = None
         if goldBatch:
             tgtData = [self.tgt_dict.convertToIdx(b,
@@ -188,7 +192,7 @@ class EnsembleTranslator(object):
                        onmt.Constants.EOS_WORD) for b in goldBatch]
 
         return onmt.Dataset(srcData, tgtData, 9999,
-                            [self.opt.gpu], volatile=True,
+                            [self.opt.gpu],
                             data_type=self._type, max_seq_num =self.opt.batch_size)
 
     def buildTargetTokens(self, pred, src, attn):
@@ -204,7 +208,7 @@ class EnsembleTranslator(object):
 
         beamSize = self.opt.beam_size
         batchSize = self._getBatchSize(srcBatch)
-            
+
         vocab_size = self.tgt_dict.size()
         allHyp, allScores, allAttn, allLengths = [], [], [], []
         
@@ -232,7 +236,8 @@ class EnsembleTranslator(object):
             tgtBatchInput = tgtBatchInput.transpose(0,1)
             
             output, coverage = model_.decoder(tgtBatchInput, contexts[0], src)
-            output = output.transpose(0, 1) # transpose to have time first, like RNN models
+            # output should have size time x batch x dim
+            #~ output = output.transpose(0, 1) # transpose to have time first, like RNN models
             
             
             #  (2) if a target is specified, compute the 'goldScore'
@@ -242,19 +247,20 @@ class EnsembleTranslator(object):
                 tgt_t = tgt_t.unsqueeze(1)
                 scores = gen_t.data.gather(1, tgt_t)
                 scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
-                goldScores += scores.squeeze(1)
-                goldWords += tgt_t.ne(onmt.Constants.PAD).sum()
+                goldScores += scores.squeeze(1).type_as(goldScores)
+                goldWords += tgt_t.ne(onmt.Constants.PAD).sum().item()
             
             
         #  (3) Start decoding
             
         # time x batch * beam
-        if(srcBatch.dim() == 3):
-            #src = Variable(torch.zeros(srcBatch.size(0),srcBatch.size(1),beamSize))
-            src = Variable(srcBatch.data.repeat(1, beamSize,1))
-        else:
-            src = Variable(srcBatch.data.repeat(1, beamSize))
-        
+        #if(srcBatch.dim() == 3):
+        #    #src = Variable(torch.zeros(srcBatch.size(0),srcBatch.size(1),beamSize))
+        #    src = Variable(srcBatch.data.repeat(1, beamSize,1))
+        #else:
+        #    src = Variable(srcBatch.data.repeat(1, beamSize))
+        src = srcBatch # this is time first again (before transposing)
+
         # initialize the beam
         beam = [onmt.Beam(beamSize, self.opt.cuda) for k in range(batchSize)]
         
@@ -266,7 +272,7 @@ class EnsembleTranslator(object):
         decoder_hiddens = dict()
         
         for i in range(self.n_models):
-            decoder_states[i] = self.models[i].create_decoder_state(src.clone(), contexts[i], beamSize)
+            decoder_states[i] = self.models[i].create_decoder_state(src, contexts[i], beamSize)
         
         for i in range(self.opt.max_sent_length):
             # Prepare decoder input.
@@ -280,14 +286,13 @@ class EnsembleTranslator(object):
                 A better buffering algorithm will be implemented
             """
            
-            decoder_input = Variable(input)
+            decoder_input = input
             
             # require batch first for everything
             outs = dict()
             attns = dict()
             
             for i in range(self.n_models):
-                #~ decoder_hidden, coverage, buffers[i] = self.models[i].decoder.step(decoder_input.transpose(0,1) , contexts[i].transpose(0, 1), src.transpose(0, 1), buffer=buffers[i])
                 decoder_hidden, coverage = self.models[i].decoder.step(decoder_input.clone(), decoder_states[i])
                 
                 # take the last decoder state
@@ -349,7 +354,7 @@ class EnsembleTranslator(object):
             allLengths += [length]
             if(srcBatch.data.dim() == 3):
                 valid_attn = srcBatch.data.narrow(2,0,1).squeeze(2)[:, b].ne(onmt.Constants.PAD) \
-                                            .nonzero().squeeze(1)            
+                                            .nonzero().squeeze(1)
             else:
                 valid_attn = srcBatch.data[:, b].ne(onmt.Constants.PAD) \
                                             .nonzero().squeeze(1)
@@ -382,7 +387,7 @@ class EnsembleTranslator(object):
 
         #  (2) translate
         pred, predScore, attn, predLength, goldScore, goldWords = self.translateBatch(src, tgt)
-        
+
 
         #  (3) convert indexes to words
         predBatch = []

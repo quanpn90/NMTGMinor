@@ -200,14 +200,15 @@ class Optim(object):
         self.normalize_grad(denom=grad_denom)
         
         "Compute gradients norm."
-        grad_norm = clip_grad_norm(self.params, self.max_grad_norm)
-            
+        grad_norm = clip_grad_norm(self.params, self.max_grad_norm).item()
+        #~ print(grad_norm)
             
         "Automatically scale learning rate over learning period"
         self._step += 1
         if 'noam' in self.update_method:
             self.updateLearningRate()
-            
+
+        #~ print("UDPATE PARAMETERS")
         self.optimizer.step()
         
         return grad_norm
@@ -258,14 +259,13 @@ class Optim(object):
     def zero_grad(self):
         self.optimizer.zero_grad()
       
-
-# This version of Adam keeps an fp32 copy of the parameters and 
+# This version of Adam keeps an fp32 copy of the parameters and
 # does all of the parameter updates in fp32, while still doing the
-# forwards and backwards passes using fp16 (i.e. fp16 copies of the 
+# forwards and backwards passes using fp16 (i.e. fp16 copies of the
 # parameters and fp16 activations).
 #
-# Note that this calls .float().cuda() on the params such that it 
-# moves them to gpu 0--if you're using a different GPU or want to 
+# Note that this calls .float().cuda() on the params such that it
+# moves them to gpu 0--if you're using a different GPU or want to
 # do multi-GPU you may need to deal with this.
 class Adam16(Optimizer):
 
@@ -274,11 +274,11 @@ class Adam16(Optimizer):
         defaults = dict(lr=lr, betas=betas, eps=eps,
                         weight_decay=weight_decay)
         params = list(params)
-        
+        eps = 1e-4
         super(Adam16, self).__init__(params, defaults)
         # for group in self.param_groups:
             # for p in group['params']:
-        
+
         self.fp32_param_groups = [p.data.float().cuda() for p in params]
         if not isinstance(self.fp32_param_groups[0], dict):
             self.fp32_param_groups = [{'params': self.fp32_param_groups}]
@@ -297,7 +297,7 @@ class Adam16(Optimizer):
             for p,fp32_p in zip(group['params'],fp32_group['params']):
                 if p.grad is None:
                     continue
-                    
+
                 grad = p.grad.data.float()
                 state = self.state[p]
 
@@ -326,7 +326,7 @@ class Adam16(Optimizer):
                 bias_correction1 = 1 - beta1 ** state['step']
                 bias_correction2 = 1 - beta2 ** state['step']
                 step_size = group['lr'] * math.sqrt(bias_correction2) / bias_correction1
-            
+
                 # print(type(fp32_p))
                 fp32_p.addcdiv_(-step_size, exp_avg, denom)
                 p.data = fp32_p.half()
