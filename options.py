@@ -56,6 +56,8 @@ def make_parser(parser):
                       help='Layer normalization type')
     parser.add_argument('-death_rate', type=float, default=0.5,
                         help='Stochastic layer death rate')  
+    parser.add_argument('-death_type', type=str, default='linear_decay',
+                        help='Stochastic layer death type: linear decay or uniform')  
     parser.add_argument('-activation_layer', default='linear_relu_linear', type=str,
                         help='The activation layer in each transformer block')                        
     parser.add_argument('-time', default='positional_encoding', type=str,

@@ -99,6 +99,12 @@ def main():
         validData = onmt.Dataset(valid_src,
                                  valid_tgt, opt.batch_size_words, opt.gpus,
                                  max_seq_num=opt.batch_size_sents)
+        
+        print(' * vocabulary size. source = %d; target = %d' %
+              (dicts['src'].size(), dicts['tgt'].size()))
+        print(' * number of training sentences. %d' %
+              len(train_src))
+        print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
     
     else:
         raise NotImplementedError

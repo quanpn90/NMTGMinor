@@ -147,9 +147,6 @@ class Dataset(object):
             #~ b = torch.stack(b, 0)
             b = b.t().contiguous()
             
-            if self.cuda:
-                b = b.cuda()
-           
             return b
 
         srcTensor = wrap(srcBatch, self._type)

@@ -405,13 +405,13 @@ class TransformerDecodingState(DecoderState):
                             
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]
-            
-            for k in buffer_:
-                t_, br_, d_ = buffer_[k].size()
-                sent_states = buffer_[k].view(t_, self.beamSize, remainingSents, d_)[:, :, idx, :]
-                
-                sent_states.data.copy_(sent_states.data.index_select(
-                            1, beam[b].getCurrentOrigin()))
+            if buffer_ is not None:
+                for k in buffer_:
+                    t_, br_, d_ = buffer_[k].size()
+                    sent_states = buffer_[k].view(t_, self.beamSize, remainingSents, d_)[:, :, idx, :]
+                    
+                    sent_states.data.copy_(sent_states.data.index_select(
+                                1, beam[b].getCurrentOrigin()))
     
     # in this section, the sentences that are still active are
     # compacted so that the decoder is not run on completed sentences
@@ -460,7 +460,7 @@ class TransformerDecodingState(DecoderState):
         
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]
-            
-            for k in buffer_:
-                buffer_[k] = updateActive(buffer_[k])
+            if buffer_ is not None:
+                for k in buffer_:
+                    buffer_[k] = updateActive(buffer_[k])
         

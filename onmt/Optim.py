@@ -165,7 +165,7 @@ class Optim(object):
                                         weight_decay=self.weight_decay, amsgrad=self.amsgrad)
         else:
             raise RuntimeError("Invalid optim method: " + self.method)
-        print(self.optimizer)
+        # ~ print(self.optimizer)
         
     
     def __init__(self, opt):

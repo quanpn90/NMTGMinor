@@ -82,6 +82,8 @@ class FP16XETrainer(XETrainer):
         # we optimize on the fp32 params
         self.optim.set_parameters([self.fp32_params])
         
+        print(self.optim.optimizer)
+        
     def eval(self, data):
         total_loss = 0
         total_words = 0
@@ -172,7 +174,6 @@ class FP16XETrainer(XETrainer):
                 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
-                    #~ print('| WARNING: ran out of memory on GPU , skipping batch')
                     oom = True
                     torch.cuda.empty_cache()
                     oom_count += 1
@@ -190,8 +191,6 @@ class FP16XETrainer(XETrainer):
                 
                 # We only update the parameters after getting gradients from n mini-batches
                 # simulating the multi-gpu situation
-                #~ if counter == opt.virtual_gpu:
-                #~ if counter >= opt.batch_size_update:
                 normalizer = num_accumulated_words if opt.normalize_gradient else 1
                 if num_accumulated_words >= opt.batch_size_update * 0.95:
                     # Update the parameters.

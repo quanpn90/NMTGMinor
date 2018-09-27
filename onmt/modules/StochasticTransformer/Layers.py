@@ -67,6 +67,37 @@ class StochasticEncoderLayer(EncoderLayer):
             input = self.postprocess_ffn(out, input)
         
         return input
+        
+    def sample(self, input, attn_mask, pad_mask=None):
+        
+        # always toss the coin
+        if self.coin is None:
+            coin = (torch.rand(1)[0].item() >= self.death_rate)
+        else:
+            self.coin = coin
+        # sample once per translation file
+            
+        if coin==True:
+            query = self.preprocess_attn(input)
+            out, _ = self.multihead(query, query, query, attn_mask)
+            
+            out = out / ( 1 - self.death_rate)
+                
+            
+            input = self.postprocess_attn(out, input)
+            
+            """ Feed forward layer 
+                layernorm > ffn > dropout > residual
+            """
+            out = self.feedforward(self.preprocess_ffn(input), 
+                                   mask=pad_mask)
+                                   
+            out = out / ( 1 - self.death_rate)
+                
+                
+            input = self.postprocess_ffn(out, input)
+        
+        return input
     
     
 class StochasticDecoderLayer(DecoderLayer):
@@ -163,39 +194,48 @@ class StochasticDecoderLayer(DecoderLayer):
     
         return input, coverage
         
-    #~ def step(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, buffer=None):
-        #~ """ Self attention layer 
-            #~ layernorm > attn > dropout > residual
-        #~ """        
-        #~ query = self.preprocess_attn(input, mask=pad_mask_tgt)
-        #~ 
-        #~ if buffer is not None:
-            #~ buffer = torch.cat([buffer, query], dim=1)
-        #~ else:
-            #~ buffer = query
-            #~ 
-#~ 
-        #~ out, _ = self.multihead_tgt(query, buffer, buffer, mask_tgt, 
-                                    #~ query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
-        #~ 
-#~ 
-        #~ input = self.postprocess_attn(out, input)
-        #~ 
-        #~ """ Context Attention layer 
-            #~ layernorm > attn > dropout > residual
-        #~ """
-        #~ 
-        #~ query = self.preprocess_src_attn(input, mask=pad_mask_tgt)
-        #~ out, coverage = self.multihead_src(query, context, context, mask_src, 
-                                           #~ query_mask=pad_mask_tgt, value_mask=None)
-        #~ input = self.postprocess_src_attn(out, input)
-        #~ 
-        #~ """ Feed forward layer 
-            #~ layernorm > ffn > dropout > residual
-        #~ """
-        #~ out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask_tgt), 
-                                           #~ mask=pad_mask_tgt)
-        #~ input = self.postprocess_ffn(out, input)
-        #~ 
-        #~ 
-        #~ return input, coverage, buffer
+    def step_sample(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, buffer=None):
+        """ Self attention layer 
+            layernorm > attn > dropout > residual
+        """
+        
+        # always toss the coin
+        if not hasattr(self, 'coin') or self.coin is None:
+            coin = (torch.rand(1)[0].item() >= self.death_rate)
+            self.coin = coin
+        else:
+            coin = self.coin
+        # sample once per translation file
+        if coin == True: 
+            query = self.preprocess_attn(input)
+            
+            out, _, buffer = self.multihead_tgt.step(query, query, query, mask_tgt, buffer=buffer)
+                                       
+            out = out / ( 1 - self.death_rate)
+
+            input = self.postprocess_attn(out, input)
+            
+            """ Context Attention layer 
+                layernorm > attn > dropout > residual
+            """
+            
+            query = self.preprocess_src_attn(input)
+            out, coverage, buffer = self.multihead_src.step(query, context, context, mask_src, buffer=buffer)
+            
+            out = out / ( 1 - self.death_rate)
+                                               
+            input = self.postprocess_src_attn(out, input)
+            
+            """ Feed forward layer 
+                layernorm > ffn > dropout > residual
+            """
+            out = self.feedforward(self.preprocess_ffn(input))
+            
+            out = out / ( 1 - self.death_rate)
+                                               
+            input = self.postprocess_ffn(out, input)
+        
+        else:
+            coverage = None
+        
+        return input, coverage, buffer, coin

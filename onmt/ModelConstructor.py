@@ -5,11 +5,7 @@ import onmt
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer
 from onmt.modules.Transformer.Layers import PositionalEncoding
 
-
-
-def build_model(opt, dicts):
-
-    model = None
+def update_backward_compatibility(opt):
     
     if not hasattr(opt, 'model'):
         opt.model = 'recurrent'
@@ -25,6 +21,18 @@ def build_model(opt, dicts):
         
     if not hasattr(opt, 'init_embedding'):
         opt.init_embedding = 'xavier'
+        
+    if not hasattr(opt, 'death_type'):
+        opt.death_type = 'linear_decay'
+        
+    return opt
+
+def build_model(opt, dicts):
+
+    model = None
+    
+    opt = update_backward_compatibility(opt)
+    
     
     onmt.Constants.layer_norm = opt.layer_norm
     onmt.Constants.weight_norm = opt.weight_norm
@@ -156,6 +164,25 @@ def build_model(opt, dicts):
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         
         model = Transformer(encoder, decoder, generator)       
+        
+    elif opt.model in ['reinforce_transformer'] :
+    
+        
+        from onmt.modules.StochasticTransformer.Models import StochasticTransformerEncoder, StochasticTransformerDecoder
+        from onmt.modules.ReinforceTransformer.Models import ReinforcedStochasticDecoder, ReinforceTransformer
+                
+        onmt.Constants.weight_norm = opt.weight_norm
+        onmt.Constants.init_value = opt.param_init
+        
+        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
+        
+        encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder)
+        
+        decoder = ReinforceStochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
+        
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        
+        model = ReinforceTransformer(encoder, decoder, generator)       
 
 
     else:
