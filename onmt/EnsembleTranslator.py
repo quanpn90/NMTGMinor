@@ -150,6 +150,8 @@ class EnsembleTranslator(object):
         for i, t in enumerate(data):
             if data[i] is not None:
                 if self.cuda:
+                    if(data[i].type() == "torch.FloatTensor" and self.fp16):
+                        data[i] = data[i].half()
                     data[i] = Variable(data[i].cuda())
                 else:
                     data[i] = Variable(data[i])

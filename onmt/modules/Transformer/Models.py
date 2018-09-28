@@ -149,7 +149,7 @@ class TransformerDecoder(nn.Module):
         self.emb_dropout = opt.emb_dropout
         self.time = opt.time
         self.version = opt.version
-        self.input_type = opt.encoder_type
+        self.encoder_type = opt.encoder_type
 
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder

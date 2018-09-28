@@ -388,7 +388,7 @@ def main():
                                           max_src_length=opt.src_seq_length,
                                                  max_tgt_length=opt.tgt_seq_length,
                                                  sort_by_target=opt.sort_by_target,
-                                                 input_type=opt.input_type
+                                                 input_type=opt.input_type,
                                                  stride=opt.stride,concat=opt.concat)
 
         print('Preparing validation ...')

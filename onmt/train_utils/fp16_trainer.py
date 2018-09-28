@@ -81,6 +81,18 @@ class FP16XETrainer(XETrainer):
         self.fp32_params.grad = self.fp32_params.data.new(total_param_size)
         # we optimize on the fp32 params
         self.optim.set_parameters([self.fp32_params])
+
+    def to_variable(self,data):
+        for i, t in enumerate(data):
+            if self.cuda:
+                if(data[i].type() == "torch.FloatTensor"):
+                    data[i] = data[i].half()
+                data[i] = Variable(data[i].cuda())
+            else:
+                data[i] = Variable(data[i])
+
+        return data
+
         
     def eval(self, data):
         total_loss = 0
