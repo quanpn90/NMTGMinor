@@ -61,12 +61,14 @@ def main():
 
         trainData = onmt.Dataset(dataset['train']['src'],
                                  dataset['train']['tgt'], opt.batch_size_words, opt.gpus,
+                                 data_type=dataset.get("type", "text"),
                                  max_seq_num=opt.batch_size_sents,
                                  pad_count = opt.pad_count,
                                  multiplier = opt.batch_size_multiplier,
                                  sort_by_target=opt.sort_by_target)
         validData = onmt.Dataset(dataset['valid']['src'],
                                  dataset['valid']['tgt'], opt.batch_size_words, opt.gpus,
+                                 data_type=dataset.get("type", "text"),
                                  max_seq_num=opt.batch_size_sents)
 
         dicts = dataset['dicts']

@@ -183,13 +183,19 @@ def build_model(opt, dicts):
 
     init.xavier_uniform_(model.generator.linear.weight)
 
-    if opt.init_embedding == 'xavier':
-        init.xavier_uniform_(model.encoder.word_lut.weight)
-        init.xavier_uniform_(model.decoder.word_lut.weight)
-    elif opt.init_embedding == 'normal':
-        init.normal_(model.encoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
-        init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
-
+    if(opt.encoder_type == "audio"):
+        init.xavier_uniform_(model.encoder.audio_trans.weight.data)
+        if opt.init_embedding == 'xavier':
+            init.xavier_uniform_(model.decoder.word_lut.weight)
+        elif opt.init_embedding == 'normal':
+            init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
+    else:
+        if opt.init_embedding == 'xavier':
+            init.xavier_uniform_(model.encoder.word_lut.weight)
+            init.xavier_uniform_(model.decoder.word_lut.weight)
+        elif opt.init_embedding == 'normal':
+            init.normal_(model.encoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
+            init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
 
     return model
     

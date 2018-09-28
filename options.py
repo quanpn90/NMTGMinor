@@ -69,6 +69,8 @@ def make_parser(parser):
     # Optimization options
     parser.add_argument('-encoder_type', default='text',
                         help="Type of encoder to use. Options are [text|img].")
+    parser.add_argument('-input_size', type=int, default=2048,
+                        help='Size of input features')  
     parser.add_argument('-init_embedding', default='normal',
                         help="How to init the embedding matrices. Xavier or Normal.")
     parser.add_argument('-batch_size_words', type=int, default=2048,
