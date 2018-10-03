@@ -7,6 +7,8 @@ class Autoencoder(nn.Module):
     def __init__(self, nmt_model,opt):
         super(Autoencoder, self).__init__()
 
+        self.param_init = opt.param_init
+        
         self.nmt = nmt_model
         self.representation = opt.representation
         if(opt.representation == "EncoderHiddenState"):
@@ -33,12 +35,20 @@ class Autoencoder(nn.Module):
         src = input[0].transpose(0,1)
 
         if(self.representation == "EncoderHiddenState"):
-            context, src_mask = self.nmt.encoder(src,grow=False)
-            flattened_context = context.contiguous().view(-1, context.size(-1))
-            flattened_mask = src_mask.squeeze(1).transpose(0,1).contiguous().view(-1)
-            non_pad_indices = torch.nonzero(1-flattened_mask).squeeze(1)
-            clean_context = flattened_context.index_select(0, non_pad_indices)
+            with torch.no_grad():
+                context, src_mask = self.nmt.encoder(src,grow=False)
+                flattened_context = context.contiguous().view(-1, context.size(-1))
+                flattened_mask = src_mask.squeeze(1).transpose(0,1).contiguous().view(-1)
+                non_pad_indices = torch.nonzero(1-flattened_mask).squeeze(1)
+                clean_context = flattened_context.index_select(0, non_pad_indices)
         else:
             raise NotImplementedError("Waring!"+opt.represenation+" not implemented for auto encoder")
-
+        
+        clean_context.require_grad=False
         return clean_context,self.model(clean_context)
+
+
+    def init_model_parameters(self):
+        for p in self.parameters():
+            p.data.uniform_(-self.param_init, self.param_init)
+            
