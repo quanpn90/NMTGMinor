@@ -292,7 +292,6 @@ class TransformerDecoder(nn.Module):
         input = decoder_state.input_seq.transpose(0, 1)
         input_ = input[:,-1].unsqueeze(1)
         
-        
         output_buffer = list()
             
         batch_size = input_.size(0)
@@ -333,7 +332,6 @@ class TransformerDecoder(nn.Module):
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
                 
         output = emb.contiguous()
-        
 
         for i, layer in enumerate(self.layer_modules):
             
@@ -407,7 +405,6 @@ class TransformerDecodingState(DecoderState):
         #~ context = 
         
         self.context = context.repeat(1,beamSize,1)
-        self.context = Variable(self.context.data.repeat(1, beamSize, 1))
         self.beamSize = beamSize
 
         self.input_seq = None

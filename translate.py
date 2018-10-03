@@ -237,7 +237,7 @@ def translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, p
         predScore_ = []
         for bb, ss, ll in zip(predBatch, predScore, predLength):
             #~ ss_ = [s_/numpy.maximum(1.,len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
-            ss_ = [len_penalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
+            ss_ = [lenPenalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
             ss_origin = [(s_, len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
             sidx = numpy.argsort(ss_)[::-1]
             #~ print(ss_, sidx, ss_origin)
@@ -252,7 +252,7 @@ def translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, p
     goldWordsTotal = 0
     if tgtF is not None:
         goldScoreTotal = sum(goldScore).item()
-        goldWordsTotal = numGoldWords.item()
+        goldWordsTotal = numGoldWords
             
     for b in range(len(predBatch)):
                         

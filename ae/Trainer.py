@@ -14,7 +14,6 @@ import time, datetime
 import random
 import numpy as np
 from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
-from onmt.ModelConstructor import init_model_parameters
 from onmt.train_utils.trainer import BaseTrainer
 
 
@@ -164,6 +163,7 @@ class AETrainer(BaseTrainer):
                     # Update the parameters.
                     self.optim.step(grad_denom=grad_denom)
                     self.autoencoder.zero_grad()
+                    self.model.zero_grad()
                     counter = 0
                     num_accumulated_words = 0
                     num_accumulated_sents = 0
@@ -185,10 +185,10 @@ class AETrainer(BaseTrainer):
                 optim = self.optim
 
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
-                    print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
+                    print(("Epoch %2d, %5d/%5d; ; loss: %6.2f ; lr: %.7f ; num updates: %7d " +
                            "%5.0f src tok/s; %s elapsed") %
                           (epoch, i + 1, len(trainData),
-                           math.exp(report_loss / report_tgt_words),
+                           report_loss / report_tgt_words,
                            optim.getLearningRate(),
                            optim._step,
                            report_tgt_words / (time.time() - start),
@@ -211,7 +211,7 @@ class AETrainer(BaseTrainer):
         batchOrder = None
         iteration = 0
         print('Initializing model parameters')
-        init_model_parameters(autoencoder, opt)
+        autoencoder.init_model_parameters()
         resume = False
 
         valid_loss = self.eval(self.validData)

@@ -129,7 +129,7 @@ def main():
         raise NotImplementedError
 
     if checkpoint is not None:
-        print('Loading model and optim from checkpoint at %s' % opt.load_from)
+        print('Loading model from checkpoint at %s' % opt.load_from)
         model.load_state_dict(checkpoint['model'])
 
         del checkpoint['model']
