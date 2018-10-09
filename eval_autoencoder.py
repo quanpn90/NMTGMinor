@@ -197,12 +197,31 @@ def main():
 
 
 def outputResults(srcBatch,r,outF):
+#    x=0
+#    for i in range(len(srcBatch)):
+#        for j in range(len(srcBatch[i])):
+#            outF.write(str(r[x].item()))
+#            outF.write(' ')
+#            x+=1
+#        outF.write("\n")
+#        outF.flush()
+
     x=0
+    j=0
+    out= []
     for i in range(len(srcBatch)):
-        for j in range(len(srcBatch[i])):
-            outF.write(str(r[x].item()))
+        out.append([])
+    while(x < r.size(0)):
+        for i in range(len(srcBatch)):
+            if(j < len(srcBatch[i])):
+               out[i].append(str(r[x].item()))
+               x+=1
+        j += 1
+    
+    for i in range(len(out)):
+        for j in range(len(out[i])):
+            outF.write(out[i][j])
             outF.write(' ')
-            x+=1
         outF.write("\n")
         outF.flush()
 
