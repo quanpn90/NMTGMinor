@@ -30,6 +30,8 @@ parser.add_argument('-auto_encoder_hidden_size', type=int, default=100,
                     help="Hidden size of autoencoder")
 parser.add_argument('-auto_encoder_drop_out', type=float, default=0,
                     help="Use drop_out in autoencoder")
+parser.add_argument('-auto_encoder_type', type=str, default="Baseline",
+                    help="Use drop_out in autoencoder")
 
 opt = parser.parse_args()
 

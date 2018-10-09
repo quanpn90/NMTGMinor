@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 
 
+from ae.VariationalLayer import VariationalLayer
+
 class Autoencoder(nn.Module):
 
     def __init__(self, nmt_model,opt):
@@ -11,6 +13,10 @@ class Autoencoder(nn.Module):
         
         self.nmt = nmt_model
         self.representation = opt.representation
+        if(opt.auto_encoder_type is None):
+            self.model_type = "Baseline"
+        else:
+            self.model_type = opt.auto_encoder_type
         if(opt.representation == "EncoderHiddenState"):
             self.inputSize = nmt_model.encoder.model_size
         else:
@@ -21,8 +27,14 @@ class Autoencoder(nn.Module):
         layers = []
         if(opt.auto_encoder_drop_out > 0):
             layers.append(nn.Dropout(opt.auto_encoder_drop_out))
-        layers.append(nn.Linear(self.inputSize, self.hiddenSize))
-        layers.append(nn.Sigmoid())
+        if(self.model_type == "Baseline"):
+            layers.append(nn.Linear(self.inputSize, self.hiddenSize))
+            layers.append(nn.Sigmoid())
+        elif(self.model_type == "Variational"):
+            self.variational_layer = VariationalLayer(self.inputSize,self.hiddenSize)
+            layers.append(self.variational_layer)
+        else:
+            raise NotImplementedError("Waring!" + self.model_type + " not implemented for auto encoder")
         if(opt.auto_encoder_drop_out > 0):
             layers.append(nn.Dropout(opt.auto_encoder_drop_out))
         layers.append(nn.Linear(self.hiddenSize, self.inputSize))
