@@ -24,6 +24,10 @@ class AETrainer(BaseTrainer):
         super().__init__(model, loss_function, trainData, validData, dicts, opt)
         self.optim = onmt.Optim(opt)
         self.autoencoder = autoencoder
+        if(opt.auto_encoder_type is None):
+            self.auto_encoder_type = "Baseline"
+        else:
+            self.auto_encoder_type = opt.auto_encoder_type
 
         if self.cuda:
             torch.cuda.set_device(self.opt.gpus[0])
@@ -138,6 +142,14 @@ class AETrainer(BaseTrainer):
                 targets,outputs = self.autoencoder(batch)
 
                 loss_data= self.loss_function(outputs, targets.data)
+                if(self.auto_encoder_type == "Variational"):
+                    m = self.autoencoder.variational_layer.mean
+                    std = self.autoencoder.variational_layer.std
+                    m = m.mul(m)
+                    std = std.mul(std)
+#                    var_loss = (m + std - torch.log(std) - torch.ones(m.size()))*0.5
+                    var_loss = ((m+std-std.log()-torch.ones(m.size()))*0.5).sum()
+                    loss_data = loss_data - var_loss
                 loss_data.backward()
 
 
