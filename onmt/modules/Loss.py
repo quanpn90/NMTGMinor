@@ -98,12 +98,13 @@ class NMTLossFunc(LossFuncBase):
             # If label smoothing value is set to zero, the loss
             # is equivalent to NLLLoss or CrossEntropyLoss.
             # All non-true labels are uniformly set to low-confidence.
-            #~ self.func = nn.KLDivLoss(size_average=False)
-            #~ one_hot = torch.randn(1, output_size)
-            #~ one_hot.fill_(self.smoothing_value)
-            #~ one_hot[0][self.padding_idx] = 0
-            #~ self.register_buffer('one_hot', one_hot)
-            self.smoothing_value = label_smoothing / (output_size - 2)
+            self.smoothing_value = label_smoothing / (output_size - 1)
+            # ~ self.func = nn.KLDivLoss(size_average=False)
+            # ~ one_hot = torch.randn(1, output_size)
+            # ~ one_hot.fill_(self.smoothing_value)
+            # ~ one_hot[0][self.padding_idx] = 0
+            # ~ self.register_buffer('one_hot', one_hot)
+            
 
             
         else:
@@ -114,26 +115,26 @@ class NMTLossFunc(LossFuncBase):
         self.label_smoothing = label_smoothing
 
         
-    def _compute_loss(self, scores, targets):
+    def _compute_loss(self, scores, targets, smooth=True):
         
         gtruth = targets.view(-1) # batch * time
         scores = scores.view(-1, scores.size(-1)) # batch * time X vocab_size
         
         if self.confidence < 1: # label smoothing
-            tdata = gtruth.data
+            tdata = gtruth
             
-            #~ # squeeze is a trick to know if mask has dimension or not
-            #~ mask = torch.nonzero(tdata.eq(self.padding_idx)).squeeze()
-            #~ likelihood = torch.gather(scores.data, 1, tdata.unsqueeze(1))
-            #~ tmp_ = self.one_hot.repeat(gtruth.size(0), 1)
-            #~ tmp_.scatter_(1, tdata.unsqueeze(1), self.confidence)
-            #~ if mask.numel() > 0:
-                #~ likelihood.index_fill_(0, mask, 0)
-                #~ tmp_.index_fill_(0, mask, 0)
+            # squeeze is a trick to know if mask has dimension or not
+            # ~ mask = torch.nonzero(tdata.eq(self.padding_idx)).squeeze()
+            # ~ likelihood = torch.gather(scores, 1, tdata.unsqueeze(1))
+            # ~ tmp_ = self.one_hot.repeat(gtruth.size(0), 1)
+            # ~ tmp_.scatter_(1, tdata.unsqueeze(1), self.confidence)
+            # ~ if mask.numel() > 0:
+                # ~ likelihood.index_fill_(0, mask, 0)
+                # ~ tmp_.index_fill_(0, mask, 0)
            
-            #~ gtruth = torch.autograd.Variable(tmp_, requires_grad=False)
-            #~ loss = self.func(scores, gtruth)
-            #~ oss_data = - likelihood.sum(0)
+            # ~ gtruth = torch.autograd.Variable(tmp_, requires_grad=False)
+            # ~ loss = self.func(scores, gtruth)
+            # ~ loss_data = - likelihood.sum(0).item()
             
             lprobs = scores
             non_pad_mask = gtruth.ne(self.padding_idx)
@@ -144,7 +145,7 @@ class NMTLossFunc(LossFuncBase):
              
             eps_i = self.smoothing_value
             loss = (1. - self.label_smoothing)   * nll_loss + eps_i * smooth_loss
-            loss_data = nll_loss.data.item()
+            loss_data = nll_loss.item()
             
         else:
             loss = self.func(scores.float(), gtruth)
@@ -175,7 +176,9 @@ class NMTLossFunc(LossFuncBase):
         
         
         if mask is not None:
-            """ We remove all positions with PAD """
+            """ We remove all positions with PAD 
+                to save memory on unwanted positions
+            """
             flattened_mask = mask.view(-1)
             
             non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
@@ -188,53 +191,15 @@ class NMTLossFunc(LossFuncBase):
             clean_input = outputs
             clean_targets = targets
         
-        detached_outputs = clean_input
-        """ detaching makes backward pass split into two steps:
-            one in the linear softmax (big)
-            one in the rest of the network
-            saving a lot of memory 
-        """
         dists = generator(clean_input)
         
         loss, loss_data = self._compute_loss(dists, clean_targets)
         
         if backward:
             loss.div(normalizer).backward()
-        #~ if generator is not None:
-            #~ outputs = torch.autograd.Variable(detached_outputs.data, requires_grad=(backward))
             
+        output = dict()
+        output['loss'] = loss
+        output['nll'] = loss_data
         
-        #~ split_size = int(math.ceil(self.shard_split / batch_size))
-        split_size = self.shard_split
-        
-        #~ outputs_split = torch.split(outputs, split_size)
-        #~ targets_split = torch.split(clean_targets, split_size)
-        
-        #~ loss_data = 0
-        #~ for i, (outputs_t, target_t) in enumerate(zip(outputs_split, targets_split)):
-            #~ 
-            #~ # if the generator is provided then transform
-            #~ if generator is not None:
-                #~ dist_t = generator(outputs_t)
-            #~ else:
-                #~ dist_t = outputs_t 
-            #~ 
-            #~ # actual loss function between the predictive distribution and target
-            #~ loss_t, loss_data_t = self._compute_loss(dist_t, target_t)
-#~ 
-            #~ loss_data += loss_data_t
-            #~ 
-            #~ # backward from loss
-            #~ # note: we only compute the gradients w.r.t the outputs 
-            #~ if backward:
-                #~ loss_t.backward(retain_graph=True)
-            #~ 
-        #~ grad_outputs = None if outputs.grad is None else outputs.grad.data
-        
-        
-        #~ if grad_outputs is not None:
-            #~ print(type(detached_outputs))
-            #~ grad_outputs = torch.autograd.grad(detached_outputs, original_outputs, grad_outputs=grad_outputs)
-            #~ detached_outputs.backward(grad_outputs)
-        
-        return loss_data, None
+        return output

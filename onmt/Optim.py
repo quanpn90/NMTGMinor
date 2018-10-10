@@ -161,7 +161,7 @@ class Optim(object):
         if self.method == 'sgd':
             self.optimizer = optim.SGD(self.params, lr=self.lr, weight_decay=self.weight_decay, momentum=0.0)
         elif self.method == 'adam':
-            self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+            self.optimizer = Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
                                         weight_decay=self.weight_decay, amsgrad=self.amsgrad)
         else:
             raise RuntimeError("Invalid optim method: " + self.method)
@@ -255,6 +255,7 @@ class Optim(object):
         
         state_dict.pop('_step', None)
         self.optimizer.load_state_dict(state_dict)
+        self.updateLearningRate()
       
     def zero_grad(self):
         self.optimizer.zero_grad()

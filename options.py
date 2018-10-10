@@ -50,6 +50,8 @@ def make_parser(parser):
                         help='Dropout probability; applied on multi-head attention.')   
     parser.add_argument('-emb_dropout', type=float, default=0.1,
                         help='Dropout probability; applied on top of embedding.')    
+    parser.add_argument('-residual_dropout', type=float, default=0.2,
+                        help='Dropout probability; applied on residual connection.')    
     parser.add_argument('-weight_norm', action='store_true',
                       help='Apply weight normalization on linear modules')
     parser.add_argument('-layer_norm', default='fast',

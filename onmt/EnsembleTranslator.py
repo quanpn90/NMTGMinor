@@ -52,13 +52,15 @@ class EnsembleTranslator(object):
                     print("Not enough len to decode. Renewing .. ")    
                     model.decoder.renew_buffer(self.opt.max_sent_length)
             
+            if opt.fp16:
+                model = model.half()
+            
             if opt.cuda:
                 model = model.cuda()
             else:
                 model = model.cpu()
                 
-            if opt.fp16:
-                model = model.half()
+            
             
             model.eval()
             
@@ -142,18 +144,6 @@ class EnsembleTranslator(object):
             return batch.size(1)
         else:
             return batch.size(0)
-            
-    def to_variable(self, data):
-        
-        for i, t in enumerate(data):
-            if data[i] is not None:
-                if self.cuda:
-                    data[i] = Variable(data[i].cuda())
-                else:
-                    data[i] = Variable(data[i])
-            else:
-                data[i] = None
-        return data
 
     def buildData(self, srcBatch, goldBatch):
         # This needs to be the same as preprocess.py.
@@ -221,7 +211,6 @@ class EnsembleTranslator(object):
             
             output, coverage = model_.decoder(tgtBatchInput, contexts[0], src)
             # output should have size time x batch x dim
-            #~ output = output.transpose(0, 1) # transpose to have time first, like RNN models
             
             
             #  (2) if a target is specified, compute the 'goldScore'
@@ -357,9 +346,12 @@ class EnsembleTranslator(object):
     def translate(self, srcBatch, goldBatch):
         #  (1) convert words to indexes
         dataset = self.buildData(srcBatch, goldBatch)
-        batch = self.to_variable(dataset.next()[0])
-        src, tgt = batch
-        batchSize = self._getBatchSize(src)
+        batch = dataset.next()[0]
+        batch.cuda()
+        # ~ batch = self.to_variable(dataset.next()[0])
+        src = batch.get('source')
+        tgt = batch.get('target_input')
+        batchSize = batch.size
 
         #  (2) translate
         pred, predScore, attn, predLength, goldScore, goldWords = self.translateBatch(src, tgt)

@@ -24,6 +24,9 @@ def update_backward_compatibility(opt):
         
     if not hasattr(opt, 'death_type'):
         opt.death_type = 'linear_decay'
+    
+    if not hasattr(opt, 'residual_dropout'):
+        opt.residual_dropout = opt.dropout
         
     return opt
 

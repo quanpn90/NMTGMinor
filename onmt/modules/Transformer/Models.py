@@ -41,7 +41,7 @@ class TransformerEncoder(nn.Module):
         self.attn_dropout = opt.attn_dropout
         self.emb_dropout = opt.emb_dropout
         self.time = opt.time
-        self.version = opt.version
+        self.residual_dropout = opt.residual_dropout
         
         self.word_lut = nn.Embedding(dicts.size(),
                                      self.model_size,
@@ -64,7 +64,7 @@ class TransformerEncoder(nn.Module):
         
     def build_modules(self):
         
-        self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
+        self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, self.residual_dropout) for _ in range(self.layers)])
 
     def forward(self, input, **kwargs):
         """
@@ -89,7 +89,7 @@ class TransformerEncoder(nn.Module):
         
         emb = self.preprocess_layer(emb)
         
-        mask_src = input.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x len_src x 1 for broadcasting
+        mask_src = input.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x 1 x len_src for broadcasting
         
         #~ pad_mask = input.ne(onmt.Constants.PAD)) # batch_size x len_src
         
@@ -138,6 +138,7 @@ class TransformerDecoder(nn.Module):
         self.emb_dropout = opt.emb_dropout
         self.time = opt.time
         self.version = opt.version
+        self.residual_dropout = opt.residual_dropout
         
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
@@ -164,7 +165,7 @@ class TransformerDecoder(nn.Module):
         self.build_modules()
         
     def build_modules(self):
-        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
+        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, self.residual_dropout) for _ in range(self.layers)])
     
     def renew_buffer(self, new_len):
         
@@ -336,7 +337,7 @@ class Transformer(NMTModel):
     """Main model in 'Attention is all you need' """
     
         
-    def forward(self, input, grow=False):
+    def forward(self, batch, grow=False):
         """
         Inputs Shapes: 
             src: len_src x batch_size
@@ -347,8 +348,8 @@ class Transformer(NMTModel):
             
             
         """
-        src = input[0]
-        tgt = input[1][:-1]  # exclude last target from inputs
+        src = batch.get('source')
+        tgt = batch.get('target_input')
         
         src = src.transpose(0, 1) # transpose to have batch first
         tgt = tgt.transpose(0, 1)

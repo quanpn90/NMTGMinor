@@ -6,6 +6,56 @@ from torch.autograd import Variable
 
 import onmt
 
+class Batch(object):
+    
+    def __init__(self, src_data, tgt_data=None, 
+                 src_align_right=False, tgt_align_right=False):
+        
+        self.tensors = dict()
+        self.has_target = False
+        self.tensors['source'], self.src_lengths = self.join_data(src_data, align_right=src_align_right)
+        self.tensors['source'] = self.tensors['source'].t().contiguous()
+        self.tensors['src_attn_mask'] = self.tensors['source'].eq(onmt.Constants.PAD).unsqueeze(1)
+        self.tensors['src_pad_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
+        
+        if tgt_data is not None:
+            target_full, self.tgt_lengths = self.join_data(tgt_data, align_right=tgt_align_right)
+            target_full = target_full.t().contiguous()
+            self.tensors['target_input'] = target_full[:-1]
+            self.tensors['target_output'] = target_full[1:]
+            self.tensors['tgt_pad_mask'] = self.tensors['target_input'].ne(onmt.Constants.PAD)
+            self.tensors['tgt_attn_mask'] = self.tensors['target_input'].ne(onmt.Constants.PAD)
+            self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.Constants.PAD)
+            self.has_target = True
+        
+        self.size = len(src_data)
+        self.tgt_size = sum([len(x) - 1 for x in tgt_data])
+        self.src_size = sum([len(x)     for x in src_data])
+
+    def join_data(self, data, align_right=False):
+    
+        lengths = [x.size(0) for x in data]
+        max_length = max(lengths)
+        # initialize with batch_size * length first
+        tensor = data[0].new(len(data), max_length).fill_(onmt.Constants.PAD)
+        
+        for i in range(len(data)):
+            data_length = data[i].size(0)
+            offset = max_length - data_length if align_right else 0
+            tensor[i].narrow(0, offset, data_length).copy_(data[i])
+            
+        return tensor, lengths
+        
+    def get(self, name):
+        if name in self.tensors:
+            return self.tensors[name]
+        else:
+            return None
+            
+    def cuda(self):
+        for key, value in self.tensors.items():
+            self.tensors[key] = value.cuda()
+
 class Dataset(object):
     '''
     batchSize is now changed to have word semantic (probably better)
@@ -39,10 +89,8 @@ class Dataset(object):
         self.allocateBatch()
         self.cur_index = 0
         self.batchOrder = None
-        # else:
-            # self.numBatches = math.ceil(len(self.src)/batchSize)
 
-    #~ # This function allocates the mini-batches (grouping sentences with the same size)
+    # This function allocates the mini-batches (grouping sentences with the same size)
     def allocateBatch(self):
             
         # The sentence pairs are sorted by source already (cool)
@@ -50,11 +98,10 @@ class Dataset(object):
         
         cur_batch = []
         cur_batch_size = 0
-        cur_batch_sizes = [0]
+        cur_batch_sizes = []
         
         def oversize_(cur_batch):
-            
-            
+
             if len(cur_batch) == self.max_seq_num:
                     return True
             
@@ -63,21 +110,24 @@ class Dataset(object):
                 if ( cur_batch_size + sentence_length > self.batchSize ):
                     return True
             else:
-                if (max(max(cur_batch_sizes), sentence_length)) * (len(cur_batch)+1) > self.batchSize:
+                # here we assume the new sentence's participation in the minibatch
+                longest_length = sentence_length
+                
+                if len(cur_batch_sizes) > 0:
+                    longest_length = max(max(cur_batch_sizes), sentence_length)
+                
+                if longest_length * (len(cur_batch)+1) > self.batchSize:
                     return True
             return False
         
         i = 0
-        while i < self.fullSize:
-        #~ for i in range(1, self.fullSize):
-            
+        while i < self.fullSize:            
             sentence_length = self.tgt[i].size(0) - 1 if self.sort_by_target else self.src[i].size(0)
 
             oversized = oversize_(cur_batch)
             # if the current length makes the batch exceeds
             # the we create a new batch
             if oversized:
-
                 current_size = len(cur_batch)
                 scaled_size = max(
                     self.multiplier * (current_size // self.multiplier),
@@ -90,7 +140,7 @@ class Dataset(object):
                 self.batches.append(batch_) # add this batch into the batch list
                 
                 cur_batch = cur_batch[scaled_size:] # reset the current batch
-                cur_batch_sizes = cur_batch_sizes[:-scaled_size]
+                cur_batch_sizes = cur_batch_sizes[scaled_size:]
                 cur_batch_size  = sum(cur_batch_sizes)
                 
             
@@ -127,33 +177,16 @@ class Dataset(object):
         
         batch = self.batches[index]
         srcData = [self.src[i] for i in batch]
-        srcBatch, lengths = self._batchify(
-            srcData,
-            align_right=False, include_lengths=True, dtype=self._type)
 
         if self.tgt:
             tgtData = [self.tgt[i] for i in batch]
-            tgtBatch = self._batchify(
-                        tgtData,
-                        dtype="text")
         else:
-                tgtBatch = None
-        
-
-        def wrap(b, dtype="text"):
-            if b is None:
-                return b
-            #~ print (b)
-            #~ b = torch.stack(b, 0)
-            b = b.t().contiguous()
+            tgtData = None
             
-            return b
-
-        srcTensor = wrap(srcBatch, self._type)
-        tgtTensor = wrap(tgtBatch, "text")
+        batch = Batch(srcData, tgt_data=tgtData, src_align_right=False, tgt_align_right=False)
         
         
-        return [srcTensor, tgtTensor]
+        return batch
        
 
     def __len__(self):
@@ -205,7 +238,7 @@ class Dataset(object):
             
             # batch_split = [ [b[0], None] for i, b in enumerate(batch_split) ] 
        
-        return [[batch[0], batch[1]]]
+        return [batch]
     
 
     def shuffle(self):
@@ -216,5 +249,3 @@ class Dataset(object):
         
         assert iteration >= 0 and iteration < self.numBatches
         self.cur_index = iteration
-
-# class AugmentedDataset(object):

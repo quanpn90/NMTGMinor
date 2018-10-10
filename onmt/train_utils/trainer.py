@@ -40,13 +40,9 @@ class BaseTrainer(object):
         
         raise NotImplementedError
         
-    def to_variable(self, data):
+    def to_variable(self, batch):
         
-        for i, t in enumerate(data):
-            if self.cuda:
-                data[i] = Variable(data[i].cuda())
-            else:
-                data[i] = Variable(data[i])
+        batch = batch.cuda()
 
         return data
             
@@ -75,11 +71,31 @@ class BaseTrainer(object):
             out[offset:offset+numel].copy_(g.view(-1))
             offset += numel
         return out[:offset]
+        
+    def _get_grad_norm(self, module):
+        
+        grads = []
+        
+        total_norm = 0
+        
+        for name, p in module.named_parameters():
+            if not p.requires_grad:
+                continue
+            if p.grad is None:
+                raise RuntimeError('Model parameter did not receive gradient: ' + name + '. '
+                                   'Use the param in the forward pass or set requires_grad=False.' +
+                                   ' If you are using Stochastic model + fp16 - try to increase the number of minibatches' +
+                                   ' each update to avoid uninitialized gradients.' )
+            # ~ grads.append(p.grad.data)
+            total_norm += p.grad.data.norm(2).item()
+            
+        total_norm = total_norm ** 0.5 
+        return total_norm
 
 
 class XETrainer(BaseTrainer):
 
-    def __init__(self, model, loss_function, trainData, validData, dicts, opt):
+    def __init__(self, model, loss_function, trainData, validData, dicts, opt, set_param=True):
         super().__init__(model, loss_function, trainData, validData, dicts, opt)
         self.optim = onmt.Optim(opt)
         
@@ -89,7 +105,8 @@ class XETrainer(BaseTrainer):
            self.loss_function = self.loss_function.cuda()
            self.model = self.model.cuda()
         
-        self.optim.set_parameters(self.model.parameters())
+        if set_param:
+            self.optim.set_parameters(self.model.parameters())
 
     def save(self, epoch, valid_ppl, batchOrder=None, iteration=-1):
         
@@ -139,8 +156,9 @@ class XETrainer(BaseTrainer):
                 outputs = self.model(batch)
                 targets = batch[1][1:]
                 
-                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
+                loss_output = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
                 
+                loss_data = loss_output['nll']
 #~ 
                 total_loss += loss_data
                 total_words += targets.data.ne(onmt.Constants.PAD).sum().item()
@@ -186,10 +204,11 @@ class XETrainer(BaseTrainer):
             
             samples = trainData.next(curriculum=curriculum)
                         
-            batch = self.to_variable(samples[0])
+            
             
             oom = False
             try:
+                batch = self.to_variable(samples[0])
             
                 outputs = self.model(batch)
                     
@@ -198,16 +217,15 @@ class XETrainer(BaseTrainer):
                 
                 batch_size = targets.size(1)
                 
-                tgt_mask = targets.data.ne(onmt.Constants.PAD)
+                tgt_mask = targets.ne(onmt.Constants.PAD)
                 tgt_size = tgt_mask.sum()
                 
-                tgt_mask = torch.autograd.Variable(tgt_mask)
                 normalizer = 1
                 
-                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, 
+                loss_output = self.loss_function(outputs, targets, generator=self.model.generator, 
                                                              backward=True, mask=tgt_mask)
                 
-                #~ outputs.backward(grad_outputs)
+                loss_data = loss_output['nll']
                 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
@@ -218,8 +236,8 @@ class XETrainer(BaseTrainer):
                     raise e        
                 
             if not oom:
-                src_size = batch[0].data.ne(onmt.Constants.PAD).sum().item()
-                tgt_size = targets.data.ne(onmt.Constants.PAD).sum().item()
+                src_size = batch[0].ne(onmt.Constants.PAD).sum().item()
+                tgt_size = targets.ne(onmt.Constants.PAD).sum().item()
                 
                 
                 counter = counter + 1 
@@ -277,8 +295,7 @@ class XETrainer(BaseTrainer):
                     report_loss, report_tgt_words = 0, 0
                     report_src_words = 0
                     start = time.time()
-            
-            
+
         return total_loss / total_words
     
     

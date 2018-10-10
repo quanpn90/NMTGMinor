@@ -77,6 +77,8 @@ def addone(f):
 def lenPenalty(s, l, alpha):
     
     l_term = math.pow(l, alpha)
+    
+    # ~ l_term = math.pow(l + 5.0, alpha) / math.pow(6, alpha)
     return s / l_term
     
 def getSentenceFromTokens(tokens, input_type):

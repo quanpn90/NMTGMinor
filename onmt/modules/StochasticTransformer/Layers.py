@@ -34,8 +34,8 @@ class StochasticEncoderLayer(EncoderLayer):
         out: batch_size x len_query x d_model
     """
     
-    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0, death_rate=0.0):
-        super().__init__(h, d_model, p, d_ff, attn_p, version)
+    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0, residual_p=0.1,death_rate=0.0):
+        super().__init__(h, d_model, p, d_ff, attn_p, residual_p,version)
         #~ super(StochasticEncoderLayer, self).__init__()
         self.death_rate = death_rate
         
@@ -128,8 +128,8 @@ class StochasticDecoderLayer(DecoderLayer):
         
     """    
     
-    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0, death_rate=0.0):
-        super().__init__(h, d_model, p, d_ff, attn_p, version)
+    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0, residual_p=0.1, death_rate=0.0):
+        super().__init__(h, d_model, p, d_ff, attn_p, residual_p, version)
         self.death_rate = death_rate
         
     

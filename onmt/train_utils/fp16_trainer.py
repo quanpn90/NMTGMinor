@@ -50,7 +50,7 @@ class DynamicLossScaler:
 class FP16XETrainer(XETrainer):
 
     def __init__(self, model, loss_function, trainData, validData, dicts, opt):
-        super().__init__(model, loss_function, trainData, validData, dicts, opt)
+        super().__init__(model, loss_function, trainData, validData, dicts, opt, set_param=False)
         self.optim = onmt.Optim(opt)
         self.scaler = DynamicLossScaler(opt.fp16_loss_scale)
         
@@ -63,8 +63,15 @@ class FP16XETrainer(XETrainer):
            # Important:
            # Loss function needs to be in fp32
            self.loss_function = self.loss_function.cuda()
-           self.model = self.model.cuda().half()
-           
+           # self.model = self.model.cuda()
+        
+    
+    def convert_fp16(self, model_state=None, optim_state=None):
+        
+        if model_state is not None:
+            self.model.load_state_dict(model_state)
+
+        self.model = self.model.half().cuda()
         params = [p for p in self.model.parameters() if p.requires_grad]
         total_param_size = sum(p.data.numel() for p in params)
         
@@ -78,40 +85,63 @@ class FP16XETrainer(XETrainer):
             offset += numel
         
         self.fp32_params = torch.nn.Parameter(self.fp32_params)
-        self.fp32_params.grad = self.fp32_params.data.new(total_param_size)
+        self.fp32_params.grad = self.fp32_params.data.new(total_param_size).zero_()
         # we optimize on the fp32 params
         self.optim.set_parameters([self.fp32_params])
+        
+        if optim_state is not None:
+            self.optim.load_state_dict(optim_state)
         
         print(self.optim.optimizer)
         
     def eval(self, data):
+        
         total_loss = 0
         total_words = 0
                 
         batch_order = data.create_order(random=False)
+        torch.cuda.empty_cache()
         self.model.eval()
-        """ New semantics of PyTorch: save space by not creating gradients """
+        """ New semantics of PyTorch: not creating gradients in this mode """
         with torch.no_grad():
             for i in range(len(data)):
+                
+                oom = False
+                try:
+                    samples = data.next()
                     
-                samples = data.next()
+                    batch = samples[0]
+                    batch.cuda()
+                    
+                    
+                    """ outputs can be either 
+                            hidden states from decoder or
+                            prob distribution from decoder generator
+                    """
+                    outputs = self.model(batch)
+                    targets = batch.get('target_output')
+                    
+                    loss_output = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
+                    
+                    loss_data = loss_output['nll']
                 
-                batch = self.to_variable(samples[0])
+                    del loss_output
+                    
+                except RuntimeError as e:
+                    if 'out of memory' in str(e) or 'get_temporary_buffer' in str(e) :
+                        oom = True
+                        torch.cuda.empty_cache()
+                    else:
+                        raise e        
                 
-                """ outputs can be either 
-                        hidden states from decoder or
-                        prob distribution from decoder generator
-                """
-                outputs = self.model(batch)
-                targets = batch[1][1:]
-                
-                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
-                
-                total_loss += loss_data
-                total_words += targets.data.ne(onmt.Constants.PAD).sum().item()
+                if oom == False:        
+                    total_loss += loss_data
+                    total_words += batch.tgt_size
 
         self.model.train()
-        return total_loss / total_words
+        return total_loss / (total_words + 1e-6)
+        
+    
         
     def train_epoch(self, epoch, resume=False, batchOrder=None, iteration=0):
         
@@ -144,6 +174,7 @@ class FP16XETrainer(XETrainer):
         num_accumulated_words = 0
         num_accumulated_sents = 0
         oom_count = 0
+        grad_norm = 0
         
         for i in range(iteration, nSamples):
 
@@ -151,29 +182,39 @@ class FP16XETrainer(XETrainer):
             
             samples = trainData.next(curriculum=curriculum)
                         
-            batch = self.to_variable(samples[0])
-            
             oom = False
             try:
+                # ~ torch.cuda.empty_cache()
+                # ~ batch = self.to_variable(samples[0])
+                batch = samples[0]
+                batch.cuda()
             
                 outputs = self.model(batch)
                     
-                targets = batch[1][1:]
-                tgt_inputs = batch[1][:-1]
+                targets = batch.get('target_output')
+                tgt_inputs = batch.get('target_input')
                 
-                batch_size = targets.size(1)
+                batch_size = batch.size
                 
-                tgt_mask = targets.data.ne(onmt.Constants.PAD)
-                tgt_size = tgt_mask.sum().item()
+                # ~ tgt_mask = targets.data.ne(onmt.Constants.PAD)
+                tgt_mask = batch.get('tgt_mask')
+                tgt_size = batch.tgt_size
                                 
                 # Scale UP the loss so that the gradients are not cutoff
                 normalizer = 1.0 / self.scaler.loss_scale 
                 
-                loss_data, _ = self.loss_function(outputs, targets, generator=self.model.generator, 
-                                                             backward=True, mask=None, normalizer=normalizer)
+                loss_output = self.loss_function(outputs, targets, generator=self.model.generator, 
+                                                             backward=True, mask=tgt_mask, normalizer=normalizer)
+                
+                # take the negative likelihood                                             
+                loss_data = loss_output['nll']
+                
+                del loss_output['loss']
+                del loss_output
+                
                 
             except RuntimeError as e:
-                if 'out of memory' in str(e):
+                if 'out of memory' in str(e) or 'get_temporary_buffer' in str(e) :
                     oom = True
                     torch.cuda.empty_cache()
                     oom_count += 1
@@ -181,8 +222,8 @@ class FP16XETrainer(XETrainer):
                     raise e        
                 
             if not oom:
-                src_size = batch[0].data.ne(onmt.Constants.PAD).sum().item()
-                tgt_size = targets.data.ne(onmt.Constants.PAD).sum().item()
+                src_size = batch.src_size
+                tgt_size = batch.tgt_size
                 
                 
                 counter = counter + 1 
@@ -219,9 +260,12 @@ class FP16XETrainer(XETrainer):
                         print('setting loss scale to: ' + str(self.scaler.loss_scale))
                         self.model.zero_grad()
                         self.optim.zero_grad()
+                        num_accumulated_words = 0
+                        num_accumulated_sents = 0
                         loss_data = 0
                     
                     else:
+                        # self.fp32_params.grad.data.zero_()
                         self.optim.step(grad_denom=1)
 
                         offset = 0
@@ -257,11 +301,9 @@ class FP16XETrainer(XETrainer):
                 
                 optim = self.optim
                 
-                
-                
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
                     print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
-                           "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; oom %d; %s elapsed") %
+                           "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; gnorm %0.2f; oom %d; %s elapsed") %
                           (epoch, i+1, len(trainData),
                            math.exp(report_loss / report_tgt_words),
                            optim.getLearningRate(),
@@ -269,6 +311,7 @@ class FP16XETrainer(XETrainer):
                            report_src_words/(time.time()-start),
                            report_tgt_words/(time.time()-start),
                            self.scaler.loss_scale,
+                           grad_norm, 
                            oom_count, 
                            str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
 
@@ -286,38 +329,37 @@ class FP16XETrainer(XETrainer):
         opt = self.opt
         model = self.model
         optim = self.optim
+        self.model = self.model
         
         # Try to load the save_file
         checkpoint = None
         if save_file:
             checkpoint = torch.load(save_file)
         
-        
         if checkpoint is not None:
             print('Loading model and optim from checkpoint at %s' % save_file)
-            self.model.load_state_dict(checkpoint['model'])
+            self.convert_fp16(checkpoint['model'], checkpoint['optim'])
+            # ~ self.model.load_state_dict(checkpoint['model'])
             
-            if opt.reset_optim == False:
-                self.optim.load_state_dict(checkpoint['optim'])
-                batchOrder = checkpoint['batchOrder']
-                iteration = checkpoint['iteration'] + 1
-                opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
-                resume=True  
-            else:
-                batchOrder = None
-                iteration = 0
-                resume=False
-                
+            # ~ if opt.reset_optim == False:
+            # ~ self.optim.load_state_dict(checkpoint['optim'])
+            batchOrder = checkpoint['batchOrder']
+            iteration = checkpoint['iteration'] + 1
+            opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
+            resume=True  
             
             del checkpoint['model']
             del checkpoint['optim']
             del checkpoint
+            
         else:
             batchOrder = None
             iteration = 0
             print('Initializing model parameters')
             init_model_parameters(model, opt)
             resume=False
+            self.convert_fp16()
+        
         
         
         valid_loss = self.eval(self.validData)
@@ -341,8 +383,9 @@ class FP16XETrainer(XETrainer):
             valid_ppl = math.exp(min(valid_loss, 100))
             print('Validation perplexity: %g' % valid_ppl)
             
-            
-            self.save(epoch, valid_ppl)
+            # only save at the end of epoch when the option to save "every iterations" is disabled
+            if self.opt.save_every <= 0: 
+                self.save(epoch, valid_ppl)
             batchOrder = None
             iteration = None
             resume = False
