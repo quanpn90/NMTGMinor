@@ -31,7 +31,6 @@ class BaseTrainer(object):
         self.start_time = 0
         
         
-        
     def run(self, *args,**kwargs):
         
         raise NotImplementedError    
@@ -40,13 +39,6 @@ class BaseTrainer(object):
         
         raise NotImplementedError
         
-    def to_variable(self, batch):
-        
-        batch = batch.cuda()
-
-        return data
-            
-
     def _get_grads(self):
         grads = []
         for name, p in self.model.named_parameters():
@@ -145,23 +137,25 @@ class XETrainer(BaseTrainer):
         with torch.no_grad():
             for i in range(len(data)):
                     
-                samples = data.next()
+                batch = data.next()[0]
+                batch.cuda()
                 
-                batch = self.to_variable(samples[0])
+                
                 
                 """ outputs can be either 
                         hidden states from decoder or
                         prob distribution from decoder generator
                 """
                 outputs = self.model(batch)
-                targets = batch[1][1:]
+                # ~ targets = batch[1][1:]
+                targets = batch.get('target_output')
                 
                 loss_output = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
                 
                 loss_data = loss_output['nll']
 #~ 
                 total_loss += loss_data
-                total_words += targets.data.ne(onmt.Constants.PAD).sum().item()
+                total_words += batch.tgt_size
 
         self.model.train()
         return total_loss / total_words
@@ -203,22 +197,21 @@ class XETrainer(BaseTrainer):
             curriculum = (epoch < opt.curriculum)
             
             samples = trainData.next(curriculum=curriculum)
-                        
-            
-            
+
             oom = False
             try:
-                batch = self.to_variable(samples[0])
+                # ~ batch = self.to_variable(samples[0])
+                batch = samples[0]
+                batch.cuda()
             
                 outputs = self.model(batch)
                     
-                targets = batch[1][1:]
-                tgt_inputs = batch[1][:-1]
+                targets = batch.get('target_output')
                 
-                batch_size = targets.size(1)
+                batch_size = batch.size
                 
-                tgt_mask = targets.ne(onmt.Constants.PAD)
-                tgt_size = tgt_mask.sum()
+                tgt_mask = batch.get('tgt_mask')
+                tgt_size = batch.tgt_size
                 
                 normalizer = 1
                 
@@ -236,8 +229,8 @@ class XETrainer(BaseTrainer):
                     raise e        
                 
             if not oom:
-                src_size = batch[0].ne(onmt.Constants.PAD).sum().item()
-                tgt_size = targets.ne(onmt.Constants.PAD).sum().item()
+                src_size = batch.src_size
+                tgt_size = batch.tgt_size
                 
                 
                 counter = counter + 1 
