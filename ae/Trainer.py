@@ -116,7 +116,7 @@ class AETrainer(BaseTrainer):
             iteration = 0
 
         total_loss, total_words = 0, 0
-        report_loss, report_tgt_words = 0, 0
+        report_loss, report_mu,report_sig,report_el,report_mse, report_kl, report_tgt_words = 0, 0,0,0,0,0,0
         report_src_words = 0
         start = time.time()
         nSamples = len(trainData)
@@ -146,10 +146,16 @@ class AETrainer(BaseTrainer):
                     m = self.autoencoder.variational_layer.mean
                     std = self.autoencoder.variational_layer.std
                     m = m.mul(m)
-                    std = std.mul(std)
-#                    var_loss = (m + std - torch.log(std) - torch.ones(m.size()))*0.5
-                    var_loss = ((m+std-std.log()-torch.ones(m.size()))*0.5).sum()
-                    loss_data = loss_data - var_loss
+                    one = torch.ones(m.size())
+                    if(m.is_cuda):
+                        one = one.cuda()
+                    var_loss = ((m+std-std.log()-one)*0.5).sum()
+                    report_mse += loss_data.item()
+                    report_kl += var_loss.item()
+                    report_mu += m.sum().item()
+                    report_sig += std.sum().item()
+                    report_el += m.numel()
+                    loss_data = loss_data + var_loss
                 loss_data.backward()
 
 
@@ -197,16 +203,18 @@ class AETrainer(BaseTrainer):
                 optim = self.optim
 
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
-                    print(("Epoch %2d, %5d/%5d; ; loss: %6.2f ; lr: %.7f ; num updates: %7d " +
+                    print(("Epoch %2d, %5d/%5d; ; loss: %6.2f (%6.2f, %6.2f) ; var: mu %6.2f sig: %6.2f; lr: %.7f ; num updates: %7d " +
                            "%5.0f src tok/s; %s elapsed") %
                           (epoch, i + 1, len(trainData),
-                           report_loss / report_tgt_words,
+                           report_loss / report_tgt_words,report_mse/report_tgt_words,report_kl/report_tgt_words,
+                           report_mu / report_el, report_sig / report_el,
                            optim.getLearningRate(),
                            optim._step,
                            report_tgt_words / (time.time() - start),
                            str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
 
-                    report_loss, report_tgt_words = 0, 0
+                    report_loss, report_tgt_words ,report_mse,report_kl= 0, 0, 0,0
+                    report_mu,report_sig,report_el = 0,0,0
                     report_src_words = 0
                     start = time.time()
 

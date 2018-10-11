@@ -56,7 +56,8 @@ class Autoencoder(nn.Module):
         else:
             raise NotImplementedError("Waring!"+opt.represenation+" not implemented for auto encoder")
         
-        clean_context.require_grad=False
+        # clean_context.require_grad=False
+        clean_context.detach_()
         return clean_context,self.model(clean_context)
 
 

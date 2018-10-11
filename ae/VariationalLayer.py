@@ -15,7 +15,7 @@ class VariationalLayer(nn.Module):
         self.meanLL= nn.Linear(self.inputSize, self.outputSize)
         self.stdLL = nn.Linear(self.inputSize, self.outputSize)
 
-        self.meanAct = nn.Sigmoid()
+        self.meanAct = nn.Tanh()
         self.stdAct = nn.Softplus()
 
 
@@ -28,6 +28,8 @@ class VariationalLayer(nn.Module):
             std = self.stdLL(input)
             std = self.stdAct(std)
             random = torch.randn(std.size())
+            if(std.is_cuda):
+                random = random.cuda()
             self.std = std
             mean = mean + random * std
         return mean

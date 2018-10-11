@@ -152,35 +152,45 @@ def main():
                 line = torch.cat((line,z),0)
                 line = line.reshape((line.size()[0]/opt.concat,line.size()[1]*opt.concat))
 
-            if line is not None:
-                #~ srcTokens = line.split()
-                srcBatch += [line]
-                if tgtF:
-                    #~ tgtTokens = tgtF.readline().split() if tgtF else None
-                    if opt.input_type == 'word':
-                        tgtTokens = tgtF.readline().split() if tgtF else None
-                    elif opt.input_type == 'char':
-                        tgtTokens = list(tgtF.readline().strip()) if tgtF else None
-                    else:
-                        raise NotImplementedError("Input type unknown")
-                    tgtBatch += [tgtTokens]
+            #~ srcTokens = line.split()
+            srcBatch += [line]
+            if tgtF:
+                #~ tgtTokens = tgtF.readline().split() if tgtF else None
+                if opt.input_type == 'word':
+                    tgtTokens = tgtF.readline().split() if tgtF else None
+                elif opt.input_type == 'char':
+                    tgtTokens = list(tgtF.readline().strip()) if tgtF else None
+                else:
+                    raise NotImplementedError("Input type unknown")
+                tgtBatch += [tgtTokens]
 
-                if len(srcBatch) < opt.batch_size:
-                    continue
-            else:
-                # at the end of file, check last batch
-                if len(srcBatch) == 0:
-                    break
+            if len(srcBatch) < opt.batch_size:
+                continue
 
-
+            print("Batch size:",len(srcBatch),len(tgtBatch))
             predBatch, predScore, predLength, goldScore, numGoldWords  = translator.translateASR(srcBatch,
                                                                                     tgtBatch)
+            print("Result:",len(predBatch))
             count,predScore,predWords,goldScore,goldWords = translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords)
             predScoreTotal += predScore
             predWordsTotal += predWords
             goldScoreTotal += goldScore
             goldWordsTotal += goldWords
             srcBatch, tgtBatch = [], []
+
+        if len(srcBatch) != 0:
+            print("Batch size:",len(srcBatch),len(tgtBatch))
+            predBatch, predScore, predLength, goldScore, numGoldWords  = translator.translateASR(srcBatch,
+                                                                                    tgtBatch)
+            print("Result:",len(predBatch))
+            count,predScore,predWords,goldScore,goldWords = translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords)
+            predScoreTotal += predScore
+            predWordsTotal += predWords
+            goldScoreTotal += goldScore
+            goldWordsTotal += goldWords
+            srcBatch, tgtBatch = [], []
+            
+
 
     else:
         
@@ -209,10 +219,11 @@ def main():
                 # at the end of file, check last batch
                 if len(srcBatch) == 0:
                     break
-
-
+                    
+            
             predBatch, predScore, predLength, goldScore, numGoldWords  = translator.translate(srcBatch,
                                                                                     tgtBatch)
+
             count,predScore,predWords,goldScore,goldWords = translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords)
             predScoreTotal += predScore
             predWordsTotal += predWords
@@ -237,7 +248,8 @@ def translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, p
         predScore_ = []
         for bb, ss, ll in zip(predBatch, predScore, predLength):
             #~ ss_ = [s_/numpy.maximum(1.,len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
-            ss_ = [lenPenalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
+            length = [len(i) for i in [''.join(b_)  for b_ in bb]]
+            ss_ = [lenPenalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,length)]
             ss_origin = [(s_, len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
             sidx = numpy.argsort(ss_)[::-1]
             #~ print(ss_, sidx, ss_origin)

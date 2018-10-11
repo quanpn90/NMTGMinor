@@ -6,7 +6,7 @@ import math
 from torch.autograd import Variable
 from onmt.ModelConstructor import build_model
 import torch.nn.functional as F
-
+import sys
 
 model_list = ['transformer', 'stochastic_transformer']
 
@@ -193,7 +193,7 @@ class EnsembleTranslator(object):
                        onmt.Constants.BOS_WORD,
                        onmt.Constants.EOS_WORD) for b in goldBatch]
 
-        return onmt.Dataset(srcData, tgtData, 9999,
+        return onmt.Dataset(srcData, tgtData, sys.maxsize,
                             [self.opt.gpu],
                             data_type=self._type, max_seq_num =self.opt.batch_size)
 
@@ -410,7 +410,6 @@ class EnsembleTranslator(object):
 
         #  (2) translate
         pred, predScore, attn, predLength, goldScore, goldWords = self.translateBatch(src, tgt)
-        
 
         #  (3) convert indexes to words
         predBatch = []
