@@ -171,7 +171,9 @@ class EnsembleTranslator(object):
 
     def buildTargetTokens(self, pred, src, attn):
         tokens = self.tgt_dict.convertToLabels(pred, onmt.Constants.EOS)
-        tokens = tokens[:-1]  # EOS
+        if tokens[-1] == onmt.Constants.EOS_WORD:
+            tokens = tokens[:-1]  # EOS
+        length = len(pred)
         
         return tokens
 
@@ -243,11 +245,14 @@ class EnsembleTranslator(object):
             decoder_states[i] = self.models[i].create_decoder_state(src, contexts[i], beamSize)
         
         for i in range(self.opt.max_sent_length):
+            # ~ print(i)
+            if all((b.done() for b in beam)):
+                print("DONE")
+                break
             # Prepare decoder input.
             
             # input size: 1 x ( batch * beam )
-            input = torch.stack([b.getCurrentState() for b in beam
-                                 if not b.done]).t().contiguous().view(1, -1)
+            input = torch.stack([b.getCurrentState() for b in beam]).t().contiguous().view(1, -1)
             
             """  
                 Inefficient decoding implementation
@@ -286,7 +291,9 @@ class EnsembleTranslator(object):
                     continue
                 
                 idx = batchIdx[b]
-                if not beam[b].advance(wordLk.data[idx], attn.data[idx]):
+                
+                beam[b].advance(wordLk.data[idx], attn.data[idx])
+                if not beam[b].done():
                     active += [b]
                     
                 for i in range(self.n_models):
@@ -302,8 +309,8 @@ class EnsembleTranslator(object):
             batchIdx = {beam: idx for idx, beam in enumerate(active)}
             
             
-            for i in range(self.n_models):
-                decoder_states[i]._prune_complete_beam(activeIdx, remainingSents)
+            # ~ for i in range(self.n_models):
+                # ~ decoder_states[i]._prune_complete_beam(activeIdx, remainingSents)
                
             
             

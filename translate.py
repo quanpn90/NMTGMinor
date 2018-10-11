@@ -76,9 +76,9 @@ def addone(f):
     
 def lenPenalty(s, l, alpha):
     
-    l_term = math.pow(l, alpha)
+    # ~ l_term = math.pow(l, alpha)
     
-    # ~ l_term = math.pow(l + 5.0, alpha) / math.pow(6, alpha)
+    l_term = math.pow(l + 5.0, alpha) / math.pow(6, alpha)
     return s / l_term
     
 def getSentenceFromTokens(tokens, input_type):
@@ -126,7 +126,8 @@ def main():
     else:
       inFile = open(opt.src)
         
-    translator = onmt.EnsembleTranslator(opt)
+    # ~ translator = onmt.EnsembleTranslator(opt)
+    translator = onmt.Translator(opt)
         
     for line in addone(inFile):
         if line is not None:
@@ -155,21 +156,21 @@ def main():
 
         predBatch, predScore, predLength, goldScore, numGoldWords  = translator.translate(srcBatch,
                                                                                     tgtBatch)
-        if opt.normalize:
-            predBatch_ = []
-            predScore_ = []
-            for bb, ss, ll in zip(predBatch, predScore, predLength):
-                #~ ss_ = [s_/numpy.maximum(1.,len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
-                ss_ = [lenPenalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
-                ss_origin = [(s_, len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
-                sidx = numpy.argsort(ss_)[::-1]
-                #~ print(ss_, sidx, ss_origin)
-                predBatch_.append([bb[s] for s in sidx])
-                predScore_.append([ss_[s] for s in sidx])
-            predBatch = predBatch_
-            predScore = predScore_    
+        # ~ if opt.normalize:
+            # ~ predBatch_ = []
+            # ~ predScore_ = []
+            # ~ for bb, ss, ll in zip(predBatch, predScore, predLength):
+                # ~ #~ ss_ = [s_/numpy.maximum(1.,len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
+                # ~ ss_ = [lenPenalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
+                # ~ ss_origin = [(s_, len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
+                # ~ sidx = numpy.argsort(ss_)[::-1]
+                # ~ #~ print(ss_, sidx, ss_origin)
+                # ~ predBatch_.append([bb[s] for s in sidx])
+                # ~ predScore_.append([ss_[s] for s in sidx])
+            # ~ predBatch = predBatch_
+            # ~ predScore = predScore_    
                                                               
-        predScoreTotal += sum(score[0].item() for score in predScore)
+        predScoreTotal += sum(score[0] for score in predScore)
         predWordsTotal += sum(len(x[0]) for x in predBatch)
         if tgtF is not None:
             goldScoreTotal += sum(goldScore).item()

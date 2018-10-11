@@ -79,7 +79,7 @@ class Dataset(object):
         
         self.balance = balance
         self.max_seq_num = max_seq_num 
-        
+        # ~ print(self.max_seq_num)
         self.multiplier = multiplier
         self.sort_by_target = sort_by_target
         
@@ -133,8 +133,10 @@ class Dataset(object):
                     self.multiplier * (current_size // self.multiplier),
                     current_size % self.multiplier)
                
-                
+                # ~ print(cur_batch)
                 batch_ =  cur_batch[:scaled_size]
+                # ~ print(batch_)
+                # ~ print(len(batch_))
                 if self.multiplier > 1:
                     assert(len(batch_) % self.multiplier == 0, "batch size is not multiplied, current batch_size is %d " % len(batch_))
                 self.batches.append(batch_) # add this batch into the batch list

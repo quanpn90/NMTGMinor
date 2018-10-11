@@ -254,7 +254,7 @@ class TransformerDecoder(nn.Module):
         """
         Inputs Shapes: 
             input: (Variable) batch_size x len_tgt (wanna tranpose)
-            context: (Variable) batch_size x len_src x d_model
+            context: (Tensor) len_src x batch_size * beam_size x d_model
             mask_src (Tensor) batch_size x len_src
             buffer (List of tensors) List of batch_size * len_tgt-1 * d_model for self-attention recomputing
         Outputs Shapes:
@@ -263,17 +263,19 @@ class TransformerDecoder(nn.Module):
             
         """
         context = decoder_state.context
-        #~ buffer = decoder_state.buffer
         buffers = decoder_state.attention_buffers
-        src = decoder_state.src.transpose(0, 1)
+        mask_src = decoder_state.src_mask
         
-        if decoder_state.input_seq is None:
-            decoder_state.input_seq = input
-        else:
-            # concatenate the last input to the previous input sequence
-            decoder_state.input_seq = torch.cat([decoder_state.input_seq, input], 0)
-        input = decoder_state.input_seq.transpose(0, 1)
+        # ~ if decoder_state.input_seq is None:
+            # ~ decoder_state.input_seq = input
+        # ~ else:
+            # ~ # concatenate the last input to the previous input sequence
+            # ~ decoder_state.input_seq = torch.cat([decoder_state.input_seq, input], 0)
+        # ~ input = decoder_state.input_seq.transpose(0, 1)
         input_ = input[:,-1].unsqueeze(1)
+        # ~ print(input.size())
+        # ~ print(mask_src.size())
+        # ~ print(context.size())
         
         
         output_buffer = list()
@@ -287,12 +289,7 @@ class TransformerDecoder(nn.Module):
         if self.time == 'positional_encoding':
             emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
-        if self.time == 'positional_encoding':
-            emb = self.time_transformer(emb, t=input.size(1))
-        else:
-            prev_h = buffer[0] if buffer is None else None
-            emb = self.time_transformer(emb, prev_h)
-            buffer[0] = emb[1]
+        emb = self.time_transformer(emb, t=input.size(1))
             
         if isinstance(emb, tuple):
             emb = emb[0]
@@ -304,7 +301,8 @@ class TransformerDecoder(nn.Module):
         emb = emb.transpose(0, 1)
         
         # batch_size x 1 x len_src
-        mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
+        # ~ mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
+        
         
         
         len_tgt = input.size(1)
@@ -314,6 +312,8 @@ class TransformerDecoder(nn.Module):
                 
         output = emb.contiguous()
         
+        # ~ print(output.size())
+        # ~ decoder_state._debug_attention_buffer(0)
     
         for i, layer in enumerate(self.layer_modules):
             
@@ -322,6 +322,8 @@ class TransformerDecoder(nn.Module):
             output, coverage, buffer = layer.step(output, context, mask_tgt, mask_src, buffer=buffer) # batch_size x len_src x d_model
             
             decoder_state._update_attention_buffer(buffer, i)
+        # ~ print("-------------------")
+        # ~ decoder_state._debug_attention_buffer(0)
         
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -360,38 +362,55 @@ class Transformer(NMTModel):
                 
         return output
         
-    def create_decoder_state(self, src, context, beamSize=1):
+    def create_decoder_state(self, src, context, mask_src, beamSize=1):
         
         from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder
         from onmt.modules.StochasticTransformer.Models import StochasticTransformerEncoder, StochasticTransformerDecoder
         from onmt.modules.UniversalTransformer.Models import UniversalTransformerDecoder
         
         if isinstance(self.decoder, TransformerDecoder) or isinstance(self.decoder, StochasticTransformerDecoder) or isinstance(self.decoder, UniversalTransformerDecoder) :
-            decoder_state = TransformerDecodingState(src, context, beamSize=beamSize)
+            decoder_state = TransformerDecodingState(src, context, mask_src, beamSize=beamSize)
         elif isinstance(self.decoder, ParallelTransformerDecoder):
             from onmt.modules.ParallelTransformer.Models import ParallelTransformerDecodingState
-            decoder_state = ParallelTransformerDecodingState(src, context, beamSize=beamSize)
+            decoder_state = ParallelTransformerDecodingState(src, context, mask_src, beamSize=beamSize)
         return decoder_state
 
 
 class TransformerDecodingState(DecoderState):
     
-    def __init__(self, src, context, beamSize=1):
+    def __init__(self, src, context, src_mask, beamSize=1):
         
-        self.src = src.repeat(1, beamSize)
-        self.context = context.repeat(1, beamSize, 1)
-        self.beamSize = beamSize
+        # ~ self.src = src.repeat(1, beamSize)
+        # ~ self.context = context.repeat(1, beamSize, 1)
+        # ~ self.beamSize = beamSize
+        self.beam_size = beamSize
         
         self.input_seq = None
         self.attention_buffers = dict()
         
+        bsz = context.size(1)
+        
+        new_order = torch.arange(bsz).view(-1, 1).repeat(1, self.beam_size).view(-1)
+        new_order = new_order.to(context.device)
+        self.context = context.index_select(1, new_order)
+        self.src_mask = src_mask.index_select(0, new_order)
         
     def _update_attention_buffer(self, buffer, layer):
         
         self.attention_buffers[layer] = buffer # dict of 2 keys (k, v) : T x B x H
         
-    def _update_beam(self, beam, b, remainingSents, idx):
+    def _debug_attention_buffer(self, layer):
         
+        if layer not in self.attention_buffers:
+            return
+        buffer = self.attention_buffers[layer]
+        
+        for k in buffer.keys():
+            print(k, buffer[k].size())
+        
+    def _update_beam(self, beam, b, remainingSents, idx):
+        # here we have to reorder the beam data 
+        # 
         for tensor in [self.src, self.input_seq]  :
                     
             t_, br = tensor.size()
@@ -414,6 +433,20 @@ class TransformerDecodingState(DecoderState):
                     sent_states.data.copy_(sent_states.data.index_select(
                                 1, beam[b].getCurrentOrigin()))
     
+    def _reorder_incremental_state(self, reorder_state):
+        
+        # ~ for tensor in [self.src, self.input_seq]  :
+        # ~ self.src = self.src.index_select(1, reorder_state) # 1 for time first
+        # ~ self.input_seq = self.input_seq.index_select(1, reorder_state)
+        self.context = self.context.index_select(1, reorder_state)
+        self.src_mask = self.src_mask.index_select(0, reorder_state)
+                            
+        for l in self.attention_buffers:
+            buffer_ = self.attention_buffers[l]
+            if buffer_ is not None:
+                for k in buffer_.keys():
+                    t_, br_, d_ = buffer_[k].size()
+                    buffer_[k] = buffer_[k].index_select(1, reorder_state) # 1 for time first
     # in this section, the sentences that are still active are
     # compacted so that the decoder is not run on completed sentences
     def _prune_complete_beam(self, activeIdx, remainingSents):
