@@ -21,7 +21,7 @@ class Translator(object):
         self.start_with_bos = opt.start_with_bos
         self.fp16 = opt.fp16
         self.stop_early = True
-        self.normalize_scores = True
+        self.normalize_scores = opt.normalize
         self.len_penalty = opt.alpha
         
         self.models = list()
@@ -74,7 +74,8 @@ class Translator(object):
             
         self.cuda = opt.cuda
         self.ensemble_op = opt.ensemble_op
-        self.search = BeamSearch(self.tgt_dict)
+        # ~ # self.search = BeamSearch(self.tgt_dict)
+        self.search = DiverseBeamSearch(self.tgt_dict,self.opt.beam_size,0.2)
         self.eos = onmt.Constants.EOS
         self.pad = onmt.Constants.PAD
         self.bos = onmt.Constants.BOS
@@ -395,7 +396,7 @@ class Translator(object):
         # - expanding the mask over the batch dimension    (B*beam) x len_src 
         decoder_states = dict()
         for i in range(self.n_models):
-            decoder_states[i] = self.models[i].create_decoder_state(src, contexts[i], src_mask, beam_size)
+            decoder_states[i] = self.models[i].create_decoder_state(src, contexts[i], src_mask, beam_size, type='new')
         
         # Start decoding
         for step in range(max_len + 1):
@@ -606,8 +607,8 @@ class Translator(object):
             
         out = self._combineOutputs(outs)
         attn = self._combineAttention(attns)
-        
-        
+        # attn = attn[:, -1, :]
+        attn = None
         return out, attn
         
         # ~ # time x batch * beam

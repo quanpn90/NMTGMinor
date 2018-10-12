@@ -21,7 +21,7 @@ class Beam(object):
     def __init__(self, size, cuda=False):
 
         self.size = size
-        self._eos = onmt.Constants.EOS
+        self.done = False
 
         self.tt = torch.cuda if cuda else torch
 
@@ -38,10 +38,6 @@ class Beam(object):
 
         # The attentions (matrix) for each time.
         self.attn = []
-        
-        # Time and k pair for finished.
-        self.finished = []
-        self.eos_top = False
 
     def getCurrentState(self):
         "Get the outputs for the current timestep."
@@ -64,17 +60,10 @@ class Beam(object):
         Returns: True if beam search is complete.
         """
         numWords = wordLk.size(1)
-        print("DEBUGGING")
 
         # Sum the previous scores.
         if len(self.prevKs) > 0:
             beamLk = wordLk + self.scores.unsqueeze(1).expand_as(wordLk)
-            
-            # Don't let EOS have children.
-            for i in range(self.nextYs[-1].size(0)):
-                if self.self.nextYs[-1][i] == self._eos:
-                    beam_scores[i] = -1e20
-
         else:
             beamLk = wordLk[0]
 
@@ -90,20 +79,13 @@ class Beam(object):
         self.prevKs.append(prevK)
         self.nextYs.append(bestScoresId - prevK * numWords)
         self.attn.append(attnOut.index_select(0, prevK))
-        
-        for i in range(self.nextYs[-1].size(0)):
-            if self.nextYs[-1][i] == self._eos:
-                s = self.scores[i]
-                self.finished.append((s, len(self.nextYs) - 1, i))
 
         # End condition is when top-of-beam is EOS.
         if self.nextYs[-1][0] == onmt.Constants.EOS:
-            self.eos_top = True
+            self.done = True
             self.allScores.append(self.scores)
 
-    
-    def done(self):
-        return self.eos_top and len(self.finished) >= self.size
+        return self.done
 
     def sortBest(self):
         return torch.sort(self.scores, 0, True)
@@ -134,6 +116,5 @@ class Beam(object):
             k = self.prevKs[j][k]
         
         length = len(hyp)
-        
-        # ~ print(length)
+
         return hyp[::-1], torch.stack(attn[::-1]), length

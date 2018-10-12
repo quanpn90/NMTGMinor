@@ -242,17 +242,13 @@ class EnsembleTranslator(object):
         decoder_hiddens = dict()
         
         for i in range(self.n_models):
-            decoder_states[i] = self.models[i].create_decoder_state(src, contexts[i], beamSize)
+            decoder_states[i] = self.models[i].create_decoder_state(src, contexts[i], src_mask, beamSize, type='old')
         
         for i in range(self.opt.max_sent_length):
-            # ~ print(i)
-            if all((b.done() for b in beam)):
-                print("DONE")
-                break
             # Prepare decoder input.
             
             # input size: 1 x ( batch * beam )
-            input = torch.stack([b.getCurrentState() for b in beam]).t().contiguous().view(1, -1)
+            input = torch.stack([b.getCurrentState() for b in beam if not b.done]).t().contiguous().view(1, -1)
             
             """  
                 Inefficient decoding implementation
@@ -292,8 +288,7 @@ class EnsembleTranslator(object):
                 
                 idx = batchIdx[b]
                 
-                beam[b].advance(wordLk.data[idx], attn.data[idx])
-                if not beam[b].done():
+                if not beam[b].advance(wordLk.data[idx], attn.data[idx]):
                     active += [b]
                     
                 for i in range(self.n_models):
@@ -309,11 +304,9 @@ class EnsembleTranslator(object):
             batchIdx = {beam: idx for idx, beam in enumerate(active)}
             
             
-            # ~ for i in range(self.n_models):
-                # ~ decoder_states[i]._prune_complete_beam(activeIdx, remainingSents)
-               
-            
-            
+            for i in range(self.n_models):
+                decoder_states[i]._prune_complete_beam(activeIdx, remainingSents)
+
             remainingSents = len(active)
             
         #  (4) package everything up
@@ -366,11 +359,14 @@ class EnsembleTranslator(object):
 
         #  (3) convert indexes to words
         predBatch = []
+        predLength = []
         for b in range(batchSize):
             predBatch.append(
                 [self.buildTargetTokens(pred[b][n], srcBatch[b], attn[b][n])
                  for n in range(self.opt.n_best)]
             )
+            
+            predLength.append([len(pred[b][n]) for n in range(self.opt.n_best)])
 
         return predBatch, predScore, predLength, goldScore, goldWords
 

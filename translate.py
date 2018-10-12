@@ -126,8 +126,8 @@ def main():
     else:
       inFile = open(opt.src)
         
-    # ~ translator = onmt.EnsembleTranslator(opt)
-    translator = onmt.Translator(opt)
+    translator = onmt.EnsembleTranslator(opt)
+    # ~ translator = onmt.Translator(opt)
         
     for line in addone(inFile):
         if line is not None:
