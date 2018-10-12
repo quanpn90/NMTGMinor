@@ -64,6 +64,15 @@ class BaseTrainer(object):
             offset += numel
         return out[:offset]
         
+    def reset_state(self):
+        
+        from onmt.modules.StaticDropout import StaticDropout
+        def reset_state(m):
+            if type(m) == StaticDropout:
+                m.reset_state()
+                
+        self.model.apply(reset_state)
+        
     def _get_grad_norm(self, module):
         
         grads = []

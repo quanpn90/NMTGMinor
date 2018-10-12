@@ -46,6 +46,7 @@ class StaticDropout(nn.Module):
                              "but got {}".format(p))
         self.p = p
         self.noise_created = False
+        self.recomputed = False
     
     def gen_noise(self, input):
         self.noise = input.new().resize_as_(input)
@@ -54,21 +55,33 @@ class StaticDropout(nn.Module):
         else:
             self.noise.bernoulli_(1 - self.p).div_(1 - self.p)
         self.noise = self.noise.expand_as(input)
-        self.noise_created = True
 
     def forward(self, input):
         
-        if self.noise_created == False and self.training:
-            self.gen_noise(input)
-            #~ self.noise = input.new().resize_as_(input)
-            #~ if self.p == 1:
-                #~ self.noise.fill_(0)
-            #~ else:
-                #~ self.noise.bernoulli_(1 - self.p).div_(1 - self.p)
-            #~ self.noise = self.noise.expand_as(input)
-            #~ self.noise_created = True
+        if self.training:
+            # First time or twice ?
+            if self.noise_created == True:
+                output = input * self.noise
+                self.noise = None
+                self.noise_created = False
+            else:
+                self.gen_noise(input)
+                self.noise_created = True
+                output = input * self.noise
+            
+            return output 
+        else:
+            return input
+            
+    def reset_state(self):
+        self.noise_created = False
+        self.noise = None
+
+        # ~ if self.noise_created == False and self.training:
+            # ~ self.gen_noise(input)
+            
      
-        return StaticDropoutFunction.apply(input, self, self.training)
+        # ~ return StaticDropoutFunction.apply(input, self, self.training)
 
     def __repr__(self):
         return self.__class__.__name__ + '(' \

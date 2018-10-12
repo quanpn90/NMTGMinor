@@ -13,6 +13,10 @@ onmt.Markdown.add_md_help_argument(parser)
 
 parser.add_argument('-model', required=True,
                     help='Path to model .pt file')
+parser.add_argument('-version', type=float, default=1.0,
+                    help="""Decoder version. The 2.0 one uses diverse decoding""")                    
+parser.add_argument('-diverse_beam_strength', type=float, default=0.5,
+                    help="""Diverse beam strength in decoding""")                    
 parser.add_argument('-input_type', default="word",
                     help="Input type: word/char")                    
 parser.add_argument('-src',   required=True,
@@ -125,9 +129,11 @@ def main():
             opt.batch_size = 1
     else:
       inFile = open(opt.src)
-        
-    translator = onmt.EnsembleTranslator(opt)
-    # ~ translator = onmt.Translator(opt)
+    
+    if opt.version == 1.0:
+        translator = onmt.EnsembleTranslator(opt)
+    elif opt.version == 2.0:
+        translator = onmt.Translator(opt)
         
     for line in addone(inFile):
         if line is not None:
@@ -156,19 +162,19 @@ def main():
 
         predBatch, predScore, predLength, goldScore, numGoldWords  = translator.translate(srcBatch,
                                                                                     tgtBatch)
-        # ~ if opt.normalize:
-            # ~ predBatch_ = []
-            # ~ predScore_ = []
-            # ~ for bb, ss, ll in zip(predBatch, predScore, predLength):
-                # ~ #~ ss_ = [s_/numpy.maximum(1.,len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
-                # ~ ss_ = [lenPenalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
-                # ~ ss_origin = [(s_, len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
-                # ~ sidx = numpy.argsort(ss_)[::-1]
-                # ~ #~ print(ss_, sidx, ss_origin)
-                # ~ predBatch_.append([bb[s] for s in sidx])
-                # ~ predScore_.append([ss_[s] for s in sidx])
-            # ~ predBatch = predBatch_
-            # ~ predScore = predScore_    
+        if opt.normalize and opt.version == 1.0:
+            predBatch_ = []
+            predScore_ = []
+            for bb, ss, ll in zip(predBatch, predScore, predLength):
+                #~ ss_ = [s_/numpy.maximum(1.,len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
+                ss_ = [lenPenalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
+                ss_origin = [(s_, len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
+                sidx = numpy.argsort(ss_)[::-1]
+                #~ print(ss_, sidx, ss_origin)
+                predBatch_.append([bb[s] for s in sidx])
+                predScore_.append([ss_[s] for s in sidx])
+            predBatch = predBatch_
+            predScore = predScore_    
                                                               
         predScoreTotal += sum(score[0] for score in predScore)
         predWordsTotal += sum(len(x[0]) for x in predBatch)

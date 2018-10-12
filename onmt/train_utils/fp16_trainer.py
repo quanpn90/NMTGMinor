@@ -216,6 +216,7 @@ class FP16XETrainer(XETrainer):
             except RuntimeError as e:
                 if 'out of memory' in str(e) or 'get_temporary_buffer' in str(e) :
                     oom = True
+                    self.reset_state()
                     torch.cuda.empty_cache()
                     oom_count += 1
                 else:

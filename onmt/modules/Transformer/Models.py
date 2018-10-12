@@ -5,7 +5,6 @@ from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, Position
 from onmt.modules.BaseModel import NMTModel, Reconstructor, DecoderState
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
-#~ from onmt.modules.Checkpoint import checkpoint
 from torch.utils.checkpoint import checkpoint
 from torch.autograd import Variable
 
@@ -169,7 +168,6 @@ class TransformerDecoder(nn.Module):
     
     def renew_buffer(self, new_len):
         
-        print(new_len)
         self.positional_encoder.renew(new_len)
         mask = torch.ByteTensor(np.triu(np.ones((new_len,new_len)), k=1).astype('uint8'))
         self.register_buffer('mask', mask)
