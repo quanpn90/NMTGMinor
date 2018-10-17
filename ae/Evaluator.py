@@ -7,6 +7,7 @@ from torch.autograd import Variable
 from onmt.ModelConstructor import build_model
 import torch.nn.functional as F
 from ae.Autoencoder import Autoencoder
+import sys
 
 model_list = ['transformer', 'stochastic_transformer']
 
@@ -214,7 +215,7 @@ class Evaluator(object):
                                                   onmt.Constants.BOS_WORD,
                                                   onmt.Constants.EOS_WORD) for b in goldBatch]
 
-        return onmt.Dataset(srcData, tgtData, 9999,
+        return onmt.Dataset(srcData, tgtData, sys.maxsize,
                             [self.opt.gpu],
                             data_type=self._type, max_seq_num=self.opt.batch_size)
 
@@ -251,7 +252,7 @@ class Evaluator(object):
 
 
 
-    def evaleASR(self, srcBatch, goldBatch):
+    def evalASR(self, srcBatch, goldBatch):
         #  (1) convert words to indexes
         dataset = self.buildASRData(srcBatch, goldBatch)
         batch = self.to_variable(dataset.next()[0])

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 
 
+
 from ae.VariationalLayer import VariationalLayer
 
 class Autoencoder(nn.Module):
@@ -35,12 +36,17 @@ class Autoencoder(nn.Module):
             layers.append(self.variational_layer)
         else:
             raise NotImplementedError("Waring!" + self.model_type + " not implemented for auto encoder")
-        if(opt.auto_encoder_drop_out > 0):
-            layers.append(nn.Dropout(opt.auto_encoder_drop_out))
+
+#        if(opt.auto_encoder_drop_out > 0):
+#            layers.append(nn.Dropout(opt.auto_encoder_drop_out,inplace=True))
+
+
         layers.append(nn.Linear(self.hiddenSize, self.inputSize))
 
         self.model = nn.Sequential(*layers)
 
+        self.layers = layers
+        print("Autoencoder:",self.model)
 
     def forward(self,input):
 
@@ -58,7 +64,16 @@ class Autoencoder(nn.Module):
         
         # clean_context.require_grad=False
         clean_context.detach_()
-        return clean_context,self.model(clean_context)
+        
+        #result = self.model(clean_context)
+
+        result = clean_context
+
+
+        for i in range(len(self.layers)):
+            result = self.layers[i](result)
+            
+        return clean_context,result
 
 
     def init_model_parameters(self):
