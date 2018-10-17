@@ -186,6 +186,7 @@ class AETrainer(BaseTrainer):
                     num_accumulated_words = 0
                     num_accumulated_sents = 0
                     num_updates = self.optim._step
+
                     if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every:
                         valid_loss = self.eval(self.validData)
                         print('Validation perplexity: %g' % valid_loss)
@@ -207,12 +208,11 @@ class AETrainer(BaseTrainer):
                            "%5.0f src tok/s; %s elapsed") %
                           (epoch, i + 1, len(trainData),
                            report_loss / report_tgt_words,report_mse/report_tgt_words,report_kl/report_tgt_words,
-                           report_mu / report_el, report_sig / report_el,
+                           report_mu / max(1,report_el), report_sig / max(1,report_el),
                            optim.getLearningRate(),
                            optim._step,
                            report_tgt_words / (time.time() - start),
                            str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
-
                     report_loss, report_tgt_words ,report_mse,report_kl= 0, 0, 0,0
                     report_mu,report_sig,report_el = 0,0,0
                     report_src_words = 0
