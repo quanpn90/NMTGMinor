@@ -42,29 +42,24 @@ class StochasticEncoderLayer(EncoderLayer):
             
     def forward(self, input, attn_mask, pad_mask=None):
         
-        coin = True
-        if self.training == True:
-            coin = (torch.rand(1)[0].item() >= self.death_rate)
+        query = self.preprocess_attn(input)
+        out, _ = self.multihead(query, query, query, attn_mask)
         
-        if coin==True:
-            query = self.preprocess_attn(input)
-            out, _ = self.multihead(query, query, query, attn_mask)
+        if self.training:
+            out = out / ( 1 - self.death_rate)
+        
+        input = self.postprocess_attn(out, input)
+        
+        """ Feed forward layer 
+            layernorm > ffn > dropout > residual
+        """
+        out = self.feedforward(self.preprocess_ffn(input), 
+                               mask=pad_mask)
+                               
+        if self.training:
+            out = out / ( 1 - self.death_rate)
             
-            if self.training:
-                out = out / ( 1 - self.death_rate)
-            
-            input = self.postprocess_attn(out, input)
-            
-            """ Feed forward layer 
-                layernorm > ffn > dropout > residual
-            """
-            out = self.feedforward(self.preprocess_ffn(input), 
-                                   mask=pad_mask)
-                                   
-            if self.training:
-                out = out / ( 1 - self.death_rate)
-                
-            input = self.postprocess_ffn(out, input)
+        input = self.postprocess_ffn(out, input)
         
         return input
         
@@ -148,51 +143,53 @@ class StochasticDecoderLayer(DecoderLayer):
 
         """
         coverage = None
+        # seed = seeded_coin
         
-        coin = True
-        if self.training == True:
-            coin = (torch.rand(1)[0].item() >= self.death_rate)
+        # if seeded_coin is None:
+            # seed = torch.rand(1)
+            
+        # coin = True
+        # if self.training == True:
+            # coin = (seed[0].item() >= self.death_rate)
         
-        if coin == True: 
-            query = self.preprocess_attn(input)
-            
-            self_context = query
-            
-            out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt, 
-                                        query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
-            
-            if self.training:
-                out = out / ( 1 - self.death_rate)
-            
-            input = self.postprocess_attn(out, input)
-            
+        # if coin == True: 
+        query = self.preprocess_attn(input)
+        
+        self_context = query
+        
+        out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt, 
+                                    query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
+        
+        if self.training:
+            out = out / ( 1 - self.death_rate)
+        
+        input = self.postprocess_attn(out, input)
+        
 
-            """ Context Attention layer 
-                layernorm > attn > dropout > residual
-            """
-            query = self.preprocess_src_attn(input, mask=pad_mask_tgt)
-            out, coverage = self.multihead_src(query, context, context, mask_src, 
-                                               query_mask=pad_mask_tgt, value_mask=pad_mask_src)
+        """ Context Attention layer 
+            layernorm > attn > dropout > residual
+        """
+        query = self.preprocess_src_attn(input, mask=pad_mask_tgt)
+        out, coverage = self.multihead_src(query, context, context, mask_src, 
+                                           query_mask=pad_mask_tgt, value_mask=pad_mask_src)
+        
+        if self.training:
+            out = out / ( 1 - self.death_rate)
+        
+        input = self.postprocess_src_attn(out, input)
+        
+        """ Feed forward layer 
+            layernorm > ffn > dropout > residual
+        """
+        out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask_tgt), 
+                                           mask=pad_mask_tgt)
+        # During testing we scale the output to match its participation during training                                   
+        if self.training:
+            out = out / ( 1 - self.death_rate)
             
-            if self.training:
-                out = out / ( 1 - self.death_rate)
-            
-            input = self.postprocess_src_attn(out, input)
-            
-            """ Feed forward layer 
-                layernorm > ffn > dropout > residual
-            """
-            out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask_tgt), 
-                                               mask=pad_mask_tgt)
-            # During testing we scale the output to match its participation during training                                   
-            if self.training:
-                out = out / ( 1 - self.death_rate)
-                
-            input = self.postprocess_ffn(out, input)
-            
- 
-    
-        return input, coverage
+        input = self.postprocess_ffn(out, input)
+
+        return input
         
     def step_sample(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, buffer=None):
         """ Self attention layer 

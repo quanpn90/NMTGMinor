@@ -17,7 +17,7 @@ from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 from onmt.ModelConstructor import init_model_parameters
 from onmt.train_utils.trainer import BaseTrainer, XETrainer
     
-    
+
 
 class DynamicLossScaler:
 
@@ -47,7 +47,7 @@ class DynamicLossScaler:
         return False
 
 
-class FP16XETrainer(XETrainer):
+class VariationalTrainer(XETrainer):
 
     def __init__(self, model, loss_function, trainData, validData, dicts, opt):
         super().__init__(model, loss_function, trainData, validData, dicts, opt, set_param=False)
@@ -58,14 +58,21 @@ class FP16XETrainer(XETrainer):
            torch.cuda.set_device(self.opt.gpus[0])
            torch.manual_seed(self.opt.seed)
            
-           #~ print(torch.cuda.get_device_capability(0)[0])
-           
-           # Important:
-           # Loss function needs to be in fp32
            self.loss_function = self.loss_function.cuda()
-           # self.model = self.model.cuda()
-        
+           self.is_fp16 = opt.fp16
     
+    def to_cuda(self, model_state=None, optim_state=None, fp16=False):
+
+        if fp16:
+            self.convert_fp16(model_state, optim_state)
+        else:
+            self.model = self.model.cuda()
+            params = [p for p in self.model.parameters() if p.requires_grad]
+            self.optim.set_parameters(params)
+
+            if optim_state is not None:
+                self.optim.load_state_dict(optim_state)
+
     def convert_fp16(self, model_state=None, optim_state=None):
         
         if model_state is not None:
@@ -120,6 +127,8 @@ class FP16XETrainer(XETrainer):
                     """
                     outputs = self.model(batch)
                     targets = batch.get('target_output')
+
+
                     
                     loss_output = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
                     
@@ -175,6 +184,9 @@ class FP16XETrainer(XETrainer):
         num_accumulated_sents = 0
         oom_count = 0
         grad_norm = 0
+
+        if not self.is_fp16:
+            self.scaler.loss_scale = 1
         
         for i in range(iteration, nSamples):
 
@@ -198,13 +210,14 @@ class FP16XETrainer(XETrainer):
                 
                 # ~ tgt_mask = targets.data.ne(onmt.Constants.PAD)
                 tgt_mask = batch.get('tgt_mask')
+                src_mask = batch.get('src_mask')
                 tgt_size = batch.tgt_size
                                 
                 # Scale UP the loss so that the gradients are not cutoff
                 normalizer = 1.0 / self.scaler.loss_scale 
                 
                 loss_output = self.loss_function(outputs, targets, generator=self.model.generator, 
-                                                             backward=True, mask=tgt_mask, normalizer=normalizer)
+                                                             backward=True, src_mask=src_mask, tgt_mask=tgt_mask, normalizer=normalizer)
                 
                 # take the negative likelihood                                             
                 loss_data = loss_output['nll']
@@ -237,58 +250,78 @@ class FP16XETrainer(XETrainer):
                 if num_accumulated_words >= opt.batch_size_update * 0.95:
                     # Update the parameters.
                     
-                    # First we have to copy the grads from fp16 to fp32
-                    self._get_flat_grads(out=self.fp32_params.grad)
-                    
-                    
-                    normalizer = normalizer * self.scaler.loss_scale 
-                    # rescale and clip grads
-                    self.fp32_params.grad.data.div_(normalizer)
+                    if self.is_fp16:
+                        # First we have to copy the grads from fp16 to fp32
+                        self._get_flat_grads(out=self.fp32_params.grad)
+                        
+                        
+                        normalizer = normalizer * self.scaler.loss_scale 
+                        # rescale and clip grads
+                        self.fp32_params.grad.data.div_(normalizer)
 
-                    grad_norm = torch.norm(self.fp32_params.grad.data).item()
-                    
-                    
-                    overflow = DynamicLossScaler.has_overflow(grad_norm)
-                    self.scaler.update_scale(overflow)
-                    
-                    if overflow:
-                        if self.scaler.loss_scale <= 1e-4:
-                            raise Exception((
-                                'Minimum loss scale reached ({}). Your loss is probably exploding. '
-                                'Try lowering the learning rate, using gradient clipping or '
-                                'increasing the batch size.'
-                            ).format(1e-4))
-                        print('setting loss scale to: ' + str(self.scaler.loss_scale))
-                        self.model.zero_grad()
-                        self.optim.zero_grad()
-                        num_accumulated_words = 0
-                        num_accumulated_sents = 0
-                        loss_data = 0
+                        grad_norm = torch.norm(self.fp32_params.grad.data).item()
+                        
+                        
+                        overflow = DynamicLossScaler.has_overflow(grad_norm)
+                        self.scaler.update_scale(overflow)
+                        
+                        if overflow:
+                            if self.scaler.loss_scale <= 1e-4:
+                                raise Exception((
+                                    'Minimum loss scale reached ({}). Your loss is probably exploding. '
+                                    'Try lowering the learning rate, using gradient clipping or '
+                                    'increasing the batch size.'
+                                ).format(1e-4))
+                            print('setting loss scale to: ' + str(self.scaler.loss_scale))
+                            self.model.zero_grad()
+                            self.optim.zero_grad()
+                            num_accumulated_words = 0
+                            num_accumulated_sents = 0
+                            loss_data = 0
+                        
+                        else:
+                            try:
+                                self.optim.step(grad_denom=1) # update the parameters in fp32 
+                                
+                                # copying the parameters back to fp16
+                                offset = 0
+                                for p in self.model.parameters():
+                                    if not p.requires_grad:
+                                        continue
+                                    numel = p.data.numel()
+                                    p.data.copy_(self.fp32_params.data[offset:offset+numel].view_as(p.data))
+                                    offset += numel
+                            except RuntimeError as e:
+                                if 'out of memory' in str(e):
+                                    torch.cuda.empty_cache()
+                                    oom_count += 1
+                                else:
+                                    raise e
+
+
+                            
+                            self.model.zero_grad()
+                            self.optim.zero_grad()
+                            counter = 0
+                            num_accumulated_words = 0
+                            num_accumulated_sents = 0
+                            num_updates = self.optim._step
+                            if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
+                                valid_loss = self.eval(self.validData)
+                                valid_ppl = math.exp(min(valid_loss, 100))
+                                print('Validation perplexity: %g' % valid_ppl)
+                                
+                                ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
+                                
+                                self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
                     
                     else:
-                        try:
-                            self.optim.step(grad_denom=1) # update the parameters in fp32 
-                            
-                            # copying the parameters back to fp16
-                            offset = 0
-                            for p in self.model.parameters():
-                                if not p.requires_grad:
-                                    continue
-                                numel = p.data.numel()
-                                p.data.copy_(self.fp32_params.data[offset:offset+numel].view_as(p.data))
-                                offset += numel
-                        except RuntimeError as e:
-                            if 'out of memory' in str(e):
-                                torch.cuda.empty_cache()
-                                oom_count += 1
-                            else:
-                                raise e
-
-
-                        
+                        grad_norm = self.optim.step(grad_denom=normalizer)
                         self.model.zero_grad()
-                        self.optim.zero_grad()
+                        self.optim.zero_grad
                         counter = 0
+
+
                         num_accumulated_words = 0
                         num_accumulated_sents = 0
                         num_updates = self.optim._step
@@ -300,7 +333,7 @@ class FP16XETrainer(XETrainer):
                             ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
                             
                             self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
-                
+
 
                 num_words = tgt_size
                 report_loss += loss_data
@@ -348,7 +381,8 @@ class FP16XETrainer(XETrainer):
         
         if checkpoint is not None:
             print('Loading model and optim from checkpoint at %s' % save_file)
-            self.convert_fp16(checkpoint['model'], checkpoint['optim'])
+            # self.convert_fp16(checkpoint['model'], checkpoint['optim'])
+            self.to_cuda(checkpoint['model'], checkpoint['optim'], fp16=self.is_fp16)
             # ~ self.model.load_state_dict(checkpoint['model'])
             
             # ~ if opt.reset_optim == False:
@@ -368,7 +402,7 @@ class FP16XETrainer(XETrainer):
             print('Initializing model parameters')
             init_model_parameters(model, opt)
             resume=False
-            self.convert_fp16()
+            self.to_cuda(fp16=self.is_fp16)
         
         
         

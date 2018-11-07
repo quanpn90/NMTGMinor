@@ -8,7 +8,9 @@ from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecod
 from onmt.modules.BaseModel import NMTModel, Reconstructor
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
-from onmt.modules.Checkpoint import checkpoint
+from torch.utils.checkpoint import checkpoint
+
+# ~ from onmt.modules.Checkpoint import checkpoint
 
 from onmt.modules.Transformer.Layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
 
@@ -17,24 +19,29 @@ def custom_layer(module):
     def custom_forward(*args):
         output = module(*args)
         return output
-    return custom_forward
+    return custom_forward   
     
 def expected_length(length, death_rate, death_type):
     
     e_length = 0
+    death_rates = dict()   
     
     for l in range(length):
         
         if death_type == 'linear_decay':
             survival_rate = 1.0 - (l+1)/length*death_rate
+        elif death_type == 'linear_reverse':
+            # the bottom layers will die more often
+            survival_rate = 1.0 - (length - l )/length*death_rate
         elif death_type == 'uniform':
             survival_rate = 1.0 - death_rate
         else:
             raise NotImplementedError
         
         e_length += survival_rate
+        death_rates[l] = 1 - survival_rate
         
-    return e_length
+    return death_rates, e_length
 
 class StochasticTransformerEncoder(TransformerEncoder):
     """Encoder in 'Attention is all you need'
@@ -49,31 +56,93 @@ class StochasticTransformerEncoder(TransformerEncoder):
     
         self.death_rate = opt.death_rate
         self.death_type = opt.death_type
+        self.layers = opt.layers
         
         # build_modules will be called from the inherited constructor
+        
+        self.death_rates, e_length = expected_length(self.layers, self.death_rate, self.death_type)  
+        
         super(StochasticTransformerEncoder, self).__init__(opt, dicts, positional_encoder)
             
-        e_length = expected_length(self.layers, self.death_rate, self.death_type)    
+          
+        
         
         print("Stochastic Encoder with %.2f expected layers" % e_length) 
        
     def build_modules(self):
         
         self.layer_modules = nn.ModuleList()
-
+        
         for l in range(self.layers):
             
             # linearly decay the death rate
-            if self.death_type == 'linear_decay':
-                death_r = ( l + 1 ) / self.layers * self.death_rate
-            elif self.death_type == 'uniform':
-                death_r = self.death_rate
-            else:
-                raise NotImplementedError("Death type incorrectly specified")
+            # ~ if self.death_type == 'linear_decay':
+                # ~ death_r = ( l + 1 ) / self.layers * self.death_rate
+            # ~ elif self.death_type == 'uniform':
+                # ~ death_r = self.death_rate
+            # ~ else:
+                # ~ raise NotImplementedError("Death type incorrectly specified")
+                
+            # ~ self.death_rates[l] = death_r
+            death_r = self.death_rates[l]
             
             block = StochasticEncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, death_rate=death_r)
             
             self.layer_modules.append(block)
+            
+    
+    def forward(self, input, **kwargs):
+        """
+        Inputs Shapes: 
+            input: batch_size x len_src (wanna tranpose)
+        
+        Outputs Shapes:
+            out: batch_size x len_src x d_model
+            mask_src 
+            
+        """
+
+        """ Embedding: batch_size x len_src x d_model """
+        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        
+        """ Scale the emb by sqrt(d_model) """
+        
+        emb = emb * math.sqrt(self.model_size)
+            
+        """ Adding positional encoding """
+        emb = self.time_transformer(emb)
+        
+        emb = self.preprocess_layer(emb)
+        
+        mask_src = input.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x 1 x len_src for broadcasting
+        
+        #~ pad_mask = input.ne(onmt.Constants.PAD)) # batch_size x len_src
+        
+        context = emb.transpose(0, 1).contiguous()
+        
+        for i, layer in enumerate(self.layer_modules):
+            
+            # pre-generate coin to use 
+            seed = torch.rand(1)
+            coin = (seed[0].item() >= self.death_rates[i])
+            
+            if coin == True:
+            
+                if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:        
+                    context = checkpoint(custom_layer(layer), context, mask_src)
+
+                else:
+                    context = layer(context, mask_src)      # batch_size x len_src x d_model
+            
+        
+        # From Google T2T
+        # if normalization is done in layer_preprocess, then it should also be done
+        # on the output, since the output can grow very large, being the sum of
+        # a whole stack of unnormalized layer outputs.    
+        context = self.postprocess_layer(context)
+            
+        
+        return context, mask_src 
             
     def sample(self, input, **kwargs):
         """
@@ -129,11 +198,12 @@ class StochasticTransformerDecoder(TransformerDecoder):
     
         self.death_rate = opt.death_rate
         self.death_type = opt.death_type
+        self.layers = opt.layers
+        
+        self.death_rates, e_length = expected_length(self.layers, self.death_rate, self.death_type)  
         
         # build_modules will be called from the inherited constructor
         super(StochasticTransformerDecoder, self).__init__(opt, dicts, positional_encoder)
-        
-        e_length = expected_length(self.layers, self.death_rate, self.death_type)    
         
         print("Stochastic Decoder with %.2f expected layers" % e_length) 
         
@@ -141,20 +211,87 @@ class StochasticTransformerDecoder(TransformerDecoder):
     def build_modules(self):
         
         self.layer_modules = nn.ModuleList()
-        
+                
         for l in range(self.layers):
             
             # linearly decay the death rate
-            if self.death_type == 'linear_decay':
-                death_r = ( l + 1 ) / self.layers * self.death_rate
-            elif self.death_type == 'uniform':
-                death_r = self.death_rate
-            else:
-                raise NotImplementedError("Death type incorrectly specified")
+            # ~ if self.death_type == 'linear_decay':
+                # ~ death_r = ( l + 1 ) / self.layers * self.death_rate
+            # ~ elif self.death_type == 'uniform':
+                # ~ death_r = self.death_rate
+            # ~ else:
+                # ~ raise NotImplementedError("Death type incorrectly specified")
+                
+            death_r = self.death_rates[l]   
             
             block = StochasticDecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, death_rate=death_r)
             
             self.layer_modules.append(block)
+            
+    def forward(self, input, context, src, **kwargs):
+        """
+        Inputs Shapes: 
+            input: (Variable) batch_size x len_tgt (wanna tranpose)
+            context: (Variable) batch_size x len_src x d_model
+            mask_src (Tensor) batch_size x len_src
+        Outputs Shapes:
+            out: batch_size x len_tgt x d_model
+            coverage: batch_size x len_tgt x len_src
+            
+        """
+        
+        """ Embedding: batch_size x len_tgt x d_model """
+        
+        
+        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        if self.time == 'positional_encoding':
+            emb = emb * math.sqrt(self.model_size)
+        """ Adding positional encoding """
+        emb = self.time_transformer(emb)
+        if isinstance(emb, tuple):
+            emb = emb[0]
+        emb = self.preprocess_layer(emb)
+        
+        mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
+        
+        pad_mask_src = src.data.ne(onmt.Constants.PAD)
+        
+        len_tgt = input.size(1)
+        mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
+        mask_tgt = torch.gt(mask_tgt, 0)
+        
+        output = emb.transpose(0, 1).contiguous()
+        coverage = None
+
+        for i, layer in enumerate(self.layer_modules):
+            
+            # pre-generate coin to use 
+            seed = torch.rand(1)
+            coin = (seed[0].item() >= self.death_rates[i])
+            
+            if coin == True:
+            
+                if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:           
+                    
+                    output = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src) 
+                                                                                  # batch_size x len_src x d_model
+                    
+                else:
+                    output = layer(output, context, mask_tgt, mask_src) # batch_size x len_src x d_model
+                    
+            # ~ output = output_dict['feature']
+            
+            # ~ if 'coverage' in output_dict:
+                # ~ coverage = output_dict['coverage']
+            
+        # From Google T2T
+        # if normalization is done in layer_preprocess, then it should also be done
+        # on the output, since the output can grow very large, being the sum of
+        # a whole stack of unnormalized layer outputs.    
+        output = self.postprocess_layer(output)
+            
+        
+        return output, coverage
             
     def step_sample(self, input, decoder_state):
         """

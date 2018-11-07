@@ -26,6 +26,7 @@ class Batch(object):
             self.tensors['tgt_pad_mask'] = self.tensors['target_input'].ne(onmt.Constants.PAD)
             self.tensors['tgt_attn_mask'] = self.tensors['target_input'].ne(onmt.Constants.PAD)
             self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.Constants.PAD)
+            self.tensors['src_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
             self.has_target = True
         
         self.size = len(src_data)

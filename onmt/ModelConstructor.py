@@ -168,26 +168,24 @@ def build_model(opt, dicts):
         
         model = Transformer(encoder, decoder, generator)       
         
-    elif opt.model in ['reinforce_transformer'] :
+    elif opt.model in ['vdtransformer'] :
     
-        
-        from onmt.modules.StochasticTransformer.Models import StochasticTransformerEncoder, StochasticTransformerDecoder
-        from onmt.modules.ReinforceTransformer.Models import ReinforcedStochasticDecoder, ReinforceTransformer
+           
+        from onmt.modules.VDTransformer.Models import VDEncoder, VDDecoder, VDTransformer
+        # ~ from onmt.modules.ReinforceTransformer.Models import ReinforcedStochasticDecoder, ReinforceTransformer
                 
-        onmt.Constants.weight_norm = opt.weight_norm
-        onmt.Constants.init_value = opt.param_init
+        # ~ onmt.Constants.weight_norm = opt.weight_norm
+        # ~ onmt.Constants.init_value = opt.param_init
         
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
         
-        encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder)
-        
-        decoder = ReinforceStochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
-        
+        encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
+        decoder = VDDecoder(opt, dicts['tgt'], positional_encoder)
+
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+
+        model = VDTransformer(encoder, decoder, generator)
         
-        model = ReinforceTransformer(encoder, decoder, generator)       
-
-
     else:
         raise NotImplementedError
         
