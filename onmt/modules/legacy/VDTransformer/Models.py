@@ -74,13 +74,115 @@ def expected_length(length, death_rate, death_type):
         
     return death_rates, e_length
 
-class VariationalPrior(nn.Module):
+class InferenceNetwork(nn.Module):
+    
+    def __init__(self, opt):
+        
+        super().__init__()
+        self.opt = opt
+        self.input_size = opt.model_size
+        self.inner_size = opt.inner_size
+        self.dropout = opt.dropout
+        self.in_norm = nn.LayerNorm(self.input_size)
+        # self.fc_1 = Linear(self.input_size, self.inner_size)
+        # self.fc_2 = Linear(self.inner_size, self.input_size)
+        self.fc_3 = Linear(self.input_size, 1) # output a distribution over actions (1 = move on, 0 = skip)
 
-	pass
+        # DEBUGGING ONLY WHICH FREEZES THIS NETWORK
+        # for p in self.parameters():
+            # p.requires_grad = False
 
-class VariationalPosterior(nn.Module):
+        # THIS NETWORK ONLY RECEIVES GRADIENT VIA POLICY GRADIENT
+        
+        
+    def forward(self, input, argmax=False):
+        
+        batch_size, len_input = input.size(0), input.size(1)
+        
+        # 
+        input = input.detach()
+        
+        # apply a single feed forward neural net
+        # or should I use a transformer here ?  
+        # input = F.relu(self.fc_1(input))
+        # input = F.relu(self.fc_2(input))
+        # input = F.dropout(input, p=self.dropout, training=self.training, inplace=True)
+        # input = self.in_norm(input)
+        input = torch.sigmoid(self.fc_3(input).float()) # sigmoid at the end for probability / Bernoulli distribution
+        
+        # size should be B x T x 1 (or T x B if time first)
 
-	pass
+        dist = torch.distributions.bernoulli.Bernoulli(probs=input)
+        if argmax == False:
+            action = dist.sample() # should be (B x T) x 1 (zero / one)
+            log_probs = dist.log_prob(action)
+        else:
+            with torch.no_grad():
+                all_probs = torch.cat([1 - dist.probs, dist.probs], dim=-1)
+                action = torch.argmax(all_probs, dim=-1, keepdim=True).float()
+            log_probs = dist.log_prob(action)
+
+        # if self.training:
+            # print(input.view(-1, 1))
+            # print(action.view(-1, 1))
+
+        output = dict()
+        
+        # reshape into 3D tensor
+        output['dist'] = dist
+        output['action'] = action
+        output['log_probs'] = log_probs
+        
+        return output
+    
+        # we should have layer normalization here
+        
+        # output should be logistic on top of feed forward net
+        
+        
+"""
+   The baseline receives the same input (or should we have some ahead information) ?
+   to produce a prediction of the reward ( c / ppl )
+"""        
+
+
+class BaselineNetwork(nn.Module):
+    
+    def __init__(self, opt):
+        
+        super().__init__()
+        self.opt = opt
+        self.input_size = opt.model_size
+        self.inner_size = opt.inner_size
+        self.dropout = opt.dropout
+        self.in_norm = nn.LayerNorm(self.input_size)
+        
+        # detach to avoid feedback Loop (if specified)
+        self.detach = True
+        # self.fc_1 = Linear(self.input_size, self.input_size)
+        self.fc_3 = Linear(self.input_size, 1) # output a single probabilty for this layer
+        
+        
+    def forward(self, input):
+        """
+            input : B x T x H (layer before Transformer)
+        """
+        
+        if self.detach: 
+            input_ = input.detach()
+        else:
+            input_ = input
+            # 
+        # input = self.in_norm(input_)
+        input = input_
+        
+        # input = F.relu(self.fc_1(input))
+        # input = F.dropout(input, p=self.dropout, training=self.training, inplace=True)
+        input = self.fc_3(input).float()     # softplus at the end for positive output ? why don't we use ReLU ?
+    
+        return input
+
+
 
 class VDEncoder(TransformerEncoder):
     """Encoder in 'Attention is all you need'

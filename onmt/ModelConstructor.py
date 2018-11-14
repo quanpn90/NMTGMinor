@@ -4,6 +4,9 @@ from torch.autograd import Variable
 import onmt
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer
 from onmt.modules.Transformer.Layers import PositionalEncoding
+from onmt.modules.Loss import NMTLossFunc
+from onmt.modules.VariationalLoss import VariationalLoss
+
 
 def update_backward_compatibility(opt):
     
@@ -168,10 +171,29 @@ def build_model(opt, dicts):
         
         model = Transformer(encoder, decoder, generator)       
         
-    elif opt.model in ['vdtransformer'] :
+    # elif opt.model in ['vdtransformer'] :
     
            
-        from onmt.modules.VDTransformer.Models import VDEncoder, VDDecoder, VDTransformer
+    #     from onmt.modules.VDTransformer.Models import VDEncoder, VDDecoder, VDTransformer
+    #     # ~ from onmt.modules.ReinforceTransformer.Models import ReinforcedStochasticDecoder, ReinforceTransformer
+                
+    #     # ~ onmt.Constants.weight_norm = opt.weight_norm
+    #     # ~ onmt.Constants.init_value = opt.param_init
+        
+    #     positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
+        
+    #     encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
+    #     decoder = VDDecoder(opt, dicts['tgt'], positional_encoder)
+
+    #     generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+
+    #     model = VDTransformer(encoder, decoder, generator)
+
+    elif opt.model in ['vtransformer', 'variational_transformer']:
+    
+           
+        from onmt.modules.VariationalTransformer.Models import VariationalDecoder, VariationalTransformer
+        from onmt.modules.VariationalTransformer.Inference import NeuralPrior, NeuralPosterior
         # ~ from onmt.modules.ReinforceTransformer.Models import ReinforcedStochasticDecoder, ReinforceTransformer
                 
         # ~ onmt.Constants.weight_norm = opt.weight_norm
@@ -180,11 +202,17 @@ def build_model(opt, dicts):
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
         
         encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
-        decoder = VDDecoder(opt, dicts['tgt'], positional_encoder)
+        decoder = VariationalDecoder(opt, dicts['tgt'], positional_encoder)
 
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        prior = NeuralPrior(opt, dicts['src'], positional_encoder)
+        posterior = NeuralPosterior(opt, dicts['src'], positional_encoder)
+        # prior = None
+        # posterior = None
 
-        model = VDTransformer(encoder, decoder, generator)
+        posterior.encoder.word_lut.weight = decoder.word_lut.weight
+
+        model = VariationalTransformer(encoder, decoder, prior, posterior, generator)
         
     else:
         raise NotImplementedError
@@ -207,9 +235,13 @@ def build_model(opt, dicts):
     elif opt.init_embedding == 'normal':
         init.normal_(model.encoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
         init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
-            
     
-    return model
+    if opt.model in ['vtransformer', 'variational_transformer']:
+        loss_function = VariationalLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+    else:
+        loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+    
+    return model, loss_function
     
 def init_model_parameters(model, opt):
     

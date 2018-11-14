@@ -225,7 +225,7 @@ class XETrainer(BaseTrainer):
                 normalizer = 1
                 
                 loss_output = self.loss_function(outputs, targets, generator=self.model.generator, 
-                                                             backward=True, mask=tgt_mask)
+                                                             backward=True, tgt_mask=tgt_mask)
                 
                 loss_data = loss_output['nll']
                 

@@ -196,17 +196,16 @@ class FP16XETrainer(XETrainer):
                 
                 batch_size = batch.size
                 
-                # ~ tgt_mask = targets.data.ne(onmt.Constants.PAD)
                 tgt_mask = batch.get('tgt_mask')
                 tgt_size = batch.tgt_size
                                 
-                # Scale UP the loss so that the gradients are not cutoff
+                ## Scale UP the loss so that the gradients are not cutoff
                 normalizer = 1.0 / self.scaler.loss_scale 
                 
                 loss_output = self.loss_function(outputs, targets, generator=self.model.generator, 
-                                                             backward=True, mask=tgt_mask, normalizer=normalizer)
+                                                             backward=True, tgt_mask=tgt_mask, normalizer=normalizer)
                 
-                # take the negative likelihood                                             
+                ## take the negative likelihood                                             
                 loss_data = loss_output['nll']
                 
                 del loss_output['loss']

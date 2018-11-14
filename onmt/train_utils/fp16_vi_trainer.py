@@ -128,8 +128,6 @@ class VariationalTrainer(XETrainer):
                     outputs = self.model(batch)
                     targets = batch.get('target_output')
 
-
-                    
                     loss_output = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
                     
                     loss_data = loss_output['nll']
@@ -221,6 +219,7 @@ class VariationalTrainer(XETrainer):
                 
                 # take the negative likelihood                                             
                 loss_data = loss_output['nll']
+                kl_data = loss_output['kl']
                 
                 del loss_output['loss']
                 del loss_output
@@ -260,8 +259,12 @@ class VariationalTrainer(XETrainer):
                         self.fp32_params.grad.data.div_(normalizer)
 
                         grad_norm = torch.norm(self.fp32_params.grad.data).item()
-                        
-                        
+
+                        max_norm = 5.0
+                        if grad_norm > max_norm > 0:
+                            clip_coef = max_norm / (grad_norm + 1e-6)
+                            self.fp32_params.grad.data.mul_(clip_coef)
+
                         overflow = DynamicLossScaler.has_overflow(grad_norm)
                         self.scaler.update_scale(overflow)
                         
@@ -274,7 +277,7 @@ class VariationalTrainer(XETrainer):
                                 ).format(1e-4))
                             print('setting loss scale to: ' + str(self.scaler.loss_scale))
                             self.model.zero_grad()
-                            self.optim.zero_grad()
+                            self.optim.zero_grad()  
                             num_accumulated_words = 0
                             num_accumulated_sents = 0
                             loss_data = 0
@@ -318,7 +321,7 @@ class VariationalTrainer(XETrainer):
                     else:
                         grad_norm = self.optim.step(grad_denom=normalizer)
                         self.model.zero_grad()
-                        self.optim.zero_grad
+                        self.optim.zero_grad()
                         counter = 0
 
 
@@ -346,7 +349,7 @@ class VariationalTrainer(XETrainer):
                 
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
                     print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
-                           "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; gnorm %0.2f; oom %d; %s elapsed") %
+                           "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; gnorm %0.2f; kl %0.3f; oom %d; %s elapsed") %
                           (epoch, i+1, len(trainData),
                            math.exp(report_loss / report_tgt_words),
                            optim.getLearningRate(),
@@ -355,6 +358,7 @@ class VariationalTrainer(XETrainer):
                            report_tgt_words/(time.time()-start),
                            self.scaler.loss_scale,
                            grad_norm, 
+                           kl_data, 
                            oom_count, 
                            str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
 

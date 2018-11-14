@@ -14,7 +14,6 @@ from onmt.train_utils.trainer import XETrainer
 from onmt.train_utils.fp16_trainer import FP16XETrainer
 from onmt.train_utils.multiGPUtrainer import MultiGPUXETrainer
 from onmt.train_utils.fp16_vi_trainer import VariationalTrainer
-from onmt.modules.Loss import NMTLossFunc
 from onmt.modules.VariationalLoss import VariationalLoss
 from onmt.ModelConstructor import build_model, init_model_parameters
 
@@ -112,7 +111,10 @@ def main():
         raise NotImplementedError
     
     print('Building model...')
-    model = build_model(opt, dicts)
+
+    # Loss function is built according to model 
+    # Go to ModelConstructor for more details
+    model, loss_function = build_model(opt, dicts)
     
     
     
@@ -125,20 +127,12 @@ def main():
     
     if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
         #~ trainer = MultiGPUXETrainer(model, loss_function, trainData, validData, dataset, opt)
-        raise NotImplementedError("Warning! Multi-GPU training is not fully tested and potential bugs can happen.")
+        raise NotImplementedError("Multi-GPU training is not supported atm")
     else:
-
-        if opt.model == 'vdtransformer':
-            loss_function = VariationalLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
-            trainer = VariationalTrainer(model, loss_function, trainData, validData, dicts, opt)
-
+        if opt.fp16:
+            trainer = FP16XETrainer(model, loss_function, trainData, validData, dicts, opt)
         else:
-            """ Building the loss function """
-            loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
-            if opt.fp16:
-                trainer = FP16XETrainer(model, loss_function, trainData, validData, dicts, opt)
-            else:
-                trainer = XETrainer(model, loss_function, trainData, validData, dicts, opt)
+            trainer = XETrainer(model, loss_function, trainData, validData, dicts, opt)
 
     
     trainer.run(save_file=opt.load_from)
