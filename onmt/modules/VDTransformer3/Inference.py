@@ -32,7 +32,6 @@ import copy
     During testing  y is not available, so we use the prior (conditional prior)
 
 """
-
 def mean_with_mask(context, mask):
 
     # context dimensions: T x B x H
@@ -75,22 +74,23 @@ class NeuralPrior(nn.Module):
         #  encoder_opt.word_dropout = 0.0 
         self.dropout = opt.dropout
         self.n_layers = opt.layers
+        self.n_steps = opt.layers
 
         self.projector = Linear(opt.model_size, opt.model_size)
-        self.predictor = Linear(opt.model_size, opt.layers * 2)
-        # self.mean_predictor = Linear(opt.model_size, opt.model_size)
-        # self.var_predictor = Linear(opt.model_size, opt.model_size)
+        self.predictor = Linear(opt.model_size, 2)
+        self.rnn = torch.nn.GRU(opt.model_size, opt.model_size)
+        self.rnn_projector = Linear(opt.model_size, opt.model_size)
 # 
     def forward(self, encoder_context, input, **kwargs):
         """
         Inputs Shapes: 
-            input: batch_size x len_src (wanna tranpose)
+            input: len_src x batch_size x hidden size
         
         Outputs Shapes:
-            out: batch_size x len_src x d_model
-            mask_src 
+            out: batch_size x n_layers x 2 for categorical (bernoulli) distribution
             
-        """
+            
+         """
         # pass the input to the transformer encoder
         context = encoder_context
           
@@ -102,18 +102,40 @@ class NeuralPrior(nn.Module):
         context = mean_with_mask(context, mask)
         
 
-        context = torch.tanh(self.projector(context))       
-        layer_probs = self.predictor(context)
+        context = torch.tanh(self.projector(context))  
 
-        layer_probs = layer_probs.view(-1, self.n_layers, 2)
+        rnn_input = context.unsqueeze(0) # for GRU input format
+        rnn_hidden = None
 
-        layer_probs = F.softmax(layer_probs.float(), dim=-1)
-        # mean = self.mean_predictor(context)       
-        # var = torch.nn.functional.softplus(self.var_predictor(context))
+        layer_probs = []
+        for t in range(self.n_steps):
 
-        # p_z = torch.distributions.bernoulli.Bernoulli(layer_probs.float())
-        p_z = torch.distributions.categorical.Categorical(probs=layer_probs)
-        # print(p_z.probs.size())
+            rnn_output, rnn_hidden = self.rnn(rnn_input, rnn_hidden)
+            rnn_output = rnn_output.squeeze(0) # batch x hidden size
+
+            proj_output = torch.tanh(self.rnn_projector(rnn_output))
+
+            layer_pred = self.predictor(proj_output) # batch x 2
+
+            layer_pred = F.softmax(layer_pred.float(), dim=-1).unsqueeze(1)
+
+            layer_probs.append(layer_pred)
+
+            # maybe detach 
+            rnn_input = proj_output
+            # rnn_input = proj_output.detach()
+
+            rnn_input = rnn_input.unsqueeze(0)
+
+        # should be B x layers x 2 like before
+        layer_probs = torch.cat(layer_probs, dim=1)
+        # layer_probs = self.predictor(context)
+
+        # layer_probs = layer_probs.view(-1, self.n_layers, 2)
+
+        # layer_probs = F.softmax(layer_probs.float(), dim=-1)
+        # print(layer_probs.size())
+        p_z = torch.distributions.categorical.Categorical(probs=layer_probs)    
 
         # return prior distribution P(z | X)
         return p_z
@@ -141,10 +163,12 @@ class NeuralPosterior(nn.Module):
         self.dropout = opt.dropout
         self.projector = Linear(opt.model_size * 2, opt.model_size)
         self.encoder = TransformerEncoder(encoder_opt, dicts, positional_encoder)
-        self.predictor = Linear(opt.model_size, opt.layers * 2)
+        self.predictor = Linear(opt.model_size, 2)
         self.n_layers = opt.layers
-        # self.mean_predictor = Linear(opt.model_size, opt.model_size)
-        # self.var_predictor = Linear(opt.model_size, opt.model_size)
+        self.n_steps = opt.layers
+
+        self.rnn = torch.nn.GRU(opt.model_size, opt.model_size)
+        self.rnn_projector = Linear(opt.model_size, opt.model_size)
     
     def forward(self, encoder_context, input_src, input_tgt, **kwargs):
         """
@@ -172,20 +196,39 @@ class NeuralPosterior(nn.Module):
         context = torch.cat([encoder_context, decoder_context], dim=-1)
 
         context = torch.tanh(self.projector(context))
-        
-        # layer_probs = torch.sigmoid(self.predictor(context))
-        layer_probs = self.predictor(context)
-        layer_probs = layer_probs.view(-1, self.n_layers, 2)
 
-        layer_probs = F.softmax(layer_probs.float(), dim=-1)
+        rnn_input = context.unsqueeze(0) # for GRU input format
+        rnn_hidden = None
 
-        print
+        layer_probs = []
+        for t in range(self.n_steps):
+
+            rnn_output, rnn_hidden = self.rnn(rnn_input, rnn_hidden)
+            rnn_output = rnn_output.squeeze(0) # batch x hidden size
+
+            proj_output = torch.tanh(self.rnn_projector(rnn_output))
+
+            layer_pred = self.predictor(proj_output) # batch x 2
+
+            layer_pred = F.softmax(layer_pred.float(), dim=-1).unsqueeze(1)
+
+            layer_probs.append(layer_pred)
+
+            # maybe detach 
+            rnn_input = proj_output
+            # rnn_input = proj_output.detach()
+
+            rnn_input = rnn_input.unsqueeze(0)
+
+        # should be B x layers x 2 like before
+        layer_probs = torch.cat(layer_probs, dim=1)
+        # layer_probs = self.predictor(context)
+
+        # layer_probs = layer_probs.view(-1, self.n_layers, 2)
+
+        # layer_probs = F.softmax(layer_probs.float(), dim=-1)
         # print(layer_probs.size())
-        # var = torch.nn.functional.softplus(self.var_predictor(context))
-        q_z = torch.distributions.categorical.Categorical(probs=layer_probs)
-        # print(q_z.probs.size())
-        # q_z = torch.distributions.bernoulli.Bernoulli(layer_probs.float())
-        # return distribution Q(z | X, Y)
+        q_z = torch.distributions.categorical.Categorical(probs=layer_probs)  
         return q_z
 
 

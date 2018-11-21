@@ -198,6 +198,7 @@ class XETrainer(BaseTrainer):
         nSamples = len(trainData)
         
         counter = 0
+        grad_norm = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
         
@@ -256,7 +257,7 @@ class XETrainer(BaseTrainer):
                     if self.opt.normalize_gradient:
                         grad_denom = num_accumulated_words
                     # Update the parameters.
-                    self.optim.step(grad_denom=grad_denom)
+                    grad_norm = self.optim.step(grad_denom=grad_denom)
                     self.model.zero_grad()
                     counter = 0
                     num_accumulated_words = 0
@@ -285,13 +286,14 @@ class XETrainer(BaseTrainer):
                 
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
                     print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
-                           "%5.0f src tok/s; %5.0f tgt tok/s; %s elapsed") %
+                           "%5.0f src tok/s; %5.0f tgt tok/s; gnorm %0.2f; %s elapsed") %
                           (epoch, i+1, len(trainData),
                            math.exp(report_loss / report_tgt_words),
                            optim.getLearningRate(),
                            optim._step,
                            report_src_words/(time.time()-start),
                            report_tgt_words/(time.time()-start),
+                           grad_norm,
                            str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
 
                     report_loss, report_tgt_words = 0, 0

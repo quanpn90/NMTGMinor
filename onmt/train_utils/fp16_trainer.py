@@ -249,6 +249,8 @@ class FP16XETrainer(XETrainer):
                     
                     overflow = DynamicLossScaler.has_overflow(grad_norm)
                     self.scaler.update_scale(overflow)
+
+
                     
                     if overflow:
                         if self.scaler.loss_scale <= 1e-4:
@@ -266,6 +268,12 @@ class FP16XETrainer(XETrainer):
                     
                     else:
                         try:
+
+                            max_norm = 5.0
+                            if grad_norm > max_norm > 0:
+                                clip_coef = max_norm / (grad_norm + 1e-6)
+                                self.fp32_params.grad.data.mul_(clip_coef)
+
                             self.optim.step(grad_denom=1) # update the parameters in fp32 
                             
                             # copying the parameters back to fp16
@@ -312,7 +320,7 @@ class FP16XETrainer(XETrainer):
                 
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
                     print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
-                           "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; gnorm %0.2f; oom %d; %s elapsed") %
+                           "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; gnorm %.3f; oom %d; %s elapsed") %
                           (epoch, i+1, len(trainData),
                            math.exp(report_loss / report_tgt_words),
                            optim.getLearningRate(),
@@ -348,10 +356,6 @@ class FP16XETrainer(XETrainer):
         if checkpoint is not None:
             print('Loading model and optim from checkpoint at %s' % save_file)
             self.convert_fp16(checkpoint['model'], checkpoint['optim'])
-            # ~ self.model.load_state_dict(checkpoint['model'])
-            
-            # ~ if opt.reset_optim == False:
-            # ~ self.optim.load_state_dict(checkpoint['optim'])
             batchOrder = checkpoint['batchOrder']
             iteration = checkpoint['iteration'] + 1
             opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))

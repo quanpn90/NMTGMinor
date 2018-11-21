@@ -115,12 +115,9 @@ class VDDecoder(TransformerDecoder):
             if latent_z is not None:
                 z_ = z_splits[i].unsqueeze(0) # should be 1 x B x 1
                                               # auto-broacasted to T x B x H
-
-                if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:           
-                
-                    output, coverage = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src, z_) 
-                                                                              # batch_size x len_src x d_model
-                
+                if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:
+                    output, coverage = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src, z_)  # batch_size x len_src x d_model                                                        
+                    
                 else:
                     output, coverage = layer(output, context, mask_tgt, mask_src, z_) # batch_size x len_src x d_model
             else:
@@ -224,11 +221,13 @@ class VDDecoder(TransformerDecoder):
 class VDTransformer(NMTModel):
     """Main model in 'Attention is all you need' """
     
-    def __init__(self, encoder, decoder, prior_estimator, posterior_estimator, generator=None, baseline=None):
+    def __init__(self, encoder, decoder, prior_estimator, posterior_estimator, generator=None):
         super().__init__(encoder, decoder, generator=generator)
         self.prior_estimator = prior_estimator
         self.posterior_estimator = posterior_estimator
-        self.baseline = baseline
+        # self.baseline = baseline
+
+
         
     def forward(self, batch):
         """
@@ -251,11 +250,12 @@ class VDTransformer(NMTModel):
 
         p_z = self.prior_estimator(encoder_context, src)
         q_z = self.posterior_estimator(encoder_context, src, tgt)
-        b   = self.baseline(encoder_context, src, tgt)
+
+
+        # b   = self.baseline(encoder_context, src, tgt)
 
         # both of them are Bernoulli distribution
-        # note (for stability reason softmax is done instead of bernoulli so there are 2 options)
-        # size: batch_size * n_layers * 2
+        # size: batch_size * n_layers
 
         # sample the layer masks:
         if self.training:
@@ -272,7 +272,7 @@ class VDTransformer(NMTModel):
 
         z = z.type_as(encoder_context)
         
-        decoder_output, coverage = self.decoder(tgt, encoder_context, src, latent_z=z_)
+        decoder_output, coverage = self.decoder(tgt, encoder_context, src, latent_z=z)
 
         # compute KL between prior and posterior
         kl_divergence = torch.distributions.kl.kl_divergence(q_z, p_z)
@@ -285,7 +285,16 @@ class VDTransformer(NMTModel):
         # we need to use the log likelihood of the sentence logP(Y | X, z)
         # to backprop this volume
         outputs['log_q_z'] = log_q_z
-        outputs['baseline'] = b
+        
+
+
+        # Now we have to compute the baseline
+        # encoder_baseline = encoder_context.detach()
+
+        with torch.no_grad():
+            # run the model without the latent variable (full network)
+            decoder_baseline, _ = self.decoder(tgt, encoder_context, src)
+            outputs['baseline'] = decoder_baseline
 
         return outputs
 

@@ -260,8 +260,10 @@ class VariationalTrainer(XETrainer):
 
                         grad_norm = torch.norm(self.fp32_params.grad.data).item()
 
+                        print(grad_norm)
                         max_norm = 5.0
-                        if grad_norm > max_norm > 0:
+                        if grad_norm > max_norm:
+                            print("CLIP")
                             clip_coef = max_norm / (grad_norm + 1e-6)
                             self.fp32_params.grad.data.mul_(clip_coef)
 

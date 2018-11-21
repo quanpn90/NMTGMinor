@@ -73,6 +73,7 @@ class NeuralPrior(nn.Module):
         # quick_hack to override some hyper parameters of the prior encoder
         # encoder_opt.layers = 
         #  encoder_opt.word_dropout = 0.0 
+        self.dropout = opt.dropout
 
         self.projector = Linear(opt.model_size, opt.model_size)
         self.mean_predictor = Linear(opt.model_size, opt.model_size)
@@ -97,12 +98,10 @@ class NeuralPrior(nn.Module):
 
         # context.masked_fill_(mask, 0)
         context = mean_with_mask(context, mask)
-        
-
         context = torch.tanh(self.projector(context))
+        # context = F.dropout(context, training=self.training, p=self.dropout)       
 
-
-        mean = self.mean_predictor(context)
+        mean = self.mean_predictor(context)       
         var = torch.nn.functional.softplus(self.var_predictor(context))
 
         p_z = torch.distributions.normal.Normal(mean.float(), var.float())
@@ -130,11 +129,12 @@ class NeuralPosterior(nn.Module):
         # quick_hack to override some hyper parameters of the prior encoder
         # encoder_opt.layers = 4
         # encoder_opt.word_dropout = 0.0 
+        self.dropout = opt.dropout
         self.projector = Linear(opt.model_size * 2, opt.model_size)
         self.encoder = TransformerEncoder(encoder_opt, dicts, positional_encoder)
+
         self.mean_predictor = Linear(opt.model_size, opt.model_size)
         self.var_predictor = Linear(opt.model_size, opt.model_size)
-            
     
     def forward(self, encoder_context, input_src, input_tgt, **kwargs):
         """
@@ -154,24 +154,23 @@ class NeuralPosterior(nn.Module):
         src_mask = input_src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
         tgt_mask = input_tgt.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
 
-        # mask both context
-        # decoder_context.masked_fill(tgt_mask, 0)
-        # encoder_context.masked_fill(src_mask, 0)
 
         # take the mean of each context
-        # encoder_context = encoder_context.mean(dim=0, keepdim=False)
-        # decoder_context = decoder_context.mean(dim=0, keepdim=False)
         encoder_context = mean_with_mask(encoder_context, src_mask)
         decoder_context = mean_with_mask(decoder_context, tgt_mask)
 
         context = torch.cat([encoder_context, decoder_context], dim=-1)
 
         context = torch.tanh(self.projector(context))
+        # context = F.dropout(context, training=self.training, p=self.dropout)       
+
+        # probs = torch.sigmoid(self.predictor(context))
 
         mean = self.mean_predictor(context)
         var = torch.nn.functional.softplus(self.var_predictor(context))
 
         q_z = torch.distributions.normal.Normal(mean.float(), var.float())
+
 
         # return distribution Q(z | X, Y)
         return q_z

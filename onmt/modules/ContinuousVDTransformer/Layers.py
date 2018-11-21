@@ -114,7 +114,7 @@ class VDDecoderLayer(DecoderLayer):
         super().__init__(h, d_model, p, d_ff, attn_p)
 
     
-    def forward(self, input, context, mask_tgt, mask_src, layer_mask=None, pad_mask_tgt=None, pad_mask_src=None):
+    def forward(self, input, context, mask_tgt, mask_src, layer_mask, pad_mask_tgt=None, pad_mask_src=None):
         
         """ Self attention layer 
             layernorm > attn > dropout > residual
@@ -175,10 +175,7 @@ class VDDecoderLayer(DecoderLayer):
         
         # the layer_mask will be sent from the reinforce sub-network
         # if self.training:
-        # print(input.size(), layer_mask.size())
-
-        if layer_mask is not None:
-            input = layer_mask * input + ( 1 - layer_mask ) * last_layer
+        input = layer_mask * input + ( 1 - layer_mask ) * last_layer
     
         return input, coverage
         
