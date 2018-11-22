@@ -162,6 +162,7 @@ class NeuralPosterior(nn.Module):
         context = torch.cat([encoder_context, decoder_context], dim=-1)
 
         context = torch.tanh(self.projector(context))
+        context = F.dropout(context, training=self.training, p=self.dropout)
         # context = F.dropout(context, training=self.training, p=self.dropout)       
 
         # probs = torch.sigmoid(self.predictor(context))

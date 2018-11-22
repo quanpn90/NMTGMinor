@@ -146,9 +146,17 @@ class VDLoss(LossFuncBase):
             tgt_t = targets[t].unsqueeze(1)
             # print(gen_t.size(), tgt_t.size())
             scores = gen_t.data.gather(1, tgt_t)
-            scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
+            smooth_scores = scores.sum(dim=-1, keepdim=True)
+
+            mask = tgt_t.eq(onmt.Constants.PAD)
+            scores.masked_fill_(mask, 0)
+            smooth_scores.masked_fill_(mask, 0)
+
+            eps_i = self.smoothing_value
+            smooth_scores = (1. - self.label_smoothing)   * scores + eps_i * smooth_scores
+
         
-            goldScores += scores.squeeze(1).type_as(goldScores)
+            goldScores += smooth_scores.squeeze(1).type_as(goldScores)
         
         
         
@@ -162,9 +170,7 @@ class VDLoss(LossFuncBase):
         baseline_loss = (b - R)**2
         baseline_loss = baseline_loss.sum() * b_coeff_ 
 
-
-
-        inference_loss = - log_q_z  * (R.data - b.data)
+        inference_loss = - log_q_z  * (R.data - b.data) * b_coeff_
         inference_loss = inference_loss.sum()
 
         lambda_ = 1.0
@@ -178,5 +184,6 @@ class VDLoss(LossFuncBase):
         output['loss'] = loss
         output['kl'] = kl.item()
         output['nll'] = nll
-        
+        output['baseline'] = b.sum().item()
+        output['R'] = (R.data - b.data).sum().item()
         return output

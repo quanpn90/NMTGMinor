@@ -237,7 +237,7 @@ def build_model(opt, dicts):
 
         model = VDTransformer(encoder, decoder, prior, posterior, generator, baseline)
 
-        from onmt.modules.VDLoss import VDLoss
+        from onmt.modules.VDTransformer.VDLoss import VDLoss
         loss_function = VDLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
 
     elif opt.model in ['vdtransformer2']:

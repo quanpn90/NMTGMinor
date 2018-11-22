@@ -272,7 +272,7 @@ class VDTransformer(NMTModel):
 
         z = z.type_as(encoder_context)
         
-        decoder_output, coverage = self.decoder(tgt, encoder_context, src, latent_z=z_)
+        decoder_output, coverage = self.decoder(tgt, encoder_context, src, latent_z=z)
 
         # compute KL between prior and posterior
         kl_divergence = torch.distributions.kl.kl_divergence(q_z, p_z)

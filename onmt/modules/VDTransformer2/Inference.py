@@ -102,7 +102,8 @@ class NeuralPrior(nn.Module):
         context = mean_with_mask(context, mask)
         
 
-        context = torch.tanh(self.projector(context))       
+        context = torch.tanh(self.projector(context))
+        context = F.dropout(context,  p=self.dropout, training=self.training)       
         layer_probs = self.predictor(context)
 
         layer_probs = layer_probs.view(-1, self.n_layers, 2)
@@ -172,6 +173,7 @@ class NeuralPosterior(nn.Module):
         context = torch.cat([encoder_context, decoder_context], dim=-1)
 
         context = torch.tanh(self.projector(context))
+        context = F.dropout(context, training=self.training, p=self.dropout)
         
         # layer_probs = torch.sigmoid(self.predictor(context))
         layer_probs = self.predictor(context)

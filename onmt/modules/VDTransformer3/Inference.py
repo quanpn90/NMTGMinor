@@ -122,8 +122,8 @@ class NeuralPrior(nn.Module):
             layer_probs.append(layer_pred)
 
             # maybe detach 
-            rnn_input = proj_output
-            # rnn_input = proj_output.detach()
+            # rnn_input = proj_output
+            rnn_input = proj_output.detach()
 
             rnn_input = rnn_input.unsqueeze(0)
 
@@ -215,8 +215,8 @@ class NeuralPosterior(nn.Module):
             layer_probs.append(layer_pred)
 
             # maybe detach 
-            rnn_input = proj_output
-            # rnn_input = proj_output.detach()
+            # rnn_input = proj_output
+            rnn_input = proj_output.detach()
 
             rnn_input = rnn_input.unsqueeze(0)
 
@@ -285,6 +285,7 @@ class Baseline(nn.Module):
         decoder_context = mean_with_mask(decoder_context, tgt_mask)
 
         context = torch.cat([encoder_context, decoder_context], dim=-1)
+        context = F.dropout(context, training=self.training, p=self.dropout)
 
         context = torch.tanh(self.projector(context))
 
