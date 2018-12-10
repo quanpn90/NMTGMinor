@@ -108,7 +108,7 @@ class VDLoss(LossFuncBase):
         return (smoothed_nll, nll, n_targets)
         
    
-    def forward(self, output_dict, targets, generator=None, backward=False, tgt_mask=None, normalizer=1, kl_lambda=0.0):
+    def forward(self, output_dict, targets, generator=None, backward=False, tgt_mask=None, normalizer=1):
         """
         Compute the loss. Subclass must define this method.
         Args:
@@ -122,7 +122,6 @@ class VDLoss(LossFuncBase):
         
         outputs = output_dict['hiddens']
         original_outputs = outputs
-        output = dict()
 
         nsteps = outputs.size(0)
         batch_size = outputs.size(1)
@@ -160,6 +159,11 @@ class VDLoss(LossFuncBase):
             goldScores += smooth_scores.squeeze(1).type_as(goldScores)
         
         
+        
+        kl = output_dict['kl'].sum()
+        log_q_z = output_dict['log_q_z']
+        # R = goldScores.unsqueeze(1).type_as(log_q_z)
+
         # processing the baseline
         with torch.no_grad():
             b = output_dict['baseline']
@@ -169,10 +173,10 @@ class VDLoss(LossFuncBase):
             b_scores = outputs.new(batch_size).zero_()
 
             for t in range(nsteps):
-                b_gen_t = b_dists[t]
+                gen_t = dists[t]
                 tgt_t = targets[t].unsqueeze(1)
                 # print(gen_t.size(), tgt_t.size())
-                scores = b_gen_t.data.gather(1, tgt_t)
+                scores = gen_t.data.gather(1, tgt_t)
                 smooth_loss = scores.sum(dim=-1, keepdim=True)
 
                 mask = tgt_t.eq(onmt.Constants.PAD)
@@ -183,57 +187,28 @@ class VDLoss(LossFuncBase):
                 smooth_scores = (1. - self.label_smoothing)  * scores + eps_i * smooth_scores
             
                 b_scores += smooth_scores.squeeze(1).type_as(b_scores)
-        
-        
-        log_q_z = output_dict['log_q_z']
-        n_dists = output_dict['p_z'].probs.size(1)
 
-        # compute R for the REINFORCE gradient
-        # R = goldScores.unsqueeze(1).type_as(log_q_z)
-        R_ = goldScores - b_scores
-        b = b_scores
-        R = R_.detach()
+        # done processing the baseline
 
-        # b = output_dict['baseline'].type_as(log_q_z)
-        output['ce'] = goldScores.sum().item()
-
-
-        # baseline for the reinforce gradient
         # b_coeff_ = 0.01
         # baseline_loss = (b - R)**2
-        # baseline_loss = baseline_loss.sum() * b_coeff_ / n_dists
+        # baseline_loss = baseline_loss.sum() * b_coeff_ 
 
-        # inference loss is - logQ * R
+        R = goldScores - b_scores
+        R = R.detach()
         inference_loss = - log_q_z  * R.unsqueeze(1).type_as(log_q_z)
-        inference_loss = inference_loss.sum() * 0.01
+        inference_loss = inference_loss.sum()
 
-        
-        # KL divergence
-        kl = output_dict['kl'].sum()
-
-        # also try to increase entropy to avoid latent collapse
-        q_entropy = output_dict['q_z'].entropy().sum() # posterior entropy 
-        p_entropy = output_dict['p_z'].entropy().sum() # prior entropy 
-
-
-        lambda_ = 0.1
-        ent_coeff = 0.05
-        # lambda_ = kl_lambda
-        loss = smoothed_nll + ( kl * lambda_   / n_dists )  \
-                            + inference_loss - ( (p_entropy + q_entropy) * ent_coeff / n_dists )
+        lambda_ = 1.0
+        loss = smoothed_nll + kl * lambda_ + inference_loss 
 
         
         if backward:
             loss.div(normalizer).backward()
-
-        
             
-        
-        output['loss'] = loss # this is actually dangerous to keep
+        output = dict()
+        output['loss'] = loss
         output['kl'] = kl.item()
         output['nll'] = nll
-        output['baseline'] = b.sum().item()
-        output['R'] = R.data.sum().item()
-        output['q_entropy'] = q_entropy.item()
-        output['p_entropy'] = p_entropy.item()
+        
         return output

@@ -178,8 +178,6 @@ class VDDecoderLayer(DecoderLayer):
         # print(input.size(), layer_mask.size())
 
         if layer_mask is not None:
-            t, H = input.size(0), input.size(2)
-            layer_mask = layer_mask.expand(t, 1, H)
             input = layer_mask * input + ( 1 - layer_mask ) * last_layer
     
         return input, coverage

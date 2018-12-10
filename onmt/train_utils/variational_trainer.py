@@ -17,6 +17,8 @@ from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 from onmt.ModelConstructor import init_model_parameters
 from onmt.train_utils.trainer import BaseTrainer, XETrainer
 from onmt.Stats import Logger
+from statistics import mean, stdev
+
     
     
 from onmt.Meters import AverageMeter, TimeMeter
@@ -55,6 +57,7 @@ class VariationalTrainerFP16(XETrainer):
         super().__init__(model, loss_function, trainData, validData, dicts, opt, set_param=False)
         self.optim = onmt.Optim(opt)
         self.scaler = DynamicLossScaler(opt.fp16_loss_scale)
+        self.n_samples = opt.num_valid_samples
         
         if self.cuda:
            torch.cuda.set_device(self.opt.gpus[0])
@@ -80,6 +83,8 @@ class VariationalTrainerFP16(XETrainer):
         self.meters["total_sloss"] = AverageMeter()
         self.meters["baseline"] = AverageMeter()
         self.meters["R"] = AverageMeter()
+        self.meters["ce"] = AverageMeter()
+        self.meters["q_entropy"] = AverageMeter()
 
         self.logger = Logger(self.optim, self.meters, scaler=self.scaler)
     
@@ -116,18 +121,24 @@ class VariationalTrainerFP16(XETrainer):
         
         total_loss = 0
         total_words = 0
+        total_batch_size = 0
+        total_p_entropy = 0
                 
         batch_order = data.create_order(random=False)
         torch.cuda.empty_cache()
         self.model.eval()
+
+        ppls = dict()
+        total_losses = dict()
         """ New semantics of PyTorch: not creating gradients in this mode """
+
         with torch.no_grad():
-            for i in range(len(data)):
-                
-                oom = False
-                try:
-                    samples = data.next()
+            for n in range(self.n_samples):
+                total_losses[n] = 0
+                for i in range(len(data)):
                     
+                    samples = data.next()
+                        
                     batch = samples[0]
                     batch.cuda()
                     
@@ -142,21 +153,33 @@ class VariationalTrainerFP16(XETrainer):
                     loss_output = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
                     
                     loss_data = loss_output['nll']
+
+                    if n == 0:
+                        total_p_entropy += loss_output['p_entropy']
+                        total_batch_size += batch.size
+                        total_words += batch.tgt_size
                 
                     del loss_output
-                    
-                except RuntimeError as e:
-                    if 'out of memory' in str(e) or 'get_temporary_buffer' in str(e) :
-                        oom = True
-                        torch.cuda.empty_cache()
-                    else:
-                        raise e        
-                
-                if oom == False:        
-                    total_loss += loss_data
-                    total_words += batch.tgt_size
+                    total_losses[n] += loss_data
 
+                    
+
+        p_entropy = total_p_entropy / (total_batch_size * self.opt.layers)
+        print("Prior entropy: %.3f " % p_entropy)
         self.model.train()
+
+        # take the average
+        total_loss = sum(total_losses.values()) / float(len(total_losses))
+        ppls = list()
+
+        for k in total_losses:
+            valid_loss = total_losses[k] / (total_words + 1e-6)
+            ppl = math.exp(min(valid_loss, 100))
+            print("perplexity for sampling %d : %.3f " % (k, ppl))
+            ppls.append(ppl)
+        mean_ = mean(ppls)
+        std_ = stdev(ppls)
+        print("Mean and std: %.3f, %.3f" % (mean_, std_))
         return total_loss / (total_words + 1e-6)
         
     
@@ -216,14 +239,25 @@ class VariationalTrainerFP16(XETrainer):
                 ## Scale UP the loss so that the gradients are not cutoff
                 normalizer = 1.0 / self.scaler.loss_scale 
                 
+                warmup_steps = self.optim.warmup_steps
+                alpha = 1 / (warmup_steps * (warmup_steps ** -1.5))
+
+                if self.optim._step < (self.optim.warmup_steps / 2):
+                    kl_lambda = 0.0
+                else:
+                    kl_lambda = alpha * self.optim._step * (warmup_steps ** -1.5)
+
                 loss_output = self.loss_function(outputs, targets, generator=self.model.generator, 
-                                                             backward=True, tgt_mask=tgt_mask, normalizer=normalizer)
+                                                             backward=True, tgt_mask=tgt_mask, normalizer=normalizer,
+                                                             kl_lambda=kl_lambda)
                 
                 ## take the negative likelihood                                             
                 loss_data = loss_output['nll']
                 kl = loss_output['kl']
                 baseline = loss_output['baseline']
                 R = loss_output['R']
+                ce = loss_output['ce']
+                q_entropy = loss_output['q_entropy']
                 
                 del loss_output['loss']
                 del loss_output
@@ -283,11 +317,13 @@ class VariationalTrainerFP16(XETrainer):
                         num_accumulated_words = 0
                         num_accumulated_sents = 0
                         loss_data = 0
+                        grad_norm = 0
+                        self.meters['gnorm'].reset()
                     
                     else:
                         try:
 
-                            max_norm = 5.0
+                            max_norm = self.opt.max_grad_norm 
                             if grad_norm > max_norm > 0:
                                 clip_coef = max_norm / (grad_norm + 1e-6)
                                 self.fp32_params.grad.data.mul_(clip_coef)
@@ -337,6 +373,8 @@ class VariationalTrainerFP16(XETrainer):
                 self.meters['kl'].update(kl, batch_size * self.opt.layers)
                 self.meters['baseline'].update(baseline, batch_size)
                 self.meters['R'].update(R, batch_size)
+                self.meters['ce'].update(ce, batch_size) # this is sentence level loss
+                self.meters['q_entropy'].update(q_entropy, batch_size * self.opt.layers)
                 
                 optim = self.optim
                 

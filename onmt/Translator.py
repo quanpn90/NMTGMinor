@@ -48,7 +48,7 @@ class Translator(object):
                 self.tgt_dict = checkpoint['dicts']['tgt']
             
             # Build model from the saved option
-            model = build_model(model_opt, checkpoint['dicts'])
+            model, _ = build_model(model_opt, checkpoint['dicts'])
             
             model.load_state_dict(checkpoint['model'])
             

@@ -112,6 +112,9 @@ class VDDecoderLayer(DecoderLayer):
     
     def __init__(self, h, d_model, p, d_ff, attn_p=0.1):
         super().__init__(h, d_model, p, d_ff, attn_p)
+        # self.postprocess_attn = PrePostProcessing(d_model, residual_p, sequence='d', static=onmt.Constants.static)
+        # self.postprocess_src_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
+        # self.postprocess_ffn = PrePostProcessing(d_model, residual_p, sequence='d', static=onmt.Constants.static)
 
     
     def forward(self, input, context, mask_tgt, mask_src, layer_mask=None, pad_mask_tgt=None, pad_mask_src=None):
@@ -142,8 +145,6 @@ class VDDecoderLayer(DecoderLayer):
         out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt, 
                                     query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
         
-        # ~ if self.training:
-            # ~ out = out / ( 1 - self.death_rate)
         
         input = self.postprocess_attn(out, input)
         
@@ -155,9 +156,6 @@ class VDDecoderLayer(DecoderLayer):
         out, coverage = self.multihead_src(query, context, context, mask_src, 
                                            query_mask=pad_mask_tgt, value_mask=pad_mask_src)
         
-        # ~ if self.training:
-            # ~ out = out / ( 1 - self.death_rate)
-        
         input = self.postprocess_src_attn(out, input)
         
         """ Feed forward layer 
@@ -165,22 +163,14 @@ class VDDecoderLayer(DecoderLayer):
         """
         out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask_tgt), 
                                            mask=pad_mask_tgt)
-                                           
-        # During testing we scale the output to match its EXPECTATION of participation during training                                   
-        # ~ if self.training:
-            # ~ out = out / ( 1 - self.death_rate)
             
         input = self.postprocess_ffn(out, input)
         
-        
-        # the layer_mask will be sent from the reinforce sub-network
-        # if self.training:
-        # print(input.size(), layer_mask.size())
-
         if layer_mask is not None:
-            t, H = input.size(0), input.size(2)
-            layer_mask = layer_mask.expand(t, 1, H)
-            input = layer_mask * input + ( 1 - layer_mask ) * last_layer
+            # add (or multiple) the variational information to the input
+            input = input + layer_mask 
+            # input = layer_mask * input + ( 1 - layer_mask ) * last_layer
+
     
         return input, coverage
         
@@ -215,6 +205,7 @@ class VDDecoderLayer(DecoderLayer):
                                            
         input = self.postprocess_ffn(out, input)
 
-        inputs = layer_mask * input + ( 1 - layer_mask ) * last_layer
+        input = input + layer_mask
+        # inputs = layer_mask * input + ( 1 - layer_mask ) * last_layer
         
         return input, coverage, buffer    

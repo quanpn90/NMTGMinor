@@ -3,7 +3,7 @@ import torch, math
 import torch.nn as nn
 import torch.nn.functional as F
 from onmt.modules.Transformer.Layers import PositionalEncoding
-from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer
+from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, PrePostProcessing
 from onmt.modules.StochasticTransformer.Layers import StochasticEncoderLayer, StochasticDecoderLayer
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder
 import onmt
@@ -33,21 +33,23 @@ import copy
 
 """
 
-def mean_with_mask(context, mask):
+def mean_with_mask(context, mask=None):
 
     # context dimensions: T x B x H
     # mask dimension: T x B x 1 (with unsqueeze)
     # first, we have to mask the context with zeros at the unwanted position
 
-    context.masked_fill_(mask, 0)
+    if mask is not None:
+        context.masked_fill_(mask, 0)
 
     # then take the sum over the dimension
     context_sum = torch.sum(context, dim=0, keepdim=False)
 
-
-    weights = torch.sum(1 - mask, dim=0, keepdim=False).type_as(context_sum)
-
-    mean = context_sum.div_(weights)
+    if mask is not None:
+        weights = torch.sum(1 - mask, dim=0, keepdim=False).type_as(context_sum)
+        mean = context_sum.div(weights)
+    else:
+        mean = context_sum.div(context.size(0))
 
     return mean
 
@@ -75,13 +77,14 @@ class NeuralPrior(nn.Module):
         #  encoder_opt.word_dropout = 0.0 
         self.dropout = opt.dropout
         self.n_layers = opt.layers
+        self.tau = opt.tau
 
         self.projector = Linear(opt.model_size, opt.model_size)
         self.predictor = Linear(opt.model_size, opt.layers * 2)
         # self.mean_predictor = Linear(opt.model_size, opt.model_size)
         # self.var_predictor = Linear(opt.model_size, opt.model_size)
 # 
-    def forward(self, encoder_context, input, **kwargs):
+    def forward(self, context_mean, input, **kwargs):
         """
         Inputs Shapes: 
             input: batch_size x len_src (wanna tranpose)
@@ -92,17 +95,14 @@ class NeuralPrior(nn.Module):
             
         """
         # pass the input to the transformer encoder
-        context = encoder_context
-        # context = encoder_context.detach()
-        # print(context.size())
-        # print(input.size())
+        context = context_mean
           
         # Now we have to mask the context with zeros
         # context size: T x B x H
-        mask = input.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
+        # mask = input.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
 
         # context.masked_fill_(mask, 0)
-        context = mean_with_mask(context, mask)
+        # context = mean_with_mask(context, mask)
         
 
         context = torch.tanh(self.projector(context))       
@@ -110,16 +110,24 @@ class NeuralPrior(nn.Module):
 
         layer_probs = layer_probs.view(-1, self.n_layers, 2)
 
-        layer_probs = F.softmax(layer_probs.float(), dim=-1)
+        # layer_probs = F.softmax(layer_probs.float(), dim=-1)
         # mean = self.mean_predictor(context)       
         # var = torch.nn.functional.softplus(self.var_predictor(context))
 
+        context = self.var_predictor(context)
         # p_z = torch.distributions.bernoulli.Bernoulli(layer_probs.float())
-        p_z = torch.distributions.categorical.Categorical(probs=layer_probs)
-        # print(p_z.probs.size())
 
-        # return prior distribution P(z | X)
-        return p_z
+
+        # p_zs = torch.split(layer_probs, 1, dim=1)
+
+        # p_z = list()
+
+        # for p in p_zs:
+        #     p_z_i =  torch.distributions.categorical.Categorical(probs=p.squeeze(1))
+        #     p_z.append(p_z_i)
+
+        # # return prior distribution P(z | X)
+        # return p_z
 
 
 class NeuralPosterior(nn.Module):
@@ -144,13 +152,15 @@ class NeuralPosterior(nn.Module):
         # encoder_opt.dropout = 0.0
         self.dropout = opt.dropout
         self.projector = Linear(opt.model_size * 2, opt.model_size)
-        self.encoder = TransformerEncoder(encoder_opt, dicts, positional_encoder)
-        self.predictor = Linear(opt.model_size, opt.layers * 2)
+        # self.encoder = TransformerEncoder(encoder_opt, dicts, positional_encoder)
+        self.encoder = EncoderLayer(opt.n_heads, opt.model_size, 0.0, opt.inner_size, 0.0)
+        self.predictor = Linear(opt.model_size, 2)
+        self.postprocess_layer = PrePostProcessing(opt.model_size, 0, sequence='n')
         self.n_layers = opt.layers
         # self.mean_predictor = Linear(opt.model_size, opt.model_size)
         # self.var_predictor = Linear(opt.model_size, opt.model_size)
     
-    def forward(self, encoder_context, input_src, input_tgt, **kwargs):
+    def forward(self, context_mean, decoder_state, input_src, input_tgt, **kwargs):
         """
         Inputs Shapes: 
             input: batch_size x len_src (wanna tranpose)
@@ -163,24 +173,27 @@ class NeuralPosterior(nn.Module):
 
         """ Embedding: batch_size x len_src x d_model """
         
-        # encoder_context_ = encoder_context.detach()
-        decoder_context, _ = self.encoder(input_tgt, **kwargs)
+        # decoder_context, _ = self.encoder(input_tgt, **kwargs)
 
-        src_mask = input_src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
         tgt_mask = input_tgt.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
+
+        tgt_self_attn_mask = input_tgt.eq(onmt.Constants.PAD).unsqueeze(1)
+
+        decoder_context = self.encoder(decoder_state, tgt_self_attn_mask)
+        decoder_context = self.postprocess_layer(decoder_context)
+        # decoder_context = decoder_state
 
 
         # take the mean of each context
-        encoder_context = mean_with_mask(encoder_context, src_mask)
+        encoder_context = context_mean
         decoder_context = mean_with_mask(decoder_context, tgt_mask)
 
         context = torch.cat([encoder_context, decoder_context], dim=-1)
 
         context = torch.tanh(self.projector(context))
         
-        # layer_probs = torch.sigmoid(self.predictor(context))
         layer_probs = self.predictor(context)
-        layer_probs = layer_probs.view(-1, self.n_layers, 2)
+        # layer_probs = layer_probs.view(-1, self.n_layers, 2)
 
         layer_probs = F.softmax(layer_probs.float(), dim=-1)
 
@@ -213,12 +226,14 @@ class Baseline(nn.Module):
         # encoder_opt.dropout = 0.0
         self.dropout = opt.dropout
         self.projector = Linear(opt.model_size * 2, opt.model_size)
-        self.encoder = TransformerEncoder(encoder_opt, dicts, positional_encoder)
+        # self.encoder = TransformerEncoder(encoder_opt, dicts, positional_encoder)
+        self.encoder = EncoderLayer(opt.n_heads, opt.model_size, 0.0, opt.inner_size, 0.0)
         self.predictor = Linear(opt.model_size, 1)
+        self.postprocess_layer = PrePostProcessing(opt.model_size, 0, sequence='n')
         # self.mean_predictor = Linear(opt.model_size, opt.model_size)
         # self.var_predictor = Linear(opt.model_size, opt.model_size)
     
-    def forward(self, encoder_context, input_src, input_tgt, **kwargs):
+    def forward(self, context_mean, decoder_state, input_src, input_tgt, **kwargs):
         """
         Inputs Shapes: 
             input: batch_size x len_src (wanna tranpose)
@@ -231,15 +246,18 @@ class Baseline(nn.Module):
 
         """ Embedding: batch_size x len_src x d_model """
         
-        decoder_context, _ = self.encoder(input_tgt, **kwargs)
+        # decoder_context, _ = self.encoder(input_tgt, **kwargs)
+        tgt_self_attn_mask = input_tgt.eq(onmt.Constants.PAD).unsqueeze(1)
 
-        src_mask = input_src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
+        # src_mask = input_src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
         tgt_mask = input_tgt.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
 
-
-        # take the mean of each context
-        # encoder_context_ = encoder_context.detach()
-        encoder_context = mean_with_mask(encoder_context, src_mask)
+        decoder_context = self.encoder(decoder_state.clone(), tgt_self_attn_mask)
+        decoder_context = self.postprocess_layer(decoder_context)
+        # decoder_context = decoder_state
+        # take  the mean of each context
+        # encoder_context = encoder_context.clone()
+        encoder_context = context_mean
         decoder_context = mean_with_mask(decoder_context, tgt_mask)
 
         context = torch.cat([encoder_context, decoder_context], dim=-1)
@@ -247,7 +265,7 @@ class Baseline(nn.Module):
 
         context = torch.tanh(self.projector(context))
 
-        b = self.predictor(context)
+        b = self.predictor(context).float()
         
         
         return b

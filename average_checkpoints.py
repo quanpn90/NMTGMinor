@@ -54,7 +54,7 @@ def main():
         
     print(model_opt.layers)
     
-    main_model = build_model(model_opt, checkpoint['dicts'])
+    main_model, _ = build_model(model_opt, checkpoint['dicts'])
     
     main_model.load_state_dict(checkpoint['model'])
     
@@ -75,7 +75,7 @@ def main():
         if 'optim' in checkpoint:
             del checkpoint['optim']
         
-        current_model = build_model(model_opt, checkpoint['dicts'])
+        current_model, _ = build_model(model_opt, checkpoint['dicts'])
         
         current_model.load_state_dict(checkpoint['model'])
         

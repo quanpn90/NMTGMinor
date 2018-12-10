@@ -1,9 +1,8 @@
 from __future__ import division
 
 import sys, tempfile
+import os, re
 import onmt
-import onmt.Markdown
-import onmt.modules
 import argparse
 import torch
 import torch.nn as nn
@@ -15,6 +14,8 @@ import random
 import numpy as np
 from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 from onmt.ModelConstructor import init_model_parameters
+from onmt.utils import checkpoint_paths
+
 
 class BaseTrainer(object):
     
@@ -94,6 +95,8 @@ class BaseTrainer(object):
         return total_norm
 
 
+
+
 class XETrainer(BaseTrainer):
 
     def __init__(self, model, loss_function, trainData, validData, dicts, opt, set_param=True):
@@ -134,8 +137,15 @@ class XETrainer(BaseTrainer):
         print('Writing to %s' % file_name)
         torch.save(checkpoint, file_name)
         
-        # check te save directory here
-        
+        # check the save directory here
+        checkpoint_dir = os.path.dirname(opt.save_model)
+        existed_save_files = checkpoint_paths(checkpoint_dir)
+        for save_file in existed_save_files[opt.keep_save_files:]:
+            print (" * Deleting old save file %s ...." % save_file)
+            os.remove(save_file)
+
+
+
     def eval(self, data):
         total_loss = 0
         total_words = 0

@@ -34,7 +34,9 @@ class Logger(object):
 
         baseline = self.meters['baseline'].avg
         kl = self.meters['kl'].avg # normalized by 6 distributions and the batch_size
-        R = self.meters['R'].avg
+        R = self.meters['R'].avg # 
+        ce = self.meters['ce'].avg
+        q_ent = self.meters['q_entropy'].avg
 
         log_string = (("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " + "%5.0f tgt tok/s; lscale %0.2f; gnorm %.3f; oom %d") %
                           (epoch, iteration+1, data_size,
@@ -47,7 +49,8 @@ class Logger(object):
                            oom_count))
 
 
-        
+        if ce is not None:
+            log_string += "; ce %.3f" % ce
 
         if baseline is not None:
             log_string += "; bl %.3f" % baseline
@@ -57,6 +60,11 @@ class Logger(object):
 
         if R is not None:
             log_string += "; R %.3f" % R
+
+        if q_ent is not None:
+            log_string += "; q_ent %.3f" % q_ent
+
+
 
 
         log_string += "; %s elapsed" % str(datetime.timedelta(seconds=int(time.time() - self.start_time)))

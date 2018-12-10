@@ -8,9 +8,9 @@ from onmt.ModelConstructor import build_model
 import torch.nn.functional as F
 
 
-model_list = ['transformer', 'stochastic_transformer']
+model_list = ['transformer', 'stochastic_transformer', 'variational_transformer']
 
-class EnsembleTranslator(object):
+class VariationalTranslator(object):
     def __init__(self, opt):
         self.opt = opt
         self.tt = torch.cuda if opt.cuda else torch
@@ -19,12 +19,18 @@ class EnsembleTranslator(object):
         self.alpha = opt.alpha
         self.start_with_bos = opt.start_with_bos
         self.fp16 = opt.fp16
+        self.sampling = opt.sampling
         
         self.models = list()
         self.model_types = list()
         
         # models are string with | as delimiter
         models = opt.model.split("|")
+
+        torch.manual_seed(opt.seed)
+        torch.cuda.manual_seed(opt.seed)
+
+
         
         print(models)
         self.n_models = len(models)
@@ -47,10 +53,12 @@ class EnsembleTranslator(object):
             
             model.load_state_dict(checkpoint['model'])
             
+            # self.opt.max_sent_length += 10 # for any additional necessary input
             if model_opt.model in model_list:
-                if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:
-                    print("Not enough len to decode. Renewing .. ")    
-                    model.decoder.renew_buffer(self.opt.max_sent_length)
+
+                # if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:
+                print("Not enough len to decode. Renewing .. ")    
+                model.decoder.renew_buffer(self.opt.max_sent_length + 16)
             
             if opt.fp16:
                 model = model.half()
@@ -194,7 +202,7 @@ class EnsembleTranslator(object):
         contexts = dict()
         
         src = srcBatch.transpose(0, 1)
-        
+
         #  (1) run the encoders on the src
         for i in range(self.n_models):
             contexts[i], src_mask = self.models[i].encoder(src)
@@ -206,12 +214,18 @@ class EnsembleTranslator(object):
         if tgtBatch is not None:
             # Use the first model to decode
             model_ = self.models[0]
+            encoder_context = contexts[0]
         
             tgtBatchInput = tgtBatch[:-1]
             tgtBatchOutput = tgtBatch[1:]
             tgtBatchInput = tgtBatchInput.transpose(0,1)
-            
-            output, coverage = model_.decoder(tgtBatchInput, contexts[0], src)
+
+            p_z = model_.prior_estimator(encoder_context, src)
+            z = p_z.mean.float()
+            # z = torch.argmax(p_z.probs, dim=-1).float()
+            z = z.type_as(encoder_context)
+
+            output, coverage = model_.decoder(tgtBatchInput, contexts[0], src, z)
             # output should have size time x batch x dim
             
             
@@ -242,7 +256,7 @@ class EnsembleTranslator(object):
         decoder_hiddens = dict()
         
         for i in range(self.n_models):
-            decoder_states[i] = self.models[i].create_decoder_state(src, contexts[i], src_mask, beamSize, type='old')
+            decoder_states[i] = self.models[i].create_decoder_state(src, contexts[i], src_mask, beamSize, type='old', sampling=self.sampling)
         
         for i in range(self.opt.max_sent_length):
             # Prepare decoder input.
@@ -369,5 +383,3 @@ class EnsembleTranslator(object):
             predLength.append([len(pred[b][n]) for n in range(self.opt.n_best)])
 
         return predBatch, predScore, predLength, goldScore, goldWords
-
-

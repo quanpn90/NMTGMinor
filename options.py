@@ -180,6 +180,17 @@ def make_parser(parser):
                         help="Print stats at this interval.")
     parser.add_argument('-save_every', type=int, default=-1,
                         help="Save every this interval.")
+    parser.add_argument('-keep_save_files', type=int, default=5,
+                        help="Save every this interval.")
+
+
+
+    parser.add_argument('-num_valid_samples', type=int, default=10,
+                        help="Number of sampling times during validation.")
+    parser.add_argument('-tau', type=float, default=1.0,
+                        help="Number of sampling times during validation.")
     
+    parser.add_argument('-n_mixtures', type=int, default=10,
+                        help="Number of mixtures in moe.")
     
     return parser

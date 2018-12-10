@@ -16,7 +16,7 @@ from onmt.train_utils.multiGPUtrainer import MultiGPUXETrainer
 from onmt.train_utils.fp16_vi_trainer import VariationalTrainer
 from onmt.ModelConstructor import build_model, init_model_parameters
 
-parser = argparse.ArgumentParser(description='train.py')
+parser = argparse.ArgumentParser(description='variational_train.py')
 onmt.Markdown.add_md_help_argument(parser)
 
 from options import make_parser
@@ -114,7 +114,11 @@ def main():
     # Loss function is built according to model 
     # Go to ModelConstructor for more details
     model, loss_function = build_model(opt, dicts)
-        
+    
+    
+    
+                                
+    
     nParams = sum([p.nelement() for p in model.parameters()])
     print('* number of parameters: %d' % nParams)
     
@@ -124,10 +128,13 @@ def main():
         #~ trainer = MultiGPUXETrainer(model, loss_function, trainData, validData, dataset, opt)
         raise NotImplementedError("Multi-GPU training is not supported atm")
     else:
-        if opt.fp16:
-            trainer = FP16XETrainer(model, loss_function, trainData, validData, dicts, opt)
-        else:
-            trainer = XETrainer(model, loss_function, trainData, validData, dicts, opt)
+        assert opt.fp16
+        # if opt.fp16:
+        from onmt.train_utils.variational_trainer import VariationalTrainerFP16
+
+        trainer = VariationalTrainerFP16(model, loss_function, trainData, validData, dicts, opt)
+        # else:
+            # trainer = XETrainer(model, loss_function, trainData, validData, dicts, opt)
 
     
     trainer.run(save_file=opt.load_from)

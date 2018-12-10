@@ -93,6 +93,9 @@ class NeuralPrior(nn.Module):
         """
         # pass the input to the transformer encoder
         context = encoder_context
+        # context = encoder_context.detach()
+        # print(context.size())
+        # print(input.size())
           
         # Now we have to mask the context with zeros
         # context size: T x B x H
@@ -102,8 +105,7 @@ class NeuralPrior(nn.Module):
         context = mean_with_mask(context, mask)
         
 
-        context = torch.tanh(self.projector(context))
-        context = F.dropout(context,  p=self.dropout, training=self.training)       
+        context = torch.tanh(self.projector(context))       
         layer_probs = self.predictor(context)
 
         layer_probs = layer_probs.view(-1, self.n_layers, 2)
@@ -139,6 +141,7 @@ class NeuralPosterior(nn.Module):
         # quick_hack to override some hyper parameters of the prior encoder
         # encoder_opt.layers = 4
         # encoder_opt.word_dropout = 0.0 
+        # encoder_opt.dropout = 0.0
         self.dropout = opt.dropout
         self.projector = Linear(opt.model_size * 2, opt.model_size)
         self.encoder = TransformerEncoder(encoder_opt, dicts, positional_encoder)
@@ -159,7 +162,8 @@ class NeuralPosterior(nn.Module):
         """
 
         """ Embedding: batch_size x len_src x d_model """
-       
+        
+        # encoder_context_ = encoder_context.detach()
         decoder_context, _ = self.encoder(input_tgt, **kwargs)
 
         src_mask = input_src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
@@ -173,7 +177,6 @@ class NeuralPosterior(nn.Module):
         context = torch.cat([encoder_context, decoder_context], dim=-1)
 
         context = torch.tanh(self.projector(context))
-        context = F.dropout(context, training=self.training, p=self.dropout)
         
         # layer_probs = torch.sigmoid(self.predictor(context))
         layer_probs = self.predictor(context)
@@ -181,13 +184,8 @@ class NeuralPosterior(nn.Module):
 
         layer_probs = F.softmax(layer_probs.float(), dim=-1)
 
-        print
-        # print(layer_probs.size())
-        # var = torch.nn.functional.softplus(self.var_predictor(context))
         q_z = torch.distributions.categorical.Categorical(probs=layer_probs)
-        # print(q_z.probs.size())
-        # q_z = torch.distributions.bernoulli.Bernoulli(layer_probs.float())
-        # return distribution Q(z | X, Y)
+        
         return q_z
 
 
@@ -212,6 +210,7 @@ class Baseline(nn.Module):
         # quick_hack to override some hyper parameters of the prior encoder
         # encoder_opt.layers = 4
         # encoder_opt.word_dropout = 0.0 
+        # encoder_opt.dropout = 0.0
         self.dropout = opt.dropout
         self.projector = Linear(opt.model_size * 2, opt.model_size)
         self.encoder = TransformerEncoder(encoder_opt, dicts, positional_encoder)
@@ -231,7 +230,7 @@ class Baseline(nn.Module):
         """
 
         """ Embedding: batch_size x len_src x d_model """
-       
+        
         decoder_context, _ = self.encoder(input_tgt, **kwargs)
 
         src_mask = input_src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
@@ -239,11 +238,12 @@ class Baseline(nn.Module):
 
 
         # take the mean of each context
-        encoder_context = encoder_context.detach()
+        # encoder_context_ = encoder_context.detach()
         encoder_context = mean_with_mask(encoder_context, src_mask)
         decoder_context = mean_with_mask(decoder_context, tgt_mask)
 
         context = torch.cat([encoder_context, decoder_context], dim=-1)
+        # context = F.dropout(context, training=self.training, p=self.dropout)
 
         context = torch.tanh(self.projector(context))
 

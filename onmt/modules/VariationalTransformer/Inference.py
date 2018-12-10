@@ -76,6 +76,7 @@ class NeuralPrior(nn.Module):
         self.dropout = opt.dropout
 
         self.projector = Linear(opt.model_size, opt.model_size)
+        # self.norm = nn.LayerNorm(opt.model_size)
         self.mean_predictor = Linear(opt.model_size, opt.model_size)
         self.var_predictor = Linear(opt.model_size, opt.model_size)
 
@@ -90,7 +91,7 @@ class NeuralPrior(nn.Module):
             
         """
         # pass the input to the transformer encoder
-        context = encoder_context
+        context = encoder_context.detach()
           
         # Now we have to mask the context with zeros
         # context size: T x B x H
@@ -99,6 +100,7 @@ class NeuralPrior(nn.Module):
         # context.masked_fill_(mask, 0)
         context = mean_with_mask(context, mask)
         context = torch.tanh(self.projector(context))
+        # context = self.norm(context)
         # context = F.dropout(context, training=self.training, p=self.dropout)       
 
         mean = self.mean_predictor(context)       
@@ -132,6 +134,7 @@ class NeuralPosterior(nn.Module):
         self.dropout = opt.dropout
         self.projector = Linear(opt.model_size * 2, opt.model_size)
         self.encoder = TransformerEncoder(encoder_opt, dicts, positional_encoder)
+        # self.norm = nn.LayerNorm(opt.model_size)
 
         self.mean_predictor = Linear(opt.model_size, opt.model_size)
         self.var_predictor = Linear(opt.model_size, opt.model_size)
@@ -148,7 +151,8 @@ class NeuralPosterior(nn.Module):
         """
 
         """ Embedding: batch_size x len_src x d_model """
-       
+        
+        encoder_context = encoder_context.detach()
         decoder_context, _ = self.encoder(input_tgt, **kwargs)
 
         src_mask = input_src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
@@ -162,7 +166,8 @@ class NeuralPosterior(nn.Module):
         context = torch.cat([encoder_context, decoder_context], dim=-1)
 
         context = torch.tanh(self.projector(context))
-        context = F.dropout(context, training=self.training, p=self.dropout)
+
+        # context = self.norm(context)
         # context = F.dropout(context, training=self.training, p=self.dropout)       
 
         # probs = torch.sigmoid(self.predictor(context))

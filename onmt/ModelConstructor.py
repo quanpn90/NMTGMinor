@@ -5,7 +5,6 @@ import onmt
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer
 from onmt.modules.Transformer.Layers import PositionalEncoding
 from onmt.modules.Loss import NMTLossFunc
-from onmt.modules.VariationalLoss import VariationalLoss
 
 
 def update_backward_compatibility(opt):
@@ -208,6 +207,8 @@ def build_model(opt, dicts):
 
         model = VariationalTransformer(encoder, decoder, prior, posterior, generator)
 
+        from onmt.modules.VariationalTransformer.VariationalLoss import VariationalLoss
+
         loss_function = VariationalLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
 
     elif opt.model in ['vdtransformer']:
@@ -298,6 +299,92 @@ def build_model(opt, dicts):
         from onmt.modules.VDTransformer3.VDLoss import VDLoss
         loss_function = VDLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
 
+    elif opt.model in ['vdtransformer4']:
+    
+            
+        from onmt.modules.VDTransformer4.Models import VDDecoder, VDTransformer
+        from onmt.modules.VDTransformer4.Inference import NeuralPrior, NeuralPosterior, Baseline
+        # ~ from onmt.modules.ReinforceTransformer.Models import ReinforcedStochasticDecoder, ReinforceTransformer
+                
+        # ~ onmt.Constants.weight_norm = opt.weight_norm
+        # ~ onmt.Constants.init_value = opt.param_init
+        
+        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
+        
+        encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
+        decoder = VDDecoder(opt, dicts['tgt'], positional_encoder)
+
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        prior = NeuralPrior(opt, dicts['tgt'], positional_encoder)
+        posterior = NeuralPosterior(opt, dicts['tgt'], positional_encoder)
+        baseline = Baseline(opt, dicts['tgt'], positional_encoder)
+        # prior = None
+        # posterior = None
+
+        # posterior.encoder.word_lut.weight = decoder.word_lut.weight
+        # baseline.encoder.word_lut.weight = decoder.word_lut.weight
+
+        model = VDTransformer(encoder, decoder, prior, posterior, generator, baseline)
+
+        from onmt.modules.VDTransformer4.VDLoss import VDLoss
+        loss_function = VDLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+    elif opt.model in ['vdtransformer6']:
+    
+            
+        from onmt.modules.VDTransformer6.Models import VDDecoder, VDTransformer
+        from onmt.modules.VDTransformer6.Inference import NeuralPrior, NeuralPosterior, Baseline
+        # ~ from onmt.modules.ReinforceTransformer.Models import ReinforcedStochasticDecoder, ReinforceTransformer
+                
+        # ~ onmt.Constants.weight_norm = opt.weight_norm
+        # ~ onmt.Constants.init_value = opt.param_init
+        
+        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
+        
+        encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
+        decoder = VDDecoder(opt, dicts['tgt'], positional_encoder)
+
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        prior = NeuralPrior(opt, dicts['tgt'], positional_encoder)
+        posterior = NeuralPosterior(opt, dicts['tgt'], positional_encoder)
+        # baseline = Baseline(opt, dicts['tgt'], positional_encoder)
+        # prior = None
+        # posterior = None
+
+        # posterior.encoder.word_lut.weight = decoder.word_lut.weight
+        # baseline.encoder.word_lut.weight = decoder.word_lut.weight
+
+        model = VDTransformer(encoder, decoder, prior, posterior, generator)
+
+        from onmt.modules.VDTransformer6.VDLoss import VDLoss
+        loss_function = VDLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+    elif opt.model in ['moe_transformer']:
+    
+            
+        from onmt.modules.MixtureModel.Models import MixtureEncoder, MixtureDecoder
+        # from onmt.modules.VDTransformer6.Inference import NeuralPrior, NeuralPosterior, Baseline
+        # ~ from onmt.modules.ReinforceTransformer.Models import ReinforcedStochasticDecoder, ReinforceTransformer
+                
+        # ~ onmt.Constants.weight_norm = opt.weight_norm
+        # ~ onmt.Constants.init_value = opt.param_init
+        
+        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
+        
+        encoder = MixtureEncoder(opt, dicts['src'], positional_encoder)
+        decoder = MixtureDecoder(opt, dicts['tgt'], positional_encoder)
+
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        # prior = NeuralPrior(opt, dicts['tgt'], positional_encoder)
+        # posterior = NeuralPosterior(opt, dicts['tgt'], positional_encoder)
+        # baseline = Baseline(opt, dicts['tgt'], positional_encoder)
+        # prior = None
+        # posterior = None
+
+        # posterior.encoder.word_lut.weight = decoder.word_lut.weight
+        # baseline.encoder.word_lut.weight = decoder.word_lut.weight
+
+        model = Transformer(encoder, decoder, generator)
+
+        loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
     else:
         raise NotImplementedError
         

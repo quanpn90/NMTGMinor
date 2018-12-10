@@ -1,9 +1,7 @@
 from __future__ import division
 
-import sys, tempfile
+import sys, tempfile, os
 import onmt
-import onmt.Markdown
-import onmt.modules
 import argparse
 import torch
 import torch.nn as nn
@@ -16,6 +14,7 @@ import numpy as np
 from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 from onmt.ModelConstructor import init_model_parameters
 from onmt.train_utils.trainer import BaseTrainer, XETrainer
+from onmt.utils import checkpoint_paths
     
     
 
@@ -352,6 +351,11 @@ class FP16XETrainer(XETrainer):
         checkpoint = None
         if save_file:
             checkpoint = torch.load(save_file)
+
+       	checkpoint_dir = os.path.dirname(opt.save_model)
+        existed_save_files = checkpoint_paths(checkpoint_dir)
+        print(existed_save_files)
+
         
         if checkpoint is not None:
             print('Loading model and optim from checkpoint at %s' % save_file)

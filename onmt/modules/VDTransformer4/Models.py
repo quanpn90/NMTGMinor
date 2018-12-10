@@ -1,14 +1,23 @@
 import numpy as np
 import torch, math
 import torch.nn as nn
-from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, PositionalEncoding, variational_dropout, PrePostProcessing
-from onmt.modules.BaseModel import NMTModel, Reconstructor, DecoderState
+import torch.nn.functional as F
+from onmt.modules.Transformer.Layers import PositionalEncoding
+from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer
+from onmt.modules.StochasticTransformer.Layers import StochasticEncoderLayer, StochasticDecoderLayer
+from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder
+from onmt.modules.BaseModel import NMTModel, DecoderState
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
-from torch.utils.checkpoint import checkpoint
 from torch.autograd import Variable
 
 
+from onmt.modules.Transformer.Layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
+from onmt.modules.VDTransformer.Layers import VDEncoderLayer, VDDecoderLayer
+from onmt.utils import mean_with_mask
+Linear = XavierLinear
+
+torch.set_printoptions(threshold=10000)
 
 def custom_layer(module):
     def custom_forward(*args):
@@ -16,198 +25,60 @@ def custom_layer(module):
         return output
     return custom_forward
 
-        
 
-class TransformerEncoder(nn.Module):
-    """Encoder in 'Attention is all you need'
-    
-    Args:
-        opt: list of options ( see train.py )
-        dicts : dictionary (for source language)
-        
-    """
-    
-    def __init__(self, opt, dicts, positional_encoder):
-    
-        super(TransformerEncoder, self).__init__()
-        
-        self.model_size = opt.model_size
-        self.n_heads = opt.n_heads
-        self.inner_size = opt.inner_size
-        self.layers = opt.layers
-        self.dropout = opt.dropout
-        self.word_dropout = opt.word_dropout
-        self.attn_dropout = opt.attn_dropout
-        self.emb_dropout = opt.emb_dropout
-        self.time = opt.time
-        self.residual_dropout = opt.residual_dropout
-        
-        self.word_lut = nn.Embedding(dicts.size(),
-                                     self.model_size,
-                                     padding_idx=onmt.Constants.PAD)
-        
-        if opt.time == 'positional_encoding':
-            self.time_transformer = positional_encoder
-        elif opt.time == 'gru':
-            self.time_transformer = nn.GRU(self.model_size, self.model_size, 1, batch_first=True)
-        elif opt.time == 'lstm':
-            self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
-        
-        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
-        
-        self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
-        
-        self.positional_encoder = positional_encoder
-    
-        self.build_modules()
-        
-    def build_modules(self):
-        
-        self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, self.residual_dropout) for _ in range(self.layers)])
+def kl_divergence_list(p_list, q_list):
 
-    def forward(self, input, **kwargs):
-        """
-        Inputs Shapes: 
-            input: batch_size x len_src (wanna tranpose)
-        
-        Outputs Shapes:
-            out: batch_size x len_src x d_model
-            mask_src 
-            
-        """
+    kl = list()
+    for (p_z_i, q_z_i) in zip(p_list, q_list):
+        kl_ = torch.distributions.kl.kl_divergence(q_z_i, p_z_i)
+        kl.append(kl_.unsqueeze(0))
 
-        """ Embedding: batch_size x len_src x d_model """
-        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
-        
-        """ Scale the emb by sqrt(d_model) """
-        
-        emb = emb * math.sqrt(self.model_size)
-            
-        """ Adding positional encoding """
-        emb = self.time_transformer(emb)
-        
-        emb = self.preprocess_layer(emb)
-        
-        mask_src = input.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x 1 x len_src for broadcasting
-        
-        #~ pad_mask = input.ne(onmt.Constants.PAD)) # batch_size x len_src
-        
-        context = emb.transpose(0, 1).contiguous()
-        
-        for i, layer in enumerate(self.layer_modules):
-            
-            if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:        
-                context = checkpoint(custom_layer(layer), context, mask_src)
+    kl = torch.cat(kl, dim=0)
 
-            else:
-                context = layer(context, mask_src)      # batch_size x len_src x d_model
-            
-        
-        # From Google T2T
-        # if normalization is done in layer_preprocess, then it should also be done
-        # on the output, since the output can grow very large, being the sum of
-        # a whole stack of unnormalized layer outputs.    
-        context = self.postprocess_layer(context)
-            
-        
-        return context, mask_src    
-        
-
-class TransformerDecoder(nn.Module):
-    """Encoder in 'Attention is all you need'
+    return kl
+class VDDecoder(TransformerDecoder):
+    """A variational 'variation' of the Transformer Decoder
     
     Args:
         opt
         dicts 
-        
+        positional encoder
         
     """
     
     def __init__(self, opt, dicts, positional_encoder):
     
-        super(TransformerDecoder, self).__init__()
-        
-        self.model_size = opt.model_size
-        self.n_heads = opt.n_heads
-        self.inner_size = opt.inner_size
+        self.death_rate = opt.death_rate
+        self.death_type = 'linear_decay'
         self.layers = opt.layers
-        self.dropout = opt.dropout
-        self.word_dropout = opt.word_dropout 
-        self.attn_dropout = opt.attn_dropout
-        self.emb_dropout = opt.emb_dropout
-        self.time = opt.time
-        self.version = opt.version
-        self.residual_dropout = opt.residual_dropout
-        
-        if opt.time == 'positional_encoding':
-            self.time_transformer = positional_encoder
-        elif opt.time == 'gru':
-            self.time_transformer = nn.GRU(self.model_size, self.model_size, 1, batch_first=True)
-        elif opt.time == 'lstm':
-            self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
-        
-        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
-        
-        self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
-        
-        self.word_lut = nn.Embedding(dicts.size(),
-                                     self.model_size,
-                                     padding_idx=onmt.Constants.PAD)
-        
-        self.positional_encoder = positional_encoder
-        
-        
-        len_max = self.positional_encoder.len_max
-        mask = torch.ByteTensor(np.triu(np.ones((len_max,len_max)), k=1).astype('uint8'))
-        self.register_buffer('mask', mask)
-        
-        self.build_modules()
-        
-    def build_modules(self):
-        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, self.residual_dropout) for _ in range(self.layers)])
-    
-    def renew_buffer(self, new_len):
-        
-        self.positional_encoder.renew(new_len)
+        self.opt = opt
 
-        if hasattr(self, 'mask'):
-            del self.mask
-        mask = torch.ByteTensor(np.triu(np.ones((new_len,new_len)), k=1).astype('uint8'))
-        self.register_buffer('mask', mask)
-    
-    def mark_pretrained(self):
+        # self.death_rates, e_length = expected_length(self.layers, self.death_rate, self.death_type)  
+        # build_modules will be called from the inherited constructor
+        super().__init__(opt, dicts, positional_encoder)
+
+
+        # self.projector = Linear(2 * opt.model_size, opt.model_size)
+        self.z_dropout = nn.Dropout(opt.dropout)
+
+    def build_modules(self):
         
-        self.pretrained_point = self.layers
-        
-    
-    def add_layers(self, n_new_layer):
-        
-        self.new_modules = list()
-        self.layers += n_new_layer
-        
-        for i in range(n_new_layer):
-            layer = EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) 
+        self.layer_modules = nn.ModuleList([VDDecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
             
-            # the first layer will use the preprocessing which is the last postprocessing
-            if i == 0:
-                layer.preprocess_attn = self.postprocess_layer
-                # replace the last postprocessing layer with a new one
-                self.postprocess_layer = PrePostProcessing(d_model, 0, sequence='n')
-            
-            self.layer_modules.append(layer)
-        
-    def forward(self, input, context, src, **kwargs):
+    def forward(self, input, context, src, context_mean=None, posterior_model=None, baseline_model=None, priors=None):
         """
         Inputs Shapes: 
             input: (Variable) batch_size x len_tgt (wanna tranpose)
             context: (Variable) batch_size x len_src x d_model
+            latent_z (variable) batch_size x d_model 
             mask_src (Tensor) batch_size x len_src
+
         Outputs Shapes:
             out: batch_size x len_tgt x d_model
             coverage: batch_size x len_tgt x len_src
             
         """
-        
+
         """ Embedding: batch_size x len_tgt x d_model """
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         if self.time == 'positional_encoding':
@@ -216,27 +87,69 @@ class TransformerDecoder(nn.Module):
         emb = self.time_transformer(emb)
         if isinstance(emb, tuple):
             emb = emb[0]
-        emb = self.preprocess_layer(emb)
+        
         
         mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
         
         pad_mask_src = src.data.ne(onmt.Constants.PAD)
         
         len_tgt = input.size(1)
-        mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
+        mask_tgt = input.data.eq(onmt.Constants.PAD) # B x T 
+        mask_tgt = mask_tgt.unsqueeze(1)  + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
         
+        # T x B x H
         output = emb.transpose(0, 1).contiguous()
 
-        for i, layer in enumerate(self.layer_modules):
+        # add dropout to embedding
+        output = self.preprocess_layer(output)
+
+        outputs = dict()
+
+        q_z = list()
+        baselines = list()
+        log_q_z = list()
+        # z size: B x L 
             
-            if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:           
-                
-                output, coverage = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src) 
-                                                                              # batch_size x len_src x d_model
-                
+        # fake_context = context.new(*context.size())
+        # fake_output = output.new(*output.size())
+
+        for i, layer in enumerate(self.layer_modules):
+
+            
+            if posterior_model is not None:
+                assert baseline_model is not None
+
+                q_z_i = posterior_model(context_mean, output, src, input) # prediction of layer usage at this step
+                b_i   = baseline_model(context_mean, output, src, input)  # prediction of baseline at this step
+
+                z_ = q_z_i.sample()
+                log_q_z_i =  q_z_i.log_prob(z_).unsqueeze(1) # take the log prob
+                z_ = z_.unsqueeze(1).unsqueeze(0).type_as(output) 
+                # should be 1 x B x 1
+                # auto-broacasted to T x B x H
+                baselines.append(b_i)
+                q_z.append(q_z_i)
+                log_q_z.append(log_q_z_i)
+
+                if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:           
+                    output, coverage = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src, z_) 
+                else:
+                    output, coverage = layer(output, context, mask_tgt, mask_src, z_) # batch_size x len_src x d_model
+            elif priors is not None:
+                assert self.training==False
+                z_i = priors[i].sample()
+                z_i = z_i.unsqueeze(1).unsqueeze(0).type_as(output) 
+                output, coverage = layer(output, context, mask_tgt, mask_src, z_i)
             else:
-                output, coverage = layer(output, context, mask_tgt, mask_src) # batch_size x len_src x d_model
+                if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:           
+                
+                    output, coverage = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src) 
+                                                                              # batch_size x len_src x d_model
+                else:
+                    output, coverage = layer(output, context, mask_tgt, mask_src) # batch_size x len_src x d_model
+
+            
             
             
         # From Google T2T
@@ -244,12 +157,16 @@ class TransformerDecoder(nn.Module):
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.    
         output = self.postprocess_layer(output)
-            
-        
-        return output, None
-    
 
-    def step(self, input, decoder_state):
+        outputs['decoder_states'] = output
+        outputs['q_z'] = q_z # list of distributions, probs size B x 2
+        outputs['baseline'] = baselines # list of tensors B x 1
+        outputs['log_q_z'] = log_q_z # list of tensors B x 1
+        outputs['coverage'] = coverage
+
+        return outputs
+
+    def step(self, input, decoder_state, sampling=False):
         """
         Inputs Shapes: 
             input: (Variable) batch_size x len_tgt (wanna tranpose)
@@ -264,6 +181,7 @@ class TransformerDecoder(nn.Module):
         context = decoder_state.context
         buffers = decoder_state.attention_buffers
         mask_src = decoder_state.src_mask
+        latent_z = decoder_state.z
         
         if decoder_state.concat_input_seq == True:
             if decoder_state.input_seq is None:
@@ -311,15 +229,22 @@ class TransformerDecoder(nn.Module):
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
                 
         output = emb.contiguous()
+
+        # z size: B x L 
+        if latent_z is not None:
+            z_splits = torch.split(latent_z, 1, dim=1)
         
         # FOR DEBUGGING
         # ~ decoder_state._debug_attention_buffer(0)
     
         for i, layer in enumerate(self.layer_modules):
+
+            z_ = z_splits[i].unsqueeze(0) # should be 1 x B x 1
+                                              # auto-broacasted to T x B x H
             
             buffer = buffers[i] if i in buffers else None
             assert(output.size(0) == 1)
-            output, coverage, buffer = layer.step(output, context, mask_tgt, mask_src, buffer=buffer) # batch_size x len_src x d_model
+            output, coverage, buffer = layer.step(output, context, mask_tgt, mask_src, z_, buffer=buffer) # batch_size x len_src x d_model
             
             decoder_state._update_attention_buffer(buffer, i)
 
@@ -331,14 +256,17 @@ class TransformerDecoder(nn.Module):
         output = self.postprocess_layer(output)
 
         return output, coverage
-    
-  
         
-class Transformer(NMTModel):
+class VDTransformer(NMTModel):
     """Main model in 'Attention is all you need' """
     
+    def __init__(self, encoder, decoder, prior_estimator, posterior_estimator, generator=None, baseline=None):
+        super().__init__(encoder, decoder, generator=generator)
+        self.prior_estimator = prior_estimator
+        self.posterior_estimator = posterior_estimator
+        self.baseline = baseline
         
-    def forward(self, batch, grow=False):
+    def forward(self, batch, sampling=True):
         """
         Inputs Shapes: 
             src: len_src x batch_size
@@ -355,45 +283,95 @@ class Transformer(NMTModel):
         src = src.transpose(0, 1) # transpose to have batch first
         tgt = tgt.transpose(0, 1)
         
-        context, src_mask = self.encoder(src, grow=grow)
+        encoder_context, src_mask = self.encoder(src)
+
+        context_mask = src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
+        context_mean = mean_with_mask(encoder_context, context_mask)
+
+        p_z = self.prior_estimator(context_mean, src)
+        # q_z = self.posterior_estimator(encoder_context, src, tgt)
+        # b   = self.baseline(encoder_context, src, tgt)
+
+        # both of them are Bernoulli distribution
+        # note (for stability reason softmax is done instead of bernoulli so there are 2 options)
+        # size: batch_size * n_layers * 2
+
+        # sample the layer masks:
+        # if self.training:
+        #     z = q_z.sample()
+        # else:
+        #     if sampling == False:
+        #     # z = p_z.mean.gt(0.5) # probably not the best idea ...
+        #     # theoretically we should take the mean of this distribution
+        #         z = torch.argmax(p_z.probs, dim=-1)
+        #     else:
+        #         z = p_z.sample()
+                            
         
-        output, coverage = self.decoder(tgt, context, src, grow=grow)
+        # z = z.float()
+        
+        # log_q_z = q_z.log_prob(z)
+
+        outputs = dict()
+        if self.training:
+            decode_outputs = self.decoder(tgt, encoder_context, src, context_mean=context_mean, 
+                                          posterior_model=self.posterior_estimator, baseline_model=self.baseline)
+            q_z = decode_outputs['q_z']
+            # compute KL between prior and posterior
+            kl_divergence = kl_divergence_list(q_z, p_z)
             
-        output_dict = dict()
-        output_dict['hiddens'] = output
-        output_dict['coverage'] = coverage
-        return output_dict
-        
-    def create_decoder_state(self, src, context, mask_src, beamSize=1, type='old'):
-        
-        from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder
-        from onmt.modules.StochasticTransformer.Models import StochasticTransformerEncoder, StochasticTransformerDecoder
-        from onmt.modules.UniversalTransformer.Models import UniversalTransformerDecoder
-        
-        if isinstance(self.decoder, TransformerDecoder) or isinstance(self.decoder, StochasticTransformerDecoder) or isinstance(self.decoder, UniversalTransformerDecoder) :
-            decoder_state = TransformerDecodingState(src, context, mask_src, beamSize=beamSize, type=type)
-        elif isinstance(self.decoder, ParallelTransformerDecoder):
-            from onmt.modules.ParallelTransformer.Models import ParallelTransformerDecodingState
-            decoder_state = ParallelTransformerDecodingState(src, context, mask_src, beamSize=beamSize)
+
+            outputs['hiddens'] = decode_outputs['decoder_states']
+            outputs['kl'] = kl_divergence
+
+            # we need to use the log likelihood of the sentence logP(Y | X, z)
+            # to backprop this volume
+            outputs['log_q_z'] = decode_outputs['log_q_z']
+            outputs['baseline'] = decode_outputs['baseline']
+            outputs['q_z'] = q_z
+            outputs['p_z'] = p_z
+        else:
+            decode_outputs = self.decoder(tgt, encoder_context, src, priors=p_z)
+
+            outputs['hiddens'] = decode_outputs['decoder_states']
+            outputs['p_z'] = p_z
+
+        return outputs
+
+    def create_decoder_state(self, src, encoder_context, src_mask, beamSize, type='old', sampling=False):
+
+        # p_z = self.prior_estimator(encoder_context, src.transpose(0, 1))
+
+        # if sampling:
+        # # z = torch.argmax(p_z.probs, dim=-1)
+        #     z = p_z.sample()
+        # else:
+        #     z = torch.argmax(p_z.probs, dim=-1)
+        # z = z.type_as(encoder_context)
+        decoder_state = VariationalDecodingState(src, encoder_context, src_mask, z, beamSize=beamSize)
+
         return decoder_state
 
 
-class TransformerDecodingState(DecoderState):
+class VariationalDecodingState(DecoderState):
     
-    def __init__(self, src, context, src_mask, beamSize=1, type='old'):
+    def __init__(self, src, context, src_mask, z, beamSize=1, type='old'):
         
         
         self.beam_size = beamSize
         
         self.input_seq = None
         self.attention_buffers = dict()
+
+        print(z)
         
         if type == 'old':
             self.src = src.repeat(1, beamSize)
-            self.context = context.repeat(1, beamSize, 1)
+            self.context = context.repeat(1, beamSize, 1) # T x B x H to T x Bxb x H
             self.beamSize = beamSize
             self.src_mask = None
-            self.concat_input_seq = True
+            self.concat_input_seq = True 
+            self.z = z.repeat(beamSize, 1) # Bxb x L
         elif type == 'new':
             bsz = context.size(1)
             new_order = torch.arange(bsz).view(-1, 1).repeat(1, self.beam_size).view(-1)
@@ -401,6 +379,7 @@ class TransformerDecodingState(DecoderState):
             self.context = context.index_select(1, new_order)
             self.src_mask = src_mask.index_select(0, new_order)
             self.concat_input_seq = False
+            self.z = z.index_select(0, new_order)
         
     def _update_attention_buffer(self, buffer, layer):
         
@@ -429,6 +408,7 @@ class TransformerDecodingState(DecoderState):
             else:
                 sent_states.copy_(sent_states.index_select(
                             1, beam[b].getCurrentOrigin()))
+
                             
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]
@@ -439,6 +419,12 @@ class TransformerDecodingState(DecoderState):
                     
                     sent_states.data.copy_(sent_states.data.index_select(
                                 1, beam[b].getCurrentOrigin()))
+
+        # update z
+        br, l = self.z.size()
+        sent_states = self.z.view(self.beamSize, remainingSents, l)[:,idx,:]
+        sent_states.copy_(sent_states.index_select(0, beam[b].getCurrentOrigin()))
+
     
     
     # in this section, the sentences that are still active are
@@ -470,6 +456,16 @@ class TransformerDecodingState(DecoderState):
                 new_t = view.index_select(1, activeIdx).view(*newSize)
                                 
                 return new_t
+
+        # for batch first 
+        def updateActive2DBF(t):
+
+            view = t.data.view(remainingSents, -1)
+            newSize = list(t.size())
+            newSize[0] = newSize[0] * len(activeIdx) // remainingSents
+            new_t = view.index_select(0, activeIdx).view(*newSize)
+
+            return new_t
         
         def updateActive4D(t):
             # select only the remaining active sentences
@@ -492,10 +488,13 @@ class TransformerDecodingState(DecoderState):
                 for k in buffer_:
                     buffer_[k] = updateActive(buffer_[k])
 
+        self.z = updateActive2DBF(self.z)
+
     # For the new decoder version only
     def _reorder_incremental_state(self, reorder_state):
         self.context = self.context.index_select(1, reorder_state)
         self.src_mask = self.src_mask.index_select(0, reorder_state)
+        self.z = self.z.index_select(0, reorder_state)
                             
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]
@@ -503,4 +502,3 @@ class TransformerDecodingState(DecoderState):
                 for k in buffer_.keys():
                     t_, br_, d_ = buffer_[k].size()
                     buffer_[k] = buffer_[k].index_select(1, reorder_state) # 1 for time first
-        

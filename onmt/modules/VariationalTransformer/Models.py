@@ -9,10 +9,9 @@ from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecod
 from onmt.modules.BaseModel import NMTModel, DecoderState
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
+from collections import defaultdict
 
-from onmt.modules.Transformer.Layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
-from onmt.modules.VDTransformer.Layers import VDEncoderLayer, VDDecoderLayer
-Linear = XavierLinear
+from onmt.modules.Linear import XavierLinear as Linear
 
 torch.set_printoptions(threshold=10000)
 
@@ -51,7 +50,7 @@ class VariationalDecoder(TransformerDecoder):
         # self.projector = Linear(2 * opt.model_size, opt.model_size)
         self.z_dropout = nn.Dropout(opt.dropout)
             
-    def forward(self, input, context, latent_z, src, **kwargs):
+    def forward(self, input, context, src, latent_z=None,  **kwargs):
         """
         Inputs Shapes: 
             input: (Variable) batch_size x len_tgt (wanna tranpose)
@@ -80,16 +79,12 @@ class VariationalDecoder(TransformerDecoder):
         pad_mask_src = src.data.ne(onmt.Constants.PAD)
         
         len_tgt = input.size(1) + 1
-        # mask_tgt = input.data.eq(onmt.Constants.PAD) # B x T ?
-
         fake_data = input.new(input.size(0), input.size(1) + 1).fill_(onmt.Constants.BOS)
         fake_data[:,1:].copy_(input)
         mask_tgt = fake_data.eq(onmt.Constants.PAD)
 
         mask_tgt = mask_tgt.unsqueeze(1)  + self.mask[:len_tgt, :len_tgt]
-        mask_tgt = torch.gt(mask_tgt, 0)
-
-        # print(mask_tgt.size())
+        mask_tgt = torch.gt(mask_tgt, 0) # size should be B x (T+1) x (T+1)
         
         # T x B x H
         output = emb.transpose(0, 1).contiguous()
@@ -107,7 +102,7 @@ class VariationalDecoder(TransformerDecoder):
         # output_plus_z = torch.cat([output, z], dim=-1)
 
         # combine input with latent variable
-        # output = torch.tanh(self.projector(output_plus_z))
+        # output = self.projector(output_plus_z))
 
         
         # the rest will be the same as the Transformer
@@ -150,6 +145,7 @@ class VariationalDecoder(TransformerDecoder):
         context = decoder_state.context
         buffers = decoder_state.attention_buffers
         mask_src = decoder_state.src_mask
+        latent_z = decoder_state.z
         
         if decoder_state.concat_input_seq == True:
             if decoder_state.input_seq is None:
@@ -161,22 +157,22 @@ class VariationalDecoder(TransformerDecoder):
             src = decoder_state.src.transpose(0, 1)
         
         input_ = input[:,-1].unsqueeze(1)
-        # ~ print(input.size())
-        # ~ print(mask_src.size())
-        # ~ print(context.size())
-        
         
         output_buffer = list()
             
         batch_size = input_.size(0)
         
         """ Embedding: batch_size x 1 x d_model """
+
+        # note: we only take into account the embedding at time step t
         emb = self.word_lut(input_)
        
         
         emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
-        emb = self.time_transformer(emb, t=input.size(1))
+
+        time_step = input.size(1)
+        emb = self.time_transformer(emb, t=time_step)
             
         if isinstance(emb, tuple):
             emb = emb[0]
@@ -191,12 +187,27 @@ class VariationalDecoder(TransformerDecoder):
         if mask_src is None:
             mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
         
-        len_tgt = input.size(1)
-        mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
+        len_tgt = input.size(1) + 1
+        fake_data = input.new(input.size(0), input.size(1) + 1).fill_(onmt.Constants.BOS)
+        fake_data[:,1:].copy_(input)
+        mask_tgt = fake_data.eq(onmt.Constants.PAD)
+
+        mask_tgt = mask_tgt.unsqueeze(1)  + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
-        mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
-                
         output = emb.contiguous()
+        if time_step > 1 :
+
+            mask_tgt = mask_tgt[:,-1:,:]
+            # print(mask_tgt.size())
+            # print(output.size())
+        else:
+            # print(mask_tgt.size())
+            # print(output.size())
+            z = latent_z.unsqueeze(0)
+
+            output = torch.cat([z, output], dim=0) # concat to the time dimension
+                
+        
         
         # FOR DEBUGGING
         # ~ decoder_state._debug_attention_buffer(0)
@@ -204,7 +215,7 @@ class VariationalDecoder(TransformerDecoder):
         for i, layer in enumerate(self.layer_modules):
             
             buffer = buffers[i] if i in buffers else None
-            assert(output.size(0) == 1)
+            # assert(output.size(0) == 1)
             output, coverage, buffer = layer.step(output, context, mask_tgt, mask_src, buffer=buffer) # batch_size x len_src x d_model
             
             decoder_state._update_attention_buffer(buffer, i)
@@ -215,6 +226,9 @@ class VariationalDecoder(TransformerDecoder):
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.    
         output = self.postprocess_layer(output)
+
+        if time_step == 1:
+            output = output[1:,:,:]
 
         return output, coverage
         
@@ -256,24 +270,41 @@ class VariationalTransformer(NMTModel):
         else:
             ## during testing, assuming that Y is not available
             ## we should use the mean of the prior
-            z = p_z.mean
+            z = p_z.sample()
+
 
         z = z.type_as(encoder_context)
         
-        decoder_output, coverage = self.decoder(tgt, encoder_context, z, src)
+        decoder_output, coverage = self.decoder(tgt, encoder_context, src, z)
 
         # compute KL between prior and posterior
         kl_divergence = torch.distributions.kl.kl_divergence(q_z, p_z)
-        outputs = dict()
+        outputs = defaultdict(lambda: None)
+
 
         outputs['hiddens'] = decoder_output
         outputs['kl'] = kl_divergence
+        outputs['p_z'] = p_z
+        outputs['q_z'] = q_z
 
         return outputs
 
+    def create_decoder_state(self, src, context, mask_src, beamSize=1, type='old', sampling=False):
+        
+        p_z = self.prior_estimator(context, src.t())
+
+        if sampling:
+            z = p_z.sample()
+        else:
+            z = p_z.mean
+        z = z.type_as(context)
+        
+        decoder_state = VariationalTransformerState(src, context, mask_src, z, beamSize=beamSize)
+        return decoder_state
+
 class VariationalTransformerState(DecoderState):
     
-    def __init__(self, src, context, src_mask, beamSize=1, type='old'):
+    def __init__(self, src, context, src_mask, latent_z, beamSize=1, type='old'):
         
         
         self.beam_size = beamSize
@@ -286,6 +317,7 @@ class VariationalTransformerState(DecoderState):
         self.beamSize = beamSize
         self.src_mask = None
         self.concat_input_seq = True
+        self.z = latent_z.repeat(beamSize, 1)    
         
     def _update_attention_buffer(self, buffer, layer):
         
@@ -308,12 +340,9 @@ class VariationalTransformerState(DecoderState):
             t_, br = tensor.size()
             sent_states = tensor.view(t_, self.beamSize, remainingSents)[:, :, idx]
             
-            if isinstance(tensor, Variable):
-                sent_states.data.copy_(sent_states.data.index_select(
+            sent_states.copy_(sent_states.index_select(
                             1, beam[b].getCurrentOrigin()))
-            else:
-                sent_states.copy_(sent_states.index_select(
-                            1, beam[b].getCurrentOrigin()))
+                
                             
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]
@@ -337,24 +366,28 @@ class VariationalTransformerState(DecoderState):
             view = t.data.view(-1, remainingSents, model_size)
             newSize = list(t.size())
             newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
-            return Variable(view.index_select(1, activeIdx)
-                            .view(*newSize))
+            return view.index_select(1, activeIdx).view(*newSize)
+                            
         
+
+        # expected size: T x B
         def updateActive2D(t):
-            if isinstance(t, Variable):
-                # select only the remaining active sentences
-                view = t.data.view(-1, remainingSents)
-                newSize = list(t.size())
-                newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
-                return Variable(view.index_select(1, activeIdx)
-                                .view(*newSize))
-            else:
-                view = t.view(-1, remainingSents)
-                newSize = list(t.size())
-                newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
-                new_t = view.index_select(1, activeIdx).view(*newSize)
-                                
-                return new_t
+            view = t.view(-1, remainingSents)
+            newSize = list(t.size())
+            newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
+            new_t = view.index_select(1, activeIdx).view(*newSize)
+                            
+            return new_t
+
+        # for batch first 
+        def updateActive2DBF(t):
+
+            view = t.data.view(remainingSents, -1)
+            newSize = list(t.size())
+            newSize[0] = newSize[0] * len(activeIdx) // remainingSents
+            new_t = view.index_select(0, activeIdx).view(*newSize)
+
+            return new_t
         
         def updateActive4D(t):
             # select only the remaining active sentences
@@ -362,8 +395,7 @@ class VariationalTransformerState(DecoderState):
             view = t.data.view(nl, -1, remainingSents, model_size)
             newSize = list(t.size())
             newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
-            return Variable(view.index_select(2, activeIdx)
-                            .view(*newSize)) 
+            return view.index_select(2, activeIdx).view(*newSize)
         
         self.context = updateActive(self.context)
         
@@ -376,6 +408,8 @@ class VariationalTransformerState(DecoderState):
             if buffer_ is not None:
                 for k in buffer_:
                     buffer_[k] = updateActive(buffer_[k])
+
+        self.z = updateActive2DBF(self.z)
 
     # For the new decoder version only
     def _reorder_incremental_state(self, reorder_state):

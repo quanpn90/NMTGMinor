@@ -1,0 +1,12 @@
+
+VDTransformer: 
+
+1: baseline + sample layers 
+
+2: no baseline, using full networks as baseline
+
+3: introduce entropy regulation ?
+
+5 ?
+
+6. Gaussian layer-wise latent variable

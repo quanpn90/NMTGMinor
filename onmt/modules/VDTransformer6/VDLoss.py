@@ -140,100 +140,44 @@ class VDLoss(LossFuncBase):
 
         smoothed_nll, nll, n_targets = self._compute_loss(dists, clean_targets)
 
-        goldScores = outputs.new(batch_size).zero_()
-
-        for t in range(nsteps):
-            gen_t = dists[t]
-            tgt_t = targets[t].unsqueeze(1)
-            # print(gen_t.size(), tgt_t.size())
-            scores = gen_t.data.gather(1, tgt_t)
-            smooth_scores = scores.sum(dim=-1, keepdim=True)
-
-            mask = tgt_t.eq(onmt.Constants.PAD)
-            scores.masked_fill_(mask, 0)
-            smooth_scores.masked_fill_(mask, 0)
-
-            eps_i = self.smoothing_value
-            smooth_scores = (1. - self.label_smoothing)   * scores + eps_i * smooth_scores
-
-        
-            goldScores += smooth_scores.squeeze(1).type_as(goldScores)
-        
-        
-        # processing the baseline
-        with torch.no_grad():
-            b = output_dict['baseline']
-
-            b_dists = generator(b)   
-
-            b_scores = outputs.new(batch_size).zero_()
-
-            for t in range(nsteps):
-                b_gen_t = b_dists[t]
-                tgt_t = targets[t].unsqueeze(1)
-                # print(gen_t.size(), tgt_t.size())
-                scores = b_gen_t.data.gather(1, tgt_t)
-                smooth_loss = scores.sum(dim=-1, keepdim=True)
-
-                mask = tgt_t.eq(onmt.Constants.PAD)
-                scores.masked_fill_(mask, 0)
-                smooth_scores.masked_fill_(mask, 0)
-
-                eps_i = self.smoothing_value
-                smooth_scores = (1. - self.label_smoothing)  * scores + eps_i * smooth_scores
-            
-                b_scores += smooth_scores.squeeze(1).type_as(b_scores)
-        
-        
-        log_q_z = output_dict['log_q_z']
-        n_dists = output_dict['p_z'].probs.size(1)
-
-        # compute R for the REINFORCE gradient
-        # R = goldScores.unsqueeze(1).type_as(log_q_z)
-        R_ = goldScores - b_scores
-        b = b_scores
-        R = R_.detach()
-
-        # b = output_dict['baseline'].type_as(log_q_z)
-        output['ce'] = goldScores.sum().item()
-
-
-        # baseline for the reinforce gradient
-        # b_coeff_ = 0.01
-        # baseline_loss = (b - R)**2
-        # baseline_loss = baseline_loss.sum() * b_coeff_ / n_dists
-
-        # inference loss is - logQ * R
-        inference_loss = - log_q_z  * R.unsqueeze(1).type_as(log_q_z)
-        inference_loss = inference_loss.sum() * 0.01
-
-        
-        # KL divergence
-        kl = output_dict['kl'].sum()
-
-        # also try to increase entropy to avoid latent collapse
-        q_entropy = output_dict['q_z'].entropy().sum() # posterior entropy 
-        p_entropy = output_dict['p_z'].entropy().sum() # prior entropy 
-
-
-        lambda_ = 0.1
-        ent_coeff = 0.05
-        # lambda_ = kl_lambda
-        loss = smoothed_nll + ( kl * lambda_   / n_dists )  \
-                            + inference_loss - ( (p_entropy + q_entropy) * ent_coeff / n_dists )
-
+       
         
         if backward:
+            n_dists = len(output_dict['p_z'])
+
+
+            # KL divergence
+            kl = output_dict['kl'].sum()
+
+            # also try to increase entropy to avoid latent collapse
+            q_entropy = [ q_z.entropy() for q_z in output_dict['q_z'] ] # posterior entropy 
+            q_entropy = torch.cat(q_entropy, dim=0).sum()
+            
+            p_entropy = [ p_z.entropy() for p_z in output_dict['p_z'] ] # # prior entropy 
+            p_entropy = torch.cat(p_entropy, dim=0).sum()
+
+
+            lambda_ = 1.0
+            ent_coeff = 1.0
+
+            loss = smoothed_nll + ( kl * lambda_   / n_dists )  
+                            
             loss.div(normalizer).backward()
 
         
             
         
-        output['loss'] = loss # this is actually dangerous to keep
-        output['kl'] = kl.item()
-        output['nll'] = nll
-        output['baseline'] = b.sum().item()
-        output['R'] = R.data.sum().item()
-        output['q_entropy'] = q_entropy.item()
-        output['p_entropy'] = p_entropy.item()
+            output['loss'] = loss # this is actually dangerous to keep
+            output['kl'] = kl.item()
+            output['nll'] = nll
+            output['baseline'] = None
+            output['R'] = None
+            output['ce'] = None
+            output['q_entropy'] = q_entropy.item()
+            output['p_entropy'] = p_entropy.item()
+        else:
+            p_entropy = [ p_z.entropy() for p_z in output_dict['p_z'] ] # # prior entropy 
+            p_entropy = torch.cat(p_entropy, dim=0).sum()   
+            output['p_entropy'] = p_entropy.item()
+            output['nll'] = nll
         return output

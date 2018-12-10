@@ -108,7 +108,7 @@ class VDLoss(LossFuncBase):
         return (smoothed_nll, nll, n_targets)
         
    
-    def forward(self, output_dict, targets, generator=None, backward=False, tgt_mask=None, normalizer=1):
+    def forward(self, output_dict, targets, generator=None, backward=False, tgt_mask=None, normalizer=1, kl_lambda=0.0):
         """
         Compute the loss. Subclass must define this method.
         Args:
@@ -122,6 +122,7 @@ class VDLoss(LossFuncBase):
         
         outputs = output_dict['hiddens']
         original_outputs = outputs
+        output = dict()
 
         nsteps = outputs.size(0)
         batch_size = outputs.size(1)
@@ -160,30 +161,52 @@ class VDLoss(LossFuncBase):
         
         
         
-        kl = output_dict['kl'].sum()
+        
         log_q_z = output_dict['log_q_z']
+        n_dists = output_dict['p_z'].probs.size(1)
+
+        # compute R for the REINFORCE gradient
         R = goldScores.unsqueeze(1).type_as(log_q_z)
 
         b = output_dict['baseline'].type_as(log_q_z)
+        output['ce'] = R.sum().item()
 
+        # baseline for the reinforce gradient
         b_coeff_ = 0.01
         baseline_loss = (b - R)**2
-        baseline_loss = baseline_loss.sum() * b_coeff_ 
+        baseline_loss = baseline_loss.sum() * b_coeff_ / n_dists
 
+        # inference loss is - logQ * R
         inference_loss = - log_q_z  * (R.data - b.data) * b_coeff_
         inference_loss = inference_loss.sum()
 
-        lambda_ = 1.0
-        loss = smoothed_nll + kl * lambda_ + inference_loss + baseline_loss
+        
+        # KL divergence
+        kl = output_dict['kl'].sum()
+
+        # also try to increase entropy to avoid latent collapse
+        q_entropy = output_dict['q_z'].entropy().sum() # posterior entropy 
+        p_entropy = output_dict['p_z'].entropy().sum() # prior entropy 
+
+
+        lambda_ = 1.0 # best values
+        ent_coeff = 0.01
+        # lambda_ = kl_lambda
+        loss = smoothed_nll + ( kl * lambda_   / n_dists )  \
+                            + inference_loss + baseline_loss - ( (q_entropy) * ent_coeff / n_dists )
 
         
         if backward:
             loss.div(normalizer).backward()
+
+        
             
-        output = dict()
-        output['loss'] = loss
+        
+        output['loss'] = loss # this is actually dangerous to keep
         output['kl'] = kl.item()
         output['nll'] = nll
         output['baseline'] = b.sum().item()
         output['R'] = (R.data - b.data).sum().item()
+        output['q_entropy'] = q_entropy.item()
+        output['p_entropy'] = p_entropy.item()
         return output

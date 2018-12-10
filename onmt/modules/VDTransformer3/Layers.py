@@ -178,9 +178,43 @@ class VDDecoderLayer(DecoderLayer):
         # print(input.size(), layer_mask.size())
 
         if layer_mask is not None:
+            t, H = input.size(0), input.size(2)
+            layer_mask = layer_mask.expand(t, 1, H)
             input = layer_mask * input + ( 1 - layer_mask ) * last_layer
     
         return input, coverage
         
     # The step function should be identical to normal Transformer
+    def step(self, input, context, mask_tgt, mask_src, layer_mask=None, pad_mask_tgt=None, pad_mask_src=None, buffer=None):
+        """ Self attention layer 
+            layernorm > attn > dropout > residual
+        """
+        last_layer = input
         
+        query = self.preprocess_attn(input)
+        
+        out, _, buffer = self.multihead_tgt.step(query, query, query, mask_tgt, buffer=buffer)
+                                   
+        
+
+        input = self.postprocess_attn(out, input)
+        
+        """ Context Attention layer 
+            layernorm > attn > dropout > residual
+        """
+        
+        query = self.preprocess_src_attn(input)
+        out, coverage, buffer = self.multihead_src.step(query, context, context, mask_src, buffer=buffer)
+                                           
+        input = self.postprocess_src_attn(out, input)
+        
+        """ Feed forward layer 
+            layernorm > ffn > dropout > residual
+        """
+        out = self.feedforward(self.preprocess_ffn(input))
+                                           
+        input = self.postprocess_ffn(out, input)
+
+        inputs = layer_mask * input + ( 1 - layer_mask ) * last_layer
+        
+        return input, coverage, buffer    

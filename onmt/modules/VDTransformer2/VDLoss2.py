@@ -5,47 +5,6 @@ import torch, math
 
 from torch.nn.modules.loss import _Loss
 
-#~ class LabelSmoothedCrossEntropyCriterion(_Loss):
-#~ 
-    #~ def __init__(self, n_targets, eps):
-        #~ super().__init__()
-        #~ self.eps = eps
-        #~ self.n_targets = n_targets
-#~ 
-    #~ @staticmethod
-    #~ def add_args(parser):
-        #~ """Add criterion-specific arguments to the parser."""
-        #~ parser.add_argument('--label-smoothing', default=0., type=float, metavar='D',
-                            #~ help='epsilon for label smoothing, 0 means no label smoothing')
-#~ 
-    #~ def forward(self, model, sample, reduce=True):
-        #~ """Compute the loss for the given sample.
-        #~ Returns a tuple with three elements:
-        #~ 1) the loss, as a Variable
-        #~ 2) the sample size, which is used as the denominator for the gradient
-        #~ 3) logging outputs to display while training
-        #~ """
-        #~ net_output = model(**sample['net_input'])
-        #~ lprobs = model.get_normalized_probs(net_output, log_probs=True)
-        #~ target = sample['target'].unsqueeze(-1)
-        #~ non_pad_mask = target.ne(self.padding_idx)
-        #~ nll_loss = -lprobs.gather(dim=-1, index=target)[non_pad_mask]
-        #~ smooth_loss = -lprobs.sum(dim=-1, keepdim=True)[non_pad_mask]
-        #~ if reduce:
-            #~ nll_loss = nll_loss.sum()
-            #~ smooth_loss = smooth_loss.sum()
-        #~ eps_i = self.eps / lprobs.size(-1)
-        #~ loss = (1. - self.eps) * nll_loss + eps_i * smooth_loss
-#~ 
-        #~ sample_size = sample['target'].size(0) if self.args.sentence_avg else sample['ntokens']
-        #~ logging_output = {
-            #~ 'loss': utils.item(loss.data) if reduce else loss.data,
-            #~ 'nll_loss': utils.item(nll_loss.data) if reduce else loss.data,
-            #~ 'ntokens': sample['ntokens'],
-            #~ 'sample_size': sample_size,
-        #~ }
-        #~ return loss, sample_size, logging_output
-
 
 class LossFuncBase(_Loss):
 
@@ -81,7 +40,7 @@ class LossFuncBase(_Loss):
         
         
 
-class VariationalLoss(LossFuncBase):
+class VDLoss(LossFuncBase):
     
     
     """
@@ -99,10 +58,7 @@ class VariationalLoss(LossFuncBase):
             # is equivalent to NLLLoss or CrossEntropyLoss.
             # All non-true labels are uniformly set to low-confidence.
             self.smoothing_value = label_smoothing / (output_size - 1)
-            
-            
-
-            
+   
         else:
             weight = torch.ones(output_size)
             weight[self.padding_idx] = 0     
@@ -133,6 +89,7 @@ class VariationalLoss(LossFuncBase):
         
         lprobs = scores
         non_pad_mask = gtruth.ne(self.padding_idx)
+        # print(lprobs.size(), gtruth.size())
         nll_loss = -lprobs.gather(1, gtruth.unsqueeze(1))[non_pad_mask]
         smooth_loss = -lprobs.sum(dim=-1, keepdim=True)[non_pad_mask]
         nll_loss = nll_loss.sum()
@@ -165,37 +122,85 @@ class VariationalLoss(LossFuncBase):
         
         outputs = output_dict['hiddens']
         original_outputs = outputs
+
+        nsteps = outputs.size(0)
         batch_size = outputs.size(1)
         h_size = outputs.size(-1)
+
         mask = tgt_mask
-        # flatten the output
-        outputs = outputs.contiguous().view(-1, outputs.size(-1))
-        targets = targets.view(-1)
+       
         
-        
-        if mask is not None:
-            """ We remove all positions with PAD 
-                to save memory on unwanted positions
-            """
-            flattened_mask = mask.view(-1)
-            
-            non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
-            
-            clean_input = outputs.index_select(0, non_pad_indices)
-            
-            clean_targets = targets.index_select(0, non_pad_indices)
-        
-        else:
-            clean_input = outputs
-            clean_targets = targets
-        
+        clean_input = outputs
+        clean_targets = targets
+
+        # T x B x V
         dists = generator(clean_input)
-        
+        # print(dists.size(), clean_targets.size())
+
         smoothed_nll, nll, n_targets = self._compute_loss(dists, clean_targets)
+
+        goldScores = outputs.new(batch_size).zero_()
+
+        for t in range(nsteps):
+            gen_t = dists[t]
+            tgt_t = targets[t].unsqueeze(1)
+            # print(gen_t.size(), tgt_t.size())
+            scores = gen_t.data.gather(1, tgt_t)
+            smooth_scores = scores.sum(dim=-1, keepdim=True)
+
+            mask = tgt_t.eq(onmt.Constants.PAD)
+            scores.masked_fill_(mask, 0)
+            smooth_scores.masked_fill_(mask, 0)
+
+            eps_i = self.smoothing_value
+            smooth_scores = (1. - self.label_smoothing)   * scores + eps_i * smooth_scores
+
+        
+            goldScores += smooth_scores.squeeze(1).type_as(goldScores)
+        
+        
+        
         kl = output_dict['kl'].sum()
+        log_q_z = output_dict['log_q_z']
+        # R = goldScores.unsqueeze(1).type_as(log_q_z)
+
+        # processing the baseline
+        with torch.no_grad():
+            b = output_dict['baseline']
+
+            b_dists = generator(b)   
+
+            b_scores = outputs.new(batch_size).zero_()
+
+            for t in range(nsteps):
+                gen_t = dists[t]
+                tgt_t = targets[t].unsqueeze(1)
+                # print(gen_t.size(), tgt_t.size())
+                scores = gen_t.data.gather(1, tgt_t)
+                smooth_loss = scores.sum(dim=-1, keepdim=True)
+
+                mask = tgt_t.eq(onmt.Constants.PAD)
+                scores.masked_fill_(mask, 0)
+                smooth_scores.masked_fill_(mask, 0)
+
+                eps_i = self.smoothing_value
+                smooth_scores = (1. - self.label_smoothing)  * scores + eps_i * smooth_scores
+            
+                b_scores += smooth_scores.squeeze(1).type_as(b_scores)
+
+        # done processing the baseline
+
+        # b_coeff_ = 0.01
+        # baseline_loss = (b - R)**2
+        # baseline_loss = baseline_loss.sum() * b_coeff_ 
+
+        R = goldScores - b_scores
+        R = R.detach()
+        inference_loss = - log_q_z  * R.unsqueeze(1).type_as(log_q_z)
+        inference_loss = inference_loss.sum()
 
         lambda_ = 1.0
-        loss = smoothed_nll + kl * lambda_
+        loss = smoothed_nll + kl * lambda_ + inference_loss 
 
         
         if backward:

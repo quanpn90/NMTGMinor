@@ -73,6 +73,19 @@ class VDLoss(LossFuncBase):
         scores = scores.view(-1, scores.size(-1)) # batch * time X vocab_size
         
         tdata = gtruth
+            
+        # squeeze is a trick to know if mask has dimension or not
+        # ~ mask = torch.nonzero(tdata.eq(self.padding_idx)).squeeze()
+        # ~ likelihood = torch.gather(scores, 1, tdata.unsqueeze(1))
+        # ~ tmp_ = self.one_hot.repeat(gtruth.size(0), 1)
+        # ~ tmp_.scatter_(1, tdata.unsqueeze(1), self.confidence)
+        # ~ if mask.numel() > 0:
+            # ~ likelihood.index_fill_(0, mask, 0)
+            # ~ tmp_.index_fill_(0, mask, 0)
+       
+        # ~ gtruth = torch.autograd.Variable(tmp_, requires_grad=False)
+        # ~ loss = self.func(scores, gtruth)
+        # ~ loss_data = - likelihood.sum(0).item()
         
         lprobs = scores
         non_pad_mask = gtruth.ne(self.padding_idx)
@@ -95,7 +108,7 @@ class VDLoss(LossFuncBase):
         return (smoothed_nll, nll, n_targets)
         
    
-    def forward(self, output_dict, targets, generator=None, backward=False, tgt_mask=None, normalizer=1):
+    def forward(self, output_dict, targets, generator=None, backward=False, tgt_mask=None, normalizer=1, kl_lambda=0.0):
         """
         Compute the loss. Subclass must define this method.
         Args:
@@ -109,6 +122,7 @@ class VDLoss(LossFuncBase):
         
         outputs = output_dict['hiddens']
         original_outputs = outputs
+        output = dict()
 
         nsteps = outputs.size(0)
         batch_size = outputs.size(1)
@@ -144,10 +158,8 @@ class VDLoss(LossFuncBase):
 
         
             goldScores += smooth_scores.squeeze(1).type_as(goldScores)
-                
-        kl = output_dict['kl'].sum()
-        log_q_z = output_dict['log_q_z']
-
+        
+        
         # processing the baseline
         with torch.no_grad():
             b = output_dict['baseline']
@@ -157,10 +169,10 @@ class VDLoss(LossFuncBase):
             b_scores = outputs.new(batch_size).zero_()
 
             for t in range(nsteps):
-                gen_t = dists[t]
+                b_gen_t = b_dists[t]
                 tgt_t = targets[t].unsqueeze(1)
                 # print(gen_t.size(), tgt_t.size())
-                scores = gen_t.data.gather(1, tgt_t)
+                scores = b_gen_t.data.gather(1, tgt_t)
                 smooth_loss = scores.sum(dim=-1, keepdim=True)
 
                 mask = tgt_t.eq(onmt.Constants.PAD)
@@ -171,25 +183,60 @@ class VDLoss(LossFuncBase):
                 smooth_scores = (1. - self.label_smoothing)  * scores + eps_i * smooth_scores
             
                 b_scores += smooth_scores.squeeze(1).type_as(b_scores)
+        
+        
+        log_q_z = output_dict['log_q_z']
+        n_dists = output_dict['p_z'].probs.size(1)
 
-        # done processing the baseline
-        # note: we don't need baseline backward 
+        # compute R for the REINFORCE gradient
+        # R = goldScores.unsqueeze(1).type_as(log_q_z)
+        R_ = goldScores - b_scores
+        b = b_scores
+        R = R_.detach()
 
-        R = goldScores - b_scores
-        R = R.detach()
-        inference_loss = - log_q_z  * R.unsqueeze(1).type_as(log_q_z)
+        # b = output_dict['baseline'].type_as(log_q_z)
+        output['ce'] = goldScores.sum().item()
+
+
+        # baseline for the reinforce gradient
+        # b_coeff_ = 0.01
+        # baseline_loss = (b - R)**2
+        # baseline_loss = baseline_loss.sum() * b_coeff_ / n_dists
+
+        # inference loss is - logQ * R
+        inference_loss = - log_q_z  * R.unsqueeze(1).type_as(log_q_z) * 0.01
         inference_loss = inference_loss.sum()
 
-        lambda_ = 1.0
-        loss = smoothed_nll + kl * lambda_ + inference_loss 
+        
+        # KL divergence
+        kl = output_dict['kl'].sum()
+
+        # also try to increase entropy to avoid latent collapse
+        q_entropy = output_dict['q_z'].entropy() # posterior entropy 
+        p_entropy = output_dict['p_z'].entropy() # prior entropy 
+
+        q_ent_loss = torch.abs(q_entropy - 1.0).sum()
+        p_ent_loss = torch.abs(p_entropy - 1.0).sum()
+
+
+        lambda_ = 0.1
+        ent_coeff = 1.0
+        # lambda_ = kl_lambda
+        loss = smoothed_nll + ( kl * lambda_   / n_dists )  \
+                            + inference_loss + ( (q_ent_loss + p_ent_loss) * ent_coeff / n_dists )
 
         
         if backward:
             loss.div(normalizer).backward()
+
+        
             
-        output = dict()
-        output['loss'] = loss
+        
+        output['loss'] = loss # this is actually dangerous to keep
         output['kl'] = kl.item()
         output['nll'] = nll
-        
+        output['baseline'] = b.sum().item()
+        output['R'] = R.data.sum().item()
+        output['q_entropy'] = q_entropy.sum().item()
+        output['p_entropy'] = p_entropy.sum().item()
         return output
