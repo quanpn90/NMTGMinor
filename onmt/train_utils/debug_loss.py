@@ -81,14 +81,14 @@ class LossFuncBase(_Loss):
         
         
 
-class NMTLossFunc(LossFuncBase):
+class DebugLossFunc(LossFuncBase):
     
     
     """
     Standard NMT Loss Computation.
     """
     def __init__(self, output_size, label_smoothing=0.0, shard_size=1):
-        super(NMTLossFunc, self).__init__(output_size)
+        super(DebugLossFunc, self).__init__(output_size)
         self.shard_split = shard_size
         
         if label_smoothing > 0:
@@ -195,12 +195,15 @@ class NMTLossFunc(LossFuncBase):
         dists = generator(clean_input)
         
         loss, loss_data = self._compute_loss(dists, clean_targets)
+
+        memory = torch.cuda.memory_cached()
         
         if backward:
             loss.div(normalizer).backward()
             
         output = dict()
-        output['loss'] = None
+        output['loss'] = loss
         output['nll'] = loss_data
-        
+        output['memory'] = memory
+
         return output

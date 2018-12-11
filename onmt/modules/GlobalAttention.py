@@ -173,6 +173,9 @@ class MultiHeadAttention(nn.Module):
         
          # batch_size*h x len_query x d_head
         # project inputs to multi-heads
+        # proj_query = self.fc_query(query)   # batch_size x len_query x h*d_head
+        # proj_key   = self.fc_key(key)             # batch_size x len_key x h*d_head
+        # proj_value = self.fc_value(value)       # batch_size x len_key x h*d_head
         if self.share == 1:
             shared_qkv = group_linear([self.fc_query.function.linear, self.fc_key.function.linear, self.fc_value.function.linear], query)
             proj_query, proj_key, proj_value = shared_qkv.chunk(3, dim=-1)

@@ -314,7 +314,7 @@ def main():
                      'valid': valid}
         torch.save(save_data, opt.save_data + '.train.pt')
         print("Done")
-    elif opt.format == 'bin':
+    elif opt.format in ['bin', 'binary']:
         # save the dictionary first
         torch.save(dicts, opt.save_data + '.dict.pt')
         

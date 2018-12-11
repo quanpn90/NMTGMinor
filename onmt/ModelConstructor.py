@@ -32,7 +32,7 @@ def update_backward_compatibility(opt):
         
     return opt
 
-def build_model(opt, dicts):
+def build_model(opt, dicts, debug=True):
 
     model = None
     
@@ -49,6 +49,26 @@ def build_model(opt, dicts):
     MAX_LEN = onmt.Constants.max_position_length  # This should be the longest sentence from the dataset
 
     
+    if debug == True:
+        onmt.Constants.init_value = opt.param_init
+        
+        if opt.time == 'positional_encoding':
+            positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
+        else:
+            positional_encoder = None
+        
+        from onmt.modules.DebugTransformer.Models import DebugTransformerEncoder, DebugTransformerDecoder
+        # from onmt.modules.DebugTransformer.Model
+        encoder = DebugTransformerEncoder(opt, dicts['src'], positional_encoder)
+        decoder = DebugTransformerDecoder(opt, dicts['tgt'], positional_encoder)
+        
+        generator = None
+        # generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        
+        model = Transformer(encoder, decoder, generator)    
+
+        loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+
     if opt.model == 'recurrent' or opt.model == 'rnn':
     
         from onmt.modules.rnn.Models import RecurrentEncoder, RecurrentDecoder, RecurrentModel 
@@ -407,6 +427,7 @@ def build_model(opt, dicts):
         init.normal_(model.encoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
         init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
     
+
    
     return model, loss_function
     

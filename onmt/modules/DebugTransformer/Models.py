@@ -1,12 +1,18 @@
 import numpy as np
 import torch, math
 import torch.nn as nn
-from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, PositionalEncoding, variational_dropout, PrePostProcessing
+from onmt.modules.DebugTransformer.Layers import EncoderLayer, DecoderLayer, PositionalEncoding
 from onmt.modules.BaseModel import NMTModel, Reconstructor, DecoderState
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
 from torch.utils.checkpoint import checkpoint
 from torch.autograd import Variable
+from onmt.modules.Bottle import Bottle
+from onmt.modules.StaticDropout import StaticDropout
+from onmt.modules.Linear import XavierLinear, group_linear, FeedForward
+from onmt.modules.MaxOut import MaxOut
+from onmt.modules.GlobalAttention import MultiHeadAttention
+from onmt.modules.PrePostProcessing import PrePostProcessing
 
 
 
@@ -18,7 +24,7 @@ def custom_layer(module):
 
         
 
-class TransformerEncoder(nn.Module):
+class DebugTransformerEncoder(nn.Module):
     """Encoder in 'Attention is all you need'
     
     Args:
@@ -29,7 +35,7 @@ class TransformerEncoder(nn.Module):
     
     def __init__(self, opt, dicts, positional_encoder):
     
-        super(TransformerEncoder, self).__init__()
+        super().__init__()
         
         self.model_size = opt.model_size
         self.n_heads = opt.n_heads
@@ -77,7 +83,8 @@ class TransformerEncoder(nn.Module):
         """
 
         """ Embedding: batch_size x len_src x d_model """
-        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        emb = self.word_lut(input)
+        # emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         
         """ Scale the emb by sqrt(d_model) """
         
@@ -108,13 +115,12 @@ class TransformerEncoder(nn.Module):
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.    
         context = self.postprocess_layer(context)
-        
-
+            
         
         return context, mask_src    
         
 
-class TransformerDecoder(nn.Module):
+class DebugTransformerDecoder(nn.Module):
     """Encoder in 'Attention is all you need'
     
     Args:
@@ -126,7 +132,7 @@ class TransformerDecoder(nn.Module):
     
     def __init__(self, opt, dicts, positional_encoder):
     
-        super(TransformerDecoder, self).__init__()
+        super().__init__()
         
         self.model_size = opt.model_size
         self.n_heads = opt.n_heads
@@ -210,7 +216,9 @@ class TransformerDecoder(nn.Module):
         """
         
         """ Embedding: batch_size x len_tgt x d_model """
-        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        # emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        emb = self.word_lut(input)
+
         if self.time == 'positional_encoding':
             emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
@@ -361,7 +369,7 @@ class Transformer(NMTModel):
         output, coverage = self.decoder(tgt, context, src, grow=grow)
             
         output_dict = dict()
-        output_dict['hiddens'] = output.transpose(0, 1)
+        output_dict['hiddens'] = output
         output_dict['coverage'] = coverage
         return output_dict
         
