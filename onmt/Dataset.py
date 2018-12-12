@@ -123,7 +123,7 @@ class Dataset(object):
         
         i = 0
         while i < self.fullSize:            
-            sentence_length = self.tgt[i].size(0) - 1 if self.sort_by_target else self.src[i].size(0)
+            sentence_length = max(self.src[i].size(0), self.tgt[i].size(0) - 1 if self.tgt is not None else 0)
 
             oversized = oversize_(cur_batch)
             # if the current length makes the batch exceeds

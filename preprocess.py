@@ -170,6 +170,8 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
     sizes = []
     count, ignored = 0, 0
     n_duplicate = 0
+    src_sizes = []
+    tgt_sizes = []
 
     print('Processing %s & %s ...' % (srcFile, tgtFile))
     srcF = open(srcFile)
@@ -190,6 +192,8 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
 
         sline = sline.strip()
         tline = tline.strip()
+
+        all_data = []
 
         # source and/or target are empty
         if remove_duplicate:
@@ -220,18 +224,22 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
             
             
             # For src text, we use BOS for possible reconstruction
-            src += [srcDicts.convertToIdx(srcWords,
-                                              onmt.Constants.UNK_WORD)]
-                                              
+            
+            src_sent = srcDicts.convertToIdx(srcWords,
+                                              onmt.Constants.UNK_WORD)
+            src += [src_sent]                                 
 
-            tgt += [tgtDicts.convertToIdx(tgtWords,
+            tgt_sent = tgtDicts.convertToIdx(tgtWords,
                                           onmt.Constants.UNK_WORD,
                                           onmt.Constants.BOS_WORD,
-                                          onmt.Constants.EOS_WORD)]
-            if sort_by_target:
-                sizes += [len(tgtWords)]
-            else:
-                sizes += [len(srcWords)]
+                                          onmt.Constants.EOS_WORD)
+            tgt += [tgt_sent]
+            # if sort_by_target:
+                # sizes += [len(tgtWords)]
+            # else:
+            #     sizes += [len(srcWords)]
+            src_sizes += [len(src_sent)]
+            tgt_sizes += [len(tgt_sent)]
         else:
             ignored += 1
 
@@ -245,17 +253,16 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
     srcF.close()
     tgtF.close()
 
-    if opt.shuffle == 1:
-        print('... shuffling sentences')
-        perm = torch.randperm(len(src))
-        src = [src[idx] for idx in perm]
-        tgt = [tgt[idx] for idx in perm]
-        sizes = [sizes[idx] for idx in perm]
 
     print('... sorting sentences by size')
-    _, perm = torch.sort(torch.Tensor(sizes), descending=(opt.sort_type == 'descending'))
-    src = [src[idx] for idx in perm]
-    tgt = [tgt[idx] for idx in perm]
+    z = zip(src, tgt, src_sizes, tgt_sizes)
+
+    sorted_by_src_z = sorted(z, key=lambda x: x[2])
+    sorted_by_tgt_z = sorted(sorted_by_src_z, key=lambda x: x[3])
+
+    src = [z_[0] for z_ in sorted_by_tgt_z]
+    tgt = [z_[1] for z_ in sorted_by_tgt_z]
+
 
     print(('Prepared %d sentences ' +
           '(%d ignored due to error or src len > %d or tgt len > %d)') %
@@ -314,7 +321,7 @@ def main():
                      'valid': valid}
         torch.save(save_data, opt.save_data + '.train.pt')
         print("Done")
-    elif opt.format == 'bin':
+    elif opt.format in ['bin', 'binary']:
         # save the dictionary first
         torch.save(dicts, opt.save_data + '.dict.pt')
         
