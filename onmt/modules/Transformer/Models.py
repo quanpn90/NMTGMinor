@@ -123,7 +123,7 @@ class TransformerDecoder(nn.Module):
         
     """
     
-    def __init__(self, opt, dicts, positional_encoder):
+    def __init__(self, opt, dicts, positional_encoder, encoder_to_share=None):
     
         super(TransformerDecoder, self).__init__()
         
@@ -161,11 +161,23 @@ class TransformerDecoder(nn.Module):
         mask = torch.ByteTensor(np.triu(np.ones((len_max,len_max)), k=1).astype('uint8'))
         self.register_buffer('mask', mask)
         
-        self.build_modules()
+        self.build_modules(encoder_to_share=encoder_to_share)
         
-    def build_modules(self):
-        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, self.residual_dropout) for _ in range(self.layers)])
-    
+    def build_modules(self, encoder_to_share=None):
+
+        if encoder_to_share is None:
+            self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, self.residual_dropout) for _ in range(self.layers)])
+        else:
+            print("* Sharing Encoder and Decoder weights for self attention and feed forward layers ...")
+            self.layer_modules = nn.ModuleList()
+
+            for i in range(self.layers):
+                decoder_layer = DecoderLayer(self.n_heads, self.model_size, self.dropout, 
+                                             self.inner_size, self.attn_dropout, self.residual_dropout, 
+                                             encoder_to_share=encoder_to_share.layer_modules[i])
+                self.layer_modules.append(decoder_layer)
+
+
     def renew_buffer(self, new_len):
         
         self.positional_encoder.renew(new_len)

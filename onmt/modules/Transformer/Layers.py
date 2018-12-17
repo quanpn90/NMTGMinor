@@ -123,30 +123,51 @@ class DecoderLayer(nn.Module):
         
     """    
     
-    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, residual_p=0.1, version=1.0):
+    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, residual_p=0.1, version=1.0, encoder_to_share=None):
         super(DecoderLayer, self).__init__()
-        self.version = version
         
-        self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
-        
+        if encoder_to_share is None:
+
+            self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
+            self.postprocess_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
+            
+            
+            self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
+            self.postprocess_ffn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
+            
+            
+            self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=1)
+            
+            
+            if onmt.Constants.activation_layer == 'linear_relu_linear':
+                ff_p = p
+                feedforward = FeedForward(d_model, d_ff, ff_p, static=onmt.Constants.static)
+            elif onmt.Constants.activation_layer == 'maxout':
+                k = int(math.ceil(d_ff / d_model))
+                feedforward = MaxOut(d_model, d_model, k)
+            self.feedforward = Bottle(feedforward)
+
+        else:
+
+            # self.preprocess_attn = PrePostProcessing(d_model, 0.0, sequence='n')
+            # self.postprocess_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
+            # self.preprocess_ffn = PrePostProcessing(d_model, 0.0, sequence='n')
+            # self.postprocess_ffn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
+            # self.multihead = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=1)
+
+            self.preprocess_attn = encoder_to_share.preprocess_attn
+            self.postprocess_attn = encoder_to_share.postprocess_attn
+
+            self.preprocess_ffn = encoder_to_share.preprocess_ffn
+            self.postprocess_ffn = encoder_to_share.postprocess_ffn
+
+            self.multihead_tgt = encoder_to_share.multihead
+            self.feedforward = encoder_to_share.feedforward
+
+
         self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
         self.postprocess_src_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
-        
-        self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
-        
-        
-        self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=1)
         self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
-        
-        if onmt.Constants.activation_layer == 'linear_relu_linear':
-            ff_p = p
-            feedforward = FeedForward(d_model, d_ff, ff_p, static=onmt.Constants.static)
-        elif onmt.Constants.activation_layer == 'maxout':
-            k = int(math.ceil(d_ff / d_model))
-            feedforward = MaxOut(d_model, d_model, k)
-        self.feedforward = Bottle(feedforward)
     
     def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, residual_dropout=0.0):
         

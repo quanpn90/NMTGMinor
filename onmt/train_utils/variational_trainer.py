@@ -57,7 +57,7 @@ class VariationalTrainerFP16(XETrainer):
         super().__init__(model, loss_function, trainData, validData, dicts, opt, set_param=False)
         self.optim = onmt.Optim(opt)
         self.scaler = DynamicLossScaler(opt.fp16_loss_scale)
-        self.n_samples = opt.num_valid_samples
+        self.n_samples = 1
         
         if self.cuda:
            torch.cuda.set_device(self.opt.gpus[0])
@@ -172,14 +172,22 @@ class VariationalTrainerFP16(XETrainer):
         total_loss = sum(total_losses.values()) / float(len(total_losses))
         ppls = list()
 
-        for k in total_losses:
-            valid_loss = total_losses[k] / (total_words + 1e-6)
-            ppl = math.exp(min(valid_loss, 100))
-            print("perplexity for sampling %d : %.3f " % (k, ppl))
-            ppls.append(ppl)
-        mean_ = mean(ppls)
-        std_ = stdev(ppls)
-        print("Mean and std: %.3f, %.3f" % (mean_, std_))
+
+        if self.n_samples > 1:
+            for k in total_losses:
+                valid_loss = total_losses[k] / (total_words + 1e-6)
+                ppl = math.exp(min(valid_loss, 100))
+                print("perplexity for sampling %d : %.3f " % (k, ppl))
+                ppls.append(ppl)
+            mean_ = mean(ppls)
+            std_ = stdev(ppls)
+            print("Mean and std: %.3f, %.3f" % (mean_, std_))
+            
+        else:
+            ppl = total_loss / (total_words + 1e-6)
+            ppl = math.exp(min(ppl, 100))
+            print("Perplexity Using Prior Mean : %.3f " % (ppl))
+
         return total_loss / (total_words + 1e-6)
         
     

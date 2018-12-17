@@ -28,9 +28,10 @@ class Batch(object):
             self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.Constants.PAD)
             self.tensors['src_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
             self.has_target = True
+            self.tgt_size = sum([len(x) - 1 for x in tgt_data])
         
         self.size = len(src_data)
-        self.tgt_size = sum([len(x) - 1 for x in tgt_data])
+        
         self.src_size = sum([len(x)     for x in src_data])
 
     def join_data(self, data, align_right=False):

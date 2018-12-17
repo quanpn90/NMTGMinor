@@ -192,5 +192,8 @@ def make_parser(parser):
     
     parser.add_argument('-n_mixtures', type=int, default=10,
                         help="Number of mixtures in moe.")
+
+    parser.add_argument('-share_enc_dec_weights', action='store_true',
+                        help='Share the encoder and decoder weights (except for the src attention layer)')
     
     return parser

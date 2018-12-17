@@ -29,6 +29,9 @@ def update_backward_compatibility(opt):
     
     if not hasattr(opt, 'residual_dropout'):
         opt.residual_dropout = opt.dropout
+
+    if not hasattr(opt, 'tie_encoder_decoder_weights'):
+        opt.tie_encoder_decoder_weights = False
         
     return opt
 
@@ -37,7 +40,6 @@ def build_model(opt, dicts):
     model = None
     
     opt = update_backward_compatibility(opt)
-    
     
     onmt.Constants.layer_norm = opt.layer_norm
     onmt.Constants.weight_norm = opt.weight_norm
@@ -74,16 +76,15 @@ def build_model(opt, dicts):
             positional_encoder = None
         
         encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
-        decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder)
+        decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder, encoder_to_share=encoder if opt.share_enc_dec_weights else None)
         
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         
         model = Transformer(encoder, decoder, generator)    
 
         loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
-        
-        #~ print(encoder)
-        
+
+                
     elif opt.model == 'stochastic_transformer':
         
         from onmt.modules.StochasticTransformer.Models import StochasticTransformerEncoder, StochasticTransformerDecoder
@@ -94,7 +95,6 @@ def build_model(opt, dicts):
         
         
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
-        #~ positional_encoder = None
         
         encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder)
         
@@ -167,10 +167,6 @@ def build_model(opt, dicts):
            
         from onmt.modules.VariationalTransformer.Models import VariationalDecoder, VariationalTransformer
         from onmt.modules.VariationalTransformer.Inference import NeuralPrior, NeuralPosterior
-        # ~ from onmt.modules.ReinforceTransformer.Models import ReinforcedStochasticDecoder, ReinforceTransformer
-                
-        # ~ onmt.Constants.weight_norm = opt.weight_norm
-        # ~ onmt.Constants.init_value = opt.param_init
         
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
         
@@ -180,8 +176,6 @@ def build_model(opt, dicts):
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         prior = NeuralPrior(opt, dicts['tgt'], positional_encoder)
         posterior = NeuralPosterior(opt, dicts['tgt'], positional_encoder)
-        # prior = None
-        # posterior = None
 
         posterior.encoder.word_lut.weight = decoder.word_lut.weight
 
@@ -195,26 +189,12 @@ def build_model(opt, dicts):
     
             
         from onmt.modules.MixtureModel.Models import MixtureEncoder, MixtureDecoder
-        # from onmt.modules.VDTransformer6.Inference import NeuralPrior, NeuralPosterior, Baseline
-        # ~ from onmt.modules.ReinforceTransformer.Models import ReinforcedStochasticDecoder, ReinforceTransformer
-                
-        # ~ onmt.Constants.weight_norm = opt.weight_norm
-        # ~ onmt.Constants.init_value = opt.param_init
-        
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
         
         encoder = MixtureEncoder(opt, dicts['src'], positional_encoder)
         decoder = MixtureDecoder(opt, dicts['tgt'], positional_encoder)
 
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
-        # prior = NeuralPrior(opt, dicts['tgt'], positional_encoder)
-        # posterior = NeuralPosterior(opt, dicts['tgt'], positional_encoder)
-        # baseline = Baseline(opt, dicts['tgt'], positional_encoder)
-        # prior = None
-        # posterior = None
-
-        # posterior.encoder.word_lut.weight = decoder.word_lut.weight
-        # baseline.encoder.word_lut.weight = decoder.word_lut.weight
 
         model = Transformer(encoder, decoder, generator)
 
@@ -223,12 +203,16 @@ def build_model(opt, dicts):
         raise NotImplementedError
         
     if opt.tie_weights:  
-        print("Joining the weights of decoder input and output embeddings")
+        print("* Joining the weights of decoder input and output embeddings")
         model.tie_weights()
        
     if opt.join_embedding:
-        print("Joining the weights of encoder and decoder word embeddings")
+        print("* Joining the weights of encoder and decoder word embeddings")
         model.share_enc_dec_embedding()
+
+    
+
+
         
     init = torch.nn.init
         

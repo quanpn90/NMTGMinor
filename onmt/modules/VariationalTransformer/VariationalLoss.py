@@ -160,7 +160,7 @@ class VariationalLoss(LossFuncBase):
         kl = output_dict['kl'].sum()
 
         # lambda_ = kl_lambda
-        lambda_ = 1.0
+        lambda_ = 0.1 # to avoid exploding (maybe)
         loss = smoothed_nll + kl * lambda_
 
         

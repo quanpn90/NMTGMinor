@@ -195,14 +195,12 @@ class VariationalDecoder(TransformerDecoder):
         mask_tgt = mask_tgt.unsqueeze(1)  + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
         output = emb.contiguous()
+
+        # only concatenate if time step 1
         if time_step > 1 :
 
             mask_tgt = mask_tgt[:,-1:,:]
-            # print(mask_tgt.size())
-            # print(output.size())
         else:
-            # print(mask_tgt.size())
-            # print(output.size())
             z = latent_z.unsqueeze(0)
 
             output = torch.cat([z, output], dim=0) # concat to the time dimension
@@ -240,7 +238,7 @@ class VariationalTransformer(NMTModel):
         self.prior_estimator = prior_estimator
         self.posterior_estimator = posterior_estimator
         
-    def forward(self, batch):
+    def forward(self, batch, sampling=False):
         """
         Inputs Shapes: 
             src: len_src x batch_size
@@ -270,7 +268,10 @@ class VariationalTransformer(NMTModel):
         else:
             ## during testing, assuming that Y is not available
             ## we should use the mean of the prior
-            z = p_z.sample()
+            if sampling:
+                z = p_z.sample()
+            else:
+                z = p_z.mean
 
 
         z = z.type_as(encoder_context)
