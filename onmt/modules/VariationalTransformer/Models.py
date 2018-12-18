@@ -257,8 +257,8 @@ class VariationalTransformer(NMTModel):
         
         encoder_context, src_mask = self.encoder(src)
 
-        p_z = self.prior_estimator(encoder_context, src)
-        q_z = self.posterior_estimator(encoder_context, src, tgt)
+        encoder_meaning, p_z = self.prior_estimator(src)
+        q_z = self.posterior_estimator(encoder_meaning, src, tgt)
 
         ### reparameterized sample:
         ### z = mean * epsilon + var
@@ -292,7 +292,7 @@ class VariationalTransformer(NMTModel):
 
     def create_decoder_state(self, src, context, mask_src, beamSize=1, type='old', sampling=False):
         
-        p_z = self.prior_estimator(context, src.t())
+        _, p_z = self.prior_estimator(src.t())
 
         if sampling:
             z = p_z.sample()

@@ -183,11 +183,8 @@ class DecoderLayer(nn.Module):
         
         out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt)
         
-        if residual_dropout > 0:
-            input_ = F.dropout(input, residual_dropout, self.training, False)
-            input = self.postprocess_attn(out, input_)
-        else:
-            input = self.postprocess_attn(out, input)
+        input = self.postprocess_attn(out, input)
+            
 
         """ Context Attention layer 
             layernorm > attn > dropout > residual

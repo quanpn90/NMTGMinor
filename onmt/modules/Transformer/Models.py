@@ -27,7 +27,7 @@ class TransformerEncoder(nn.Module):
         
     """
     
-    def __init__(self, opt, dicts, positional_encoder):
+    def __init__(self, opt, embedding, positional_encoder):
     
         super(TransformerEncoder, self).__init__()
         
@@ -42,9 +42,10 @@ class TransformerEncoder(nn.Module):
         self.time = opt.time
         self.residual_dropout = opt.residual_dropout
         
-        self.word_lut = nn.Embedding(dicts.size(),
-                                     self.model_size,
-                                     padding_idx=onmt.Constants.PAD)
+        # self.word_lut = nn.Embedding(dicts.size(),
+        #                              self.model_size,
+        #                              padding_idx=onmt.Constants.PAD)
+        self.word_lut = embedding
         
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
@@ -65,7 +66,7 @@ class TransformerEncoder(nn.Module):
         
         self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, self.residual_dropout) for _ in range(self.layers)])
 
-    def forward(self, input, **kwargs):
+    def forward(self, input, freeze_embedding=False, **kwargs):
         """
         Inputs Shapes: 
             input: batch_size x len_src (wanna tranpose)
@@ -77,11 +78,18 @@ class TransformerEncoder(nn.Module):
         """
 
         """ Embedding: batch_size x len_src x d_model """
-        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
-        
-        """ Scale the emb by sqrt(d_model) """
-        
-        emb = emb * math.sqrt(self.model_size)
+
+        if freeze_embedding:
+            with torch.no_grad():
+                emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+                
+                """ Scale the emb by sqrt(d_model) """
+                emb = emb * math.sqrt(self.model_size)
+        else:
+            emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+                
+            """ Scale the emb by sqrt(d_model) """
+            emb = emb * math.sqrt(self.model_size)
             
         """ Adding positional encoding """
         emb = self.time_transformer(emb)
@@ -123,7 +131,7 @@ class TransformerDecoder(nn.Module):
         
     """
     
-    def __init__(self, opt, dicts, positional_encoder, encoder_to_share=None):
+    def __init__(self, opt, embedding, positional_encoder, encoder_to_share=None):
     
         super(TransformerDecoder, self).__init__()
         
@@ -150,9 +158,10 @@ class TransformerDecoder(nn.Module):
         
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
         
-        self.word_lut = nn.Embedding(dicts.size(),
-                                     self.model_size,
-                                     padding_idx=onmt.Constants.PAD)
+        # self.word_lut = nn.Embedding(dicts.size(),
+        #                              self.model_size,
+        #                              padding_idx=onmt.Constants.PAD)
+        self.word_lut = embedding
         
         self.positional_encoder = positional_encoder
         

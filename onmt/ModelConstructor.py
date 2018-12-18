@@ -30,8 +30,8 @@ def update_backward_compatibility(opt):
     if not hasattr(opt, 'residual_dropout'):
         opt.residual_dropout = opt.dropout
 
-    if not hasattr(opt, 'tie_encoder_decoder_weights'):
-        opt.tie_encoder_decoder_weights = False
+    if not hasattr(opt, 'share_enc_dec_weights'):
+        opt.share_enc_dec_weights = False
         
     return opt
 
@@ -50,14 +50,27 @@ def build_model(opt, dicts):
     
     MAX_LEN = onmt.Constants.max_position_length  # This should be the longest sentence from the dataset
 
+    embedding_src = nn.Embedding(dicts['src'].size(),
+                                     opt.model_size,
+                                     padding_idx=onmt.Constants.PAD)
+
+    if opt.join_embedding:
+        embedding_tgt = embedding_src
+    else:
+        embedding_tgt = nn.Embedding(dicts['tgt'].size(),
+                                     opt.model_size,
+                                     padding_idx=onmt.Constants.PAD)
+        # print("* Joining the weights of encoder and decoder word embeddings")
+        # model.share_enc_dec_embedding()
+
     
     if opt.model == 'recurrent' or opt.model == 'rnn':
     
         from onmt.modules.rnn.Models import RecurrentEncoder, RecurrentDecoder, RecurrentModel 
 
-        encoder = RecurrentEncoder(opt, dicts['src'])
+        encoder = RecurrentEncoder(opt, embedding_src)
 
-        decoder = RecurrentDecoder(opt, dicts['tgt'])
+        decoder = RecurrentDecoder(opt, embedding_tgt)
         
         generator = onmt.modules.BaseModel.Generator(opt.rnn_size, dicts['tgt'].size())
         
@@ -75,8 +88,8 @@ def build_model(opt, dicts):
         else:
             positional_encoder = None
         
-        encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
-        decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder, encoder_to_share=encoder if opt.share_enc_dec_weights else None)
+        encoder = TransformerEncoder(opt, embedding_src, positional_encoder)
+        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, encoder_to_share=encoder if opt.share_enc_dec_weights else None)
         
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         
@@ -170,14 +183,12 @@ def build_model(opt, dicts):
         
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
         
-        encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
-        decoder = VariationalDecoder(opt, dicts['tgt'], positional_encoder)
+        encoder = TransformerEncoder(opt, embedding_src, positional_encoder)
+        decoder = VariationalDecoder(opt, embedding_tgt, positional_encoder)
 
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
-        prior = NeuralPrior(opt, dicts['tgt'], positional_encoder)
-        posterior = NeuralPosterior(opt, dicts['tgt'], positional_encoder)
-
-        posterior.encoder.word_lut.weight = decoder.word_lut.weight
+        prior = NeuralPrior(opt, embedding_src, positional_encoder)
+        posterior = NeuralPosterior(opt, embedding_tgt, positional_encoder)
 
         model = VariationalTransformer(encoder, decoder, prior, posterior, generator)
 
@@ -206,9 +217,7 @@ def build_model(opt, dicts):
         print("* Joining the weights of decoder input and output embeddings")
         model.tie_weights()
        
-    if opt.join_embedding:
-        print("* Joining the weights of encoder and decoder word embeddings")
-        model.share_enc_dec_embedding()
+    
 
     
 

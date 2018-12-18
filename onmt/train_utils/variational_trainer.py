@@ -276,7 +276,7 @@ class VariationalTrainerFP16(XETrainer):
                     oom = True
                     self.reset_state()
                     torch.cuda.empty_cache()
-                    oom_count += 1
+                    self.meters['oom'].update(1)
                 else:
                     raise e        
                 
@@ -350,7 +350,7 @@ class VariationalTrainerFP16(XETrainer):
                         except RuntimeError as e:
                             if 'out of memory' in str(e):
                                 torch.cuda.empty_cache()
-                                oom_count += 1
+                                self.meters["oom"].update(1)
                             else:
                                 raise e
 
@@ -394,7 +394,7 @@ class VariationalTrainerFP16(XETrainer):
                     self.logger.reset_meter("report_loss")
                     self.logger.reset_meter("report_tgt_words")
                     self.logger.reset_meter("report_src_words")
-                    self.logger.reset_time()
+                    
         
         total_loss = self.meters['total_loss'].sum
         total_words = self.meters['total_words'].sum
