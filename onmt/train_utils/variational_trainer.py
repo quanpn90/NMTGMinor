@@ -56,7 +56,7 @@ class VariationalTrainerFP16(XETrainer):
     def __init__(self, model, loss_function, trainData, validData, dicts, opt):
         super().__init__(model, loss_function, trainData, validData, dicts, opt, set_param=False)
         self.optim = onmt.Optim(opt)
-        self.scaler = DynamicLossScaler(opt.fp16_loss_scale)
+        self.scaler = DynamicLossScaler(opt.fp16_loss_scale, scale_window=opt.warmup_steps*2)
         self.n_samples = 1
         
         if self.cuda:
@@ -391,9 +391,9 @@ class VariationalTrainerFP16(XETrainer):
                     data_size = len(trainData)
                     self.logger.log(epoch, i, data_size)
                     
-                    self.logger.reset_meter("report_loss")
-                    self.logger.reset_meter("report_tgt_words")
-                    self.logger.reset_meter("report_src_words")
+                    # self.logger.reset_meter("report_loss")
+                    # self.logger.reset_meter("report_tgt_words")
+                    # self.logger.reset_meter("report_src_words")
                     
         
         total_loss = self.meters['total_loss'].sum

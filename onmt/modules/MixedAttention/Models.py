@@ -10,7 +10,6 @@ from torch.autograd import Variable
 
 
 
-
 def custom_layer(module):
     def custom_forward(*args):
         output = module(*args)

@@ -12,6 +12,7 @@ from onmt.modules.WordDrop import embedded_dropout
 from collections import defaultdict
 
 from onmt.modules.Linear import XavierLinear as Linear
+from onmt.modules.KLDivergence import kl_divergence_normal
 
 torch.set_printoptions(threshold=10000)
 
@@ -98,12 +99,6 @@ class VariationalDecoder(TransformerDecoder):
         output_plus_z = torch.cat([z, output], dim=0) # concat to the time dimension
 
         output = output_plus_z
-        # print(output.size())
-        # output_plus_z = torch.cat([output, z], dim=-1)
-
-        # combine input with latent variable
-        # output = self.projector(output_plus_z))
-
         
         # the rest will be the same as the Transformer
 
@@ -279,7 +274,8 @@ class VariationalTransformer(NMTModel):
         decoder_output, coverage = self.decoder(tgt, encoder_context, src, z)
 
         # compute KL between prior and posterior
-        kl_divergence = torch.distributions.kl.kl_divergence(q_z, p_z)
+        # kl_divergence = torch.distributions.kl.kl_divergence(q_z, p_z)
+        kl_divergence = kl_divergence_normal(q_z, p_z)
         outputs = defaultdict(lambda: None)
 
 

@@ -109,7 +109,7 @@ def build_model(opt, dicts):
         
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
         
-        encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder)
+        encoder = StochasticTransformerEncoder(opt, embedding_src, positional_encoder)
         
         decoder = StochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
         
@@ -128,8 +128,8 @@ def build_model(opt, dicts):
         
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN )
         
-        encoder = FCTransformerEncoder(opt, dicts['src'], positional_encoder)
-        decoder = FCTransformerDecoder(opt, dicts['tgt'], positional_encoder)
+        encoder = FCTransformerEncoder(opt, embedding_src, positional_encoder)
+        decoder = FCTransformerDecoder(opt, embedding_tgt, positional_encoder)
         
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         
@@ -145,8 +145,8 @@ def build_model(opt, dicts):
         
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN )
         
-        encoder = ParallelTransformerEncoder(opt, dicts['src'], positional_encoder)
-        decoder = ParallelTransformerDecoder(opt, dicts['tgt'], positional_encoder)
+        encoder = ParallelTransformerEncoder(opt, embedding_src, positional_encoder)
+        decoder = ParallelTransformerDecoder(opt, embedding_tgt, positional_encoder)
         
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         
@@ -166,8 +166,8 @@ def build_model(opt, dicts):
         time_encoder = TimeEncoding(opt.model_size, len_max=32)
 
         
-        encoder = UniversalTransformerEncoder(opt, dicts['src'], positional_encoder, time_encoder)
-        decoder = UniversalTransformerDecoder(opt, dicts['tgt'], positional_encoder, time_encoder)
+        encoder = UniversalTransformerEncoder(opt, embedding_src, positional_encoder, time_encoder)
+        decoder = UniversalTransformerDecoder(opt, embedding_tgt, positional_encoder, time_encoder)
         
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         
@@ -202,8 +202,8 @@ def build_model(opt, dicts):
         from onmt.modules.MixtureModel.Models import MixtureEncoder, MixtureDecoder
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
         
-        encoder = MixtureEncoder(opt, dicts['src'], positional_encoder)
-        decoder = MixtureDecoder(opt, dicts['tgt'], positional_encoder)
+        encoder = MixtureEncoder(opt, embedding_src, positional_encoder)
+        decoder = MixtureDecoder(opt, embedding_tgt, positional_encoder)
 
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
 
@@ -216,13 +216,7 @@ def build_model(opt, dicts):
     if opt.tie_weights:  
         print("* Joining the weights of decoder input and output embeddings")
         model.tie_weights()
-       
-    
 
-    
-
-
-        
     init = torch.nn.init
         
     init.xavier_uniform_(model.generator.linear.weight)

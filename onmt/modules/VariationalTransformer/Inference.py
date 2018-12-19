@@ -39,9 +39,10 @@ def mean_with_mask(context, mask):
     # mask dimension: T x B x 1 (with unsqueeze)
     # first, we have to mask the context with zeros at the unwanted position
 
-    context.masked_fill_(mask, 0)
+    eps = 0
+    context.masked_fill_(mask, eps)
 
-    # then take the sum over the dimension
+    # then take the sum over the time dimension
     context_sum = torch.sum(context, dim=0, keepdim=False)
 
 
@@ -53,8 +54,6 @@ def mean_with_mask(context, mask):
 
 """
     The Prior model estimates p(z | x)
-
-
 """
 class NeuralPrior(nn.Module):
 
@@ -78,7 +77,6 @@ class NeuralPrior(nn.Module):
         self.encoder = TransformerEncoder(encoder_opt, embedding, positional_encoder)
 
         self.projector = Linear(opt.model_size, opt.model_size)
-        # self.norm = nn.LayerNorm(opt.model_size)
         self.mean_predictor = Linear(opt.model_size, opt.model_size)
         self.var_predictor = Linear(opt.model_size, opt.model_size)
 
@@ -102,7 +100,7 @@ class NeuralPrior(nn.Module):
 
         context = mean_with_mask(context, mask)
         encoder_meaning = context
-        context = torch.tanh(self.projector(context))
+        context = F.tanh(self.projector(context))
        
 
         mean = self.mean_predictor(context)       
@@ -172,8 +170,7 @@ class NeuralPosterior(nn.Module):
 
         context = torch.cat([encoder_context, decoder_context], dim=-1)
 
-        context = torch.tanh(self.projector(context))
-
+        context = F.tanh(self.projector(context))
 
         mean = self.mean_predictor(context)
         var = torch.nn.functional.softplus(self.var_predictor(context))
