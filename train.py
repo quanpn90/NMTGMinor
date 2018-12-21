@@ -25,6 +25,7 @@ parser = make_parser(parser)
 
 opt = parser.parse_args()
 
+print(torch.__version__)
 print(opt)
 
 # An ugly hack to have weight norm on / off

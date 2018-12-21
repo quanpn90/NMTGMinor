@@ -274,8 +274,8 @@ class VariationalTransformer(NMTModel):
         decoder_output, coverage = self.decoder(tgt, encoder_context, src, z)
 
         # compute KL between prior and posterior
-        # kl_divergence = torch.distributions.kl.kl_divergence(q_z, p_z)
-        kl_divergence = kl_divergence_normal(q_z, p_z)
+        kl_divergence = torch.distributions.kl.kl_divergence(q_z, p_z)
+        # kl_divergence = kl_divergence_normal(q_z, p_z)
         outputs = defaultdict(lambda: None)
 
 

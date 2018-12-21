@@ -16,86 +16,9 @@ from onmt.modules.PrePostProcessing import PrePostProcessing
         
 Linear = XavierLinear
 
-def variational_dropout(input, p, training=False):
-    """Applies Variational Dropout (query, key, value)
-    Inputs:
-        input: Variable - batch_size * time_steps * hidden
-    """
-    if training:
-        bsize = input.size(0)
-        hsize = input.size(2)
-        
-        # create a mask for one time step
-        mask = Variable(input.data.new(bsize, hsize).bernoulli_(1 - p).div_(1 - p), requires_grad=False)
-        
-        # then expand it to all time steps 
-        mask = mask.unsqueeze(1).expand_as(input)
-        output = input * mask
-        return output
-    # if eval then return the input
-    return input
-
-    
-
-    
-class EncoderLayer(nn.Module):
-    """Wraps multi-head attentions and position-wise feed forward into one encoder layer
-    
-    Args:
-        h:       number of heads
-        d_model: dimension of model
-        p:       dropout probabolity 
-        d_ff:    dimension of feed forward
-        
-    Params:
-        multihead:    multi-head attentions layer
-        feedforward:  feed forward layer
-    
-    Input Shapes:
-        query: batch_size x len_query x d_model 
-        key:   batch_size x len_key x d_model   
-        value: batch_size x len_key x d_model
-        mask:  batch_size x len_query x len_key or broadcastable 
-    
-    Output Shapes:
-        out: batch_size x len_query x d_model
-    """
-    
-    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, residual_p=0.1, version=1.0):
-        super(EncoderLayer, self).__init__()
-        self.version = version
-        
-        self.preprocess_attn = PrePostProcessing(d_model, 0.0, sequence='n')
-        self.postprocess_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
-        self.preprocess_ffn = PrePostProcessing(d_model, 0.0, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
-        self.multihead = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=1)
-        
-        if onmt.Constants.activation_layer == 'linear_relu_linear':
-            ff_p = p
-            feedforward = FeedForward(d_model, d_ff, ff_p,static=onmt.Constants.static)
-        elif onmt.Constants.activation_layer == 'maxout':
-            k = int(math.ceil(d_ff / d_model))
-            feedforward = MaxOut(d_model, d_model, k)
-        self.feedforward = Bottle(feedforward)
-            
-    def forward(self, input, attn_mask, pad_mask=None):
-        pad_mask = None
-        query = self.preprocess_attn(input)
-        out, _ = self.multihead(query, query, query, attn_mask)
-        input = self.postprocess_attn(out, input)
-        
-        """ Feed forward layer 
-            layernorm > ffn > dropout > residual
-        """
-        out = self.feedforward(self.preprocess_ffn(input))
-        input = self.postprocess_ffn(out, input)
-        
-        return input
     
     
-    
-class DecoderLayer(nn.Module):
+class MixedDecoderLayer(nn.Module):
     """Wraps multi-head attentions and position-wise feed forward into one layer of decoder
     
     Args:
@@ -124,7 +47,7 @@ class DecoderLayer(nn.Module):
     """    
     
     def __init__(self, h, d_model, p, d_ff, attn_p=0.1, residual_p=0.1, version=1.0, encoder_to_share=None):
-        super(DecoderLayer, self).__init__()
+        super().__init__()
         
         if encoder_to_share is None:
 
@@ -136,7 +59,7 @@ class DecoderLayer(nn.Module):
             self.postprocess_ffn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
             
             
-            self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=1)
+            self.multihead = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
             
             
             if onmt.Constants.activation_layer == 'linear_relu_linear':
@@ -161,13 +84,13 @@ class DecoderLayer(nn.Module):
             self.preprocess_ffn = encoder_to_share.preprocess_ffn
             self.postprocess_ffn = encoder_to_share.postprocess_ffn
 
-            self.multihead_tgt = encoder_to_share.multihead
+            self.multihead = encoder_to_share.multihead
             self.feedforward = encoder_to_share.feedforward
 
 
-        self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_src_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
-        self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
+        # self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
+        # self.postprocess_src_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
+        # self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
     
     def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, residual_dropout=0.0):
         

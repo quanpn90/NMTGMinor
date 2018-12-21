@@ -216,18 +216,16 @@ class VariationalTranslator(object):
             model_ = self.models[0]
             encoder_context = contexts[0]
         
-            tgtBatchInput = tgtBatch[:-1]
-            tgtBatchOutput = tgtBatch[1:]
+            tgtBatchInput = tgtBatch[0]
+            tgtBatchOutput = tgtBatch[1]
             tgtBatchInput = tgtBatchInput.transpose(0,1)
 
-            p_z = model_.prior_estimator(encoder_context, src)
+            _, p_z = model_.prior_estimator(src)
             z = p_z.mean.float()
-            # z = torch.argmax(p_z.probs, dim=-1).float()
             z = z.type_as(encoder_context)
 
             output, coverage = model_.decoder(tgtBatchInput, contexts[0], src, z)
             # output should have size time x batch x dim
-            
             
             #  (2) if a target is specified, compute the 'goldScore'
             #  (i.e. log likelihood) of the target under the model
@@ -364,11 +362,12 @@ class VariationalTranslator(object):
         batch.cuda()
         # ~ batch = self.to_variable(dataset.next()[0])
         src = batch.get('source')
-        tgt = batch.get('target_input')
+        tgt_input = batch.get('target_input')
+        tgt_output = batch.get('target_output')
         batchSize = batch.size
 
         #  (2) translate
-        pred, predScore, attn, predLength, goldScore, goldWords = self.translateBatch(src, tgt)
+        pred, predScore, attn, predLength, goldScore, goldWords = self.translateBatch(src, (tgt_input, tgt_output))
         
 
         #  (3) convert indexes to words

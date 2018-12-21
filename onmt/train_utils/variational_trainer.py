@@ -56,7 +56,7 @@ class VariationalTrainerFP16(XETrainer):
     def __init__(self, model, loss_function, trainData, validData, dicts, opt):
         super().__init__(model, loss_function, trainData, validData, dicts, opt, set_param=False)
         self.optim = onmt.Optim(opt)
-        self.scaler = DynamicLossScaler(opt.fp16_loss_scale, scale_window=opt.warmup_steps*2)
+        self.scaler = DynamicLossScaler(opt.fp16_loss_scale, scale_window=2000)
         self.n_samples = 1
         
         if self.cuda:

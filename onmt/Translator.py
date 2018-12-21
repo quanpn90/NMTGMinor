@@ -222,9 +222,8 @@ class Translator(object):
             # Use the first model to decode
             model_ = self.models[0]
         
-            tgtBatchInput = tgtBatch[:-1]
-            tgtBatchOutput = tgtBatch[1:]
-            tgtBatchInput = tgtBatchInput.transpose(0,1)
+            tgtBatchInput = tgtBatch[0].transpose(0,1)
+            tgtBatchOutput = tgtBatch[1]
             
             output, coverage = model_.decoder(tgtBatchInput, contexts[0], src)
             # output should have size time x batch x dim
@@ -612,12 +611,13 @@ class Translator(object):
         batch.cuda()
         # ~ batch = self.to_variable(dataset.next()[0])
         src = batch.get('source')
-        tgt = batch.get('target_input')
+        tgt_input = batch.get('target_input')
+        tgt_output = batch.get('target_output')
         bsz = batch.size
 
         #  (2) translate
         # ~ pred, predScore, attn, predLength, goldScore, goldWords = self.translateBatch(src, tgt)
-        finalized, goldScore, goldWords = self.translateBatch(src, tgt)
+        finalized, goldScore, goldWords = self.translateBatch(src, (tgt_input, tgt_output))
         
         
 

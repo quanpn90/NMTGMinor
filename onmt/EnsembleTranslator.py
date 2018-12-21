@@ -207,13 +207,12 @@ class EnsembleTranslator(object):
             # Use the first model to decode
             model_ = self.models[0]
         
-            tgtBatchInput = tgtBatch[:-1]
-            tgtBatchOutput = tgtBatch[1:]
-            tgtBatchInput = tgtBatchInput.transpose(0,1)
+            tgtBatchInput = tgtBatch[0]
+            tgtBatchOutput = tgtBatch[1]
+            tgtBatchInput = tgtBatchInput.transpose(0,1) # batch first
             
             output, coverage = model_.decoder(tgtBatchInput, contexts[0], src)
             # output should have size time x batch x dim
-            
             
             #  (2) if a target is specified, compute the 'goldScore'
             #  (i.e. log likelihood) of the target under the model
@@ -350,11 +349,12 @@ class EnsembleTranslator(object):
         batch.cuda()
         # ~ batch = self.to_variable(dataset.next()[0])
         src = batch.get('source')
-        tgt = batch.get('target_input')
+        tgt_input = batch.get('target_input')
+        tgt_output = batch.get('target_output')
         batchSize = batch.size
 
         #  (2) translate
-        pred, predScore, attn, predLength, goldScore, goldWords = self.translateBatch(src, tgt)
+        pred, predScore, attn, predLength, goldScore, goldWords = self.translateBatch(src, (tgt_input, tgt_output))
         
 
         #  (3) convert indexes to words
