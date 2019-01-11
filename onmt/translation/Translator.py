@@ -219,7 +219,7 @@ class EnsembleTranslator(object):
         goldScores = contexts[0].data.new(batchSize).zero_()
         goldWords = 0
         
-        if tgtBatch is not None:
+        if tgtBatch[0] is not None:
             # Use the first model to decode
             model_ = self.models[0]
         

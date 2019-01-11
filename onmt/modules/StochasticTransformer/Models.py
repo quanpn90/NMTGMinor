@@ -64,9 +64,6 @@ class StochasticTransformerEncoder(TransformerEncoder):
         
         super(StochasticTransformerEncoder, self).__init__(opt, dicts, positional_encoder)
             
-          
-        
-        
         print("Stochastic Encoder with %.2f expected layers" % e_length) 
        
     def build_modules(self):
@@ -75,15 +72,6 @@ class StochasticTransformerEncoder(TransformerEncoder):
         
         for l in range(self.layers):
             
-            # linearly decay the death rate
-            # ~ if self.death_type == 'linear_decay':
-                # ~ death_r = ( l + 1 ) / self.layers * self.death_rate
-            # ~ elif self.death_type == 'uniform':
-                # ~ death_r = self.death_rate
-            # ~ else:
-                # ~ raise NotImplementedError("Death type incorrectly specified")
-                
-            # ~ self.death_rates[l] = death_r
             death_r = self.death_rates[l]
             
             block = StochasticEncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, death_rate=death_r)
@@ -115,9 +103,7 @@ class StochasticTransformerEncoder(TransformerEncoder):
         emb = self.preprocess_layer(emb)
         
         mask_src = input.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x 1 x len_src for broadcasting
-        
-        #~ pad_mask = input.ne(onmt.Constants.PAD)) # batch_size x len_src
-        
+                
         context = emb.transpose(0, 1).contiguous()
         
         for i, layer in enumerate(self.layer_modules):
@@ -194,7 +180,7 @@ class StochasticTransformerDecoder(TransformerDecoder):
         
     """
     
-    def __init__(self, opt, dicts, positional_encoder):
+    def __init__(self, opt, dicts, positional_encoder, encoder_to_share=None):
     
         self.death_rate = opt.death_rate
         self.death_type = opt.death_type
@@ -208,25 +194,20 @@ class StochasticTransformerDecoder(TransformerDecoder):
         print("Stochastic Decoder with %.2f expected layers" % e_length) 
         
     
-    def build_modules(self):
+    def build_modules(self, encoder_to_share=None):
         
-        self.layer_modules = nn.ModuleList()
+        if encoder_to_share == None:
+            self.layer_modules = nn.ModuleList()
+                    
+            for l in range(self.layers):
+                    
+                death_r = self.death_rates[l]   
                 
-        for l in range(self.layers):
-            
-            # linearly decay the death rate
-            # ~ if self.death_type == 'linear_decay':
-                # ~ death_r = ( l + 1 ) / self.layers * self.death_rate
-            # ~ elif self.death_type == 'uniform':
-                # ~ death_r = self.death_rate
-            # ~ else:
-                # ~ raise NotImplementedError("Death type incorrectly specified")
+                block = StochasticDecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, death_rate=death_r)
                 
-            death_r = self.death_rates[l]   
-            
-            block = StochasticDecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, death_rate=death_r)
-            
-            self.layer_modules.append(block)
+                self.layer_modules.append(block)
+        else:
+            raise NotImplementedError
             
     def forward(self, input, context, src, **kwargs):
         """

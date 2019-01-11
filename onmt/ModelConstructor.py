@@ -32,6 +32,12 @@ def update_backward_compatibility(opt):
 
     if not hasattr(opt, 'share_enc_dec_weights'):
         opt.share_enc_dec_weights = False
+
+    if not hasattr(opt, 'var_posterior_share_weight'):
+        opt.var_posterior_share_weight = False
+
+    if not hasattr(opt, 'var_posterior_combine'):
+        opt.var_posterior_combine = 'concat'
         
     return opt
 
@@ -106,12 +112,11 @@ def build_model(opt, dicts):
         onmt.Constants.init_value = opt.param_init
         
         
-        
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
         
         encoder = StochasticTransformerEncoder(opt, embedding_src, positional_encoder)
         
-        decoder = StochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
+        decoder = StochasticTransformerDecoder(opt, embedding_tgt, positional_encoder)
         
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         
@@ -188,7 +193,7 @@ def build_model(opt, dicts):
 
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         prior = NeuralPrior(opt, embedding_src, positional_encoder)
-        posterior = NeuralPosterior(opt, embedding_tgt, positional_encoder)
+        posterior = NeuralPosterior(opt, embedding_tgt, positional_encoder, prior=prior)
 
         model = VariationalTransformer(encoder, decoder, prior, posterior, generator)
 

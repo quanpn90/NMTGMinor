@@ -195,5 +195,12 @@ def make_parser(parser):
 
     parser.add_argument('-share_enc_dec_weights', action='store_true',
                         help='Share the encoder and decoder weights (except for the src attention layer)')
+
+
+
+    parser.add_argument('-var_posterior_combine', default='concat',
+                        help="Type of combination between source and target for posterior q(z|x, y). Values concat|sum")
     
+    parser.add_argument('-var_posterior_share_weight', action='store_true',
+                        help="Share weights between posterior")
     return parser

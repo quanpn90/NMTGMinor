@@ -127,7 +127,7 @@ class NeuralPosterior(nn.Module):
         
     """
     
-    def __init__(self, opt, embedding, positional_encoder):
+    def __init__(self, opt, embedding, positional_encoder, prior=None):
     
         super(NeuralPosterior, self).__init__()
         
@@ -137,9 +137,20 @@ class NeuralPosterior(nn.Module):
         encoder_opt.layers = opt.layers // 2
         # encoder_opt.word_dropout = 0.0 
         self.dropout = opt.dropout
-        self.projector = Linear(opt.model_size * 2, opt.model_size)
-        # self.encoder_src = TransformerEncoder(encoder_opt, dicts_src, positional_encoder)
-        self.encoder = TransformerEncoder(encoder_opt, embedding, positional_encoder)
+
+        self.posterior_combine = opt.var_posterior_combine
+        if opt.var_posterior_combine == 'concat':
+            self.projector = Linear(opt.model_size * 2, opt.model_size)
+        elif opt.var_posterior_combine == 'sum':
+            self.projector = Linear(opt.model_size * 1, opt.model_size)
+        else:
+            raise NotImplementedError
+
+        if opt.var_posterior_share_weight:
+            assert prior is not None
+            self.encoder = prior.encoder
+        else:
+            self.encoder = TransformerEncoder(encoder_opt, embedding, positional_encoder)
         # self.norm = nn.LayerNorm(opt.model_size)
 
         self.mean_predictor = Linear(opt.model_size, opt.model_size)
@@ -171,7 +182,10 @@ class NeuralPosterior(nn.Module):
         encoder_context = encoder_meaning
         decoder_context = mean_with_mask(decoder_context, tgt_mask)
 
-        context = torch.cat([encoder_context, decoder_context], dim=-1)
+        if self.posterior_combine == 'concat':
+            context = torch.cat([encoder_context, decoder_context], dim=-1)
+        elif self.posterior_combine == 'sum':
+            context = encoder_context + decoder_context
 
         context = torch.tanh(self.projector(context))
 

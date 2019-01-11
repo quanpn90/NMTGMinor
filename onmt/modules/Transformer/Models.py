@@ -159,9 +159,6 @@ class TransformerDecoder(nn.Module):
         
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
         
-        # self.word_lut = nn.Embedding(dicts.size(),
-        #                              self.model_size,
-        #                              padding_idx=onmt.Constants.PAD)
         self.word_lut = embedding
         
         self.positional_encoder = positional_encoder

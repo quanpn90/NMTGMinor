@@ -70,6 +70,8 @@ parser.add_argument('-lower', action='store_true', help='lowercase data')
 parser.add_argument('-remove_duplicate', action='store_true', help='remove duplicated sequences')
 parser.add_argument('-sort_by_target', action='store_true', help='lowercase data')
 parser.add_argument('-join_vocab', action='store_true', help='Using one dictionary for both source and target')
+parser.add_argument('-bos_word', default="default",
+                    help="Type of the source input. Options are [text|img].")
 
 parser.add_argument('-report_every', type=int, default=100000,
                     help="Report status every this many sentences")
@@ -77,6 +79,8 @@ parser.add_argument('-report_every', type=int, default=100000,
 opt = parser.parse_args()
 
 torch.manual_seed(opt.seed)
+
+# print(opt.bos_word)
 
 def makeJoinVocabulary(filenames, size, input_type="word"):
     
@@ -165,7 +169,8 @@ def saveVocabulary(name, vocab, file):
     vocab.writeFile(file)
 
 
-def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_length=64, sort_by_target=False, input_type='word', remove_duplicate=False):
+def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_length=64, 
+             sort_by_target=False, input_type='word', remove_duplicate=False, bos_word="default"):
     src, tgt = [], []
     sizes = []
     count, ignored = 0, 0
@@ -176,6 +181,13 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
     print('Processing %s & %s ...' % (srcFile, tgtFile))
     srcF = open(srcFile)
     tgtF = open(tgtFile)
+
+    if bos_word == "default":
+        bos_word = onmt.Constants.BOS_WORD
+
+    elif bos_word == "none":
+        print(" * Warning: no BOS WORD used in data preprocessing!")
+        bos_word = None
 
     while True:
         sline = srcF.readline()
@@ -224,20 +236,16 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
             
             
             # For src text, we use BOS for possible reconstruction
-            
             src_sent = srcDicts.convertToIdx(srcWords,
                                               onmt.Constants.UNK_WORD)
             src += [src_sent]                                 
 
             tgt_sent = tgtDicts.convertToIdx(tgtWords,
                                           onmt.Constants.UNK_WORD,
-                                          onmt.Constants.BOS_WORD,
-                                          onmt.Constants.EOS_WORD)
+                                          bosWord=bos_word,
+                                          eosWord=onmt.Constants.EOS_WORD)
             tgt += [tgt_sent]
-            # if sort_by_target:
-                # sizes += [len(tgtWords)]
-            # else:
-            #     sizes += [len(srcWords)]
+            
             src_sizes += [len(src_sent)]
             tgt_sizes += [len(tgt_sent)]
         else:
@@ -296,7 +304,8 @@ def main():
                                           max_tgt_length=opt.tgt_seq_length, 
                                           sort_by_target=opt.sort_by_target,
                                           input_type=opt.input_type,
-                                          remove_duplicate=opt.remove_duplicate)
+                                          remove_duplicate=opt.remove_duplicate,
+                                          bos_word=opt.bos_word)
 
     print('Preparing validation ...')
    
@@ -304,7 +313,8 @@ def main():
                                           dicts['src'], dicts['tgt'], 
                                           max_src_length=max(1024,opt.src_seq_length), 
                                           max_tgt_length=max(1024,opt.tgt_seq_length),
-                                          input_type=opt.input_type)
+                                          input_type=opt.input_type,
+                                          bos_word=opt.bos_word)
     
     if opt.format == 'raw':                                  
         

@@ -148,12 +148,7 @@ class DecoderLayer(nn.Module):
             self.feedforward = Bottle(feedforward)
 
         else:
-
-            # self.preprocess_attn = PrePostProcessing(d_model, 0.0, sequence='n')
-            # self.postprocess_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
-            # self.preprocess_ffn = PrePostProcessing(d_model, 0.0, sequence='n')
-            # self.postprocess_ffn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
-            # self.multihead = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=1)
+            # share the self-attention layers between encoder and decoder
 
             self.preprocess_attn = encoder_to_share.preprocess_attn
             self.postprocess_attn = encoder_to_share.postprocess_attn
