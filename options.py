@@ -203,4 +203,9 @@ def make_parser(parser):
     
     parser.add_argument('-var_posterior_share_weight', action='store_true',
                         help="Share weights between posterior")
+
+    parser.add_argument('-var_ignore_first_source_token', action='store_true',
+                        help="Share weights between posterior")
+    parser.add_argument('-var_ignore_first_target_token', action='store_true',
+                        help="Share weights between posterior")
     return parser

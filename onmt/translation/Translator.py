@@ -23,6 +23,7 @@ class EnsembleTranslator(object):
         self.stop_early = True
         self.normalize_scores = True
         self.len_penalty = opt.alpha
+        self.bos_token = opt.bos_token
         
         self.models = list()
         self.model_types = list()
@@ -75,6 +76,7 @@ class EnsembleTranslator(object):
         self.cuda = opt.cuda
         self.ensemble_op = opt.ensemble_op
         self.search = BeamSearch(self.tgt_dict)
+        self.bos = self.tgt_dict.lookup(self.bos_token)
         self.eos = onmt.Constants.EOS
         self.pad = onmt.Constands.PAD
         

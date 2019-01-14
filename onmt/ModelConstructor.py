@@ -189,7 +189,8 @@ def build_model(opt, dicts):
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
         
         encoder = TransformerEncoder(opt, embedding_src, positional_encoder)
-        decoder = VariationalDecoder(opt, embedding_tgt, positional_encoder)
+        decoder = VariationalDecoder(opt, embedding_tgt, positional_encoder, 
+                                          encoder_to_share=encoder if opt.share_enc_dec_weights else None)
 
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         prior = NeuralPrior(opt, embedding_src, positional_encoder)

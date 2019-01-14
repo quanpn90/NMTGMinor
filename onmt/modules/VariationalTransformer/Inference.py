@@ -72,8 +72,9 @@ class NeuralPrior(nn.Module):
         encoder_opt = copy.deepcopy(opt)
         # quick_hack to override some hyper parameters of the prior encoder
         encoder_opt.layers = opt.layers // 2
-        #  encoder_opt.word_dropout = 0.0 
         self.dropout = opt.dropout
+
+        self.var_ignore_first_source_token = opt.var_ignore_first_source_token
 
         self.encoder = TransformerEncoder(encoder_opt, embedding, positional_encoder)
 
@@ -91,6 +92,8 @@ class NeuralPrior(nn.Module):
             mask_src 
             
         """
+        if self.var_ignore_first_source_token:
+            input = input[:,1:]
         # pass the input to the transformer encoder (we also return the mask)
         context, _ = self.encoder(input, freeze_embedding=True)
           
@@ -111,7 +114,6 @@ class NeuralPrior(nn.Module):
 
         p_z = torch.distributions.normal.Normal(mean.float(), var)
 
-        
 
         # return prior distribution P(z | X)
         return encoder_meaning, p_z
@@ -138,6 +140,8 @@ class NeuralPosterior(nn.Module):
         # encoder_opt.word_dropout = 0.0 
         self.dropout = opt.dropout
 
+        self.var_ignore_first_target_token = opt.var_ignore_first_target_token
+
         self.posterior_combine = opt.var_posterior_combine
         if opt.var_posterior_combine == 'concat':
             self.projector = Linear(opt.model_size * 2, opt.model_size)
@@ -146,12 +150,11 @@ class NeuralPosterior(nn.Module):
         else:
             raise NotImplementedError
 
-        if opt.var_posterior_share_weight:
+        if opt.var_posterior_share_weight == True:
             assert prior is not None
             self.encoder = prior.encoder
         else:
             self.encoder = TransformerEncoder(encoder_opt, embedding, positional_encoder)
-        # self.norm = nn.LayerNorm(opt.model_size)
 
         self.mean_predictor = Linear(opt.model_size, opt.model_size)
         self.var_predictor = Linear(opt.model_size, opt.model_size)
@@ -168,17 +171,18 @@ class NeuralPosterior(nn.Module):
         """
 
         """ Embedding: batch_size x len_src x d_model """
+
+        if self.var_ignore_first_target_token:
+            input_tgt = input_tgt[:,1:]
         
         # encoder_context = encoder_context.detach()
         decoder_context, _ = self.encoder(input_tgt, freeze_embedding=True)
 
         # src_mask = input_src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
-        tgt_mask = input_tgt.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
+        tgt_mask = input_tgt.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2) 
 
 
         # take the mean of each context
-        # encoder_context = mean_with_mask(encoder_context, src_mask)
-
         encoder_context = encoder_meaning
         decoder_context = mean_with_mask(decoder_context, tgt_mask)
 
@@ -194,7 +198,6 @@ class NeuralPosterior(nn.Module):
         var = torch.exp(0.5 * log_var)
 
         q_z = torch.distributions.normal.Normal(mean.float(), var)
-
 
         # return distribution Q(z | X, Y)
         return q_z

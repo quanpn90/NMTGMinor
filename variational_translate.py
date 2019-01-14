@@ -69,6 +69,8 @@ parser.add_argument('-gpu', type=int, default=-1,
                     help="Device to run on")
 parser.add_argument('-seed', default=9999, type=int,
                     help="Seed for deterministic runs.")
+parser.add_argument('-bos_token', type=str, default="<s>",
+                    help='BOS Token to start BEAM search. Default is <s>.')
 
 def reportScore(name, scoreTotal, wordsTotal):
     print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (

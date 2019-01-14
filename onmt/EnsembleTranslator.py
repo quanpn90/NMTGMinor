@@ -19,6 +19,9 @@ class EnsembleTranslator(object):
         self.alpha = opt.alpha
         self.start_with_bos = opt.start_with_bos
         self.fp16 = opt.fp16
+        self.bos_token = opt.bos_token
+
+        print("* Starting token %s " % self.bos_token)
         
         self.models = list()
         self.model_types = list()
@@ -69,6 +72,7 @@ class EnsembleTranslator(object):
             
         self.cuda = opt.cuda
         self.ensemble_op = opt.ensemble_op
+        self.bos_id = self.tgt_dict.lookup(self.bos_token)
         
         if opt.verbose:
             print('Done')
@@ -231,7 +235,7 @@ class EnsembleTranslator(object):
         src = srcBatch # this is time first again (before transposing)
         
         # initialize the beam
-        beam = [onmt.Beam(beamSize, self.opt.cuda) for k in range(batchSize)]
+        beam = [onmt.Beam(beamSize, bos_id=self.bos_id, cuda=self.opt.cuda) for k in range(batchSize)]
         
         batchIdx = list(range(batchSize))
         remainingSents = batchSize
@@ -346,7 +350,8 @@ class EnsembleTranslator(object):
         #  (1) convert words to indexes
         dataset = self.buildData(srcBatch, goldBatch)
         batch = dataset.next()[0]
-        batch.cuda()
+        if self.cuda:
+            batch.cuda()
         # ~ batch = self.to_variable(dataset.next()[0])
         src = batch.get('source')
         tgt_input = batch.get('target_input')

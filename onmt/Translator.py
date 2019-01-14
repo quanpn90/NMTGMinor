@@ -23,6 +23,7 @@ class Translator(object):
         self.stop_early = True
         self.normalize_scores = opt.normalize
         self.len_penalty = opt.alpha
+        self.bos_token = opt.bos_token
         
         self.models = list()
         self.model_types = list()
@@ -79,7 +80,9 @@ class Translator(object):
         self.search = DiverseBeamSearch(self.tgt_dict, 1, self.opt.diverse_beam_strength)
         self.eos = onmt.Constants.EOS
         self.pad = onmt.Constants.PAD
-        self.bos = onmt.Constants.BOS
+        if "BOS" in self.bos_token:
+            self.bos_token = onmt.Constants.BOS_WORD
+        self.bos = self.tgt_dict.lookup(self.bos_token)
         self.unk = onmt.Constants.UNK
         self.vocab_size = self.tgt_dict.size()
         self.minlen = 1

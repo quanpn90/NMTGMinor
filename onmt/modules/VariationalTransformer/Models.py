@@ -36,7 +36,7 @@ class VariationalDecoder(TransformerDecoder):
         
     """
     
-    def __init__(self, opt, dicts, positional_encoder):
+    def __init__(self, opt, dicts, positional_encoder, encoder_to_share=None):
     
         self.death_rate = opt.death_rate
         self.death_type = 'linear_decay'
@@ -45,7 +45,7 @@ class VariationalDecoder(TransformerDecoder):
 
         # self.death_rates, e_length = expected_length(self.layers, self.death_rate, self.death_type)  
         # build_modules will be called from the inherited constructor
-        super().__init__(opt, dicts, positional_encoder)
+        super().__init__(opt, dicts, positional_encoder, encoder_to_share=encoder_to_share)
 
 
         # self.projector = Linear(2 * opt.model_size, opt.model_size)
@@ -261,8 +261,7 @@ class VariationalTransformer(NMTModel):
         if self.training:
             z = q_z.rsample()
         else:
-            ## during testing, assuming that Y is not available
-            ## we should use the mean of the prior
+            ## during testing we use the prior
             if sampling:
                 z = p_z.sample()
             else:
@@ -275,7 +274,6 @@ class VariationalTransformer(NMTModel):
 
         # compute KL between prior and posterior
         kl_divergence = torch.distributions.kl.kl_divergence(q_z, p_z)
-        # kl_divergence = kl_divergence_normal(q_z, p_z)
         outputs = defaultdict(lambda: None)
 
 
@@ -354,6 +352,7 @@ class VariationalTransformerState(DecoderState):
     
     # in this section, the sentences that are still active are
     # compacted so that the decoder is not run on completed sentences
+    # compatible with decoding version 1.0
     def _prune_complete_beam(self, activeIdx, remainingSents):
         
         model_size = self.context.size(-1)
@@ -409,7 +408,10 @@ class VariationalTransformerState(DecoderState):
         self.z = updateActive2DBF(self.z)
 
     # For the new decoder version only
+    # compatible with decoding version 2.0
     def _reorder_incremental_state(self, reorder_state):
+        raise NotImplementedError
+        # not implemented correctly yet
         self.context = self.context.index_select(1, reorder_state)
         self.src_mask = self.src_mask.index_select(0, reorder_state)
                             
