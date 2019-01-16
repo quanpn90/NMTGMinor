@@ -91,7 +91,6 @@ class TransformerEncoder(nn.Module):
             emb = self.audio_trans.forward(input.contiguous().view(-1, input.size(2))).view(input.size(0),
                                                                                             input.size(1), -1)
 
-
         """ Scale the emb by sqrt(d_model) """
         
         emb = emb * math.sqrt(self.model_size)

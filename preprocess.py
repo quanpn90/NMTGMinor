@@ -32,6 +32,8 @@ parser.add_argument('-stride', type=int, default=1,
                     help="Stride on input features")
 parser.add_argument('-concat', type=int, default=1,
                     help="Concate sequential audio features to decrease sequence length")
+parser.add_argument('-previous_context', type=int, default=0,
+                    help="Number of previous sentence for context")
 parser.add_argument('-input_type', default="word",
                     help="Input type: word/char")
 parser.add_argument('-format', default="bin",
@@ -265,7 +267,7 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
     return src, tgt
 
 
-def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64,sort_by_target=False, input_type='word',stride=1,concat=1):
+def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64,sort_by_target=False, input_type='word',stride=1,concat=1,prev_context = 0):
     src, tgt = [], []
     sizes = []
     count, ignored = 0, 0
@@ -277,6 +279,9 @@ def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64
     tgtF = open(tgtFile)
 
     index = 0;
+
+    s_prev_context = []
+    t_prev_context = []
 
     while True:
         tline = tgtF.readline()
@@ -300,6 +305,17 @@ def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64
 
 
         tline = tline.strip()
+
+        if(prev_context > 0):
+            s_prev_context.append(sline)
+            t_prev_context.append(tline)
+            for i in range(1,prev_context+1):
+                if(i < len(s_prev_context)):
+                    sline = torch.cat((torch.cat((s_prev_context[-i-1],torch.zeros(1,sline.size()[1]))),sline))
+                    tline = t_prev_context[-i-1]+" # "+tline
+            if(len(s_prev_context) > prev_context):
+                s_prev_context = s_prev_context[-1*prev_context:]
+                t_prev_context = t_prev_context[-1*prev_context:]
 
         # source and/or target are empty
         if tline == "":
@@ -389,7 +405,7 @@ def main():
                                                  max_tgt_length=opt.tgt_seq_length,
                                                  sort_by_target=opt.sort_by_target,
                                                  input_type=opt.input_type,
-                                                 stride=opt.stride,concat=opt.concat)
+                                                 stride=opt.stride,concat=opt.concat,prev_context=opt.previous_context)
 
         print('Preparing validation ...')
         valid = {}
@@ -399,7 +415,7 @@ def main():
                                                  max_tgt_length=max(1024,opt.tgt_seq_length),
                                                  sort_by_target=opt.sort_by_target,
                                                  input_type=opt.input_type,
-                                                 stride=opt.stride,concat=opt.concat)
+                                                 stride=opt.stride,concat=opt.concat,prev_context=opt.previous_context)
 
     else:
         print('Preparing training ...')
