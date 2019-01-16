@@ -15,6 +15,8 @@ onmt.Markdown.add_md_help_argument(parser)
 
 parser.add_argument('-model', required=True,
                     help='Path to model .pt file')
+parser.add_argument('-autoencoder', required=False,
+                    help='Path to autoencoder .pt file')
 parser.add_argument('-input_type', default="word",
                     help="Input type: word/char")
 parser.add_argument('-src',   required=True,

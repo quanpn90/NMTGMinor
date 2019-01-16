@@ -29,6 +29,8 @@ class Evaluator(object):
         self.n_models = len(models)
         self._type = 'text'
 
+        check_m = None;
+
         for i, model in enumerate(models):
             if opt.verbose:
                 print('Loading model from %s' % model)
@@ -48,6 +50,8 @@ class Evaluator(object):
             model = build_model(model_opt, checkpoint['dicts'])
 
             model.load_state_dict(checkpoint['model'])
+            
+            check_m = checkpoint['model'];
 
 
             if opt.cuda:
@@ -85,6 +89,15 @@ class Evaluator(object):
         self.autoencoder = Autoencoder(self.models[0],model_opt)
 
         self.autoencoder.load_state_dict(checkpoint['autoencoder'])
+
+        for k in checkpoint['autoencoder']:
+            if(k.startswith("nmt")):
+                n = checkpoint['autoencoder'][k]
+                o = check_m[k[4:]]
+                if(o.size() != n.size()):
+                    print("Different size:",k[4:])
+                elif((n - o).sum() != 0):
+                    print("Different weight:",k[4:])
 
         if opt.cuda:
             self.autoencoder = self.autoencoder.cuda()
