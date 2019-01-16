@@ -7,6 +7,7 @@ from torch.autograd import Variable
 from onmt.ModelConstructor import build_model
 import torch.nn.functional as F
 from ae.Autoencoder import Autoencoder
+import sys
 
 model_list = ['transformer', 'stochastic_transformer']
 
@@ -28,6 +29,8 @@ class Evaluator(object):
         self.n_models = len(models)
         self._type = 'text'
 
+        check_m = None;
+
         for i, model in enumerate(models):
             if opt.verbose:
                 print('Loading model from %s' % model)
@@ -47,6 +50,8 @@ class Evaluator(object):
             model = build_model(model_opt, checkpoint['dicts'])
 
             model.load_state_dict(checkpoint['model'])
+            
+            check_m = checkpoint['model'];
 
 
             if opt.cuda:
@@ -84,6 +89,15 @@ class Evaluator(object):
         self.autoencoder = Autoencoder(self.models[0],model_opt)
 
         self.autoencoder.load_state_dict(checkpoint['autoencoder'])
+
+        for k in checkpoint['autoencoder']:
+            if(k.startswith("nmt")):
+                n = checkpoint['autoencoder'][k]
+                o = check_m[k[4:]]
+                if(o.size() != n.size()):
+                    print("Different size:",k[4:])
+                elif((n - o).sum() != 0):
+                    print("Different weight:",k[4:])
 
         if opt.cuda:
             self.autoencoder = self.autoencoder.cuda()
@@ -214,7 +228,7 @@ class Evaluator(object):
                                                   onmt.Constants.BOS_WORD,
                                                   onmt.Constants.EOS_WORD) for b in goldBatch]
 
-        return onmt.Dataset(srcData, tgtData, 9999,
+        return onmt.Dataset(srcData, tgtData, sys.maxsize,
                             [self.opt.gpu],
                             data_type=self._type, max_seq_num=self.opt.batch_size)
 
@@ -251,7 +265,7 @@ class Evaluator(object):
 
 
 
-    def evaleASR(self, srcBatch, goldBatch):
+    def evalASR(self, srcBatch, goldBatch):
         #  (1) convert words to indexes
         dataset = self.buildASRData(srcBatch, goldBatch)
         batch = self.to_variable(dataset.next()[0])

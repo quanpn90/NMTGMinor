@@ -157,6 +157,10 @@ def main():
 
             r = evaluator.evalASR(srcBatch,tgtBatch)
             outputResults(srcBatch,r,outF)
+            srcBatch, tgtBatch = [], []
+        if len(srcBatch) != 0:
+            r = evaluator.evalASR(srcBatch,tgtBatch)
+            outputResults(srcBatch,r,outF)
 
     else:
 

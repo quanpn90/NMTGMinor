@@ -5,8 +5,9 @@ import torch
 import math
 from torch.autograd import Variable
 from onmt.ModelConstructor import build_model
+from ae.Autoencoder import Autoencoder
 import torch.nn.functional as F
-
+import sys
 
 model_list = ['transformer', 'stochastic_transformer']
 
@@ -70,6 +71,37 @@ class EnsembleTranslator(object):
             
         self.cuda = opt.cuda
         self.ensemble_op = opt.ensemble_op
+
+        if (opt.autoencoder != None):
+            if opt.verbose:
+                print('Loading autoencoder from %s' % opt.autoencoder)
+            checkpoint = torch.load(opt.autoencoder,
+                                map_location=lambda storage, loc: storage)
+            model_opt = checkpoint['opt']
+
+            #posSize= checkpoint['autoencoder']['nmt.decoder.positional_encoder.pos_emb'].size(0)
+            #self.models[0].decoder.renew_buffer(posSize)
+            #self.models[0].decoder.renew_buffer(posSize)
+
+
+            # Build model from the saved option
+            self.autoencoder = Autoencoder(self.models[0],model_opt)
+
+            self.autoencoder.load_state_dict(checkpoint['autoencoder'])
+
+
+            if opt.cuda:
+                self.autoencoder = self.autoencoder.cuda()
+                self.models[0] = self.models[0].cuda()
+            else:
+                self.autoencoder = self.autoencoder.cpu()
+                self.models[0] = self.models[0].cpu()
+
+            if opt.fp16:
+                self.autoencoder = self.autoencoder.half()
+                self.models[0] = self.models[0].half()
+
+
         
         if opt.verbose:
             print('Done')
@@ -193,7 +225,7 @@ class EnsembleTranslator(object):
                        onmt.Constants.BOS_WORD,
                        onmt.Constants.EOS_WORD) for b in goldBatch]
 
-        return onmt.Dataset(srcData, tgtData, 9999,
+        return onmt.Dataset(srcData, tgtData, sys.maxsize,
                             [self.opt.gpu],
                             data_type=self._type, max_seq_num =self.opt.batch_size)
 
@@ -225,6 +257,8 @@ class EnsembleTranslator(object):
         for i in range(self.n_models):
             contexts[i], src_mask = self.models[i].encoder(src)
             
+            if(hasattr(self, 'autoencoder') and self.autoencoder):
+                contexts[i] = self.autoencoder.autocode(contexts[i])
                 
         goldScores = contexts[0].data.new(batchSize).zero_()
         goldWords = 0
@@ -410,7 +444,6 @@ class EnsembleTranslator(object):
 
         #  (2) translate
         pred, predScore, attn, predLength, goldScore, goldWords = self.translateBatch(src, tgt)
-        
 
         #  (3) convert indexes to words
         predBatch = []

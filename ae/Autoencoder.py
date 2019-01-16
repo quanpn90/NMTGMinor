@@ -3,6 +3,7 @@ import torch.nn as nn
 import onmt
 
 
+
 from ae.VariationalLayer import VariationalLayer
 
 class Autoencoder(nn.Module):
@@ -38,12 +39,17 @@ class Autoencoder(nn.Module):
             layers.append(self.variational_layer)
         else:
             raise NotImplementedError("Waring!" + self.model_type + " not implemented for auto encoder")
-        if(opt.auto_encoder_drop_out > 0):
-            layers.append(nn.Dropout(opt.auto_encoder_drop_out))
+
+#        if(opt.auto_encoder_drop_out > 0):
+#            layers.append(nn.Dropout(opt.auto_encoder_drop_out,inplace=True))
+
+
         layers.append(nn.Linear(self.hiddenSize, self.inputSize))
 
         self.model = nn.Sequential(*layers)
 
+        self.layers = layers
+        print("Autoencoder:",self.model)
 
     def forward(self,input):
 
@@ -70,11 +76,61 @@ class Autoencoder(nn.Module):
         else:
             raise NotImplementedError("Waring!"+opt.represenation+" not implemented for auto encoder")
         
-        clean_context.require_grad=False
-        return clean_context,self.model(clean_context)
+        # clean_context.require_grad=False
+        clean_context.detach_()
+        
+        #result = self.model(clean_context)
+
+        result = clean_context
+
+        for i in range(len(self.layers)):
+            result = self.layers[i](result)
+            
+        return clean_context,result
+
+
+
+    def autocode(self,input):
+
+        result = input.view(-1,input.size(2))
+        for i in range(len(self.layers)):
+            result = self.layers[i](result)
+        return result.view(input.size())
 
 
     def init_model_parameters(self):
         for p in self.parameters():
             p.data.uniform_(-self.param_init, self.param_init)
             
+
+    def parameters(self):
+        param = []
+        for (n,p) in self.named_parameters():
+            if('nmt' not in n):
+                param.append(p)
+        return param
+        
+
+    def load_state_dict(self, state_dict, strict=True):
+        
+        def condition(param_name):
+            
+            if 'positional_encoder' in param_name:
+                return False
+            if 'time_transformer' in param_name and self.nmt.encoder.time == 'positional_encoding':
+                return False
+            if param_name == 'nmt.decoder.mask':
+                return False
+#            if 'nmt' in param_name:
+#                return False
+            
+            return True
+        
+        filtered = {k: v for k, v in state_dict.items() if condition(k)}
+        
+        model_dict = self.state_dict()
+        for k,v in model_dict.items():
+            if k not in filtered:
+                filtered[k] = v
+        super().load_state_dict(filtered)   
+
