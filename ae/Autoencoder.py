@@ -68,6 +68,8 @@ class Autoencoder(nn.Module):
                 context, src_mask = self.nmt.encoder(src, grow=False)
                 output, coverage = self.nmt.decoder(tgt, context, src, grow=False)
                 tgt_mask = tgt.data.eq(onmt.Constants.PAD).unsqueeze(1)
+                tgt_mask2 = tgt.data.eq(onmt.Constants.EOS).unsqueeze(1)
+                tgt_mask = tgt_mask + tgt_mask2
                 flattened_output = output.contiguous().view(-1, output.size(-1))
                 flattened_mask = tgt_mask.squeeze(1).transpose(0,1).contiguous().view(-1)
                 non_pad_indices = torch.nonzero(1-flattened_mask).squeeze(1)
