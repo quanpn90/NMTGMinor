@@ -194,6 +194,8 @@ def main():
             if(opt.representation == "EncoderHiddenState"):
                 outputResults(srcBatch,r,outF)
             elif(opt.representation == "DecoderHiddenState"):
+                for i in range(len(tgtBatch)):
+                    tgtBatch[i].append("EOS");
                 outputResults(tgtBatch,r,outF)
             srcBatch, tgtBatch = [], []
 
@@ -224,7 +226,6 @@ def outputResults(srcBatch,r,outF):
                out[i].append(str(r[x].item()))
                x+=1
         j += 1
-    
     for i in range(len(out)):
         for j in range(len(out[i])):
             outF.write(out[i][j])
