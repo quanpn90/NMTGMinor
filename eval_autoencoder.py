@@ -191,7 +191,10 @@ def main():
                     break
 
             r = evaluator.eval(srcBatch,tgtBatch)
-            outputResults(srcBatch,r,outF)
+            if(opt.representation == "EncoderHiddenState"):
+                outputResults(srcBatch,r,outF)
+            elif(opt.representation == "DecoderHiddenState"):
+                outputResults(tgtBatch,r,outF)
             srcBatch, tgtBatch = [], []
 
 
