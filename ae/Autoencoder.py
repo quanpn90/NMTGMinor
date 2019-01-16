@@ -69,14 +69,54 @@ class Autoencoder(nn.Module):
 
         result = clean_context
 
-
         for i in range(len(self.layers)):
             result = self.layers[i](result)
             
         return clean_context,result
 
 
+
+    def autocode(self,input):
+
+        result = input.view(-1,input.size(2))
+        for i in range(len(self.layers)):
+            result = self.layers[i](result)
+        return result.view(input.size())
+
+
     def init_model_parameters(self):
         for p in self.parameters():
             p.data.uniform_(-self.param_init, self.param_init)
             
+
+    def parameters(self):
+        param = []
+        for (n,p) in self.named_parameters():
+            if('nmt' not in n):
+                param.append(p)
+        return param
+        
+
+    def load_state_dict(self, state_dict, strict=True):
+        
+        def condition(param_name):
+            
+            if 'positional_encoder' in param_name:
+                return False
+            if 'time_transformer' in param_name and self.nmt.encoder.time == 'positional_encoding':
+                return False
+            if param_name == 'nmt.decoder.mask':
+                return False
+#            if 'nmt' in param_name:
+#                return False
+            
+            return True
+        
+        filtered = {k: v for k, v in state_dict.items() if condition(k)}
+        
+        model_dict = self.state_dict()
+        for k,v in model_dict.items():
+            if k not in filtered:
+                filtered[k] = v
+        super().load_state_dict(filtered)   
+

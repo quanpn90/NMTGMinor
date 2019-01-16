@@ -122,7 +122,6 @@ def main():
     nParams = sum([p.nelement() for p in autoencoder.parameters()])
     print('* number of parameters: %d' % nParams)
 
-
     # load nmt model
     checkpoint = None
     if opt.load_from:

@@ -576,7 +576,9 @@ class PositionalEncoding(nn.Module):
 
     def renew(self, new_max_len):
         ## detele the old variable to avoid Pytorch's error when register new buffer
+        cuda = False
         if hasattr(self, 'pos_emb'):
+            cuda = self.pos_emb.is_cuda
             del self.pos_emb
         position = torch.arange(0,new_max_len).float()
 
@@ -586,6 +588,9 @@ class PositionalEncoding(nn.Module):
         inv_timescales = torch.exp(torch.arange(0, num_timescales).float() * -log_timescale_increment)
         scaled_time = position.unsqueeze(1) * inv_timescales.unsqueeze(0)
         pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 1)
+        
+        if(cuda):
+                pos_emb = pos_emb.cuda()
 
         if self.data_type is not None:
             pos_emb.type(self.data_type)
