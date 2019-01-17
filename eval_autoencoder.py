@@ -156,7 +156,12 @@ def main():
                     break
 
             r = evaluator.evalASR(srcBatch,tgtBatch)
-            outputResults(srcBatch,r,outF)
+            if(opt.representation == "EncoderHiddenState"):
+                outputResults(srcBatch,r,outF)
+            elif(opt.representation == "DecoderHiddenState"):
+                for i in range(len(tgtBatch)):
+                    tgtBatch[i].append("EOS");
+                outputResults(tgtBatch,r,outF)
             srcBatch, tgtBatch = [], []
         if len(srcBatch) != 0:
             r = evaluator.evalASR(srcBatch,tgtBatch)
