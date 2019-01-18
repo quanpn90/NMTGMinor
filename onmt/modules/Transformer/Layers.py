@@ -123,8 +123,10 @@ class DecoderLayer(nn.Module):
         
     """    
     
-    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, residual_p=0.1, version=1.0, encoder_to_share=None):
+    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, residual_p=0.1, version=1.0, 
+                                   ignore_source=False, encoder_to_share=None):
         super(DecoderLayer, self).__init__()
+        self.ignore_source = ignore_source
         
         if encoder_to_share is None:
 
@@ -159,10 +161,10 @@ class DecoderLayer(nn.Module):
             self.multihead_tgt = encoder_to_share.multihead
             self.feedforward = encoder_to_share.feedforward
 
-
-        self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_src_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
-        self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
+        if self.ignore_source == False:
+            self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
+            self.postprocess_src_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
+            self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
     
     def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, residual_dropout=0.0):
         
@@ -184,10 +186,12 @@ class DecoderLayer(nn.Module):
         """ Context Attention layer 
             layernorm > attn > dropout > residual
         """
-        
-        query = self.preprocess_src_attn(input)
-        out, coverage = self.multihead_src(query, context, context, mask_src)
-        input = self.postprocess_src_attn(out, input)
+        if self.ignore_source == False:
+            query = self.preprocess_src_attn(input)
+            out, coverage = self.multihead_src(query, context, context, mask_src)
+            input = self.postprocess_src_attn(out, input)
+        else:
+            coverage = None
         
         """ Feed forward layer 
             layernorm > ffn > dropout > residual

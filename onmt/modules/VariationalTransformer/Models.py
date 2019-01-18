@@ -4,7 +4,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from onmt.modules.Transformer.Layers import PositionalEncoding
 from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer
-from onmt.modules.StochasticTransformer.Layers import StochasticEncoderLayer, StochasticDecoderLayer
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder
 from onmt.modules.BaseModel import NMTModel, DecoderState
 import onmt
@@ -42,6 +41,7 @@ class VariationalDecoder(TransformerDecoder):
         self.death_type = 'linear_decay'
         self.layers = opt.layers
         self.opt = opt
+        self.ignore_source = opt.var_ignore_source
 
         # self.death_rates, e_length = expected_length(self.layers, self.death_rate, self.death_type)  
         # build_modules will be called from the inherited constructor
@@ -50,6 +50,21 @@ class VariationalDecoder(TransformerDecoder):
 
         # self.projector = Linear(2 * opt.model_size, opt.model_size)
         self.z_dropout = nn.Dropout(opt.dropout)
+
+    def build_modules(self, encoder_to_share=None):
+
+        if encoder_to_share is None:
+            self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, self.residual_dropout, ignore_source=self.ignore_source) for _ in range(self.layers)])
+        else:
+            print("* Sharing Encoder and Decoder weights for self attention and feed forward layers ...")
+            self.layer_modules = nn.ModuleList()
+
+            for i in range(self.layers):
+                decoder_layer = DecoderLayer(self.n_heads, self.model_size, self.dropout, 
+                                             self.inner_size, self.attn_dropout, self.residual_dropout, 
+                                             ignore_source=self.ignore_source,
+                                             encoder_to_share=encoder_to_share.layer_modules[i])
+                self.layer_modules.append(decoder_layer)
             
     def forward(self, input, context, src, latent_z=None,  **kwargs):
         """
@@ -200,8 +215,6 @@ class VariationalDecoder(TransformerDecoder):
 
             output = torch.cat([z, output], dim=0) # concat to the time dimension
                 
-        
-        
         # FOR DEBUGGING
         # ~ decoder_state._debug_attention_buffer(0)
     
@@ -224,14 +237,16 @@ class VariationalDecoder(TransformerDecoder):
             output = output[1:,:,:]
 
         return output, coverage
+
         
 class VariationalTransformer(NMTModel):
     """Main model in 'Attention is all you need' """
     
-    def __init__(self, encoder, decoder, prior_estimator, posterior_estimator, generator=None):
+    def __init__(self, encoder, decoder, prior_estimator, posterior_estimator, generator=None, use_prior_training=False):
         super().__init__(encoder, decoder, generator=generator)
         self.prior_estimator = prior_estimator
         self.posterior_estimator = posterior_estimator
+        self.use_prior = use_prior_training
         
     def forward(self, batch, sampling=False):
         """
@@ -250,7 +265,10 @@ class VariationalTransformer(NMTModel):
         src = src.transpose(0, 1) # transpose to have batch first
         tgt = tgt.transpose(0, 1)
         
-        encoder_context, src_mask = self.encoder(src)
+        if self.encoder is not None:
+            encoder_context, _ = self.encoder(src)
+        else:
+            encoder_context = None
 
         encoder_meaning, p_z = self.prior_estimator(src)
         q_z = self.posterior_estimator(encoder_meaning, src, tgt)
@@ -258,7 +276,7 @@ class VariationalTransformer(NMTModel):
         ### reparameterized sample:
         ### z = mean * epsilon + var
         ### epsilon is generated from Normal(0, I)
-        if self.training:
+        if self.training and not self.use_prior:
             z = q_z.rsample()
         else:
             ## during testing we use the prior
@@ -268,7 +286,7 @@ class VariationalTransformer(NMTModel):
                 z = p_z.mean
 
 
-        z = z.type_as(encoder_context)
+        z = z.type_as(encoder_meaning)
         
         decoder_output, coverage = self.decoder(tgt, encoder_context, src, z)
 
@@ -292,7 +310,6 @@ class VariationalTransformer(NMTModel):
             z = p_z.sample()
         else:
             z = p_z.mean
-        z = z.type_as(context)
         
         decoder_state = VariationalTransformerState(src, context, mask_src, z, beamSize=beamSize)
         return decoder_state
@@ -308,7 +325,10 @@ class VariationalTransformerState(DecoderState):
         self.attention_buffers = dict()
         
         self.src = src.repeat(1, beamSize)
-        self.context = context.repeat(1, beamSize, 1)
+        if context is not None:
+            self.context = context.repeat(1, beamSize, 1)
+        else:
+            self.context = None
         self.beamSize = beamSize
         self.src_mask = None
         self.concat_input_seq = True
@@ -393,7 +413,8 @@ class VariationalTransformerState(DecoderState):
             newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
             return view.index_select(2, activeIdx).view(*newSize)
         
-        self.context = updateActive(self.context)
+        if self.context is not None:
+            self.context = updateActive(self.context)
         
         self.input_seq = updateActive2D(self.input_seq)
         
@@ -412,7 +433,8 @@ class VariationalTransformerState(DecoderState):
     def _reorder_incremental_state(self, reorder_state):
         raise NotImplementedError
         # not implemented correctly yet
-        self.context = self.context.index_select(1, reorder_state)
+        if self.context is not None:
+            self.context = self.context.index_select(1, reorder_state)
         self.src_mask = self.src_mask.index_select(0, reorder_state)
                             
         for l in self.attention_buffers:

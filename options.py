@@ -200,7 +200,8 @@ def make_parser(parser):
 
     parser.add_argument('-var_posterior_combine', default='concat',
                         help="Type of combination between source and target for posterior q(z|x, y). Values concat|sum")
-    
+    parser.add_argument('-var_ignore_source', action='store_true',
+                        help="Ignore source sentence in the decoder (only relying on the latent variable z)")
     parser.add_argument('-var_posterior_share_weight', action='store_true',
                         help="Share weights between posterior")
 
@@ -208,4 +209,8 @@ def make_parser(parser):
                         help="Share weights between posterior")
     parser.add_argument('-var_ignore_first_target_token', action='store_true',
                         help="Share weights between posterior")
+    parser.add_argument('-var_kl_lambda', type=float, default=1.0,  
+                        help="""kl var_kl_lambda""")
+    parser.add_argument('-var_use_prior_training', action='store_true',
+                        help="Use prior during training (mostly for debugging)")
     return parser

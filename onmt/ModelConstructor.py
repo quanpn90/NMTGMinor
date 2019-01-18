@@ -38,6 +38,18 @@ def update_backward_compatibility(opt):
 
     if not hasattr(opt, 'var_posterior_combine'):
         opt.var_posterior_combine = 'concat'
+
+    if not hasattr(opt, 'var_ignore_first_source_token'):
+        opt.var_ignore_first_source_token = False
+
+    if not hasattr(opt, 'var_ignore_first_target_token'):
+        opt.var_ignore_first_target_token = False
+
+    if not hasattr(opt, 'var_ignore_source'):
+        opt.var_ignore_source = False
+    
+    if not hasattr(opt, 'var_use_prior_training'):
+        opt.var_use_prior_training = False
         
     return opt
 
@@ -188,7 +200,11 @@ def build_model(opt, dicts):
         
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
         
-        encoder = TransformerEncoder(opt, embedding_src, positional_encoder)
+        if opt.var_ignore_source:
+            encoder=None
+        else:
+            encoder = TransformerEncoder(opt, embedding_src, positional_encoder)
+
         decoder = VariationalDecoder(opt, embedding_tgt, positional_encoder, 
                                           encoder_to_share=encoder if opt.share_enc_dec_weights else None)
 
@@ -196,11 +212,11 @@ def build_model(opt, dicts):
         prior = NeuralPrior(opt, embedding_src, positional_encoder)
         posterior = NeuralPosterior(opt, embedding_tgt, positional_encoder, prior=prior)
 
-        model = VariationalTransformer(encoder, decoder, prior, posterior, generator)
+        model = VariationalTransformer(encoder, decoder, prior, posterior, generator, use_prior_training=opt.var_use_prior_training)
 
         from onmt.modules.VariationalTransformer.VariationalLoss import VariationalLoss
 
-        loss_function = VariationalLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+        loss_function = VariationalLoss(dicts['tgt'].size(), opt)
 
     elif opt.model in ['moe_transformer']:
     
@@ -231,7 +247,8 @@ def build_model(opt, dicts):
         init.xavier_uniform_(model.encoder.word_lut.weight)
         init.xavier_uniform_(model.decoder.word_lut.weight)
     elif opt.init_embedding == 'normal':
-        init.normal_(model.encoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
+        if model.encoder is not None:
+            init.normal_(model.encoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
         init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
     
    

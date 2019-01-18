@@ -71,8 +71,9 @@ class NeuralPrior(nn.Module):
 
         encoder_opt = copy.deepcopy(opt)
         # quick_hack to override some hyper parameters of the prior encoder
-        encoder_opt.layers = opt.layers // 2
+        encoder_opt.layers = opt.layers if opt.var_ignore_source else opt.layers // 2
         self.dropout = opt.dropout
+        self.opt = opt
 
         self.var_ignore_first_source_token = opt.var_ignore_first_source_token
 
@@ -95,7 +96,10 @@ class NeuralPrior(nn.Module):
         if self.var_ignore_first_source_token:
             input = input[:,1:]
         # pass the input to the transformer encoder (we also return the mask)
-        context, _ = self.encoder(input, freeze_embedding=True)
+        freeze_embedding_ = True
+        if self.opt.var_ignore_source:
+            freeze_embedding_ = False
+        context, _ = self.encoder(input, freeze_embedding=freeze_embedding_)
           
         # Now we have to mask the context with zeros
         # context size: T x B x H
@@ -134,9 +138,10 @@ class NeuralPosterior(nn.Module):
         super(NeuralPosterior, self).__init__()
         
         encoder_opt = copy.deepcopy(opt)
+        self.opt = opt
 
         # quick_hack to override some hyper parameters of the prior encoder
-        encoder_opt.layers = opt.layers // 2
+        encoder_opt.layers = opt.layers if opt.var_ignore_source else opt.layers // 2
         # encoder_opt.word_dropout = 0.0 
         self.dropout = opt.dropout
 

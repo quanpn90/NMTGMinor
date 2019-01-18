@@ -11,9 +11,6 @@ from collections import defaultdict
 class LossFuncBase(_Loss):
 
     """
-    Class for managing efficient loss computation. Handles
-    sharding next step predictions and accumulating mutiple
-    loss computations
     Users can implement their own loss computation strategy by making
     subclass of this one.  Users need to implement the _compute_loss()
     and make_shard_state() methods.
@@ -48,10 +45,9 @@ class VariationalLoss(LossFuncBase):
     """
     Standard NMT Loss Computation.
     """
-    def __init__(self, output_size, label_smoothing=0.0, shard_size=1):
+    def __init__(self, output_size, opt):
         super().__init__(output_size)
-        self.shard_split = shard_size
-        
+        label_smoothing = opt.label_smoothing
         if label_smoothing > 0:
             # When label smoothing is turned on,
             # KL-divergence between q_{smoothed ground truth prob.}(w)
@@ -68,8 +64,10 @@ class VariationalLoss(LossFuncBase):
             weight = torch.ones(output_size)
             weight[self.padding_idx] = 0     
             self.func = nn.NLLLoss(weight, reduction='sum')
+        
         self.confidence = 1.0 - label_smoothing
         self.label_smoothing = label_smoothing
+        self.kl_lambda = opt.var_kl_lambda
 
         
     def _compute_loss(self, scores, targets, smooth=True):
@@ -160,7 +158,7 @@ class VariationalLoss(LossFuncBase):
         kl = output_dict['kl'].sum()
 
         #lambda_ = kl_lambda
-        lambda_ = 1 # to avoid exploding (maybe)
+        lambda_ = self.kl_lambda # to avoid exploding (maybe)
         loss = smoothed_nll + kl * lambda_
 
         
