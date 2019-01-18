@@ -99,6 +99,9 @@ class Evaluator(object):
                 elif((n - o).sum() != 0):
                     print("Different weight:",k[4:])
 
+        if self.autoencoder.nmt.decoder.positional_encoder.len_max < self.opt.max_sent_length:
+            self.autoencoder.nmt.decoder.renew_buffer(self.opt.max_sent_length)
+
         if opt.cuda:
             self.autoencoder = self.autoencoder.cuda()
         else:
@@ -106,6 +109,7 @@ class Evaluator(object):
 
         if opt.fp16:
             self.autoencoder = self.autoencoder.half()
+
 
         self.autoencoder.eval()
 
