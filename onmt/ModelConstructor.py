@@ -50,6 +50,9 @@ def update_backward_compatibility(opt):
     
     if not hasattr(opt, 'var_use_prior_training'):
         opt.var_use_prior_training = False
+
+    if not hasattr(opt, 'var_pooling'):
+        opt.var_pooling = 'mean'
         
     return opt
 
@@ -215,6 +218,31 @@ def build_model(opt, dicts):
         model = VariationalTransformer(encoder, decoder, prior, posterior, generator, use_prior_training=opt.var_use_prior_training)
 
         from onmt.modules.VariationalTransformer.VariationalLoss import VariationalLoss
+
+        loss_function = VariationalLoss(dicts['tgt'].size(), opt)
+
+    elif opt.model in ['deep_vtransformer']:
+    
+           
+        from onmt.modules.DeepVariationalTransformer.Models import VariationalDecoder, VariationalTransformer
+        from onmt.modules.DeepVariationalTransformer.Inference import NeuralPrior, NeuralPosterior
+        from onmt.modules.DeepVariationalTransformer.VariationalLoss import VariationalLoss
+        
+        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
+        
+        if opt.var_ignore_source:
+            encoder=None
+        else:
+            encoder = TransformerEncoder(opt, embedding_src, positional_encoder)
+
+        decoder = VariationalDecoder(opt, embedding_tgt, positional_encoder, 
+                                          encoder_to_share=encoder if opt.share_enc_dec_weights else None)
+
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        prior = NeuralPrior(opt, embedding_src, positional_encoder)
+        posterior = NeuralPosterior(opt, embedding_tgt, positional_encoder, prior=prior)
+
+        model = VariationalTransformer(encoder, decoder, prior, posterior, generator, use_prior_training=opt.var_use_prior_training)
 
         loss_function = VariationalLoss(dicts['tgt'].size(), opt)
 

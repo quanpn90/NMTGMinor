@@ -79,7 +79,8 @@ class EncoderLayer(nn.Module):
             feedforward = MaxOut(d_model, d_model, k)
         self.feedforward = Bottle(feedforward)
             
-    def forward(self, input, attn_mask, pad_mask=None):
+    def forward(self, input, attn_mask, pad_mask=None, return_norm_input=False):
+
         pad_mask = None
         query = self.preprocess_attn(input)
         out, _ = self.multihead(query, query, query, attn_mask)
@@ -91,7 +92,10 @@ class EncoderLayer(nn.Module):
         out = self.feedforward(self.preprocess_ffn(input))
         input = self.postprocess_ffn(out, input)
         
-        return input
+        if return_norm_input == False:
+            return input
+        else:
+            return input, query
     
     
     

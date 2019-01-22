@@ -67,7 +67,7 @@ class TransformerEncoder(nn.Module):
         
         self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, self.residual_dropout) for _ in range(self.layers)])
 
-    def forward(self, input, freeze_embedding=False, **kwargs):
+    def forward(self, input, freeze_embedding=False, return_stack=False, **kwargs):
         """
         Inputs Shapes: 
             input: batch_size x len_src (wanna tranpose)
@@ -103,24 +103,41 @@ class TransformerEncoder(nn.Module):
         
         context = emb.transpose(0, 1).contiguous()
         
-        for i, layer in enumerate(self.layer_modules):
-            
-            if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:        
-                context = checkpoint(custom_layer(layer), context, mask_src)
+        if return_stack == False:
 
-            else:
-                context = layer(context, mask_src)      # batch_size x len_src x d_model
+            for i, layer in enumerate(self.layer_modules):
+                
+
+                if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:        
+                    context = checkpoint(custom_layer(layer), context, mask_src)
+
+                else:
+                    context = layer(context, mask_src)      # batch_size x len_src x d_model
+                
             
-        
-        # From Google T2T
-        # if normalization is done in layer_preprocess, then it should also be done
-        # on the output, since the output can grow very large, being the sum of
-        # a whole stack of unnormalized layer outputs.    
-        context = self.postprocess_layer(context)
+            # From Google T2T
+            # if normalization is done in layer_preprocess, then it should also be done
+            # on the output, since the output can grow very large, being the sum of
+            # a whole stack of unnormalized layer outputs.    
+            context = self.postprocess_layer(context)
+                
             
-        
-        return context, mask_src    
-        
+            return context, mask_src    
+
+        else:
+            output = list()
+
+            for i, layer in enumerate(self.layer_modules):
+                context, normalized_input = layer(context, mask_src, return_norm_input=True)
+
+                if i > 0:
+                    output.append(normalized_input)
+
+            context = self.postprocess_layer(context)
+
+            output.append(context)
+            
+            return output, mask_src
 
 class TransformerDecoder(nn.Module):
     """Encoder in 'Attention is all you need'

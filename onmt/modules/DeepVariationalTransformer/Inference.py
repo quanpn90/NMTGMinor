@@ -10,9 +10,10 @@ import onmt
 from onmt.modules.WordDrop import embedded_dropout
 from onmt.modules.Transformer.Layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
 Linear = XavierLinear
+from onmt.modules.Utilities import mean_with_mask_backpropable as mean_with_mask
+from onmt.modules.Utilities import max_with_mask
 
 import copy
-from onmt.modules.Utilities import mean_with_mask, max_with_mask
 """
     Variational Inference for model depth generation
 
@@ -54,18 +55,31 @@ class NeuralPrior(nn.Module):
 
         encoder_opt = copy.deepcopy(opt)
         # quick_hack to override some hyper parameters of the prior encoder
-        encoder_opt.layers = opt.layers if opt.var_ignore_source else opt.layers // 2
+        encoder_opt.layers = opt.layers
         self.dropout = opt.dropout
         self.opt = opt
-        self.pooling = opt.var_pooling
 
         self.var_ignore_first_source_token = opt.var_ignore_first_source_token
 
         self.encoder = TransformerEncoder(encoder_opt, embedding, positional_encoder)
 
-        self.projector = Linear(opt.model_size, opt.model_size)
-        self.mean_predictor = Linear(opt.model_size, opt.model_size)
-        self.var_predictor = Linear(opt.model_size, opt.model_size)
+        # self.projector = Linear(opt.model_size, opt.model_size)
+        # self.mean_predictor = Linear(opt.model_size, opt.model_size)
+        # self.var_predictor = Linear(opt.model_size, opt.model_size)
+
+        # for each layer, we define
+        # a set of transformation linear
+        self.projector = nn.ModuleList()
+        self.mean_predictor = nn.ModuleList()
+        self.var_predictor = nn.ModuleList()
+
+        for i in range(self.opt.layers):
+            self.projector.append(Linear(opt.model_size, opt.model_size))
+            self.mean_predictor.append(Linear(opt.model_size, opt.model_size))
+            self.var_predictor.append(Linear(opt.model_size, opt.model_size))
+
+
+
 
     def forward(self, input, **kwargs):
         """
@@ -80,33 +94,36 @@ class NeuralPrior(nn.Module):
         if self.var_ignore_first_source_token:
             input = input[:,1:]
         # pass the input to the transformer encoder (we also return the mask)
-        freeze_embedding_ = True
-        if self.opt.var_ignore_source:
-            freeze_embedding_ = False
-        context, _ = self.encoder(input, freeze_embedding=freeze_embedding_)
-          
+        context_stack, _ = self.encoder(input, freeze_embedding=True, return_stack=True)
+        
+        # print(len(context_stack))   
         # Now we have to mask the context with zeros
         # context size: T x B x H
         # mask size: T x B x 1 for broadcasting
+
         mask = input.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
 
-        if self.pooling == 'mean':
-            context = mean_with_mask(context, mask)
-        elif self.pooling == 'max':
-            context = max_with_mask(context, mask)
-        encoder_meaning = context
-        context = torch.tanh(self.projector(context))
-       
+        contexts = list()
 
-        mean = self.mean_predictor(context)       
-        log_var = self.var_predictor(context).float()
+        # output list:
+        # contain a list of vector 
+        # and list of distribution
+        encoder_meaning = list()
+        p_z = list()
+        for i, context_ in enumerate(context_stack):
+            context = mean_with_mask(context_, mask)
+            encoder_meaning.append(context)
+            # context = torch.tanh(self.projector(context))
+            # contexts.append(context)
+            context = torch.tanh(self.projector[i](context))
+            mean = self.mean_predictor[i](context)
+            log_var = self.var_predictor[i] (context).float()
+            var = torch.exp(0.5*log_var)
+            p_z_ = torch.distributions.normal.Normal(mean.float(), var)
+            p_z.append(p_z_)
 
-        var = torch.exp(0.5*log_var)
 
-        p_z = torch.distributions.normal.Normal(mean.float(), var)
-
-
-        # return prior distribution P(z | X)
+        # return a list of prior distribution P(z | X) for each layer
         return encoder_meaning, p_z
 
 
@@ -128,20 +145,13 @@ class NeuralPosterior(nn.Module):
         self.opt = opt
 
         # quick_hack to override some hyper parameters of the prior encoder
-        encoder_opt.layers = opt.layers if opt.var_ignore_source else opt.layers // 2
-        # encoder_opt.word_dropout = 0.0 
+        encoder_opt.layers = opt.layers
         self.dropout = opt.dropout
-        self.pooling = opt.var_pooling
 
         self.var_ignore_first_target_token = opt.var_ignore_first_target_token
 
         self.posterior_combine = opt.var_posterior_combine
-        if opt.var_posterior_combine == 'concat':
-            self.projector = Linear(opt.model_size * 2, opt.model_size)
-        elif opt.var_posterior_combine == 'sum':
-            self.projector = Linear(opt.model_size * 1, opt.model_size)
-        else:
-            raise NotImplementedError
+        
 
         if opt.var_posterior_share_weight == True:
             assert prior is not None
@@ -149,8 +159,21 @@ class NeuralPosterior(nn.Module):
         else:
             self.encoder = TransformerEncoder(encoder_opt, embedding, positional_encoder)
 
-        self.mean_predictor = Linear(opt.model_size, opt.model_size)
-        self.var_predictor = Linear(opt.model_size, opt.model_size)
+        self.projector = nn.ModuleList()
+        self.mean_predictor = nn.ModuleList()
+        self.var_predictor = nn.ModuleList()
+
+        for i in range(self.opt.layers):
+
+            if opt.var_posterior_combine == 'concat':
+                self.projector.append(Linear(opt.model_size * 2, opt.model_size))
+            elif opt.var_posterior_combine == 'sum':
+                self.projector.append(Linear(opt.model_size * 1, opt.model_size))
+            else:
+                raise NotImplementedError
+
+            self.mean_predictor.append(Linear(opt.model_size, opt.model_size))
+            self.var_predictor.append(Linear(opt.model_size, opt.model_size))
     
     def forward(self, encoder_meaning, input_src, input_tgt, **kwargs):
         """
@@ -169,32 +192,34 @@ class NeuralPosterior(nn.Module):
             input_tgt = input_tgt[:,1:]
         
         # encoder_context = encoder_context.detach()
-        decoder_context, _ = self.encoder(input_tgt, freeze_embedding=True)
+        decoder_context, _ = self.encoder(input_tgt, freeze_embedding=True, return_stack=True)
 
         # src_mask = input_src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
         tgt_mask = input_tgt.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2) 
 
 
         # take the mean of each context
-        encoder_context = encoder_meaning
+        # encoder_context = encoder_meaning
+        q_z = list()
 
-        if self.pooling == 'mean':
-            decoder_context = mean_with_mask(decoder_context, tgt_mask)
-        elif self.pooling == 'max':
-            decoder_context = max_with_mask(decoder_context, tgt_mask)        
+        for i, decoder_context_ in enumerate(decoder_context):
 
-        if self.posterior_combine == 'concat':
-            context = torch.cat([encoder_context, decoder_context], dim=-1)
-        elif self.posterior_combine == 'sum':
-            context = encoder_context + decoder_context
+            decoder_context = mean_with_mask(decoder_context_, tgt_mask)
+            encoder_context = encoder_meaning[i]
 
-        context = torch.tanh(self.projector(context))
+            if self.posterior_combine == 'concat':
+                context = torch.cat([encoder_context, decoder_context], dim=-1)
+            elif self.posterior_combine == 'sum':
+                context = encoder_context + decoder_context
 
-        mean = self.mean_predictor(context)
-        log_var = self.var_predictor(context).float()
-        var = torch.exp(0.5 * log_var)
+            context = torch.tanh(self.projector[i](context))
 
-        q_z = torch.distributions.normal.Normal(mean.float(), var)
+            mean = self.mean_predictor[i](context)
+            log_var = self.var_predictor[i](context).float()
+            var = torch.exp(0.5 * log_var)
 
+            q_z_ = torch.distributions.normal.Normal(mean.float(), var)
+
+            q_z.append(q_z_)
         # return distribution Q(z | X, Y)
         return q_z

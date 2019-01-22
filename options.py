@@ -211,6 +211,8 @@ def make_parser(parser):
                         help="Share weights between posterior")
     parser.add_argument('-var_kl_lambda', type=float, default=1.0,  
                         help="""kl var_kl_lambda""")
+    parser.add_argument('-var_pooling', default='mean',  
+                        help="""pooling operation to summerize one state from a sequence""")
     parser.add_argument('-var_use_prior_training', action='store_true',
                         help="Use prior during training (mostly for debugging)")
     return parser
