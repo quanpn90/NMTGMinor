@@ -114,9 +114,7 @@ def main():
 
     # Loss function is built according to model 
     # Go to ModelConstructor for more details
-    model, loss_function = build_model(opt, dicts)
-    
-    
+    model, loss_function = build_model(opt, dicts)  
     
                                 
     
@@ -129,8 +127,6 @@ def main():
         #~ trainer = MultiGPUXETrainer(model, loss_function, trainData, validData, dataset, opt)
         raise NotImplementedError("Multi-GPU training is not supported atm")
     else:
-        assert opt.fp16
-        # if opt.fp16:
         from onmt.train_utils.variational_trainer import VariationalTrainerFP16
 
         trainer = VariationalTrainerFP16(model, loss_function, trainData, validData, dicts, opt)

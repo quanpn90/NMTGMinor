@@ -61,7 +61,7 @@ class NeuralPrior(nn.Module):
 
         self.var_ignore_first_source_token = opt.var_ignore_first_source_token
 
-        self.encoder = TransformerEncoder(encoder_opt, embedding, positional_encoder)
+        # self.encoder = TransformerEncoder(encoder_opt, embedding, positional_encoder)
 
         # self.projector = Linear(opt.model_size, opt.model_size)
         # self.mean_predictor = Linear(opt.model_size, opt.model_size)
@@ -73,15 +73,17 @@ class NeuralPrior(nn.Module):
         self.mean_predictor = nn.ModuleList()
         self.var_predictor = nn.ModuleList()
 
+        self.context_projector = nn.ModuleList()
+
         for i in range(self.opt.layers):
-            self.projector.append(Linear(opt.model_size, opt.model_size))
             self.mean_predictor.append(Linear(opt.model_size, opt.model_size))
             self.var_predictor.append(Linear(opt.model_size, opt.model_size))
+            self.context_projector.append(Linear(opt.model_size, opt.model_size))
 
 
 
 
-    def forward(self, input, **kwargs):
+    def forward(self, input, context, **kwargs):
         """
         Inputs Shapes: 
             input: batch_size x len_src (wanna tranpose)
@@ -94,7 +96,7 @@ class NeuralPrior(nn.Module):
         if self.var_ignore_first_source_token:
             input = input[:,1:]
         # pass the input to the transformer encoder (we also return the mask)
-        context_stack, _ = self.encoder(input, freeze_embedding=True, return_stack=True)
+        # context_stack, _ = self.encoder(input, freeze_embedding=freeze_embedding_, return_stack=True)
         
         # print(len(context_stack))   
         # Now we have to mask the context with zeros
@@ -103,7 +105,9 @@ class NeuralPrior(nn.Module):
 
         mask = input.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
 
+        
         contexts = list()
+        context_stack = context
 
         # output list:
         # contain a list of vector 
@@ -111,11 +115,13 @@ class NeuralPrior(nn.Module):
         encoder_meaning = list()
         p_z = list()
         for i, context_ in enumerate(context_stack):
+
+            context_ = torch.relu(self.context_projector[i](context_)) + context_
+
             context = mean_with_mask(context_, mask)
             encoder_meaning.append(context)
             # context = torch.tanh(self.projector(context))
             # contexts.append(context)
-            context = torch.tanh(self.projector[i](context))
             mean = self.mean_predictor[i](context)
             log_var = self.var_predictor[i] (context).float()
             var = torch.exp(0.5*log_var)
@@ -149,15 +155,15 @@ class NeuralPosterior(nn.Module):
         self.dropout = opt.dropout
 
         self.var_ignore_first_target_token = opt.var_ignore_first_target_token
+        self.var_ignore_first_source_token = opt.var_ignore_first_source_token
 
         self.posterior_combine = opt.var_posterior_combine
         
-
-        if opt.var_posterior_share_weight == True:
-            assert prior is not None
-            self.encoder = prior.encoder
-        else:
-            self.encoder = TransformerEncoder(encoder_opt, embedding, positional_encoder)
+        # if opt.var_posterior_share_weight == True:
+        #     assert prior is not None
+        #     self.encoder = prior.encoder
+        # else:
+        self.encoder = TransformerEncoder(encoder_opt, embedding, positional_encoder)
 
         self.projector = nn.ModuleList()
         self.mean_predictor = nn.ModuleList()
@@ -191,10 +197,15 @@ class NeuralPosterior(nn.Module):
         if self.var_ignore_first_target_token:
             input_tgt = input_tgt[:,1:]
         
+        if self.var_ignore_first_source_token:
+            input_src = input_src[:,1:]
         # encoder_context = encoder_context.detach()
         decoder_context, _ = self.encoder(input_tgt, freeze_embedding=True, return_stack=True)
+        encoder_context, _ = self.encoder(input_src, freeze_embedding=True, return_stack=True)
 
-        # src_mask = input_src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
+        encoder_meaning = encoder_context
+
+        src_mask = input_src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
         tgt_mask = input_tgt.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2) 
 
 
@@ -204,15 +215,15 @@ class NeuralPosterior(nn.Module):
 
         for i, decoder_context_ in enumerate(decoder_context):
 
-            decoder_context = mean_with_mask(decoder_context_, tgt_mask)
-            encoder_context = encoder_meaning[i]
+            decoder_context_ = mean_with_mask(decoder_context_, tgt_mask)
+            encoder_context_ = mean_with_mask(encoder_context[i], src_mask)
 
             if self.posterior_combine == 'concat':
-                context = torch.cat([encoder_context, decoder_context], dim=-1)
+                context = torch.cat([encoder_context_, decoder_context_], dim=-1)
             elif self.posterior_combine == 'sum':
-                context = encoder_context + decoder_context
+                context = encoder_context_ + decoder_context_
 
-            context = torch.tanh(self.projector[i](context))
+            context = torch.relu(self.projector[i](context))
 
             mean = self.mean_predictor[i](context)
             log_var = self.var_predictor[i](context).float()

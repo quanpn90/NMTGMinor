@@ -244,13 +244,12 @@ class VariationalDecoder(TransformerDecoder):
 class VariationalTransformer(NMTModel):
     """Main model in 'Attention is all you need' """
     
-    def __init__(self, encoder, decoder, prior_estimator, posterior_estimator, generator=None, use_prior_training=False):
+    def __init__(self, encoder, decoder, prior_estimator, posterior_estimator, generator=None):
         super().__init__(encoder, decoder, generator=generator)
         self.prior_estimator = prior_estimator
         self.posterior_estimator = posterior_estimator
-        self.use_prior = use_prior_training
         
-    def forward(self, batch, sampling=False):
+    def forward(self, batch, dist='posterior', sampling=False):
         """
         Inputs Shapes: 
             src: len_src x batch_size
@@ -268,33 +267,32 @@ class VariationalTransformer(NMTModel):
         tgt = tgt.transpose(0, 1)
         
         if self.encoder is not None:
-            encoder_context, _ = self.encoder(src)
+            encoder_context, _ = self.encoder(src, return_stack=True)
         else:
             encoder_context = None
 
-        encoder_meaning, p_z = self.prior_estimator(src)
+        encoder_meaning, p_z = self.prior_estimator(src, encoder_context)
         q_z = self.posterior_estimator(encoder_meaning, src, tgt)
 
         ### reparameterized sample:
         ### z = mean * epsilon + var
         ### epsilon is generated from Normal(0, I)
         z = list()
-        if self.training and not self.use_prior:
-            for q_z_ in q_z:
-                z.append(q_z_.rsample().type_as(encoder_meaning[0]))
+
+        if dist == 'posterior':
+            sample_dist = q_z
+        elif dist == 'prior':
+            sample_dist = p_z
         else:
-            ## during testing we use the prior
-            for p_z_ in p_z:
-                if sampling:
-                    z_ = p_z_.sample()
-                else:
-                    z_ = p_z_.mean
+            raise NotImplementedError
 
-                # cast type back to fp16 if necessary
-                z.append(z_.type_as(encoder_meaning[0]))
+        for dist_ in sample_dist:
+            if sampling:
+                z.append(dist_.rsample().type_as(encoder_meaning[0]))
+            else:
+                z.append(dist_.mean.type_as(encoder_meaning[0]))
 
-        
-        decoder_output, coverage = self.decoder(tgt, encoder_context, src, z)
+        decoder_output, coverage = self.decoder(tgt, encoder_context[-1], src, z)
 
         # compute KL between prior and posterior
         kl_divergence = 0
@@ -310,6 +308,14 @@ class VariationalTransformer(NMTModel):
         outputs['q_z'] = q_z
 
         return outputs
+
+    def load_transformer_weights(self, transformer_model):
+
+        current_weights = self.state_dict()
+
+        current_weights.update(transformer_model)
+
+        self.load_state_dict(current_weights)
 
     def create_decoder_state(self, src, context, mask_src, beamSize=1, type='old', sampling=False):
         

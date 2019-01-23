@@ -314,6 +314,14 @@ class VariationalTransformer(NMTModel):
         decoder_state = VariationalTransformerState(src, context, mask_src, z, beamSize=beamSize)
         return decoder_state
 
+    def load_transformer_weights(self, transformer_model):
+
+        current_weights = self.state_dict()
+
+        current_weights.update(transformer_model)
+
+        self.load_state_dict(current_weights)
+
 class VariationalTransformerState(DecoderState):
     
     def __init__(self, src, context, src_mask, latent_z, beamSize=1, type='old'):

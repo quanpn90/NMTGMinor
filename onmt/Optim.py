@@ -234,9 +234,7 @@ class Optim(object):
             self.lr = self.init_lr*self._step**(-0.5)
         
         self.optimizer.param_groups[0]['lr'] = self.lr
-        
 
-    
     def setLearningRate(self, lr):
         self.optimizer.param_groups[0]['lr'] = lr
         self.lr = lr

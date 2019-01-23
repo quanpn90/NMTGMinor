@@ -68,7 +68,7 @@ class VariationalTrainerFP16(XETrainer):
            # Important:
            # Loss function needs to be in fp32
            self.loss_function = self.loss_function.cuda()
-           # self.model = self.model.cuda()
+           self.model = self.model.cuda()
         
         # prepare some meters
         self.meters = dict()
@@ -88,13 +88,13 @@ class VariationalTrainerFP16(XETrainer):
 
         self.logger = Logger(self.optim, self.meters, scaler=self.scaler)
     
-    
+    # fp16 utility
     def convert_fp16(self, model_state=None, optim_state=None):
         
         if model_state is not None:
             self.model.load_state_dict(model_state)
 
-        self.model = self.model.half().cuda()
+        self.model = self.model.half()
         params = [p for p in self.model.parameters() if p.requires_grad]
         total_param_size = sum(p.data.numel() for p in params)
         
@@ -116,7 +116,23 @@ class VariationalTrainerFP16(XETrainer):
             self.optim.load_state_dict(optim_state)
         
         print(self.optim.optimizer)
-        
+
+
+    # fp32 utility (gradients and optim)
+    def convert_fp32(self, model_state=None, optim_state=None):
+
+        if model_state is not None:
+            self.model.load_state_dict(model_state)
+
+        params = [p for p in self.model.parameters() if p.requires_grad]
+        self.optim.set_parameters(params)
+
+        if optim_state is not None:
+            self.optim.load_state_dict(optim_state)
+
+        print(self.optim.optimizer)
+
+
     def eval(self, data):
         
         total_loss = 0
@@ -146,8 +162,12 @@ class VariationalTrainerFP16(XETrainer):
                     """ outputs can be either 
                             hidden states from decoder or
                             prob distribution from decoder generator
+                        during Evaluation we sample from the prior distribution
+                        and don't use sampling
                     """
-                    outputs = self.model(batch)
+
+
+                    outputs = self.model(batch, dist='prior', sampling=False)
                     targets = batch.get('target_output')
                     
                     loss_output = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
@@ -233,8 +253,10 @@ class VariationalTrainerFP16(XETrainer):
                 # ~ batch = self.to_variable(samples[0])
                 batch = samples[0]
                 batch.cuda()
-            
-                outputs = self.model(batch)
+                
+                sampling = not opt.var_not_sampling
+                dist = opt.var_sample_from
+                outputs = self.model(batch, dist=dist, sampling=sampling)
                     
                 targets = batch.get('target_output')
                 tgt_inputs = batch.get('target_input')
@@ -245,11 +267,20 @@ class VariationalTrainerFP16(XETrainer):
                 tgt_size = batch.tgt_size
                                 
                 ## Scale UP the loss so that the gradients are not cutoff
-                normalizer = 1.0 / self.scaler.loss_scale 
+
+                if self.opt.fp16:
+                    normalizer = 1.0 / self.scaler.loss_scale 
+                else:
+                    normalizer = 1.0
                 
                 warmup_steps = self.optim.warmup_steps
                 alpha = 1 / (warmup_steps * (warmup_steps ** -1.5))
 
+
+                # from bowman et al, 2016:
+                # gradually increasing the coefficient for kl divergence loss
+                # so that the model does not ignore the latent variable later on
+                # (actually current unused in the loss function) to be implemented
                 if self.optim._step < (self.optim.warmup_steps / 2):
                     kl_lambda = 0.0
                 else:
@@ -284,7 +315,6 @@ class VariationalTrainerFP16(XETrainer):
                 src_size = batch.src_size
                 tgt_size = batch.tgt_size
                 
-                
                 counter = counter + 1 
                 num_accumulated_words += tgt_size
                 num_accumulated_sents += batch_size
@@ -295,21 +325,23 @@ class VariationalTrainerFP16(XETrainer):
                 if num_accumulated_words >= opt.batch_size_update * 0.95:
                     # Update the parameters.
                     
-                    # First we have to copy the grads from fp16 to fp32
-                    self._get_flat_grads(out=self.fp32_params.grad)
-                    
-                    
-                    normalizer = normalizer * self.scaler.loss_scale 
-                    # rescale and clip grads
-                    self.fp32_params.grad.data.div_(normalizer)
+                    if self.opt.fp16:
 
-                    grad_norm = torch.norm(self.fp32_params.grad.data).item()
-                    self.meters['gnorm'].update(grad_norm)
-                    
-                    
-                    overflow = DynamicLossScaler.has_overflow(grad_norm)
-                    self.scaler.update_scale(overflow)
+                        # First we have to copy the grads from fp16 to fp32
+                        self._get_flat_grads(out=self.fp32_params.grad)
+                        
+                        normalizer = normalizer * self.scaler.loss_scale 
+                        # rescale and clip grads
+                        self.fp32_params.grad.data.div_(normalizer)
 
+                        grad_norm = torch.norm(self.fp32_params.grad.data).item()
+                        
+                        
+                        
+                        overflow = DynamicLossScaler.has_overflow(grad_norm)
+                        self.scaler.update_scale(overflow)
+                    else:
+                        overflow = False
 
                     
                     if overflow:
@@ -330,23 +362,27 @@ class VariationalTrainerFP16(XETrainer):
                     
                     else:
                         try:
+                            # max_norm = self.opt.max_grad_norm 
+                            # if grad_norm > max_norm > 0:
+                            #     clip_coef = max_norm / (grad_norm + 1e-6)
+                            #     self.fp32_params.grad.data.mul_(clip_coef)
 
-                            max_norm = self.opt.max_grad_norm 
-                            if grad_norm > max_norm > 0:
-                                clip_coef = max_norm / (grad_norm + 1e-6)
-                                self.fp32_params.grad.data.mul_(clip_coef)
+                            if self.opt.fp16:
+                                grad_denom = 1
+                            else:
+                                grad_denom = normalizer
+                            grad_norm = self.optim.step(grad_denom=grad_denom) # update the parameters in fp32 
+                            self.meters['gnorm'].update(grad_norm)
 
-
-                            self.optim.step(grad_denom=1) # update the parameters in fp32 
-                            
-                            # copying the parameters back to fp16
-                            offset = 0
-                            for p in self.model.parameters():
-                                if not p.requires_grad:
-                                    continue
-                                numel = p.data.numel()
-                                p.data.copy_(self.fp32_params.data[offset:offset+numel].view_as(p.data))
-                                offset += numel
+                            if self.opt.fp16:
+                                # copying the parameters back to fp16
+                                offset = 0
+                                for p in self.model.parameters():
+                                    if not p.requires_grad:
+                                        continue
+                                    numel = p.data.numel()
+                                    p.data.copy_(self.fp32_params.data[offset:offset+numel].view_as(p.data))
+                                    offset += numel
                         except RuntimeError as e:
                             if 'out of memory' in str(e):
                                 torch.cuda.empty_cache()
@@ -355,7 +391,6 @@ class VariationalTrainerFP16(XETrainer):
                                 raise e
 
 
-                        
                         self.model.zero_grad()
                         self.optim.zero_grad()
                         counter = 0
@@ -432,8 +467,21 @@ class VariationalTrainerFP16(XETrainer):
             print('Initializing model parameters')
             init_model_parameters(model, opt)
             resume=False
-            self.convert_fp16()
-        
+
+            if self.opt.fp16:
+                self.convert_fp16()
+            else:
+                self.convert_fp32()
+
+        if opt.var_load_pretrained:
+            print("Loading pretrained from %s " % opt.var_load_pretrained)
+
+            pretrained_cp = torch.load(opt.var_load_pretrained, map_location=lambda storage, loc: storage)
+
+            transformer_model_weights = pretrained_cp['model']
+            self.model.load_transformer_weights(transformer_model_weights)
+            
+            print("Done")
         
         
         valid_loss = self.eval(self.validData)

@@ -47,9 +47,6 @@ def update_backward_compatibility(opt):
 
     if not hasattr(opt, 'var_ignore_source'):
         opt.var_ignore_source = False
-    
-    if not hasattr(opt, 'var_use_prior_training'):
-        opt.var_use_prior_training = False
 
     if not hasattr(opt, 'var_pooling'):
         opt.var_pooling = 'mean'
@@ -230,10 +227,7 @@ def build_model(opt, dicts):
         
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
         
-        if opt.var_ignore_source:
-            encoder=None
-        else:
-            encoder = TransformerEncoder(opt, embedding_src, positional_encoder)
+        encoder = TransformerEncoder(opt, embedding_src, positional_encoder)
 
         decoder = VariationalDecoder(opt, embedding_tgt, positional_encoder, 
                                           encoder_to_share=encoder if opt.share_enc_dec_weights else None)
@@ -242,7 +236,7 @@ def build_model(opt, dicts):
         prior = NeuralPrior(opt, embedding_src, positional_encoder)
         posterior = NeuralPosterior(opt, embedding_tgt, positional_encoder, prior=prior)
 
-        model = VariationalTransformer(encoder, decoder, prior, posterior, generator, use_prior_training=opt.var_use_prior_training)
+        model = VariationalTransformer(encoder, decoder, prior, posterior, generator)
 
         loss_function = VariationalLoss(dicts['tgt'].size(), opt)
 
@@ -279,7 +273,7 @@ def build_model(opt, dicts):
             init.normal_(model.encoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
         init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
     
-   
+    
     return model, loss_function
     
 def init_model_parameters(model, opt):

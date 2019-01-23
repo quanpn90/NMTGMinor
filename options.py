@@ -213,6 +213,10 @@ def make_parser(parser):
                         help="""kl var_kl_lambda""")
     parser.add_argument('-var_pooling', default='mean',  
                         help="""pooling operation to summerize one state from a sequence""")
-    parser.add_argument('-var_use_prior_training', action='store_true',
-                        help="Use prior during training (mostly for debugging)")
+    parser.add_argument('-var_load_pretrained', default='', type=str,
+                        help="""Load a pretrained from a transformer model""")
+    parser.add_argument('-var_not_sampling', action='store_true',
+                        help="""Do not sample (use mean)""")
+    parser.add_argument('-var_sample_from', default='posterior',
+                        help="""The distribution where we sample from. Default is posterior. Choice is posterior|prior""")
     return parser
