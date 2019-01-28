@@ -261,6 +261,7 @@ class EnsembleTranslator(object):
                 contexts[i] = self.autoencoder.autocode(contexts[i])
                 
         goldScores = contexts[0].data.new(batchSize).zero_()
+        allGoldScores = []
         goldWords = 0
         
         if tgtBatch is not None:
@@ -285,6 +286,7 @@ class EnsembleTranslator(object):
                 scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
                 goldScores += scores.squeeze(1).type_as(goldScores)
                 goldWords += tgt_t.ne(onmt.Constants.PAD).sum().item()
+                allGoldScores.append(scores.squeeze(1).type_as(goldScores))
             
             
         #  (3) Start decoding
@@ -412,7 +414,7 @@ class EnsembleTranslator(object):
         
         torch.set_grad_enabled(True)
 
-        return allHyp, allScores, allAttn, allLengths, goldScores, goldWords
+        return allHyp, allScores, allAttn, allLengths, goldScores, goldWords, allGoldScores
 
     def translate(self, srcBatch, goldBatch):
         #  (1) convert words to indexes
@@ -422,7 +424,7 @@ class EnsembleTranslator(object):
         batchSize = self._getBatchSize(src)
 
         #  (2) translate
-        pred, predScore, attn, predLength, goldScore, goldWords = self.translateBatch(src, tgt)
+        pred, predScore, attn, predLength, goldScore, goldWords,allGoldWords = self.translateBatch(src, tgt)
 
 
         #  (3) convert indexes to words
@@ -433,7 +435,7 @@ class EnsembleTranslator(object):
                  for n in range(self.opt.n_best)]
             )
 
-        return predBatch, predScore, predLength, goldScore, goldWords
+        return predBatch, predScore, predLength, goldScore, goldWords,allGoldWords
 
     def translateASR(self, srcBatch, goldBatch):
         #  (1) convert words to indexes
@@ -443,7 +445,7 @@ class EnsembleTranslator(object):
         batchSize = self._getBatchSize(src)
 
         #  (2) translate
-        pred, predScore, attn, predLength, goldScore, goldWords = self.translateBatch(src, tgt)
+        pred, predScore, attn, predLength, goldScore, goldWords,allGoldWords = self.translateBatch(src, tgt)
 
         #  (3) convert indexes to words
         predBatch = []
@@ -453,6 +455,6 @@ class EnsembleTranslator(object):
                  for n in range(self.opt.n_best)]
             )
 
-        return predBatch, predScore, predLength, goldScore, goldWords
+        return predBatch, predScore, predLength, goldScore, goldWords,allGoldWords
 
 
