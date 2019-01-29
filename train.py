@@ -13,7 +13,7 @@ import time, datetime
 from onmt.train_utils.trainer import XETrainer
 from onmt.train_utils.fp16_trainer import FP16XETrainer
 from onmt.train_utils.multiGPUtrainer import MultiGPUXETrainer
-from onmt.modules.Loss import NMTLossFunc
+from onmt.modules.Loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.ModelConstructor import build_model, init_model_parameters
 
 parser = argparse.ArgumentParser(description='train.py')
@@ -115,7 +115,10 @@ def main():
     
     
     """ Building the loss function """
-    loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+    if(opt.ctc_loss != 0):
+        loss_function = NMTAndCTCLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing,ctc_weight = opt.ctc_loss)
+    else:
+        loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
 
 
     nParams = sum([p.nelement() for p in model.parameters()])

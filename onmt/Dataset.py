@@ -153,7 +153,7 @@ class Dataset(object):
                 return b
             #~ print (b)
             #~ b = torch.stack(b, 0)
-            b = b.t().contiguous()
+            b = b.transpose(0,1).contiguous()
 
 #            if self.cuda:
 #                b = b.cuda()
