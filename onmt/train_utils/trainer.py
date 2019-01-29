@@ -310,7 +310,6 @@ class XETrainer(BaseTrainer):
         if save_file:
             checkpoint = torch.load(save_file, map_location=lambda storage, loc: storage)
         
-        
         if checkpoint is not None:
             print('Loading model and optim from checkpoint at %s' % save_file)
             self.model.load_state_dict(checkpoint['model'])
@@ -325,7 +324,7 @@ class XETrainer(BaseTrainer):
                 batchOrder = None
                 iteration = 0
                 resume=False
-                
+
             
             del checkpoint['model']
             del checkpoint['optim']
@@ -336,7 +335,6 @@ class XETrainer(BaseTrainer):
             print('Initializing model parameters')
             init_model_parameters(model, opt)
             resume=False
-        
         
         valid_loss = self.eval(self.validData)
         valid_ppl = math.exp(min(valid_loss, 100))

@@ -250,7 +250,6 @@ class Optim(object):
         return state_dict
         
     def load_state_dict(self, state_dict):
-        
         self._step = state_dict['_step']
         
         state_dict.pop('_step', None)

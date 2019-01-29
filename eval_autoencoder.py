@@ -158,7 +158,7 @@ def main():
             r = evaluator.evalASR(srcBatch,tgtBatch)
             if(opt.representation == "EncoderHiddenState"):
                 outputResults(srcBatch,r,outF)
-            elif(opt.representation == "DecoderHiddenState"):
+            elif(opt.representation == "DecoderHiddenState" or opt.representation == "Probabilities"):
                 for i in range(len(tgtBatch)):
                     tgtBatch[i].append("EOS");
                 outputResults(tgtBatch,r,outF)
@@ -167,7 +167,7 @@ def main():
             r = evaluator.evalASR(srcBatch,tgtBatch)
             if(opt.representation == "EncoderHiddenState"):
                 outputResults(srcBatch,r,outF)
-            elif(opt.representation == "DecoderHiddenState"):
+            elif(opt.representation == "DecoderHiddenState" or opt.representation == "Probabilities"):
                 for i in range(len(tgtBatch)):
                     tgtBatch[i].append("EOS");
                 outputResults(tgtBatch,r,outF)
@@ -203,7 +203,7 @@ def main():
             r = evaluator.eval(srcBatch,tgtBatch)
             if(opt.representation == "EncoderHiddenState"):
                 outputResults(srcBatch,r,outF)
-            elif(opt.representation == "DecoderHiddenState"):
+            elif(opt.representation == "DecoderHiddenState" or opt.representation == "Probabilities"):
                 for i in range(len(tgtBatch)):
                     tgtBatch[i].append("EOS");
                 outputResults(tgtBatch,r,outF)
