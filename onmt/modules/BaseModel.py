@@ -72,6 +72,11 @@ class NMTModel(nn.Module):
             
             return True
         
+
+        #restore old generated if necessay for loading
+        if("generator.linear.weight" in state_dict and type(self.generator) is nn.ModuleList):
+            self.generator = self.generator[0]
+
         #~ filtered_dict = dict()
         
         #~ for
@@ -86,8 +91,12 @@ class NMTModel(nn.Module):
         for k,v in model_dict.items():
             if k not in filtered:
                 filtered[k] = v
-        #~ 
+        #~
+
         super().load_state_dict(filtered)   
+
+        if(type(self.generator) is not list):
+            self.generator = nn.ModuleList([self.generator])
 
         #~ for name, param in state_dict.items():
             #~ 

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import onmt
-
+import torch.nn.functional as F
 
 
 from ae.VariationalLayer import VariationalLayer
@@ -24,7 +24,10 @@ class Autoencoder(nn.Module):
         elif (opt.representation == "DecoderHiddenState"):
             self.inputSize = nmt_model.decoder.model_size
         elif (opt.representation == "Probabilities"):
-            self.inputSize = nmt_model.generator.output_size
+            if(type(nmt_model.generator) is nn.ModuleList):
+                self.inputSize = nmt_model.generator[0].output_size
+            else:
+                self.inputSize = nmt_model.generator.output_size
         else:
             raise NotImplementedError("Waring!"+opt.represenation+" not implemented for auto encoder")
 
@@ -87,7 +90,11 @@ class Autoencoder(nn.Module):
                 flattened_mask = tgt_mask.squeeze(1).transpose(0,1).contiguous().view(-1)
                 non_pad_indices = torch.nonzero(1-flattened_mask).squeeze(1)
                 clean_context = flattened_output.index_select(0, non_pad_indices)
-                clean_context = self.nmt.generator(clean_context)
+                if (type(self.nmt.generator) is nn.ModuleList):
+                    clean_context = self.nmt.generator[0](clean_context)
+                else:
+                    clean_context = self.nmt.generator(clean_context)
+
 
         else:
             raise NotImplementedError("Waring!"+opt.represenation+" not implemented for auto encoder")
@@ -101,7 +108,12 @@ class Autoencoder(nn.Module):
 
         for i in range(len(self.layers)):
             result = self.layers[i](result)
-            
+
+        if (self.representation == "Probabilities"):
+            result = F.log_softmax(result, dim=-1)
+
+
+
         return clean_context,result
 
 
