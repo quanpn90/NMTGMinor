@@ -142,8 +142,7 @@ class XETrainer(BaseTrainer):
                 tgt_mask = targets.data.ne(onmt.Constants.PAD)
 
                 if(self.opt.ctc_loss != 0):
-                    _,loss_data,grad_outputs = self.loss_function(outputs,encoder,targets,generator=self.model.generator,backward=False,
-                                                                  source_mask=src_mask,target_mask=tgt_mask)
+                    _,loss_data,grad_outputs = self.loss_function(outputs,encoder,targets,generator=self.model.generator,backward=False,source_mask=src_mask,target_mask=tgt_mask)
                 else:
                     _,loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator[0],
                                                              backward=False, mask=tgt_mask)
@@ -215,7 +214,7 @@ class XETrainer(BaseTrainer):
 
 
                 if(self.opt.ctc_loss != 0):
-                    _,loss_data,grad_outputs = self.loss_function(outputs,encoder,generator=self.model.generator,backward=True,
+                    _,loss_data,grad_outputs = self.loss_function(outputs,encoder,targets,generator=self.model.generator,backward=True,
                                                                   source_mask=src_mask,target_mask=tgt_mask)
                 else:
                     _,loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator[0],

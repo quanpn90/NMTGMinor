@@ -5,6 +5,8 @@ import torch, math
 
 from torch.nn.modules.loss import _Loss
 
+import numpy
+
 #~ class LabelSmoothedCrossEntropyCriterion(_Loss):
 #~ 
     #~ def __init__(self, n_targets, eps):
@@ -304,6 +306,15 @@ class CTCLossFunc(LossFuncBase):
             input_length = (1-source_mask).squeeze(1).sum(1)
         else:
             input_length = (1-source_mask).sum(1)
+
+
+        #remove elements with more targets than input
+        comp = torch.lt(target_length,input_length)
+        target_length = target_length.index_select(0,comp.nonzero().squeeze())
+        input_length = input_length.index_select(0,comp.nonzero().squeeze())
+        outputs = outputs.index_select(1,comp.nonzero().squeeze())
+        targets = targets.index_select(1,comp.nonzero().squeeze())
+
         # flatten the output
         size = outputs.size()
         outputs = outputs.contiguous().view(-1, outputs.size(-1))
@@ -317,6 +328,17 @@ class CTCLossFunc(LossFuncBase):
         loss = self.func(dists,targets.transpose(0,1),input_length,target_length)
 
         loss_data = loss.data.item()
+
+        if(not numpy.isfinite(loss_data)):
+            print("Input:",input_length)
+            print("Target:",target_length)
+            print("Compare:",comp)
+            print("Selected:",comp.nonzero().squeeze().size())
+            for i in range(len(comp)):
+                print(i,self.func(dists.narrow(1,i,1),targets.transpose(0,1).narrow(0,i,1),input_length.narrow(0,i,1),target_length.narrow(0,i,1)))
+            loss = torch.zeros_like(loss)
+            loss_data = loss.data.item()
+            
 
         if backward:
             loss.div(normalizer).backward()
@@ -345,8 +367,18 @@ class NMTAndCTCLossFunc(LossFuncBase):
         ctc_loss,ctc_loss_data,_ = self.ctc.forward(enc_output,targets,generator[1],False,target_mask,source_mask,normalizer);
         loss = self.ctc_weight * ctc_loss + (1-self.ctc_weight)*n_loss
         loss_data = self.ctc_weight * ctc_loss_data + (1-self.ctc_weight)*n_loss_data
-
+        if(not numpy.isfinite(ctc_loss_data)):
+            print("CTC_Loss:",ctc_loss_data)
+            print("NMT_Loss:",n_loss_data)
+            print("Loss:",loss_data)
+            exit()
         if backward:
             loss.div(normalizer).backward()
 
         return loss,loss_data,None
+
+
+    def cuda(self):
+        self.nmt = self.nmt.cuda()
+        self.ctc = self.ctc.cuda()
+        return self
