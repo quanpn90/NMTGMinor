@@ -237,4 +237,116 @@ class NMTLossFunc(LossFuncBase):
             #~ grad_outputs = torch.autograd.grad(detached_outputs, original_outputs, grad_outputs=grad_outputs)
             #~ detached_outputs.backward(grad_outputs)
         
-        return loss_data, None
+        return loss,loss_data, None
+
+
+class CTCLossFunc(LossFuncBase):
+    """
+    Standard NMT Loss Computation.
+    """
+
+    def __init__(self, output_size, label_smoothing=0.0, shard_size=1):
+        super(CTCLossFunc, self).__init__(output_size)
+        self.shard_split = shard_size
+
+        if label_smoothing > 0:
+            self.smoothing_value = label_smoothing / (output_size - 2)
+        else:
+            weight = torch.ones(output_size)
+            weight[self.padding_idx] = 0
+        self.func = nn.CTCLoss(output_size-1, reduction='sum')
+        self.confidence = 1.0 - label_smoothing
+        self.label_smoothing = label_smoothing
+
+    def _compute_loss(self, scores, targets):
+
+        gtruth = targets.view(-1)  # batch * time
+        scores = scores.view(-1, scores.size(-1))  # batch * time X vocab_size
+
+        if self.confidence < 1:  # label smoothing
+            tdata = gtruth.data
+
+            lprobs = scores
+            non_pad_mask = gtruth.ne(self.padding_idx)
+            nll_loss = -lprobs.gather(1, gtruth.unsqueeze(1))[non_pad_mask]
+            smooth_loss = -lprobs.sum(dim=-1, keepdim=True)[non_pad_mask]
+            nll_loss = nll_loss.sum()
+            smooth_loss = smooth_loss.sum()
+
+            eps_i = self.smoothing_value
+            loss = (1. - self.label_smoothing) * nll_loss + eps_i * smooth_loss
+            loss_data = nll_loss.data.item()
+
+        else:
+            loss = self.func(scores.float(), gtruth)
+            loss_data = loss.data.item()
+
+        return (loss, loss_data)
+
+    def forward(self, outputs, targets, generator=None, backward=False, target_mask=None, source_mask = None, normalizer=1):
+        """
+        Compute the loss. Subclass must define this method.
+        Args:
+
+            outputs: the predictive output from the model. time x batch x vocab_size
+                                                   or time x batch x hidden_size
+            target: the validate target to compare output with. time x batch
+            generator: in case we want to save memory and
+            **kwargs(optional): additional info for computing loss.
+        """
+
+        original_outputs = outputs
+        batch_size = outputs.size(1)
+        h_size = outputs.size(-1)
+
+        target_length = target_mask.sum(0)
+        if(source_mask.dim() == 3):
+            input_length = (1-source_mask).squeeze(1).sum(1)
+        else:
+            input_length = (1-source_mask).sum(1)
+        # flatten the output
+        size = outputs.size()
+        outputs = outputs.contiguous().view(-1, outputs.size(-1))
+
+        detached_outputs = outputs
+
+        dists = generator(outputs)
+
+        dists = dists.view(size[0],size[1],-1)
+
+        loss = self.func(dists,targets.transpose(0,1),input_length,target_length)
+
+        loss_data = loss.data.item()
+
+        if backward:
+            loss.div(normalizer).backward()
+
+        split_size = self.shard_split
+
+
+        return loss,loss_data, None
+
+
+
+class NMTAndCTCLossFunc(LossFuncBase):
+    """
+    Standard NMT Loss Computation.
+    """
+
+    def __init__(self, output_size, label_smoothing=0.0, shard_size=1,ctc_weight = 0.0):
+        super(NMTAndCTCLossFunc, self).__init__(output_size)
+        self.shard_split = shard_size
+        self.ctc_weight = 0.0
+        self.nmt = NMTLossFunc(output_size,label_smoothing,shard_size)
+        self.ctc = CTCLossFunc(output_size+1,label_smoothing,shard_size)
+
+    def forward(self, outputs, enc_output, targets, generator=None, backward=False, target_mask=None, source_mask = None, normalizer=1):
+        n_loss,n_loss_data,_ = self.nmt.forward(outputs,targets,generator[0],False,target_mask,normalizer)
+        ctc_loss,ctc_loss_data,_ = self.ctc.forward(enc_output,targets,generator[1],False,target_mask,source_mask,normalizer);
+        loss = self.ctc_weight * ctc_loss + (1-self.ctc_weight)*n_loss
+        loss_data = self.ctc_weight * ctc_loss_data + (1-self.ctc_weight)*n_loss_data
+
+        if backward:
+            loss.div(normalizer).backward()
+
+        return loss,loss_data,None

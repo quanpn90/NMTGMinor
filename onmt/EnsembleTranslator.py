@@ -279,7 +279,7 @@ class EnsembleTranslator(object):
             #  (2) if a target is specified, compute the 'goldScore'
             #  (i.e. log likelihood) of the target under the model
             for dec_t, tgt_t in zip(output, tgtBatchOutput.data):
-                gen_t = model_.generator(dec_t)
+                gen_t = model_.generator[0](dec_t)
                 tgt_t = tgt_t.unsqueeze(1)
                 scores = gen_t.data.gather(1, tgt_t)
                 scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
@@ -336,7 +336,7 @@ class EnsembleTranslator(object):
                 attns[i] = coverage[:, -1, :].squeeze(1) # batch * beam x src_len
                 
                 # batch * beam x vocab_size 
-                outs[i] = self.models[i].generator(decoder_hidden)
+                outs[i] = self.models[i].generator[0](decoder_hidden)
             
             out = self._combineOutputs(outs)
             attn = self._combineAttention(attns)

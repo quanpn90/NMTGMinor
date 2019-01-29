@@ -375,7 +375,7 @@ class Transformer(NMTModel):
         
         output, coverage = self.decoder(tgt, context, src, grow=grow)
 
-        return output
+        return output,context,src_mask
         
     def create_decoder_state(self, src, context, beamSize=1):
         

@@ -77,6 +77,8 @@ def make_parser(parser):
                         help='Maximum batch size in word dimension')
     parser.add_argument('-batch_size_sents', type=int, default=128,
                         help='Maximum number of sentences in a batch')
+    parser.add_argument('-ctc_loss', type=float, default=0.0,
+                        help='CTC Loss as additional loss function with this weight')
     parser.add_argument('-max_generator_batches', type=int, default=32,
                         help="""Maximum batches of words in a sequence to run
                         the generator on in parallel. Higher is faster, but uses

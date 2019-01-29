@@ -29,6 +29,10 @@ def build_model(opt, dicts):
     if not hasattr(opt, 'init_embedding'):
         opt.init_embedding = 'xavier'
 
+    if not hasattr(opt, 'ctc_loss'):
+        opt.ctc_loss = 0
+
+
     onmt.Constants.layer_norm = opt.layer_norm
     onmt.Constants.weight_norm = opt.weight_norm
     onmt.Constants.activation_layer = opt.activation_layer
@@ -47,9 +51,9 @@ def build_model(opt, dicts):
 
         decoder = RecurrentDecoder(opt, dicts['tgt'])
         
-        generator = onmt.modules.BaseModel.Generator(opt.rnn_size, dicts['tgt'].size())
+        generators = [onmt.modules.BaseModel.Generator(opt.rnn_size, dicts['tgt'].size())]
         
-        model = RecurrentModel(encoder, decoder, generator)    
+        model = RecurrentModel(encoder, decoder, generators)
         
     elif opt.model == 'transformer':
         # raise NotImplementedError
@@ -68,9 +72,11 @@ def build_model(opt, dicts):
 
         decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder)
         
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
+        if(opt.ctc_loss != 0):
+            generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
         
-        model = Transformer(encoder, decoder, generator)    
+        model = Transformer(encoder, decoder, generators)
         
         #~ print(encoder)
         
@@ -93,9 +99,11 @@ def build_model(opt, dicts):
 
         decoder = StochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
         
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
-        
-        model = Transformer(encoder, decoder, generator)       
+        generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
+        if(opt.ctc_loss != 0):
+            generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
+
+        model = Transformer(encoder, decoder, generators)
         
         
         
@@ -111,9 +119,12 @@ def build_model(opt, dicts):
         encoder = FCTransformerEncoder(opt, dicts['src'], positional_encoder)
         decoder = FCTransformerDecoder(opt, dicts['tgt'], positional_encoder)
         
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
+        if(opt.ctc_loss != 0):
+            generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
+
         
-        model = Transformer(encoder, decoder, generator)    
+        model = Transformer(encoder, decoder, generators)
     elif opt.model == 'ptransformer':
     
         from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder
@@ -126,9 +137,12 @@ def build_model(opt, dicts):
         encoder = ParallelTransformerEncoder(opt, dicts['src'], positional_encoder)
         decoder = ParallelTransformerDecoder(opt, dicts['tgt'], positional_encoder)
         
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
+        if(opt.ctc_loss != 0):
+            generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
 
-        model = Transformer(encoder, decoder, generator)
+
+        model = Transformer(encoder, decoder, generators)
 
     elif opt.model in ['universal_transformer', 'utransformer'] :
 
@@ -145,9 +159,12 @@ def build_model(opt, dicts):
         encoder = UniversalTransformerEncoder(opt, dicts['src'], positional_encoder, time_encoder)
         decoder = UniversalTransformerDecoder(opt, dicts['tgt'], positional_encoder, time_encoder)
 
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
+        if(opt.ctc_loss != 0):
+            generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
+
         
-        model = Transformer(encoder, decoder, generator)    
+        model = Transformer(encoder, decoder, generators)
 
     elif opt.model in ['iid_stochastic_transformer'] :
 
@@ -163,9 +180,12 @@ def build_model(opt, dicts):
 
         decoder = IIDStochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
 
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
+        if(opt.ctc_loss != 0):
+            generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
 
-        model = Transformer(encoder, decoder, generator)
+
+        model = Transformer(encoder, decoder, generators)
 
 
     else:
@@ -181,7 +201,8 @@ def build_model(opt, dicts):
 
     init = torch.nn.init
 
-    init.xavier_uniform_(model.generator.linear.weight)
+    for g in model.generator:
+        init.xavier_uniform_(g.linear.weight)
 
     if(opt.encoder_type == "audio"):
         init.xavier_uniform_(model.encoder.audio_trans.weight.data)
