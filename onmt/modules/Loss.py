@@ -334,8 +334,6 @@ class CTCLossFunc(LossFuncBase):
             print("Target:",target_length)
             print("Compare:",comp)
             print("Selected:",comp.nonzero().squeeze().size())
-            for i in range(len(comp)):
-                print(i,self.func(dists.narrow(1,i,1),targets.transpose(0,1).narrow(0,i,1),input_length.narrow(0,i,1),target_length.narrow(0,i,1)))
             loss = torch.zeros_like(loss)
             loss_data = loss.data.item()
             
