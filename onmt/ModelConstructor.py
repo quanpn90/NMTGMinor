@@ -53,7 +53,7 @@ def build_model(opt, dicts):
         
         generators = [onmt.modules.BaseModel.Generator(opt.rnn_size, dicts['tgt'].size())]
         
-        model = RecurrentModel(encoder, decoder, generators)
+        model = RecurrentModel(encoder, decoder, nn.ModuleList(generators))
         
     elif opt.model == 'transformer':
         # raise NotImplementedError
@@ -76,7 +76,7 @@ def build_model(opt, dicts):
         if(opt.ctc_loss != 0):
             generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
         
-        model = Transformer(encoder, decoder, generators)
+        model = Transformer(encoder, decoder, nn.ModuleList(generators))
         
         #~ print(encoder)
         
@@ -103,7 +103,7 @@ def build_model(opt, dicts):
         if(opt.ctc_loss != 0):
             generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
 
-        model = Transformer(encoder, decoder, generators)
+        model = Transformer(encoder, decoder, nn.ModuleList(generators))
         
         
         
@@ -124,7 +124,7 @@ def build_model(opt, dicts):
             generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
 
         
-        model = Transformer(encoder, decoder, generators)
+        model = Transformer(encoder, decoder, nn.ModuleList(generators))
     elif opt.model == 'ptransformer':
     
         from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder
@@ -142,7 +142,7 @@ def build_model(opt, dicts):
             generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
 
 
-        model = Transformer(encoder, decoder, generators)
+        model = Transformer(encoder, decoder, nn.ModuleList(generators))
 
     elif opt.model in ['universal_transformer', 'utransformer'] :
 
@@ -164,7 +164,7 @@ def build_model(opt, dicts):
             generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
 
         
-        model = Transformer(encoder, decoder, generators)
+        model = Transformer(encoder, decoder, nn.ModuleList(generators))
 
     elif opt.model in ['iid_stochastic_transformer'] :
 
@@ -185,7 +185,7 @@ def build_model(opt, dicts):
             generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
 
 
-        model = Transformer(encoder, decoder, generators)
+        model = Transformer(encoder, decoder, nn.ModuleList(generators))
 
 
     else:
