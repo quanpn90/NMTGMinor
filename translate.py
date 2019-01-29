@@ -196,10 +196,10 @@ def main():
                 continue
 
             print("Batch size:",len(srcBatch),len(tgtBatch))
-            predBatch, predScore, predLength, goldScore, numGoldWords  = translator.translateASR(srcBatch,
+            predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores  = translator.translateASR(srcBatch,
                                                                                     tgtBatch)
             print("Result:",len(predBatch))
-            count,predScore,predWords,goldScore,goldWords = translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords,opt.input_type)
+            count,predScore,predWords,goldScore,goldWords = translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords, allGoldScores,opt.input_type)
             predScoreTotal += predScore
             predWordsTotal += predWords
             goldScoreTotal += goldScore
@@ -208,10 +208,10 @@ def main():
 
         if len(srcBatch) != 0:
             print("Batch size:",len(srcBatch),len(tgtBatch))
-            predBatch, predScore, predLength, goldScore, numGoldWords  = translator.translateASR(srcBatch,
+            predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores  = translator.translateASR(srcBatch,
                                                                                     tgtBatch)
             print("Result:",len(predBatch))
-            count,predScore,predWords,goldScore,goldWords = translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords,opt.input_type)
+            count,predScore,predWords,goldScore,goldWords = translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores,opt.input_type)
             predScoreTotal += predScore
             predWordsTotal += predWords
             goldScoreTotal += goldScore
@@ -249,10 +249,10 @@ def main():
                     break
                     
             
-            predBatch, predScore, predLength, goldScore, numGoldWords  = translator.translate(srcBatch,
+            predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores  = translator.translate(srcBatch,
                                                                                     tgtBatch)
 
-            count,predScore,predWords,goldScore,goldWords = translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords,opt.input_type)
+            count,predScore,predWords,goldScore,goldWords = translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores,opt.input_type)
             predScoreTotal += predScore
             predWordsTotal += predWords
             goldScoreTotal += goldScore
@@ -270,7 +270,7 @@ def main():
     if opt.dump_beam:
         json.dump(translator.beam_accum, open(opt.dump_beam, 'w'))
 
-def translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords,input_type):
+def translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores,input_type):
     if opt.normalize:
         predBatch_ = []
         predScore_ = []
@@ -318,7 +318,10 @@ def translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, p
                     tgtSent = tgtSent.lower()
                 print('GOLD %d: %s ' % (count, tgtSent))
                 print("GOLD SCORE: %.4f" % goldScore[b])
-
+                print("Single GOLD Scores:",end=" ")
+                for j in range(len(tgtBatch[b])):
+                    print(allGoldScores[j][b].item(),end =" ")
+                print ()
             if opt.print_nbest:
                 print('\nBEST HYP:')
                 for n in range(opt.n_best):
