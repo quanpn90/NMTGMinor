@@ -1,137 +1,43 @@
-from __future__ import division
-
-import onmt
-import onmt.Markdown
-import onmt.modules
 import argparse
+
 import torch
-import torch.nn as nn
-from torch import cuda
-from torch.autograd import Variable
-import math
-import time, datetime
-from onmt.train_utils.trainer import XETrainer
-from onmt.train_utils.fp16_trainer import FP16XETrainer
-from onmt.train_utils.multiGPUtrainer import MultiGPUXETrainer
-from onmt.train_utils.fp16_vi_trainer import VariationalTrainer
-from onmt.ModelConstructor import build_model, init_model_parameters
 
-parser = argparse.ArgumentParser(description='train.py')
-onmt.Markdown.add_md_help_argument(parser)
+from nmtg.logging import add_log_options, setup_logging
+from nmtg.options import add_general_options, add_task_option, add_trainer_option
+from nmtg.trainers import Trainer
+from nmtg.tasks import Task
 
-from options import make_parser
-# Please look at the options file to see the options regarding models and data
-parser = make_parser(parser)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="train.py")
+    add_general_options(parser)
+    task_class = add_task_option(parser)
+    task_class.add_options(parser)
+    trainer_class = add_trainer_option(parser)
+    trainer_class.add_options(parser)
+    add_log_options(parser)
 
-opt = parser.parse_args()
+    parser.add_argument('-reset_optim', action='store_true',
+                        help='Reset the optimizer running variables')
+    parser.add_argument('-load_from', type=str,
+                        help='If training from a checkpoint then this is the'
+                             'path to the pretrained model.')
 
-print(torch.__version__)
-print(opt)
+    args = parser.parse_args()
 
-# An ugly hack to have weight norm on / off
-onmt.Constants.weight_norm = opt.weight_norm
-onmt.Constants.checkpointing = opt.checkpointing
-onmt.Constants.max_position_length = opt.max_position_length
+    logger = setup_logging(args.log_dir, 'train', args.log_level_file, args.log_level_console)
 
-# Use static dropout if checkpointing > 0
-if opt.checkpointing > 0:
-    onmt.Constants.static = True
+    logger.debug('Torch version: {}'.format(torch.__version__))
+    logger.debug(args)
 
-if torch.cuda.is_available() and not opt.gpus:
-    print("WARNING: You have a CUDA device, should run with -gpus 0")
-    
+    torch.manual_seed(args.seed)
 
+    task = task_class.setup_task(args)  # type: Task
+    trainer = trainer_class(args)  # type: Trainer
 
-
-
-torch.manual_seed(opt.seed)
-
-
-def main():
-    
-    
-    
-    start = time.time()
-    print("Loading data from '%s'" % opt.data)
-    
-    if opt.data_format == 'raw':
-        dataset = torch.load(opt.data)
-        elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
-        print("Done after %s" % elapse )
-      
-
-        trainData = onmt.Dataset(dataset['train']['src'],
-                                 dataset['train']['tgt'], opt.batch_size_words, opt.gpus,
-                                 max_seq_num=opt.batch_size_sents,
-                                 pad_count = opt.pad_count,
-                                 multiplier = opt.batch_size_multiplier,
-                                 sort_by_target=opt.sort_by_target)
-        validData = onmt.Dataset(dataset['valid']['src'],
-                                 dataset['valid']['tgt'], opt.batch_size_words, opt.gpus,
-                                 max_seq_num=opt.batch_size_sents)
-
-        dicts = dataset['dicts']
-        print(' * vocabulary size. source = %d; target = %d' %
-              (dicts['src'].size(), dicts['tgt'].size()))
-        print(' * number of training sentences. %d' %
-              len(dataset['train']['src']))
-        print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
-    elif opt.data_format == 'bin':
-        from onmt.data_utils.IndexedDataset import IndexedInMemoryDataset
-
-        dicts = torch.load(opt.data + ".dict.pt")
-        
-        #~ train = {}
-        train_path = opt.data + '.train'
-        train_src = IndexedInMemoryDataset(train_path + '.src')
-        train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
-        
-        trainData = onmt.Dataset(train_src,
-                                 train_tgt, opt.batch_size_words, opt.gpus,
-                                 max_seq_num=opt.batch_size_sents,
-                                 pad_count = opt.pad_count,
-                                 multiplier = opt.batch_size_multiplier,
-                                 sort_by_target=opt.sort_by_target)
-                                 
-        valid_path = opt.data + '.valid'
-        valid_src = IndexedInMemoryDataset(valid_path + '.src')
-        valid_tgt = IndexedInMemoryDataset(valid_path + '.tgt')
-        
-        validData = onmt.Dataset(valid_src,
-                                 valid_tgt, opt.batch_size_words, opt.gpus,
-                                 max_seq_num=opt.batch_size_sents)
-        
-        print(' * vocabulary size. source = %d; target = %d' %
-              (dicts['src'].size(), dicts['tgt'].size()))
-        print(' * number of training sentences. %d' %
-              len(train_src))
-        print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
-    
+    if args.load_from is None:
+        checkpoint = torch.load(args.load_from, map_location='cpu')
+        train_data = trainer.load_checkpoint(checkpoint, True, args.reset_optim)
     else:
-        raise NotImplementedError
-    
-    print('Building model...')
+        train_data = trainer.load_data()
 
-    # Loss function is built according to model 
-    # Go to ModelConstructor for more details
-    model, loss_function = build_model(opt, dicts)
-        
-    nParams = sum([p.nelement() for p in model.parameters()])
-    print('* number of parameters: %d' % nParams)
-    
-    optim = None
-    
-    if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
-        #~ trainer = MultiGPUXETrainer(model, loss_function, trainData, validData, dataset, opt)
-        raise NotImplementedError("Multi-GPU training is not supported atm")
-    else:
-        if opt.fp16:
-            trainer = FP16XETrainer(model, loss_function, trainData, validData, dicts, opt)
-        else:
-            trainer = XETrainer(model, loss_function, trainData, validData, dicts, opt)
-
-    
-    trainer.run(save_file=opt.load_from)
-
-if __name__ == "__main__":
-    main()
+    trainer.train(train_data, task)
