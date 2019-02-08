@@ -118,3 +118,9 @@ class EncoderDecoderModel(Model):
         encoder_out = self.encoder(encoder_inputs, encoder_mask)
         decoder_out = self.decoder(decoder_inputs, encoder_out, decoder_mask, encoder_mask)
         return decoder_out
+
+    @staticmethod
+    def convert_state_dict(opt, state_dict):
+        res = super().convert_state_dict(state_dict)
+        res['decoder'] = {'future_mask': state_dict['decoder']['mask']}
+        return res

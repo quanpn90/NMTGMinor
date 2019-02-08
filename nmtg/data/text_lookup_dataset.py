@@ -5,7 +5,7 @@ from nmtg.data.dataset import Dataset, TextLineDataset
 
 class TextLookupDataset(Dataset):
     def __init__(self, text_dataset: TextLineDataset, dictionary: Dictionary, words=True,
-                 bos=True, eos=True, align_right=False, trunc_len=0):
+                 lower=False, bos=True, eos=True, align_right=False, trunc_len=0):
         """
         A dataset which contains indices derived by splitting
         text lines and looking up indices in a dictionary
@@ -19,6 +19,7 @@ class TextLookupDataset(Dataset):
         self.source = text_dataset
         self.dictionary = dictionary
         self.words = words
+        self.lower = lower
         self.bos = bos
         self.eos = eos
         self.align_right = align_right
@@ -29,6 +30,8 @@ class TextLookupDataset(Dataset):
 
     def __getitem__(self, index):
         line = self.source[index]
+        if self.lower:
+            line = line.lower()
         if self.words:
             line = line.split(' ')
         if self.trunc_len > 0:

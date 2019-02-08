@@ -38,7 +38,6 @@ class NMTTrainer(Trainer):
         parser.add_argument('-tgt_vocab', type=str,
                             help='Path to an existing target vocabulary')
 
-        parser.add_argument('-lower', action='store_true', help='lowercase data')
         # parser.add_argument('-remove_duplicate', action='store_true',
         #                     help='Remove examples where source and target are the same')
         parser.add_argument('-join_vocab', action='store_true',
@@ -68,8 +67,6 @@ class NMTTrainer(Trainer):
                             help='To normalize the scores based on output length')
         parser.add_argument('-n_best', type=int, default=1,
                             help='Will output the n_best decoded sentences')
-        parser.add_argument('-bpe_symbol', type=str, default='@@ ',
-                            help='Strip this symbol from the output')
 
     @staticmethod
     def add_training_options(parser):
@@ -203,10 +200,10 @@ class NMTTrainer(Trainer):
         offsets_tgt = os.path.join(self.args.data_dir, 'train.tgt.idx')
         src_data = TextLineDataset.load_indexed(self.args.train_src, offsets_src)
         src_data = TextLookupDataset(src_data, self.src_dict, words=split_words, bos=False, eos=False,
-                                     trunc_len=self.args.src_seq_length_trunc)
+                                     trunc_len=self.args.src_seq_length_trunc, lower=self.args.lower)
         tgt_data = TextLineDataset.load_indexed(self.args.train_tgt, offsets_tgt)
         tgt_data = TextLookupDataset(tgt_data, self.tgt_dict, words=split_words, bos=True, eos=True,
-                                     trunc_len=self.args.tgt_seq_length_trunc)
+                                     trunc_len=self.args.tgt_seq_length_trunc, lower=self.args.lower)
         dataset = ParallelDataset(src_data, tgt_data)
 
         src_len_filename = os.path.join(self.args.data_dir, 'train.src.len')
@@ -284,10 +281,12 @@ class NMTTrainer(Trainer):
 
     def _get_eval_iterator(self, task):
         split_words = self.args.input_type == 'word'
-        src_data = TextLookupDataset(task.src_dataset, self.src_dict, bos=False, eos=False)
+        src_data = TextLookupDataset(task.src_dataset, self.src_dict, split_words, bos=False, eos=False,
+                                     lower=self.args.lower)
         tgt_data = None
         if task.tgt_dataset is not None:
-            tgt_data = TextLookupDataset(task.tgt_dataset, self.tgt_dict, split_words)
+            tgt_data = TextLookupDataset(task.tgt_dataset, self.tgt_dict, split_words,
+                                         lower=self.args.lower)
         dataset = ParallelDataset(src_data, tgt_data)
         return dataset.get_iterator(self.args.batch_size, num_workers=self.args.data_loader_threads,
                                     cuda=self.args.cuda)

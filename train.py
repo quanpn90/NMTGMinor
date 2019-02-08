@@ -2,6 +2,7 @@ import argparse
 
 import torch
 
+from nmtg import convert
 from nmtg.logging import add_log_options, setup_logging
 from nmtg.options import add_general_options, add_task_option, add_trainer_option
 from nmtg.trainers import Trainer
@@ -13,7 +14,7 @@ if __name__ == '__main__':
     task_class = add_task_option(parser)
     task_class.add_options(parser)
     trainer_class = add_trainer_option(parser)
-    trainer_class.add_options(parser)
+    trainer_class.add_training_options(parser)
     add_log_options(parser)
 
     parser.add_argument('-reset_optim', action='store_true',
@@ -35,7 +36,7 @@ if __name__ == '__main__':
     trainer = trainer_class(args)  # type: Trainer
 
     if args.load_from is None:
-        checkpoint = torch.load(args.load_from, map_location='cpu')
+        checkpoint = convert.load_checkpoint(args.load_from)
         train_data = trainer.load_checkpoint(checkpoint, True, args.reset_optim)
     else:
         train_data = trainer.load_data()

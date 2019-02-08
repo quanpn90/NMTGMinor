@@ -89,7 +89,7 @@ class Dictionary:
         if eos:
             vec.append(self.eos())
 
-        return torch.tensor(vec, dtype=torch.long)
+        return torch.tensor(vec, dtype=torch.int64)
 
     def unk_string(self, escape=False):
         """Return unknown string, optionally escaped as: <<unk>>"""
@@ -245,3 +245,19 @@ class Dictionary:
                 return self.save(fd)
         for symbol, count in zip(self.symbols[self.nspecial:], self.count[self.nspecial:]):
             print('{} {}'.format(symbol, count), file=f)
+
+    @classmethod
+    def convert(cls, old_dict):
+        pad_word = '<blank>'
+        unk_word = '<unk>'
+        bos_word = '<s>'
+        eos_word = '</s>'
+        new_dict = cls(pad=pad_word, unk=unk_word, bos=bos_word, eos=eos_word)
+        new_dict.indices = old_dict.labelToIdx
+        new_dict.symbols = [old_dict.idxToLabel[i] for i in range(len(old_dict.idxToLabel))]
+        new_dict.counts = [old_dict.frequencies[w] for w in new_dict.symbols]
+        new_dict.pad_index = new_dict.indices[pad_word]
+        new_dict.unk_index = new_dict.indices[unk_word]
+        new_dict.bos_index = new_dict.indices[bos_word]
+        new_dict.eos_index = new_dict.indices[eos_word]
+        return new_dict

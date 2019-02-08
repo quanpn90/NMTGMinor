@@ -115,7 +115,7 @@ class NMTModel(EncoderDecoderModel):
         if args.tie_weights:
             tgt_linear.weight = tgt_embedding.weight
         else:
-            torch.nn.init.xavier_uniform_(tgt_linear.weight)
+            nn.init.xavier_uniform_(tgt_linear.weight)
 
         encoder = NMTEncoder(model.encoder, src_embedding, args.word_dropout)
         decoder = NMTDecoder(model.decoder, tgt_embedding, args.word_dropout, tgt_linear)
@@ -129,9 +129,9 @@ class NMTModel(EncoderDecoderModel):
             embed_dict = nmtg.data.data_utils.parse_embedding(path)
             nmtg.data.data_utils.load_embedding(embed_dict, dictionary, emb)
         elif args.init_embedding == 'xavier':
-            torch.nn.init.xavier_uniform_(emb.weight)
+            nn.init.xavier_uniform_(emb.weight)
         elif args.init_embedding == 'normal':
-            torch.nn.init.normal_(emb.weight, mean=0, std=embedding_size ** -0.5)
+            nn.init.normal_(emb.weight, mean=0, std=embedding_size ** -0.5)
         else:
             raise ValueError('Unknown initialization {}'.format(args.init_embedding))
 
@@ -155,4 +155,21 @@ class NMTModel(EncoderDecoderModel):
                                    optimized=optimized_decoding)
         return decoder_out
 
-
+    @staticmethod
+    def convert_state_dict(opt, state_dict):
+        # No call to super here, because wrapping a model in NMTModel is new
+        model_cls = nmtg.models.get_model_type(opt.model)
+        res = {
+            'encoder': {
+                'embedded_dropout': {'embedding': {'weight': state_dict['encoder']['word_lut']['weight']}},
+            },
+            'decoder': {
+                'embedded_dropout': {'embedding': {'weight': state_dict['decoder']['word_lut']['weight']}},
+                'linear': {'weight': state_dict['generator']['linear']['weight'],
+                           'bias': state_dict['generator']['linear']['bias']}
+            }
+        }
+        model_state_dict = model_cls.convert_state_dict(state_dict)
+        res['encoder']['encoder'] = model_state_dict['encoder']
+        res['decoder']['decoder'] = model_state_dict['decoder']
+        return res
