@@ -42,4 +42,4 @@ class TextLookupDataset(Dataset):
         indices, lengths = data_utils.collate_sequences(samples,
                                                         self.dictionary.pad(),
                                                         self.align_right)
-        return {'indices': indices, 'lengths': lengths, 'size': lengths.sum()}
+        return {'indices': indices, 'lengths': lengths, 'size': lengths.sum().item()}

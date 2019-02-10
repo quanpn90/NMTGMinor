@@ -24,7 +24,7 @@ class Decoder(nn.Module):
     def __init__(self, future_masking=True, encoder_to_share=None):
         super().__init__()
         self.future_masking = future_masking
-        self.register_buffer('future_mask', None)
+        self.future_mask = None
 
     def get_future_mask(self, dim, device):
         if self.future_mask is None or self.future_mask.device != device:
@@ -102,7 +102,7 @@ class EncoderDecoderModel(Model):
         self.decoder = decoder
 
     @staticmethod
-    def add_args(parser):
+    def add_options(parser):
         parser.add_argument('-share_enc_dec_weights', action='store_true',
                             help='Share the encoder and decoder weights (except for the src attention layer)')
 

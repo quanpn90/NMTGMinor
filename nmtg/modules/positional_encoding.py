@@ -63,18 +63,19 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
         seq_len = inputs.size(1 if self.batch_first else 0)
         needed_length = seq_len
 
-        if incremental_state is not None:
-            timestep = incremental_state.get(self, 'timestep', 0)
-            needed_length = timestep + seq_len
-            incremental_state.set(self, 'timestep', needed_length)
+        # if incremental_state is not None:
+        #     timestep = incremental_state.get(self, 'timestep', 0)
+        #     needed_length = timestep + seq_len
+        #     incremental_state.set(self, 'timestep', needed_length)
 
         if needed_length > self.current_length:
-            self.generate(self.current_length)
+            self.generate(needed_length)
 
-        if incremental_state is None:
-            emb = self.pos_emb[:needed_length, :]
-        else:
-            emb = self.pos_emb[needed_length - seq_len:needed_length, :]
+        # if incremental_state is None:
+        #     emb = self.pos_emb[:needed_length, :]
+        # else:
+        #     emb = self.pos_emb[needed_length - seq_len:needed_length, :]
+        emb = self.pos_emb[:needed_length, :]
 
         if not self.batch_first:
             emb = emb.unsqueeze(1)

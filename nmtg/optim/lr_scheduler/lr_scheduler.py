@@ -9,21 +9,20 @@ from .. import Optimizer
 
 
 class LRScheduler:
-    def __init__(self, args, optimizer):
+    def __init__(self, optimizer):
         super().__init__()
         if not isinstance(optimizer, Optimizer):
             raise ValueError('optimizer must be an instance of Optimizer')
-        self.args = args
         self.optimizer = optimizer
         self.best = None
         self.step_update(0)
 
     @classmethod
     def build_lr_scheduler(cls, args, optimizer):
-        return cls(args, optimizer)
+        return cls(optimizer)
 
     @staticmethod
-    def add_args(parser):
+    def add_options(parser):
         """Add arguments to the parser for this LR scheduler."""
         raise NotImplementedError
 

@@ -3,31 +3,20 @@ from torch import nn
 
 
 class EmbeddingDropout(nn.Module):
-    def __init__(self, embeding, dropout=0.1, scale=None):
+    def __init__(self, embedding, dropout=0.1, scale=None):
         super().__init__()
-        self.embedding = embeding
-        self.dropout = dropout
+        self.embedding = embedding
+        self.dropout = nn.Dropout(dropout)
         self.scale = scale
 
     def forward(self, words):
-        if self.training and self.dropout > 0:
-            # TODO: Waste of memory in resize_ ?
-            mask = self.embedding.weight.new()\
-                       .resize_((self.embedding.weight.size(0), 1))\
-                       .bernoulli_(1 - self.dropout)\
-                       .expand_as(self.embedding.weight) / (1 - self.dropout)
-            masked_embed_weight = mask * self.embedding.weight
-        else:
-            masked_embed_weight = self.embedding.weight
+        masked_embed_weight = self.dropout(self.embedding.weight)
+
         if self.scale is not None:
             masked_embed_weight = self.scale.expand_as(masked_embed_weight) * masked_embed_weight
 
-        padding_idx = self.embedding.padding_idx
-        if padding_idx is None:
-            padding_idx = -1
-
         X = F.embedding(
-            words, masked_embed_weight, padding_idx, self.embedding.max_norm,
+            words, masked_embed_weight, self.embedding.padding_idx, self.embedding.max_norm,
             self.embedding.norm_type, self.embedding.scale_grad_by_freq, self.embedding.sparse)
 
         return X

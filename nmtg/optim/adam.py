@@ -8,13 +8,14 @@ from nmtg.optim import Optimizer, register_optimizer
 @register_optimizer('adam')
 class AdamOptimizer(Optimizer):
 
-    def __init__(self, args, params):
-        super().__init__(args, params)
-        self._optimizer = Adam(params, lr=self.get_lr(), weight_decay=args.weight_decay,
-                               betas=(args.beta1, args.beta2), eps=1e-9, amsgrad=args.amsgrad)
+    def __init__(self, params, betas=(0.9, 0.999), eps=1e-9,
+                 weight_decay=0, amsgrad=False):
+        super().__init__(params)
+        self._optimizer = Adam(params, weight_decay=weight_decay,
+                               betas=betas, eps=eps, amsgrad=amsgrad)
 
     @staticmethod
-    def add_args(parser):
+    def add_options(parser):
         parser.add_argument('-beta1', type=float, default=0.9,
                             help='beta_1 value for adam')
         parser.add_argument('-beta2', type=float, default=0.98,

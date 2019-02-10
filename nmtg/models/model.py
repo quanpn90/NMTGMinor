@@ -9,7 +9,7 @@ class Model(nn.Module):
         self._is_generation_fast = False
 
     @staticmethod
-    def add_args(parser):
+    def add_options(parser):
         """Add model-specific arguments to the parser."""
         pass
 

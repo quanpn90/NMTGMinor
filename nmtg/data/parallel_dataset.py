@@ -26,14 +26,16 @@ class ParallelDataset(Dataset):
 
     def collate_samples(self, samples):
         src_batch = self.src_data.collate_samples([x['src_indices'] for x in samples])
-        res = {'src_indices': src_batch['indices'], 'src_lengths': src_batch['lengths']}
+        res = {'src_indices': src_batch['indices'],
+               'src_size': src_batch['size'],
+               'src_lengths': src_batch['lengths']}
 
         if self.tgt_data is not None:
             target_input = self.tgt_data.collate_samples([x['tgt_input'] for x in samples])
             target_output = self.tgt_data.collate_samples([x['tgt_output'] for x in samples])
-            res['tgt_input'] = target_input
-            res['tgt_output'] = target_output
+            res['tgt_input'] = target_input['indices']
+            res['tgt_output'] = target_output['indices']
             res['tgt_size'] = target_output['size']
-            res['tgt_lengths'] = target_output['lengths']  # TODO: unsure if needed
+            res['tgt_lengths'] = target_output['lengths']
 
         return res

@@ -5,13 +5,41 @@
 # the root directory of this source tree. An additional grant of patent rights
 # can be found in the PATENTS file in the same directory.
 import io
+from typing import Mapping, Sequence
 
 import numpy as np
 
 import torch.utils.data
+from torch import Tensor
 
 from nmtg.data import data_utils
 from nmtg.data.indexed_data import IndexedData
+
+
+class _CUDAIterator:
+    def __init__(self, iterable):
+        self.length = len(iterable)
+        self.iterator = iter(iterable)
+
+    def __len__(self):
+        return self.length
+
+    def __next__(self):
+        return _batch_to_cuda(next(self.iterator))
+
+    def __iter__(self):
+        return self
+
+
+def _batch_to_cuda(batch):
+    if isinstance(batch, Tensor):
+        return batch.cuda(async=True)
+    elif isinstance(batch, Mapping):
+        return {k: _batch_to_cuda(v) for k, v in batch.items()}
+    elif isinstance(batch, Sequence):
+        return [_batch_to_cuda(x) for x in batch]
+    else:
+        return batch
 
 
 class Dataset(torch.utils.data.Dataset):
@@ -31,15 +59,20 @@ class Dataset(torch.utils.data.Dataset):
     def get_iterator(self, batch_size=1, shuffle=False, sampler=None, batch_sampler=None,
                      num_workers=0, cuda=False, drop_last=False):
         """See torch.utils.data.DataLoader"""
-        return torch.utils.data.DataLoader(self,
-                                           batch_size=1,
-                                           shuffle=shuffle,
-                                           sampler=sampler,
-                                           batch_sampler=batch_sampler,
-                                           num_workers=num_workers,
-                                           collate_fn=self.collate_samples,
-                                           pin_memory=cuda,
-                                           drop_last=drop_last)
+        dataloader = torch.utils.data.DataLoader(
+            self,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            sampler=sampler,
+            batch_sampler=batch_sampler,
+            num_workers=num_workers,
+            collate_fn=self.collate_samples,
+            # pin_memory=cuda,
+            drop_last=drop_last)
+        if cuda:
+            return _CUDAIterator(dataloader)
+        else:
+            return dataloader
 
 
 class RawDataset(Dataset):
@@ -101,6 +134,7 @@ class RawDataset(Dataset):
 
 class TensorDataset(RawDataset):
     """A dataset consisting of a structure of tensors."""
+
     @staticmethod
     def load_raw(filename):
         return torch.load(filename, map_location='cpu')
@@ -139,11 +173,11 @@ class TextLineDataset(RawDataset):
 
     @staticmethod
     def decode(data_bytes):
-        data_bytes.decode('utf-8')
+        return data_bytes.decode('utf-8')[:-1]
 
     @staticmethod
     def encode(sample):
-        sample.encode('utf-8')
+        return (sample + '\n').encode('utf-8')
 
     def collate_samples(self, samples):
         return samples

@@ -3,8 +3,7 @@ from torch import nn
 
 import nmtg.data.data_utils
 from nmtg.data import Dictionary
-from nmtg.models import EncoderDecoderModel
-from nmtg.models.encoder_decoder import Encoder, IncrementalDecoder
+from nmtg.models.encoder_decoder import Encoder, IncrementalDecoder, EncoderDecoderModel
 from nmtg.modules.dropout import EmbeddingDropout
 
 
@@ -38,9 +37,8 @@ class NMTDecoder(IncrementalDecoder):
         if optimized and input_mask is not None:
             # Optimize the projection by calculating only those position where
             # the input was not padding
-            logits = self.linear(out.mask_select(input_mask.unsqueeze(-1)))
-            return logits
-
+            out = out.view(-1, out.size(-1))
+            out = out.index_select(0, torch.nonzero(input_mask.view(-1)).squeeze(1))
         return self.linear(out)
 
     def reorder_incremental_state(self, incremental_state, new_order):
@@ -59,8 +57,10 @@ class NMTModel(EncoderDecoderModel):
         self.batch_first = batch_first
 
     @staticmethod
-    def add_args(parser):
-        super().add_args(parser)
+    def add_options(parser):
+        # Do not add EncoderDeocderModel parameters, because NMTModel wraps another model
+        # that already added those parameters
+        # EncoderDecoderModel.add_options(parser)
         parser.add_argument('-tie_weights', action='store_true',
                             help='Share weights between embedding and softmax')
         parser.add_argument('-join_embedding', action='store_true',
@@ -96,9 +96,12 @@ class NMTModel(EncoderDecoderModel):
         if batch_first is None:
             raise ValueError("Could not infer whether the model is batch_first, specify manually")
 
-        dummy_input = torch.zeros(1, 1, embedding_size, dtype=torch.long)
-        dummy_output = model(dummy_input, torch.tensor([[1]], dtype=torch.uint8))
-        output_size = dummy_output.size(-1)
+        if hasattr(args, 'model_size'):
+            output_size = args.model_size
+        else:
+            dummy_input = torch.zeros(1, 1, embedding_size)
+            dummy_output = model(dummy_input, torch.tensor([[1]], dtype=torch.uint8))
+            output_size = dummy_output.size(-1)
 
         src_embedding = cls.build_embedding(args, src_dict, embedding_size, path=args.pre_word_vecs_enc)
 
@@ -143,12 +146,8 @@ class NMTModel(EncoderDecoderModel):
     def forward(self, encoder_inputs, decoder_inputs, encoder_mask=None, decoder_mask=None, optimized_decoding=False):
         if encoder_mask is None and self.src_dict is not None:
             encoder_mask = encoder_inputs.ne(self.src_dict.pad())
-            if not self.batch_first:
-                encoder_mask = encoder_mask.transpose_(0, 1)
         if decoder_mask is None and self.tgt_dict is not None:
             decoder_mask = decoder_inputs.ne(self.tgt_dict.pad())
-            if not self.batch_first:
-                decoder_mask = decoder_mask.transpose_(0, 1)
 
         encoder_out = self.encoder(encoder_inputs, encoder_mask)
         decoder_out = self.decoder(decoder_inputs, encoder_out, decoder_mask, encoder_mask,

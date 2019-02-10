@@ -134,8 +134,9 @@ class TransformerEncoderLayer(nn.Module):
         feed_forward:  feed forward layer
 
     Input Shapes:
-        inputs:     batch_size x len_query x model_dim  or  len_query x batch_size x model_dim
-        attn_mask:  batch_size x len_query or broadcastable, regardless of batch_first
+        inputs:         batch_size x len_query x model_dim  or  len_query x batch_size x model_dim
+        input_mask:     batch_size x len_query  or  len_query x batch_size (or broadcastable)
+        attention_bias: batch_size x len_query x len_query or broadcastable, regardless of batch_first
 
     Output Shapes:
         out: batch_size x len_query x model_dim  or  len_query x batch_size x model_dim
@@ -228,8 +229,8 @@ class TransformerDecoderLayer(nn.Module):
     Input Shapes:
         inputs:              len_query x batch_size x model_dim  or  batch_size x len_query x model_dim
         context:             len_context x batch_size x model_dim  or  batch_size x len_context x model_dim
-        input_mask:          batch_size x len_query or broadcastable, regardless of batch_first
-        context_mask:        batch_size x len_context or broadcastable, regardless of batch_first
+        input_mask:          batch_size x len_query  or  len_query x batch_size
+        context_mask:        batch_size x len_context  or  len_context x batch_size
         self_attention_mask: batch_size x len_query x len_query or broadcastable, regardless of batch_first
 
     Output Shapes:

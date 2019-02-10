@@ -73,7 +73,7 @@ class FP16Optimizer(Optimizer):
         )
 
     @staticmethod
-    def add_args(parser):
+    def add_options(parser):
         pass
 
     @classmethod
@@ -265,7 +265,7 @@ class MemoryEfficientFP16Optimizer(Optimizer):
     """
 
     @staticmethod
-    def add_args(parser):
+    def add_options(parser):
         pass
 
     def __init__(self, args, params, optimizer):

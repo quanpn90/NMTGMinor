@@ -47,7 +47,7 @@ class TranslationTask(Task):
 
         ref_stream = (line.replace(self.bpe_symbol, '') for line in self.tgt_dataset)
         sys_stream = (line.replace(self.bpe_symbol, '') for line in results[::len(results) // len(self.dataset)])
-        bleu = sacrebleu.raw_corpus_bleu(sys_stream, ref_stream)
+        bleu = sacrebleu.raw_corpus_bleu(sys_stream, [ref_stream])
         return ["{:.2f} BLEU".format(bleu.score)]
 
     def save_results(self, results, out_filename):

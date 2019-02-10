@@ -36,14 +36,14 @@ def setup_logging(log_dir, filename, file_level, console_level):
             if os.path.exists(log_dir):
                 raise ValueError('Log directory exists and is a file')
             os.makedirs(log_dir)
-        t = time.strftime('%Y-%m-%model_dim %H:%M:%S', time.localtime())
+        t = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
         filename = os.path.join(log_dir, '{} {}.log'.format(t, filename))
         handler = logging.FileHandler(filename, 'w')
         handler.setLevel(LOG_LEVELS[file_level])
         handlers.append(handler)
 
     logging.basicConfig(
-        datefmt='%Y-%m-%model_dim %H:%M:%S',
+        datefmt='%Y-%m-%d %H:%M:%S',
         format='{asctime} | {name} | {levelname}: {message}',
         style='{',
         level=min(LOG_LEVELS[file_level], LOG_LEVELS[console_level]),

@@ -11,6 +11,6 @@ class SGDOptimizer(Optimizer):
         self._optimizer = SGD(params, lr=self.get_lr(), weight_decay=args.weight_decay, momentum=0.0)
 
     @staticmethod
-    def add_args(parser):
+    def add_options(parser):
         parser.add_argument('-weight_decay', type=float, default=0.0,
                             help='weight decay (L2 penalty)')

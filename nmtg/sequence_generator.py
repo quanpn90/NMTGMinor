@@ -4,17 +4,15 @@ from typing import List, Sequence, Mapping
 import torch
 
 from nmtg import search
-from nmtg.models import EncoderDecoderModel
-from nmtg.models.encoder_decoder import IncrementalDecoder
+from nmtg.models.encoder_decoder import IncrementalDecoder, EncoderDecoderModel
 
 
 class SequenceGenerator:
-    def __init__(self, models: List[EncoderDecoderModel], dictionary,
+    def __init__(self, models: List[EncoderDecoderModel], dictionary, batch_first=False,
                  beam_size=1, minlen=1, maxlen_a=1.0, maxlen_b=0, stop_early=True,
                  normalize_scores=True, len_penalty=1., unk_penalty=0., retain_dropout=False,
                  sampling=False, sampling_topk=-1, sampling_temperature=1.,
-                 diverse_beam_groups=-1, diverse_beam_strength=0.5, no_repeat_ngram_size=0
-                 ):
+                 diverse_beam_groups=-1, diverse_beam_strength=0.5, no_repeat_ngram_size=0):
         """Stores parameters for generating a target sequence.
 
         :param models: List of EncoderDecoderModel, ensemble of models to generate for
@@ -46,7 +44,7 @@ class SequenceGenerator:
                 Diverse Beam Search sampling
         """
         self.models = models
-        self._make_batch_first(models)
+        self.batch_first = batch_first
         self.dictionary = dictionary
         self.beam_size = beam_size
         self.minlen = minlen
@@ -457,6 +455,9 @@ class SequenceGenerator:
         return finalized
 
     def _decode(self, tokens, encoder_outs, incremental_states):
+        if not self.batch_first:
+            tokens = tokens.transpose(0, 1)
+
         if len(self.models) == 1:
             return self._decode_one(tokens, self.models[0], encoder_outs[0], incremental_states, log_probs=True)
 
@@ -470,10 +471,13 @@ class SequenceGenerator:
     def _decode_one(self, tokens, model: EncoderDecoderModel, encoder_out, incremental_states, log_probs):
         with torch.no_grad():
             if incremental_states[model] is not None:
-                decoder_out = list(model.decoder(tokens, encoder_out, incremental_state=incremental_states[model]))
+                decoder_out = model.decoder(tokens, encoder_out, incremental_state=incremental_states[model])
             else:
-                decoder_out = list(model.decoder(tokens, encoder_out))
-            decoder_out = decoder_out[:, -1, :]
+                decoder_out = model.decoder(tokens, encoder_out)
+            if self.batch_first:
+                decoder_out = decoder_out[:, -1, :]
+            else:
+                decoder_out = decoder_out[-1, :, :]
         probs = model.get_normalized_probs(decoder_out, log_probs=log_probs)
         return probs
 
@@ -483,19 +487,9 @@ class SequenceGenerator:
         elif isinstance(encoder_out, Mapping):
             return {k: self._reorder_encoder_out(v, new_order) for k, v in encoder_out.items()}
         elif isinstance(encoder_out, torch.Tensor):
-            return encoder_out.index_select(0, new_order)
+            return encoder_out.index_select(0 if self.batch_first else 1, new_order)
         else:
             return encoder_out
-
-    @staticmethod
-    def _make_batch_first(models):
-
-        def make_batch_first(module):
-            if hasattr(module, 'batch_first'):
-                module.batch_first = True
-
-        for model in models:
-            model.apply(make_batch_first)
 
 
 class IncrementalState:
@@ -510,3 +504,6 @@ class IncrementalState:
 
     def set(self, instance, key, value):
         self.items[(id(instance), key)] = value
+
+    def __str__(self):
+        return str(self.items)

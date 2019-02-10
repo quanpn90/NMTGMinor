@@ -29,16 +29,15 @@ class InverseSquareRootSchedule(LRScheduler):
       lr = decay_factor / sqrt(update_num)
     """
 
-    def __init__(self, args, optimizer):
-        super().__init__(args, optimizer)
-
+    def __init__(self, optimizer, model_size, learning_rate, warmup_steps):
         # TODO: Find a better way to do this, ideally still keeping backwards compatibility
-        self.init_lr = args.model_size ** (-0.5) * args.learning_rate
+        self.init_lr = model_size ** (-0.5) * learning_rate
         self.lr = self.init_lr
-        self.optimizer.set_lr(self.lr)
+        self.warmup_steps = warmup_steps
+        super().__init__(optimizer)
 
     @staticmethod
-    def add_args(parser):
+    def add_options(parser):
         """Add arguments to the parser for this LR scheduler."""
         # fmt: off
         parser.add_argument('-learning_rate', type=float, default=1.0,
@@ -46,6 +45,10 @@ class InverseSquareRootSchedule(LRScheduler):
         parser.add_argument('-warmup_steps', type=int, default=4096,
                             help='Number of steps to increase the lr in noam')
         # fmt: on
+
+    @classmethod
+    def build_lr_scheduler(cls, args, optimizer):
+        return cls(optimizer, args.model_size, args.learning_rate, args.warmup_steps)
 
     def step(self, epoch, val_loss=None):
         """Update the learning rate at the end of the given epoch."""
@@ -55,8 +58,8 @@ class InverseSquareRootSchedule(LRScheduler):
 
     def step_update(self, num_updates):
         """Update the learning rate after each update."""
-        if num_updates < self.args.warmup_steps:
-            self.lr = self.init_lr * num_updates * self.args.warmup_steps ** (-1.5)
+        if num_updates < self.warmup_steps:
+            self.lr = self.init_lr * num_updates * self.warmup_steps ** (-1.5)
         else:
             self.lr = self.init_lr * num_updates**(-0.5)
         self.optimizer.set_lr(self.lr)

@@ -3,20 +3,22 @@ import math
 from torch import nn
 import torch.utils.checkpoint
 
-from nmtg.models import EncoderDecoderModel
-from nmtg.models.encoder_decoder import Encoder, IncrementalDecoder
-from nmtg.modules.masking import MaskedFunction
+from nmtg.models import register_model
+from nmtg.models.encoder_decoder import Encoder, IncrementalDecoder, EncoderDecoderModel
 from nmtg.modules.positional_encoding import SinusoidalPositionalEncoding, LearnedPositionalEncoding, \
     RNNPositionalEncoding
 from nmtg.modules.transformer_layers import PrePostProcessing, TransformerEncoderLayer, TransformerDecoderLayer
 
 
+@register_model('transformer')
 class Transformer(EncoderDecoderModel):
     def __init__(self, *, model_dim=512, num_heads=8, layers=6, feed_forward_dim=2048,
                  feed_forward_dropout=0.1, attn_dropout=0.1, residual_dropout=0.1, embedding_dropout=0.1,
                  weight_norm=False, masked_layers=False, future_masking=True, gated_residuals=False, batch_first=False,
                  feed_forward_type='linear_relu_linear', positional_encoding=None,
                  ignore_context=False, share_encoder_decoder=False, checkpointing=0):
+        self.batch_first = batch_first
+
         encoder = TransformerEncoder(
             model_dim=model_dim,
             num_heads=num_heads,
@@ -59,8 +61,8 @@ class Transformer(EncoderDecoderModel):
         super().__init__(encoder, decoder)
 
     @staticmethod
-    def add_args(parser):
-        super().add_args(parser)
+    def add_options(parser):
+        EncoderDecoderModel.add_options(parser)
         parser.add_argument('-layers', type=int, default=6,
                             help='Number of layers in the encoder/decoder')
         parser.add_argument('-model_size', type=int, default=512,
@@ -107,6 +109,8 @@ class Transformer(EncoderDecoderModel):
                             help='Stochastic layer death rate')
         parser.add_argument('-death_type', type=str, default='linear_decay',
                             help='Stochastic layer death type: linear decay or uniform')
+
+        parser.set_defaults(optimizer='adam', update_method='noam')
 
     @classmethod
     def build_model(cls, args):
@@ -227,7 +231,7 @@ class TransformerEncoder(Encoder):
 
     Input Shapes:
         inputs:     batch_size x len_query x model_dim  or  len_query x batch_size x model_dim
-        input_mask:  batch_size x len_query or broadcastable, regardless of batch_first
+        input_mask:  batch_size x len_query  or  len_query x batch_size (or broadcastable)
 
     Output Shapes:
         out: batch_size x len_query x model_dim  or  len_query x batch_size x model_dim
@@ -272,8 +276,9 @@ class TransformerEncoder(Encoder):
         inputs = self.preprocess(inputs)
 
         if input_mask is not None:
-            self_attention_bias = inputs.new_full(input_mask.size(), float('-inf'))\
-                .masked_fill_(input_mask, 0).unsqueeze(1)
+            self_attention_mask = input_mask if self.batch_first else input_mask.transpose(0, 1)
+            self_attention_bias = inputs.new_full(self_attention_mask.size(), float('-inf'))\
+                .masked_fill_(self_attention_mask, 0).unsqueeze(1)
         else:
             self_attention_bias = None
 
@@ -311,9 +316,9 @@ class TransformerDecoder(IncrementalDecoder):
 
     Input Shapes:
         inputs:       len_query x batch_size x model_dim  or  batch_size x len_query x model_dim
-        input_mask:   batch_size x len_query or broadcastable, regardless of batch_first
+        input_mask:   batch_size x len_query  or  len_query x batch_size
         context:      len_context x batch_size x model_dim  or  batch_size x len_context x model_dim
-        context_mask: batch_size x len_context or broadcastable, regardless of batch_first
+        context_mask: batch_size x len_context  or  len_context x batch_size
     """
     def __init__(self, *, model_dim=512, num_heads=8, layers=6, feed_forward_dim=2048,
                  feed_forward_dropout=0.1, attn_dropout=0.1, residual_dropout=0.1, embedding_dropout=0.1,
@@ -360,25 +365,32 @@ class TransformerDecoder(IncrementalDecoder):
 
         if incremental_state is None and self.future_masking:
             len_tgt = decoder_inputs.size(1 if self.batch_first else 0)
+            # future_mask: (len_tgt x len_tgt)
             future_mask = self.get_future_mask(len_tgt, decoder_inputs.device)
             if input_mask is None:
                 self_attention_mask = future_mask.unsqueeze(0)
             else:
-                self_attention_mask = (input_mask.unsqueeze(1) + future_mask).gt_(1)
+                # padding_mask: (batch_size x len_tgt)
+                padding_mask = input_mask if self.batch_first else input_mask.transpose(0, 1)
+                self_attention_mask = (padding_mask.unsqueeze(1) + future_mask).gt_(1)
         elif input_mask is not None:
-            self_attention_mask = input_mask.unsqueeze(1)
+            self_attention_mask = input_mask if self.batch_first else input_mask.transpose(0, 1)
+            self_attention_mask = self_attention_mask.unsqueeze(1)
         else:
             self_attention_mask = None
 
         if self_attention_mask is not None:
+            # self_attention_mask: (batch_size x len_tgt x len_tgt) or broadcastable
             self_attention_bias = decoder_inputs.new_full(self_attention_mask.size(), float('-inf'))\
                 .masked_fill_(self_attention_mask, 0)
         else:
             self_attention_bias = None
 
         if context_mask is not None:
-            encoder_attention_bias = encoder_outputs.new_full(context_mask.size(), float('-inf'))\
-                .masked_fill(context_mask, 0).unsqueeze(1)
+            # enc_padding_mask: (batch_size x len_src) or broadcastable
+            enc_padding_mask = context_mask if self.batch_first else context_mask.transpose(0, 1)
+            encoder_attention_bias = encoder_outputs.new_full(enc_padding_mask.size(), float('-inf'))\
+                .masked_fill(enc_padding_mask, 0).unsqueeze(1)
         else:
             encoder_attention_bias = None
 

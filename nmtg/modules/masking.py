@@ -13,19 +13,22 @@ def masked_function(function, inputs, mask=None):
     """
     if mask is None:
         return function(inputs)
-    mask = mask.unsqueeze(-1)
+    valid_indices = torch.nonzero(mask.view(-1)).squeeze(1)
 
     # remember the original shape
     original_shape = inputs.size()
 
-    clean_input = inputs.masked_select(mask)
+    flat_input = inputs.view(-1, original_shape[-1])
+    clean_input = flat_input.index_select(0, valid_indices)
 
     # forward pass on the clean input only
     clean_output = function(clean_input)
 
     # after that, scatter the output (the position where we don't scatter are masked zeros anyways)
-    output = inputs.new(*original_shape[:-1], clean_output.size(-1)).zero_()
-    output.masked_scatter_(mask, clean_output)
+    flat_output = flat_input.new_zeros(flat_input.size(0), clean_output.size(-1))
+    flat_output.index_copy_(0, valid_indices, clean_output)
+
+    output = flat_output.view(*original_shape[:-1], clean_output.size(-1))
     return output
 
 

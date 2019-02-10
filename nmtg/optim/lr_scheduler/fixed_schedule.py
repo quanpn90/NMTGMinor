@@ -13,20 +13,21 @@ from . import LRScheduler, register_lr_scheduler
 class FixedSchedule(LRScheduler):
     """Decay the LR on a fixed schedule."""
 
-    def __init__(self, args, optimizer):
-        super().__init__(args, optimizer)
+    def __init__(self, optimizer, learning_rate, warmup_steps=0, force_anneal=None, lr_shrink=0.1):
+        self.warmup_steps = warmup_steps
+        self.force_anneal = force_anneal
+        self.lr_shring = lr_shrink
 
-        # set defaults
-        args.warmup_steps = getattr(args, 'warmup_steps', 0) or 0
-
-        self.lr = args.learning_rate
-        if args.warmup_steps > 0:
-            self.warmup_factor = 1. / args.warmup_steps
+        self.lr = learning_rate
+        if warmup_steps > 0:
+            self.warmup_factor = 1. / warmup_steps
         else:
             self.warmup_factor = 1
 
+        super().__init__(optimizer)
+
     @staticmethod
-    def add_args(parser):
+    def add_options(parser):
         """Add arguments to the parser for this LR scheduler."""
         # fmt: off
         parser.add_argument('-learning_rate', type=float, default=1.0,
@@ -35,18 +36,22 @@ class FixedSchedule(LRScheduler):
                             help='force annealing at specified epoch')
         parser.add_argument('-warmup_steps', type=int, default=4096,
                             help='Number of steps to increase the lr in noam')
-        parser.add_argument('--lr-shrink', default=0.1, type=float,
+        parser.add_argument('-lr-shrink', default=0.1, type=float,
                             help='learning rate shrink factor for annealing, lr_new = (lr * lr_shrink)')
         # fmt: on
 
+    @classmethod
+    def build_lr_scheduler(cls, args, optimizer):
+        return cls(optimizer, args.learning_rate, args.warmup_steps, args.force_anneal, args.lr_srhink)
+
     def get_next_lr(self, epoch):
-        lrs = self.args.lr
-        if self.args.force_anneal is None or epoch < self.args.force_anneal:
+        lrs = self.lr
+        if self.force_anneal is None or epoch < self.force_anneal:
             # use fixed LR schedule
             next_lr = lrs[min(epoch, len(lrs) - 1)]
         else:
             # annneal based on lr_shrink
-            next_lr = lrs[-1] * self.args.lr_shrink ** (epoch + 1 - self.args.force_anneal)
+            next_lr = lrs[-1] * self.lr_shrink ** (epoch + 1 - self.force_anneal)
         return next_lr
 
     def step(self, epoch, val_loss=None):
@@ -58,7 +63,7 @@ class FixedSchedule(LRScheduler):
 
     def step_update(self, num_updates):
         """Update the learning rate after each update."""
-        if self.args.warmup_steps > 0 and num_updates <= self.args.warmup_steps:
-            self.warmup_factor = num_updates / float(self.args.warmup_steps)
+        if self.warmup_steps > 0 and num_updates <= self.warmup_steps:
+            self.warmup_factor = num_updates / float(self.warmup_steps)
             self.optimizer.set_lr(self.warmup_factor * self.lr)
         return self.optimizer.get_lr()

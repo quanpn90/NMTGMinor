@@ -10,13 +10,12 @@ import torch
 
 
 class Optimizer:
-    def __init__(self, args, params):
-        self.args = args
+    def __init__(self, params):
         self.params = list(params)
 
     @classmethod
     def build_optimizer(cls, args, params):
-        return cls(args, params)
+        return cls(params)
 
     @property
     def optimizer(self):
@@ -28,7 +27,7 @@ class Optimizer:
         return self._optimizer
 
     @staticmethod
-    def add_args(parser):
+    def add_options(parser):
         """Add optimizer-specific arguments to the parser."""
         raise NotImplementedError
 
@@ -60,14 +59,14 @@ class Optimizer:
 
         for p in self.params:
             if p.grad is not None:
-                p.grad.data.mul_(c)
+                p.grad.mul_(c)
 
     def clip_grad_norm(self, max_norm):
         """Clips gradient norm."""
         if max_norm > 0:
             return torch.nn.utils.clip_grad_norm_(self.params, max_norm)
         else:
-            return math.sqrt(sum(p.grad.data.norm()**2 for p in self.params if p.grad is not None))
+            return math.sqrt(sum(p.grad.norm()**2 for p in self.params if p.grad is not None))
 
     def step(self, closure=None):
         """Performs a single optimization step."""

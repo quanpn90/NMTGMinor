@@ -35,7 +35,7 @@ if __name__ == '__main__':
     task = task_class.setup_task(args)  # type: Task
     trainer = trainer_class(args)  # type: Trainer
 
-    if args.load_from is None:
+    if args.load_from is not None:
         checkpoint = convert.load_checkpoint(args.load_from)
         train_data = trainer.load_checkpoint(checkpoint, True, args.reset_optim)
     else:

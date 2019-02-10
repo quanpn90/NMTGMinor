@@ -6,10 +6,8 @@
 # can be found in the PATENTS file in the same directory.
 
 import importlib
-import os
-
+import pkgutil
 from .model import Model
-from nmtg.models.encoder_decoder import EncoderDecoderModel
 
 MODEL_REGISTRY = {}
 
@@ -28,11 +26,9 @@ def register_model(name):
     return register_model_cls
 
 
-# automatically import any Python files in the optim/ directory
-for file in os.listdir(os.path.dirname(__file__)):
-    if file.endswith('.py') and not file.startswith('_'):
-        module = file[:file.find('.py')]
-        importlib.import_module('nmtg.models.' + module)
+# automatically import any Python files in the models/ directory
+for module in pkgutil.walk_packages(__path__, 'nmtg.models.'):
+    importlib.import_module(module.name)
 
 
 def get_model_type(name):

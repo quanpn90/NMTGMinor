@@ -38,6 +38,10 @@ if __name__ == '__main__':
 
     models = [trainer.load_checkpoint(convert.load_checkpoint(filename)) for filename in args.load_from]
 
+    if args.cuda:
+        for model in models:
+            model.cuda()
+
     results = trainer.solve(models, task)
 
     logger.info(' | '.join(task.score_results(results)))

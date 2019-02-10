@@ -5,6 +5,7 @@ from torch import nn, Tensor
 class NMTLoss(nn.Module):
     def __init__(self, output_size, padding_idx, label_smoothing=0.0):
         super().__init__()
+        self.output_size = output_size
         self.padding_idx = padding_idx
         self.label_smoothing = label_smoothing
         weight = torch.ones(output_size)
