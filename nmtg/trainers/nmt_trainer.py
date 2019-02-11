@@ -288,14 +288,21 @@ class NMTTrainer(Trainer):
                                       len_penalty=self.args.alpha, unk_penalty=self.args.beta,
                                       diverse_beam_strength=self.args.diverse_beam_strength)
 
-        iterator = self._get_eval_iterator(task, self.args.test_batch_size)
+        iterator = self._get_eval_iterator(task, self.args.batch_size)
 
         join_str = ' ' if self.args.input_type == 'word' else ''
 
+        def prepare_inputs(batch):
+            encoder_inputs = batch['src_indices']
+            if not generator.batch_first:
+                encoder_inputs = encoder_inputs.transpose(0, 1)
+            source_lengths = batch['src_lengths']
+            encoder_mask = encoder_inputs.ne(self.src_dict.pad())
+            return encoder_inputs, source_lengths, encoder_mask
+
         results = [self.tgt_dict.string(result['tokens'], join_str=join_str)
                    for batch in tqdm(iterator, postfix='inference')
-                   for results in generator.generate(batch['src_indices'], batch['src_lengths'],
-                                                     batch['src_indices'].ne(self.src_dict.pad()))
+                   for results in generator.generate(*prepare_inputs(batch))
                    for result in results[:self.args.n_best]]
 
         return results

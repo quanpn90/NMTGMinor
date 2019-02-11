@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from nmtg.models.encoder_decoder import IncrementalModule
 from nmtg.modules.attention import MultiHeadAttention
 from nmtg.modules.linear import XavierLinear, MaxOut
 from nmtg.modules.masking import MaskedFunction
@@ -184,7 +185,7 @@ class TransformerEncoderLayer(nn.Module):
         return out
 
 
-class TransformerDecoderLayer(nn.Module):
+class TransformerDecoderLayer(IncrementalModule):
     """
     Wraps multi-head self-attention, encoder-decoder attention and position-wise
     feed forward into one layer of decoder
@@ -289,23 +290,21 @@ class TransformerDecoderLayer(nn.Module):
                                                     batch_first=batch_first)
 
     def forward(self, inputs, context, input_mask=None, context_mask=None, self_attention_bias=None,
-                encoder_attention_bias=None, incremental_state=None):
+                encoder_attention_bias=None):
         if not self.masked_layers:
             input_mask = None
             context_mask = None
 
         # Self-Attention layer
         query = self.preprocess_attn(inputs, mask=input_mask)
-        self_attention_out = self.attention_tgt(query, query, query, self_attention_bias, input_mask,
-                                                incremental_state=incremental_state)
+        self_attention_out = self.attention_tgt(query, query, query, self_attention_bias, input_mask)
         self_attention_out = self.postprocess_attn(self_attention_out, inputs)
 
         # Context-To-Query-Attention layer
         if not self.ignore_context:
             query = self.preprocess_src_attn(self_attention_out, mask=input_mask)
             src_attention_out = self.attention_src(query, context, context, encoder_attention_bias,
-                                                   input_mask, context_mask,
-                                                   incremental_state=incremental_state, static_kv=True)
+                                                   input_mask, context_mask)
             src_attention_out = self.postprocess_src_attn(src_attention_out, self_attention_out)
         else:
             src_attention_out = self_attention_out
@@ -315,3 +314,34 @@ class TransformerDecoderLayer(nn.Module):
         out = self.feed_forward(out, input_mask)
         out = self.postprocess_ffn(out, src_attention_out)
         return out
+
+    def _step(self, inputs, context, incremental_state, input_mask=None, context_mask=None, self_attention_bias=None,
+              encoder_attention_bias=None):
+
+        if not self.masked_layers:
+            input_mask = None
+            context_mask = None
+
+        # Self-Attention layer
+        query = self.preprocess_attn(inputs, mask=input_mask)
+        self_attention_out = self.attention_tgt.step(query, query, query, incremental_state,
+                                                     self_attention_bias, input_mask)
+        self_attention_out = self.postprocess_attn(self_attention_out, inputs)
+
+        # Context-To-Query-Attention layer
+        if not self.ignore_context:
+            query = self.preprocess_src_attn(self_attention_out, mask=input_mask)
+            src_attention_out = self.attention_src.step(query, context, context, incremental_state,
+                                                        encoder_attention_bias,
+                                                        input_mask, context_mask,
+                                                        static_kv=True)
+            src_attention_out = self.postprocess_src_attn(src_attention_out, self_attention_out)
+        else:
+            src_attention_out = self_attention_out
+
+        # Feed-Forward layer
+        out = self.preprocess_ffn(src_attention_out, mask=input_mask)
+        out = self.feed_forward(out, input_mask)
+        out = self.postprocess_ffn(out, src_attention_out)
+        return out
+

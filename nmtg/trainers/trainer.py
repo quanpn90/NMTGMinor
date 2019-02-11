@@ -67,10 +67,8 @@ class Trainer:
     def add_general_options(cls, parser):
         parser.add_argument('-data_loader_threads', type=int, default=1,
                             help='Number of threads for data loading')
-        parser.add_argument('-eval_batch_size', type=int, default=32,
+        parser.add_argument('-batch_size', type=int, default=32,
                             help='Batch size for evaluation')
-        parser.add_argument('-test_batch_size', type=int, default=32,
-                            help='Batch size for inference')
 
     @classmethod
     def add_training_options(cls, parser):
@@ -186,7 +184,7 @@ class Trainer:
         for model in models:
             model.eval()
 
-        iterator = self._get_eval_iterator(task, self.args.test_batch_size)
+        iterator = self._get_eval_iterator(task, self.args.batch_size)
 
         results = [result
                    for batch in tqdm(iterator)
@@ -204,7 +202,7 @@ class Trainer:
         :return (loss, perplexity)
         """
         model.eval()
-        iterator = self._get_eval_iterator(task, self.args.eval_batch_size)
+        iterator = self._get_eval_iterator(task, self.args.batch_size)
         total_weight, total_loss = 0, 0
 
         with torch.no_grad():
@@ -273,7 +271,7 @@ class Trainer:
             logger.info(' | '.join(eval_metrics))
         else:
             valid_ppl = 0.0
-        self.save_checkpoint(train_data.model, train_data, valid_ppl)
+        self.save_checkpoint(train_data, valid_ppl)
 
     def _train_epoch(self, train_data: TrainData, eval_task: Task = None):
         train_data.model.train()

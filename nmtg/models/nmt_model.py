@@ -29,16 +29,21 @@ class NMTDecoder(IncrementalDecoder):
         self.embedded_dropout = EmbeddingDropout(embedding, dropout)
         self.linear = linear
 
-    def forward(self, decoder_inputs, encoder_outputs, input_mask=None, encoder_mask=None,
-                incremental_state=None, optimized=False):
+    def forward(self, decoder_inputs, encoder_outputs, input_mask=None,
+                encoder_mask=None, optimized=False):
         emb = self.embedded_dropout(decoder_inputs)
-        out = self.decoder(emb, encoder_outputs, input_mask, encoder_mask, incremental_state)
+        out = self.decoder(emb, encoder_outputs, input_mask, encoder_mask)
 
         if optimized and input_mask is not None:
             # Optimize the projection by calculating only those position where
             # the input was not padding
             out = out.view(-1, out.size(-1))
             out = out.index_select(0, torch.nonzero(input_mask.view(-1)).squeeze(1))
+        return self.linear(out)
+
+    def _step(self, decoder_inputs, encoder_outputs, incremental_state, input_mask=None, encoder_mask=None):
+        emb = self.embedded_dropout(decoder_inputs)
+        out = self.decoder.step(emb, encoder_outputs, incremental_state, input_mask, encoder_mask)
         return self.linear(out)
 
     def reorder_incremental_state(self, incremental_state, new_order):

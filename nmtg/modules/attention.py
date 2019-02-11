@@ -4,20 +4,19 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from nmtg.modules.dropout import StaticDropout
+from nmtg.models.encoder_decoder import IncrementalModule
 from nmtg.modules.linear import XavierLinear
 from nmtg.modules.masking import MaskedFunction
 from nmtg.sequence_generator import IncrementalState
 
 
-class MultiHeadAttention(nn.Module):
+class MultiHeadAttention(IncrementalModule):
     """
     Applies multi-head attentions to inputs (query, key, value)
     Args:
         model_dim:      dimension of model
         num_heads:      number of heads
         dropout:        dropout probability
-        static_dropout: whether to use static dropout
         batch_first:    whether the inputs (and outputs) are batch first or time first
 
     Params:
@@ -61,8 +60,7 @@ class MultiHeadAttention(nn.Module):
 
         self.attn_dropout = nn.Dropout(dropout)
 
-    def forward(self, query, key, value, attention_bias=None, query_mask=None, value_mask=None, static_kv=False,
-                incremental_state: IncrementalState = None):
+    def forward(self, query, key, value, attention_bias=None, query_mask=None, value_mask=None):
         """
         Perform the forward pass
         :param query: (len_query x batch_size x model_dim) | (batch_size x len_query x model_dim)
@@ -71,9 +69,6 @@ class MultiHeadAttention(nn.Module):
         :param attention_bias: (batch_size x len_query x len_key) or broadcastable
         :param query_mask (len_query x batch_size) | (batch_size x len_query)
         :param value_mask (len_key x batch_size) | (batch_size x len_key)
-        :param static_kv: If true, do not recalculate keys and values, they have not changed since
-            the last timestep (used for self-attention when incremental_state is None)
-        :param incremental_state: Instance of incremental_state for step-wise decoding
         :return: (len_query x batch_size x model_dim) | (batch_size x len_query x model_dim)
 
         Implementation notes Felix 2019-02-02:
@@ -87,7 +82,6 @@ class MultiHeadAttention(nn.Module):
         """
 
         qkv_same = query.data_ptr() == key.data_ptr() == value.data_ptr()
-        kv_same = key.data_ptr() == value.data_ptr()
 
         if not self.masked_layers:
             query_mask = None
@@ -100,17 +94,62 @@ class MultiHeadAttention(nn.Module):
         else:
             len_query, batch_size, _ = query.size()
 
-        if incremental_state is not None:
-            saved_state = incremental_state.get(self, 'attn_state', {})
-            if 'prev_key' in saved_state:
-                # previous time steps are cached - no need to recompute
-                # key and value if they are static
-                if static_kv:
-                    assert kv_same and not qkv_same
-                    key = value = None
-        else:
-            saved_state = None
+        q, k, v = self._project_inputs(query, key, value, query_mask, value_mask, batch_size, len_query)
 
+        out = self._attention(q, k, v, attention_bias, query_mask, batch_size, len_query)
+
+        return out
+
+    def _step(self, query, key, value, incremental_state: IncrementalState, attention_bias=None,
+              query_mask=None, value_mask=None, static_kv=False,):
+        """
+        static_kv: If true, do not recalculate keys and values, they have not changed since
+            the last timestep (used for self-attention when incremental_state is None)
+        incremental_state: Instance of incremental_state for step-wise decoding
+        """
+        qkv_same = query.data_ptr() == key.data_ptr() == value.data_ptr()
+        kv_same = key.data_ptr() == value.data_ptr()
+
+        if not self.masked_layers:
+            query_mask = None
+            value_mask = None
+        elif qkv_same:
+            value_mask = query_mask
+
+        batch_size = query.size(0 if self.batch_first else 1)
+
+        saved_state = incremental_state.get(self, 'attn_state', {})
+        if 'prev_key' in saved_state:
+            # previous time steps are cached - no need to recompute
+            # key and value if they are static
+            if static_kv:
+                assert kv_same and not qkv_same
+                key = value = None
+
+        q, k, v = self._project_inputs(query, key, value, query_mask, value_mask, batch_size, 1)
+
+        # saved states are stored with shape (bsz, num_heads, seq_len, head_dim)
+        if 'prev_key' in saved_state:
+            prev_key = saved_state['prev_key'].view(batch_size * self.num_heads, -1, self.head_dim)
+            if static_kv:
+                k = prev_key
+            else:
+                k = torch.cat((prev_key, k), dim=1)
+        if 'prev_value' in saved_state:
+            prev_value = saved_state['prev_value'].view(batch_size * self.num_heads, -1, self.head_dim)
+            if static_kv:
+                v = prev_value
+            else:
+                v = torch.cat((prev_value, v), dim=1)
+        saved_state['prev_key'] = k.view(batch_size, self.num_heads, -1, self.head_dim)
+        saved_state['prev_value'] = v.view(batch_size, self.num_heads, -1, self.head_dim)
+        incremental_state.set(self, 'attn_state', saved_state)
+
+        out = self._attention(q, k, v, attention_bias, query_mask, batch_size, 1)
+
+        return out
+
+    def _project_inputs(self, query, key, value, query_mask, value_mask, batch_size, len_query):
         # Project inputs to multi-heads
         # Projection has the same dimensionality as input, gets split into heads later
         q = self.query_projection(query, query_mask)
@@ -119,42 +158,14 @@ class MultiHeadAttention(nn.Module):
         q *= self.head_dim ** -0.5
 
         # prepare the shape for applying softmax
-        if self.batch_first:
-            # batch_size x num_heads x seq_len x head_dim
-            q = q.view(batch_size, len_query, self.num_heads, self.head_dim).transpose(1, 2) \
-                .contiguous().view(batch_size * self.num_heads, len_query, self.head_dim)
-            if k is not None:
-                k = k.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2) \
-                    .contiguous().view(batch_size * self.num_heads, -1, self.head_dim)
-            if v is not None:
-                v = v.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2) \
-                    .contiguous().view(batch_size * self.num_heads, -1, self.head_dim)
-        else:
-            # batch_size*num_heads x seq_len x head_dim
-            q = q.view(len_query, batch_size * self.num_heads, self.head_dim).transpose(0, 1)
-            if k is not None:
-                k = k.view(-1, batch_size * self.num_heads, self.head_dim).transpose(0, 1)
-            if v is not None:
-                v = v.view(-1, batch_size * self.num_heads, self.head_dim).transpose(0, 1)
+        q = self._split_heads(q, batch_size, len_query)
+        if k is not None:
+            k = self._split_heads(k, batch_size, -1)
+        if v is not None:
+            v = self._split_heads(v, batch_size, -1)
+        return q, k, v
 
-        if saved_state is not None:
-            # saved states are stored with shape (bsz, num_heads, seq_len, head_dim)
-            if 'prev_key' in saved_state:
-                prev_key = saved_state['prev_key'].view(batch_size * self.num_heads, -1, self.head_dim)
-                if static_kv:
-                    k = prev_key
-                else:
-                    k = torch.cat((prev_key, k), dim=1)
-            if 'prev_value' in saved_state:
-                prev_value = saved_state['prev_value'].view(batch_size * self.num_heads, -1, self.head_dim)
-                if static_kv:
-                    v = prev_value
-                else:
-                    v = torch.cat((prev_value, v), dim=1)
-            saved_state['prev_key'] = k.view(batch_size, self.num_heads, -1, self.head_dim)
-            saved_state['prev_value'] = v.view(batch_size, self.num_heads, -1, self.head_dim)
-            incremental_state.set(self, 'attn_state', saved_state)
-
+    def _attention(self, q, k, v, attention_bias, query_mask, batch_size, len_query):
         len_key = k.size(1)
 
         # get dotproduct softmax attns for each head
@@ -173,15 +184,23 @@ class MultiHeadAttention(nn.Module):
         # apply attns on value
         attn_weights = attn_weights.view(batch_size * self.num_heads, len_query, len_key)
         out = torch.bmm(attn_weights, v)  # batch_size*num_heads x len_query x head_dim
+        out = self._join_heads(out, batch_size, len_query)
+        out = self.out_projection(out, query_mask)
+        return out
+
+    def _split_heads(self, tensor, batch_size, seq_len):
         if self.batch_first:
-            out = out.view(batch_size, self.num_heads, len_query, self.head_dim).transpose(1, 2)\
+            return tensor.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2) \
+                .contiguous().view(batch_size * self.num_heads, seq_len, self.head_dim)
+        else:
+            return tensor.view(seq_len, batch_size * self.num_heads, self.head_dim).transpose(0, 1)
+
+    def _join_heads(self, out, batch_size, len_query):
+        if self.batch_first:
+            return out.view(batch_size, self.num_heads, len_query, self.head_dim).transpose(1, 2) \
                 .contiguous().view(batch_size, len_query, self.model_dim)
         else:
-            out = out.transpose(0, 1).contiguous().view(len_query, batch_size, self.model_dim)
-
-        out = self.out_projection(out, query_mask)
-
-        return out
+            return out.transpose(0, 1).contiguous().view(len_query, batch_size, self.model_dim)
 
     def reorder_incremental_state(self, incremental_state: IncrementalState, new_order):
         """Reorder buffered internal state (for incremental generation)."""

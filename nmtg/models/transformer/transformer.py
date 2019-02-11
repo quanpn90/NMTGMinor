@@ -268,10 +268,12 @@ class TransformerEncoder(Encoder):
         ) for _ in range(layers)])
 
     def forward(self, inputs, input_mask=None):
+        positions = self.positional_encoding(inputs) if self.positional_encoding is not None else None
+
         inputs *= math.sqrt(self.model_dim)
 
-        if self.positional_encoding is not None:
-            inputs = self.positional_encoding(inputs)
+        if positions is not None:
+            inputs += positions
 
         inputs = self.preprocess(inputs)
 
@@ -354,60 +356,62 @@ class TransformerDecoder(IncrementalDecoder):
             encoder_to_share=encoder_to_share.layers[i] if encoder_to_share is not None else None
         ) for i in range(layers)])
 
-    def forward(self, decoder_inputs, encoder_outputs, input_mask=None, context_mask=None,
-                incremental_state=None):
+    def forward(self, decoder_inputs, encoder_outputs, input_mask=None, encoder_mask=None):
+        if self.positional_encoding is not None:
+            positions = self.positional_encoding(decoder_inputs)
+        else:
+            positions = None
+
         decoder_inputs *= math.sqrt(self.model_dim)
 
-        if self.positional_encoding is not None:
-            decoder_inputs = self.positional_encoding(decoder_inputs, incremental_state=incremental_state)
+        if positions is not None:
+            decoder_inputs += positions
 
         decoder_inputs = self.preprocess(decoder_inputs)
 
-        if incremental_state is None and self.future_masking:
-            len_tgt = decoder_inputs.size(1 if self.batch_first else 0)
-            # future_mask: (len_tgt x len_tgt)
-            future_mask = self.get_future_mask(len_tgt, decoder_inputs.device)
-            if input_mask is None:
-                self_attention_mask = future_mask.unsqueeze(0)
-            else:
-                # padding_mask: (batch_size x len_tgt)
-                padding_mask = input_mask if self.batch_first else input_mask.transpose(0, 1)
-                self_attention_mask = (padding_mask.unsqueeze(1) + future_mask).gt_(1)
-        elif input_mask is not None:
-            self_attention_mask = input_mask if self.batch_first else input_mask.transpose(0, 1)
-            self_attention_mask = self_attention_mask.unsqueeze(1)
-        else:
-            self_attention_mask = None
+        self_attention_bias = self.get_self_attention_bias(decoder_inputs, self.batch_first, input_mask)
 
-        if self_attention_mask is not None:
-            # self_attention_mask: (batch_size x len_tgt x len_tgt) or broadcastable
-            self_attention_bias = decoder_inputs.new_full(self_attention_mask.size(), float('-inf'))\
-                .masked_fill_(self_attention_mask, 0)
-        else:
-            self_attention_bias = None
-
-        if context_mask is not None:
-            # enc_padding_mask: (batch_size x len_src) or broadcastable
-            enc_padding_mask = context_mask if self.batch_first else context_mask.transpose(0, 1)
-            encoder_attention_bias = encoder_outputs.new_full(enc_padding_mask.size(), float('-inf'))\
-                .masked_fill(enc_padding_mask, 0).unsqueeze(1)
-        else:
-            encoder_attention_bias = None
+        encoder_attention_bias = self.get_encoder_attention_bias(encoder_outputs, self.batch_first, encoder_mask)
 
         for i, layer in enumerate(self.layers):
             if self.checkpointing > 0 and self.training and (i + 1) % self.checkpointing == 0:
-                decoder_inputs = torch.utils.checkpoint.checkpoint(layer, decoder_inputs, encoder_outputs, input_mask, context_mask,
-                                                                   self_attention_bias, encoder_attention_bias,
-                                                                   incremental_state)
+                decoder_inputs = torch.utils.checkpoint.checkpoint(layer, decoder_inputs, encoder_outputs, input_mask, encoder_mask,
+                                                                   self_attention_bias, encoder_attention_bias)
             else:
-                decoder_inputs = layer(decoder_inputs, encoder_outputs, input_mask, context_mask,
-                                       self_attention_bias, encoder_attention_bias,
-                                       incremental_state)
+                decoder_inputs = layer(decoder_inputs, encoder_outputs, input_mask, encoder_mask,
+                                       self_attention_bias, encoder_attention_bias)
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.
+        outputs = self.postprocess(decoder_inputs, mask=input_mask if self.masked_layers else None)
+
+        return outputs
+
+    def _step(self, decoder_inputs, encoder_outputs, incremental_state, input_mask=None, encoder_mask=None):
+        if self.positional_encoding is not None:
+            positions = self.positional_encoding.step(decoder_inputs, incremental_state)
+        else:
+            positions = None
+
+        decoder_inputs *= math.sqrt(self.model_dim)
+
+        if positions is not None:
+            decoder_inputs += positions
+
+        decoder_inputs = self.preprocess(decoder_inputs)
+
+        self_attention_bias = self.get_self_attention_bias(decoder_inputs, self.batch_first, input_mask,
+                                                           future_masking=False)
+
+        encoder_attention_bias = self.get_encoder_attention_bias(encoder_outputs, self.batch_first, encoder_mask)
+
+        for i, layer in enumerate(self.layers):
+            decoder_inputs = layer.step(decoder_inputs, encoder_outputs, incremental_state,
+                                        input_mask, encoder_mask,
+                                        self_attention_bias, encoder_attention_bias)
+
         outputs = self.postprocess(decoder_inputs, mask=input_mask if self.masked_layers else None)
 
         return outputs

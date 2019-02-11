@@ -4,16 +4,20 @@ import torch
 from torch import nn
 from torch.nn import Parameter
 
+from nmtg.models.encoder_decoder import IncrementalModule
 from nmtg.sequence_generator import IncrementalState
 
 
-class PositionalEncoding(nn.Module):
+class PositionalEncoding(IncrementalModule):
     def __init__(self, model_dim, batch_first=True):
         super().__init__()
         self.model_dim = model_dim
         self.batch_first = batch_first
 
-    def forward(self, inputs, input_mask=None, incremental_state: IncrementalState = None):
+    def forward(self, inputs):
+        raise NotImplementedError
+
+    def _step(self, inputs, incremental_state: IncrementalState = None):
         raise NotImplementedError
 
     def mask_outputs(self, outputs, input_mask):
@@ -59,33 +63,35 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
         self.pos_emb = pos_emb
         self.current_length = new_max_len
 
-    def forward(self, inputs, input_mask=None, incremental_state: IncrementalState = None):
+    def forward(self, inputs):
         seq_len = inputs.size(1 if self.batch_first else 0)
-        needed_length = seq_len
 
-        # if incremental_state is not None:
-        #     timestep = incremental_state.get(self, 'timestep', 0)
-        #     needed_length = timestep + seq_len
-        #     incremental_state.set(self, 'timestep', needed_length)
+        if seq_len > self.current_length:
+            self.generate(seq_len)
 
-        if needed_length > self.current_length:
-            self.generate(needed_length)
-
-        # if incremental_state is None:
-        #     emb = self.pos_emb[:needed_length, :]
-        # else:
-        #     emb = self.pos_emb[needed_length - seq_len:needed_length, :]
-        emb = self.pos_emb[:needed_length, :]
+        emb = self.pos_emb[:seq_len, :]
 
         if not self.batch_first:
             emb = emb.unsqueeze(1)
 
-        out = inputs + emb
+        return emb
 
-        if input_mask is not None:
-            self.mask_outputs(out, input_mask)
+    def _step(self, inputs, incremental_state: IncrementalState = None):
+        seq_len = inputs.size(1 if self.batch_first else 0)
 
-        return out
+        timestep = incremental_state.get(self, 'timestep', 0)
+        needed_length = timestep + seq_len
+        incremental_state.set(self, 'timestep', needed_length)
+
+        if needed_length > self.current_length:
+            self.generate(needed_length)
+
+        emb = self.pos_emb[timestep:needed_length, :]
+
+        if not self.batch_first:
+            emb = emb.unsqueeze(1)
+
+        return emb
 
 
 class LearnedPositionalEncoding(PositionalEncoding):
@@ -101,29 +107,30 @@ class LearnedPositionalEncoding(PositionalEncoding):
     def reset_parameters(self):
         nn.init.xavier_uniform_(self.embeddings)
 
-    def forward(self, inputs, input_mask=None, incremental_state: IncrementalState = None):
+    def forward(self, inputs):
         seq_len = inputs.size(1 if self.batch_first else 0)
         needed_length = seq_len
 
-        if incremental_state is not None:
-            timestep = incremental_state.get(self, 'timestep', 0)
-            needed_length = timestep + seq_len
-            incremental_state.set(self, 'timestep', needed_length)
-
-        if incremental_state is None:
-            emb = self.pos_emb[:needed_length, :]
-        else:
-            emb = self.pos_emb[needed_length - seq_len:needed_length, :]
+        emb = self.pos_emb[:needed_length, :]
 
         if not self.batch_first:
             emb = emb.unsqueeze(1)
 
-        out = inputs + emb
+        return emb
 
-        if input_mask is not None:
-            self.mask_outputs(out, input_mask)
+    def _step(self, inputs, incremental_state: IncrementalState = None):
+        seq_len = inputs.size(1 if self.batch_first else 0)
 
-        return out
+        timestep = incremental_state.get(self, 'timestep', 0)
+        needed_length = timestep + seq_len
+        incremental_state.set(self, 'timestep', needed_length)
+
+        emb = self.pos_emb[timestep:needed_length, :]
+
+        if not self.batch_first:
+            emb = emb.unsqueeze(1)
+
+        return emb
 
 
 class RNNPositionalEncoding(PositionalEncoding):
@@ -134,15 +141,12 @@ class RNNPositionalEncoding(PositionalEncoding):
         super().__init__(model_dim, rnn.batch_first)
         self.rnn = rnn
 
-    def forward(self, inputs, input_mask=None, incremental_state: IncrementalState = None):
-        if incremental_state is not None:
-            initial_state = incremental_state.get(self, 'initial_state', None)
-            out, state = self.rnn(inputs, initial_state)
-            incremental_state.set(self, 'initial_state', state)
-        else:
-            out, _ = self.rnn(inputs)
+    def forward(self, inputs):
+        out, _ = self.rnn(inputs)
+        return out
 
-        if input_mask is not None:
-            self.mask_outputs(out, input_mask)
-
+    def _step(self, inputs, incremental_state: IncrementalState = None):
+        initial_state = incremental_state.get(self, 'initial_state', None)
+        out, state = self.rnn(inputs, initial_state)
+        incremental_state.set(self, 'initial_state', state)
         return out

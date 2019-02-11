@@ -45,6 +45,23 @@ class Decoder(nn.Module):
         raise NotImplementedError
 
 
+class IncrementalModule(nn.Module):
+    def step(self, *input, **kwargs):
+        for hook in self._forward_pre_hooks.values():
+            hook(self, input)
+        result = self._step(*input, **kwargs)
+        for hook in self._forward_hooks.values():
+            hook_result = hook(self, input, result)
+            if hook_result is not None:
+                raise RuntimeError(
+                    "forward hooks should never return any values, but '{}'"
+                    "didn't return None".format(hook))
+        return result
+
+    def _step(self, *input, **kwargs):
+        raise NotImplementedError
+
+
 class IncrementalDecoder(Decoder):
     def reorder_incremental_state(self, incremental_state, new_order):
         """Reorder incremental state.
@@ -77,8 +94,19 @@ class IncrementalDecoder(Decoder):
             self.apply(apply_set_beam_size)
             self._beam_size = beam_size
 
-    def forward(self, decoder_inputs, encoder_outputs, input_mask=None, encoder_mask=None,
-                incremental_state=None):
+    def step(self, *input, **kwargs):
+        for hook in self._forward_pre_hooks.values():
+            hook(self, input)
+        result = self._step(*input, **kwargs)
+        for hook in self._forward_hooks.values():
+            hook_result = hook(self, input, result)
+            if hook_result is not None:
+                raise RuntimeError(
+                    "forward hooks should never return any values, but '{}'"
+                    "didn't return None".format(hook))
+        return result
+
+    def _step(self, decoder_inputs, encoder_outputs, incremental_state, input_mask=None, encoder_mask=None):
         """
         Run the decoder
         :param decoder_inputs: (FloatTensor) Input to the decoder
@@ -89,6 +117,43 @@ class IncrementalDecoder(Decoder):
         :return:
         """
         raise NotImplementedError
+
+    def get_self_attention_bias(self, decoder_inputs, batch_first, input_mask=None, future_masking=True):
+        if future_masking and self.future_masking:
+            len_tgt = decoder_inputs.size(1 if batch_first else 0)
+            # future_mask: (len_tgt x len_tgt)
+            future_mask = self.get_future_mask(len_tgt, decoder_inputs.device)
+            if input_mask is None:
+                self_attention_mask = future_mask.unsqueeze(0)
+            else:
+                # padding_mask: (batch_size x len_tgt)
+                padding_mask = input_mask if batch_first else input_mask.transpose(0, 1)
+                self_attention_mask = (padding_mask.unsqueeze(1) + future_mask).gt_(1)
+        elif input_mask is not None:
+            self_attention_mask = input_mask if batch_first else input_mask.transpose(0, 1)
+            self_attention_mask = self_attention_mask.unsqueeze(1)
+        else:
+            self_attention_mask = None
+
+        if self_attention_mask is not None:
+            # self_attention_mask: (batch_size x len_tgt x len_tgt) or broadcastable
+            self_attention_bias = decoder_inputs.new_full(self_attention_mask.size(), float('-inf'))\
+                .masked_fill_(self_attention_mask, 0)
+        else:
+            self_attention_bias = None
+
+        return self_attention_bias
+
+    def get_encoder_attention_bias(self, encoder_outputs, batch_first, encoder_mask=None):
+        if encoder_mask is not None:
+            # enc_padding_mask: (batch_size x len_src) or broadcastable
+            enc_padding_mask = encoder_mask if batch_first else encoder_mask.transpose(0, 1)
+            encoder_attention_bias = encoder_outputs.new_full(enc_padding_mask.size(), float('-inf'))\
+                .masked_fill(enc_padding_mask, 0).unsqueeze(1)
+        else:
+            encoder_attention_bias = None
+
+        return encoder_attention_bias
 
 
 class EncoderDecoderModel(Model):
@@ -121,6 +186,6 @@ class EncoderDecoderModel(Model):
 
     @staticmethod
     def convert_state_dict(opt, state_dict):
-        res = super().convert_state_dict(state_dict)
+        res = super().convert_state_dict(opt, state_dict)
         res['decoder'] = {'future_mask': state_dict['decoder']['mask']}
         return res
