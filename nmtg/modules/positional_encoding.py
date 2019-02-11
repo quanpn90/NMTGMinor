@@ -45,13 +45,13 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
 
     """
 
-    def __init__(self, model_dim, batch_first=True, initial_length=512):
+    def __init__(self, model_dim, batch_first=True, initial_length=1024):
         super().__init__(model_dim, batch_first)
-        self.register_buffer('pos_emb', None)
-        self.current_length = None
-        self.generate(initial_length)
+        self.pos_emb = None
+        self.current_length = -1
+        self.generate(initial_length, torch.device('cpu'))
 
-    def generate(self, new_max_len):
+    def generate(self, new_max_len, device):
         position = torch.arange(new_max_len, dtype=torch.float)
 
         num_timescales = self.model_dim // 2
@@ -60,14 +60,18 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
             torch.arange(0, num_timescales, dtype=torch.float) * -log_timescale_increment)
         scaled_time = position.unsqueeze(1) * inv_timescales.unsqueeze(0)
         pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 1)
-        self.pos_emb = pos_emb
+        self.pos_emb = pos_emb.to(device)
         self.current_length = new_max_len
 
     def forward(self, inputs):
         seq_len = inputs.size(1 if self.batch_first else 0)
 
-        if seq_len > self.current_length:
-            self.generate(seq_len)
+        if self.pos_emb is None \
+                or seq_len > self.current_length:
+            self.generate(seq_len, inputs.device)
+
+        if self.pos_emb.device != inputs.device:
+            self.pos_emb = self.pos_emb.to(inputs.device)
 
         emb = self.pos_emb[:seq_len, :]
 
@@ -83,8 +87,12 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
         needed_length = timestep + seq_len
         incremental_state.set(self, 'timestep', needed_length)
 
-        if needed_length > self.current_length:
-            self.generate(needed_length)
+        if self.pos_emb is None \
+                or needed_length > self.current_length:
+            self.generate(needed_length, inputs.device)
+
+        if self.pos_emb.device != inputs.device:
+            self.pos_emb = self.pos_emb.to(inputs.device)
 
         emb = self.pos_emb[timestep:needed_length, :]
 

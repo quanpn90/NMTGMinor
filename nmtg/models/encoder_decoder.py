@@ -186,6 +186,7 @@ class EncoderDecoderModel(Model):
 
     @staticmethod
     def convert_state_dict(opt, state_dict):
-        res = super().convert_state_dict(opt, state_dict)
-        res['decoder'] = {'future_mask': state_dict['decoder']['mask']}
+        res = Model.convert_state_dict(opt, state_dict)
+        res['decoder'] = {}
+        opt.no_future_masking = False
         return res

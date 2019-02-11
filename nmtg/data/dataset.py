@@ -33,7 +33,7 @@ class _CUDAIterator:
 
 def _batch_to_cuda(batch):
     if isinstance(batch, Tensor):
-        return batch.cuda(async=True)
+        return batch.cuda()
     elif isinstance(batch, Mapping):
         return {k: _batch_to_cuda(v) for k, v in batch.items()}
     elif isinstance(batch, Sequence):

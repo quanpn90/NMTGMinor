@@ -27,21 +27,23 @@ def load_checkpoint(filename):
 
 def convert_checkpoint(checkpoint):
     logger.info('Converting old checkpoint...')
-    num_updates = checkpoint['optim']['_step']
-    del checkpoint['optim']['_step']
-    new_checkpoint = {
-        'args': checkpoint['opt'],
-        'train_data': {
-            'model': flatten_state_dict(
-                NMTModel.convert_state_dict(checkpoint['opt'],
-                                            unflatten_state_dict(checkpoint['model']))),
-            'epoch': checkpoint['epoch'],
-            'sampler': {'index': checkpoint['iteration'], 'batch_order': checkpoint['batchOrder']},
-            'num_updates': num_updates,
-            'optimizer': checkpoint['optim'],
-            'lr_scheduler': {'best': None}
-        }
+    train_data = {
+        'model': flatten_state_dict(
+            NMTModel.convert_state_dict(checkpoint['opt'],
+                                        unflatten_state_dict(checkpoint['model']))),
+        'lr_scheduler': {'best': None}
     }
+    if 'optim' in checkpoint:
+        num_updates = checkpoint['optim']['_step']
+        del checkpoint['optim']['_step']
+        train_data['optimizer'] = checkpoint['optim']
+        train_data['num_updates'] = num_updates
+    if 'epoch' in checkpoint:
+        train_data['epoch'] = checkpoint['epoch']
+    if 'iteration' in checkpoint:
+        train_data['sampler'] = {'index': checkpoint['iteration'], 'batch_order': checkpoint['batchOrder']}
+
+    new_checkpoint = {'train_data': train_data}
 
     # Dictionaries
     src_state_dict = Dictionary.convert(checkpoint['dicts']['src']).state_dict()
@@ -52,6 +54,11 @@ def convert_checkpoint(checkpoint):
         new_checkpoint['src_dict'] = src_state_dict
         tgt_state_dict = Dictionary.convert(checkpoint['dicts']['tgt']).state_dict()
         new_checkpoint['tgt_dict'] = tgt_state_dict
+    args = checkpoint['opt']
+    args.join_vocab = join_vocab
+    input_chars = all(len(x[0]) == 1 for x in src_state_dict['dict'])
+    args.input_type = 'char' if input_chars else 'word'
+    new_checkpoint['args'] = args
 
     return new_checkpoint
 

@@ -73,3 +73,5 @@ def add_log_options(parser):
     parser.add_argument('-log_level_console', type=str, default='debug',
                         help='Logging level for the console logger. '
                              'Accepts debug (default), info, warning, error, critical')
+    parser.add_argument('-no_progress', action='store_true',
+                        help='Disable progress bars')

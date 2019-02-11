@@ -255,7 +255,7 @@ class Dictionary:
         new_dict = cls(pad=pad_word, unk=unk_word, bos=bos_word, eos=eos_word)
         new_dict.indices = old_dict.labelToIdx
         new_dict.symbols = [old_dict.idxToLabel[i] for i in range(len(old_dict.idxToLabel))]
-        new_dict.counts = [old_dict.frequencies[w] for w in new_dict.symbols]
+        new_dict.count = [old_dict.frequencies[old_dict.labelToIdx[w]] for w in new_dict.symbols]
         new_dict.pad_index = new_dict.indices[pad_word]
         new_dict.unk_index = new_dict.indices[unk_word]
         new_dict.bos_index = new_dict.indices[bos_word]

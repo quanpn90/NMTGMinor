@@ -153,19 +153,19 @@ class Transformer(EncoderDecoderModel):
 
     @staticmethod
     def convert_state_dict(opt, state_dict):
-        res = super().convert_state_dict(opt, state_dict)
+        res = EncoderDecoderModel.convert_state_dict(opt, state_dict)
         res['encoder'] = {}
         if opt.time in ('lstm', 'gru'):
             res['encoder']['positional_encoding'] = {'rnn': state_dict['encoder']['time_transformer']}
             res['decoder']['positional_encoding'] = {'rnn': state_dict['decoder']['time_transformer']}
-        else:
-            res['encoder']['positional_encoding'] = state_dict['encoder']['time_transformer']
-            res['decoder']['positional_encoding'] = state_dict['decoder']['time_transformer']
+        # else:
+        #     res['encoder']['positional_encoding'] = state_dict['encoder']['time_transformer']
+        #     res['decoder']['positional_encoding'] = state_dict['decoder']['time_transformer']
         res['encoder']['postprocess'] = state_dict['encoder']['postprocess_layer']
         res['decoder']['postprocess'] = state_dict['decoder']['postprocess_layer']
 
         def convert_linear_relu_linear(ffn_dict):
-            return {'layer_1': ffn_dict['fc_1'], 'layer_2': ffn_dict['fc_2']}
+            return {'layer_1': ffn_dict['fc_1']['linear'], 'layer_2': ffn_dict['fc_2']['linear']}
 
         def convert_maxout(ffn_dict):
             return {'linear': ffn_dict['lin']}
@@ -199,17 +199,21 @@ class Transformer(EncoderDecoderModel):
                     'value_projection': {'function': layer_in['multihead_tgt']['fc_value']['function']['linear']},
                     'out_projection': {'function': layer_in['multihead_tgt']['fc_concat']['function']['linear']}
                 },
-                'feed_forward': {'function': convert_ffn(layer_in['feedforward']['function'])}
-            }
-            if not opt.ignore_context:
-                layer_dict['preprocess_src_attn'] = layer_in['preprocess_src_attn']
-                layer_dict['attention_src'] = {
+                'feed_forward': {'function': convert_ffn(layer_in['feedforward']['function'])},
+                'preprocess_src_attn': layer_in['preprocess_src_attn'],
+                'attention_src': {
                     'query_projection': {'function': layer_in['multihead_src']['fc_query']['function']['linear']},
                     'key_projection': {'function': layer_in['multihead_src']['fc_key']['function']['linear']},
                     'value_projection': {'function': layer_in['multihead_src']['fc_value']['function']['linear']},
                     'out_projection': {'function': layer_in['multihead_src']['fc_concat']['function']['linear']}
                 }
+            }
             res['decoder']['layers'][str(i)] = layer_dict
+
+        opt.batch_first = False
+        opt.ignore_context = False
+        opt.freeze_embeddings = False
+
         return res
 
 

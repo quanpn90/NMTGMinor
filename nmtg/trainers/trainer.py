@@ -187,7 +187,7 @@ class Trainer:
         iterator = self._get_eval_iterator(task, self.args.batch_size)
 
         results = [result
-                   for batch in tqdm(iterator)
+                   for batch in tqdm(iterator, disable=self.args.no_progress)
                    for model in models
                    for result in self._inference_step(model, batch)]
 
@@ -206,7 +206,7 @@ class Trainer:
         total_weight, total_loss = 0, 0
 
         with torch.no_grad():
-            for batch in tqdm(iterator, postfix='evaluation'):
+            for batch in tqdm(iterator, postfix='evaluation', disable=self.args.no_progress):
                 loss, display_loss = self._get_loss(model, batch)
                 total_loss += display_loss
                 total_weight += self._get_batch_weight(batch)
@@ -283,7 +283,8 @@ class Trainer:
         total_weight = 0
         total_loss = 0
         grad_norm = 0
-        with tqdm(total=len(train_data.sampler), initial=train_data.sampler.index + 1) as pbar:
+        with tqdm(total=len(train_data.sampler), initial=train_data.sampler.index + 1,
+                  disable=self.args.no_progress) as pbar:
             for index, batch in enumerate(iterator, train_data.sampler.index + 1):
                 start_time = datetime.datetime.now()
 

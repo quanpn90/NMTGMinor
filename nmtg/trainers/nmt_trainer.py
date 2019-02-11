@@ -52,9 +52,6 @@ class NMTTrainer(Trainer):
     @classmethod
     def add_general_options(cls, parser):
         super().add_general_options(parser)
-        # Currently used, but pointless
-        parser.add_argument('-diverse_beam_strength', type=float, default=0.5,
-                            help='Diverse beam strength in decoding')
         parser.add_argument('-beam_size', type=int, default=5, help='Beam size')
         parser.add_argument('-alpha', type=float, default=0.6,
                             help='Length Penalty coefficient')
@@ -66,6 +63,12 @@ class NMTTrainer(Trainer):
                             help='Will output the n_best decoded sentences')
         parser.add_argument('-label_smoothing', type=float, default=0.0,
                             help='Label smoothing value for loss functions.')
+        parser.add_argument('-print_translations', action='store_true',
+                            help='Output finished translations as they are generated')
+
+        # Currently used, but pointless
+        parser.add_argument('-diverse_beam_strength', type=float, default=0.5,
+                            help='Diverse beam strength in decoding')
 
     @classmethod
     def add_training_options(cls, parser):
@@ -109,7 +112,8 @@ class NMTTrainer(Trainer):
         src_filename = os.path.join(args.data_dir, 'train.src')
         tgt_filename = os.path.join(args.data_dir, 'train.tgt')
 
-        with open(src_filename) as src, open(tgt_filename) as tgt, tqdm(unit='lines') as pbar:
+        with open(src_filename) as src, open(tgt_filename) as tgt,\
+                tqdm(unit='lines', disable=args.no_progress) as pbar:
             src_line = None
             tgt_line = None
             i = 0
@@ -292,18 +296,30 @@ class NMTTrainer(Trainer):
 
         join_str = ' ' if self.args.input_type == 'word' else ''
 
-        def prepare_inputs(batch):
+        results = []
+        for batch in tqdm(iterator, postfix='inference', disable=self.args.no_progress):
             encoder_inputs = batch['src_indices']
             if not generator.batch_first:
                 encoder_inputs = encoder_inputs.transpose(0, 1)
             source_lengths = batch['src_lengths']
             encoder_mask = encoder_inputs.ne(self.src_dict.pad())
-            return encoder_inputs, source_lengths, encoder_mask
 
-        results = [self.tgt_dict.string(result['tokens'], join_str=join_str)
-                   for batch in tqdm(iterator, postfix='inference')
-                   for results in generator.generate(*prepare_inputs(batch))
-                   for result in results[:self.args.n_best]]
+            res = [self.tgt_dict.string(tr['tokens'], join_str=join_str)
+                   for beams in generator.generate(encoder_inputs, source_lengths, encoder_mask)
+                   for tr in beams[:self.args.n_best]]
+
+            if self.args.print_translations:
+                for i in range(len(batch['src_indices'])):
+                    reference = batch['src_indices'][i][:batch['src_lengths'][i]]
+                    reference = self.src_dict.string(reference, join_str=join_str,
+                                                     bpe_symbol=self.args.bpe_symbol)
+                    tqdm.write("Ref {}: {}".format(len(results) + i, reference))
+                    for j in range(self.args.n_best):
+                        translation = res[i * self.args.n_best + j]
+                        tqdm.write("Sys {}.{}: {}".format(len(results) + i, j,
+                                   translation.replace(self.args.bpe_symbol, '')))
+
+            results.extend(res)
 
         return results
 

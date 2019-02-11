@@ -173,7 +173,7 @@ class NMTModel(EncoderDecoderModel):
                            'bias': state_dict['generator']['linear']['bias']}
             }
         }
-        model_state_dict = model_cls.convert_state_dict(state_dict)
+        model_state_dict = model_cls.convert_state_dict(opt, state_dict)
         res['encoder']['encoder'] = model_state_dict['encoder']
         res['decoder']['decoder'] = model_state_dict['decoder']
         return res
