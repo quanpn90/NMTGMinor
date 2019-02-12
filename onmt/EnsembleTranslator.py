@@ -256,8 +256,7 @@ class EnsembleTranslator(object):
         #  (1) run the encoders on the src
         for i in range(self.n_models):
             contexts[i], src_mask = self.models[i].encoder(src)
-            
-            if(hasattr(self, 'autoencoder') and self.autoencoder):
+            if(hasattr(self, 'autoencoder') and self.autoencoder and self.autoencoder.representation == "EncoderHiddenState"):
                 contexts[i] = self.autoencoder.autocode(contexts[i])
                 
         goldScores = contexts[0].data.new(batchSize).zero_()
@@ -276,10 +275,13 @@ class EnsembleTranslator(object):
             # output should have size time x batch x dim
             #~ output = output.transpose(0, 1) # transpose to have time first, like RNN models
             
+            if(hasattr(self, 'autoencoder') and self.autoencoder and self.autoencoder.representation == "DecoderHiddenState"):
+                output = self.autoencoder.autocode(output)
             
             #  (2) if a target is specified, compute the 'goldScore'
             #  (i.e. log likelihood) of the target under the model
             for dec_t, tgt_t in zip(output, tgtBatchOutput.data):
+
                 gen_t = model_.generator[0](dec_t)
                 tgt_t = tgt_t.unsqueeze(1)
                 scores = gen_t.data.gather(1, tgt_t)
@@ -337,6 +339,10 @@ class EnsembleTranslator(object):
                 decoder_hidden = decoder_hidden.squeeze(1)
                 attns[i] = coverage[:, -1, :].squeeze(1) # batch * beam x src_len
                 
+
+#                if(hasattr(self, 'autoencoder') and self.autoencoder and self.autoencoder.representation == "DecoderHiddenState"):
+#                    decoder_hidden = self.autoencoder.autocode(decoder_hidden)
+
                 # batch * beam x vocab_size 
                 outs[i] = self.models[i].generator[0](decoder_hidden)
             

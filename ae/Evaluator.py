@@ -91,7 +91,7 @@ class Evaluator(object):
         self.autoencoder.load_state_dict(checkpoint['autoencoder'])
 
         for k in checkpoint['autoencoder']:
-            if(k.startswith("nmt")):
+            if(k.startswith("nmt") and k[4:] in check_m):
                 n = checkpoint['autoencoder'][k]
                 o = check_m[k[4:]]
                 if(o.size() != n.size()):
