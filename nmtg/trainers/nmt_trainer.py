@@ -42,6 +42,8 @@ class NMTTrainer(Trainer):
                             help='Where to save the target vocabulary')
         parser.add_argument('-lower', action='store_true',
                             help='Construct a lower-case vocabulary')
+        parser.add_argument('-vocab_threshold', type=int,
+                            help='Discard vocabulary words that occur less often than this threshold')
 
         # parser.add_argument('-remove_duplicate', action='store_true',
         #                     help='Remove examples where source and target are the same')
@@ -187,11 +189,14 @@ class NMTTrainer(Trainer):
             # or we are inferring both dictionaries
             if args.tgt_vocab is not None or args.src_vocab is None:
                 src_dictionary.update(tgt_dictionary)
-            src_dictionary.finalize(nwords=args.src_vocab_size)
+            src_dictionary.finalize(nwords=args.src_vocab_size,
+                                    threshold=args.vocab_threshold or -1)
             src_dictionary.save(args.src_vocab_out)
         else:
-            src_dictionary.finalize(nwords=args.src_vocab_size)
-            tgt_dictionary.finalize(nwords=args.tgt_vocab_size)
+            src_dictionary.finalize(nwords=args.src_vocab_size,
+                                    threshold=args.vocab_threshold or -1)
+            tgt_dictionary.finalize(nwords=args.tgt_vocab_size,
+                                    threshold=args.vocab_threshold or -1)
             src_dictionary.save(args.src_vocab_out)
             tgt_dictionary.save(args.tgt_vocab_out)
 
@@ -207,6 +212,8 @@ class NMTTrainer(Trainer):
                 self.src_dict = Dictionary.load(args.src_vocab)
                 self.tgt_dict = Dictionary.load(args.tgt_vocab)
             self.loss = self._build_loss()
+            logger.debug('Source vocabulary size: {}'.format(len(self.src_dict)))
+            logger.debug('Target vocabulary size: {}'.format(len(self.tgt_dict)))
         else:
             self.src_dict = None
             self.tgt_dict = None

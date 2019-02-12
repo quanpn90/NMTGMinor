@@ -12,7 +12,7 @@ class EmbeddingDropout(nn.Module):
     def forward(self, words):
         if self.dropout > 0:
             weight = self.embedding.weight
-            mask = weight.resize_((weight.size(0), 1)) \
+            mask = weight.new().resize_((weight.size(0), 1)) \
                        .bernoulli_(1 - self.dropout) \
                        .expand_as(weight) / (1 - self.dropout)
             masked_embed_weight = mask * weight
