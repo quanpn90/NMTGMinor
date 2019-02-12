@@ -27,6 +27,7 @@ if __name__ == '__main__':
 
     counter = Counter()
     for line in tqdm(input_stream, disable=args.no_progress):
+        line = line.rstrip()
         if args.lower:
             line = line.lower()
         if not args.chars:
@@ -36,7 +37,7 @@ if __name__ == '__main__':
     if args.input != '-':
         input_stream.close()
 
-    output_stream.writelines("{} {}".format(item, count) for item, count in counter.items())
+    output_stream.writelines("{} {}\n".format(item, count) for item, count in counter.items())
 
     if args.output is not None:
         output_stream.close()

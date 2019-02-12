@@ -95,7 +95,7 @@ class FP16Optimizer(Optimizer):
         fp32_params.grad = fp32_params.data.new(total_param_size)
 
         fp32_optimizer_class = nmtg.optim.get_optimizer_type(args.optimizer)
-        fp32_optimizer = fp32_optimizer_class._build_optimizer(args, [fp32_params])
+        fp32_optimizer = fp32_optimizer_class.build_optimizer(args, [fp32_params])
         return cls(args, params, fp32_optimizer, fp32_params)
 
     @property

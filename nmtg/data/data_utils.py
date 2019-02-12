@@ -141,7 +141,7 @@ def _generate_length_based_batches(lengths, indices, length_per_batch, max_examp
 
             trunc_batch = cur_batch[:scaled_size]
             if batch_size_align > 1:
-                assert (len(trunc_batch) % batch_size_align == 0), \
+                assert (len(trunc_batch) < batch_size_align or len(trunc_batch) % batch_size_align == 0), \
                     'Batch size is not a multiple of {}, current batch_size is {}' \
                     .format(batch_size_align, len(trunc_batch))
             batches.append(trunc_batch)  # add this batch into the batch list

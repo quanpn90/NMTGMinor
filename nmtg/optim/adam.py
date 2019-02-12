@@ -25,6 +25,11 @@ class AdamOptimizer(Optimizer):
         parser.add_argument('-amsgrad', action='store_true',
                             help='Using AMSGRad for adam')
 
+    @classmethod
+    def build_optimizer(cls, args, params):
+        return cls(params, (args.beta1, args.beta2), weight_decay=args.weight_decay,
+                   amsgrad=args.amsgrad)
+
 
 class Adam(torch.optim.Optimizer):
     """Implements Adam algorithm.
