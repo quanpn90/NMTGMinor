@@ -95,8 +95,6 @@ class Trainer:
         lr_scheduler_class = nmtg.optim.lr_scheduler.get_lr_scheduler_type(args.update_method)
         lr_scheduler_class.add_options(parser)
 
-        parser.add_argument('-data_dir', type=str, required=True,
-                            help='Where to load the data from')
         parser.add_argument('-curriculum', type=int, default=0,
                             help='For this many epochs, order the minibatches based '
                                  'on source sequence length. Sometimes setting this to 1 will '
@@ -146,13 +144,7 @@ class Trainer:
         return model
 
     def load_data(self, model_args=None):
-        model = self._build_model(model_args or self.args)
-        data_path = os.path.join(self.args.data_dir, 'train.bin')
-        offset_path = os.path.join(self.args.data_dir, 'train.idx')
-        dataset = TensorDataset.load_indexed(data_path, offset_path)
-        sampler = StatefulBatchSampler(StatefulRandomSampler(dataset), self.args.batch_size)
-        lr_scheduler, optimizer = self._build_optimizer(model)
-        return TrainData(model, dataset, sampler, lr_scheduler, optimizer)
+        raise NotImplementedError
 
     def _build_optimizer(self, model):
         params = list(filter(lambda p: p.requires_grad, model.parameters()))
