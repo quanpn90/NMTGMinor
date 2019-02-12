@@ -192,8 +192,8 @@ class NMTTrainer(Trainer):
                 self.src_dict = Dictionary.load(os.path.join(args.data_dir, 'dict'))
                 self.tgt_dict = self.src_dict
             else:
-                self.src_dict = Dictionary.load(os.path.join(args.data_dir, 'dict.src'))
-                self.tgt_dict = Dictionary.load(os.path.join(args.data_dir, 'dict.tgt'))
+                self.src_dict = Dictionary.load(os.path.join(args.data_dir, 'src.dict'))
+                self.tgt_dict = Dictionary.load(os.path.join(args.data_dir, 'tgt.dict'))
             self.loss = self._build_loss()
         else:
             self.src_dict = None
@@ -316,7 +316,7 @@ class NMTTrainer(Trainer):
                     tqdm.write("Ref {}: {}".format(len(results) + i, reference))
                     for j in range(self.args.n_best):
                         translation = res[i * self.args.n_best + j]
-                        tqdm.write("Sys {}.{}: {}".format(len(results) + i, j,
+                        tqdm.write("Hyp {}.{}: {}".format(len(results) + i, j+1,
                                    translation.replace(self.args.bpe_symbol, '')))
 
             results.extend(res)

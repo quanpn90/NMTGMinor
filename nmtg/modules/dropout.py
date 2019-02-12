@@ -6,11 +6,18 @@ class EmbeddingDropout(nn.Module):
     def __init__(self, embedding, dropout=0.1, scale=None):
         super().__init__()
         self.embedding = embedding
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = dropout
         self.scale = scale
 
     def forward(self, words):
-        masked_embed_weight = self.dropout(self.embedding.weight)
+        if self.dropout > 0:
+            weight = self.embedding.weight
+            mask = weight.resize_((weight.size(0), 1)) \
+                       .bernoulli_(1 - self.dropout) \
+                       .expand_as(weight) / (1 - self.dropout)
+            masked_embed_weight = mask * weight
+        else:
+            masked_embed_weight = self.embedding.weight
 
         if self.scale is not None:
             masked_embed_weight = self.scale.expand_as(masked_embed_weight) * masked_embed_weight
