@@ -1,7 +1,6 @@
 import datetime
 import logging
 import os
-from argparse import ArgumentParser
 from collections import Counter
 from typing import Sequence
 
@@ -36,10 +35,8 @@ class NMTTrainer(Trainer):
                             help='Path to an existing source vocabulary')
         parser.add_argument('-tgt_vocab', type=str,
                             help='Path to an existing target vocabulary')
-        parser.add_argument('-src_vocab_out', type=str, required=True,
-                            help='Where to save the source vocabulary')
-        parser.add_argument('-tgt_vocab_out', type=str, required=True,
-                            help='Where to save the target vocabulary')
+        parser.add_argument('-data_dir_out', type=str, required=True,
+                            help='Output directory for auxiliary data')
         parser.add_argument('-lower', action='store_true',
                             help='Construct a lower-case vocabulary')
         parser.add_argument('-vocab_threshold', type=int,
@@ -87,10 +84,8 @@ class NMTTrainer(Trainer):
                             help='Path to the training source file')
         parser.add_argument('-train_tgt', type=str, required=True,
                             help='Path to the training target file')
-        parser.add_argument('-src_vocab', type=str, required=True,
-                            help='Path to an existing source vocabulary')
-        parser.add_argument('-tgt_vocab', type=str, required=True,
-                            help='Path to an existing target vocabulary')
+        parser.add_argument('-data_dir', type=str, required=True,
+                            help='Path to an auxiliary data')
         parser.add_argument('-join_vocab', action='store_true',
                             help='Share dictionary for source and target')
         parser.add_argument('-input_type', default='word', choices=['word', 'char'],
@@ -121,7 +116,7 @@ class NMTTrainer(Trainer):
         split_words = args.input_type == 'word'
         
         # since input and output dir are the same, this is no longer needed
-        # os.makedirs(args.data_dir, exist_ok=True)
+        os.makedirs(args.data_dir_out, exist_ok=True)
 
         src_offsets, src_lengths, src_counter = [0], [], Counter()
         tgt_offsets, tgt_lengths, tgt_counter = [0], [], Counter()
@@ -162,8 +157,8 @@ class NMTTrainer(Trainer):
             if src_line != '' or tgt_line != '':
                 logger.warning('Source and target file were not the same length!')
 
-        out_offsets_src = args.train_src + '.idx.npy'
-        out_lengths_src = args.train_src + '.len.npy'
+        out_offsets_src = os.path.join(args.data_dir_out, 'train.src.idx.npy')
+        out_lengths_src = os.path.join(args.data_dir_out, 'train.src.len.npy')
         np.save(out_offsets_src, src_offsets)
         np.save(out_lengths_src, src_lengths)
         if args.src_vocab is not None:
@@ -173,8 +168,8 @@ class NMTTrainer(Trainer):
             for word, count in src_counter.items():
                 src_dictionary.add_symbol(word, count)
 
-        out_offsets_tgt = args.train_tgt + '.idx.npy'
-        out_lengths_tgt = args.train_tgt + '.len.npy'
+        out_offsets_tgt = os.path.join(args.data_dir_out, 'train.tgt.idx.npy')
+        out_lengths_tgt = os.path.join(args.data_dir_out, 'train.tgt.len.npy')
         np.save(out_offsets_tgt, tgt_offsets)
         np.save(out_lengths_tgt, tgt_lengths)
         if args.tgt_vocab is not None:
@@ -191,26 +186,26 @@ class NMTTrainer(Trainer):
                 src_dictionary.update(tgt_dictionary)
             src_dictionary.finalize(nwords=args.src_vocab_size,
                                     threshold=args.vocab_threshold or -1)
-            src_dictionary.save(args.src_vocab_out)
+            src_dictionary.save(os.path.join(args.data_dir_out, 'dict'))
         else:
             src_dictionary.finalize(nwords=args.src_vocab_size,
                                     threshold=args.vocab_threshold or -1)
             tgt_dictionary.finalize(nwords=args.tgt_vocab_size,
                                     threshold=args.vocab_threshold or -1)
-            src_dictionary.save(args.src_vocab_out)
-            tgt_dictionary.save(args.tgt_vocab_out)
+            src_dictionary.save(os.path.join(args.data_dir_out, 'src.dict'))
+            tgt_dictionary.save(os.path.join(args.data_dir_out, 'tgt.dict'))
 
     def __init__(self, args):
         super().__init__(args)
 
-        if hasattr(args, 'src_vocab'):
-            logger.info('Loading vocabularies from {}'.format(args.src_vocab))
+        if hasattr(args, 'data_dir'):
+            logger.info('Loading vocabularies from {}'.format(args.data_dir))
             if args.join_vocab:
-                self.src_dict = Dictionary.load(args.src_vocab)
+                self.src_dict = Dictionary.load(os.path.join(args.data_dir, 'dict'))
                 self.tgt_dict = self.src_dict
             else:
-                self.src_dict = Dictionary.load(args.src_vocab)
-                self.tgt_dict = Dictionary.load(args.tgt_vocab)
+                self.src_dict = Dictionary.load(os.path.join(args.data_dir, 'src.dict'))
+                self.tgt_dict = Dictionary.load(os.path.join(args.data_dir, 'tgt.dict'))
             self.loss = self._build_loss()
             logger.debug('Source vocabulary size: {}'.format(len(self.src_dict)))
             logger.debug('Target vocabulary size: {}'.format(len(self.tgt_dict)))
@@ -233,8 +228,8 @@ class NMTTrainer(Trainer):
         logger.info('Loading training data from {}'.format(self.args.train_src))
         split_words = self.args.input_type == 'word'
 
-        offsets_src = self.args.train_src + '.idx.npy'
-        offsets_tgt = self.args.train_tgt + '.idx.npy'
+        offsets_src = os.path.join(self.args.data_dir, 'train.src.idx.npy')
+        offsets_tgt = os.path.join(self.args.data_dir, 'train.tgt.idx.npy')
         src_data = TextLineDataset.load_indexed(self.args.train_src, offsets_src)
         src_data = TextLookupDataset(src_data, self.src_dict, words=split_words, bos=False, eos=False,
                                      trunc_len=self.args.src_seq_length_trunc, lower=self.args.lower)
@@ -243,8 +238,8 @@ class NMTTrainer(Trainer):
                                      trunc_len=self.args.tgt_seq_length_trunc, lower=self.args.lower)
         dataset = ParallelDataset(src_data, tgt_data)
 
-        src_len_filename = self.args.train_src + '.len.npy'
-        tgt_len_filename = self.args.train_tgt + '.len.npy'
+        src_len_filename = os.path.join(self.args.data_dir, 'train.src.len.npy')
+        tgt_len_filename = os.path.join(self.args.data_dir, 'train.src.len.npy')
         src_lengths = np.load(src_len_filename)
         tgt_lengths = np.load(tgt_len_filename)
 

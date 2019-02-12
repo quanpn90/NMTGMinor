@@ -12,8 +12,6 @@ from tqdm import tqdm
 
 import nmtg.models
 import nmtg.optim
-from nmtg.data import TensorDataset
-from nmtg.data.samplers import StatefulBatchSampler, StatefulRandomSampler
 from nmtg.optim import MemoryEfficientFP16Optimizer, FP16Optimizer
 from nmtg.optim.lr_scheduler import LRScheduler
 from nmtg.tasks import Task
