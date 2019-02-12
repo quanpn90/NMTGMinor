@@ -101,6 +101,7 @@ class Autoencoder(nn.Module):
         
         # clean_context.require_grad=False
         clean_context.detach_()
+
         
         #result = self.model(clean_context)
 
@@ -154,6 +155,9 @@ class Autoencoder(nn.Module):
             
             return True
         
+        if("nmt.generator.linear.weight" in state_dict and type(self.nmt.generator) is nn.ModuleList):
+            self.nmt.generator = self.nmt.generator[0]
+
         filtered = {k: v for k, v in state_dict.items() if condition(k)}
         
         model_dict = self.state_dict()
@@ -162,3 +166,5 @@ class Autoencoder(nn.Module):
                 filtered[k] = v
         super().load_state_dict(filtered)   
 
+        if(type(self.nmt.generator) is not nn.ModuleList):
+            self.nmt.generator = nn.ModuleList([self.nmt.generator])

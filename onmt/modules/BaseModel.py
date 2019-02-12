@@ -95,7 +95,7 @@ class NMTModel(nn.Module):
 
         super().load_state_dict(filtered)   
 
-        if(type(self.generator) is not list):
+        if(type(self.generator) is not nn.ModuleList):
             self.generator = nn.ModuleList([self.generator])
 
         #~ for name, param in state_dict.items():
