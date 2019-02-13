@@ -86,6 +86,8 @@ class NMTTrainer(Trainer):
                             help='Path to the training target file')
         parser.add_argument('-data_dir', type=str, required=True,
                             help='Path to an auxiliary data')
+        parser.add_argument('-load_into_memory', action='store_true',
+                            help='Load the dataset into memory')
         parser.add_argument('-join_vocab', action='store_true',
                             help='Share dictionary for source and target')
         parser.add_argument('-input_type', default='word', choices=['word', 'char'],
@@ -228,12 +230,16 @@ class NMTTrainer(Trainer):
         logger.info('Loading training data from {}'.format(self.args.train_src))
         split_words = self.args.input_type == 'word'
 
-        offsets_src = os.path.join(self.args.data_dir, 'train.src.idx.npy')
-        offsets_tgt = os.path.join(self.args.data_dir, 'train.tgt.idx.npy')
-        src_data = TextLineDataset.load_indexed(self.args.train_src, offsets_src)
+        if self.args.load_into_memory:
+            src_data = TextLineDataset.load_into_memory(self.args.train_src)
+            tgt_data = TextLineDataset.load_into_memory(self.args.train_tgt)
+        else:
+            offsets_src = os.path.join(self.args.data_dir, 'train.src.idx.npy')
+            offsets_tgt = os.path.join(self.args.data_dir, 'train.tgt.idx.npy')
+            src_data = TextLineDataset.load_indexed(self.args.train_src, offsets_src)
+            tgt_data = TextLineDataset.load_indexed(self.args.train_tgt, offsets_tgt)
         src_data = TextLookupDataset(src_data, self.src_dict, words=split_words, bos=False, eos=False,
                                      trunc_len=self.args.src_seq_length_trunc, lower=self.args.lower)
-        tgt_data = TextLineDataset.load_indexed(self.args.train_tgt, offsets_tgt)
         tgt_data = TextLookupDataset(tgt_data, self.tgt_dict, words=split_words, bos=True, eos=True,
                                      trunc_len=self.args.tgt_seq_length_trunc, lower=self.args.lower)
         dataset = ParallelDataset(src_data, tgt_data)
@@ -248,7 +254,7 @@ class NMTTrainer(Trainer):
 
         logger.info('Generating batches')
         batches = data_utils.generate_length_based_batches_from_lengths(
-            tgt_lengths, self.args.batch_size_words,
+            np.maximum(src_lengths, tgt_lengths), self.args.batch_size_words,
             self.args.batch_size_sents,
             self.args.batch_size_multiplier,
             self.args.pad_count,

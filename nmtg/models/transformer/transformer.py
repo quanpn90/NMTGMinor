@@ -158,9 +158,9 @@ class Transformer(EncoderDecoderModel):
         if opt.time in ('lstm', 'gru'):
             res['encoder']['positional_encoding'] = {'rnn': state_dict['encoder']['time_transformer']}
             res['decoder']['positional_encoding'] = {'rnn': state_dict['decoder']['time_transformer']}
-        # else:
-        #     res['encoder']['positional_encoding'] = state_dict['encoder']['time_transformer']
-        #     res['decoder']['positional_encoding'] = state_dict['decoder']['time_transformer']
+        else:
+            res['encoder']['positional_encoding'] = state_dict['encoder']['time_transformer']
+            res['decoder']['positional_encoding'] = state_dict['decoder']['time_transformer']
         res['encoder']['postprocess'] = state_dict['encoder']['postprocess_layer']
         res['decoder']['postprocess'] = state_dict['decoder']['postprocess_layer']
 

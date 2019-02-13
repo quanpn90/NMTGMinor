@@ -277,7 +277,6 @@ class Trainer:
                   disable=self.args.no_progress) as pbar:
             for index, batch in enumerate(iterator, train_data.sampler.index + 1):
                 start_time = datetime.datetime.now()
-
                 try:
                     loss, display_loss = self._get_loss(train_data.model, batch)
                     train_data.optimizer.backward(loss)
@@ -288,6 +287,7 @@ class Trainer:
                         if self.args.cuda:
                             torch.cuda.empty_cache()
                         oom_count += 1
+                        pbar.update()
                         continue
                     else:
                         raise e

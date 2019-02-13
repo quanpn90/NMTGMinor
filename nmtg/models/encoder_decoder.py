@@ -24,7 +24,7 @@ class Decoder(nn.Module):
     def __init__(self, future_masking=True, encoder_to_share=None):
         super().__init__()
         self.future_masking = future_masking
-        self.future_mask = None
+        self.register_buffer('future_mask', None)
 
     def get_future_mask(self, dim, device):
         if self.future_mask is None or self.future_mask.device != device:
@@ -43,6 +43,10 @@ class Decoder(nn.Module):
         :return:
         """
         raise NotImplementedError
+
+    def load_state_dict(self, state_dict, strict=True):
+        self.future_mask.resize_as_(state_dict['future_mask'])
+        super().load_state_dict(state_dict, strict)
 
 
 class IncrementalModule(nn.Module):
@@ -187,6 +191,6 @@ class EncoderDecoderModel(Model):
     @staticmethod
     def convert_state_dict(opt, state_dict):
         res = Model.convert_state_dict(opt, state_dict)
-        res['decoder'] = {}
+        res['decoder'] = {'future_mask': state_dict['decoder']['mask']}
         opt.no_future_masking = False
         return res

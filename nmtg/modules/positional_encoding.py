@@ -47,31 +47,28 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
 
     def __init__(self, model_dim, batch_first=True, initial_length=1024):
         super().__init__(model_dim, batch_first)
-        self.pos_emb = None
+        self.register_buffer('pos_emb', None)
         self.current_length = -1
-        self.generate(initial_length, torch.device('cpu'))
+        shape = [1, 1]
+        shape[0 if batch_first else 1] = initial_length
+        self.generate(initial_length, torch.zeros(*shape))
 
-    def generate(self, new_max_len, device):
-        position = torch.arange(new_max_len, dtype=torch.float)
-
+    def generate(self, new_max_len, inputs):
+        position = torch.arange(new_max_len).type_as(inputs)
         num_timescales = self.model_dim // 2
         log_timescale_increment = math.log(10000) / (num_timescales - 1)
         inv_timescales = torch.exp(
-            torch.arange(0, num_timescales, dtype=torch.float) * -log_timescale_increment)
+            torch.arange(0, num_timescales).type_as(inputs) * -log_timescale_increment)
         scaled_time = position.unsqueeze(1) * inv_timescales.unsqueeze(0)
         pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 1)
-        self.pos_emb = pos_emb.to(device)
+        self.pos_emb = pos_emb.to(inputs.device)
         self.current_length = new_max_len
 
     def forward(self, inputs):
         seq_len = inputs.size(1 if self.batch_first else 0)
 
-        if self.pos_emb is None \
-                or seq_len > self.current_length:
-            self.generate(seq_len, inputs.device)
-
-        if self.pos_emb.device != inputs.device:
-            self.pos_emb = self.pos_emb.to(inputs.device)
+        if seq_len > self.current_length:
+            self.generate(seq_len, inputs)
 
         emb = self.pos_emb[:seq_len, :]
 
@@ -87,12 +84,8 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
         needed_length = timestep + seq_len
         incremental_state.set(self, 'timestep', needed_length)
 
-        if self.pos_emb is None \
-                or needed_length > self.current_length:
+        if needed_length > self.current_length:
             self.generate(needed_length, inputs.device)
-
-        if self.pos_emb.device != inputs.device:
-            self.pos_emb = self.pos_emb.to(inputs.device)
 
         emb = self.pos_emb[timestep:needed_length, :]
 
@@ -100,6 +93,10 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
             emb = emb.unsqueeze(1)
 
         return emb
+
+    def load_state_dict(self, state_dict, strict=True):
+        self.pos_emb.resize_as_(state_dict['pos_emb'])
+        super().load_state_dict(state_dict, strict)
 
 
 class LearnedPositionalEncoding(PositionalEncoding):
@@ -109,7 +106,7 @@ class LearnedPositionalEncoding(PositionalEncoding):
 
     def __init__(self, model_dim, max_length, batch_first=True):
         super().__init__(model_dim, batch_first)
-        self.pos_emb = Parameter(torch.Tensor(max_length, model_dim))
+        self.pos_emb = Parameter(torch.zeros(max_length, model_dim))
         self.reset_parameters()
 
     def reset_parameters(self):
