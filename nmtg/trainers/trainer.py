@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 import nmtg.models
 import nmtg.optim
+from nmtg.meters import TimeMeter, AverageMeter, StopwatchMeter
 from nmtg.optim import MemoryEfficientFP16Optimizer, FP16Optimizer
 from nmtg.optim.lr_scheduler import LRScheduler
 from nmtg.tasks import Task
@@ -20,15 +21,16 @@ logger = logging.getLogger(__name__)
 
 
 class TrainData:
-    def __init__(self, model, dataset, sampler, lr_scheduler, optimizer):
+    def __init__(self, model, dataset, sampler, lr_scheduler, optimizer, meters):
         self.model = model
         self.dataset = dataset
         self.sampler = sampler
         self.lr_scheduler = lr_scheduler
         self.optimizer = optimizer
         self.epoch = 1
-        self.training_start_time = None
         self.num_updates = 0
+        self.meters = meters
+        self.training_time = TimeMeter()
 
     def state_dict(self):
         return {
@@ -37,7 +39,8 @@ class TrainData:
             'sampler': self.sampler.state_dict(),
             'num_updates': self.num_updates,
             'optimizer': self.optimizer.state_dict(),
-            'lr_scheduler': self.lr_scheduler.state_dict()
+            'lr_scheduler': self.lr_scheduler.state_dict(),
+            'training_time': self.training_time.elapsed_time
         }
 
     def load_state_dict(self, state_dict, reset_optim=False):
@@ -46,6 +49,7 @@ class TrainData:
         self.model.load_state_dict(state_dict['model'])
         self.lr_scheduler.load_state_dict(state_dict['lr_scheduler'])
         self.sampler.load_state_dict(state_dict['sampler'])
+        self.training_time.reset(state_dict['training_time'], self.sampler.index)
 
         if reset_optim:
             self.sampler.reset()
@@ -221,8 +225,23 @@ class Trainer:
     def _get_batch_weight(self, batch):
         return len(batch)
 
-    def _get_training_metrics(self, batch, step_time: datetime.timedelta):
-        raise NotImplementedError
+    def _get_training_metrics(self):
+        meters = {
+            'nll': AverageMeter(),
+            'lr': AverageMeter(),
+            'gnorm': AverageMeter(),
+            'oom': AverageMeter(),
+            'fwbw_wall': StopwatchMeter(),
+            'train_wall': StopwatchMeter()}
+        return meters
+
+    def _update_training_metrics(self, train_data: TrainData, batch):
+        return []
+
+    def _reset_training_metrics(self, train_data):
+        meters = train_data.meters
+        meters['nll'].reset()
+        meters['fwbw_wall'].reset()
 
     def _get_train_iterator(self, train_data: TrainData):
         return train_data.dataset.get_iterator(batch_sampler=train_data.sampler,
@@ -241,7 +260,7 @@ class Trainer:
             valid_loss, valid_ppl = self.evaluate(train_data.model, eval_task)
             logger.info('Starting validation perplexity {:g}'.format(valid_ppl))
 
-        train_data.training_start_time = datetime.datetime.now()
+        train_data.training_time.start()
 
         for _ in range(train_data.epoch, self.args.epochs + 1):
             self._train_epoch(train_data, eval_task)
@@ -266,17 +285,17 @@ class Trainer:
     def _train_epoch(self, train_data: TrainData, eval_task: Task = None):
         train_data.model.train()
         train_data.optimizer.zero_grad()
+        meters = train_data.meters
 
         iterator = self._get_train_iterator(train_data)
 
-        oom_count = 0
         total_weight = 0
-        total_loss = 0
-        grad_norm = 0
+        reset_metrics = False
         with tqdm(total=len(train_data.sampler), initial=train_data.sampler.index + 1,
                   disable=self.args.no_progress) as pbar:
             for index, batch in enumerate(iterator, train_data.sampler.index + 1):
-                start_time = datetime.datetime.now()
+                weight = self._get_batch_weight(batch)
+                meters['fwbw_wall'].start()
                 try:
                     loss, display_loss = self._get_loss(train_data.model, batch)
                     train_data.optimizer.backward(loss)
@@ -286,22 +305,25 @@ class Trainer:
                         self._reset_state(train_data)
                         if self.args.cuda:
                             torch.cuda.empty_cache()
-                        oom_count += 1
+                        meters['oom'].update()
                         pbar.update()
                         continue
                     else:
                         raise e
-                time_for_batch = datetime.datetime.now() - start_time
+                meters['fwbw_wall'].stop()
 
-                specific_metrics = self._get_training_metrics(batch, time_for_batch)
-                total_weight += self._get_batch_weight(batch)
-                total_loss += display_loss
-                perplexity = math.exp(total_loss / (total_weight + 1e-6))
+                total_weight += weight
+                train_data.training_time.update()
+                meters['nll'].update(display_loss, weight)
+                perplexity = math.exp(meters['nll'].avg)
+                specific_metrics = self._update_training_metrics(train_data, batch)
 
                 # TODO: factor 0.95?
                 if total_weight >= self.args.batch_size_update:
+                    meters['train_wall'].start()
                     try:
                         grad_norm = self._learning_step(train_data, total_weight)
+                        meters['gnorm'].update(grad_norm)
                         train_data.num_updates += 1
                         train_data.lr_scheduler.step_update(train_data.num_updates)
                     except OverflowError as e:
@@ -313,11 +335,12 @@ class Trainer:
                             self._reset_state(train_data)
                             if self.args.cuda:
                                 torch.cuda.empty_cache()
-                            oom_count += 1
+                            meters['oom'].update()
                         else:
                             raise e
+                    meters['train_wall'].stop()
                     total_weight = 0
-                    total_loss = 0
+                    reset_metrics = True
 
                     train_data.optimizer.zero_grad()
 
@@ -331,18 +354,27 @@ class Trainer:
 
                         self.save_checkpoint(train_data, eval_ppl)
 
-                progress_metrics = ['Epoch: {:2d}'.format(train_data.epoch),
-                                    'Updates: {:5d}'.format(train_data.num_updates),
-                                    'ppl: {:6.2f}'.format(perplexity),
-                                    'lr: {:.4e}'.format(train_data.optimizer.get_lr()),
-                                    'gnorm: {:.2f}'.format(grad_norm)]
+                progress_metrics = ['Epoch {:2d}'.format(train_data.epoch),
+                                    'Updates {:5d}'.format(train_data.num_updates),
+                                    'ppl {:6.2f}'.format(perplexity),
+                                    'lr {:.4e}'.format(train_data.optimizer.get_lr()),
+                                    'gnorm {:.2f}'.format(meters['gnorm'].val),
+                                    'ooms {:d}'.format(meters['oom'].val),
+                                    'fw/bw {:.0f}ms'.format(meters['fwbw_wall'].avg * 1000),
+                                    'train {:.0f}ms'.format(meters['train_wall'].val * 1000)]
                 pbar.set_postfix_str(' | '.join(progress_metrics + specific_metrics))
                 if index == 0 or (index + 1) % self.args.log_interval == 0:
-                    elapsed_time = datetime.datetime.now() - train_data.training_start_time
+                    elapsed_time = train_data.training_time.elapsed_time
+                    elapsed_time = str(datetime.timedelta(seconds=elapsed_time)).split('.')[0]
                     log_metrics = ['{:5d}/{:5d}'.format(index + 1, len(iterator)),
-                                   '{} elapsed'.format(str(elapsed_time).split('.')[0])]
+                                   '{} elapsed'.format(elapsed_time)]
                     log_str = " | ".join(log_metrics + progress_metrics + specific_metrics)
                     logger.info(log_str)
+
+                if reset_metrics:
+                    self._reset_training_metrics(train_data)
+                    reset_metrics = False
+
                 pbar.update()
 
     def _learning_step(self, train_data, total_weight):

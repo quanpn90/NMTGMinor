@@ -12,13 +12,16 @@ class IndexedData:
     def __init__(self, filename, offsets, decode_fn):
         self.filename = filename
         self.offsets = offsets
-        self.data_file = open(self.filename, 'rb')
+        self.data_file = None
         self.decode_fn = decode_fn
 
     def __del__(self):
-        self.data_file.close()
+        if self.data_file is not None:
+            self.data_file.close()
 
     def __getitem__(self, index):
+        if self.data_file is None:
+            self.data_file = open(self.filename, 'rb')
         self.data_file.seek(self.offsets[index])
         length = self.offsets[index + 1] - self.offsets[index]
         return self.decode_fn(self.data_file.read(length))

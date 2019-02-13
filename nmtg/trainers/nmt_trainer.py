@@ -11,6 +11,7 @@ from tqdm import tqdm
 from nmtg.data import Dictionary, data_utils, ParallelDataset, TextLineDataset
 from nmtg.data.samplers import PreGeneratedBatchSampler
 from nmtg.data.text_lookup_dataset import TextLookupDataset
+from nmtg.meters import StopwatchMeter, AverageMeter
 from nmtg.models.nmt_model import NMTModel
 from nmtg.modules.loss import NMTLoss
 from nmtg.sequence_generator import SequenceGenerator
@@ -245,7 +246,7 @@ class NMTTrainer(Trainer):
         dataset = ParallelDataset(src_data, tgt_data)
 
         src_len_filename = os.path.join(self.args.data_dir, 'train.src.len.npy')
-        tgt_len_filename = os.path.join(self.args.data_dir, 'train.src.len.npy')
+        tgt_len_filename = os.path.join(self.args.data_dir, 'train.tgt.len.npy')
         src_lengths = np.load(src_len_filename)
         tgt_lengths = np.load(tgt_len_filename)
 
@@ -268,7 +269,7 @@ class NMTTrainer(Trainer):
 
         model = self._build_model(model_args or self.args)
         lr_scheduler, optimizer = self._build_optimizer(model)
-        return TrainData(model, dataset, sampler, lr_scheduler, optimizer)
+        return TrainData(model, dataset, sampler, lr_scheduler, optimizer, self._get_training_metrics())
 
     def _get_loss(self, model, batch) -> (Tensor, float):
         encoder_input = batch.get('src_indices')
@@ -290,12 +291,44 @@ class NMTTrainer(Trainer):
     def _get_batch_weight(self, batch):
         return batch['tgt_size']
 
-    def _get_training_metrics(self, batch, step_time: datetime.timedelta):
-        src_size = batch['src_size']
-        tgt_size = batch['tgt_size']
+    def _get_training_metrics(self):
+        meters = super()._get_training_metrics()
+        meters['srctok'] = AverageMeter()
+        meters['tgttok'] = AverageMeter()
+        meters['srcpad'] = AverageMeter()
+        meters['tgtpad'] = AverageMeter()
+        meters['eff'] = AverageMeter()
+        return meters
 
-        return ['{:5.0f} srctok/s'.format(src_size / step_time.total_seconds()),
-                '{:5.0f} tgttok/s'.format(tgt_size / step_time.total_seconds())]
+    def _update_training_metrics(self, train_data, batch):
+        meters = train_data.meters
+        batch_time = meters['fwbw_wall'].val
+        src_tokens = batch['src_size']
+        tgt_tokens = batch['tgt_size']
+        src_total = batch['src_indices'].numel()
+        tgt_total = batch['tgt_input'].numel()
+
+        meters['srctok'].update(src_tokens, batch_time)
+        meters['tgttok'].update(tgt_tokens, batch_time)
+        meters['srcpad'].update(1.0 - src_tokens / src_total)
+        meters['tgtpad'].update(1.0 - tgt_tokens / tgt_total)
+        eff = (src_tokens + tgt_tokens) / (2.0 * self.args.batch_size_words)
+        if eff > 1:
+            logger.warning('Batch size exceeded')
+        meters['eff'].update(eff)
+
+        return ['{:5.0f}|{:5.0f} tok/s'.format(meters['srctok'].avg, meters['tgttok'].avg),
+                '{:2.0%}|{:2.0%} pad'.format(meters['srcpad'].avg, meters['tgtpad'].avg),
+                '{:2.0%} beff'.format(meters['eff'].avg)]
+
+    def _reset_training_metrics(self, train_data):
+        meters = train_data.meters
+        meters['srctok'].reset()
+        meters['tgttok'].reset()
+        meters['srcpad'].reset()
+        meters['tgtpad'].reset()
+        meters['eff'].reset()
+        super()._reset_training_metrics(train_data)
 
     def solve(self, model_or_ensemble, task):
         models = model_or_ensemble

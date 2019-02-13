@@ -31,7 +31,8 @@ def convert_checkpoint(checkpoint):
         'model': flatten_state_dict(
             NMTModel.convert_state_dict(checkpoint['opt'],
                                         unflatten_state_dict(checkpoint['model']))),
-        'lr_scheduler': {'best': None}
+        'lr_scheduler': {'best': None},
+        'training_time': 0.0
     }
     if 'optim' in checkpoint:
         num_updates = checkpoint['optim']['_step']

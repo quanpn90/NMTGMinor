@@ -101,6 +101,8 @@ def generate_length_based_batches_from_lengths(lengths, length_per_batch, max_ex
 
 def _generate_length_based_batches(lengths, indices, length_per_batch, max_examples_per_batch=128,
                                    batch_size_align=1, count_padding=True):
+    # indices are the indices of samples, sorted by length and filtered
+
     batches = []
     cur_batch = []
     cur_batch_size = 0
@@ -120,13 +122,9 @@ def _generate_length_based_batches(lengths, indices, length_per_batch, max_examp
             if len(cur_batch_sizes) > 0:
                 longest_length = max(max(cur_batch_sizes), sample_length)
 
-            if longest_length * (len(cur_batch) + 1) > length_per_batch:
-                return True
+            return longest_length * (len(cur_batch) + 1) > length_per_batch
         else:
-            if cur_batch_size + sample_length > length_per_batch:
-                return True
-
-        return False
+            return cur_batch_size + sample_length > length_per_batch
 
     for i in indices:
         sample_length = lengths[i]
