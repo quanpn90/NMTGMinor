@@ -290,7 +290,6 @@ class Trainer:
         iterator = self._get_train_iterator(train_data)
 
         total_weight = 0
-        reset_metrics = False
         with tqdm(total=len(train_data.sampler), initial=train_data.sampler.index + 1,
                   disable=self.args.no_progress) as pbar:
             for index, batch in enumerate(iterator, train_data.sampler.index + 1):
@@ -340,7 +339,6 @@ class Trainer:
                             raise e
                     meters['train_wall'].stop()
                     total_weight = 0
-                    reset_metrics = True
 
                     train_data.optimizer.zero_grad()
 
@@ -370,10 +368,7 @@ class Trainer:
                                    '{} elapsed'.format(elapsed_time)]
                     log_str = " | ".join(log_metrics + progress_metrics + specific_metrics)
                     logger.info(log_str)
-
-                if reset_metrics:
                     self._reset_training_metrics(train_data)
-                    reset_metrics = False
 
                 pbar.update()
 

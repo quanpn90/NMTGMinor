@@ -5,6 +5,7 @@ from collections import Counter
 from typing import Sequence
 
 import numpy as np
+import torch
 from torch import Tensor
 from tqdm import tqdm
 
@@ -216,6 +217,52 @@ class NMTTrainer(Trainer):
             self.src_dict = None
             self.tgt_dict = None
 
+    def online_translate(self, model_or_ensemble, in_stream):
+        models = model_or_ensemble
+        if not isinstance(models, Sequence):
+            models = [model_or_ensemble]
+
+        for model in models:
+            model.eval()
+
+        split_words = self.args.input_type == 'words'
+
+        generator = SequenceGenerator(models, self.tgt_dict, models[0].batch_first,
+                                      self.args.beam_size, maxlen_b=20, normalize_scores=self.args.normalize,
+                                      len_penalty=self.args.alpha, unk_penalty=self.args.beta,
+                                      diverse_beam_strength=self.args.diverse_beam_strength)
+
+        join_str = ' ' if self.args.input_type == 'word' else ''
+
+        for line in in_stream:
+            line = line.rstrip()
+            if self.args.lower:
+                line = line.lower()
+            if split_words:
+                line = line.split(' ')
+
+            src_indices = self.src_dict.to_indices(line, bos=False, eos=False)
+            encoder_inputs = src_indices.unsqueeze(0 if self.batch_first else 1)
+            source_lengths = torch.tensor([len(line)])
+            encoder_mask = encoder_inputs.ne(self.src_dict.pad())
+
+            if self.args.cuda:
+                encoder_inputs = encoder_inputs.cuda()
+                source_lengths = source_lengths.cuda()
+                encoder_mask = encoder_mask.cuda()
+
+            res = [self.tgt_dict.string(tr['tokens'], join_str=join_str)
+                   for tr in generator.generate(encoder_inputs, source_lengths, encoder_mask)[0][:self.args.n_best]]
+
+            if self.args.print_translations:
+                tqdm.write(line)
+                for i, hyp in enumerate(res):
+                    tqdm.write("Hyp {}/{}: {}".format(i+1, len(hyp), hyp))
+
+            if len(res) == 1:
+                res = res[0]
+            yield res
+
     def _build_loss(self):
         loss = NMTLoss(len(self.tgt_dict), self.tgt_dict.pad(), self.args.label_smoothing)
         if self.args.cuda:
@@ -295,9 +342,6 @@ class NMTTrainer(Trainer):
         meters = super()._get_training_metrics()
         meters['srctok'] = AverageMeter()
         meters['tgttok'] = AverageMeter()
-        meters['srcpad'] = AverageMeter()
-        meters['tgtpad'] = AverageMeter()
-        meters['eff'] = AverageMeter()
         return meters
 
     def _update_training_metrics(self, train_data, batch):
@@ -305,21 +349,11 @@ class NMTTrainer(Trainer):
         batch_time = meters['fwbw_wall'].val
         src_tokens = batch['src_size']
         tgt_tokens = batch['tgt_size']
-        src_total = batch['src_indices'].numel()
-        tgt_total = batch['tgt_input'].numel()
 
         meters['srctok'].update(src_tokens, batch_time)
         meters['tgttok'].update(tgt_tokens, batch_time)
-        meters['srcpad'].update(1.0 - src_tokens / src_total)
-        meters['tgtpad'].update(1.0 - tgt_tokens / tgt_total)
-        eff = (src_tokens + tgt_tokens) / (2.0 * self.args.batch_size_words)
-        if eff > 1:
-            logger.warning('Batch size exceeded')
-        meters['eff'].update(eff)
 
-        return ['{:5.0f}|{:5.0f} tok/s'.format(meters['srctok'].avg, meters['tgttok'].avg),
-                '{:2.0%}|{:2.0%} pad'.format(meters['srcpad'].avg, meters['tgtpad'].avg),
-                '{:2.0%} beff'.format(meters['eff'].avg)]
+        return ['{:5.0f}|{:5.0f} tok/s'.format(meters['srctok'].avg, meters['tgttok'].avg)]
 
     def _reset_training_metrics(self, train_data):
         meters = train_data.meters
