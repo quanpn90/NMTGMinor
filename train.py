@@ -1,5 +1,6 @@
 import argparse
 
+import numpy as np
 import torch
 
 from nmtg import convert
@@ -31,6 +32,7 @@ if __name__ == '__main__':
     logger.debug(args)
 
     torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
 
     task = task_class.setup_task(args)  # type: Task
     trainer = trainer_class(args)  # type: Trainer

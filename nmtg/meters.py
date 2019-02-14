@@ -87,4 +87,6 @@ class StopwatchMeter:
 
     @property
     def avg(self):
+        if self.n == 0:
+            return 0.0
         return self.sum / self.n

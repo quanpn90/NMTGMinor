@@ -44,9 +44,16 @@ class Decoder(nn.Module):
         """
         raise NotImplementedError
 
-    def load_state_dict(self, state_dict, strict=True):
-        self.future_mask.resize_as_(state_dict['future_mask'])
-        super().load_state_dict(state_dict, strict)
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
+                              error_msgs):
+        if prefix + 'future_mask' in state_dict:
+            old_mask = state_dict[prefix + 'future_mask']
+            if self.future_mask is None:
+                self.future_mask = old_mask.new(old_mask.size())
+            else:
+                self.future_mask.resize_as_(old_mask)
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
+                                      error_msgs)
 
 
 class IncrementalModule(nn.Module):

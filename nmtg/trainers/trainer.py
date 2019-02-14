@@ -145,6 +145,16 @@ class Trainer:
         model = model_class.build_model(args)
         return model
 
+    def build_model(self, args=None):
+        if args is None:
+            args = self.args
+        model = self._build_model(args)
+        if self.args.fp16:
+            model.half()
+        if self.args.cuda:
+            model.cuda()
+        return model
+
     def load_data(self, model_args=None):
         raise NotImplementedError
 
@@ -178,7 +188,7 @@ class Trainer:
         for model in models:
             model.eval()
 
-        iterator = self._get_eval_iterator(task, self.args.batch_size)
+        iterator = self._get_eval_iterator(task)
 
         results = [result
                    for batch in tqdm(iterator, disable=self.args.no_progress)
@@ -196,7 +206,7 @@ class Trainer:
         :return (loss, perplexity)
         """
         model.eval()
-        iterator = self._get_eval_iterator(task, self.args.batch_size)
+        iterator = self._get_eval_iterator(task)
         total_weight, total_loss = 0, 0
 
         with torch.no_grad():
@@ -209,8 +219,8 @@ class Trainer:
         ppl = math.exp(min(loss, 100))
         return loss, ppl
 
-    def _get_eval_iterator(self, task, batch_size):
-        return task.dataset.get_iterator(batch_size=batch_size,
+    def _get_eval_iterator(self, task):
+        return task.dataset.get_iterator(batch_size=self.args.batch_size,
                                          num_workers=self.args.data_loader_threads,
                                          cuda=self.args.cuda)
 
@@ -242,6 +252,7 @@ class Trainer:
         meters = train_data.meters
         meters['nll'].reset()
         meters['fwbw_wall'].reset()
+        meters['train_wall'].reset()
 
     def _get_train_iterator(self, train_data: TrainData):
         return train_data.dataset.get_iterator(batch_sampler=train_data.sampler,
@@ -249,11 +260,6 @@ class Trainer:
                                                cuda=self.args.cuda)
 
     def train(self, train_data: TrainData, eval_task: Task = None):
-        if self.args.fp16:
-            train_data.model.half()
-        if self.args.cuda:
-            train_data.model.cuda()
-
         logger.debug('{:,d} parameters to train'.format(sum(torch.numel(p) for p in train_data.optimizer.params)))
 
         if eval_task is not None:
@@ -311,6 +317,9 @@ class Trainer:
                         raise e
                 meters['fwbw_wall'].stop()
 
+                if math.isnan(display_loss):
+                    self.deal_with_nan(train_data, batch, index + 1)
+
                 total_weight += weight
                 train_data.training_time.update()
                 meters['nll'].update(display_loss, weight)
@@ -328,6 +337,8 @@ class Trainer:
                     except OverflowError as e:
                         logger.warning('Overflow detected ' + str(e))
                         train_data.optimizer.zero_grad()
+                    except ValueError as e:
+                        self.deal_with_nan(train_data, batch, index + 1)
                     except RuntimeError as e:
                         if 'out of memory' in str(e):
                             logger.warning('Ran out of memory in step {}'.format(train_data.sampler.index))
@@ -359,7 +370,7 @@ class Trainer:
                                     'gnorm {:.2f}'.format(meters['gnorm'].val),
                                     'ooms {:d}'.format(meters['oom'].val),
                                     'fw/bw {:.0f}ms'.format(meters['fwbw_wall'].avg * 1000),
-                                    'train {:.0f}ms'.format(meters['train_wall'].val * 1000)]
+                                    'train {:.0f}ms'.format(meters['train_wall'].avg * 1000)]
                 pbar.set_postfix_str(' | '.join(progress_metrics + specific_metrics))
                 if index == 0 or (index + 1) % self.args.log_interval == 0:
                     elapsed_time = train_data.training_time.elapsed_time
@@ -377,6 +388,9 @@ class Trainer:
             train_data.optimizer.multiply_grads(1. / total_weight)
 
         grad_norm = train_data.optimizer.clip_grad_norm(self.args.max_grad_norm)
+
+        if math.isnan(grad_norm):
+            raise ValueError('NaN gradient norm encountered')
 
         train_data.optimizer.step()
         return grad_norm
@@ -413,15 +427,16 @@ class Trainer:
             os.remove(save_file)
 
     def load_checkpoint(self, checkpoint, for_training=False, reset_optim=False):
+        logger.info("Loading checkpoint {}".format(self.args.load_from))
         self.load_args(checkpoint['args'])
         self.load_state_dict(checkpoint)
 
         if for_training:
             train_data = self.load_data(checkpoint['args'])
-            train_data.load_state_dict(checkpoint, reset_optim)
+            train_data.load_state_dict(checkpoint['train_data'], reset_optim)
             return train_data
         else:
-            model = self._build_model(checkpoint['args'])
+            model = self.build_model(checkpoint['args'])
             model.load_state_dict(checkpoint['train_data']['model'])
             return model
 
@@ -433,6 +448,16 @@ class Trainer:
 
     def load_state_dict(self, state_dict):
         pass
+
+    def deal_with_nan(self, train_data, batch, step):
+        for k, v in batch.items():
+            if isinstance(v, Tensor):
+                logger.debug("{}: {}".format(k, v.size()))
+            else:
+                logger.debug("{}: {}".format(k, v))
+        breakpoint()
+        self._get_loss(train_data.model, batch)
+        raise ValueError('NaN loss encountered in {}'.format(step))
 
 
 def checkpoint_paths(path, pattern=r'(.*)_ppl_(\d+\.\d+)\_e(\d+\.\d+)\.pt'):

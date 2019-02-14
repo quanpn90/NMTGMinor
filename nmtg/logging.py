@@ -44,7 +44,7 @@ def setup_logging(log_dir, filename, file_level, console_level):
 
     logging.basicConfig(
         datefmt='%Y-%m-%d %H:%M:%S',
-        format='{asctime} | {name} | {levelname}: {message}',
+        format='{asctime} | {levelname}: {message}',
         style='{',
         level=min(LOG_LEVELS[file_level], LOG_LEVELS[console_level]),
         handlers=handlers

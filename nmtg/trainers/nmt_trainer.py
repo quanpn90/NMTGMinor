@@ -12,7 +12,7 @@ from tqdm import tqdm
 from nmtg.data import Dictionary, data_utils, ParallelDataset, TextLineDataset
 from nmtg.data.samplers import PreGeneratedBatchSampler
 from nmtg.data.text_lookup_dataset import TextLookupDataset
-from nmtg.meters import StopwatchMeter, AverageMeter
+from nmtg.meters import AverageMeter
 from nmtg.models.nmt_model import NMTModel
 from nmtg.modules.loss import NMTLoss
 from nmtg.sequence_generator import SequenceGenerator
@@ -314,7 +314,7 @@ class NMTTrainer(Trainer):
 
         sampler = PreGeneratedBatchSampler(batches, self.args.curriculum == 0)
 
-        model = self._build_model(model_args or self.args)
+        model = self.build_model(model_args)
         lr_scheduler, optimizer = self._build_optimizer(model)
         return TrainData(model, dataset, sampler, lr_scheduler, optimizer, self._get_training_metrics())
 
@@ -359,9 +359,6 @@ class NMTTrainer(Trainer):
         meters = train_data.meters
         meters['srctok'].reset()
         meters['tgttok'].reset()
-        meters['srcpad'].reset()
-        meters['tgtpad'].reset()
-        meters['eff'].reset()
         super()._reset_training_metrics(train_data)
 
     def solve(self, model_or_ensemble, task):
@@ -377,7 +374,7 @@ class NMTTrainer(Trainer):
                                       len_penalty=self.args.alpha, unk_penalty=self.args.beta,
                                       diverse_beam_strength=self.args.diverse_beam_strength)
 
-        iterator = self._get_eval_iterator(task, self.args.batch_size)
+        iterator = self._get_eval_iterator(task)
 
         join_str = ' ' if self.args.input_type == 'word' else ''
 
@@ -408,7 +405,7 @@ class NMTTrainer(Trainer):
 
         return results
 
-    def _get_eval_iterator(self, task, batch_size):
+    def _get_eval_iterator(self, task):
         split_words = self.args.input_type == 'word'
         src_data = TextLookupDataset(task.src_dataset, self.src_dict, split_words, bos=False, eos=False,
                                      lower=self.args.lower)
@@ -417,7 +414,7 @@ class NMTTrainer(Trainer):
             tgt_data = TextLookupDataset(task.tgt_dataset, self.tgt_dict, split_words,
                                          lower=self.args.lower)
         dataset = ParallelDataset(src_data, tgt_data)
-        return dataset.get_iterator(batch_size=batch_size,
+        return dataset.get_iterator(batch_size=self.args.batch_size,
                                     num_workers=self.args.data_loader_threads,
                                     cuda=self.args.cuda)
 
