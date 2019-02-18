@@ -13,13 +13,13 @@ class Batch(object):
         
         self.tensors = dict()
         self.has_target = False
-        self.tensors['source'], self.src_lengths = self.join_data(src_data, align_right=src_align_right)
+        self.tensors['source'], self.src_lengths = self.collate(src_data, align_right=src_align_right)
         self.tensors['source'] = self.tensors['source'].t().contiguous()
         self.tensors['src_attn_mask'] = self.tensors['source'].eq(onmt.Constants.PAD).unsqueeze(1)
         self.tensors['src_pad_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
         
         if tgt_data is not None:
-            target_full, self.tgt_lengths = self.join_data(tgt_data, align_right=tgt_align_right)
+            target_full, self.tgt_lengths = self.collate(tgt_data, align_right=tgt_align_right)
             target_full = target_full.t().contiguous()
             self.tensors['target_input'] = target_full[:-1]
             self.tensors['target_output'] = target_full[1:]
@@ -34,7 +34,7 @@ class Batch(object):
         
         self.src_size = sum([len(x)     for x in src_data])
 
-    def join_data(self, data, align_right=False):
+    def collate(self, data, align_right=False):
     
         lengths = [x.size(0) for x in data]
         max_length = max(lengths)
@@ -62,13 +62,13 @@ class Dataset(object):
     '''
     batchSize is now changed to have word semantic (probably better)
     '''
-    def __init__(self, srcData, tgtData, batchSize, gpus,
-                 data_type="text", balance=False, max_seq_num=128,
+    def __init__(self, src_data, tgt_data, batch_size_words, gpus,
+                 data_type="text", balance=False, batch_size_sents=128,
                  multiplier=1, pad_count=False, sort_by_target=False):
-        self.src = srcData
+        self.src = src_data
         self._type = data_type
-        if tgtData:
-            self.tgt = tgtData
+        if tgt_data:
+            self.tgt = tgt_data
             assert(len(self.src) == len(self.tgt))
         else:
             self.tgt = None
@@ -76,69 +76,59 @@ class Dataset(object):
         self.fullSize = len(self.src)
         self.n_gpu = len(gpus)
 
-        self.batchSize = batchSize
-        
-        
-        self.balance = balance
-        self.max_seq_num = max_seq_num 
-        # ~ print(self.max_seq_num)
+        self.batch_size_words = batch_size_words
+        self.batch_size_sents = batch_size_sents
         self.multiplier = multiplier
         self.sort_by_target = sort_by_target
-        
-        
-        self.pad_count = pad_count
-        # if self.balance:
-        self.allocateBatch()
+
+        self.pad_count = True
+
         self.cur_index = 0
         self.batchOrder = None
 
-    # This function allocates the mini-batches (grouping sentences with the same size)
-    def allocateBatch(self):
-            
-        # The sentence pairs are sorted by source already (cool)
         self.batches = []
-        
+
+        self.num_batches = 0
+        self.allocate_batch()
+
+    # This function allocates the mini-batches (grouping sentences with the same size)
+    def allocate_batch(self):
+
+        # The sentence pairs are sorted by source already
+        self.batches = []
+
         cur_batch = []
         cur_batch_size = 0
         cur_batch_sizes = []
-        
-        def oversize_(cur_batch):
 
-            if len(cur_batch) == self.max_seq_num:
+        def oversize_(batch_):
+
+            if len(batch_) == self.batch_size_sents:
                     return True
-            
-            oversized = False
-            if self.pad_count == False:
-                if ( cur_batch_size + sentence_length > self.batchSize ):
-                    return True
-            else:
-                # here we assume the new sentence's participation in the minibatch
-                longest_length = sentence_length
-                
-                if len(cur_batch_sizes) > 0:
-                    longest_length = max(max(cur_batch_sizes), sentence_length)
-                
-                if longest_length * (len(cur_batch)+1) > self.batchSize:
-                    return True
-            return False
-        
+
+            # here we assume the new sentence's participation in the minibatch
+            longest_length = sentence_length
+
+            if len(cur_batch_sizes) > 0:
+                longest_length = max(max(cur_batch_sizes), sentence_length)
+
+            if longest_length * (len(cur_batch)+1) > self.batch_size_words:
+                return True
+
         i = 0
         while i < self.fullSize:            
             sentence_length = max(self.src[i].size(0), self.tgt[i].size(0) - 1 if self.tgt is not None else 0)
 
-            oversized = oversize_(cur_batch)
+            over_sized = oversize_(cur_batch)
             # if the current length makes the batch exceeds
             # the we create a new batch
-            if oversized:
+            if over_sized:
                 current_size = len(cur_batch)
                 scaled_size = max(
                     self.multiplier * (current_size // self.multiplier),
                     current_size % self.multiplier)
                
-                # ~ print(cur_batch)
-                batch_ =  cur_batch[:scaled_size]
-                # ~ print(batch_)
-                # ~ print(len(batch_))
+                batch_ = cur_batch[:scaled_size]
                 if self.multiplier > 1:
                     assert(len(batch_) % self.multiplier == 0), "batch size is not multiplied, current batch_size is %d " % len(batch_)
                 self.batches.append(batch_) # add this batch into the batch list
@@ -146,8 +136,7 @@ class Dataset(object):
                 cur_batch = cur_batch[scaled_size:] # reset the current batch
                 cur_batch_sizes = cur_batch_sizes[scaled_size:]
                 cur_batch_size  = sum(cur_batch_sizes)
-                
-            
+
             cur_batch.append(i)
             cur_batch_size += sentence_length
             cur_batch_sizes.append(sentence_length)
@@ -158,58 +147,40 @@ class Dataset(object):
         if len(cur_batch) > 0:
             self.batches.append(cur_batch)
         
-        self.numBatches = len(self.batches)
-                
-    def _batchify(self, data, align_right=False,
-                  include_lengths=False, dtype="text"):
-        lengths = [x.size(0) for x in data]
-        max_length = max(lengths)
-        out = data[0].new(len(data), max_length).fill_(onmt.Constants.PAD)
-        for i in range(len(data)):
-            data_length = data[i].size(0)
-            offset = max_length - data_length if align_right else 0
-            out[i].narrow(0, offset, data_length).copy_(data[i])
-        if include_lengths:
-            return out, lengths 
-        else:
-            return out
-        
-                
-                
+        self.num_batches = len(self.batches)
+
     def __getitem__(self, index):
-        assert index < self.numBatches, "%d > %d" % (index, self.numBatches)
+        assert index < self.num_batches, "%d > %d" % (index, self.num_batches)
         
         batch = self.batches[index]
-        srcData = [self.src[i] for i in batch]
+        src_data = [self.src[i] for i in batch]
 
         if self.tgt:
-            tgtData = [self.tgt[i] for i in batch]
+            tgt_data = [self.tgt[i] for i in batch]
         else:
-            tgtData = None
+            tgt_data = None
             
-        batch = Batch(srcData, tgt_data=tgtData, src_align_right=False, tgt_align_right=False)
-        
-        
+        batch = Batch(src_data, tgt_data=tgt_data, src_align_right=False, tgt_align_right=False)
+
         return batch
-       
 
     def __len__(self):
-        return self.numBatches
+        return self.num_batches
         
     def create_order(self, random=True):
         
         if random:
-            self.batchOrder = torch.randperm(self.numBatches)
+            self.batchOrder = torch.randperm(self.num_batches)
         else:
-            self.batchOrder = torch.arange(self.numBatches).long()
+            self.batchOrder = torch.arange(self.num_batches).long()
         self.cur_index = 0
         
         return self.batchOrder
         
     def next(self, curriculum=False, reset=True, split_sizes=1):
         
-         # reset iterator if reach data size limit
-        if self.cur_index >= self.numBatches:
+        # reset iterator if reach data size limit
+        if self.cur_index >= self.num_batches:
             if reset:
                 self.cur_index = 0
             else: return None
@@ -223,27 +194,8 @@ class Dataset(object):
         
         # move the iterator one step
         self.cur_index += 1
-        
-        #split that batch to number of gpus
-        samples = []
-        split_size = 1
-        
-        # maybe we need a more smart splitting function ?
-        
-        # if batch[1] is not None:
-            # batch_split = zip(batch[0].split(split_size, dim=1), 
-                              # batch[1].split(split_size, dim=1))
-                              
-            
-            # batch_split = [ [b[0], b[1]] for i, b in enumerate(batch_split) ] 
-        # else:
-            # batch_split = zip(batch[0].split(split_size, dim=1))
-                              
-            
-            # batch_split = [ [b[0], None] for i, b in enumerate(batch_split) ] 
-       
+
         return [batch]
-    
 
     def shuffle(self):
         data = list(zip(self.src, self.tgt))
@@ -251,5 +203,5 @@ class Dataset(object):
         
     def set_index(self, iteration):
         
-        assert iteration >= 0 and iteration < self.numBatches
+        assert(iteration >= 0 and iteration < self.num_batches)
         self.cur_index = iteration

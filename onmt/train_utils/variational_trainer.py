@@ -78,6 +78,7 @@ class VariationalTrainerFP16(XETrainer):
         self.meters["report_tgt_words"] = AverageMeter()
         self.meters["report_src_words"] = AverageMeter()
         self.meters["kl"] = AverageMeter()
+        self.meters["kl_prior"] = AverageMeter()
         self.meters["gnorm"] = AverageMeter()
         self.meters["oom"] = AverageMeter() 
         self.meters["total_sloss"] = AverageMeter()
@@ -85,6 +86,8 @@ class VariationalTrainerFP16(XETrainer):
         self.meters["R"] = AverageMeter()
         self.meters["ce"] = AverageMeter()
         self.meters["q_entropy"] = AverageMeter()
+        self.meters["q_mean"] = AverageMeter()
+        self.meters["q_var"] = AverageMeter()
 
         self.logger = Logger(self.optim, self.meters, scaler=self.scaler)
     
@@ -139,6 +142,7 @@ class VariationalTrainerFP16(XETrainer):
         total_words = 0
         total_batch_size = 0
         total_p_entropy = 0
+        total_kl = 0
                 
         batch_order = data.create_order(random=False)
         torch.cuda.empty_cache()
@@ -173,19 +177,24 @@ class VariationalTrainerFP16(XETrainer):
                     loss_output = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
                     
                     loss_data = loss_output['nll']
+                    kl = loss_output['kl']
 
                     if n == 0:
                         total_p_entropy += loss_output['p_entropy']
                         total_batch_size += batch.size
                         total_words += batch.tgt_size
+                        total_kl += kl
                 
                     del loss_output
                     total_losses[n] += loss_data
 
+
                     
 
-        p_entropy = total_p_entropy / (total_batch_size * self.opt.layers)
+        p_entropy = total_p_entropy / (total_batch_size)
+        kl = total_kl / (total_batch_size)
         print("Prior entropy: %.3f " % p_entropy)
+        print("Validation KL divergence: %.3f " % kl)
         self.model.train()
 
         # take the average
@@ -274,17 +283,24 @@ class VariationalTrainerFP16(XETrainer):
                     normalizer = 1.0
                 
                 warmup_steps = self.optim.warmup_steps
-                alpha = 1 / (warmup_steps * (warmup_steps ** -1.5))
+                # alpha = 1 / (warmup_steps * (warmup_steps ** -1.5))
 
 
                 # from bowman et al, 2016:
                 # gradually increasing the coefficient for kl divergence loss
                 # so that the model does not ignore the latent variable later on
                 # (actually current unused in the loss function) to be implemented
-                if self.optim._step < (self.optim.warmup_steps / 2):
-                    kl_lambda = 0.0
+                if opt.var_annealing_kl:
+                    max_steps = self.optim.warmup_steps * 2
+                    min_steps = self.optim.warmup_steps / 2
+
+                    
+                    alpha = max(min((self.optim._step - min_steps) / max_steps, 1.0), 0.0)
+                    kl_lambda = alpha * opt.var_kl_lambda
+                    # else:
+                    #     kl_lambda = alpha * opt.var_kl_lambda
                 else:
-                    kl_lambda = alpha * self.optim._step * (warmup_steps ** -1.5)
+                    kl_lambda = opt.var_kl_lambda   
 
                 loss_output = self.loss_function(outputs, targets, generator=self.model.generator, 
                                                              backward=True, tgt_mask=tgt_mask, normalizer=normalizer,
@@ -293,10 +309,14 @@ class VariationalTrainerFP16(XETrainer):
                 ## take the negative likelihood                                             
                 loss_data = loss_output['nll']
                 kl = loss_output['kl']
+                kl_prior = loss_output['kl_prior']
                 baseline = loss_output['baseline']
                 R = loss_output['R']
                 ce = loss_output['ce']
                 q_entropy = loss_output['q_entropy']
+                q_z = outputs['q_z']
+
+
                 
                 del loss_output['loss']
                 del loss_output
@@ -322,7 +342,7 @@ class VariationalTrainerFP16(XETrainer):
                 # We only update the parameters after getting gradients from n mini-batches
                 # simulating the multi-gpu situation
                 normalizer = num_accumulated_words if opt.normalize_gradient else 1
-                if num_accumulated_words >= opt.batch_size_update * 0.95:
+                if num_accumulated_words >= opt.batch_size_update :
                     # Update the parameters.
                     
                     if self.opt.fp16:
@@ -413,11 +433,19 @@ class VariationalTrainerFP16(XETrainer):
                 self.meters['report_src_words'].update(src_size)
                 self.meters['total_loss'].update(loss_data)
                 self.meters['total_words'].update(num_words)
-                self.meters['kl'].update(kl, batch_size * self.opt.layers)
+                self.meters['kl'].update(kl, batch_size)
+                self.meters['kl_prior'].update(kl_prior, batch_size)
                 self.meters['baseline'].update(baseline, batch_size)
                 self.meters['R'].update(R, batch_size)
                 self.meters['ce'].update(ce, batch_size) # this is sentence level loss
-                self.meters['q_entropy'].update(q_entropy, batch_size * self.opt.layers)
+                self.meters['q_entropy'].update(q_entropy, batch_size)
+
+                if isinstance(q_z, (list,)):
+                    self.meters['q_mean'].update(q_z[0].loc.sum().item(), batch_size)
+                    self.meters['q_var'].update(q_z[0].scale.sum().item(), batch_size)
+                else:
+                    self.meters['q_mean'].update(q_z.loc.sum().item(), batch_size)
+                    self.meters['q_var'].update(q_z.scale.sum().item(), batch_size)
                 
                 optim = self.optim
                 

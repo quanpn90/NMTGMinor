@@ -13,8 +13,8 @@ from onmt.modules.MaxOut import MaxOut
 from onmt.modules.GlobalAttention import MultiHeadAttention
 from onmt.modules.PrePostProcessing import PrePostProcessing
 
-        
 Linear = XavierLinear
+
 
 def variational_dropout(input, p, training=False):
     """Applies Variational Dropout (query, key, value)
@@ -35,9 +35,7 @@ def variational_dropout(input, p, training=False):
     # if eval then return the input
     return input
 
-    
 
-    
 class EncoderLayer(nn.Module):
     """Wraps multi-head attentions and position-wise feed forward into one encoder layer
     
@@ -97,8 +95,7 @@ class EncoderLayer(nn.Module):
         else:
             return input, query
     
-    
-    
+
 class DecoderLayer(nn.Module):
     """Wraps multi-head attentions and position-wise feed forward into one layer of decoder
     
@@ -128,7 +125,7 @@ class DecoderLayer(nn.Module):
     """    
     
     def __init__(self, h, d_model, p, d_ff, attn_p=0.1, residual_p=0.1, version=1.0, 
-                                   ignore_source=False, encoder_to_share=None):
+                                   ignore_source=False, use_latent=False, d_latent=32, encoder_to_share=None):
         super(DecoderLayer, self).__init__()
         self.ignore_source = ignore_source
         
@@ -136,15 +133,12 @@ class DecoderLayer(nn.Module):
 
             self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
             self.postprocess_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
-            
-            
+
             self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
             self.postprocess_ffn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
-            
-            
+
             self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=1)
-            
-            
+
             if onmt.Constants.activation_layer == 'linear_relu_linear':
                 ff_p = p
                 feedforward = FeedForward(d_model, d_ff, ff_p, static=onmt.Constants.static)
@@ -169,8 +163,8 @@ class DecoderLayer(nn.Module):
             self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
             self.postprocess_src_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
             self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
-    
-    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, residual_dropout=0.0):
+
+    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, residual_dropout=0.0, latent_z=None):
         
         """ Self attention layer 
             layernorm > attn > dropout > residual
@@ -185,18 +179,22 @@ class DecoderLayer(nn.Module):
         out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt)
         
         input = self.postprocess_attn(out, input)
-            
 
         """ Context Attention layer 
             layernorm > attn > dropout > residual
         """
         if self.ignore_source == False:
             query = self.preprocess_src_attn(input)
+            # note: "out" represents the weight sum of the source representation
             out, coverage = self.multihead_src(query, context, context, mask_src)
             input = self.postprocess_src_attn(out, input)
         else:
             coverage = None
-        
+
+        # use residual combination for input and z
+        if latent_z is not None:    
+            input = latent_z + input
+
         """ Feed forward layer 
             layernorm > ffn > dropout > residual
         """
@@ -205,7 +203,7 @@ class DecoderLayer(nn.Module):
     
         return input, coverage
         
-    def step(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, buffer=None):
+    def step(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, latent_z=None, buffer=None):
         """ Self attention layer 
             layernorm > attn > dropout > residual
         """
@@ -213,8 +211,6 @@ class DecoderLayer(nn.Module):
         query = self.preprocess_attn(input)
         
         out, _, buffer = self.multihead_tgt.step(query, query, query, mask_tgt, buffer=buffer)
-                                   
-        
 
         input = self.postprocess_attn(out, input)
         
@@ -222,16 +218,24 @@ class DecoderLayer(nn.Module):
             layernorm > attn > dropout > residual
         """
         
-        query = self.preprocess_src_attn(input)
-        out, coverage, buffer = self.multihead_src.step(query, context, context, mask_src, buffer=buffer)
-                                           
-        input = self.postprocess_src_attn(out, input)
-        
+        if self.ignore_source == False:
+            query = self.preprocess_src_attn(input)
+            out, coverage, buffer = self.multihead_src.step(query, context, context, mask_src, buffer=buffer)
+            input = self.postprocess_src_attn(out, input)
+        else:
+            batch_size = query.size(1)
+            length_tgt = query.size(0)
+            length_src = mask_src.size(-1)
+            coverage = input.new(batch_size, length_tgt, length_src).zero_()
+
+        # use residual combination for input and z
+        if latent_z is not None:    
+            input = latent_z + input
+
         """ Feed forward layer 
             layernorm > ffn > dropout > residual
         """
-        out = self.feedforward(self.preprocess_ffn(input))
-                                           
+        out = self.feedforward(self.preprocess_ffn(input))                                           
         input = self.postprocess_ffn(out, input)
         
         return input, coverage, buffer
@@ -264,15 +268,13 @@ class PositionalEncoding(nn.Module):
         self.renew(len_max)
         
         self.p = p
-        
-    
+
     def renew(self, new_max_len):
-        ## detele the old variable to avoid Pytorch's error when register new buffer
+        # detele the old variable to avoid Pytorch's error when register new buffer
         if hasattr(self, 'pos_emb'):
             del self.pos_emb
         position = torch.arange(0,new_max_len).float()  
-        
-                            
+
         num_timescales = self.d_model // 2
         log_timescale_increment = math.log(10000) / (num_timescales-1)
         inv_timescales = torch.exp(torch.arange(0, num_timescales).float() * -log_timescale_increment)
@@ -286,7 +288,6 @@ class PositionalEncoding(nn.Module):
         self.data_type = self.pos_emb.type()
         self.len_max = new_max_len
 
-        
     def forward(self, word_emb, t=None):
     
         len_seq = t if t else word_emb.size(1)

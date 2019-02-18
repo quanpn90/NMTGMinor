@@ -52,8 +52,9 @@ def main():
     
     
     start = time.time()
+    print("Locally in debugging")
     print("Loading data from '%s'" % opt.data)
-    
+
     if opt.data_format == 'raw':
         dataset = torch.load(opt.data)
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))

@@ -8,7 +8,7 @@ from onmt.ModelConstructor import build_model
 import torch.nn.functional as F
 
 
-model_list = ['transformer', 'stochastic_transformer', 'variational_transformer']
+model_list = ['transformer', 'stochastic_transformer', 'variational_transformer', 'deep_vtransformer']
 
 class VariationalTranslator(object):
     def __init__(self, opt):
@@ -31,7 +31,7 @@ class VariationalTranslator(object):
         torch.manual_seed(opt.seed)
         torch.cuda.manual_seed(opt.seed)
 
-
+        print("* Starting token %s " % self.bos_token)
         
         print(models)
         self.n_models = len(models)
@@ -177,7 +177,7 @@ class VariationalTranslator(object):
 
         return onmt.Dataset(srcData, tgtData, 9999,
                             [self.opt.gpu], 
-                            max_seq_num =self.opt.batch_size)
+                            batch_size_sents = self.opt.batch_size)
 
     def buildTargetTokens(self, pred, src, attn):
         tokens = self.tgt_dict.convertToLabels(pred, onmt.Constants.EOS)
@@ -202,44 +202,25 @@ class VariationalTranslator(object):
         # tgtBatch should have size len x batch
         
         contexts = dict()
-        
-        src = srcBatch.transpose(0, 1)
 
-        #  (1) run the encoders on the src
-        for i in range(self.n_models):
-            contexts[i], src_mask = self.models[i].encoder(src)
-            
-                
-        goldScores = contexts[0].data.new(batchSize).zero_()
+        goldScores = srcBatch.data.new(batchSize).float().zero_()
         goldWords = 0
         
         if tgtBatch[0] is not None:
             # Use the first model to decode
             model_ = self.models[0]
-            encoder_context = contexts[0]
+            
+            goldWords, goldScores = model_.decode_gold(srcBatch, tgtBatch)
         
-            tgtBatchInput = tgtBatch[0]
-            tgtBatchOutput = tgtBatch[1]
-            tgtBatchInput = tgtBatchInput.transpose(0,1)
-
-            _, p_z = model_.prior_estimator(src)
-            z = p_z.mean.float()
-            z = z.type_as(encoder_context)
-
-            output, coverage = model_.decoder(tgtBatchInput, contexts[0], src, z)
-            # output should have size time x batch x dim
-            
-            #  (2) if a target is specified, compute the 'goldScore'
-            #  (i.e. log likelihood) of the target under the model
-            for dec_t, tgt_t in zip(output, tgtBatchOutput.data):
-                gen_t = model_.generator(dec_t)
-                tgt_t = tgt_t.unsqueeze(1)
-                scores = gen_t.data.gather(1, tgt_t)
-                scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
-                goldScores += scores.squeeze(1).type_as(goldScores)
-                goldWords += tgt_t.ne(onmt.Constants.PAD).sum().item()
-            
-            
+        #  (2) run the encoders on the src
+        src = srcBatch.transpose(0, 1)
+        for i in range(self.n_models):
+            if self.models[i].encoder is not None:
+                contexts[i], src_mask = self.models[i].encoder(src)
+            else:
+                contexts[i] = None
+                
+        src_mask = src.eq(onmt.Constants.PAD).unsqueeze(1)
         #  (3) Start decoding
             
         # time x batch * beam

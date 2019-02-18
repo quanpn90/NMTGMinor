@@ -56,10 +56,7 @@ class VariationalLoss(LossFuncBase):
             # is equivalent to NLLLoss or CrossEntropyLoss.
             # All non-true labels are uniformly set to low-confidence.
             self.smoothing_value = label_smoothing / (output_size - 1)
-            
-            
-
-            
+  
         else:
             weight = torch.ones(output_size)
             weight[self.padding_idx] = 0     
@@ -110,7 +107,7 @@ class VariationalLoss(LossFuncBase):
         return (smoothed_nll, nll, n_targets)
         
    
-    def forward(self, output_dict, targets, generator=None, backward=False, tgt_mask=None, normalizer=1, kl_lambda=0.001):
+    def forward(self, output_dict, targets, generator=None, backward=False, tgt_mask=None, normalizer=1, kl_lambda=1.0):
         """
         Compute the loss. Subclass must define this method.
         Args:
@@ -156,10 +153,12 @@ class VariationalLoss(LossFuncBase):
         
         smoothed_nll, nll, n_targets = self._compute_loss(dists, clean_targets)
         kl = output_dict['kl'].sum()
+        kl_prior = output_dict['kl_prior'].sum()
 
-        #lambda_ = kl_lambda
-        lambda_ = self.kl_lambda # to avoid exploding (maybe)
-        loss = smoothed_nll + kl * lambda_
+        # the final loss function:
+        # reconstruction term and kl divergence term
+
+        loss = smoothed_nll +  kl * kl_lambda
 
         
         if backward:
@@ -168,6 +167,7 @@ class VariationalLoss(LossFuncBase):
         output = defaultdict(lambda: None)
         output['loss'] = loss
         output['kl'] = kl.item()
+        output['kl_prior'] = kl_prior.item()
         output['nll'] = nll
         output['p_entropy'] = p_entropy.item()
         output['q_entropy'] = q_entropy.item()

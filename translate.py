@@ -102,7 +102,6 @@ def main():
     opt.cuda = opt.gpu > -1
     if opt.cuda:
         torch.cuda.set_device(opt.gpu)
-    
     # Always pick n_best
     opt.n_best = opt.beam_size
         
@@ -131,11 +130,8 @@ def main():
             opt.batch_size = 1
     else:
       inFile = open(opt.src)
-    
-    if opt.version == 1.0:
-        translator = onmt.EnsembleTranslator(opt)
-    elif opt.version == 2.0:
-        translator = onmt.Translator(opt)
+
+    translator = onmt.EnsembleTranslator(opt)
         
     for line in addone(inFile):
         if line is not None:

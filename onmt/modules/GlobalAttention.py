@@ -1,25 +1,25 @@
-#~ """
-#~ Global attention takes a matrix and a query vector. It
-#~ then computes a parameterized convex combination of the matrix
-#~ based on the input query.
-#~ 
-#~ 
-        #~ H_1 H_2 H_3 ... H_n
-          #~ q   q   q       q
-            #~ |  |   |       |
-              #~ \ |   |      /
-                      #~ .....
-                  #~ \   |  /
-                          #~ a
-#~ 
-#~ Constructs a unit mapping.
-    #~ $$(H_1 + H_n, q) => (a)$$
-    #~ Where H is of `batch x n x dim` and q is of `batch x dim`.
-#~ 
-    #~ The full def is  $$\tanh(W_2 [(softmax((W_1 q + b_1) H) H), q] + b_2)$$.:
-#~ 
-#~ """
-#~ 
+# """
+# Global attention takes a matrix and a query vector. It
+# then computes a parameterized convex combination of the matrix
+# based on the input query.
+# 
+# 
+        # H_1 H_2 H_3 ... H_n
+          # q   q   q       q
+            # |  |   |       |
+              # \ |   |      /
+                      # .....
+                  # \   |  /
+                          # a
+# 
+# Constructs a unit mapping.
+# $$(H_1 + H_n, q) => (a)$$
+# Where H is of `batch x n x dim` and q is of `batch x dim`.
+#
+# The full def is  $$\tanh(W_2 [(softmax((W_1 q + b_1) H) H), q] + b_2)$$.:
+# 
+# """
+# 
 import math
 import torch
 import torch.nn as nn
@@ -35,9 +35,8 @@ from onmt.modules.Linear import group_linear
 from onmt.modules.MaxOut import MaxOut
 
 
-#~ 
-#~ 
 class GlobalAttention(nn.Module):
+
     def __init__(self, dim):
         super(GlobalAttention, self).__init__()
         self.linear_in = nn.Linear(dim, dim, bias=False)
@@ -104,17 +103,14 @@ class GlobalAttention(nn.Module):
         gatedContext = weightedContext * contextGate
         gatedInput = input * inputGate
         gatedContextCombined = torch.cat((gatedContext, gatedInput), 1)
-        
 
         contextOutput = self.tanh(self.linear_out(gatedContextCombined))
 
         return contextOutput, attn
 
 
-
-
-
 class MultiHeadAttention(nn.Module):
+
     """Applies multi-head attentions to inputs (query, key, value)
     Args:
         h:       number of heads
@@ -155,23 +151,18 @@ class MultiHeadAttention(nn.Module):
         self.attention_out = onmt.Constants.attention_out
         self.fc_concat = Bottle(Linear(h*self.d_head, d_model, bias=False))
 
-        self.sm = nn.Softmax(dim=-1)
-        
         if static:
             self.attn_dropout = StaticDropout(attn_p)
         else:
             self.attn_dropout = nn.Dropout(attn_p)
-    
-    
-        
+
     def forward(self, query, key, value, mask, query_mask=None, value_mask=None):
 
         len_query, b = query.size(0), query.size(1)
         len_key,  b_ = key.size(0), key.size(1)
         
         key_mask = value_mask
-        
-         # batch_size*h x len_query x d_head
+
         # project inputs to multi-heads
         if self.share == 1:
             shared_qkv = group_linear([self.fc_query.function.linear, self.fc_key.function.linear, self.fc_value.function.linear], query)
@@ -253,18 +244,20 @@ class MultiHeadAttention(nn.Module):
                 buffer['c_k'] = proj_key
                 buffer['c_v'] = proj_value
         else:
-            raise NotImplementedError
+            proj_query = self.fc_query(query, mask=query_mask)  
+            proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
+            proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
         
         q, k, v = proj_query, proj_key, proj_value
-        
-        # prepare the shape for applying softmax
+                
+        # prepare the shape for applying soft_max
         q = q.contiguous().view(len_query, b*self.h, self.d_head).transpose(0, 1)
         k = k.contiguous().view(len_key,   b*self.h, self.d_head).transpose(0, 1)
         v = v.contiguous().view(len_key,   b*self.h, self.d_head).transpose(0, 1)
         
         q = q * (self.d_head**-0.5)
         
-        # get dotproduct softmax attns for each head
+        # get dot_product softmax attns for each head
         attns = torch.bmm(q, k.transpose(1,2))  # batch_size*h x len_query x len_key
         
         attns = attns.view(b, self.h, len_query, len_key) 
@@ -277,7 +270,7 @@ class MultiHeadAttention(nn.Module):
         attns = self.attn_dropout(attns)
         attns = attns.view(b*self.h, len_query, len_key)
         
-        # apply attns on value
+        # apply attn on value
         out = torch.bmm(attns, v)      # batch_size*h x len_query x d_head
         out = out.transpose(0, 1).contiguous().view(len_query, b, self.d)
             

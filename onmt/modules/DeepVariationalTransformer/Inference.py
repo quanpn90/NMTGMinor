@@ -61,7 +61,7 @@ class NeuralPrior(nn.Module):
 
         self.var_ignore_first_source_token = opt.var_ignore_first_source_token
 
-        # self.encoder = TransformerEncoder(encoder_opt, embedding, positional_encoder)
+        self.encoder = TransformerEncoder(encoder_opt, embedding, positional_encoder)
 
         # self.projector = Linear(opt.model_size, opt.model_size)
         # self.mean_predictor = Linear(opt.model_size, opt.model_size)
@@ -76,9 +76,9 @@ class NeuralPrior(nn.Module):
         self.context_projector = nn.ModuleList()
 
         for i in range(self.opt.layers):
-            self.mean_predictor.append(Linear(opt.model_size, opt.model_size))
-            self.var_predictor.append(Linear(opt.model_size, opt.model_size))
-            self.context_projector.append(Linear(opt.model_size, opt.model_size))
+            self.mean_predictor.append(Linear(opt.model_size, opt.model_size, weight_norm=False))
+            self.var_predictor.append(Linear(opt.model_size, opt.model_size, weight_norm=False))
+            self.context_projector.append(Linear(opt.model_size, opt.model_size, weight_norm=False))
 
 
 
@@ -96,7 +96,7 @@ class NeuralPrior(nn.Module):
         if self.var_ignore_first_source_token:
             input = input[:,1:]
         # pass the input to the transformer encoder (we also return the mask)
-        # context_stack, _ = self.encoder(input, freeze_embedding=freeze_embedding_, return_stack=True)
+        context_stack, _ = self.encoder(input, freeze_embedding=False, return_stack=True)
         
         # print(len(context_stack))   
         # Now we have to mask the context with zeros
@@ -107,7 +107,6 @@ class NeuralPrior(nn.Module):
 
         
         contexts = list()
-        context_stack = context
 
         # output list:
         # contain a list of vector 
@@ -116,16 +115,20 @@ class NeuralPrior(nn.Module):
         p_z = list()
         for i, context_ in enumerate(context_stack):
 
+            # relu and 
             context_ = torch.relu(self.context_projector[i](context_)) + context_
 
             context = mean_with_mask(context_, mask)
+            # context = torch.tanh(self.context_projector[i](mean_context))
             encoder_meaning.append(context)
             # context = torch.tanh(self.projector(context))
-            # contexts.append(context)
+            # contexts.append(mean_context)
             mean = self.mean_predictor[i](context)
-            log_var = self.var_predictor[i] (context).float()
-            var = torch.exp(0.5*log_var)
-            p_z_ = torch.distributions.normal.Normal(mean.float(), var)
+            var = self.var_predictor[i] (context)
+            # mean = mean_context
+            # var = mean_context
+            var = torch.exp(0.5*var)
+            p_z_ = torch.distributions.normal.Normal(mean.float(), var.float())
             p_z.append(p_z_)
 
 
@@ -172,7 +175,7 @@ class NeuralPosterior(nn.Module):
         for i in range(self.opt.layers):
 
             if opt.var_posterior_combine == 'concat':
-                self.projector.append(Linear(opt.model_size * 2, opt.model_size))
+                self.projector.append(Linear(opt.model_size * 1, opt.model_size))
             elif opt.var_posterior_combine == 'sum':
                 self.projector.append(Linear(opt.model_size * 1, opt.model_size))
             else:
@@ -201,11 +204,9 @@ class NeuralPosterior(nn.Module):
             input_src = input_src[:,1:]
         # encoder_context = encoder_context.detach()
         decoder_context, _ = self.encoder(input_tgt, freeze_embedding=True, return_stack=True)
-        encoder_context, _ = self.encoder(input_src, freeze_embedding=True, return_stack=True)
+        # encoder_context, _ = self.encoder(input_src, freeze_embedding=True, return_stack=True)
 
-        encoder_meaning = encoder_context
-
-        src_mask = input_src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
+        # src_mask = input_src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
         tgt_mask = input_tgt.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2) 
 
 
@@ -216,20 +217,21 @@ class NeuralPosterior(nn.Module):
         for i, decoder_context_ in enumerate(decoder_context):
 
             decoder_context_ = mean_with_mask(decoder_context_, tgt_mask)
-            encoder_context_ = mean_with_mask(encoder_context[i], src_mask)
+            # encoder_context_ = mean_with_mask(encoder_context[i], src_mask)
 
-            if self.posterior_combine == 'concat':
-                context = torch.cat([encoder_context_, decoder_context_], dim=-1)
-            elif self.posterior_combine == 'sum':
-                context = encoder_context_ + decoder_context_
+            # if self.posterior_combine == 'concat':
+            #     context = torch.cat([encoder_context_, decoder_context_], dim=-1)
+            # elif self.posterior_combine == 'sum':
+            #     context = encoder_context_ + decoder_context_
+            context = decoder_context_
 
-            context = torch.relu(self.projector[i](context))
+            context = F.elu(self.projector[i](context))
 
             mean = self.mean_predictor[i](context)
-            log_var = self.var_predictor[i](context).float()
+            log_var = self.var_predictor[i](context)
             var = torch.exp(0.5 * log_var)
 
-            q_z_ = torch.distributions.normal.Normal(mean.float(), var)
+            q_z_ = torch.distributions.normal.Normal(mean.float(), var.float())
 
             q_z.append(q_z_)
         # return distribution Q(z | X, Y)

@@ -48,8 +48,8 @@ class DynamicLossScaler:
 
 class FP16XETrainer(XETrainer):
 
-    def __init__(self, model, loss_function, trainData, validData, dicts, opt):
-        super().__init__(model, loss_function, trainData, validData, dicts, opt, set_param=False)
+    def __init__(self, model, loss_function, train_data, validData, dicts, opt):
+        super().__init__(model, loss_function, train_data, validData, dicts, opt, set_param=False)
         self.optim = onmt.Optim(opt)
         self.scaler = DynamicLossScaler(opt.fp16_loss_scale)
         
@@ -111,8 +111,7 @@ class FP16XETrainer(XETrainer):
                     
                     batch = samples[0]
                     batch.cuda()
-                    
-                    
+
                     """ outputs can be either 
                             hidden states from decoder or
                             prob distribution from decoder generator
@@ -142,32 +141,32 @@ class FP16XETrainer(XETrainer):
         
     
         
-    def train_epoch(self, epoch, resume=False, batchOrder=None, iteration=0):
+    def train_epoch(self, epoch, resume=False, batch_order=None, iteration=0):
         
         opt = self.opt
-        trainData = self.trainData
+        train_data = self.train_data
         
         # Clear the gradients of the model
         self.model.zero_grad()
         self.optim.zero_grad() 
 
         if opt.extra_shuffle and epoch > opt.curriculum:
-            trainData.shuffle()
+            train_data.shuffle()
 
         # Shuffle mini batch order.
         if resume:
-            trainData.batchOrder = batchOrder
-            trainData.set_index(iteration)
+            train_data.batch_order = batch_order
+            train_data.set_index(iteration)
             print("Resuming from iteration: %d" % iteration)
         else:
-            batchOrder = trainData.create_order()
+            batch_order = train_data.create_order()
             iteration = 0
 
         total_loss, total_words = 0, 0
         report_loss, report_tgt_words = 0, 0
         report_src_words = 0
         start = time.time()
-        nSamples = len(trainData)
+        nSamples = len(train_data)
         
         counter = 0
         num_accumulated_words = 0
@@ -179,7 +178,7 @@ class FP16XETrainer(XETrainer):
 
             curriculum = (epoch < opt.curriculum)
             
-            samples = trainData.next(curriculum=curriculum)
+            samples = train_data.next(curriculum=curriculum)
                         
             oom = False
             try:
@@ -305,7 +304,7 @@ class FP16XETrainer(XETrainer):
                             
                             ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
                             
-                            self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
+                            self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
                 
 
                 num_words = tgt_size
@@ -320,7 +319,7 @@ class FP16XETrainer(XETrainer):
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
                     print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
                            "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; gnorm %.3f; oom %d; %s elapsed") %
-                          (epoch, i+1, len(trainData),
+                          (epoch, i+1, len(train_data),
                            math.exp(report_loss / report_tgt_words),
                            optim.getLearningRate(),
                            optim._step,
@@ -337,9 +336,7 @@ class FP16XETrainer(XETrainer):
             
             
         return total_loss / total_words
-    
-    
-    
+
     def run(self, save_file=None):
         
         opt = self.opt
@@ -360,7 +357,7 @@ class FP16XETrainer(XETrainer):
         if checkpoint is not None:
             print('Loading model and optim from checkpoint at %s' % save_file)
             self.convert_fp16(checkpoint['model'], checkpoint['optim'])
-            batchOrder = checkpoint['batchOrder']
+            batch_order = checkpoint['batch_order']
             iteration = checkpoint['iteration'] + 1
             opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
             resume=True  
@@ -370,7 +367,7 @@ class FP16XETrainer(XETrainer):
             del checkpoint
             
         else:
-            batchOrder = None
+            batch_order = None
             iteration = 0
             print('Initializing model parameters')
             init_model_parameters(model, opt)
@@ -390,7 +387,7 @@ class FP16XETrainer(XETrainer):
 
             #  (1) train for one epoch on the training set
             train_loss = self.train_epoch(epoch, resume=resume,
-                                                 batchOrder=batchOrder,
+                                                 batch_order=batch_order,
                                                  iteration=iteration)
             train_ppl = math.exp(min(train_loss, 100))
             print('Train perplexity: %g' % train_ppl)
@@ -403,7 +400,7 @@ class FP16XETrainer(XETrainer):
             # only save at the end of epoch when the option to save "every iterations" is disabled
             if self.opt.save_every <= 0: 
                 self.save(epoch, valid_ppl)
-            batchOrder = None
+            batch_order = None
             iteration = None
             resume = False
         

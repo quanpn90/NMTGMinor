@@ -170,6 +170,7 @@ class StochasticTransformerEncoder(TransformerEncoder):
              
         return context, mask_src   
 
+
 class StochasticTransformerDecoder(TransformerDecoder):
     """Encoder in 'Attention is all you need'
     

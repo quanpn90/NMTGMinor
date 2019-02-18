@@ -9,15 +9,12 @@ from torch.utils.checkpoint import checkpoint
 from torch.autograd import Variable
 
 
-
-
 def custom_layer(module):
     def custom_forward(*args):
         output = module(*args)
         return output
     return custom_forward
 
-        
 
 class TransformerEncoder(nn.Module):
     """Encoder in 'Attention is all you need'
@@ -67,7 +64,7 @@ class TransformerEncoder(nn.Module):
         
         self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, self.residual_dropout) for _ in range(self.layers)])
 
-    def forward(self, input, freeze_embedding=False, return_stack=False, **kwargs):
+    def forward(self, input, freeze_embedding=False, return_stack=False, additional_sequence=None, **kwargs):
         """
         Inputs Shapes: 
             input: batch_size x len_src (wanna tranpose)
@@ -80,48 +77,64 @@ class TransformerEncoder(nn.Module):
 
         """ Embedding: batch_size x len_src x d_model """
 
+        add_emb = None
         if freeze_embedding:
             with torch.no_grad():
                 emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
                 
                 """ Scale the emb by sqrt(d_model) """
                 emb = emb * math.sqrt(self.model_size)
+
+                if additional_sequence is not None:
+                    add_input = additional_sequence
+                    add_emb = embedded_dropout(self.word_lut, add_input, dropout=self.word_dropout if self.training else 0)
+
+                    # emb = torch.cat([emb, add_emb], dim=0)
         else:
             emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
                 
             """ Scale the emb by sqrt(d_model) """
             emb = emb * math.sqrt(self.model_size)
+
+            if additional_sequence is not None:
+                add_input = additional_sequence
+                add_emb = embedded_dropout(self.word_lut, add_input, dropout=self.word_dropout if self.training else 0)
+
+                # emb = torch.cat([emb, add_emb], dim=0)
             
         """ Adding positional encoding """
         emb = self.time_transformer(emb)
-        
+
+        if add_emb is not None:
+            add_emb = self.time_transformer(add_emb)
+
+            # batch first 
+            emb = torch.cat([emb, add_emb], dim=1) 
+            input = torch.cat([input, additional_sequence], dim=1)
+
         emb = self.preprocess_layer(emb)
         
         mask_src = input.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x 1 x len_src for broadcasting
         
-        #~ pad_mask = input.ne(onmt.Constants.PAD)) # batch_size x len_src
-        
+        # time first 
         context = emb.transpose(0, 1).contiguous()
         
         if return_stack == False:
 
             for i, layer in enumerate(self.layer_modules):
-                
 
                 if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:        
                     context = checkpoint(custom_layer(layer), context, mask_src)
 
                 else:
                     context = layer(context, mask_src)      # batch_size x len_src x d_model
-                
-            
+
             # From Google T2T
             # if normalization is done in layer_preprocess, then it should also be done
             # on the output, since the output can grow very large, being the sum of
             # a whole stack of unnormalized layer outputs.    
             context = self.postprocess_layer(context)
-                
-            
+
             return context, mask_src    
 
         else:
@@ -139,14 +152,15 @@ class TransformerEncoder(nn.Module):
             
             return output, mask_src
 
+
 class TransformerDecoder(nn.Module):
     """Encoder in 'Attention is all you need'
     
     Args:
-        opt
-        dicts 
-        
-        
+        opt: options for parameters
+        embedding: torch.nn.Embedding instance for embedding
+        positional encoder (sinusoid encoding)
+        encoder to share: sharing parameters with encoder if needed
     """
     
     def __init__(self, opt, embedding, positional_encoder, encoder_to_share=None):
@@ -179,8 +193,7 @@ class TransformerDecoder(nn.Module):
         self.word_lut = embedding
         
         self.positional_encoder = positional_encoder
-        
-        
+
         len_max = self.positional_encoder.len_max
         mask = torch.ByteTensor(np.triu(np.ones((len_max,len_max)), k=1).astype('uint8'))
         self.register_buffer('mask', mask)
@@ -190,7 +203,10 @@ class TransformerDecoder(nn.Module):
     def build_modules(self, encoder_to_share=None):
 
         if encoder_to_share is None:
-            self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, self.residual_dropout) for _ in range(self.layers)])
+            self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size,
+                                                             self.dropout, self.inner_size,
+                                                             self.attn_dropout, self.residual_dropout)
+                                                             for _ in range(self.layers)])
         else:
             print("* Sharing Encoder and Decoder weights for self attention and feed forward layers ...")
             self.layer_modules = nn.ModuleList()
@@ -200,7 +216,6 @@ class TransformerDecoder(nn.Module):
                                              self.inner_size, self.attn_dropout, self.residual_dropout, 
                                              encoder_to_share=encoder_to_share.layer_modules[i])
                 self.layer_modules.append(decoder_layer)
-
 
     def renew_buffer(self, new_len):
         
@@ -212,12 +227,11 @@ class TransformerDecoder(nn.Module):
         self.register_buffer('mask', mask)
     
     def mark_pretrained(self):
-        
+
         self.pretrained_point = self.layers
-        
-    
+
     def add_layers(self, n_new_layer):
-        
+
         self.new_modules = list()
         self.layers += n_new_layer
         
@@ -235,11 +249,10 @@ class TransformerDecoder(nn.Module):
     def forward(self, input, context, src, **kwargs):
         """
         Inputs Shapes: 
-            input: (Variable) batch_size x len_tgt (wanna tranpose)
-            context: (Variable) batch_size x len_src x d_model
-            mask_src (Tensor) batch_size x len_src
+            input: (Tensor) batch_size x len_tgt (to be transposed)
+            context: (Tensor) len_src x batch_size x d_model
         Outputs Shapes:
-            out: batch_size x len_tgt x d_model
+            out: tgt_len x batch_size x d_model
             coverage: batch_size x len_tgt x len_src
             
         """
@@ -252,6 +265,7 @@ class TransformerDecoder(nn.Module):
         emb = self.time_transformer(emb)
         if isinstance(emb, tuple):
             emb = emb[0]
+
         emb = self.preprocess_layer(emb)
         
         mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
@@ -273,22 +287,19 @@ class TransformerDecoder(nn.Module):
                 
             else:
                 output, coverage = layer(output, context, mask_tgt, mask_src) # batch_size x len_src x d_model
-            
-            
+
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.    
         output = self.postprocess_layer(output)
-            
-        
+
         return output, None
-    
 
     def step(self, input, decoder_state):
         """
         Inputs Shapes: 
-            input: (Variable) batch_size x len_tgt (wanna tranpose)
+            input: (Variable) batch_size x len_tgt
             context: (Tensor) len_src x batch_size * beam_size x d_model
             mask_src (Tensor) batch_size x len_src
             buffer (List of tensors) List of batch_size * len_tgt-1 * d_model for self-attention recomputing
@@ -311,18 +322,11 @@ class TransformerDecoder(nn.Module):
             src = decoder_state.src.transpose(0, 1)
         
         input_ = input[:,-1].unsqueeze(1)
-        # ~ print(input.size())
-        # ~ print(mask_src.size())
-        # ~ print(context.size())
-        
-        
-        output_buffer = list()
             
         batch_size = input_.size(0)
         
         """ Embedding: batch_size x 1 x d_model """
         emb = self.word_lut(input_)
-       
         
         emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
@@ -347,7 +351,7 @@ class TransformerDecoder(nn.Module):
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
                 
         output = emb.contiguous()
-        
+
         # FOR DEBUGGING
         # ~ decoder_state._debug_attention_buffer(0)
     
@@ -355,7 +359,8 @@ class TransformerDecoder(nn.Module):
             
             buffer = buffers[i] if i in buffers else None
             assert(output.size(0) == 1)
-            output, coverage, buffer = layer.step(output, context, mask_tgt, mask_src, buffer=buffer) # batch_size x len_src x d_model
+            output, coverage, buffer = layer.step(output, context, mask_tgt, mask_src, buffer=buffer)
+            # batch_size x len_src x d_model
             
             decoder_state._update_attention_buffer(buffer, i)
 
@@ -368,12 +373,10 @@ class TransformerDecoder(nn.Module):
 
         return output, coverage
     
-  
-        
+
 class Transformer(NMTModel):
     """Main model in 'Attention is all you need' """
-    
-        
+
     def forward(self, batch, grow=False):
         """
         Inputs Shapes: 
@@ -381,8 +384,7 @@ class Transformer(NMTModel):
             tgt: len_tgt x batch_size
         
         Outputs Shapes:
-            out:      batch_size*len_tgt x model_size
-            
+            out:   a dictionary containing output hidden state and coverage
             
         """
         src = batch.get('source')
@@ -399,6 +401,32 @@ class Transformer(NMTModel):
         output_dict['hiddens'] = output
         output_dict['coverage'] = coverage
         return output_dict
+
+    def decode(self, src, tgt):
+
+        tgt_input = tgt[0]
+        tgt_output = tgt[1]
+
+        src = src.transpose(0, 1)  # transpose to have batch first
+        tgt_input = tgt_input.transpose(0, 1)
+        batch_size = tgt_input.size(0)
+
+        context, src_mask = self.encoder(src)
+
+        gold_scores = context.new(batch_size).zero_()
+        gold_words = 0
+
+        output, coverage = self.decoder(tgt_input, context, src)
+
+        for dec_t, tgt_t in zip(output, tgt_output):
+            gen_t = self.generator(dec_t)
+            tgt_t = tgt_t.unsqueeze(1)
+            scores = gen_t.gather(1, tgt_t)
+            scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
+            gold_scores += scores.squeeze(1).type_as(gold_scores)
+            gold_words += tgt_t.ne(onmt.Constants.PAD).sum().item()
+
+        return gold_words, gold_scores
         
     def create_decoder_state(self, src, context, mask_src, beamSize=1, type='old'):
         
@@ -417,12 +445,12 @@ class Transformer(NMTModel):
 class TransformerDecodingState(DecoderState):
     
     def __init__(self, src, context, src_mask, beamSize=1, type='old'):
-        
-        
+
         self.beam_size = beamSize
         
         self.input_seq = None
         self.attention_buffers = dict()
+        self.original_src = src
         
         if type == 'old':
             self.src = src.repeat(1, beamSize)
@@ -458,12 +486,8 @@ class TransformerDecodingState(DecoderState):
                     
             t_, br = tensor.size()
             sent_states = tensor.view(t_, self.beamSize, remainingSents)[:, :, idx]
-            
-            if isinstance(tensor, Variable):
-                sent_states.data.copy_(sent_states.data.index_select(
-                            1, beam[b].getCurrentOrigin()))
-            else:
-                sent_states.copy_(sent_states.index_select(
+
+            sent_states.copy_(sent_states.index_select(
                             1, beam[b].getCurrentOrigin()))
                             
         for l in self.attention_buffers:
@@ -475,8 +499,7 @@ class TransformerDecodingState(DecoderState):
                     
                     sent_states.data.copy_(sent_states.data.index_select(
                                 1, beam[b].getCurrentOrigin()))
-    
-    
+
     # in this section, the sentences that are still active are
     # compacted so that the decoder is not run on completed sentences
     def _prune_complete_beam(self, activeIdx, remainingSents):
@@ -507,15 +530,6 @@ class TransformerDecodingState(DecoderState):
                                 
                 return new_t
         
-        def updateActive4D(t):
-            # select only the remaining active sentences
-            nl, t_, br_, d_ = t.size()
-            view = t.data.view(nl, -1, remainingSents, model_size)
-            newSize = list(t.size())
-            newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
-            return Variable(view.index_select(2, activeIdx)
-                            .view(*newSize)) 
-        
         self.context = updateActive(self.context)
         
         self.input_seq = updateActive2D(self.input_seq)
@@ -527,16 +541,3 @@ class TransformerDecodingState(DecoderState):
             if buffer_ is not None:
                 for k in buffer_:
                     buffer_[k] = updateActive(buffer_[k])
-
-    # For the new decoder version only
-    def _reorder_incremental_state(self, reorder_state):
-        self.context = self.context.index_select(1, reorder_state)
-        self.src_mask = self.src_mask.index_select(0, reorder_state)
-                            
-        for l in self.attention_buffers:
-            buffer_ = self.attention_buffers[l]
-            if buffer_ is not None:
-                for k in buffer_.keys():
-                    t_, br_, d_ = buffer_[k].size()
-                    buffer_[k] = buffer_[k].index_select(1, reorder_state) # 1 for time first
-        

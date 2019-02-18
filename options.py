@@ -43,7 +43,9 @@ def make_parser(parser):
     parser.add_argument('-inner_size', type=int, default=2048,
         help='Size of inner feed forward layer')  
     parser.add_argument('-n_heads', type=int, default=8,
-        help='Number of heads for multi-head attention') 
+        help='Number of heads for multi-head attention')
+    parser.add_argument('-n_encoder_heads', type=int, default=1,
+                        help='Number of heads for simplified encoder ')
     parser.add_argument('-checkpointing', type=int, default=0,
         help='Number of checkpointed layers in the Transformer') 
     parser.add_argument('-attn_dropout', type=float, default=0.1,
@@ -154,9 +156,9 @@ def make_parser(parser):
                         help="Type of update rule to use. Options are [regular|noam].")                                    
     # pretrained word vectors
     parser.add_argument('-tie_weights', action='store_true',
-                        help='Tie the weights of the encoder and decoder layer')
+                        help='Tie the weights between the decoder embeddings and softmax')
     parser.add_argument('-join_embedding', action='store_true',
-                        help='Jointly train the embedding of encoder and decoder in one weight')
+                        help='Jointly train the embedding of encoder and decoder in one weight matrix')
     parser.add_argument('-pre_word_vecs_enc',
                         help="""If a valid path is specified, then this will load
                         pretrained word embeddings on the encoder side.
@@ -210,13 +212,21 @@ def make_parser(parser):
     parser.add_argument('-var_ignore_first_target_token', action='store_true',
                         help="Share weights between posterior")
     parser.add_argument('-var_kl_lambda', type=float, default=1.0,  
-                        help="""kl var_kl_lambda""")
+                        help="""kl coefficient in the loss function""")
+    parser.add_argument('-var_latent_dim', type=int, default=64,
+                        help="Number of dimensions for the latent variable.")
     parser.add_argument('-var_pooling', default='mean',  
                         help="""pooling operation to summerize one state from a sequence""")
+    parser.add_argument('-var_combine_z', default='once',  
+                        help="""How to combine z into the transformer: once|all """)
     parser.add_argument('-var_load_pretrained', default='', type=str,
                         help="""Load a pretrained from a transformer model""")
     parser.add_argument('-var_not_sampling', action='store_true',
                         help="""Do not sample (use mean)""")
+    parser.add_argument('-var_annealing_kl', action='store_true',
+                        help="""Annealing the cofficient of kl divergence during training as in Bowman et al, 2016""")
     parser.add_argument('-var_sample_from', default='posterior',
                         help="""The distribution where we sample from. Default is posterior. Choice is posterior|prior""")
+    parser.add_argument('-var_depth', type=int, default=16,
+                        help="Number of recurrent states in the variational layer.")
     return parser

@@ -42,12 +42,13 @@ def main():
     print("Loading main model from %s ..." % models[0])
     checkpoint = torch.load(models[0], map_location=lambda storage, loc: storage)
     
-    if 'optim' in checkpoint:
-        del checkpoint['optim']
+    # if 'optim' in checkpoint:
+    #     del checkpoint['optim']
     
     main_checkpoint = checkpoint
     model_opt = checkpoint['opt']
     dicts = checkpoint['dicts']
+    optim = checkpoint['optim']
     
     #~ if hasattr(model_opt, 'grow_layer'):
         #~ model_opt.layers = model_opt.layers + model_opt.grow_layer

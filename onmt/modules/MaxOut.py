@@ -4,10 +4,6 @@ import torch.autograd as autograd
 import torch.optim as optim
 import torch.nn as nn
 
-
-
-
-    
 class MaxOut(nn.Module):
     def __init__(self, d, m, k):
         super(MaxOut, self).__init__()

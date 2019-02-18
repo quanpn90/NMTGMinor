@@ -5,47 +5,6 @@ import torch, math
 
 from torch.nn.modules.loss import _Loss
 
-#~ class LabelSmoothedCrossEntropyCriterion(_Loss):
-#~ 
-    #~ def __init__(self, n_targets, eps):
-        #~ super().__init__()
-        #~ self.eps = eps
-        #~ self.n_targets = n_targets
-#~ 
-    #~ @staticmethod
-    #~ def add_args(parser):
-        #~ """Add criterion-specific arguments to the parser."""
-        #~ parser.add_argument('--label-smoothing', default=0., type=float, metavar='D',
-                            #~ help='epsilon for label smoothing, 0 means no label smoothing')
-#~ 
-    #~ def forward(self, model, sample, reduce=True):
-        #~ """Compute the loss for the given sample.
-        #~ Returns a tuple with three elements:
-        #~ 1) the loss, as a Variable
-        #~ 2) the sample size, which is used as the denominator for the gradient
-        #~ 3) logging outputs to display while training
-        #~ """
-        #~ net_output = model(**sample['net_input'])
-        #~ lprobs = model.get_normalized_probs(net_output, log_probs=True)
-        #~ target = sample['target'].unsqueeze(-1)
-        #~ non_pad_mask = target.ne(self.padding_idx)
-        #~ nll_loss = -lprobs.gather(dim=-1, index=target)[non_pad_mask]
-        #~ smooth_loss = -lprobs.sum(dim=-1, keepdim=True)[non_pad_mask]
-        #~ if reduce:
-            #~ nll_loss = nll_loss.sum()
-            #~ smooth_loss = smooth_loss.sum()
-        #~ eps_i = self.eps / lprobs.size(-1)
-        #~ loss = (1. - self.eps) * nll_loss + eps_i * smooth_loss
-#~ 
-        #~ sample_size = sample['target'].size(0) if self.args.sentence_avg else sample['ntokens']
-        #~ logging_output = {
-            #~ 'loss': utils.item(loss.data) if reduce else loss.data,
-            #~ 'nll_loss': utils.item(nll_loss.data) if reduce else loss.data,
-            #~ 'ntokens': sample['ntokens'],
-            #~ 'sample_size': sample_size,
-        #~ }
-        #~ return loss, sample_size, logging_output
-
 
 class LossFuncBase(_Loss):
 
@@ -79,7 +38,6 @@ class LossFuncBase(_Loss):
         """
         return NotImplementedError
         
-        
 
 class NMTLossFunc(LossFuncBase):
     
@@ -104,9 +62,7 @@ class NMTLossFunc(LossFuncBase):
             # ~ one_hot.fill_(self.smoothing_value)
             # ~ one_hot[0][self.padding_idx] = 0
             # ~ self.register_buffer('one_hot', one_hot)
-            
 
-            
         else:
             weight = torch.ones(output_size)
             weight[self.padding_idx] = 0     
@@ -114,7 +70,6 @@ class NMTLossFunc(LossFuncBase):
         self.confidence = 1.0 - label_smoothing
         self.label_smoothing = label_smoothing
 
-        
     def _compute_loss(self, scores, targets, smooth=True):
         
         gtruth = targets.view(-1) # batch * time
@@ -151,31 +106,28 @@ class NMTLossFunc(LossFuncBase):
             loss = self.func(scores.float(), gtruth)
             loss_data = loss.data.item()
 
-        return (loss, loss_data)
-        
-   
+        return loss, loss_data
+
     def forward(self, output_dict, targets, generator=None, backward=False, tgt_mask=None, normalizer=1):
         """
         Compute the loss. Subclass must define this method.
         Args:
-             
-            outputs: the predictive output from the model. time x batch x vocab_size
+            output_dict: the predictive output from the model. time x batch x vocab_size
                                                    or time x batch x hidden_size 
-            target: the validate target to compare output with. time x batch
-            generator: in case we want to save memory and 
+            targets: the validate target to compare output with. time x batch
+            backward
+            tgt_mask: for masking the target (saving memory)
+            generator: in case we want to save memory and
+            normalizer: the denomination term of the loss
             **kwargs(optional): additional info for computing loss.
         """
         
         outputs = output_dict['hiddens']
-        original_outputs = outputs
-        batch_size = outputs.size(1)
-        h_size = outputs.size(-1)
         mask = tgt_mask
         # flatten the output
         outputs = outputs.contiguous().view(-1, outputs.size(-1))
         targets = targets.view(-1)
-        
-        
+
         if mask is not None:
             """ We remove all positions with PAD 
                 to save memory on unwanted positions

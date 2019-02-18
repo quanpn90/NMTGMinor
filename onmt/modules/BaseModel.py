@@ -23,8 +23,7 @@ class Generator(nn.Module):
         
         self.linear.bias.data.zero_()
         
-        
-        
+
     def forward(self, input, log_softmax=True):
         
         # added float to the end 
@@ -66,8 +65,13 @@ class NMTModel(nn.Module):
             # we don't need to load the position encoding (not weight)
             if 'positional_encoder' in param_name:
                 return False
-            if 'time_transformer' in param_name and self.encoder.time == 'positional_encoding':
+
+            if 'time_transformer' in param_name:
                 return False
+
+            # if self.encoder is not None:
+            #     if 'time_transformer' in param_name and self.encoder.time == 'positional_encoding':
+            #         return False
             # we don't need to load the decoder mask (not weight)
             if param_name == 'decoder.mask':
                 return False
@@ -83,10 +87,6 @@ class NMTModel(nn.Module):
             if k not in filtered:
                 filtered[k] = v
         super().load_state_dict(filtered)   
-
-        
-        
-    
 
 
 class Reconstructor(nn.Module):

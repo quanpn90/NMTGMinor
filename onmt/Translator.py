@@ -604,8 +604,6 @@ class Translator(object):
         # attn = attn[:, -1, :]
         attn = None
         return out, attn
-        
-        
 
     def translate(self, srcBatch, goldBatch):
         #  (1) convert words to indexes
@@ -619,10 +617,7 @@ class Translator(object):
         bsz = batch.size
 
         #  (2) translate
-        # ~ pred, predScore, attn, predLength, goldScore, goldWords = self.translateBatch(src, tgt)
         finalized, goldScore, goldWords = self.translateBatch(src, (tgt_input, tgt_output))
-        
-        
 
         #  (3) convert indexes to words
         predBatch = []

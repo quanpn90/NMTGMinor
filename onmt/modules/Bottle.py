@@ -28,13 +28,10 @@ class Bottle(nn.Module):
         # remember the original shape
         original_shape = input.size()
         
-        # flattned the tensor to 2D
+        # flatten the tensor to 2D
         flattened_input = input.contiguous().view(-1, input.size(-1))
         flattened_size = flattened_input.size()
-        
-        
-        dim = original_shape[-1]
-        
+
         flattened_mask = mask.view(-1)
         
         non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
@@ -45,7 +42,7 @@ class Bottle(nn.Module):
         clean_output = self.function(clean_input)
                 
         # after that, scatter the output (the position where we don't scatter are masked zeros anyways)
-        flattened_output = Variable(flattened_input.data.new(*flattened_size[:-1], clean_output.size(-1)).zero_())
+        flattened_output = flattened_input.data.new(*flattened_size[:-1], clean_output.size(-1).zero_())
         flattened_output.index_copy_(0, non_pad_indices, clean_output)
         
         # restore the tensor original size

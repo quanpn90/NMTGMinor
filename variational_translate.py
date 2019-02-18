@@ -108,8 +108,7 @@ def main():
     
     # Always pick n_best
     opt.n_best = opt.beam_size
-        
-    
+
     if opt.output == "stdout":
         outF = sys.stdout
     else:

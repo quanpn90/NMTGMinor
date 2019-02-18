@@ -9,10 +9,12 @@ from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecod
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
 from onmt.modules.Transformer.Layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
+
 Linear = XavierLinear
 
 import copy
 from onmt.modules.Utilities import mean_with_mask, max_with_mask
+
 """
     Variational Inference for model depth generation
 
@@ -24,7 +26,7 @@ from onmt.modules.Utilities import mean_with_mask, max_with_mask
 
     L = E_q_z ( log (p (Y|X, z)) - KL( q(z|X, y) || p(z|X))
     (data likelihood given the latent variable)
-    
+
     The Prior model estimates p(z | x)
 
     The Posterior model estimates q(z | x, y)
@@ -34,22 +36,22 @@ from onmt.modules.Utilities import mean_with_mask, max_with_mask
 
 """
 
-
-
 """
     The Prior model estimates p(z | x)
 """
-class NeuralPrior(nn.Module):
 
+
+class NeuralPrior(nn.Module):
     """Encoder in 'Attention is all you need'
-    
+
     Args:
         opt: list of options ( see train.py )
         dicts : dictionary (for source language)
-        
+
     """
+
     def __init__(self, opt, embedding, positional_encoder):
-    
+
         super(NeuralPrior, self).__init__()
 
         encoder_opt = copy.deepcopy(opt)
@@ -69,22 +71,22 @@ class NeuralPrior(nn.Module):
 
     def forward(self, input, **kwargs):
         """
-        Inputs Shapes: 
+        Inputs Shapes:
             input: batch_size x len_src (wanna tranpose)
-        
+
         Outputs Shapes:
             out: batch_size x len_src x d_model
-            mask_src 
-            
+            mask_src
+
         """
         if self.var_ignore_first_source_token:
-            input = input[:,1:]
+            input = input[:, 1:]
         # pass the input to the transformer encoder (we also return the mask)
         freeze_embedding_ = True
         if self.opt.var_ignore_source:
             freeze_embedding_ = False
         context, _ = self.encoder(input, freeze_embedding=freeze_embedding_)
-          
+
         # Now we have to mask the context with zeros
         # context size: T x B x H
         # mask size: T x B x 1 for broadcasting
@@ -96,40 +98,37 @@ class NeuralPrior(nn.Module):
             context = max_with_mask(context, mask)
         encoder_meaning = context
         context = torch.tanh(self.projector(context))
-       
 
-        mean = self.mean_predictor(context)       
+        mean = self.mean_predictor(context)
         log_var = self.var_predictor(context).float()
 
-        var = torch.exp(0.5*log_var)
+        var = torch.exp(0.5 * log_var)
 
         p_z = torch.distributions.normal.Normal(mean.float(), var)
-
 
         # return prior distribution P(z | X)
         return encoder_meaning, p_z
 
 
 class NeuralPosterior(nn.Module):
-
     """Neural Posterior using Transformer
-    
+
     Args:
         opt: list of options ( see train.py )
         embedding : dictionary (for target language)
-        
+
     """
-    
+
     def __init__(self, opt, embedding, positional_encoder, prior=None):
-    
+
         super(NeuralPosterior, self).__init__()
-        
+
         encoder_opt = copy.deepcopy(opt)
         self.opt = opt
 
         # quick_hack to override some hyper parameters of the prior encoder
         encoder_opt.layers = opt.layers if opt.var_ignore_source else opt.layers // 2
-        # encoder_opt.word_dropout = 0.0 
+        # encoder_opt.word_dropout = 0.0
         self.dropout = opt.dropout
         self.pooling = opt.var_pooling
 
@@ -151,29 +150,28 @@ class NeuralPosterior(nn.Module):
 
         self.mean_predictor = Linear(opt.model_size, opt.model_size)
         self.var_predictor = Linear(opt.model_size, opt.model_size)
-    
+
     def forward(self, encoder_meaning, input_src, input_tgt, **kwargs):
         """
-        Inputs Shapes: 
+        Inputs Shapes:
             input: batch_size x len_src (wanna tranpose)
-        
+
         Outputs Shapes:
             out: batch_size x len_src x d_model
-            mask_src 
-            
+            mask_src
+
         """
 
         """ Embedding: batch_size x len_src x d_model """
 
         if self.var_ignore_first_target_token:
-            input_tgt = input_tgt[:,1:]
-        
+            input_tgt = input_tgt[:, 1:]
+
         # encoder_context = encoder_context.detach()
         decoder_context, _ = self.encoder(input_tgt, freeze_embedding=True)
 
         # src_mask = input_src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
-        tgt_mask = input_tgt.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2) 
-
+        tgt_mask = input_tgt.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
 
         # take the mean of each context
         encoder_context = encoder_meaning
@@ -181,7 +179,7 @@ class NeuralPosterior(nn.Module):
         if self.pooling == 'mean':
             decoder_context = mean_with_mask(decoder_context, tgt_mask)
         elif self.pooling == 'max':
-            decoder_context = max_with_mask(decoder_context, tgt_mask)        
+            decoder_context = max_with_mask(decoder_context, tgt_mask)
 
         if self.posterior_combine == 'concat':
             context = torch.cat([encoder_context, decoder_context], dim=-1)
