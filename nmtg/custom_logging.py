@@ -64,6 +64,10 @@ def setup_logging(log_dir, filename, file_level, console_level):
     return logger
 
 
+def setup_logging_from_args(args, filename):
+    return setup_logging(args.log_dir, filename, args.log_level_file, args.log_level_console)
+
+
 def add_log_options(parser):
     parser.add_argument('-log_dir', type=str,
                         help='Where to place log files')

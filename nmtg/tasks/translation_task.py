@@ -37,7 +37,7 @@ class TranslationTask(Task):
         if args.valid_tgt is not None:
             tgt_dataset = TextLineDataset.load_into_memory(args.valid_tgt)
 
-        logger.info('Number of validation sentences: {}'.format(len(src_dataset)))
+        logger.info('Number of validation sentences: {:,d}'.format(len(src_dataset)))
 
         return cls(src_dataset, tgt_dataset, args.bpe_symbol, args.lower)
 

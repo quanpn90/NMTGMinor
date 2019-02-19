@@ -60,6 +60,8 @@ class NMTTrainer(Trainer):
     @classmethod
     def add_general_options(cls, parser):
         super().add_general_options(parser)
+        parser.add_argument('-input_type', default='word', choices=['word', 'char'],
+                            help='Type of dictionary to create.')
         parser.add_argument('-beam_size', type=int, default=5, help='Beam size')
         parser.add_argument('-alpha', type=float, default=0.6,
                             help='Length Penalty coefficient')
@@ -92,8 +94,6 @@ class NMTTrainer(Trainer):
                             help='Load the dataset into memory')
         parser.add_argument('-join_vocab', action='store_true',
                             help='Share dictionary for source and target')
-        parser.add_argument('-input_type', default='word', choices=['word', 'char'],
-                            help='Type of dictionary to create.')
         parser.add_argument('-batch_size_words', type=int, default=2048,
                             help='Maximum number of words in a batch')
         parser.add_argument('-batch_size_sents', type=int, default=128,
@@ -127,13 +127,10 @@ class NMTTrainer(Trainer):
 
         with open(args.train_src) as src, open(args.train_tgt) as tgt,\
                 tqdm(unit='lines', disable=args.no_progress) as pbar:
-            src_line = None
-            tgt_line = None
             i = 0
+            src_line = src.readline()
+            tgt_line = tgt.readline()
             while src_line != '' and tgt_line != '':
-                src_line = src.readline()
-                tgt_line = tgt.readline()
-
                 proc_src_line = src_line.rstrip()
                 proc_tgt_line = tgt_line.rstrip()
 
@@ -152,10 +149,14 @@ class NMTTrainer(Trainer):
 
                 src_counter.update(proc_src_line)
                 tgt_counter.update(proc_tgt_line)
+
                 i += 1
 
                 if i % args.report_every == 0:
                     logger.info('{} lines processed'.format(i))
+
+                src_line = src.readline()
+                tgt_line = tgt.readline()
                 pbar.update()
 
             if src_line != '' or tgt_line != '':
@@ -211,8 +212,7 @@ class NMTTrainer(Trainer):
                 self.src_dict = Dictionary.load(os.path.join(args.data_dir, 'src.dict'))
                 self.tgt_dict = Dictionary.load(os.path.join(args.data_dir, 'tgt.dict'))
             self.loss = self._build_loss()
-            logger.debug('Source vocabulary size: {}'.format(len(self.src_dict)))
-            logger.debug('Target vocabulary size: {}'.format(len(self.tgt_dict)))
+            logger.info('Vocabulary size: {:,d}|{:,d}'.format(len(self.src_dict), len(self.tgt_dict)))
         else:
             self.src_dict = None
             self.tgt_dict = None
@@ -275,7 +275,7 @@ class NMTTrainer(Trainer):
         return NMTModel.wrap_model(args, model, self.src_dict, self.tgt_dict)
 
     def load_data(self, model_args=None):
-        logger.info('Loading training data from {}'.format(self.args.train_src))
+        logger.info('Loading training data')
         split_words = self.args.input_type == 'word'
 
         if self.args.load_into_memory:
@@ -291,6 +291,7 @@ class NMTTrainer(Trainer):
         tgt_data = TextLookupDataset(tgt_data, self.tgt_dict, words=split_words, bos=True, eos=True,
                                      trunc_len=self.args.tgt_seq_length_trunc, lower=self.args.lower)
         dataset = ParallelDataset(src_data, tgt_data)
+        logger.info('Number of training sentences: {:,d}'.format(len(dataset)))
 
         src_len_filename = os.path.join(self.args.data_dir, 'train.src.len.npy')
         tgt_len_filename = os.path.join(self.args.data_dir, 'train.tgt.len.npy')
@@ -308,14 +309,16 @@ class NMTTrainer(Trainer):
             self.args.pad_count,
             key_fn=lambda i: (tgt_lengths[i], src_lengths[i]),
             filter_fn=filter_fn)
+        logger.info('Number of training batches: {:,d}'.format(len(batches)))
 
         filtered = len(src_lengths) - sum(len(batch) for batch in batches)
-        logger.info('Filtered {}/{} training examples for length'.format(filtered, len(src_lengths)))
+        logger.info('Filtered {:,d}/{:,d} training examples for length'.format(filtered, len(src_lengths)))
 
         sampler = PreGeneratedBatchSampler(batches, self.args.curriculum == 0)
 
         model = self.build_model(model_args)
-        lr_scheduler, optimizer = self._build_optimizer(model)
+        params = list(filter(lambda p: p.requires_grad, model.parameters()))
+        lr_scheduler, optimizer = self._build_optimizer(params)
         return TrainData(model, dataset, sampler, lr_scheduler, optimizer, self._get_training_metrics())
 
     def _get_loss(self, model, batch) -> (Tensor, float):
@@ -379,7 +382,7 @@ class NMTTrainer(Trainer):
         join_str = ' ' if self.args.input_type == 'word' else ''
 
         results = []
-        for batch in tqdm(iterator, postfix='inference', disable=self.args.no_progress):
+        for batch in tqdm(iterator, desc='inference', disable=self.args.no_progress):
             encoder_inputs = batch['src_indices']
             if not generator.batch_first:
                 encoder_inputs = encoder_inputs.transpose(0, 1)

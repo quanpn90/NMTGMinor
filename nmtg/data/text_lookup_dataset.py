@@ -1,6 +1,11 @@
+import logging
+
 from nmtg.data import data_utils
 from nmtg.data.dictionary import Dictionary
 from nmtg.data.dataset import Dataset, TextLineDataset
+
+
+logger = logging.getLogger(__name__)
 
 
 class TextLookupDataset(Dataset):
@@ -36,6 +41,8 @@ class TextLookupDataset(Dataset):
             line = line.split(' ')
         if self.trunc_len > 0:
             line = line[:self.trunc_len]
+        if len(line) == 0:
+            logger.warning('Zero-length input at {}'.format(index))
         return self.dictionary.to_indices(line, bos=self.bos, eos=self.eos)
 
     def collate_samples(self, samples):

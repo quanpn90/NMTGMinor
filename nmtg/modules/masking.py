@@ -2,7 +2,7 @@ import torch
 from torch import nn, Tensor
 
 
-def masked_function(function, inputs, mask=None):
+def masked_function(function, *inputs, mask=None):
     """
     Apply a function to the masked part of an input tensor.
     :param function: The function to apply.
@@ -12,20 +12,23 @@ def masked_function(function, inputs, mask=None):
     but in the original shape
     """
     if mask is None:
-        return function(inputs)
+        return function(*inputs)
     valid_indices = torch.nonzero(mask.view(-1)).squeeze(1)
 
     # remember the original shape
-    original_shape = inputs.size()
+    original_shape = inputs[0].size()
+    num_items = torch.prod(original_shape[:-1])
 
-    flat_input = inputs.view(-1, original_shape[-1])
-    clean_input = flat_input.index_select(0, valid_indices)
+    clean_inputs = []
+    for inp in inputs:
+        flat_input = inp.view(-1, original_shape[-1])
+        clean_inputs.append(flat_input.index_select(0, valid_indices))
 
     # forward pass on the clean input only
-    clean_output = function(clean_input)
+    clean_output = function(*clean_inputs)
 
     # after that, scatter the output (the position where we don't scatter are masked zeros anyways)
-    flat_output = flat_input.new_zeros(flat_input.size(0), clean_output.size(-1))
+    flat_output = inputs[0].new_zeros(num_items, clean_output.size(-1))
     flat_output.index_copy_(0, valid_indices, clean_output)
 
     output = flat_output.view(*original_shape[:-1], clean_output.size(-1))
@@ -52,4 +55,4 @@ class MaskedFunction(nn.Module):
         :return: The output of applying the function to only the masked part of the tensor,
         but in the original shape
         """
-        return masked_function(self.function, inputs, mask)
+        return masked_function(self.function, inputs, mask=mask)

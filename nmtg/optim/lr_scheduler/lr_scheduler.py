@@ -45,3 +45,38 @@ class LRScheduler:
     def step_update(self, num_updates):
         """Update the learning rate after each update."""
         return self.optimizer.get_lr()
+
+
+class MultiScheduler(LRScheduler):
+    """Schedules multiple Optimizers"""
+
+    def __init__(self, schedulers):
+        self.schedulers = schedulers
+        super().__init__([s.optimizer for s in schedulers])
+
+    @classmethod
+    def build_lr_scheduler(cls, args, optimizer):
+        raise NotImplementedError
+
+    @staticmethod
+    def add_options(parser):
+        pass
+
+    def state_dict(self):
+        return {'schedulers': [s.state_dict() for s in self.schedulers]}
+
+    def load_state_dict(self, state_dict):
+        for s, s_dict in zip(self.schedulers, state_dict['schedulers']):
+            s.load_state_dict(s_dict)
+
+    def step(self, epoch, val_loss=None):
+        if val_loss is not None:
+            for s, loss in zip(self.schedulers, val_loss):
+                s.step(epoch, loss)
+        else:
+            for s in self.schedulers:
+                s.step(epoch)
+
+    def step_update(self, num_updates):
+        for s in self.schedulers:
+            s.step_update(num_updates)

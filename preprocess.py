@@ -2,7 +2,7 @@ import argparse
 
 import torch
 
-from nmtg.logging import add_log_options, setup_logging
+from nmtg.custom_logging import add_log_options, setup_logging
 from nmtg.options import add_general_options, add_trainer_option
 
 if __name__ == '__main__':

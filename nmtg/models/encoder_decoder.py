@@ -51,7 +51,7 @@ class Decoder(nn.Module):
             if self.future_mask is None:
                 self.future_mask = old_mask.new(old_mask.size())
             else:
-                self.future_mask.resize_as_(old_mask)
+                self.future_mask.resize_(list(old_mask.size()))
         super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
                                       error_msgs)
 
@@ -129,7 +129,7 @@ class IncrementalDecoder(Decoder):
         """
         raise NotImplementedError
 
-    def get_self_attention_bias(self, decoder_inputs, batch_first, input_mask=None, future_masking=True):
+    def get_self_attention_mask(self, decoder_inputs, batch_first, input_mask=None, future_masking=True):
         if future_masking and self.future_masking:
             len_tgt = decoder_inputs.size(1 if batch_first else 0)
             # future_mask: (len_tgt x len_tgt)
@@ -145,6 +145,11 @@ class IncrementalDecoder(Decoder):
             self_attention_mask = self_attention_mask.unsqueeze(1)
         else:
             self_attention_mask = None
+
+        return self_attention_mask
+
+    def get_self_attention_bias(self, decoder_inputs, batch_first, input_mask=None, future_masking=True):
+        self_attention_mask = self.get_self_attention_mask(decoder_inputs, batch_first, input_mask, future_masking)
 
         if self_attention_mask is not None:
             # self_attention_mask: (batch_size x len_tgt x len_tgt) or broadcastable

@@ -1,6 +1,10 @@
+import logging
+
 import numpy as np
 import torch.utils.data
 from torch.utils.data import BatchSampler
+
+logger = logging.getLogger(__name__)
 
 
 class StatefulSampler(torch.utils.data.Sampler):
@@ -97,8 +101,16 @@ class PreGeneratedBatchSampler(StatefulSampler):
         return state_dict
 
     def load_state_dict(self, state_dict):
-        super().load_state_dict(state_dict)
-        self.batch_order = state_dict['batch_order']
+        if self.batch_order is None or \
+                state_dict['batch_order'] is None or \
+                len(state_dict['batch_order']) == len(self.batch_order):
+            self.batch_order = state_dict['batch_order']
+            self.index = state_dict['index']
+        else:
+            logger.warning('Saved batch order has different length, it will not be loaded (index will be converted)')
+            self.index = int(state_dict['index'] / len(state_dict['batch_order'])
+                             * len(self.batch_order))
+
         self.shuffle = self.batch_order is not None
 
     def __len__(self):

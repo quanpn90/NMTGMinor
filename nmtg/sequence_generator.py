@@ -478,10 +478,7 @@ class IncrementalState:
         self.items = {}
 
     def get(self, instance, key, default=None):
-        if default is None:
-            return self.items.get((id(instance), key))
-        else:
-            return self.items.get((id(instance), key), default)
+        return self.items.get((id(instance), key), default)
 
     def set(self, instance, key, value):
         self.items[(id(instance), key)] = value

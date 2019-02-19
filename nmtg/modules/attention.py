@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 from nmtg.models.encoder_decoder import IncrementalModule
 from nmtg.modules.linear import XavierLinear
-from nmtg.modules.masking import MaskedFunction
+from nmtg.modules.masking import MaskedFunction, masked_function
 from nmtg.sequence_generator import IncrementalState
 
 
@@ -152,9 +152,9 @@ class MultiHeadAttention(IncrementalModule):
     def _project_inputs(self, query, key, value, query_mask, value_mask, batch_size, len_query):
         # Project inputs to multi-heads
         # Projection has the same dimensionality as input, gets split into heads later
-        q = self.query_projection(query, query_mask)
-        k = self.key_projection(key, value_mask) if key is not None else None
-        v = self.value_projection(value, value_mask) if value is not None else None
+        q = self.query_projection(query, mask=query_mask)
+        k = self.key_projection(key, mask=value_mask) if key is not None else None
+        v = self.value_projection(value, mask=value_mask) if value is not None else None
         q *= self.head_dim ** -0.5
 
         # prepare the shape for applying softmax
@@ -185,7 +185,7 @@ class MultiHeadAttention(IncrementalModule):
         attn_weights = attn_weights.view(batch_size * self.num_heads, len_query, len_key)
         out = torch.bmm(attn_weights, v)  # batch_size*num_heads x len_query x head_dim
         out = self._join_heads(out, batch_size, len_query)
-        out = self.out_projection(out, query_mask)
+        out = self.out_projection(out, mask=query_mask)
         return out
 
     def _split_heads(self, tensor, batch_size, seq_len):
@@ -208,3 +208,78 @@ class MultiHeadAttention(IncrementalModule):
         for k in input_buffer.keys():
             input_buffer[k] = input_buffer[k].index_select(0, new_order)
         incremental_state.set(self, 'attn_state', input_buffer)
+
+
+class AverageAttention(IncrementalModule):
+    def __init__(self, model_dim, dropout=0.1, feed_forward=None, batch_first=False, masked_layers=False):
+        super().__init__()
+        self.batch_first = batch_first
+        self.model_dim = model_dim
+        self.masked_layers = masked_layers
+        self.dropout = nn.Dropout(dropout)
+        self.feed_forward = feed_forward
+        self.input_proj = XavierLinear(model_dim * 2, model_dim, bias=False)
+        self.forget_proj = XavierLinear(model_dim * 2, model_dim, bias=False)
+
+    def forward(self, inputs, mask=None):
+        if not self.batch_first:
+            inputs = inputs.transpose(0, 1)
+
+        seq_len = inputs.size(1)
+        if mask is None:
+            mask = inputs.new_ones(seq_len, seq_len) / seq_len
+
+        mask = self.dropout(mask)
+
+        attention_outputs = torch.matmul(mask, inputs)
+
+        if self.masked_layers:
+            mask = mask.gt(0)
+            outputs = masked_function(self._attention, inputs, attention_outputs, mask=mask)
+        else:
+            outputs = self._attention(inputs, attention_outputs)
+
+        if self.batch_first:
+            return outputs
+        else:
+            return outputs.transpose(0, 1)
+
+    def _attention(self, inputs, attention_outputs):
+        if self.feed_forward is not None:
+            attention_outputs = self.feed_forward(attention_outputs)
+        gate_inputs = torch.cat((inputs, attention_outputs), -1)
+        input_gate = torch.sigmoid(self.input_proj(gate_inputs))
+        forget_gate = torch.sigmoid(self.forget_proj(gate_inputs))
+        outputs = input_gate * inputs + forget_gate * attention_outputs
+        return outputs
+
+    def _step(self, inputs, incremental_state: IncrementalState, padding_mask=None):
+        inputs = inputs.squeeze(1 if self.batch_first else 0)
+
+        saved_state = incremental_state.get(self, 'attn_state')
+        step = incremental_state.get(self, 'step')
+        if saved_state is None:
+            saved_state = inputs.new_zeros(inputs.size())
+            step = 0
+
+        step += 1
+        attention_outputs = saved_state + inputs
+
+        incremental_state.set(self, 'attn_state', attention_outputs)
+        incremental_state.set(self, 'step', step)
+
+        attention_outputs = attention_outputs.div(float(step))
+
+        if self.masked_layers:
+            outputs = masked_function(self._attention, inputs, attention_outputs, mask=padding_mask)
+        else:
+            outputs = self._attention(inputs, attention_outputs)
+
+        return outputs.unsqueeze(1 if self.batch_first else 0)
+
+    def reorder_incremental_state(self, incremental_state: IncrementalState, new_order):
+        """Reorder buffered internal state (for incremental generation)."""
+        saved_state = incremental_state.get(self, 'attn_state')
+        if saved_state is not None:
+            saved_state = saved_state.index_select(0, new_order)
+            incremental_state.set(self, 'attn_state', saved_state)

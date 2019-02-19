@@ -1,14 +1,12 @@
 import argparse
-import os
 
 import torch
 
 from nmtg import convert, custom_logging
 from nmtg.custom_logging import add_log_options
 from nmtg.options import add_general_options, add_task_option, add_trainer_option
-from nmtg.trainers import Trainer
 from nmtg.tasks import Task
-
+from nmtg.trainers import Trainer
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="train.py")
@@ -19,14 +17,14 @@ if __name__ == '__main__':
     trainer_class.add_eval_options(parser)
     add_log_options(parser)
 
-    parser.add_argument('-load_from', type=str, nargs='+', required=True,
-                        help='Path to one or more pretrained models.')
+    parser.add_argument('-load_from', type=str, required=True,
+                        help='Path to a pretrained model.')
     parser.add_argument('-output',
                         help="Path to output the predictions")
 
     args = parser.parse_args()
 
-    logger = custom_logging.setup_logging_from_args(args, 'evaluate')
+    logger = custom_logging.setup_logging_from_args(args, 'validate')
 
     logger.debug('Torch version: {}'.format(torch.__version__))
     logger.debug(args)
@@ -37,12 +35,6 @@ if __name__ == '__main__':
 
     trainer = trainer_class(args)  # type: Trainer
 
-    models = [trainer.load_checkpoint(convert.load_checkpoint(filename)) for filename in args.load_from]
+    model = trainer.load_checkpoint(convert.load_checkpoint(args.load_from))
 
-    results = trainer.solve(models, task)
-
-    logger.info(' | '.join(task.score_results(results)))
-
-    if args.output is not None:
-        os.makedirs(os.path.dirname(args.output), exist_ok=True)
-        task.save_results(results, args.output)
+    val_loss = trainer.evaluate(model, task)

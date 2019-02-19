@@ -94,9 +94,11 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
 
         return emb
 
-    def load_state_dict(self, state_dict, strict=True):
-        self.pos_emb.resize_as_(state_dict['pos_emb'])
-        super().load_state_dict(state_dict, strict)
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
+                              error_msgs):
+        self.pos_emb.resize_(*list(state_dict[prefix + 'pos_emb'].size()))
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
+                                      error_msgs)
 
 
 class LearnedPositionalEncoding(PositionalEncoding):

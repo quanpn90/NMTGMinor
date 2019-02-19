@@ -4,9 +4,10 @@
 # This source code is licensed under the license found in the LICENSE file in
 # the root directory of this source tree. An additional grant of patent rights
 # can be found in the PATENTS file in the same directory.
-
+import itertools
 import math
 import torch
+from typing import Sequence
 
 
 class Optimizer:
@@ -75,3 +76,64 @@ class Optimizer:
     def zero_grad(self):
         """Clears the gradients of all optimized parameters."""
         self.optimizer.zero_grad()
+
+
+class MultiOptimizer(Optimizer):
+    """Wraps multiple Optimizer instances.
+    Each child optimizer has its own loss"""
+
+    def __init__(self, optimizers):
+        params = itertools.chain.from_iterable(opt.params for opt in optimizers)
+        super().__init__(params)
+        self.optimizers = optimizers
+
+    @classmethod
+    def build_optimizer(cls, args, params):
+        raise NotImplementedError
+
+    @property
+    def optimizer(self):
+        return self.optimizers[0]
+
+    @staticmethod
+    def add_options(parser):
+        pass
+
+    def state_dict(self):
+        return {
+            'optimizers': [opt.state_dict() for opt in self.optimizers]
+        }
+
+    def load_state_dict(self, state_dict):
+        for opt, s_dict in zip(state_dict['optimizers']):
+            opt.load_state_dict(s_dict)
+
+    def backward(self, losses):
+        for opt, loss in zip(self.optimizers, losses):
+            opt.backward(loss)
+
+    def multiply_grads(self, c):
+        if isinstance(c, Sequence):
+            for opt, cc in zip(self.optimizers, c):
+                opt.multiply_grads(cc)
+        else:
+            for opt in self.optimizers:
+                opt.multiply_grads(c)
+
+    def clip_grad_norm(self, max_norm):
+        for opt in self.optimizers:
+            opt.clip_grad_norm(max_norm)
+
+    def step(self, closure=None):
+        if closure is not None:
+            for opt, c in zip(self.optimizers, closure):
+                opt.step(c)
+        else:
+            for opt in self.optimizers:
+                opt.step(closure)
+
+    def zero_grad(self):
+        for opt in self.optimizers:
+            opt.zero_grad()
+
+
