@@ -6,7 +6,7 @@ def make_parser(parser):
     # Data options
     parser.add_argument('-data', required=True,
                         help='Path to the *-train.pt file from preprocess.py')
-    parser.add_argument('-data_format', required=True, default='bin',
+    parser.add_argument('-data_format', required=False, default='bin',
                         help='Default data format: raw')
     parser.add_argument('-sort_by_target', action='store_true',
                         help='Training data sorted by target')                    

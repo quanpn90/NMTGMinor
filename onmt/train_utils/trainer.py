@@ -19,11 +19,11 @@ from onmt.utils import checkpoint_paths
 
 class BaseTrainer(object):
     
-    def __init__(self, model, loss_function, train_data, validData, dicts, opt):
+    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt):
         
         self.model = model
         self.train_data = train_data
-        self.validData = validData
+        self.valid_data = valid_data
         self.dicts = dicts
         self.opt = opt
         self.cuda = (len(opt.gpus) >= 1)
@@ -98,8 +98,8 @@ class BaseTrainer(object):
 
 class XETrainer(BaseTrainer):
 
-    def __init__(self, model, loss_function, train_data, validData, dicts, opt, set_param=True):
-        super().__init__(model, loss_function, train_data, validData, dicts, opt)
+    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt, set_param=True):
+        super().__init__(model, loss_function, train_data, valid_data, dicts, opt)
         self.optim = onmt.Optim(opt)
         
         if self.cuda:
@@ -265,7 +265,7 @@ class XETrainer(BaseTrainer):
                     num_accumulated_sents = 0
                     num_updates = self.optim._step
                     if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
-                        valid_loss = self.eval(self.validData)
+                        valid_loss = self.eval(self.valid_data)
                         valid_ppl = math.exp(min(valid_loss, 100))
                         print('Validation perplexity: %g' % valid_ppl)
                         
@@ -341,7 +341,7 @@ class XETrainer(BaseTrainer):
             resume=False
         
         
-        valid_loss = self.eval(self.validData)
+        valid_loss = self.eval(self.valid_data)
         valid_ppl = math.exp(min(valid_loss, 100))
         print('Validation perplexity: %g' % valid_ppl)
         
@@ -358,7 +358,7 @@ class XETrainer(BaseTrainer):
             print('Train perplexity: %g' % train_ppl)
 
             #  (2) evaluate on the validation set
-            valid_loss = self.eval(self.validData)
+            valid_loss = self.eval(self.valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
             print('Validation perplexity: %g' % valid_ppl)
             

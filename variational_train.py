@@ -59,7 +59,6 @@ def main():
         dataset = torch.load(opt.data)
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
         print("Done after %s" % elapse )
-      
 
         trainData = onmt.Dataset(dataset['train']['src'],
                                  dataset['train']['tgt'], opt.batch_size_words, opt.gpus,
@@ -82,7 +81,6 @@ def main():
 
         dicts = torch.load(opt.data + ".dict.pt")
         
-        #~ train = {}
         train_path = opt.data + '.train'
         train_src = IndexedInMemoryDataset(train_path + '.src')
         train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
@@ -116,14 +114,10 @@ def main():
     # Loss function is built according to model 
     # Go to ModelConstructor for more details
     model, loss_function = build_model(opt, dicts)  
-    
-                                
-    
+
     nParams = sum([p.nelement() for p in model.parameters()])
     print('* number of parameters: %d' % nParams)
-    
-    optim = None
-    
+
     if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
         #~ trainer = MultiGPUXETrainer(model, loss_function, trainData, validData, dataset, opt)
         raise NotImplementedError("Multi-GPU training is not supported atm")
@@ -131,10 +125,7 @@ def main():
         from onmt.train_utils.variational_trainer import VariationalTrainerFP16
 
         trainer = VariationalTrainerFP16(model, loss_function, trainData, validData, dicts, opt)
-        # else:
-            # trainer = XETrainer(model, loss_function, trainData, validData, dicts, opt)
 
-    
     trainer.run(save_file=opt.load_from)
 
 if __name__ == "__main__":

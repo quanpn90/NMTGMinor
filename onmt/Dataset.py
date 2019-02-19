@@ -1,24 +1,27 @@
 from __future__ import division
-
 import math
 import torch
-from torch.autograd import Variable
 
 import onmt
 
+
 class Batch(object):
-    
-    def __init__(self, src_data, tgt_data=None, 
+
+    def __init__(self, src_data, tgt_data=None,
+                 src_attbs=None, tgt_attbs=None,
                  src_align_right=False, tgt_align_right=False):
-        
+
         self.tensors = dict()
         self.has_target = False
         self.tensors['source'], self.src_lengths = self.collate(src_data, align_right=src_align_right)
         self.tensors['source'] = self.tensors['source'].t().contiguous()
         self.tensors['src_attn_mask'] = self.tensors['source'].eq(onmt.Constants.PAD).unsqueeze(1)
         self.tensors['src_pad_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
-        
+        self.tensors['src_length'] = torch.LongTensor(self.src_lengths)
+        self.tensors['src_attbs'] = torch.LongTensor(src_attbs)
+
         if tgt_data is not None:
+            assert(tgt_attbs is not None)
             target_full, self.tgt_lengths = self.collate(tgt_data, align_right=tgt_align_right)
             target_full = target_full.t().contiguous()
             self.tensors['target_input'] = target_full[:-1]
@@ -27,11 +30,13 @@ class Batch(object):
             self.tensors['tgt_attn_mask'] = self.tensors['target_input'].ne(onmt.Constants.PAD)
             self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.Constants.PAD)
             self.tensors['src_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
+            self.tensors['tgt_length'] = torch.LongTensor(self.tgt_lengths)
+            self.tensors['tgt_attbs'] = torch.LongTensor(tgt_attbs)
             self.has_target = True
             self.tgt_size = sum([len(x) - 1 for x in tgt_data])
-        
+
         self.size = len(src_data)
-        
+
         self.src_size = sum([len(x)     for x in src_data])
 
     def collate(self, data, align_right=False):
@@ -65,10 +70,12 @@ class Dataset(object):
     def __init__(self, src_data, tgt_data, batch_size_words, gpus,
                  data_type="text", balance=False, batch_size_sents=128,
                  multiplier=1, pad_count=False, sort_by_target=False):
-        self.src = src_data
+        self.src = src_data['words']
+        self.src_attbs =  src_data['attbs']
         self._type = data_type
         if tgt_data:
-            self.tgt = tgt_data
+            self.tgt = tgt_data['words']
+            self.tgt_attbs = tgt_data['attbs']
             assert(len(self.src) == len(self.tgt))
         else:
             self.tgt = None
@@ -150,17 +157,21 @@ class Dataset(object):
         self.num_batches = len(self.batches)
 
     def __getitem__(self, index):
+
         assert index < self.num_batches, "%d > %d" % (index, self.num_batches)
         
         batch = self.batches[index]
         src_data = [self.src[i] for i in batch]
+        src_attbs =  [self.src_attbs[i] for i in batch]
 
         if self.tgt:
             tgt_data = [self.tgt[i] for i in batch]
+            tgt_attbs = [self.tgt_attbs[i] for i in batch]
         else:
             tgt_data = None
             
-        batch = Batch(src_data, tgt_data=tgt_data, src_align_right=False, tgt_align_right=False)
+        batch = Batch(src_data, tgt_data=tgt_data, src_align_right=False, tgt_align_right=False,    
+                      src_attbs=src_attbs, tgt_attbs=tgt_attbs)
 
         return batch
 

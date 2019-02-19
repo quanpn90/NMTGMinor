@@ -16,6 +16,7 @@ def custom_layer(module):
         return output
     return custom_forward
 
+
 class FCTransformerEncoder(nn.Module):
     """Encoder in 'Attention is all you need'
     

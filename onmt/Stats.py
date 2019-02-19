@@ -3,17 +3,37 @@ from __future__ import division
 import time
 import math
 import sys
-import datetime 
+import datetime
+from onmt.Meters import AverageMeter, TimeMeter
+
 
 
 class Logger(object):
 
-    def __init__(self, optim, meters, scaler=None):
+    def __init__(self, optim, scaler=None):
 
         self.optim = optim
-        self.meters = meters
+        self.meters = dict()
         self.start_time = time.time()
         self.scaler = scaler
+
+        # initializing the meters
+        self.meters["total_loss"] = AverageMeter()
+        self.meters["total_words"] = AverageMeter()
+        self.meters["report_loss"] = AverageMeter()
+        self.meters["report_tgt_words"] = AverageMeter()
+        self.meters["report_src_words"] = AverageMeter()
+        self.meters["kl"] = AverageMeter()
+        self.meters["kl_prior"] = AverageMeter()
+        self.meters["gnorm"] = AverageMeter()
+        self.meters["oom"] = AverageMeter()
+        self.meters["total_sloss"] = AverageMeter()
+        self.meters["baseline"] = AverageMeter()
+        self.meters["R"] = AverageMeter()
+        self.meters["ce"] = AverageMeter()
+        self.meters["q_entropy"] = AverageMeter()
+        self.meters["q_mean"] = AverageMeter()
+        self.meters["q_var"] = AverageMeter()
 
     def reset(self):
 

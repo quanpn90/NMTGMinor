@@ -51,60 +51,28 @@ def main():
     start = time.time()
     print("Locally in debugging mode")
     print("Loading data from '%s'" % opt.data)
-    
-    if opt.data_format == 'raw':
-        dataset = torch.load(opt.data)
-        elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
-        print("Done after %s" % elapse )
 
-        train_data = onmt.Dataset(dataset['train']['src'],
-                                 dataset['train']['tgt'], opt.batch_size_words, opt.gpus,
-                                 max_seq_num=opt.batch_size_sents,
-                                 pad_count = opt.pad_count,
-                                 multiplier = opt.batch_size_multiplier,
-                                 sort_by_target=opt.sort_by_target)
-        valid_data = onmt.Dataset(dataset['valid']['src'],
-                                 dataset['valid']['tgt'], opt.batch_size_words, opt.gpus,
-                                 max_seq_num=opt.batch_size_sents)
+    dataset = torch.load(opt.data)
+    elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
+    print("Done after %s" % elapse)
 
-        dicts = dataset['dicts']
-        print(' * vocabulary size. source = %d; target = %d' %
-              (dicts['src'].size(), dicts['tgt'].size()))
-        print(' * number of training sentences. %d' %
-              len(dataset['train']['src']))
-        print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
-    elif opt.data_format == 'bin':
-        from onmt.data_utils.IndexedDataset import IndexedInMemoryDataset
+    train_data = onmt.Dataset(dataset['train']['src'],
+                              dataset['train']['tgt'], opt.batch_size_words, opt.gpus,
+                              batch_size_sents=opt.batch_size_sents,
+                              multiplier=opt.batch_size_multiplier)
 
-        dicts = torch.load(opt.data + ".dict.pt")
+    valid_data = onmt.Dataset(dataset['valid']['src'],
+                              dataset['valid']['tgt'], opt.batch_size_words, opt.gpus,
+                              batch_size_sents=opt.batch_size_sents)
 
-        #~ train = {}
-        train_path = opt.data + '.train'
-        train_src = IndexedInMemoryDataset(train_path + '.src')
-        train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
+    dicts = dataset['dicts']
+    print(' * vocabulary size. source = %d; target = %d' %
+          (dicts['src'].size(), dicts['tgt'].size()))
+    print(' * number of training sentences. %d' %
+          len(dataset['train']['src']['words']))
+    print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
 
-        train_data = onmt.Dataset(train_src,
-                                 train_tgt, opt.batch_size_words, opt.gpus,
-                                 batch_size_sents=opt.batch_size_sents,
-                                 pad_count = opt.pad_count,
-                                 multiplier = opt.batch_size_multiplier)
-
-        valid_path = opt.data + '.valid'
-        valid_src = IndexedInMemoryDataset(valid_path + '.src')
-        valid_tgt = IndexedInMemoryDataset(valid_path + '.tgt')
-
-        valid_data = onmt.Dataset(valid_src,
-                                 valid_tgt, opt.batch_size_words, opt.gpus,
-                                 batch_size_sents=opt.batch_size_sents)
-
-        print(' * vocabulary size. source = %d; target = %d' %
-              (dicts['src'].size(), dicts['tgt'].size()))
-        print(' * number of training sentences. %d' %
-              len(train_src))
-        print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
-        #
-    else:
-        raise NotImplementedError
+    # ------------------------------------------------------------------------------------------------#
     
     print('Building model...')
 
