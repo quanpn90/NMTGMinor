@@ -140,13 +140,14 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                 """
 
                 src = batch.get('source')
-                src_length = batch.get()
+                src_length = batch.get('src_length')
+                target = batch.get('src_attbs')
 
-                outputs = self.model(batch, dist='prior', sampling=False)
-                targets = batch.get('target_output')
+                outputs = self.model(src.t(), src_length)
 
-                loss_output = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
+                loss_output = self.loss_function(outputs, target)
 
+                loss_data = loss_output.sum().item()
                 # loss_data = loss_output['nll']
 
                 total_batch_size += batch.size

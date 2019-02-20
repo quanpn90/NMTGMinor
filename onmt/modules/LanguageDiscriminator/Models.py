@@ -56,9 +56,10 @@ class LanguageDiscriminator(nn.Module):
 
         emb = emb.transpoes(0, 1)
 
-        output = emb
+        # pack into LSTM input format
+        lstm_input = pack(emb, sorted_length)
 
-        ltsm_outputs, (hn, cn) = self.fwd_lstm(output)
+        ltsm_outputs, (hn, cn) = self.fwd_lstm(lstm_input)
 
         # the first dimension is 1 (1 layer * 1 direction)
         output = hn.squeeze(0)
