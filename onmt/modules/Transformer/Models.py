@@ -53,7 +53,6 @@ class TransformerEncoder(nn.Module):
         else:
             self.enable_feature = False
 
-
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
         elif opt.time == 'gru':
@@ -290,9 +289,8 @@ class TransformerDecoder(nn.Module):
             
             if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:
                 # batch_size x len_src x d_model
-                output, coverage = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src) 
+                output, coverage = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src)
 
-                
             else:
                 output, coverage = layer(output, context, mask_tgt, mask_src) # batch_size x len_src x d_model
 
@@ -380,7 +378,6 @@ class TransformerDecoder(nn.Module):
             
             decoder_state._update_attention_buffer(buffer, i)
 
-        
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
         # on the output, since the output can grow very large, being the sum of
