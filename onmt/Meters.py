@@ -26,7 +26,7 @@ class AverageMeter(object):
     def update(self, val, n=1):
         if val is not None:
             self.val = val
-            self.sum += val 
+            self.sum += val
             self.count += n
             self.avg = self.sum / self.count
 

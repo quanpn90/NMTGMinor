@@ -17,6 +17,8 @@ from onmt.train_utils.fp16_trainer import FP16XETrainer
 from onmt.train_utils.multiGPUtrainer import MultiGPUXETrainer
 from onmt.train_utils.fp16_vi_trainer import VariationalTrainer
 from onmt.ModelConstructor import build_model, init_model_parameters
+from onmt.data_utils.IndexedDataset import IndexedInMemoryDataset
+
 
 parser = argparse.ArgumentParser(description='train.py')
 onmt.Markdown.add_md_help_argument(parser)
@@ -47,29 +49,42 @@ torch.manual_seed(opt.seed)
 
 
 def main():
-
     start = time.time()
-    print("Locally in debugging mode")
+    print("Debugging a fader network    ")
     print("Loading data from '%s'" % opt.data)
 
-    dataset = torch.load(opt.data)
-    elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
-    print("Done after %s" % elapse)
+    dicts = torch.load(opt.data + ".dict.pt")
 
-    train_data = onmt.Dataset(dataset['train']['src'],
-                              dataset['train']['tgt'], opt.batch_size_words, opt.gpus,
+    train_path = opt.data + '.train'
+    train_src, train_tgt = dict(), dict()
+    train_src['words'] = IndexedInMemoryDataset(train_path + '.words.src')
+    train_tgt['words'] = IndexedInMemoryDataset(train_path + '.words.tgt')
+    train_src['attbs'] = IndexedInMemoryDataset(train_path + '.langs.src')
+    train_tgt['attbs'] = IndexedInMemoryDataset(train_path + '.langs.tgt')
+
+    train_data = onmt.Dataset(train_src,
+                              train_tgt, opt.batch_size_words,
                               batch_size_sents=opt.batch_size_sents,
                               multiplier=opt.batch_size_multiplier)
 
-    valid_data = onmt.Dataset(dataset['valid']['src'],
-                              dataset['valid']['tgt'], opt.batch_size_words, opt.gpus,
+    valid_path = opt.data + '.valid'
+    valid_src, valid_tgt = dict(), dict()
+    valid_src['words'] = IndexedInMemoryDataset(valid_path + '.words.src')
+    valid_tgt['words'] = IndexedInMemoryDataset(valid_path + '.words.tgt')
+    valid_src['attbs'] = IndexedInMemoryDataset(valid_path + '.langs.src')
+    valid_tgt['attbs'] = IndexedInMemoryDataset(valid_path + '.langs.tgt')
+
+    valid_data = onmt.Dataset(valid_src,
+                              valid_tgt, opt.batch_size_words,
                               batch_size_sents=opt.batch_size_sents)
 
-    dicts = dataset['dicts']
+    elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
+    print("Done after %s" % elapse)
     print(' * vocabulary size. source = %d; target = %d' %
           (dicts['src'].size(), dicts['tgt'].size()))
     print(' * number of training sentences. %d' %
-          len(dataset['train']['src']['words']))
+          len(train_src['words']))
+    print(' * number of languages. %d' % dicts['atb'].size())
     print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
 
     # ------------------------------------------------------------------------------------------------#
@@ -89,10 +104,12 @@ def main():
         # trainer = MultiGPUXETrainer(model, loss_function, train_data, valid_data, dataset, opt)
         raise NotImplementedError("Multi-GPU training is not supported atm")
     else:
-        if opt.fp16:
-            trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
-        else:
-            trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
+            # if opt.fp16:
+            #     trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
+            # else:
+            #     trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
+
+        trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
 
     trainer.run(save_file=opt.load_from)
 

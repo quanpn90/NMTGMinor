@@ -80,6 +80,8 @@ def build_model(opt, dicts):
         embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                      opt.model_size,
                                      padding_idx=onmt.Constants.PAD)
+
+    feat_embedding = nn.Embedding(dicts['atb'].size(), opt.model_size)
         # print("* Joining the weights of encoder and decoder word embeddings")
         # model.share_enc_dec_embedding()
 
@@ -108,7 +110,8 @@ def build_model(opt, dicts):
             positional_encoder = None
         
         encoder = TransformerEncoder(opt, embedding_src, positional_encoder)
-        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, encoder_to_share=encoder if opt.share_enc_dec_weights else None)
+        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding,
+                                     encoder_to_share=encoder if opt.share_enc_dec_weights else None)
         
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
         

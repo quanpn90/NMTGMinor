@@ -27,8 +27,6 @@ class Dict(object):
             label = fields[0]
             idx = int(fields[1])
             self.add(label, idx)
-        
-        
 
     def writeFile(self, filename):
         "Write entries to a file."

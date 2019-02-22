@@ -1,6 +1,7 @@
 from __future__ import division
 import math
 import torch
+from collections import defaultdict
 
 import onmt
 
@@ -11,7 +12,7 @@ class Batch(object):
                  src_attbs=None, tgt_attbs=None,
                  src_align_right=False, tgt_align_right=False):
 
-        self.tensors = dict()
+        self.tensors = defaultdict(lambda: None)
         self.has_target = False
         self.tensors['source'], self.src_lengths = self.collate(src_data, align_right=src_align_right)
         self.tensors['source'] = self.tensors['source'].t().contiguous()
@@ -20,8 +21,10 @@ class Batch(object):
         self.tensors['src_length'] = torch.LongTensor(self.src_lengths)
         self.tensors['src_attbs'] = torch.LongTensor(src_attbs)
 
+        # always need tgt attbs to know which language we translate to
+        assert (tgt_attbs is not None)
+
         if tgt_data is not None:
-            assert(tgt_attbs is not None)
             target_full, self.tgt_lengths = self.collate(tgt_data, align_right=tgt_align_right)
             target_full = target_full.t().contiguous()
             self.tensors['target_input'] = target_full[:-1]
@@ -63,32 +66,27 @@ class Batch(object):
         for key, value in self.tensors.items():
             self.tensors[key] = value.cuda()
 
+
 class Dataset(object):
     '''
     batchSize is now changed to have word semantic (probably better)
     '''
-    def __init__(self, src_data, tgt_data, batch_size_words, gpus,
-                 data_type="text", balance=False, batch_size_sents=128,
-                 multiplier=1, pad_count=False, sort_by_target=False):
+    def __init__(self, src_data, tgt_data, batch_size_words,
+                 batch_size_sents=128,
+                 multiplier=1):
         self.src = src_data['words']
         self.src_attbs =  src_data['attbs']
-        self._type = data_type
         if tgt_data:
             self.tgt = tgt_data['words']
             self.tgt_attbs = tgt_data['attbs']
             assert(len(self.src) == len(self.tgt))
         else:
             self.tgt = None
-        self.cuda = (len(gpus) > 0)
         self.fullSize = len(self.src)
-        self.n_gpu = len(gpus)
 
         self.batch_size_words = batch_size_words
         self.batch_size_sents = batch_size_sents
         self.multiplier = multiplier
-        self.sort_by_target = sort_by_target
-
-        self.pad_count = True
 
         self.cur_index = 0
         self.batchOrder = None
@@ -159,14 +157,16 @@ class Dataset(object):
     def __getitem__(self, index):
 
         assert index < self.num_batches, "%d > %d" % (index, self.num_batches)
+
         
         batch = self.batches[index]
         src_data = [self.src[i] for i in batch]
         src_attbs =  [self.src_attbs[i] for i in batch]
 
+        tgt_attbs = [self.tgt_attbs[i] for i in batch]
+
         if self.tgt:
             tgt_data = [self.tgt[i] for i in batch]
-            tgt_attbs = [self.tgt_attbs[i] for i in batch]
         else:
             tgt_data = None
             

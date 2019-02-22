@@ -118,6 +118,9 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
         total_words = 0
         total_batch_size = 0
 
+        num_correct = 0
+        total = 0
+
         # batch_order = data.create_order(random=False)
         torch.cuda.empty_cache()
         self.model.eval()
@@ -143,21 +146,31 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                 src_length = batch.get('src_length')
                 target = batch.get('src_attbs')
 
-                outputs = self.model(src.t(), src_length)
+                # print(src)
+                # print(target)
+
+
+                outputs = self.model(src, src_length)
 
                 loss_output = self.loss_function(outputs, target)
 
                 loss_data = loss_output.sum().item()
-                # loss_data = loss_output['nll']
 
                 total_batch_size += batch.size
                 total_words += batch.tgt_size
 
-                del loss_output
                 total_loss += loss_data
+
+                # now compute the accuracy
+                pred = outputs.max(1)[1]
+                num_correct += pred.eq(target).sum().item()
+                total += batch.size
+
 
         self.model.train()
 
+        acc = num_correct / total * 100
+        print("Accuracy : %.2f percent" % acc)
         # take the average
 
         return total_loss / (total_words + 1e-6)
@@ -166,6 +179,7 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
 
         opt = self.opt
         train_data = self.train_data
+        print("TRAINING EPOCH")
 
         # Clear the gradients of the model
         self.model.zero_grad()
@@ -201,17 +215,15 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                 batch = samples[0]
                 batch.cuda()
 
-                sampling = not opt.var_not_sampling
-                dist = opt.var_sample_from
-                outputs = self.model(batch, dist=dist, sampling=sampling)
+                src = batch.get('source')
+                src_length = batch.get('src_length')
+                target = batch.get('src_attbs')
+                # print("DEBUGGING 1")
+                outputs = self.model(src, src_length)
+                # print("DEBUGGING 2")
+                loss_output = self.loss_function(outputs, target)
 
-                targets = batch.get('target_output')
-                tgt_inputs = batch.get('target_input')
-
-                batch_size = batch.size
-
-                tgt_mask = batch.get('tgt_mask')
-                tgt_size = batch.tgt_size
+                loss = loss_output.sum()
 
                 ## Scale UP the loss so that the gradients are not cutoff
 
@@ -220,41 +232,22 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                 else:
                     normalizer = 1.0
 
-                warmup_steps = self.optim.warmup_steps
-                # alpha = 1 / (warmup_steps * (warmup_steps ** -1.5))
+                loss.div(normalizer).backward()
 
-                # from bowman et al, 2016:
-                # gradually increasing the coefficient for kl divergence loss
-                # so that the model does not ignore the latent variable later on
-                # (actually current unused in the loss function) to be implemented
-                if opt.var_annealing_kl:
-                    max_steps = self.optim.warmup_steps * 2
-                    min_steps = self.optim.warmup_steps / 2
-
-                    alpha = max(min((self.optim._step - min_steps) / max_steps, 1.0), 0.0)
-                    kl_lambda = alpha * opt.var_kl_lambda
-                    # else:
-                    #     kl_lambda = alpha * opt.var_kl_lambda
-                else:
-                    kl_lambda = opt.var_kl_lambda
-
-                loss_output = self.loss_function(outputs, targets, generator=self.model.generator,
-                                                 backward=True, tgt_mask=tgt_mask, normalizer=normalizer,
-                                                 kl_lambda=kl_lambda)
 
                 ## take the negative likelihood
-                loss_data = loss_output['nll']
-                kl = loss_output['kl']
-                kl_prior = loss_output['kl_prior']
-                baseline = loss_output['baseline']
-                R = loss_output['R']
-                ce = loss_output['ce']
-                q_entropy = loss_output['q_entropy']
-                q_z = outputs['q_z']
+                loss_data = loss.item()
 
-                del loss_output['loss']
-                del loss_output
+                pred = outputs.max(1)[1]
+                num_correct = pred.eq(target).sum().item()
+                # total = target.sum().item() # should be batch_size
 
+                self.meters['total_lang_correct'].update(num_correct)
+                self.meters["total_sents"].update(batch.size)
+
+                # print(loss_data)
+
+                # print("DEBUGGING 1")
 
             except RuntimeError as e:
                 if 'out of memory' in str(e) or 'get_temporary_buffer' in str(e):
@@ -266,8 +259,10 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                     raise e
 
             if not oom:
+                # print("DEBUGGING 2")
                 src_size = batch.src_size
                 tgt_size = batch.tgt_size
+                batch_size = batch.size
 
                 counter = counter + 1
                 num_accumulated_words += tgt_size
@@ -280,7 +275,6 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                     # Update the parameters.
 
                     if self.opt.fp16:
-
                         # First we have to copy the grads from fp16 to fp32
                         self._get_flat_grads(out=self.fp32_params.grad)
 
@@ -298,9 +292,9 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                     if overflow:
                         if self.scaler.loss_scale <= 1e-4:
                             raise Exception((
-                                                'Minimum loss scale reached ({}). Your loss is probably exploding. '
-                                                'Try lowering the learning rate, using gradient clipping or '
-                                                'increasing the batch size.'
+                                            'Minimum loss scale reached ({}). Your loss is probably exploding. '
+                                            'Try lowering the learning rate, using gradient clipping or '
+                                            'increasing the batch size.'
                                             ).format(1e-4))
                         print('setting loss scale to: ' + str(self.scaler.loss_scale))
                         self.model.zero_grad()
@@ -323,6 +317,7 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                                 grad_denom = normalizer
                             grad_norm = self.optim.step(grad_denom=grad_denom)  # update the parameters in fp32
                             self.meters['gnorm'].update(grad_norm)
+                            # print("DEBUGGING 3")
 
                             if self.opt.fp16:
                                 # copying the parameters back to fp16
@@ -346,6 +341,7 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                         num_accumulated_words = 0
                         num_accumulated_sents = 0
                         num_updates = self.optim._step
+
                         if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every:
                             valid_loss = self.eval(self.valid_data)
                             valid_ppl = math.exp(min(valid_loss, 100))
@@ -353,7 +349,7 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
 
                             ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
 
-                            self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
+                            # self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
 
                 num_words = tgt_size
                 self.meters['report_loss'].update(loss_data)
@@ -361,19 +357,6 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                 self.meters['report_src_words'].update(src_size)
                 self.meters['total_loss'].update(loss_data)
                 self.meters['total_words'].update(num_words)
-                self.meters['kl'].update(kl, batch_size)
-                self.meters['kl_prior'].update(kl_prior, batch_size)
-                self.meters['baseline'].update(baseline, batch_size)
-                self.meters['R'].update(R, batch_size)
-                self.meters['ce'].update(ce, batch_size)  # this is sentence level loss
-                self.meters['q_entropy'].update(q_entropy, batch_size)
-
-                if isinstance(q_z, (list,)):
-                    self.meters['q_mean'].update(q_z[0].loc.sum().item(), batch_size)
-                    self.meters['q_var'].update(q_z[0].scale.sum().item(), batch_size)
-                else:
-                    self.meters['q_mean'].update(q_z.loc.sum().item(), batch_size)
-                    self.meters['q_var'].update(q_z.scale.sum().item(), batch_size)
 
                 optim = self.optim
 
@@ -457,8 +440,8 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
             print('Validation perplexity: %g' % valid_ppl)
 
             # only save at the end of epoch when the option to save "every iterations" is disabled
-            if self.opt.save_every <= 0:
-                self.save(epoch, valid_ppl)
+            # if self.opt.save_every <= 0:
+                # self.save(epoch, valid_ppl)
             batchOrder = None
             iteration = None
             resume = False

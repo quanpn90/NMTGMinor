@@ -69,25 +69,27 @@ parser.add_argument('-gpu', type=int, default=-1,
                     help="Device to run on")
 
 
-def reportScore(name, scoreTotal, wordsTotal):
+def reportScore(name, score_total, wordsTotal):
     print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (
-        name, scoreTotal / wordsTotal,
-        name, math.exp(-scoreTotal/wordsTotal)))
+        name, score_total / wordsTotal,
+        name, math.exp(-score_total/wordsTotal)))
 
 
 def addone(f):
     for line in f:
         yield line
     yield None
+
     
-def lenPenalty(s, l, alpha):
+def len_penalty(s, l, alpha):
     
     # ~ l_term = math.pow(l, alpha)
     
     l_term = math.pow(l + 5.0, alpha) / math.pow(6, alpha)
     return s / l_term
-    
-def getSentenceFromTokens(tokens, input_type):
+
+
+def get_sent_from_tokens(tokens, input_type):
     
     if input_type == 'word':
         sent = " ".join(tokens)
@@ -97,135 +99,131 @@ def getSentenceFromTokens(tokens, input_type):
         raise NotImplementedError
     return sent
 
+
 def main():
+
     opt = parser.parse_args()
     opt.cuda = opt.gpu > -1
     if opt.cuda:
         torch.cuda.set_device(opt.gpu)
     # Always pick n_best
     opt.n_best = opt.beam_size
-        
-    
+
     if opt.output == "stdout":
         outF = sys.stdout
     else:
         outF = open(opt.output, 'w')
 
-    predScoreTotal, predWordsTotal, goldScoreTotal, goldWordsTotal = 0, 0, 0, 0
+    pred_score_total, pred_words_total, gold_scores_total, gold_words_total = 0, 0, 0, 0
 
-    srcBatch, tgtBatch = [], []
+    src_batch, tgt_batch = [], []
 
     count = 0
 
     tgtF = open(opt.tgt) if opt.tgt else None
 
+    # here we are trying to check if online decoding is used
+    in_file = None
+    if(opt.src == "stdin"):
+        in_file = sys.stdin
+        opt.batch_size = 1
+    else:
+        in_file = open(opt.src)
+
+    translator = onmt.EnsembleTranslator(opt)
+
     if opt.dump_beam != "":
         import json
         translator.initBeamAccum()
         
-        # here we are trying to 
-    inFile = None
-    if(opt.src == "stdin"):
-            inFile = sys.stdin
-            opt.batch_size = 1
-    else:
-      inFile = open(opt.src)
-
-    translator = onmt.EnsembleTranslator(opt)
-        
-    for line in addone(inFile):
+    for line in addone(in_file):
         if line is not None:
+
             if opt.input_type == 'word':
-                srcTokens = line.split()
-                srcBatch += [srcTokens]
+                src_tokens = line.split()
+                src_batch += [src_tokens]
                 if tgtF:
-                    tgtTokens = tgtF.readline().split() if tgtF else None
-                    tgtBatch += [tgtTokens]
+                    tgt_tokens = tgtF.readline().split() if tgtF else None
+                    tgt_batch += [tgt_tokens]
+
             elif opt.input_type == 'char':
-                srcTokens = list(line.strip())
-                srcBatch += [srcTokens]
+                src_tokens = list(line.strip())
+                src_batch += [src_tokens]
                 if tgtF:
-                    #~ tgtTokens = tgtF.readline().split() if tgtF else None
-                    tgtTokens = list(tgtF.readline().strip()) if tgtF else None
-                    tgtBatch += [tgtTokens]
+                    # tgt_tokens = tgtF.readline().split() if tgtF else None
+                    tgt_tokens = list(tgtF.readline().strip()) if tgtF else None
+                    tgt_batch += [tgt_tokens]
             else:
                 raise NotImplementedError("Input type unknown")
 
-            if len(srcBatch) < opt.batch_size:
+            if len(src_batch) < opt.batch_size:
                 continue
         else:
             # at the end of file, check last batch
-            if len(srcBatch) == 0:
+            if len(src_batch) == 0:
                 break
 
-        predBatch, predScore, predLength, goldScore, numGoldWords  = translator.translate(srcBatch,
-                                                                                    tgtBatch)
+        pred_batch, pred_score, pred_length, gold_scores, num_gold_words  = translator.translate(src_batch,
+                                                                                    tgt_batch)
         if opt.normalize and opt.version == 1.0:
-            predBatch_ = []
-            predScore_ = []
-            for bb, ss, ll in zip(predBatch, predScore, predLength):
-                #~ ss_ = [s_/numpy.maximum(1.,len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
-                ss_ = [lenPenalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
-                ss_origin = [(s_, len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
+            pred_batch_ = []
+            pred_score_ = []
+            for bb, ss, ll in zip(pred_batch, pred_score, pred_length):
+                # ss_ = [s_/numpy.maximum(1.,len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
+                ss_ = [len_penalty(s_, l_, opt.alpha) for b_,s_,l_ in zip(bb,ss,ll)]
+                # ss_origin = [(s_, len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
                 sidx = numpy.argsort(ss_)[::-1]
-                #~ print(ss_, sidx, ss_origin)
-                predBatch_.append([bb[s] for s in sidx])
-                predScore_.append([ss_[s] for s in sidx])
-            predBatch = predBatch_
-            predScore = predScore_    
+                # print(ss_, sidx, ss_origin)
+                pred_batch_.append([bb[s] for s in sidx])
+                pred_score_.append([ss_[s] for s in sidx])
+            pred_batch = pred_batch_
+            pred_score = pred_score_    
                                                               
-        predScoreTotal += sum(score[0] for score in predScore)
-        predWordsTotal += sum(len(x[0]) for x in predBatch)
+        pred_score_total += sum(score[0] for score in pred_score)
+        pred_words_total += sum(len(x[0]) for x in pred_batch)
         if tgtF is not None:
-            goldScoreTotal += sum(goldScore).item()
-            goldWordsTotal += numGoldWords
+            gold_scores_total += sum(gold_scores).item()
+            gold_words_total += num_gold_words
             
-        for b in range(len(predBatch)):
+        for b in range(len(pred_batch)):
                         
             count += 1
             
-            bestHyp =  getSentenceFromTokens(predBatch[b][0], opt.input_type)            
+            best_hyp =  get_sent_from_tokens(pred_batch[b][0], opt.input_type)            
             if not opt.print_nbest:
-                #~ print(predBatch[b][0])
-                outF.write(bestHyp + '\n')
+                # print(pred_batch[b][0])
+                outF.write(best_hyp + '\n')
                 outF.flush()
 
             if opt.verbose:
-                srcSent = getSentenceFromTokens(srcBatch[b], opt.input_type)
+                src_sent = get_sent_from_tokens(src_batch[b], opt.input_type)
                 if translator.tgt_dict.lower:
-                    srcSent = srcSent.lower()
-                print('SENT %d: %s' % (count, srcSent))
-                
-                
-                print('PRED %d: %s' % (count, bestHyp))
-                print("PRED SCORE: %.4f" %  predScore[b][0])
+                    src_sent = src_sent.lower()
+                print('SENT %d: %s' % (count, src_sent))
+                print('PRED %d: %s' % (count, best_hyp))
+                print("PRED SCORE: %.4f" %  pred_score[b][0])
 
                 if tgtF is not None:
-                    #~ if opt.input_type == 'word':
-                        #~ tgtSent = ' '.join(tgtBatch[b]) 
-                    #~ elif opt.input_type == 'char':
-                        #~ tgtSent = ''.join(tgtBatch[b])
-                    tgtSent = getSentenceFromTokens(tgtBatch[b], opt.input_type)
+                    tgtSent = get_sent_from_tokens(tgt_batch[b], opt.input_type)
                     if translator.tgt_dict.lower:
                         tgtSent = tgtSent.lower()
                     print('GOLD %d: %s ' % (count, tgtSent))
-                    print("GOLD SCORE: %.4f" % goldScore[b])
+                    print("GOLD SCORE: %.4f" % gold_scores[b])
 
                 if opt.print_nbest:
                     print('\nBEST HYP:')
                     for n in range(opt.n_best):
                         idx = n
-                        sent = getSentenceFromTokens(predBatch[b][idx], opt.input_type)
-                        print("[%.4f] %s" % (predScore[b][idx], sent))
+                        sent = get_sent_from_tokens(pred_batch[b][idx], opt.input_type)
+                        print("[%.4f] %s" % (pred_score[b][idx], sent))
                             
-
                 print('')
 
-        srcBatch, tgtBatch = [], []
+        src_batch, tgt_batch = [], []
         
     if opt.verbose:
-        reportScore('PRED', predScoreTotal, predWordsTotal)
-        if tgtF: reportScore('GOLD', goldScoreTotal, goldWordsTotal)
+        reportScore('PRED', pred_score_total, pred_words_total)
+        if tgtF: reportScore('GOLD', gold_scores_total, gold_words_total)
                 
 
     if tgtF:

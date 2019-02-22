@@ -327,14 +327,18 @@ def makeData(srcFile, tgtFile, src_dicts, tgt_dicts, atb_dict, max_src_length=64
     tgtF.close()
 
     print('... sorting sentences by size')
-    z = zip(src, tgt, src_sizes, tgt_sizes)
+    z = zip(src, tgt, src_sizes, tgt_sizes, src_attbs, tgt_attbs)
 
     # sort by source first, then sort by target
+    # should we sort by descending order or ascending order (the default is ascending)
     sorted_by_src_z = sorted(z, key=lambda x: x[2])
     sorted_by_tgt_z = sorted(sorted_by_src_z, key=lambda x: x[3])
 
     src = [z_[0] for z_ in sorted_by_tgt_z]
     tgt = [z_[1] for z_ in sorted_by_tgt_z]
+
+    src_attbs = [z_[4] for z_ in sorted_by_tgt_z]
+    tgt_attbs = [z_[5] for z_ in sorted_by_tgt_z]
 
     print(('Prepared %d sentences ' +
           '(%d ignored due to error or src len > %d or tgt len > %d)') %
@@ -438,7 +442,6 @@ def main():
 
         data.finalize(opt.save_data + ".valid.words.%s.idx" % set)
         attb_data.finalize(opt.save_data + ".valid.langs.%s.idx" % set)
-
 
     print("Done")
 

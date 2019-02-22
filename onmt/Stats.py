@@ -35,6 +35,9 @@ class Logger(object):
         self.meters["q_mean"] = AverageMeter()
         self.meters["q_var"] = AverageMeter()
 
+        self.meters["total_lang_correct"] = AverageMeter()
+        self.meters["total_sents"] = AverageMeter()
+
     def reset(self):
 
         for key in self.meters:
@@ -95,6 +98,12 @@ class Logger(object):
 
         if q_var is not None:
             log_string += "; q_var %.3f" % q_var
+
+        if self.meters['total_lang_correct'].avg is not None:
+            total_lang_correct = self.meters['total_lang_correct'].sum
+            acc = total_lang_correct / self.meters['total_sents'].sum * 100.0
+
+        log_string += "; acc %.3f " % acc
 
         # Don't forget to print this ...
         print(log_string)

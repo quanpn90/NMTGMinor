@@ -221,7 +221,7 @@ class VariationalTrainerFP16(XETrainer):
         
     
         
-    def train_epoch(self, epoch, resume=False, batchOrder=None, iteration=0):
+    def train_epoch(self, epoch, resume=False, batch_order=None, iteration=0):
         
         opt = self.opt
         trainData = self.trainData
@@ -235,11 +235,11 @@ class VariationalTrainerFP16(XETrainer):
 
         # Shuffle mini batch order.
         if resume:
-            trainData.batchOrder = batchOrder
+            trainData.batch_order = batch_order
             trainData.set_index(iteration)
             print("Resuming from iteration: %d" % iteration)
         else:
-            batchOrder = trainData.create_order()
+            batch_order = trainData.create_order()
             iteration = 0
 
 
@@ -424,7 +424,7 @@ class VariationalTrainerFP16(XETrainer):
                             
                             ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
                             
-                            self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
+                            self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
                 
 
                 num_words = tgt_size
@@ -479,8 +479,13 @@ class VariationalTrainerFP16(XETrainer):
         
         if checkpoint is not None:
             print('Loading model and optim from checkpoint at %s' % save_file)
-            self.convert_fp16(checkpoint['model'], checkpoint['optim'])
-            batchOrder = checkpoint['batchOrder']
+
+            if self.opt.fp16:
+                self.convert_fp16(checkpoint['model'], checkpoint['optim'])
+            else:
+                # note for fp32 loading, loading optim parameters does not work
+                self.convert_fp32(checkpoint['model'], None)
+            batch_order = checkpoint['batch_order']
             iteration = checkpoint['iteration'] + 1
             opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
             resume=True  
@@ -490,7 +495,7 @@ class VariationalTrainerFP16(XETrainer):
             del checkpoint
             
         else:
-            batchOrder = None
+            batch_order = None
             iteration = 0
             print('Initializing model parameters')
             init_model_parameters(model, opt)
@@ -523,7 +528,7 @@ class VariationalTrainerFP16(XETrainer):
 
             #  (1) train for one epoch on the training set
             train_loss = self.train_epoch(epoch, resume=resume,
-                                                 batchOrder=batchOrder,
+                                                 batch_order=batch_order,
                                                  iteration=iteration)
             train_ppl = math.exp(min(train_loss, 100))
             print('Train perplexity: %g' % train_ppl)
@@ -536,7 +541,7 @@ class VariationalTrainerFP16(XETrainer):
             # only save at the end of epoch when the option to save "every iterations" is disabled
             if self.opt.save_every <= 0: 
                 self.save(epoch, valid_ppl)
-            batchOrder = None
+            batch_order = None
             iteration = None
             resume = False
         

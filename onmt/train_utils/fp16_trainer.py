@@ -48,21 +48,32 @@ class DynamicLossScaler:
 
 class FP16XETrainer(XETrainer):
 
-    def __init__(self, model, loss_function, train_data, validData, dicts, opt):
-        super().__init__(model, loss_function, train_data, validData, dicts, opt, set_param=False)
+    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt):
+        super().__init__(model, loss_function, train_data, valid_data, dicts, opt, set_param=False)
         self.optim = onmt.Optim(opt)
         self.scaler = DynamicLossScaler(opt.fp16_loss_scale)
         
         if self.cuda:
            torch.cuda.set_device(self.opt.gpus[0])
            torch.manual_seed(self.opt.seed)
-           
-           #~ print(torch.cuda.get_device_capability(0)[0])
-           
+
            # Important:
            # Loss function needs to be in fp32
            self.loss_function = self.loss_function.cuda()
-           # self.model = self.model.cuda()
+
+    # fp32 utility (gradients and optim)
+    def convert_fp32(self, model_state=None, optim_state=None):
+
+        if model_state is not None:
+            self.model.load_state_dict(model_state)
+
+        params = [p for p in self.model.parameters() if p.requires_grad]
+        self.optim.set_parameters(params)
+
+        if optim_state is not None:
+            self.optim.load_state_dict(optim_state)
+
+        print(self.optim.optimizer)
         
     
     def convert_fp16(self, model_state=None, optim_state=None):
@@ -98,7 +109,6 @@ class FP16XETrainer(XETrainer):
         total_loss = 0
         total_words = 0
                 
-        batch_order = data.create_order(random=False)
         torch.cuda.empty_cache()
         self.model.eval()
         """ New semantics of PyTorch: not creating gradients in this mode """
@@ -166,7 +176,7 @@ class FP16XETrainer(XETrainer):
         report_loss, report_tgt_words = 0, 0
         report_src_words = 0
         start = time.time()
-        nSamples = len(train_data)
+        n_samples = len(train_data)
         
         counter = 0
         num_accumulated_words = 0
@@ -174,7 +184,7 @@ class FP16XETrainer(XETrainer):
         oom_count = 0
         grad_norm = 0
         
-        for i in range(iteration, nSamples):
+        for i in range(iteration, n_samples):
 
             curriculum = (epoch < opt.curriculum)
             
@@ -289,8 +299,6 @@ class FP16XETrainer(XETrainer):
                             else:
                                 raise e
 
-
-                        
                         self.model.zero_grad()
                         self.optim.zero_grad()
                         counter = 0
@@ -298,11 +306,11 @@ class FP16XETrainer(XETrainer):
                         num_accumulated_sents = 0
                         num_updates = self.optim._step
                         if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
-                            valid_loss = self.eval(self.validData)
+                            valid_loss = self.eval(self.valid_data)
                             valid_ppl = math.exp(min(valid_loss, 100))
                             print('Validation perplexity: %g' % valid_ppl)
                             
-                            ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
+                            ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
                             
                             self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
                 
@@ -372,11 +380,15 @@ class FP16XETrainer(XETrainer):
             print('Initializing model parameters')
             init_model_parameters(model, opt)
             resume=False
-            self.convert_fp16()
+
+            if self.opt.fp16:
+                self.convert_fp16()
+            else:
+                self.convert_fp32()
         
         
         
-        valid_loss = self.eval(self.validData)
+        valid_loss = self.eval(self.valid_data)
         valid_ppl = math.exp(min(valid_loss, 100))
         print('Validation perplexity: %g' % valid_ppl)
         #~ 
@@ -393,7 +405,7 @@ class FP16XETrainer(XETrainer):
             print('Train perplexity: %g' % train_ppl)
 
             #  (2) evaluate on the validation set
-            valid_loss = self.eval(self.validData)
+            valid_loss = self.eval(self.valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
             print('Validation perplexity: %g' % valid_ppl)
             

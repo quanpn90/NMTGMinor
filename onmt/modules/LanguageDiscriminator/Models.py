@@ -3,6 +3,9 @@ import torch, math
 import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence as pack
 from torch.nn.utils.rnn import pad_packed_sequence as unpack
+from onmt.modules.WordDrop import embedded_dropout
+
+# from onmt.modules.Utilities import mean_with_mask
 
 
 class LanguageDiscriminator(nn.Module):
@@ -34,7 +37,7 @@ class LanguageDiscriminator(nn.Module):
 
         self.linear_softmax = nn.Linear(self.model_size, self.output_size)
 
-        self.fwd_lstm = nn.LSTM(self.model_size, self.model_size, 1)
+        self.fwd_lstm = nn.LSTM(self.model_size, self.model_size, 2, dropout=self.dropout, bidirectional=False)
 
         self.dropout = nn.Dropout(self.dropout)
 
@@ -52,26 +55,33 @@ class LanguageDiscriminator(nn.Module):
 
         sorted_input = torch.index_select(input, 1, sorted_indices)
 
-        emb = self.word_lut(sorted_input)
+        # emb = self.word_lut(sorted_input)
+        emb = embedded_dropout(self.word_lut, sorted_input, dropout=self.word_dropout if self.training else 0)
 
-        emb = emb.transpoes(0, 1)
+        emb = self.dropout(emb)
 
         # pack into LSTM input format
         lstm_input = pack(emb, sorted_length)
 
-        ltsm_outputs, (hn, cn) = self.fwd_lstm(lstm_input)
+        lstm_outputs, (hn, cn) = self.fwd_lstm(lstm_input)
 
         # the first dimension is 1 (1 layer * 1 direction)
-        output = hn.squeeze(0)
+        # output = hn.squeeze(0)
+        lstm_outputs, _ = unpack(lstm_outputs)
+        sum_ = lstm_outputs.sum(dim=0, keepdim=False)
+        mean_ = sum_ / sorted_length.unsqueeze(1).type_as(sum_)
+
+        output = mean_
 
         # unsort the output from the result to get the output from the original indices
         unsorted_output = output.new(*output.size())
-        unsorted_output.scatter_(0, sorted_indices, output)
+        unsorted_output[sorted_indices] = output
+        # unsorted_output.scatter_(0, sorted_indices.unsqueeze(1), output)
 
-        output = self.dropout(output)
+        output = self.dropout(unsorted_output)
 
         # project to n language output and apply linear softmax
-        output = self.linear_softmax(output)
-        output = nn.functional.log_softmax(output)
+        output = self.linear_softmax(output.float())
+        output = nn.functional.log_softmax(output, dim=-1)
 
         return output
