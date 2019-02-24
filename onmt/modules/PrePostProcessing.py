@@ -8,7 +8,6 @@ import onmt
 from onmt.modules.Bottle import Bottle
 
 
-
 class PrePostProcessing(nn.Module):
     
     """Applies processing to tensors 
@@ -25,26 +24,22 @@ class PrePostProcessing(nn.Module):
         super(PrePostProcessing, self).__init__() 
         self.d_model = d_model
         self.dropout_p = dropout_p     
-        
+        self.residual_type = onmt.Constants.residual_type
         self.steps = list(sequence)
+        self.static = static
         
-        if onmt.Constants.residual_type == 'gated':
+        if self.residual_type == 'gated':
             # gated residual
             # initialize k with one 
             self.k = nn.Parameter(torch.ones(1))
-        
+
         if 'n' in self.steps:
-            
-            ln = nn.LayerNorm((self.d_model,),elementwise_affine=elementwise_affine)
+            ln = nn.LayerNorm((self.d_model,), elementwise_affine=elementwise_affine)
             self.layer_norm = Bottle(ln)
         if 'd' in self.steps:
-            if static:
-                self.dropout = StaticDropout(self.dropout_p)
-            else:
-                self.dropout = nn.Dropout(self.dropout_p, inplace=False)
+            self.dropout = nn.Dropout(self.dropout_p, inplace=False)
     
     def forward(self, tensor, input_tensor=None, mask=None):
-        #~ mask = None
         output = tensor
         for step in self.steps:
             if step == 'n':
@@ -54,9 +49,8 @@ class PrePostProcessing(nn.Module):
                 output = self.dropout(output)
             if step == 'a':
                 if input_tensor is not None:
-                    if onmt.Constants.residual_type != 'gated':
+                    if self.residual_type != 'gated':
                         output = output + input_tensor
                     else:
                         output = F.relu(self.k) * output + input_tensor
         return output
-        

@@ -29,6 +29,7 @@ class XavierLinear(nn.Module):
     def __init__(self, d_in, d_out, bias=True, nonlinearity='linear', weight_norm=False):
         super(XavierLinear, self).__init__()
         linear = nn.Linear(d_in, d_out, bias=bias)
+        self.nonlinearity = nonlinearity
         
         self.weight_norm = weight_norm
         

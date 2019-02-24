@@ -24,5 +24,5 @@ class MaxOut(nn.Module):
         m, i = out.view(*shape).max(dim=max_dim)
         
         m = m.view(*original_size[:-1], m.size(-1))
-        
+
         return m

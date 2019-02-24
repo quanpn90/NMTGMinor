@@ -82,8 +82,8 @@ def build_model(opt, dicts):
                                      padding_idx=onmt.Constants.PAD)
 
     feat_embedding = nn.Embedding(dicts['atb'].size(), opt.model_size)
-        # print("* Joining the weights of encoder and decoder word embeddings")
-        # model.share_enc_dec_embedding()
+    # print("* Joining the weights of encoder and decoder word embeddings")
+    # model.share_enc_dec_embedding()
 
     if opt.model == 'recurrent' or opt.model == 'rnn':
     
@@ -159,35 +159,19 @@ def build_model(opt, dicts):
         
         model = Transformer(encoder, decoder, generator)
 
-    elif opt.model == 'average_transformer':
-
-        from onmt.modules.AverageTransformer.Models import AverageTransformerDecoder
-
-        onmt.Constants.weight_norm = opt.weight_norm
-        onmt.Constants.init_value = opt.param_init
-
-        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN )
-
-        encoder = TransformerEncoder(opt, embedding_src, positional_encoder)
-        decoder = AverageTransformerDecoder(opt, embedding_tgt, positional_encoder)
-
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
-
-        model = Transformer(encoder, decoder, generator)
-
-        loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
-
     elif opt.model == 'simplified_transformer':
 
         from onmt.modules.SimplifiedTransformer.Models import SimplifiedTransformerEncoder, SimplifiedTransformer
 
         onmt.Constants.weight_norm = opt.weight_norm
+
         onmt.Constants.init_value = opt.param_init
 
-        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN )
+        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
 
         encoder = SimplifiedTransformerEncoder(opt, embedding_src, positional_encoder)
-        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder)
+
+        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
 
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
 
@@ -224,7 +208,6 @@ def build_model(opt, dicts):
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN )
         time_encoder = TimeEncoding(opt.model_size, len_max=32)
 
-        
         encoder = UniversalTransformerEncoder(opt, embedding_src, positional_encoder, time_encoder)
         decoder = UniversalTransformerDecoder(opt, embedding_tgt, positional_encoder, time_encoder)
         
@@ -349,13 +332,11 @@ def build_model(opt, dicts):
         if model.encoder is not None:
             init.normal_(model.encoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
         init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
-    
-    
+
     return model, loss_function
-    
+
+
 def init_model_parameters(model, opt):
     
-    if opt.model == 'recurrent':
-        for p in model.parameters():
-            p.data.uniform_(-opt.param_init, opt.param_init)
+    pass
 

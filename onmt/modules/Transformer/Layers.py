@@ -2,12 +2,8 @@ import math
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
-import torch.nn.init as init
-import torch.nn.utils.weight_norm as WeightNorm
 import onmt 
-import torch.nn.functional as F
 from onmt.modules.Bottle import Bottle
-from onmt.modules.StaticDropout import StaticDropout
 from onmt.modules.Linear import XavierLinear, group_linear, FeedForward
 from onmt.modules.MaxOut import MaxOut
 from onmt.modules.GlobalAttention import MultiHeadAttention
@@ -164,7 +160,8 @@ class DecoderLayer(nn.Module):
             self.postprocess_src_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
             self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
 
-    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, residual_dropout=0.0, latent_z=None):
+    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None,
+                residual_dropout=0.0, latent_z=None):
         
         """ Self attention layer 
             layernorm > attn > dropout > residual
