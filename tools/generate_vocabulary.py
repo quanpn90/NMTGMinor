@@ -23,7 +23,7 @@ if __name__ == '__main__':
         input_stream = open(args.input)
     output_stream = sys.stdout
     if args.output is not None:
-        output_stream = open(args.output)
+        output_stream = open(args.output, 'w')
 
     counter = Counter()
     for line in tqdm(input_stream, disable=args.no_progress):

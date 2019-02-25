@@ -344,9 +344,6 @@ class Trainer:
                         raise e
                 meters['fwbw_wall'].stop()
 
-                if math.isnan(display_loss):
-                    self.deal_with_nan(train_data, batch, index + 1)
-
                 total_weight += weight
                 train_data.training_time.update()
                 meters['nll'].update(display_loss, weight)
@@ -398,7 +395,7 @@ class Trainer:
                                     'ppl {:6.2f}'.format(perplexity),
                                     'lr {:.4e}'.format(train_data.optimizer.get_lr()),
                                     'gnorm {:.2f}'.format(meters['gnorm'].val),
-                                    'ooms {:d}'.format(meters['oom'].val),
+                                    'ooms {:d}'.format(meters['oom'].sum),
                                     'fw/bw {:.0f}ms'.format(meters['fwbw_wall'].avg * 1000),
                                     'train {:.0f}ms'.format(meters['train_wall'].avg * 1000)]
                 pbar.set_postfix_str(' | '.join(progress_metrics + specific_metrics))
@@ -458,7 +455,6 @@ class Trainer:
             os.remove(save_file)
 
     def load_checkpoint(self, checkpoint, for_training=False, reset_optim=False):
-        logger.info("Loading checkpoint {}".format(self.args.load_from))
         self.load_args(checkpoint['args'])
         self.load_state_dict(checkpoint)
 
@@ -479,16 +475,6 @@ class Trainer:
 
     def load_state_dict(self, state_dict):
         pass
-
-    def deal_with_nan(self, train_data, batch, step):
-        for k, v in batch.items():
-            if isinstance(v, Tensor):
-                logger.debug("{}: {}".format(k, v.size()))
-            else:
-                logger.debug("{}: {}".format(k, v))
-        breakpoint()
-        self._get_loss(train_data.model, batch)
-        raise ValueError('NaN loss encountered in {}'.format(step))
 
 
 def checkpoint_paths(path, pattern=r'(.*)_ppl_(\d+\.\d+)\_e(\d+\.\d+)\.pt'):

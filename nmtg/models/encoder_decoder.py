@@ -16,6 +16,15 @@ class Encoder(nn.Module):
         """
         raise NotImplementedError
 
+    def get_self_attention_bias(self, inputs, batch_first, input_mask=None):
+        if input_mask is not None:
+            self_attention_mask = input_mask if batch_first else input_mask.transpose(0, 1)
+            self_attention_bias = inputs.new_full(self_attention_mask.size(), float('-inf'))\
+                .masked_fill_(self_attention_mask, 0).unsqueeze(1)
+        else:
+            self_attention_bias = None
+        return self_attention_bias
+
 
 class Decoder(nn.Module):
     """Base class for decoders. Implementing classes should provide the constructor parameter
@@ -54,6 +63,48 @@ class Decoder(nn.Module):
                 self.future_mask.resize_(list(old_mask.size()))
         super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
                                       error_msgs)
+
+    def get_self_attention_mask(self, decoder_inputs, batch_first, input_mask=None, future_masking=True):
+        if future_masking and self.future_masking:
+            len_tgt = decoder_inputs.size(1 if batch_first else 0)
+            # future_mask: (len_tgt x len_tgt)
+            future_mask = self.get_future_mask(len_tgt, decoder_inputs.device)
+            if input_mask is None:
+                self_attention_mask = future_mask.unsqueeze(0)
+            else:
+                # padding_mask: (batch_size x len_tgt)
+                padding_mask = input_mask if batch_first else input_mask.transpose(0, 1)
+                self_attention_mask = (padding_mask.unsqueeze(1) + future_mask).gt_(1)
+        elif input_mask is not None:
+            self_attention_mask = input_mask if batch_first else input_mask.transpose(0, 1)
+            self_attention_mask = self_attention_mask.unsqueeze(1)
+        else:
+            self_attention_mask = None
+
+        return self_attention_mask
+
+    def get_self_attention_bias(self, decoder_inputs, batch_first, input_mask=None, future_masking=True):
+        self_attention_mask = self.get_self_attention_mask(decoder_inputs, batch_first, input_mask, future_masking)
+
+        if self_attention_mask is not None:
+            # self_attention_mask: (batch_size x len_tgt x len_tgt) or broadcastable
+            self_attention_bias = decoder_inputs.new_full(self_attention_mask.size(), float('-inf'))\
+                .masked_fill_(self_attention_mask, 0)
+        else:
+            self_attention_bias = None
+
+        return self_attention_bias
+
+    def get_encoder_attention_bias(self, encoder_outputs, batch_first, encoder_mask=None):
+        if encoder_mask is not None:
+            # enc_padding_mask: (batch_size x len_src) or broadcastable
+            enc_padding_mask = encoder_mask if batch_first else encoder_mask.transpose(0, 1)
+            encoder_attention_bias = encoder_outputs.new_full(enc_padding_mask.size(), float('-inf'))\
+                .masked_fill(enc_padding_mask, 0).unsqueeze(1)
+        else:
+            encoder_attention_bias = None
+
+        return encoder_attention_bias
 
 
 class IncrementalModule(nn.Module):
@@ -128,48 +179,6 @@ class IncrementalDecoder(Decoder):
         :return:
         """
         raise NotImplementedError
-
-    def get_self_attention_mask(self, decoder_inputs, batch_first, input_mask=None, future_masking=True):
-        if future_masking and self.future_masking:
-            len_tgt = decoder_inputs.size(1 if batch_first else 0)
-            # future_mask: (len_tgt x len_tgt)
-            future_mask = self.get_future_mask(len_tgt, decoder_inputs.device)
-            if input_mask is None:
-                self_attention_mask = future_mask.unsqueeze(0)
-            else:
-                # padding_mask: (batch_size x len_tgt)
-                padding_mask = input_mask if batch_first else input_mask.transpose(0, 1)
-                self_attention_mask = (padding_mask.unsqueeze(1) + future_mask).gt_(1)
-        elif input_mask is not None:
-            self_attention_mask = input_mask if batch_first else input_mask.transpose(0, 1)
-            self_attention_mask = self_attention_mask.unsqueeze(1)
-        else:
-            self_attention_mask = None
-
-        return self_attention_mask
-
-    def get_self_attention_bias(self, decoder_inputs, batch_first, input_mask=None, future_masking=True):
-        self_attention_mask = self.get_self_attention_mask(decoder_inputs, batch_first, input_mask, future_masking)
-
-        if self_attention_mask is not None:
-            # self_attention_mask: (batch_size x len_tgt x len_tgt) or broadcastable
-            self_attention_bias = decoder_inputs.new_full(self_attention_mask.size(), float('-inf'))\
-                .masked_fill_(self_attention_mask, 0)
-        else:
-            self_attention_bias = None
-
-        return self_attention_bias
-
-    def get_encoder_attention_bias(self, encoder_outputs, batch_first, encoder_mask=None):
-        if encoder_mask is not None:
-            # enc_padding_mask: (batch_size x len_src) or broadcastable
-            enc_padding_mask = encoder_mask if batch_first else encoder_mask.transpose(0, 1)
-            encoder_attention_bias = encoder_outputs.new_full(enc_padding_mask.size(), float('-inf'))\
-                .masked_fill(enc_padding_mask, 0).unsqueeze(1)
-        else:
-            encoder_attention_bias = None
-
-        return encoder_attention_bias
 
 
 class EncoderDecoderModel(Model):

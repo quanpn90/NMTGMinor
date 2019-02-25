@@ -53,3 +53,6 @@ class TranslationTask(Task):
     def save_results(self, results, out_filename):
         with open(out_filename, 'w') as out:
             out.writelines(r + '\n' for r in results)
+
+    def load_results(self, filename):
+        return TextLineDataset.load_into_memory(filename)

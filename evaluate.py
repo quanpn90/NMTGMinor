@@ -37,7 +37,10 @@ if __name__ == '__main__':
 
     trainer = trainer_class(args)  # type: Trainer
 
-    models = [trainer.load_checkpoint(convert.load_checkpoint(filename)) for filename in args.load_from]
+    models = []
+    for filename in args.load_from:
+        logger.info('Loading checkpoint {}'.format(filename))
+        models.append(trainer.load_checkpoint(convert.load_checkpoint(filename)))
 
     results = trainer.solve(models, task)
 

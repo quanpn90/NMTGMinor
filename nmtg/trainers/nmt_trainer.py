@@ -1,7 +1,5 @@
-import datetime
 import logging
 import os
-from collections import Counter
 from typing import Sequence
 
 import numpy as np
@@ -10,6 +8,7 @@ from torch import Tensor
 from tqdm import tqdm
 
 from nmtg.data import Dictionary, data_utils, ParallelDataset, TextLineDataset
+from nmtg.data.data_utils import get_indices_and_vocabulary
 from nmtg.data.samplers import PreGeneratedBatchSampler
 from nmtg.data.text_lookup_dataset import TextLookupDataset
 from nmtg.meters import AverageMeter
@@ -118,52 +117,22 @@ class NMTTrainer(Trainer):
     @staticmethod
     def preprocess(args):
         split_words = args.input_type == 'word'
-        
+
         # since input and output dir are the same, this is no longer needed
         os.makedirs(args.data_dir_out, exist_ok=True)
+        train_src_name = os.path.basename(args.train_src)
+        train_tgt_name = os.path.basename(args.train_tgt)
 
-        src_offsets, src_lengths, src_counter = [0], [], Counter()
-        tgt_offsets, tgt_lengths, tgt_counter = [0], [], Counter()
+        (src_offsets, src_lengths, src_counter), \
+        (tgt_offsets, tgt_lengths, tgt_counter) = \
+            get_indices_and_vocabulary((args.train_src, args.train_tgt),
+                                       split_words,
+                                       args.lower,
+                                       not args.no_progress,
+                                       args.report_every)
 
-        with open(args.train_src) as src, open(args.train_tgt) as tgt,\
-                tqdm(unit='lines', disable=args.no_progress) as pbar:
-            i = 0
-            src_line = src.readline()
-            tgt_line = tgt.readline()
-            while src_line != '' and tgt_line != '':
-                proc_src_line = src_line.rstrip()
-                proc_tgt_line = tgt_line.rstrip()
-
-                src_offsets.append(src.tell())
-                tgt_offsets.append(tgt.tell())
-
-                if args.lower:
-                    proc_src_line = proc_src_line.lower()
-                    proc_tgt_line = proc_tgt_line.lower()
-                if split_words:
-                    proc_src_line = proc_src_line.split()
-                    proc_tgt_line = proc_tgt_line.split()
-
-                src_lengths.append(len(proc_src_line))
-                tgt_lengths.append(len(proc_tgt_line))
-
-                src_counter.update(proc_src_line)
-                tgt_counter.update(proc_tgt_line)
-
-                i += 1
-
-                if i % args.report_every == 0:
-                    logger.info('{} lines processed'.format(i))
-
-                src_line = src.readline()
-                tgt_line = tgt.readline()
-                pbar.update()
-
-            if src_line != '' or tgt_line != '':
-                logger.warning('Source and target file were not the same length!')
-
-        out_offsets_src = os.path.join(args.data_dir_out, 'train.src.idx.npy')
-        out_lengths_src = os.path.join(args.data_dir_out, 'train.src.len.npy')
+        out_offsets_src = os.path.join(args.data_dir_out, train_src_name + '.idx.npy')
+        out_lengths_src = os.path.join(args.data_dir_out, train_tgt_name + '.len.npy')
         np.save(out_offsets_src, src_offsets)
         np.save(out_lengths_src, src_lengths)
         if args.src_vocab is not None:
@@ -173,8 +142,8 @@ class NMTTrainer(Trainer):
             for word, count in src_counter.items():
                 src_dictionary.add_symbol(word, count)
 
-        out_offsets_tgt = os.path.join(args.data_dir_out, 'train.tgt.idx.npy')
-        out_lengths_tgt = os.path.join(args.data_dir_out, 'train.tgt.len.npy')
+        out_offsets_tgt = os.path.join(args.data_dir_out, train_src_name + '.idx.npy')
+        out_lengths_tgt = os.path.join(args.data_dir_out, train_tgt_name + '.len.npy')
         np.save(out_offsets_tgt, tgt_offsets)
         np.save(out_lengths_tgt, tgt_lengths)
         if args.tgt_vocab is not None:
@@ -257,7 +226,7 @@ class NMTTrainer(Trainer):
             if self.args.print_translations:
                 tqdm.write(line)
                 for i, hyp in enumerate(res):
-                    tqdm.write("Hyp {}/{}: {}".format(i+1, len(hyp), hyp))
+                    tqdm.write("Hyp {}/{}: {}".format(i + 1, len(hyp), hyp))
 
             if len(res) == 1:
                 res = res[0]
@@ -278,12 +247,15 @@ class NMTTrainer(Trainer):
         logger.info('Loading training data')
         split_words = self.args.input_type == 'word'
 
+        train_src_name = os.path.basename(self.args.train_src)
+        train_tgt_name = os.path.basename(self.args.train_tgt)
+
         if self.args.load_into_memory:
             src_data = TextLineDataset.load_into_memory(self.args.train_src)
             tgt_data = TextLineDataset.load_into_memory(self.args.train_tgt)
         else:
-            offsets_src = os.path.join(self.args.data_dir, 'train.src.idx.npy')
-            offsets_tgt = os.path.join(self.args.data_dir, 'train.tgt.idx.npy')
+            offsets_src = os.path.join(self.args.data_dir, train_src_name + '.idx.npy')
+            offsets_tgt = os.path.join(self.args.data_dir, train_tgt_name + '.idx.npy')
             src_data = TextLineDataset.load_indexed(self.args.train_src, offsets_src)
             tgt_data = TextLineDataset.load_indexed(self.args.train_tgt, offsets_tgt)
         src_data = TextLookupDataset(src_data, self.src_dict, words=split_words, bos=False, eos=False,
@@ -293,8 +265,8 @@ class NMTTrainer(Trainer):
         dataset = ParallelDataset(src_data, tgt_data)
         logger.info('Number of training sentences: {:,d}'.format(len(dataset)))
 
-        src_len_filename = os.path.join(self.args.data_dir, 'train.src.len.npy')
-        tgt_len_filename = os.path.join(self.args.data_dir, 'train.tgt.len.npy')
+        src_len_filename = os.path.join(self.args.data_dir, train_src_name + '.len.npy')
+        tgt_len_filename = os.path.join(self.args.data_dir, train_tgt_name + '.len.npy')
         src_lengths = np.load(src_len_filename)
         tgt_lengths = np.load(tgt_len_filename)
 
@@ -401,8 +373,8 @@ class NMTTrainer(Trainer):
                     tqdm.write("Ref {}: {}".format(len(results) + i, reference))
                     for j in range(self.args.n_best):
                         translation = res[i * self.args.n_best + j]
-                        tqdm.write("Hyp {}.{}: {}".format(len(results) + i, j+1,
-                                   translation.replace(self.args.bpe_symbol, '')))
+                        tqdm.write("Hyp {}.{}: {}".format(len(results) + i, j + 1,
+                                                          translation.replace(self.args.bpe_symbol, '')))
 
             results.extend(res)
 

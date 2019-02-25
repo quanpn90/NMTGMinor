@@ -1,3 +1,5 @@
+import argparse
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -13,10 +15,15 @@ class Model(nn.Module):
         """Add model-specific arguments to the parser."""
         pass
 
+    @staticmethod
+    def map_options(args):
+        """Map command-line options to constructor parameters"""
+        return argparse.Namespace()
+
     @classmethod
     def build_model(cls, args):
         """Build a new model instance."""
-        raise NotImplementedError
+        return cls(**cls.map_options(args).__dict__)
 
     def get_normalized_probs(self, net_output, log_probs):
         """Get normalized probabilities (or log probs) from a net's output."""

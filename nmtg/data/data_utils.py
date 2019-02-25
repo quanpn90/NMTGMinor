@@ -1,11 +1,17 @@
+import logging
+from collections import Counter
+
 import numpy as np
 from typing import Mapping, Sequence
 
 import torch
 import torch.utils.data
 from torch import Tensor
+from tqdm import tqdm
 
 from nmtg.data.dictionary import Dictionary
+
+logger = logging.getLogger(__name__)
 
 
 def parse_embedding(embed_path):
@@ -34,6 +40,49 @@ def load_embedding(embed_dict, vocab: Dictionary, embedding):
         if token in embed_dict:
             embedding.weight.data[idx] = embed_dict[token]
     return embedding
+
+
+def get_indices_and_vocabulary(filenames, split_words=True, lower=False, progress_bar=True, report_every=100000):
+    offsets = [[0] for _ in filenames]
+    lengths = [[] for _ in filenames]
+    counters = [Counter() for _ in filenames]
+
+    file_handles = [open(filename) for filename in filenames]
+
+    try:
+        with tqdm(unit='lines', disable=not progress_bar) as pbar:
+            i = 0
+            lines = [f.readline() for f in file_handles]
+            while all(line != '' for line in lines):
+                proc_lines = [line.rstrip() for line in lines]
+
+                if lower:
+                    proc_lines = [line.lower() for line in lines]
+                if split_words:
+                    proc_lines = [line.split() for line in lines]
+
+                for offset, f in zip(offsets, file_handles):
+                    offset.append(f.tell())
+
+                for length, counter, line in zip(lengths, counters, proc_lines):
+                    length.append(len(line))
+                    counter.update(line)
+
+                i += 1
+
+                if i % report_every == 0:
+                    logger.info('{:,} lines processed'.format(i))
+
+                lines = [f.readline() for f in file_handles]
+                pbar.update()
+
+            if any(line != '' for line in lines):
+                logger.warning('Files are not the same length')
+    finally:
+        for f in file_handles:
+            f.close()
+
+    return list(zip(offsets, lengths, counters))
 
 
 def generate_length_based_batches_from_samples(samples, length_per_batch, max_examples_per_batch=128,

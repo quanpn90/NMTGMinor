@@ -10,11 +10,11 @@ class EmbeddingDropout(nn.Module):
         self.scale = scale
 
     def forward(self, words):
-        if self.dropout > 0:
+        if self.dropout > 0 and self.training:
             weight = self.embedding.weight
-            mask = weight.new().resize_((weight.size(0), 1)) \
+            mask = weight.new_empty((weight.size(0), 1)) \
                        .bernoulli_(1 - self.dropout) \
-                       .expand_as(weight) / (1 - self.dropout)
+                       .expand_as(weight).div(1 - self.dropout)
             masked_embed_weight = mask * weight
         else:
             masked_embed_weight = self.embedding.weight
@@ -30,6 +30,9 @@ class EmbeddingDropout(nn.Module):
 
 
 class StaticDropout(nn.Module):
+    # Currently not in use. Was used as part of gradient checkpointing, to statically generate a dropout mask
+    # Since torch builtin checkpointing (supposedly) handles RNG state, we are currently not using static dropout
+
     def __init__(self, p=0.5):
         super().__init__()
         if not 0 <= p <= 1:

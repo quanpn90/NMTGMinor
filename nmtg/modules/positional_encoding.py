@@ -30,7 +30,8 @@ class PositionalEncoding(IncrementalModule):
 class SinusoidalPositionalEncoding(PositionalEncoding):
     """
     Adds positional embeddings to standard word embeddings
-    This matches the original TensorFlow implementation at https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py.
+    This matches the original TensorFlow implementation at
+    https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py.
 
     Args:
         model_dim:   dimension of model
@@ -96,7 +97,8 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
 
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
                               error_msgs):
-        self.pos_emb.resize_(*list(state_dict[prefix + 'pos_emb'].size()))
+        old_emb = state_dict[prefix + 'pos_emb']
+        self.pos_emb.resize_(*list(old_emb.size()))
         super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
                                       error_msgs)
 
