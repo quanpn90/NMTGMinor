@@ -50,12 +50,13 @@ class DynamicLossScaler:
 
 class LanguageDiscriminatorTrainer(BaseTrainer):
 
-    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt):
-        super().__init__(model, loss_function, train_data, valid_data, dicts, opt   )
+    def __init__(self, cls_model, nmt_model, loss_function, train_data, valid_data, dicts, opt):
+        super().__init__(cls_model, loss_function, train_data, valid_data, dicts, opt   )
         self.optim = onmt.Optim(opt)
         self.scaler = DynamicLossScaler(opt.fp16_loss_scale, scale_window=2000)
         self.n_samples = 1
         self.start_time = time.time()
+        self.nmt_model = nmt_model
 
         if self.cuda:
             torch.cuda.set_device(self.opt.gpus[0])
@@ -64,6 +65,7 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
             # Loss function needs to be in fp32
             self.loss_function = self.loss_function.cuda()
             self.model = self.model.cuda()
+            self.nmt_model = self.nmt_model.cuda()
 
         # prepare some meters
         self.logger = Logger(self.optim, scaler=self.scaler)
@@ -76,6 +78,7 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
             self.model.load_state_dict(model_state)
 
         self.model = self.model.half()
+        self.nmt_model = self.nmt_model.half()
         params = [p for p in self.model.parameters() if p.requires_grad]
         total_param_size = sum(p.data.numel() for p in params)
 
@@ -148,9 +151,10 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
 
                 # print(src)
                 # print(target)
+                src = src.transpose(0, 1)
+                src_context, _  = self.nmt_model.encoder(src)
 
-
-                outputs = self.model(src, src_length)
+                outputs = self.model(src, src_context)
 
                 loss_output = self.loss_function(outputs, target)
 
@@ -175,7 +179,7 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
 
         return total_loss / (total_words + 1e-6)
 
-    def train_epoch(self, epoch, resume=False, batchOrder=None, iteration=0):
+    def train_epoch(self, epoch, resume=False, batch_order=None, iteration=0):
 
         opt = self.opt
         train_data = self.train_data
@@ -190,11 +194,11 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
 
         # Shuffle mini batch order.
         if resume:
-            train_data.batchOrder = batchOrder
+            train_data.batch_order = batch_order
             train_data.set_index(iteration)
             print("Resuming from iteration: %d" % iteration)
         else:
-            batchOrder = train_data.create_order()
+            batch_order = train_data.create_order()
             iteration = 0
 
         self.logger.reset()
@@ -219,7 +223,12 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                 src_length = batch.get('src_length')
                 target = batch.get('src_attbs')
                 # print("DEBUGGING 1")
-                outputs = self.model(src, src_length)
+
+                with torch.no_grad():
+                    src = src.transpose(0, 1)
+                    src_context, _ = self.nmt_model.encoder(src)
+
+                outputs = self.model( src, src_context.detach())
                 # print("DEBUGGING 2")
                 loss_output = self.loss_function(outputs, target)
 
@@ -233,7 +242,6 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                     normalizer = 1.0
 
                 loss.div(normalizer).backward()
-
 
                 ## take the negative likelihood
                 loss_data = loss.item()
@@ -349,7 +357,7 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
 
                             ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
 
-                            # self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
+                            # self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
 
                 num_words = tgt_size
                 self.meters['report_loss'].update(loss_data)
@@ -387,7 +395,7 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
         if checkpoint is not None:
             print('Loading model and optim from checkpoint at %s' % save_file)
             self.convert_fp16(checkpoint['model'], checkpoint['optim'])
-            batchOrder = checkpoint['batchOrder']
+            batch_order = checkpoint['batch_order']
             iteration = checkpoint['iteration'] + 1
             opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
             resume = True
@@ -397,7 +405,7 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
             del checkpoint
 
         else:
-            batchOrder = None
+            batch_order = None
             iteration = 0
             print('Initializing model parameters')
             init_model_parameters(model, opt)
@@ -408,13 +416,13 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
             else:
                 self.convert_fp32()
 
-        if opt.var_load_pretrained:
-            print("Loading pretrained from %s " % opt.var_load_pretrained)
+        if opt.load_pretrained_nmt:
+            print("Loading pretrained NMT from %s " % opt.load_pretrained_nmt)
 
-            pretrained_cp = torch.load(opt.var_load_pretrained, map_location=lambda storage, loc: storage)
+            pretrained_cp = torch.load(opt.load_pretrained_nmt, map_location=lambda storage, loc: storage)
 
             transformer_model_weights = pretrained_cp['model']
-            self.model.load_transformer_weights(transformer_model_weights)
+            self.nmt_model.load_state_dict(transformer_model_weights)
 
             print("Done")
 
@@ -429,7 +437,7 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
 
             #  (1) train for one epoch on the training set
             train_loss = self.train_epoch(epoch, resume=resume,
-                                          batchOrder=batchOrder,
+                                          batch_order=batch_order,
                                           iteration=iteration)
             train_ppl = math.exp(min(train_loss, 100))
             print('Train perplexity: %g' % train_ppl)
@@ -442,7 +450,7 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
             # only save at the end of epoch when the option to save "every iterations" is disabled
             # if self.opt.save_every <= 0:
                 # self.save(epoch, valid_ppl)
-            batchOrder = None
+            batch_order = None
             iteration = None
             resume = False
 

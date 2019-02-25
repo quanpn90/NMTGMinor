@@ -148,7 +148,6 @@ class MultiHeadAttention(nn.Module):
         self.fc_key = Bottle(Linear(d_model, h*self.d_head, bias=False))
         self.fc_value = Bottle(Linear(d_model, h*self.d_head, bias=False))
         
-        self.attention_out = onmt.Constants.attention_out
         self.fc_concat = Bottle(Linear(h*self.d_head, d_model, bias=False))
 
         if static:

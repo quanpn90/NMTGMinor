@@ -16,6 +16,8 @@ from onmt.train_utils.trainer import XETrainer
 from onmt.train_utils.lang_discriminator_trainer import LanguageDiscriminatorTrainer
 from onmt.ModelConstructor import build_model, init_model_parameters
 from onmt.data_utils.IndexedDataset import IndexedInMemoryDataset
+from onmt.modules.Transformer.Layers import PositionalEncoding
+
 
 parser = argparse.ArgumentParser(description='train_language_discriminator.py')
 onmt.Markdown.add_md_help_argument(parser)
@@ -33,6 +35,8 @@ print(opt)
 onmt.Constants.weight_norm = opt.weight_norm
 onmt.Constants.checkpointing = opt.checkpointing
 onmt.Constants.max_position_length = opt.max_position_length
+onmt.Constants.residual_type = opt.residual_type
+onmt.Constants.activation_layer = opt.activation_layer
 
 # Use static dropout if checkpointing > 0
 if opt.checkpointing > 0:
@@ -60,11 +64,9 @@ def main():
     train_tgt['attbs'] = IndexedInMemoryDataset(train_path + '.langs.tgt')
 
     train_data = onmt.Dataset(train_src,
-                              train_tgt, opt.batch_size_words, opt.gpus,
+                              train_tgt, opt.batch_size_words,
                               batch_size_sents=opt.batch_size_sents,
-                              pad_count=opt.pad_count,
-                              multiplier=opt.batch_size_multiplier,
-                              sort_by_target=opt.sort_by_target)
+                              multiplier=opt.batch_size_multiplier)
 
     valid_path = opt.data + '.valid'
     valid_src, valid_tgt = dict(), dict()
@@ -74,7 +76,7 @@ def main():
     valid_tgt['attbs'] = IndexedInMemoryDataset(valid_path + '.langs.tgt')
 
     valid_data = onmt.Dataset(valid_src,
-                              valid_tgt, opt.batch_size_words, opt.gpus,
+                              valid_tgt, opt.batch_size_words,
                               batch_size_sents=opt.batch_size_sents)
 
     elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
@@ -92,19 +94,24 @@ def main():
     # Go to ModelConstructor for more details
     from onmt.modules.LanguageDiscriminator.Models import LanguageDiscriminator
 
+    nmt_model, _ = build_model(opt, dicts)
+
     n_languages = dicts['atb'].size()
 
     embedding_src = nn.Embedding(dicts['src'].size(),
                                  opt.model_size,
                                  padding_idx=onmt.Constants.PAD)
-    model = LanguageDiscriminator(opt, embedding_src, n_languages)
+
+    positional_encoder = PositionalEncoding(opt.model_size, len_max=2048)
+
+    cls_model = LanguageDiscriminator(opt, embedding_src, positional_encoder, n_languages)
 
     loss_function = nn.NLLLoss(reduce=False)
 
-    num_params = sum([p.nelement() for p in model.parameters()])
+    num_params = sum([p.nelement() for p in cls_model.parameters()])
     print('* number of parameters: %d' % num_params)
 
-    trainer = LanguageDiscriminatorTrainer(model, loss_function, train_data, valid_data, dicts, opt)
+    trainer = LanguageDiscriminatorTrainer(cls_model, nmt_model, loss_function, train_data, valid_data, dicts, opt)
 
     trainer.run(save_file=opt.load_from)
 

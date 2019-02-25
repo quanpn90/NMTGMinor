@@ -219,7 +219,7 @@ def make_parser(parser):
                         help="""pooling operation to summerize one state from a sequence""")
     parser.add_argument('-var_combine_z', default='once',  
                         help="""How to combine z into the transformer: once|all """)
-    parser.add_argument('-var_load_pretrained', default='', type=str,
+    parser.add_argument('-load_pretrained_nmt', default='', type=str,
                         help="""Load a pretrained from a transformer model""")
     parser.add_argument('-var_not_sampling', action='store_true',
                         help="""Do not sample (use mean)""")

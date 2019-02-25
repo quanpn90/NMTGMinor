@@ -67,6 +67,7 @@ def build_model(opt, dicts):
     onmt.Constants.version = 1.0
     onmt.Constants.attention_out = opt.attention_out
     onmt.Constants.residual_type = opt.residual_type
+    onmt.Constants.init_value = opt.param_init
     
     MAX_LEN = onmt.Constants.max_position_length  # This should be the longest sentence from the dataset
 
@@ -82,6 +83,8 @@ def build_model(opt, dicts):
                                      padding_idx=onmt.Constants.PAD)
 
     feat_embedding = nn.Embedding(dicts['atb'].size(), opt.model_size)
+
+    positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
     # print("* Joining the weights of encoder and decoder word embeddings")
     # model.share_enc_dec_embedding()
 
@@ -100,15 +103,7 @@ def build_model(opt, dicts):
         loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
         
     elif opt.model == 'transformer':
-        # raise NotImplementedError
-        
-        onmt.Constants.init_value = opt.param_init
-        
-        if opt.time == 'positional_encoding':
-            positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
-        else:
-            positional_encoder = None
-        
+
         encoder = TransformerEncoder(opt, embedding_src, positional_encoder)
         decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding,
                                      encoder_to_share=encoder if opt.share_enc_dec_weights else None)
@@ -126,8 +121,6 @@ def build_model(opt, dicts):
         onmt.Constants.weight_norm = opt.weight_norm
         onmt.Constants.init_value = opt.param_init
 
-        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
-        
         encoder = StochasticTransformerEncoder(opt, embedding_src, positional_encoder)
         
         decoder = StochasticTransformerDecoder(opt, embedding_tgt, positional_encoder)
@@ -144,11 +137,6 @@ def build_model(opt, dicts):
         
         onmt.Constants.weight_norm = opt.weight_norm
         onmt.Constants.init_value = opt.param_init
-
-        if opt.time == 'positional_encoding':
-            positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
-        else:
-            positional_encoder = None
         
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN )
         
@@ -163,12 +151,6 @@ def build_model(opt, dicts):
 
         from onmt.modules.SimplifiedTransformer.Models import SimplifiedTransformerEncoder, SimplifiedTransformer
 
-        onmt.Constants.weight_norm = opt.weight_norm
-
-        onmt.Constants.init_value = opt.param_init
-
-        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
-
         encoder = SimplifiedTransformerEncoder(opt, embedding_src, positional_encoder)
 
         decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
@@ -178,6 +160,22 @@ def build_model(opt, dicts):
         model = SimplifiedTransformer(encoder, decoder, generator)
 
         loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+
+    elif opt.model == 'l2_transformer':
+
+        from onmt.modules.SimplifiedTransformer.Models import SimplifiedTransformerEncoder, SimplifiedTransformer
+        from onmt.modules.SimplifiedTransformer.NMTL2Loss import NMTL2Loss
+
+        encoder = SimplifiedTransformerEncoder(opt, embedding_src, positional_encoder)
+        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
+
+        tgt_encoder = SimplifiedTransformerEncoder(opt, embedding_tgt, positional_encoder, share=encoder)
+
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+
+        model = SimplifiedTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder)
+
+        loss_function = NMTL2Loss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
 
     elif opt.model == 'ptransformer':
     

@@ -3,13 +3,12 @@ import torch, math
 import torch.nn as nn
 import onmt
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, TransformerDecodingState
+from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer
 from onmt.modules.BaseModel import NMTModel
 from onmt.modules.WordDrop import embedded_dropout
 from torch.utils.checkpoint import checkpoint
 from onmt.modules.Utilities import mean_with_mask_backpropable as mean_with_mask
 from onmt.modules.Utilities import max_with_mask
-
-# ~ from onmt.modules.Checkpoint import checkpoint
 from onmt.modules.Transformer.Layers import PrePostProcessing
 
 
@@ -30,18 +29,42 @@ class SimplifiedTransformerEncoder(TransformerEncoder):
 
     """
 
-    def __init__(self, opt, embedding, positional_encoder):
+    def __init__(self, opt, embedding, positional_encoder, share=None):
 
         self.layers = opt.layers
-
-        # build_modules will be called from the inherited constructor
-        super(SimplifiedTransformerEncoder, self).__init__(opt, embedding, positional_encoder)
-
         self.n_encoder_heads = opt.n_encoder_heads
         self.model_size = opt.model_size
-        self.projector = nn.Linear(opt.model_size, opt.model_size * opt.n_encoder_heads)
         self.pooling = opt.var_pooling
-        self.final_norm = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+        # self.projector = nn.Linear(opt.model_size, opt.model_size * opt.n_encoder_heads)
+        # self.final_norm = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+
+        # build_modules will be called from the inherited constructor
+        super(SimplifiedTransformerEncoder, self).__init__(opt, embedding, positional_encoder, share=share)
+
+
+    def build_modules(self, shared_encoder=None):
+
+        if shared_encoder is not None:
+            assert(isinstance(shared_encoder, SimplifiedTransformerEncoder))
+            print("* This encoder is Sharing parameters with another encoder")
+            self.layer_modules = shared_encoder.layer_modules
+
+            self.postprocess_layer = shared_encoder.postprocess_layer
+
+            self.projector = shared_encoder.projector
+
+            self.final_norm = shared_encoder.final_norm
+        else:
+
+            self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout,
+                                                             self.inner_size, self.attn_dropout, self.residual_dropout)
+                                                for _ in range(self.layers)])
+
+            self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
+
+            self.projector = nn.Linear(self.model_size, self.model_size * self.n_encoder_heads)
+
+            self.final_norm = PrePostProcessing(self.model_size, self   .dropout, sequence='n')
 
     def forward(self, input, freeze_embedding=False, return_stack=False, additional_sequence=None, **kwargs):
         """
@@ -143,6 +166,13 @@ class SimplifiedTransformerEncoder(TransformerEncoder):
 class SimplifiedTransformer(NMTModel):
     """Main model in 'Attention is all you need' """
 
+    def __init__(self, encoder, decoder, generator=None, tgt_encoder=None):
+        super().__init__(encoder, decoder, generator=generator)
+        self.tgt_encoder = tgt_encoder
+
+        # if tgt_encoder is not None:
+
+
     def forward(self, batch, grow=False):
         """
         Inputs Shapes:
@@ -161,13 +191,25 @@ class SimplifiedTransformer(NMTModel):
         tgt = tgt.transpose(0, 1)
 
         context, src_mask = self.encoder(src)
+        src_context = context
 
+        if self.tgt_encoder is not None:
+            # don't look at the first token of the target
+            tgt_context, _ = self.tgt_encoder(tgt[:, 1:])
+        else:
+            tgt_context = None
+
+        # because the context size does not depend on the input size
+        # and the context does not have masking any more
+        # so we create a 'fake' input sequence for the decoder
         fake_src = src.new(context.size(1), context.size(0)).fill_(onmt.Constants.BOS)
         output, coverage = self.decoder(tgt, tgt_attbs, context, fake_src)
 
         output_dict = dict()
         output_dict['hiddens'] = output
         output_dict['coverage'] = coverage
+        output_dict['tgt_context'] = tgt_context
+        output_dict['src_context'] = src_context
         return output_dict
 
     def decode(self, batch):
@@ -189,8 +231,8 @@ class SimplifiedTransformer(NMTModel):
         fake_src = src.new(context.size(1), context.size(0)).fill_(onmt.Constants.BOS)
 
         output, coverage = self.decoder(tgt_input, tgt_attbs, context, fake_src)
-        # output, coverage = self.decoder(tgt_input, context, fake_src)
 
+        # scan through the sequence to get the sentence log probs
         for dec_t, tgt_t in zip(output, tgt_output):
             gen_t = self.generator(dec_t)
             tgt_t = tgt_t.unsqueeze(1)

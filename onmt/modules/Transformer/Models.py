@@ -26,7 +26,7 @@ class TransformerEncoder(nn.Module):
         
     """
 
-    def __init__(self, opt, embedding, positional_encoder, feature_embedding=None):
+    def __init__(self, opt, embedding, positional_encoder, feature_embedding=None, share=None):
 
         super(TransformerEncoder, self).__init__()
 
@@ -66,13 +66,21 @@ class TransformerEncoder(nn.Module):
 
         self.positional_encoder = positional_encoder
 
-        self.build_modules()
+        self.build_modules(shared_encoder=share)
 
-    def build_modules(self):
+    def build_modules(self, shared_encoder=None):
 
-        self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size,
-                                                         self.attn_dropout, self.residual_dropout) for _ in
-                                            range(self.layers)])
+        if shared_encoder is not None:
+            self.layer_modules = shared_encoder.layer_modules
+
+            self.postprocess_layer = shared_encoder.postprocess_layer
+        else:
+
+            self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout,
+                                                             self.inner_size, self.attn_dropout, self.residual_dropout)
+                                                for _ in range(self.layers)])
+
+            self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
 
     def forward(self, input, freeze_embedding=False, return_stack=False, additional_sequence=None, **kwargs):
         """

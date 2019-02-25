@@ -35,6 +35,8 @@ class Logger(object):
         self.meters["q_mean"] = AverageMeter()
         self.meters["q_var"] = AverageMeter()
 
+        self.meters["l2"] = AverageMeter()
+
         self.meters["total_lang_correct"] = AverageMeter()
         self.meters["total_sents"] = AverageMeter()
 
@@ -64,15 +66,16 @@ class Logger(object):
         q_mean = self.meters['q_mean'].avg
         q_var = self.meters['q_var'].avg
         kl_prior = self.meters['kl_prior'].avg
+        l2 = self.meters['l2'].avg if 'l2' in self.meters else None
 
-        log_string = (("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " + "%5.0f tgt tok/s; lscale %0.2f; gnorm %.3f; oom %d") %
+        log_string = (("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d "
+                       + "%5.0f tgt tok/s; gnorm %.3f; oom %d") %
                           (epoch, iteration+1, data_size,
                            ppl,
                            self.optim.getLearningRate(),
                            self.optim._step,
                            self.meters["report_tgt_words"].sum/(time.time()-self.start_time),
-                           self.scaler.loss_scale,
-                           grad_norm if grad_norm else 0, 
+                           grad_norm if grad_norm else 0,
                            oom_count))
 
         if ce is not None:
@@ -102,8 +105,10 @@ class Logger(object):
         if self.meters['total_lang_correct'].avg is not None:
             total_lang_correct = self.meters['total_lang_correct'].sum
             acc = total_lang_correct / self.meters['total_sents'].sum * 100.0
+            log_string += "; acc %.3f " % acc
 
-        log_string += "; acc %.3f " % acc
+        if l2 is not None:
+            log_string += "; l2 %.3f" % l2
 
         # Don't forget to print this ...
         print(log_string)

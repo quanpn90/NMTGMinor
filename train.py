@@ -104,12 +104,10 @@ def main():
         # trainer = MultiGPUXETrainer(model, loss_function, train_data, valid_data, dataset, opt)
         raise NotImplementedError("Multi-GPU training is not supported atm")
     else:
-            # if opt.fp16:
-            #     trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
-            # else:
-            #     trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
-
-        trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
+        if opt.fp16:
+            trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
+        else:
+            trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
 
     trainer.run(save_file=opt.load_from)
 
