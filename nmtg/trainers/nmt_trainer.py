@@ -75,6 +75,8 @@ class NMTTrainer(Trainer):
                             help='Label smoothing value for loss functions.')
         parser.add_argument('-print_translations', action='store_true',
                             help='Output finished translations as they are generated')
+        parser.add_argument('-return_scores', action='store_true',
+                            help='Return scores in the online translation')
 
         # Currently used, but pointless
         parser.add_argument('-diverse_beam_strength', type=float, default=0.5,
@@ -217,8 +219,13 @@ class NMTTrainer(Trainer):
                 source_lengths = source_lengths.cuda()
                 encoder_mask = encoder_mask.cuda()
 
-            res = [self.tgt_dict.string(tr['tokens'], join_str=join_str)
-                   for tr in generator.generate(encoder_inputs, source_lengths, encoder_mask)[0][:self.args.n_best]]
+            res = []
+            scores = []
+            positional_scores = []
+            for tr in generator.generate(encoder_inputs, source_lengths, encoder_mask)[0][:self.args.n_best]:
+                res.append(self.tgt_dict.string(tr['tokens'], join_str=join_str))
+                scores.append(tr['score'])
+                positional_scores.append(tr['positional_scores'])
 
             if self.args.print_translations:
                 tqdm.write(line)
@@ -227,7 +234,13 @@ class NMTTrainer(Trainer):
 
             if len(res) == 1:
                 res = res[0]
-            yield res
+                scores = scores[0]
+                positional_scores = positional_scores[0]
+            
+            if self.args.return_scores:
+                yield res, scores, positional_scores.tolist()
+            else:
+                yield res
 
     def _build_loss(self):
         loss = NMTLoss(len(self.tgt_dict), self.tgt_dict.pad(), self.args.label_smoothing)
