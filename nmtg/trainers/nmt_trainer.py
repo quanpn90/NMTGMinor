@@ -111,10 +111,6 @@ class NMTTrainer(Trainer):
         parser.add_argument('-tgt_seq_length_trunc', type=int, default=0,
                             help='Truncate target sequences to this length. 0 (default) to disable')
 
-    @classmethod
-    def add_eval_options(cls, parser):
-        super().add_eval_options(parser)
-
     @staticmethod
     def preprocess(args):
         split_words = args.input_type == 'word'
