@@ -3,8 +3,10 @@ from torch import nn
 
 import nmtg.data.data_utils
 from nmtg.data import Dictionary
+from nmtg.models import Model
 from nmtg.models.encoder_decoder import Encoder, IncrementalDecoder, EncoderDecoderModel
 from nmtg.modules.dropout import EmbeddingDropout
+from nmtg.modules.linear import XavierLinear
 
 
 class NMTEncoder(Encoder):
@@ -108,7 +110,9 @@ class NMTModel(EncoderDecoderModel):
             dummy_output = model(dummy_input, torch.tensor([[1]], dtype=torch.uint8))
             output_size = dummy_output.size(-1)
 
-        src_embedding = cls.build_embedding(args, src_dict, embedding_size, path=args.pre_word_vecs_enc)
+        src_embedding = cls.build_embedding(src_dict, embedding_size, path=args.pre_word_vecs_enc,
+                                            init_embedding=args.init_embedding,
+                                            freeze_embedding=args.freeze_embeddings)
 
         if args.join_embedding:
             if src_dict is not tgt_dict:
@@ -116,14 +120,14 @@ class NMTModel(EncoderDecoderModel):
 
             tgt_embedding = src_embedding
         else:
-            tgt_embedding = cls.build_embedding(args, tgt_dict, embedding_size, path=args.pre_word_vecs_dec)
+            tgt_embedding = cls.build_embedding(tgt_dict, embedding_size, path=args.pre_word_vecs_dec,
+                                                init_embedding=args.init_embedding,
+                                                freeze_embedding=args.freeze_embeddings)
 
-        tgt_linear = nn.Linear(output_size, len(tgt_dict))
+        tgt_linear = XavierLinear(output_size, len(tgt_dict))
 
         if args.tie_weights:
             tgt_linear.weight = tgt_embedding.weight
-        else:
-            nn.init.xavier_uniform_(tgt_linear.weight)
 
         encoder = NMTEncoder(model.encoder, src_embedding, args.word_dropout)
         decoder = NMTDecoder(model.decoder, tgt_embedding, args.word_dropout, tgt_linear)
@@ -131,19 +135,20 @@ class NMTModel(EncoderDecoderModel):
         return cls(encoder, decoder, src_dict, tgt_dict, batch_first)
 
     @staticmethod
-    def build_embedding(args, dictionary: Dictionary, embedding_size, path=None):
+    def build_embedding(dictionary: Dictionary, embedding_size, path=None,
+                        init_embedding='xavier', freeze_embedding=False):
         emb = nn.Embedding(len(dictionary), embedding_size, padding_idx=dictionary.pad())
         if path is not None:
             embed_dict = nmtg.data.data_utils.parse_embedding(path)
             nmtg.data.data_utils.load_embedding(embed_dict, dictionary, emb)
-        elif args.init_embedding == 'xavier':
+        elif init_embedding == 'xavier':
             nn.init.xavier_uniform_(emb.weight)
-        elif args.init_embedding == 'normal':
+        elif init_embedding == 'normal':
             nn.init.normal_(emb.weight, mean=0, std=embedding_size ** -0.5)
         else:
-            raise ValueError('Unknown initialization {}'.format(args.init_embedding))
+            raise ValueError('Unknown initialization {}'.format(init_embedding))
 
-        if args.freeze_embeddings:
+        if freeze_embedding:
             emb.weight.requires_grad_(False)
 
         return emb
@@ -177,3 +182,48 @@ class NMTModel(EncoderDecoderModel):
         res['encoder']['encoder'] = model_state_dict['encoder']
         res['decoder']['decoder'] = model_state_dict['decoder']
         return res
+
+
+class NMTDualDecoder(Model):
+    def __init__(self, first_model, second_model):
+        super().__init__()
+        self.first_model = first_model
+        self.second_model = second_model
+
+    @staticmethod
+    def add_options(parser):
+        # NMTModel.add_options(parser)
+        parser.add_argument('-tie_dual_weights', action='store_true',
+                            help='Share weights between embedding and second softmax')
+        parser.add_argument('-join_dual_embedding', action='store_true',
+                            help='Share encoder and other decoder embeddings')
+        parser.add_argument('-freeze_dual_embeddings', action='store_true',
+                            help='Do not train other word embeddings')
+        parser.add_argument('-pre_word_vecs_dual_dec', type=str,
+                            help='If a valid path is specified, then this will load '
+                                 'pretrained word embeddings on the other decoder side. '
+                                 'See README for specific formatting instructions.')
+
+    @classmethod
+    def wrap_model(cls, args, model: EncoderDecoderModel, second_model: EncoderDecoderModel,
+                   src_dict: Dictionary, tgt_dict: Dictionary, second_tgt_dict: Dictionary, batch_first=None):
+        del second_model.encoder
+        nmt_model = NMTModel.wrap_model(args, model, src_dict, tgt_dict, batch_first)
+
+        if args.join_dual_embedding:
+            embedding = nmt_model.encoder.embedded_dropout.embedding
+        else:
+            embedding = NMTModel.build_embedding(second_tgt_dict,
+                                                 nmt_model.encoder.embedded_dropout.embedding.weight.size(1),
+                                                 path=args.pre_word_vecs_dual_dev,
+                                                 init_embedding=args.init_embedding,
+                                                 freeze_embedding=args.freeze_dual_embeddings)
+
+        linear = XavierLinear(nmt_model.decoder.linear.weight.size(1), len(second_tgt_dict))
+
+        if args.tie_dual_weights:
+            linear.weight = embedding.weight
+
+        second_decoder = NMTDecoder(second_model.decoder, embedding, args.word_dropout, linear)
+        second_model = NMTModel(nmt_model.encoder, second_decoder, src_dict, second_tgt_dict, nmt_model.batch_first)
+        return cls(nmt_model, second_model)

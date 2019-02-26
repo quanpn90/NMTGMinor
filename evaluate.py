@@ -47,5 +47,5 @@ if __name__ == '__main__':
     logger.info(' | '.join(task.score_results(results)))
 
     if args.output is not None:
-        os.makedirs(os.path.dirname(args.output), exist_ok=True)
+        os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
         task.save_results(results, args.output)

@@ -72,7 +72,3 @@ class Model(nn.Module):
         """Freeze this model's parameters"""
         for p in self.parameters():
             p.requires_grad_(False)
-
-    @staticmethod
-    def convert_state_dict(opt, state_dict):
-        return {}

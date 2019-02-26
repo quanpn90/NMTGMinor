@@ -7,6 +7,7 @@ import torch
 from torch import Tensor
 from tqdm import tqdm
 
+from nmtg import convert
 from nmtg.data import Dictionary, data_utils, ParallelDataset, TextLineDataset
 from nmtg.data.data_utils import get_indices_and_vocabulary
 from nmtg.data.samplers import PreGeneratedBatchSampler
@@ -132,7 +133,7 @@ class NMTTrainer(Trainer):
                                        args.report_every)
 
         out_offsets_src = os.path.join(args.data_dir_out, train_src_name + '.idx.npy')
-        out_lengths_src = os.path.join(args.data_dir_out, train_tgt_name + '.len.npy')
+        out_lengths_src = os.path.join(args.data_dir_out, train_src_name + '.len.npy')
         np.save(out_offsets_src, src_offsets)
         np.save(out_lengths_src, src_lengths)
         if args.src_vocab is not None:
@@ -142,7 +143,7 @@ class NMTTrainer(Trainer):
             for word, count in src_counter.items():
                 src_dictionary.add_symbol(word, count)
 
-        out_offsets_tgt = os.path.join(args.data_dir_out, train_src_name + '.idx.npy')
+        out_offsets_tgt = os.path.join(args.data_dir_out, train_tgt_name + '.idx.npy')
         out_lengths_tgt = os.path.join(args.data_dir_out, train_tgt_name + '.len.npy')
         np.save(out_offsets_tgt, tgt_offsets)
         np.save(out_lengths_tgt, tgt_lengths)
@@ -180,7 +181,7 @@ class NMTTrainer(Trainer):
             else:
                 self.src_dict = Dictionary.load(os.path.join(args.data_dir, 'src.dict'))
                 self.tgt_dict = Dictionary.load(os.path.join(args.data_dir, 'tgt.dict'))
-            self.loss = self._build_loss()
+            self._build_loss()
             logger.info('Vocabulary size: {:,d}|{:,d}'.format(len(self.src_dict), len(self.tgt_dict)))
         else:
             self.src_dict = None
@@ -194,7 +195,7 @@ class NMTTrainer(Trainer):
         for model in models:
             model.eval()
 
-        split_words = self.args.input_type == 'words'
+        split_words = self.args.input_type == 'word'
 
         generator = SequenceGenerator(models, self.tgt_dict, models[0].batch_first,
                                       self.args.beam_size, maxlen_b=20, normalize_scores=self.args.normalize,
@@ -211,7 +212,7 @@ class NMTTrainer(Trainer):
                 line = line.split(' ')
 
             src_indices = self.src_dict.to_indices(line, bos=False, eos=False)
-            encoder_inputs = src_indices.unsqueeze(0 if self.batch_first else 1)
+            encoder_inputs = src_indices.unsqueeze(0 if models[0].batch_first else 1)
             source_lengths = torch.tensor([len(line)])
             encoder_mask = encoder_inputs.ne(self.src_dict.pad())
 
@@ -236,14 +237,14 @@ class NMTTrainer(Trainer):
         loss = NMTLoss(len(self.tgt_dict), self.tgt_dict.pad(), self.args.label_smoothing)
         if self.args.cuda:
             loss.cuda()
-        return loss
+        self.loss = loss
 
     def _build_model(self, args):
         model = super()._build_model(args)
         logger.info('Building embeddings and softmax')
         return NMTModel.wrap_model(args, model, self.src_dict, self.tgt_dict)
 
-    def load_data(self, model_args=None):
+    def _load_parallel_dataset(self):
         logger.info('Loading training data')
         split_words = self.args.input_type == 'word'
 
@@ -253,22 +254,28 @@ class NMTTrainer(Trainer):
         if self.args.load_into_memory:
             src_data = TextLineDataset.load_into_memory(self.args.train_src)
             tgt_data = TextLineDataset.load_into_memory(self.args.train_tgt)
+            if split_words:
+                src_lengths = np.array([len(sample.split(' ')) for sample in src_data])
+                tgt_lengths = np.array([len(sample.split(' ')) for sample in tgt_data])
+            else:
+                src_lengths = np.array([len(sample) for sample in src_data])
+                tgt_lengths = np.array([len(sample) for sample in tgt_data])
         else:
             offsets_src = os.path.join(self.args.data_dir, train_src_name + '.idx.npy')
             offsets_tgt = os.path.join(self.args.data_dir, train_tgt_name + '.idx.npy')
             src_data = TextLineDataset.load_indexed(self.args.train_src, offsets_src)
             tgt_data = TextLineDataset.load_indexed(self.args.train_tgt, offsets_tgt)
+            src_len_filename = os.path.join(self.args.data_dir, train_src_name + '.len.npy')
+            tgt_len_filename = os.path.join(self.args.data_dir, train_tgt_name + '.len.npy')
+            src_lengths = np.load(src_len_filename)
+            tgt_lengths = np.load(tgt_len_filename)
+
         src_data = TextLookupDataset(src_data, self.src_dict, words=split_words, bos=False, eos=False,
                                      trunc_len=self.args.src_seq_length_trunc, lower=self.args.lower)
         tgt_data = TextLookupDataset(tgt_data, self.tgt_dict, words=split_words, bos=True, eos=True,
                                      trunc_len=self.args.tgt_seq_length_trunc, lower=self.args.lower)
         dataset = ParallelDataset(src_data, tgt_data)
         logger.info('Number of training sentences: {:,d}'.format(len(dataset)))
-
-        src_len_filename = os.path.join(self.args.data_dir, train_src_name + '.len.npy')
-        tgt_len_filename = os.path.join(self.args.data_dir, train_tgt_name + '.len.npy')
-        src_lengths = np.load(src_len_filename)
-        tgt_lengths = np.load(tgt_len_filename)
 
         def filter_fn(i):
             return src_lengths[i] <= self.args.src_seq_length and tgt_lengths[i] <= self.args.tgt_seq_length
@@ -285,8 +292,11 @@ class NMTTrainer(Trainer):
 
         filtered = len(src_lengths) - sum(len(batch) for batch in batches)
         logger.info('Filtered {:,d}/{:,d} training examples for length'.format(filtered, len(src_lengths)))
-
         sampler = PreGeneratedBatchSampler(batches, self.args.curriculum == 0)
+        return dataset, sampler
+
+    def load_data(self, model_args=None):
+        dataset, sampler = self._load_parallel_dataset()
 
         model = self.build_model(model_args)
         params = list(filter(lambda p: p.requires_grad, model.parameters()))
@@ -417,4 +427,4 @@ class NMTTrainer(Trainer):
             self.src_dict.load_state_dict(state_dict['src_dict'])
             self.tgt_dict = Dictionary()
             self.tgt_dict.load_state_dict(state_dict['tgt_dict'])
-        self.loss = self._build_loss()
+        self._build_loss()

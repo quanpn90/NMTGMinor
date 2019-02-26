@@ -113,7 +113,7 @@ class DenoisingTextTrainer(NMTTrainer):
         super().__init__(args)
         self.dictionary = self.src_dict
 
-    def load_data(self, model_args=None):
+    def _load_noisy_data(self):
         logger.info('Loading training data')
         split_words = self.args.input_type == 'word'
 
@@ -121,9 +121,15 @@ class DenoisingTextTrainer(NMTTrainer):
 
         if self.args.load_into_memory:
             clean_data = TextLineDataset.load_into_memory(self.args.train_clean)
+            if split_words:
+                lengths = np.array([len(sample.split()) for sample in clean_data])
+            else:
+                lengths = np.array([len(sample) for sample in clean_data])
         else:
             offsets = os.path.join(self.args.data_dir, train_clean_name + '.idx.npy')
             clean_data = TextLineDataset.load_indexed(self.args.train_clean, offsets)
+            clean_len_filename = os.path.join(self.args.data_dir, train_clean_name + '.len.npy')
+            lengths = np.load(clean_len_filename)
 
         if self.args.train_noisy is not None:
             train_noisy_name = os.path.basename(self.args.train_noisy)
@@ -148,9 +154,6 @@ class DenoisingTextTrainer(NMTTrainer):
         dataset = ParallelDataset(noisy_data, clean_data)
         logger.info('Number of training sentences: {:,d}'.format(len(dataset)))
 
-        clean_len_filename = os.path.join(self.args.data_dir, train_clean_name + '.len.npy')
-        lengths = np.load(clean_len_filename)
-
         def filter_fn(i):
             return lengths[i] <= self.args.seq_length
 
@@ -167,6 +170,10 @@ class DenoisingTextTrainer(NMTTrainer):
         logger.info('Filtered {:,d}/{:,d} training examples for length'.format(filtered, len(lengths)))
 
         sampler = PreGeneratedBatchSampler(batches, self.args.curriculum == 0)
+        return dataset, sampler
+
+    def load_data(self, model_args=None):
+        dataset, sampler = self._load_noisy_data()
 
         model = self.build_model(model_args)
         params = list(filter(lambda p: p.requires_grad, model.parameters()))

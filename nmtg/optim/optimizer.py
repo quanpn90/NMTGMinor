@@ -82,9 +82,12 @@ class MultiOptimizer(Optimizer):
     """Wraps multiple Optimizer instances.
     Each child optimizer has its own loss"""
 
-    def __init__(self, optimizers):
-        params = itertools.chain.from_iterable(opt.params for opt in optimizers)
-        super().__init__(params)
+    def __init__(self, *optimizers):
+        params = {}
+        for param in itertools.chain.from_iterable(opt.params for opt in optimizers):
+            if param.data_ptr() not in params:
+                params[param.data_ptr()] = param
+        super().__init__(params.values())
         self.optimizers = optimizers
 
     @classmethod
@@ -93,7 +96,7 @@ class MultiOptimizer(Optimizer):
 
     @property
     def optimizer(self):
-        return self.optimizers[0]
+        return self.optimizers[0].optimizer
 
     @staticmethod
     def add_options(parser):
@@ -103,6 +106,14 @@ class MultiOptimizer(Optimizer):
         return {
             'optimizers': [opt.state_dict() for opt in self.optimizers]
         }
+
+    def set_lr(self, lr):
+        if isinstance(lr, Sequence):
+            for opt, llr in zip(self.optimizers, lr):
+                opt.set_lr(llr)
+        else:
+            for opt in self.optimizers:
+                opt.set_lr(lr)
 
     def load_state_dict(self, state_dict):
         for opt, s_dict in zip(state_dict['optimizers']):
@@ -121,8 +132,7 @@ class MultiOptimizer(Optimizer):
                 opt.multiply_grads(c)
 
     def clip_grad_norm(self, max_norm):
-        for opt in self.optimizers:
-            opt.clip_grad_norm(max_norm)
+        return max(opt.clip_grad_norm(max_norm) for opt in self.optimizers)
 
     def step(self, closure=None):
         if closure is not None:

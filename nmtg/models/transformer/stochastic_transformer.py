@@ -160,25 +160,25 @@ class StochasticTransformerDecoderLayer(TransformerDecoderLayer):
                                    self_attention_bias, encoder_attention_bias)
 
     def self_attention_layer(self, inputs, input_mask=None, self_attention_bias=None):
-        query = self.preprocess_attn(inputs, mask=input_mask)
-        self_attention_out = self.attention_tgt(query, query, query, self_attention_bias, input_mask)
+        query = self.preprocess_self_attn(inputs, mask=input_mask)
+        self_attention_out = self.self_attention(query, query, query, self_attention_bias, input_mask)
 
         if self.training:
             self_attention_out = self_attention_out / (1 - self.death_rate)
 
-        self_attention_out = self.postprocess_attn(self_attention_out, inputs)
+        self_attention_out = self.postprocess_self_attn(self_attention_out, inputs)
         return self_attention_out
 
     def encoder_attention_layer(self, inputs, encoder_outputs, input_mask=None,
                                 context_mask=None, encoder_attention_bias=None):
-        query = self.preprocess_src_attn(inputs, mask=input_mask)
-        enc_attention_out = self.attention_src(query, encoder_outputs, encoder_outputs,
+        query = self.preprocess_enc_attn(inputs, mask=input_mask)
+        enc_attention_out = self.enc_attention(query, encoder_outputs, encoder_outputs,
                                                encoder_attention_bias, input_mask, context_mask)
 
         if self.training:
             enc_attention_out = enc_attention_out / (1 - self.death_rate)
 
-        enc_attention_out = self.postprocess_src_attn(enc_attention_out, inputs)
+        enc_attention_out = self.postprocess_enc_attn(enc_attention_out, inputs)
         return enc_attention_out
 
     def feed_forward_layer(self, inputs, input_mask=None):

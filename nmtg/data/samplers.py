@@ -1,8 +1,10 @@
+import itertools
 import logging
 
 import numpy as np
 import torch.utils.data
 from torch.utils.data import BatchSampler
+from typing import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +19,9 @@ class StatefulSampler(torch.utils.data.Sampler):
 
     def __iter__(self):
         return self
+
+    def __len__(self):
+        raise NotImplementedError
 
     def reset(self):
         """Restart the iterator and regenerate internal state.
@@ -130,3 +135,50 @@ class StatefulBatchSampler(PreGeneratedBatchSampler):
     def __init__(self, sampler, batch_size, shuffle_batches=False, drop_incomplete=False):
         batches = [batch for batch in BatchSampler(sampler, batch_size, drop_incomplete)]
         super().__init__(batches, shuffle_batches)
+
+
+class MultiSampler(StatefulSampler):
+    def __init__(self, *samplers):
+        super().__init__(None)
+        self.samplers = samplers
+        self.longest = max(range(len(samplers)), key=lambda i: len(samplers[i]))
+
+    def __next__(self):
+        res = []
+        self.index += 1
+        for i, sampler in enumerate(self.samplers):
+            try:
+                res.append(next(sampler))
+            except StopIteration as e:
+                if i == self.longest:
+                    raise e
+                else:
+                    sampler.soft_reset()
+                    res.append(next(sampler))
+        if isinstance(res[0], Sequence):
+            return list(itertools.zip_longest(*res))
+        else:
+            return res
+
+    def __len__(self):
+        return len(self.samplers[self.longest])
+
+    def reset(self):
+        super().reset()
+        for sampler in self.samplers:
+            sampler.reset()
+
+    def soft_reset(self):
+        super().soft_reset()
+        for sampler in self.samplers:
+            sampler.soft_reset()
+
+    def state_dict(self):
+        state_dict = super().state_dict()
+        state_dict['samplers'] = [sampler.state_dict() for sampler in self.samplers]
+        return state_dict
+
+    def load_state_dict(self, state_dict):
+        super().load_state_dict(state_dict)
+        for sampler, s_dict in zip(self.samplers, state_dict['samplers']):
+            sampler.load_state_dict(s_dict)

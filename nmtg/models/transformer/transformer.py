@@ -215,7 +215,7 @@ class Transformer(EncoderDecoderModel):
             layer_dict = {
                 'preprocess_self_attn': layer_in['preprocess_attn'],
                 'preprocess_ffn': layer_in['preprocess_ffn'],
-                'attention_tgt': {
+                'self_attention': {
                     'query_projection': {'function': layer_in['multihead_tgt']['fc_query']['function']['linear']},
                     'key_projection': {'function': layer_in['multihead_tgt']['fc_key']['function']['linear']},
                     'value_projection': {'function': layer_in['multihead_tgt']['fc_value']['function']['linear']},
@@ -223,7 +223,7 @@ class Transformer(EncoderDecoderModel):
                 },
                 'feed_forward': {'function': convert_ffn(layer_in['feedforward']['function'])},
                 'preprocess_enc_attn': layer_in['preprocess_src_attn'],
-                'attention_src': {
+                'enc_attention': {
                     'query_projection': {'function': layer_in['multihead_src']['fc_query']['function']['linear']},
                     'key_projection': {'function': layer_in['multihead_src']['fc_key']['function']['linear']},
                     'value_projection': {'function': layer_in['multihead_src']['fc_value']['function']['linear']},
@@ -235,6 +235,7 @@ class Transformer(EncoderDecoderModel):
         opt.batch_first = False
         opt.ignore_context = False
         opt.freeze_embeddings = False
+        opt.mask_layers = False
 
         return res
 
@@ -667,6 +668,9 @@ class TransformerDecoderLayer(IncrementalModule):
         if not ignore_context:
             self.build_encoder_attention()
 
+        self.register_buffer('version', torch.tensor([1]))
+        self._register_load_state_dict_pre_hook(self._update_names)
+
     def get_preprocessing_module(self):
         return PrePostProcessing(self.model_dim, 'n', masking=self.masked_layers)
 
@@ -675,54 +679,54 @@ class TransformerDecoderLayer(IncrementalModule):
 
     # noinspection PyAttributeOutsideInit
     def build_self_attention(self):
-        self.preprocess_attn = self.get_preprocessing_module()
-        self.attention_tgt = MultiHeadAttention(
+        self.preprocess_self_attn = self.get_preprocessing_module()
+        self.self_attention = MultiHeadAttention(
             self.model_dim, self.num_heads, self.attention_dropout,
             masked_layers=self.masked_layers, batch_first=self.batch_first)
-        self.postprocess_attn = self.get_postprocessing_module()
+        self.postprocess_self_attn = self.get_postprocessing_module()
 
     # noinspection PyAttributeOutsideInit
     def share_self_attention(self, encoder):
-        self.preprocess_attn = encoder.preprocess_attn
-        self.postprocess_attn = encoder.postprocess_attn
-        self.attention_tgt = encoder.attention
+        self.preprocess_self_attn = encoder.preprocess_attn
+        self.postprocess_self_attn = encoder.postprocess_attn
+        self.self_attention = encoder.attention
 
     def self_attention_layer(self, inputs, input_mask=None, self_attention_bias=None):
-        query = self.preprocess_attn(inputs, mask=input_mask)
-        self_attention_out = self.attention_tgt(query, query, query, self_attention_bias, input_mask)
-        self_attention_out = self.postprocess_attn(self_attention_out, inputs)
+        query = self.preprocess_self_attn(inputs, mask=input_mask)
+        self_attention_out = self.self_attention(query, query, query, self_attention_bias, input_mask)
+        self_attention_out = self.postprocess_self_attn(self_attention_out, inputs)
         return self_attention_out
 
     def self_attention_step(self, inputs, incremental_state, input_mask=None, self_attention_bias=None):
-        query = self.preprocess_attn(inputs, mask=input_mask)
-        self_attention_out = self.attention_tgt.step(query, query, query, incremental_state,
-                                                     self_attention_bias, input_mask)
-        self_attention_out = self.postprocess_attn(self_attention_out, inputs)
+        query = self.preprocess_self_attn(inputs, mask=input_mask)
+        self_attention_out = self.self_attention.step(query, query, query, incremental_state,
+                                                      self_attention_bias, input_mask)
+        self_attention_out = self.postprocess_self_attn(self_attention_out, inputs)
         return self_attention_out
 
     # noinspection PyAttributeOutsideInit
     def build_encoder_attention(self):
-        self.preprocess_src_attn = self.get_preprocessing_module()
-        self.attention_src = MultiHeadAttention(
+        self.preprocess_enc_attn = self.get_preprocessing_module()
+        self.enc_attention = MultiHeadAttention(
             self.model_dim, self.num_heads, self.attention_dropout,
             masked_layers=self.masked_layers, batch_first=self.batch_first)
-        self.postprocess_src_attn = self.get_postprocessing_module()
+        self.postprocess_enc_attn = self.get_postprocessing_module()
 
     def encoder_attention_layer(self, inputs, encoder_outputs, input_mask=None,
                                 context_mask=None, encoder_attention_bias=None):
-        query = self.preprocess_src_attn(inputs, mask=input_mask)
-        enc_attention_out = self.attention_src(query, encoder_outputs, encoder_outputs,
+        query = self.preprocess_enc_attn(inputs, mask=input_mask)
+        enc_attention_out = self.enc_attention(query, encoder_outputs, encoder_outputs,
                                                encoder_attention_bias, input_mask, context_mask)
-        enc_attention_out = self.postprocess_src_attn(enc_attention_out, inputs)
+        enc_attention_out = self.postprocess_enc_attn(enc_attention_out, inputs)
         return enc_attention_out
 
     def encoder_attention_step(self, inputs, encoder_outputs, incremental_state, input_mask=None,
                                context_mask=None, encoder_attention_bias=None):
-        query = self.preprocess_src_attn(inputs, mask=input_mask)
-        enc_attention_out = self.attention_src.step(query, encoder_outputs, encoder_outputs, incremental_state,
+        query = self.preprocess_enc_attn(inputs, mask=input_mask)
+        enc_attention_out = self.enc_attention.step(query, encoder_outputs, encoder_outputs, incremental_state,
                                                     encoder_attention_bias, input_mask, context_mask,
                                                     static_kv=True)
-        enc_attention_out = self.postprocess_src_attn(enc_attention_out, inputs)
+        enc_attention_out = self.postprocess_enc_attn(enc_attention_out, inputs)
         return enc_attention_out
 
     # noinspection PyAttributeOutsideInit
@@ -778,3 +782,15 @@ class TransformerDecoderLayer(IncrementalModule):
 
         out = self.feed_forward_step(enc_attention_out, input_mask)
         return out
+
+    def _update_names(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        if prefix + 'version' not in state_dict:
+            for key in self.preprocess_self_attn.state_dict().keys():
+                state_dict[prefix + 'preprocess_self_attn.' + key] = state_dict.pop(prefix + 'preprocess_attn.' + key)
+            for key in self.preprocess_enc_attn.state_dict().keys():
+                state_dict[prefix + 'preprocess_enc_attn.' + key] = state_dict.pop(prefix + 'preprocess_src_attn.' + key)
+            for key in self.self_attention.state_dict().keys():
+                state_dict[prefix + 'self_attention.' + key] = state_dict.pop(prefix + 'attention_tgt.' + key)
+            for key in self.enc_attention.state_dict().keys():
+                state_dict[prefix + 'enc_attention.' + key] = state_dict.pop(prefix + 'attention_src.' + key)
+            state_dict[prefix + 'version'] = self.version

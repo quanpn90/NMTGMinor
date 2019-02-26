@@ -53,6 +53,7 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
         shape = [1, 1]
         shape[0 if batch_first else 1] = initial_length
         self.generate(initial_length, torch.zeros(*shape))
+        self._register_load_state_dict_pre_hook(self._fix_embedding_size)
 
     def generate(self, new_max_len, inputs):
         position = torch.arange(new_max_len).type_as(inputs)
@@ -95,12 +96,10 @@ class SinusoidalPositionalEncoding(PositionalEncoding):
 
         return emb
 
-    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
-                              error_msgs):
+    def _fix_embedding_size(self, state_dict, prefix, local_metadata, strict,
+                            missing_keys, unexpected_keys, error_msgs):
         old_emb = state_dict[prefix + 'pos_emb']
         self.pos_emb.resize_(*list(old_emb.size()))
-        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
-                                      error_msgs)
 
 
 class LearnedPositionalEncoding(PositionalEncoding):

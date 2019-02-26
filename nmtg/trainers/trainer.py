@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 import nmtg.models
 import nmtg.optim
+from nmtg import convert
 from nmtg.meters import TimeMeter, AverageMeter, StopwatchMeter
 from nmtg.optim import MemoryEfficientFP16Optimizer, FP16Optimizer
 from nmtg.optim.lr_scheduler import LRScheduler
@@ -44,17 +45,17 @@ class TrainData:
         }
 
     def load_state_dict(self, state_dict, reset_optim=False):
-        self.epoch = state_dict['epoch']
-        self.num_updates = state_dict['num_updates']
         self.model.load_state_dict(state_dict['model'])
-        self.lr_scheduler.load_state_dict(state_dict['lr_scheduler'])
-        self.sampler.load_state_dict(state_dict['sampler'])
-        self.training_time.reset(state_dict['training_time'], self.sampler.index)
 
         if reset_optim:
             self.sampler.reset()
         else:
+            self.epoch = state_dict['epoch']
+            self.num_updates = state_dict['num_updates']
+            self.lr_scheduler.load_state_dict(state_dict['lr_scheduler'])
             self.optimizer.load_state_dict(state_dict['optimizer'])
+            self.sampler.load_state_dict(state_dict['sampler'])
+            self.training_time.reset(state_dict['training_time'], self.sampler.index)
 
 
 class Trainer:
@@ -153,7 +154,7 @@ class Trainer:
     def build_model(self, args=None):
         """
         Build the model for this trainer,
-        and handle GPU transfering and FP16 conversion, if appropriate
+        and handle GPU transferring and FP16 conversion, if appropriate
         
         (Probably) do not override
         """
@@ -361,8 +362,9 @@ class Trainer:
                     except OverflowError as e:
                         logger.warning('Overflow detected ' + str(e))
                         train_data.optimizer.zero_grad()
-                    except ValueError as e:
-                        self.deal_with_nan(train_data, batch, index + 1)
+                    except ValueError:
+                        logger.critical('NaN loss detected in step {}'.format(train_data.sampler.index))
+                        breakpoint()
                     except RuntimeError as e:
                         if 'out of memory' in str(e):
                             logger.warning('Ran out of memory in step {}'.format(train_data.sampler.index))
@@ -455,6 +457,7 @@ class Trainer:
             os.remove(save_file)
 
     def load_checkpoint(self, checkpoint, for_training=False, reset_optim=False):
+        self.upgrade_checkpoint(checkpoint)
         self.load_args(checkpoint['args'])
         self.load_state_dict(checkpoint)
 
@@ -474,6 +477,10 @@ class Trainer:
         pass
 
     def load_state_dict(self, state_dict):
+        pass
+
+    def upgrade_checkpoint(self, checkpoint):
+        """Update the checkpoint to the newest version"""
         pass
 
 

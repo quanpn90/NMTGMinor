@@ -7,6 +7,7 @@ from nmtg.trainers import Trainer
 
 
 class MultitaskTrainer(Trainer):
+    # This is more of a guide on how to write a Multitask trainer, do not actually inherit from this class
 
     def _build_optimizers(self, model):
         # Call self._build_optimizer with appropriate params

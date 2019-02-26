@@ -3,6 +3,7 @@ import sys
 
 import torch
 
+from nmtg import trainers
 from nmtg.data import Dictionary
 from nmtg.models.nmt_model import NMTModel
 

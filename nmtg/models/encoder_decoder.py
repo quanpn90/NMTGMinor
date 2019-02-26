@@ -34,6 +34,7 @@ class Decoder(nn.Module):
         super().__init__()
         self.future_masking = future_masking
         self.register_buffer('future_mask', None)
+        self._register_load_state_dict_pre_hook(self._fix_future_mask)
 
     def get_future_mask(self, dim, device):
         if self.future_mask is None or self.future_mask.device != device:
@@ -53,7 +54,7 @@ class Decoder(nn.Module):
         """
         raise NotImplementedError
 
-    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
+    def _fix_future_mask(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
                               error_msgs):
         if prefix + 'future_mask' in state_dict:
             old_mask = state_dict[prefix + 'future_mask']
@@ -61,8 +62,6 @@ class Decoder(nn.Module):
                 self.future_mask = old_mask.new(old_mask.size())
             else:
                 self.future_mask.resize_(list(old_mask.size()))
-        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
-                                      error_msgs)
 
     def get_self_attention_mask(self, decoder_inputs, batch_first, input_mask=None, future_masking=True):
         if future_masking and self.future_masking:
@@ -183,7 +182,7 @@ class IncrementalDecoder(Decoder):
 
 class EncoderDecoderModel(Model):
     """Base class for Encoder/Decoder models. Implementing classes should construct encoders and
-    decoders with the encoder_to_share paremeter"""
+    decoders with the encoder_to_share parameter"""
 
     def __init__(self, encoder: Encoder, decoder: Decoder):
         super().__init__()

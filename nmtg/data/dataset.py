@@ -181,3 +181,45 @@ class TextLineDataset(RawDataset):
 
     def collate_samples(self, samples):
         return samples
+
+
+class ConcatDataset(Dataset):
+    def __init__(self, *datasets):
+        self.datasets = datasets
+        self.length = sum(len(d) for d in datasets)
+
+    def __getitem__(self, index):
+        for dataset in self.datasets:
+            if index >= len(dataset):
+                index -= len(dataset)
+            else:
+                return dataset[index]
+
+    def __len__(self):
+        return self.length
+
+    def collate_samples(self, samples):
+        return self.datasets[0].collate_samples(samples)
+
+
+class MultiDataset(Dataset):
+    def __init__(self, *datasets):
+        self.datasets = datasets
+        self.length = max(datasets, key=len)
+
+    def __getitem__(self, index):
+        assert len(index) == len(self.datasets)
+        return [dataset[i] if i is not None else None for i, dataset in zip(index, self.datasets)]
+
+    def __len__(self):
+        return self.length
+
+    def collate_samples(self, samples):
+        # Unreadable version:
+        # return [dataset.collate_samples(list(filter(lambda x: x is not None, s)))
+        #         for s, dataset in zip(zip(*samples), self.datasets)]
+
+        # Equivalent, but more readable version
+        padded_samples = zip(*samples)
+        real_samples = [[x for x in padded if x is not None] for padded in padded_samples]
+        return [dataset.collate_samples(real) for dataset, real in zip(self.datasets, real_samples)]
