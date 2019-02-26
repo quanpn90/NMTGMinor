@@ -177,6 +177,21 @@ def build_model(opt, dicts):
 
         loss_function = NMTL2Loss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
 
+    elif opt.model == 'l2_full_transformer':
+
+        from onmt.modules.SimplifiedTransformer.NMTL2Loss import NMTL2Loss
+
+        encoder = TransformerEncoder(opt, embedding_src, positional_encoder)
+        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
+
+        tgt_encoder = TransformerEncoder(opt, embedding_tgt, positional_encoder, share=encoder)
+
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+
+        model = Transformer(encoder, decoder, generator, tgt_encoder=tgt_encoder)
+
+        loss_function = NMTL2Loss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+
     elif opt.model == 'ptransformer':
     
         from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder

@@ -9,13 +9,15 @@ from torch import cuda
 from torch.autograd import Variable
 import math
 import time, datetime
+from collections import defaultdict
 import random 
 import numpy as np
 from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 from onmt.ModelConstructor import init_model_parameters
 from onmt.train_utils.trainer import BaseTrainer, XETrainer
 from onmt.utils import checkpoint_paths
-    
+from onmt.Stats import Logger
+
     
 
 class DynamicLossScaler:
@@ -60,6 +62,9 @@ class FP16XETrainer(XETrainer):
            # Important:
            # Loss function needs to be in fp32
            self.loss_function = self.loss_function.cuda()
+
+        self.logger = Logger(self.optim)
+        self.meters = self.logger.meters
 
     # fp32 utility (gradients and optim)
     def convert_fp32(self, model_state=None, optim_state=None):
@@ -142,7 +147,7 @@ class FP16XETrainer(XETrainer):
                     else:
                         raise e        
                 
-                if oom == False:        
+                if not oom :
                     total_loss += loss_data
                     total_words += batch.tgt_size
 
@@ -208,13 +213,21 @@ class FP16XETrainer(XETrainer):
                 tgt_size = batch.tgt_size
                                 
                 ## Scale UP the loss so that the gradients are not cutoff
-                normalizer = 1.0 / self.scaler.loss_scale 
+                normalizer = 1.0 / self.scaler.loss_scale
+
+                params = defaultdict(lambda: 0.0)
+                params['l2'] = self.opt.l2_coeff
                 
                 loss_output = self.loss_function(outputs, targets, generator=self.model.generator, 
-                                                             backward=True, tgt_mask=tgt_mask, normalizer=normalizer)
+                                                             backward=True, tgt_mask=tgt_mask, normalizer=normalizer,
+                                                             params=params)
                 
                 ## take the negative likelihood                                             
                 loss_data = loss_output['nll']
+
+                for key in loss_output:
+                    if key in self.meters:
+                        self.meters[key].update(loss_output[key], batch.size)
                 
                 del loss_output['loss']
                 del loss_output
@@ -316,33 +329,24 @@ class FP16XETrainer(XETrainer):
                 
 
                 num_words = tgt_size
-                report_loss += loss_data
-                report_tgt_words += num_words
-                report_src_words += src_size
-                total_loss += loss_data
-                total_words += num_words
-                
+                self.meters['report_loss'].update(loss_data)
+                self.meters['report_tgt_words'].update(num_words)
+                self.meters['report_src_words'].update(src_size)
+                self.meters['total_loss'].update(loss_data)
+                self.meters['total_words'].update(num_words)
+
                 optim = self.optim
                 
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
-                    print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
-                           "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; gnorm %.3f; oom %d; %s elapsed") %
-                          (epoch, i+1, len(train_data),
-                           math.exp(report_loss / report_tgt_words),
-                           optim.getLearningRate(),
-                           optim._step,
-                           report_src_words/(time.time()-start),
-                           report_tgt_words/(time.time()-start),
-                           self.scaler.loss_scale,
-                           grad_norm, 
-                           oom_count, 
-                           str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
+                    data_size = len(train_data)
+                    self.logger.log(epoch, i, data_size)
+                    self.meters['report_loss'].reset()
+                    self.meters['report_tgt_words'].reset()
+                    self.logger.reset_time()
+                    self.meters['l2'].reset()
 
-                    report_loss, report_tgt_words = 0, 0
-                    report_src_words = 0
-                    start = time.time()
-            
-            
+        total_loss = self.meters['total_loss'].sum
+        total_words = self.meters['total_words'].sum
         return total_loss / total_words
 
     def run(self, save_file=None):

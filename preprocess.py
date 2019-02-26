@@ -70,6 +70,7 @@ parser.add_argument('-seed',       type=int, default=3435,
 parser.add_argument('-lower', action='store_true', help='lowercase data')
 parser.add_argument('-remove_duplicate', action='store_true', help='remove duplicated sequences')
 parser.add_argument('-join_vocab', action='store_true', help='Using one dictionary for both source and target')
+parser.add_argument('-multilingual_tags', action='store_true', help='Treating the data as multilingual')
 parser.add_argument('-bos_word', default="default",
                     help="Type of the source input. Options are [text|img].")
 
@@ -106,13 +107,13 @@ About the data format used in this project:
 #     return vocab
 
 
-def make_join_vocabulary(filenames, size, input_type="word", dict_atb=None):
+def make_join_vocabulary(filenames, size, input_type="word", dict_atb=None, use_atb=True):
     
     vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
                       lower=opt.lower)
 
-    if dict_atb is None:
+    if dict_atb is None and use_atb:
         dict_atb = onmt.Dict()
     
     for filename in filenames:
@@ -147,12 +148,12 @@ def make_join_vocabulary(filenames, size, input_type="word", dict_atb=None):
     return vocab, dict_atb
 
 
-def make_vocabulary(filename, size, input_type='word', dict_atb=None):
+def make_vocabulary(filename, size, input_type='word', dict_atb=None, use_atb=True):
     vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
                       lower=opt.lower)
 
-    if dict_atb is None:
+    if dict_atb is None and use_atb:
         dict_atb = onmt.Dict()
 
     with open(filename) as f:
@@ -176,10 +177,10 @@ def make_vocabulary(filename, size, input_type='word', dict_atb=None):
             else:
                 raise NotImplementedError("Input type not implemented")
 
-    originalSize = vocab.size()
+    original_size = vocab.size()
     vocab = vocab.prune(size)
     print('Created dictionary of size %d (pruned from %d)' %
-          (vocab.size(), originalSize))
+          (vocab.size(), original_size))
 
     return vocab, dict_atb
 
@@ -215,10 +216,9 @@ def save_vocabulary(name, vocab, file):
     vocab.writeFile(file)
 
 
-def makeData(srcFile, tgtFile, src_dicts, tgt_dicts, atb_dict, max_src_length=64, max_tgt_length=64,
-             input_type='word', remove_duplicate=False, bos_word="default"):
+def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length=64, max_tgt_length=64,
+              input_type='word', remove_duplicate=False, bos_word="default"):
     src, tgt = [], []
-    sizes = []
     count, ignored = 0, 0
     n_duplicate = 0
     src_sizes = []
@@ -226,9 +226,9 @@ def makeData(srcFile, tgtFile, src_dicts, tgt_dicts, atb_dict, max_src_length=64
     src_attbs = []
     tgt_attbs = []
 
-    print('Processing %s & %s ...' % (srcFile, tgtFile))
-    srcF = open(srcFile)
-    tgtF = open(tgtFile)
+    print('Processing %s & %s ...' % (src_file, tgt_file))
+    srcF = open(src_file)
+    tgtF = open(tgt_file)
 
     if bos_word == "default":
         bos_word = onmt.Constants.BOS_WORD
@@ -381,7 +381,7 @@ def main():
 
     print('Preparing training ...')
         
-    train['src']['words'], train['tgt']['words'], train['src']['attbs'], train['tgt']['attbs'] = makeData(
+    train['src']['words'], train['tgt']['words'], train['src']['attbs'], train['tgt']['attbs'] = make_data(
                                           opt.train_src, opt.train_tgt,
                                           dicts['src'], dicts['tgt'], dicts['atb'],
                                           max_src_length=opt.src_seq_length,
@@ -394,7 +394,7 @@ def main():
 
     valid['src'], valid['tgt'] = dict(), dict()
 
-    valid['src']['words'], valid['tgt']['words'], valid['src']['attbs'], valid['tgt']['attbs'] = makeData(
+    valid['src']['words'], valid['tgt']['words'], valid['src']['attbs'], valid['tgt']['attbs'] = make_data(
                                           opt.valid_src, opt.valid_tgt,
                                           dicts['src'], dicts['tgt'], dicts['atb'],
                                           max_src_length=9999,

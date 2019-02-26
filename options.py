@@ -185,8 +185,6 @@ def make_parser(parser):
     parser.add_argument('-keep_save_files', type=int, default=5,
                         help="Save every this interval.")
 
-
-
     parser.add_argument('-num_valid_samples', type=int, default=10,
                         help="Number of sampling times during validation.")
     parser.add_argument('-tau', type=float, default=1.0,
@@ -197,8 +195,6 @@ def make_parser(parser):
 
     parser.add_argument('-share_enc_dec_weights', action='store_true',
                         help='Share the encoder and decoder weights (except for the src attention layer)')
-
-
 
     parser.add_argument('-var_posterior_combine', default='concat',
                         help="Type of combination between source and target for posterior q(z|x, y). Values concat|sum")
@@ -226,7 +222,10 @@ def make_parser(parser):
     parser.add_argument('-var_annealing_kl', action='store_true',
                         help="""Annealing the cofficient of kl divergence during training as in Bowman et al, 2016""")
     parser.add_argument('-var_sample_from', default='posterior',
-                        help="""The distribution where we sample from. Default is posterior. Choice is posterior|prior""")
+                        help="""The distribution where we sample from. Default is posterior. posterior|prior""")
     parser.add_argument('-var_depth', type=int, default=16,
                         help="Number of recurrent states in the variational layer.")
+
+    parser.add_argument('-l2_coeff', type=float, default=1.0,
+                        help="""l2 coefficient in the loss function for multilingual""")
     return parser

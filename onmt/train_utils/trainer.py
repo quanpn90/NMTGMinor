@@ -1,5 +1,5 @@
 from __future__ import division
-
+from collections import defaultdict
 import sys, tempfile
 import os, re
 import onmt
@@ -223,12 +223,16 @@ class XETrainer(BaseTrainer):
 
                 tgt_mask = batch.get('tgt_mask')
 
+                params = defaultdict(0.0)
+                params['l2'] = self.opt.l2_coeff
                 loss_output = self.loss_function(outputs, targets, generator=self.model.generator,
                                                  backward=True, tgt_mask=tgt_mask)
 
                 ## take the negative likelihood
                 loss_data = loss_output['nll']
-                l2 = loss_output['l2']
+                for key in loss_output:
+                    if key in self.meters:
+                        self.meters.update(loss_output[key], batch.size)
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
@@ -273,17 +277,12 @@ class XETrainer(BaseTrainer):
                         self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
 
                 num_words = tgt_size
-                # report_loss += loss_data
-                # report_tgt_words += num_words
-                # report_src_words += src_size
-                # total_loss += loss_data
-                # total_words += num_words
+
                 self.meters['report_loss'].update(loss_data)
                 self.meters['report_tgt_words'].update(num_words)
                 self.meters['report_src_words'].update(src_size)
                 self.meters['total_loss'].update(loss_data)
                 self.meters['total_words'].update(num_words)
-                self.meters['l2'].update(l2, batch.size)
 
                 optim = self.optim
 

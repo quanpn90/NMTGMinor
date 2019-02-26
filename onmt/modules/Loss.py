@@ -27,13 +27,12 @@ class LossFuncBase(_Loss):
     def _compute_loss(self, scores, targets):
         return NotImplementedError
     
-    def forward(self, dists, targets, hiddens, **kwargs):
+    def forward(self, output_dicts, targets, **kwargs):
         """
         Compute the loss. Subclass must define this method.
         Args:
-            batch: the current batch.
-            output: the predict output from the model.
-            target: the validate target to compare output with.
+            output_dicts: the current batch.
+            targets: the predict output from the model.
             **kwargs(optional): additional info for computing loss.
         """
         return NotImplementedError
@@ -108,7 +107,7 @@ class NMTLossFunc(LossFuncBase):
 
         return loss, loss_data
 
-    def forward(self, output_dict, targets, generator=None, backward=False, tgt_mask=None, normalizer=1):
+    def forward(self, output_dict, targets, generator=None, backward=False, tgt_mask=None, normalizer=1, **kwargs):
         """
         Compute the loss. Subclass must define this method.
         Args:

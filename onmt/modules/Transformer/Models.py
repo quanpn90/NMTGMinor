@@ -7,6 +7,9 @@ from onmt.modules.BaseModel import NMTModel, Reconstructor, DecoderState
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
 from torch.utils.checkpoint import checkpoint
+from onmt.modules.Utilities import mean_with_mask_backpropable as mean_with_mask
+from onmt.modules.Utilities import max_with_mask
+
 
 
 def custom_layer(module):
@@ -71,6 +74,8 @@ class TransformerEncoder(nn.Module):
     def build_modules(self, shared_encoder=None):
 
         if shared_encoder is not None:
+
+            print("* Shaing encoder parameters with another encoder")
             self.layer_modules = shared_encoder.layer_modules
 
             self.postprocess_layer = shared_encoder.postprocess_layer
@@ -118,8 +123,6 @@ class TransformerEncoder(nn.Module):
             if additional_sequence is not None:
                 add_input = additional_sequence
                 add_emb = embedded_dropout(self.word_lut, add_input, dropout=self.word_dropout if self.training else 0)
-
-                # emb = torch.cat([emb, add_emb], dim=0)
 
         """ Adding positional encoding """
         emb = self.time_transformer(emb)
@@ -197,6 +200,7 @@ class TransformerDecoder(nn.Module):
         self.emb_dropout = opt.emb_dropout
         self.time = opt.time
         self.residual_dropout = opt.residual_dropout
+        self.pooling = opt.var_pooling
 
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
@@ -399,6 +403,10 @@ class TransformerDecoder(nn.Module):
 
 class Transformer(NMTModel):
     """Main model in 'Attention is all you need' """
+    def __init__(self, encoder, decoder, generator=None, tgt_encoder=None):
+        super().__init__(encoder, decoder, generator=generator)
+        self.tgt_encoder = tgt_encoder
+        self.pooling = self.decoder.pooling
 
     def forward(self, batch, grow=False):
         """
@@ -426,6 +434,29 @@ class Transformer(NMTModel):
         output_dict = dict()
         output_dict['hiddens'] = output
         output_dict['coverage'] = coverage
+
+        # additional loss term for multilingual
+        # forcing the source and target context to be the same
+        if self.tgt_encoder is not None:
+            tgt_ = tgt[:, 1:]
+            tgt_context, _ = self.tgt_encoder(tgt_)
+            tgt_mask = tgt_.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
+
+            if self.pooling == 'mean':
+                tgt_context = mean_with_mask(tgt_context, tgt_mask)
+            else:
+                tgt_context = max_with_mask(tgt_context, tgt_mask)
+
+            src_mask = src.eq(onmt.Constants.PAD).transpose(0, 1).unsqueeze(2)
+
+            if self.pooling == 'mean':
+                src_context = mean_with_mask(context, src_mask)
+            else:
+                src_context = mean_with_mask(context, src_mask)
+
+            output_dict['src_context'] = src_context
+            output_dict['tgt_context'] = tgt_context
+
         return output_dict
 
     def decode(self, batch):

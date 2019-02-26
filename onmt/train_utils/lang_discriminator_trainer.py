@@ -222,7 +222,6 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                 src = batch.get('source')
                 src_length = batch.get('src_length')
                 target = batch.get('src_attbs')
-                # print("DEBUGGING 1")
 
                 with torch.no_grad():
                     src = src.transpose(0, 1)
@@ -235,7 +234,6 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                 loss = loss_output.sum()
 
                 ## Scale UP the loss so that the gradients are not cutoff
-
                 if self.opt.fp16:
                     normalizer = 1.0 / self.scaler.loss_scale
                 else:
