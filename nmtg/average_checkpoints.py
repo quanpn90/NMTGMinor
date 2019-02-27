@@ -16,9 +16,9 @@ def average_checkpoints(filenames, method='mean'):
     # If some parameters are shared, don't consider them twice
     keys = list({value.data_ptr(): key for key, value in state_dict.items()}.values())
 
-    del checkpoint['train_data']['sampler']
-    del checkpoint['train_data']['optimizer']
-    del checkpoint['train_data']['lr_scheduler']
+    for key in list(checkpoint['train_data'].keys()):
+        if key not in ['model', 'epoch', 'num_updates', 'training_time']:
+            del checkpoint['train_data'][key]
 
     for filename in filenames[1:]:
         logger.info('Loading {}'.format(filename))

@@ -7,7 +7,6 @@ import torch
 from torch import Tensor
 from tqdm import tqdm
 
-from nmtg import convert
 from nmtg.data import Dictionary, data_utils, ParallelDataset, TextLineDataset
 from nmtg.data.data_utils import get_indices_and_vocabulary
 from nmtg.data.samplers import PreGeneratedBatchSampler
@@ -389,11 +388,12 @@ class NMTTrainer(Trainer):
                     reference = batch['src_indices'][i][:batch['src_lengths'][i]]
                     reference = self.src_dict.string(reference, join_str=join_str,
                                                      bpe_symbol=self.args.bpe_symbol)
-                    tqdm.write("Ref {}: {}".format(len(results) + i, reference))
+                    tqdm.write("Src {}: {}".format(len(results) + i, reference))
                     for j in range(self.args.n_best):
                         translation = res[i * self.args.n_best + j]
                         tqdm.write("Hyp {}.{}: {}".format(len(results) + i, j + 1,
                                                           translation.replace(self.args.bpe_symbol, '')))
+                    tqdm.write("")
 
             results.extend(res)
 
@@ -437,3 +437,11 @@ class NMTTrainer(Trainer):
             self.tgt_dict = Dictionary()
             self.tgt_dict.load_state_dict(state_dict['tgt_dict'])
         self._build_loss()
+
+    def convert_checkpoint(self, checkpoint, original_trainer_class):
+        if original_trainer_class.__name__ == 'DialectTrainer':
+            # no operation necessary
+            logger.info('Converting checkpoint from {}'.format(original_trainer_class.__name__))
+        else:
+            super().convert_checkpoint(checkpoint, original_trainer_class)
+

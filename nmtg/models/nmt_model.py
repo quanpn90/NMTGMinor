@@ -129,10 +129,18 @@ class NMTModel(EncoderDecoderModel):
         if args.tie_weights:
             tgt_linear.weight = tgt_embedding.weight
 
-        encoder = NMTEncoder(model.encoder, src_embedding, args.word_dropout)
-        decoder = NMTDecoder(model.decoder, tgt_embedding, args.word_dropout, tgt_linear)
+        encoder = cls.build_encoder(model.encoder, src_embedding, args.word_dropout)
+        decoder = cls.build_decoder(model.decoder, tgt_embedding, args.word_dropout, tgt_linear)
 
         return cls(encoder, decoder, src_dict, tgt_dict, batch_first)
+
+    @staticmethod
+    def build_encoder(encoder, embedding, dropout):
+        return NMTEncoder(encoder, embedding, dropout)
+
+    @staticmethod
+    def build_decoder(decoder, embedding, dropout, linear):
+        return NMTDecoder(decoder, embedding, dropout, linear)
 
     @staticmethod
     def build_embedding(dictionary: Dictionary, embedding_size, path=None,
@@ -184,46 +192,24 @@ class NMTModel(EncoderDecoderModel):
         return res
 
 
-class NMTDualDecoder(Model):
-    def __init__(self, first_model, second_model):
-        super().__init__()
-        self.first_model = first_model
-        self.second_model = second_model
-
-    @staticmethod
-    def add_options(parser):
-        # NMTModel.add_options(parser)
-        parser.add_argument('-tie_dual_weights', action='store_true',
-                            help='Share weights between embedding and second softmax')
-        parser.add_argument('-join_dual_embedding', action='store_true',
-                            help='Share encoder and other decoder embeddings')
-        parser.add_argument('-freeze_dual_embeddings', action='store_true',
-                            help='Do not train other word embeddings')
-        parser.add_argument('-pre_word_vecs_dual_dec', type=str,
-                            help='If a valid path is specified, then this will load '
-                                 'pretrained word embeddings on the other decoder side. '
-                                 'See README for specific formatting instructions.')
+class NMTModelCopyDecoder(NMTModel):
+    def __init__(self, encoder, decoder, src_dict=None, tgt_dict=None, batch_first=False):
+        super().__init__(encoder, decoder, src_dict, tgt_dict, batch_first)
+        self._register_load_state_dict_pre_hook(self._load_nmt_model_compatibility)
 
     @classmethod
-    def wrap_model(cls, args, model: EncoderDecoderModel, second_model: EncoderDecoderModel,
-                   src_dict: Dictionary, tgt_dict: Dictionary, second_tgt_dict: Dictionary, batch_first=None):
-        del second_model.encoder
-        nmt_model = NMTModel.wrap_model(args, model, src_dict, tgt_dict, batch_first)
+    def wrap_model(cls, args, model: EncoderDecoderModel, src_dict: Dictionary, tgt_dict: Dictionary, batch_first=None):
+        if not args.join_vocab:
+            raise NotImplementedError("Currently, copy decoder requires a shared dictionary")
 
-        if args.join_dual_embedding:
-            embedding = nmt_model.encoder.embedded_dropout.embedding
-        else:
-            embedding = NMTModel.build_embedding(second_tgt_dict,
-                                                 nmt_model.encoder.embedded_dropout.embedding.weight.size(1),
-                                                 path=args.pre_word_vecs_dual_dev,
-                                                 init_embedding=args.init_embedding,
-                                                 freeze_embedding=args.freeze_dual_embeddings)
+        return super().wrap_model(args, model, src_dict, tgt_dict, batch_first)
 
-        linear = XavierLinear(nmt_model.decoder.linear.weight.size(1), len(second_tgt_dict))
+    @staticmethod
+    def build_decoder(decoder, embedding, dropout, linear):
+        return NMTCopyDecoder(decoder, embedding, dropout, linear)
 
-        if args.tie_dual_weights:
-            linear.weight = embedding.weight
-
-        second_decoder = NMTDecoder(second_model.decoder, embedding, args.word_dropout, linear)
-        second_model = NMTModel(nmt_model.encoder, second_decoder, src_dict, second_tgt_dict, nmt_model.batch_first)
-        return cls(nmt_model, second_model)
+    def _load_nmt_model_compatibility(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys,
+                              error_msgs):
+        own_state_dict = self.state_dict(prefix=prefix)
+        for key, value in own_state_dict:
+            pass

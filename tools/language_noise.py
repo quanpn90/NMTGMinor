@@ -19,7 +19,7 @@ from nmtg.data import Dictionary
 parser = argparse.ArgumentParser()
 parser.add_argument('input')
 parser.add_argument('other_language_dict')
-parser.add_argument('output', default='-')
+parser.add_argument('output', default='-', nargs='?')
 parser.add_argument('-threshold', type=int, default=0)
 parser.add_argument('-prob', type=float, default=0.1)
 parser.add_argument('-num_variants', type=int, default=1)
@@ -36,7 +36,6 @@ dictionary = Dictionary.load(args.other_language_dict)
 if args.threshold != 0:
     dictionary.finalize(threshold=args.threshold)
 symbols = dictionary.symbols[dictionary.nspecial:]
-print(len(symbols))
 del dictionary
 
 

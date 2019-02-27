@@ -61,6 +61,8 @@ class TrainData:
 class Trainer:
     """Trainer solves a Task using a Model"""
 
+    _version = 1
+
     @classmethod
     def add_preprocess_options(cls, parser):
         """Options relating to preprocessing"""
@@ -102,7 +104,7 @@ class Trainer:
                             help='For this many epochs, order the minibatches based '
                                  'on source sequence length. Sometimes setting this to 1 will '
                                  'increase convergence speed.')
-        parser.add_argument('-batch_size_update', type=int, default=2048,
+        parser.add_argument('-batch_size_update', type=int, default=0,
                             help='Perform a learning step when total batch size exceeds this value')
         parser.add_argument('-normalize_gradient', action='store_true',
                             help='Normalize the gradients by number of tokens before updates')
@@ -258,6 +260,9 @@ class Trainer:
         """
         raise NotImplementedError
 
+    def _get_loss_train(self, train_data, batch) -> (Tensor, float):
+        return self._get_loss(train_data.model, batch)
+
     def _get_batch_weight(self, batch):
         """
         Get the weight of the batch, i.e. the batch size.
@@ -330,7 +335,7 @@ class Trainer:
                 weight = self._get_batch_weight(batch)
                 meters['fwbw_wall'].start()
                 try:
-                    loss, display_loss = self._get_loss(train_data.model, batch)
+                    loss, display_loss = self._get_loss_train(train_data, batch)
                     train_data.optimizer.backward(loss)
                 except RuntimeError as e:
                     if 'out of memory' in str(e) or 'get_temporary_buffer' in str(e):
@@ -457,7 +462,10 @@ class Trainer:
             os.remove(save_file)
 
     def load_checkpoint(self, checkpoint, for_training=False, reset_optim=False):
-        self.upgrade_checkpoint(checkpoint)
+        original_trainer_class = nmtg.trainers.get_trainer_type(checkpoint['args'].trainer)
+        original_trainer_class.upgrade_checkpoint(checkpoint)
+        if original_trainer_class is not type(self):
+            self.convert_checkpoint(checkpoint, original_trainer_class)
         self.load_args(checkpoint['args'])
         self.load_state_dict(checkpoint)
 
@@ -471,7 +479,7 @@ class Trainer:
             return model
 
     def state_dict(self):
-        return {}
+        return {'version': self._version}
 
     def load_args(self, args):
         pass
@@ -479,9 +487,14 @@ class Trainer:
     def load_state_dict(self, state_dict):
         pass
 
-    def upgrade_checkpoint(self, checkpoint):
+    @staticmethod
+    def upgrade_checkpoint(checkpoint):
         """Update the checkpoint to the newest version"""
         pass
+
+    def convert_checkpoint(self, checkpoint, original_trainer_class):
+        raise NotImplementedError('Cannot convert checkpoint from {} to {}'.format(original_trainer_class.__name__,
+                                                                                   type(self).__name__))
 
 
 def checkpoint_paths(path, pattern=r'(.*)_ppl_(\d+\.\d+)\_e(\d+\.\d+)\.pt'):

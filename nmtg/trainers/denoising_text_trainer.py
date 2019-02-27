@@ -198,3 +198,20 @@ class DenoisingTextTrainer(NMTTrainer):
         return dataset.get_iterator(batch_size=self.args.batch_size,
                                     num_workers=self.args.data_loader_threads,
                                     cuda=self.args.cuda)
+
+    def load_state_dict(self, state_dict):
+        super().load_state_dict(state_dict)
+        self.dictionary = self.src_dict
+
+    def convert_checkpoint(self, checkpoint, original_trainer_class):
+        if original_trainer_class.__name__ == 'DialectTrainer':
+            logger.info('Converting checkpoint from {}'.format(original_trainer_class.__name__))
+            checkpoint['train_data']['model'] = checkpoint['train_data']['denoising_model']
+            args = checkpoint['args']
+            if not args.join_vocab:
+                args.join_vocab = True
+                checkpoint['dict'] = checkpoint['src_dict']
+            args.join_embedding = True
+        else:
+            super().convert_checkpoint(checkpoint, original_trainer_class)
+

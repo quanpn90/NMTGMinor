@@ -1,12 +1,13 @@
 import argparse
 import sys
 
-from nmtg import custom_logging, convert
+from nmtg import custom_logging, convert, options
 from nmtg.trainers.nmt_trainer import NMTTrainer
 
 # Example for how to use NMTGMinor from a program and not from the command line
 
 parser = argparse.ArgumentParser()
+options.add_general_options(parser)
 NMTTrainer.add_eval_options(parser)
 # either add log options or set up your own logging. NMTGMinor uses logging.getLogger(__name__) to build its loggers
 custom_logging.add_log_options(parser)

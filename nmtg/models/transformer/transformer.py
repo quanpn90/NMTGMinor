@@ -638,6 +638,8 @@ class TransformerDecoderLayer(IncrementalModule):
         out:      len_query x batch_size x model_dim  or  len_query x batch_size x model_dim
     """
 
+    _version = 2
+
     def __init__(self, *, model_dim=512, num_heads=8, feed_forward_dim=2048,
                  feed_forward_dropout=0.1, attention_dropout=0.1, residual_dropout=0.1,
                  weight_norm=False, masked_layers=False, gated_residuals=False, batch_first=False,
@@ -668,7 +670,6 @@ class TransformerDecoderLayer(IncrementalModule):
         if not ignore_context:
             self.build_encoder_attention()
 
-        self.register_buffer('version', torch.tensor([1]))
         self._register_load_state_dict_pre_hook(self._update_names)
 
     def get_preprocessing_module(self):
@@ -784,7 +785,8 @@ class TransformerDecoderLayer(IncrementalModule):
         return out
 
     def _update_names(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
-        if prefix + 'version' not in state_dict:
+        version = local_metadata.get('version', None)
+        if version == 1 and prefix + 'version' not in state_dict:
             for key in self.preprocess_self_attn.state_dict().keys():
                 state_dict[prefix + 'preprocess_self_attn.' + key] = state_dict.pop(prefix + 'preprocess_attn.' + key)
             for key in self.preprocess_enc_attn.state_dict().keys():
@@ -793,4 +795,5 @@ class TransformerDecoderLayer(IncrementalModule):
                 state_dict[prefix + 'self_attention.' + key] = state_dict.pop(prefix + 'attention_tgt.' + key)
             for key in self.enc_attention.state_dict().keys():
                 state_dict[prefix + 'enc_attention.' + key] = state_dict.pop(prefix + 'attention_src.' + key)
-            state_dict[prefix + 'version'] = self.version
+        elif version == 1:
+            del state_dict[prefix + 'version']
