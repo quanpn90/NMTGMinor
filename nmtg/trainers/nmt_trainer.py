@@ -1,3 +1,4 @@
+import argparse
 import logging
 import os
 from typing import Sequence
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 @register_trainer('nmt')
 class NMTTrainer(Trainer):
+
     @classmethod
     def add_preprocess_options(cls, parser):
         super().add_preprocess_options(parser)
@@ -321,11 +323,14 @@ class NMTTrainer(Trainer):
             decoder_input = decoder_input.transpose(0, 1).contiguous()
             targets = targets.transpose(0, 1).contiguous()
 
+        encoder_mask = encoder_input.ne(self.src_dict.pad())
         decoder_mask = decoder_input.ne(self.tgt_dict.pad())
-        logits = model(encoder_input, decoder_input, decoder_mask=decoder_mask, optimized_decoding=True)
+        logits, attn_out = model(encoder_input, decoder_input, encoder_mask=encoder_mask,
+                                 decoder_mask=decoder_mask, optimized_decoding=True)
         targets = targets.masked_select(decoder_mask)
 
-        lprobs = model.get_normalized_probs(logits, log_probs=True)
+        lprobs = model.get_normalized_probs(logits, attn_out, encoder_input, encoder_mask=encoder_mask,
+                                            decoder_mask=decoder_mask, log_probs=True)
         return self.loss(lprobs, targets)
 
     def _get_batch_weight(self, batch):
@@ -425,6 +430,9 @@ class NMTTrainer(Trainer):
         self.args.join_vocab = args.join_vocab
         self.args.input_type = args.input_type
 
+        if 'freeze_model' in self.args and self.args.freeze_model != args.freeze_model:
+            self.args.reset_optim = True
+
     def load_state_dict(self, state_dict):
         super().load_state_dict(state_dict)
         if self.args.join_vocab:
@@ -437,6 +445,12 @@ class NMTTrainer(Trainer):
             self.tgt_dict = Dictionary()
             self.tgt_dict.load_state_dict(state_dict['tgt_dict'])
         self._build_loss()
+
+    @staticmethod
+    def upgrade_checkpoint(checkpoint):
+        args = checkpoint['args']
+        NMTModel.upgrade_args(args)
+        Trainer.upgrade_checkpoint(checkpoint)
 
     def convert_checkpoint(self, checkpoint, original_trainer_class):
         if original_trainer_class.__name__ == 'DialectTrainer':

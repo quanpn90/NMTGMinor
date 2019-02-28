@@ -127,7 +127,7 @@ class StochasticTransformerEncoderLayer(TransformerEncoderLayer):
 
     def self_attention_layer(self, inputs, input_mask=None, self_attention_bias=None):
         query = self.preprocess_attn(inputs, mask=input_mask)
-        attention_out = self.attention(query, query, query, self_attention_bias, input_mask)
+        attention_out, _ = self.attention(query, query, query, self_attention_bias, input_mask)
 
         if self.training:
             attention_out = attention_out / (1 - self.death_rate)
@@ -161,7 +161,7 @@ class StochasticTransformerDecoderLayer(TransformerDecoderLayer):
 
     def self_attention_layer(self, inputs, input_mask=None, self_attention_bias=None):
         query = self.preprocess_self_attn(inputs, mask=input_mask)
-        self_attention_out = self.self_attention(query, query, query, self_attention_bias, input_mask)
+        self_attention_out, _ = self.self_attention(query, query, query, self_attention_bias, input_mask)
 
         if self.training:
             self_attention_out = self_attention_out / (1 - self.death_rate)
@@ -172,14 +172,15 @@ class StochasticTransformerDecoderLayer(TransformerDecoderLayer):
     def encoder_attention_layer(self, inputs, encoder_outputs, input_mask=None,
                                 context_mask=None, encoder_attention_bias=None):
         query = self.preprocess_enc_attn(inputs, mask=input_mask)
-        enc_attention_out = self.enc_attention(query, encoder_outputs, encoder_outputs,
-                                               encoder_attention_bias, input_mask, context_mask)
+        enc_attention_out, attention_weights = self.enc_attention(
+            query, encoder_outputs, encoder_outputs,
+            encoder_attention_bias, input_mask, context_mask)
 
         if self.training:
             enc_attention_out = enc_attention_out / (1 - self.death_rate)
 
         enc_attention_out = self.postprocess_enc_attn(enc_attention_out, inputs)
-        return enc_attention_out
+        return enc_attention_out, attention_weights
 
     def feed_forward_layer(self, inputs, input_mask=None):
         out = self.preprocess_ffn(inputs, mask=input_mask)

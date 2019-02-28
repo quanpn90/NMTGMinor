@@ -44,6 +44,7 @@ class SequenceGenerator:
                 Diverse Beam Search sampling
         """
         self.models = models
+        assert all(isinstance(model.decoder, IncrementalDecoder) for model in models)
         self.batch_first = batch_first
         self.dictionary = dictionary
         self.beam_size = beam_size
@@ -87,23 +88,22 @@ class SequenceGenerator:
         maxlen = int(self.maxlen_a * srclen + self.maxlen_b)
 
         encoder_outs = []
-        incremental_states = {}
+        incremental_states = []
+        new_order = torch.arange(batch_size).view(-1, 1).repeat(1, self.beam_size).view(-1)
+        new_order = new_order.to(encoder_input.device).long()
         for model in self.models:
             if not self.retain_dropout:
                 model.eval()
-            if isinstance(model.decoder, IncrementalDecoder):
-                incremental_states[model] = IncrementalState()
-            else:
-                incremental_states[model] = None
+            incremental_states.append(IncrementalState())
 
             # compute the encoder output for each beam
             encoder_out = model.encoder(encoder_input, encoder_mask)
-            new_order = torch.arange(batch_size).view(-1, 1).repeat(1, self.beam_size).view(-1)
-            new_order = new_order.to(encoder_input.device).long()
             encoder_out = self._reorder_encoder_out(encoder_out, new_order)
             encoder_outs.append(encoder_out)
-            if encoder_mask is not None:
-                encoder_mask = encoder_mask.index_select(0 if self.batch_first else 1, new_order)
+
+        encoder_input = encoder_input.index_select(0 if self.batch_first else 1, new_order)
+        if encoder_mask is not None:
+            encoder_mask = encoder_mask.index_select(0 if self.batch_first else 1, new_order)
 
         # initialize buffers
         scores = encoder_input.data.new(batch_size * self.beam_size, maxlen + 1).float().fill_(0)
@@ -111,7 +111,8 @@ class SequenceGenerator:
         tokens = encoder_input.data.new(batch_size * self.beam_size, maxlen + 2).fill_(self.dictionary.pad())
         tokens_buf = tokens.clone()
         tokens[:, 0] = self.dictionary.bos()
-        nonpad_idxs = None
+        attn, attn_buf = None, None
+        nonpad_idxs = encoder_mask if self.batch_first else encoder_mask.transpose(0, 1)
 
         # list of completed sentences
         finalized = [[] for i in range(batch_size)]
@@ -177,6 +178,7 @@ class SequenceGenerator:
             tokens_clone = tokens.index_select(0, bbsz_idx)
             tokens_clone = tokens_clone[:, 1:step + 2]  # skip the first index, which is EOS
             tokens_clone[:, step] = self.dictionary.eos()
+            attn_clone = attn.index_select(0, bbsz_idx)[:, :, 1:step + 2] if attn is not None else None
 
             # compute scores per token position
             pos_scores = scores.index_select(0, bbsz_idx)[:, :step + 1]
@@ -207,9 +209,20 @@ class SequenceGenerator:
                 #    score = -math.inf
 
                 def get_hypo():
+
+                    if attn_clone is not None:
+                        # remove padding tokens from attn scores
+                        hypo_attn = attn_clone[i][nonpad_idxs[sent]]
+                        _, alignment = hypo_attn.max(dim=0)
+                    else:
+                        hypo_attn = None
+                        alignment = None
+
                     return {
                         'tokens': tokens_clone[i],
                         'score': score,
+                        'attention': hypo_attn,  # src_len x tgt_len
+                        'alignment': alignment,
                         'positional_scores': pos_scores[i],
                     }
 
@@ -246,12 +259,14 @@ class SequenceGenerator:
                     corr = batch_idxs - torch.arange(batch_idxs.numel()).type_as(batch_idxs)
                     reorder_state.view(-1, self.beam_size).add_(corr.unsqueeze(-1) * self.beam_size)
                 for i, model in enumerate(self.models):
-                    model.decoder.reorder_incremental_state(incremental_states[model], reorder_state)
+                    model.decoder.reorder_incremental_state(incremental_states[i], reorder_state)
                     encoder_outs[i] = self._reorder_encoder_out(encoder_outs[i], reorder_state)
+                encoder_input = encoder_input.index_select(0 if self.batch_first else 1, reorder_state)
                 if encoder_mask is not None:
                     encoder_mask = encoder_mask.index_select(0 if self.batch_first else 1, reorder_state)
 
-            lprobs = self._decode(tokens[:, :step + 1], encoder_outs, incremental_states, encoder_mask)
+            lprobs, avg_attn_scores = self._decode(tokens[:, :step + 1], encoder_input, encoder_outs,
+                                                   incremental_states, encoder_mask)
 
             lprobs[:, self.dictionary.pad()] = -math.inf  # never select pad
             if self.unk_penalty > 0:
@@ -265,6 +280,13 @@ class SequenceGenerator:
                     for ngram in zip(*[gen_tokens[i:] for i in range(self.no_repeat_ngram_size)]):
                         gen_ngrams[bbsz_idx][tuple(ngram[:-1])] = \
                             gen_ngrams[bbsz_idx].get(tuple(ngram[:-1]), []) + [ngram[-1]]
+
+            # Record attention scores
+            if avg_attn_scores is not None:
+                if attn is None:
+                    attn = scores.new(batch_size * self.beam_size, srclen, maxlen + 2)
+                    attn_buf = attn.clone()
+                attn[:, :, step + 1].copy_(avg_attn_scores)
 
             scores = scores.type_as(lprobs)
             scores_buf = scores_buf.type_as(lprobs)
@@ -281,7 +303,8 @@ class SequenceGenerator:
 
                     if step + 2 - self.no_repeat_ngram_size >= 0:
                         # no banned tokens if we haven't generated no_repeat_ngram_size tokens yet
-                        banned_tokens = [calculate_banned_tokens(bbsz_idx) for bbsz_idx in range(batch_size * self.beam_size)]
+                        banned_tokens = [calculate_banned_tokens(bbsz_idx) for bbsz_idx in
+                                         range(batch_size * self.beam_size)]
                     else:
                         banned_tokens = [[] for bbsz_idx in range(batch_size * self.beam_size)]
 
@@ -369,6 +392,9 @@ class SequenceGenerator:
                 scores_buf.resize_as_(scores)
                 tokens = tokens.view(batch_size, -1)[batch_idxs].view(new_bsz * self.beam_size, -1)
                 tokens_buf.resize_as_(tokens)
+                if attn is not None:
+                    attn = attn.view(batch_size, -1)[batch_idxs].view(new_bsz * self.beam_size, attn.size(1), -1)
+                    attn_buf.resize_as_(attn)
                 batch_size = new_bsz
             else:
                 batch_idxs = None
@@ -426,6 +452,8 @@ class SequenceGenerator:
             # swap buffers
             tokens, tokens_buf = tokens_buf, tokens
             scores, scores_buf = scores_buf, scores
+            if attn is not None:
+                attn, attn_buf = attn_buf, attn
 
             # reorder incremental state in decoder
             reorder_state = active_bbsz_idx
@@ -436,31 +464,49 @@ class SequenceGenerator:
 
         return finalized
 
-    def _decode(self, tokens, encoder_outs, incremental_states, encoder_mask=None):
+    def _decode(self, tokens, encoder_inputs, encoder_outs, incremental_states, encoder_mask=None):
         if len(self.models) == 1:
-            return self._decode_one(tokens, self.models[0], encoder_outs[0], incremental_states, encoder_mask, log_probs=True)
+            return self._decode_one(tokens, self.models[0], encoder_inputs, encoder_outs[0], incremental_states[0],
+                                    encoder_mask, log_probs=True)
 
         log_probs = []
-        for model, encoder_out in zip(self.models, encoder_outs):
-            probs = self._decode_one(tokens, model, encoder_out, incremental_states, encoder_mask, log_probs=True)
+        avg_attn = None
+        for model, encoder_out, incremental_state, in zip(self.models, encoder_outs, incremental_states):
+            probs, attn = self._decode_one(tokens, model, encoder_inputs, encoder_out, incremental_state,
+                                           encoder_mask, log_probs=True)
             log_probs.append(probs)
-        avg_probs = torch.logsumexp(torch.stack(log_probs, dim=0), dim=0) - math.log(len(self.models))
-        return avg_probs
+            if attn is not None:
+                if avg_attn is None:
+                    avg_attn = attn
+                else:
+                    avg_attn.add_(attn)
+        if len(self.models) > 1:
+            avg_probs = torch.logsumexp(torch.stack(log_probs, dim=0), dim=0) - math.log(len(self.models))
+            if avg_attn is not None:
+                avg_attn.div_(len(self.models))
+        else:
+            avg_probs = log_probs[0]
+        return avg_probs, avg_attn
 
-    def _decode_one(self, tokens, model: EncoderDecoderModel, encoder_out, incremental_states,
+    def _decode_one(self, tokens, model: EncoderDecoderModel, encoder_inputs, encoder_out, incremental_state,
                     encoder_mask, log_probs):
-        with torch.no_grad():
-            if incremental_states[model] is not None:
-                tokens = tokens[:, -1:]
-                if not self.batch_first:
-                    tokens = tokens.transpose(0, 1)
-                decoder_out = model.decoder.step(tokens, encoder_out, encoder_mask=encoder_mask,
-                                                 incremental_state=incremental_states[model])
-            else:
-                decoder_out = model.decoder(tokens, encoder_out)
-            decoder_out = decoder_out.squeeze(1 if self.batch_first else 0)
-        probs = model.get_normalized_probs(decoder_out, log_probs=log_probs)
-        return probs
+        if incremental_state is not None:
+            tokens = tokens[:, -1:]
+            if not self.batch_first:
+                tokens = tokens.transpose(0, 1)
+            decoder_out, attn_weights = model.decoder.step(tokens, encoder_out, encoder_mask=encoder_mask,
+                                                           incremental_state=incremental_state)
+        else:
+            decoder_out, attn_weights = model.decoder(tokens, encoder_out)
+        probs = model.get_normalized_probs(decoder_out, attn_weights, encoder_inputs,
+                                           encoder_mask=encoder_mask, log_probs=log_probs)
+        probs = probs.squeeze(1 if self.batch_first else 0)
+
+        if attn_weights is not None:
+            if isinstance(attn_weights, dict):
+                attn_weights = attn_weights['attn']
+            attn_weights = attn_weights.squeeze(1 if self.batch_first else 0)
+        return probs, attn_weights
 
     def _reorder_encoder_out(self, encoder_out, new_order):
         if isinstance(encoder_out, Sequence):

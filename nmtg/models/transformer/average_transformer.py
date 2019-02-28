@@ -80,12 +80,12 @@ class AverageTransformerDecoderLayer(TransformerDecoderLayer):
 
     def self_attention_layer(self, inputs, input_mask=None, self_attention_bias=None):
         query = self.preprocess_self_attn(inputs, mask=input_mask)
-        self_attention_out = self.self_attention(query, self_attention_bias)
+        self_attention_out, _ = self.self_attention(query, self_attention_bias)
         self_attention_out = self.postprocess_self_attn(self_attention_out, inputs)
         return self_attention_out
 
     def self_attention_step(self, inputs, incremental_state, input_mask=None, self_attention_bias=None):
         query = self.preprocess_self_attn(inputs, mask=input_mask)
-        self_attention_out = self.self_attention.step(query, incremental_state, input_mask)
+        self_attention_out, _ = self.self_attention.step(query, incremental_state, input_mask)
         self_attention_out = self.postprocess_self_attn(self_attention_out, inputs)
         return self_attention_out

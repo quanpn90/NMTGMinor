@@ -96,9 +96,9 @@ class MultiHeadAttention(IncrementalModule):
 
         q, k, v = self._project_inputs(query, key, value, query_mask, value_mask, batch_size, len_query)
 
-        out = self._attention(q, k, v, attention_bias, query_mask, batch_size, len_query)
+        out, attn_weights = self._attention(q, k, v, attention_bias, query_mask, batch_size, len_query)
 
-        return out
+        return out, attn_weights
 
     def _step(self, query, key, value, incremental_state: IncrementalState, attention_bias=None,
               query_mask=None, value_mask=None, static_kv=False,):
@@ -145,9 +145,9 @@ class MultiHeadAttention(IncrementalModule):
         saved_state['prev_value'] = v.view(batch_size, self.num_heads, -1, self.head_dim)
         incremental_state.set(self, 'attn_state', saved_state)
 
-        out = self._attention(q, k, v, attention_bias, query_mask, batch_size, 1)
+        out, attn_weights = self._attention(q, k, v, attention_bias, query_mask, batch_size, 1)
 
-        return out
+        return out, attn_weights
 
     def _project_inputs(self, query, key, value, query_mask, value_mask, batch_size, len_query):
         # Project inputs to multi-heads
@@ -186,7 +186,13 @@ class MultiHeadAttention(IncrementalModule):
         out = torch.bmm(attn_weights, v)  # batch_size*num_heads x len_query x head_dim
         out = self._join_heads(out, batch_size, len_query)
         out = self.out_projection(out, mask=query_mask)
-        return out
+
+        if self.num_heads > 1:
+            return out, None
+
+        if not self.batch_first:
+            attn_weights = attn_weights.transpose(0, 1).contiguous()
+        return out, attn_weights
 
     def _split_heads(self, tensor, batch_size, seq_len):
         if self.batch_first:
@@ -240,9 +246,9 @@ class AverageAttention(IncrementalModule):
             outputs = self._attention(inputs, attention_outputs)
 
         if self.batch_first:
-            return outputs
+            return outputs, mask
         else:
-            return outputs.transpose(0, 1)
+            return outputs.transpose(0, 1), mask
 
     def _attention(self, inputs, attention_outputs):
         if self.feed_forward is not None:
@@ -275,7 +281,7 @@ class AverageAttention(IncrementalModule):
         else:
             outputs = self._attention(inputs, attention_outputs)
 
-        return outputs.unsqueeze(1 if self.batch_first else 0)
+        return outputs.unsqueeze(1 if self.batch_first else 0), None
 
     def reorder_incremental_state(self, incremental_state: IncrementalState, new_order):
         """Reorder buffered internal state (for incremental generation)."""

@@ -7,6 +7,7 @@ from typing import Sequence
 
 import torch
 import torch.utils.data
+import torch.autograd
 from torch import Tensor
 from tqdm import tqdm
 
@@ -60,8 +61,6 @@ class TrainData:
 
 class Trainer:
     """Trainer solves a Task using a Model"""
-
-    _version = 1
 
     @classmethod
     def add_preprocess_options(cls, parser):
@@ -125,6 +124,9 @@ class Trainer:
                             help='Keep this many save files.')
         parser.add_argument('-memory_efficient_fp16', action='store_true',
                             help='Use alternative, more memory efficient implementation of fp16 training.')
+        parser.add_argument('-reset_optim', action='store_true',
+                            help='Reset the optimizer running variables')
+
 
     @classmethod
     def add_eval_options(cls, parser):
@@ -461,25 +463,28 @@ class Trainer:
             logger.info('Deleting old save file {}'.format(save_file))
             os.remove(save_file)
 
-    def load_checkpoint(self, checkpoint, for_training=False, reset_optim=False):
-        original_trainer_class = nmtg.trainers.get_trainer_type(checkpoint['args'].trainer)
+    def load_checkpoint(self, checkpoint, for_training=False):
+        args = checkpoint['args']
+        original_trainer_class = nmtg.trainers.get_trainer_type(args.trainer)
         original_trainer_class.upgrade_checkpoint(checkpoint)
         if original_trainer_class is not type(self):
             self.convert_checkpoint(checkpoint, original_trainer_class)
-        self.load_args(checkpoint['args'])
+        model_class = nmtg.models.get_model_type(args.model)
+        model_class.upgrade_args(args)
+        self.load_args(args)
         self.load_state_dict(checkpoint)
 
         if for_training:
-            train_data = self.load_data(checkpoint['args'])
-            train_data.load_state_dict(checkpoint['train_data'], reset_optim)
+            train_data = self.load_data(self.args)
+            train_data.load_state_dict(checkpoint['train_data'], self.args.reset_optim)
             return train_data
         else:
-            model = self.build_model(checkpoint['args'])
+            model = self.build_model(args)
             model.load_state_dict(checkpoint['train_data']['model'])
             return model
 
     def state_dict(self):
-        return {'version': self._version}
+        return {}
 
     def load_args(self, args):
         pass

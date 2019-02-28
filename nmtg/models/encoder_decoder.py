@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 from nmtg.models import Model
 
@@ -50,7 +51,7 @@ class Decoder(nn.Module):
         :param encoder_outputs: (FloatTensor) Outputs from the encoder
         :param input_mask: (ByteTensor) Optional mask for invalid decoder inputs (i.e. padding)
         :param encoder_mask: (ByteTensor) Optional mask for invalid encoder outputs (i.e. padding)
-        :return:
+        :return: The decoder output and attention weights
         """
         raise NotImplementedError
 
@@ -105,6 +106,14 @@ class Decoder(nn.Module):
 
         return encoder_attention_bias
 
+    def get_normalized_probs(self, decoder_outputs, attention_weights, encoder_inputs=None,
+                             encoder_mask=None, decoder_mask=None, log_probs=False):
+        logits = decoder_outputs.float()
+        if log_probs:
+            return F.log_softmax(logits, dim=-1)
+        else:
+            return F.softmax(logits, dim=-1)
+
 
 class IncrementalModule(nn.Module):
     def step(self, *input, **kwargs):
@@ -140,20 +149,6 @@ class IncrementalDecoder(Decoder):
                 module.reorder_incremental_state(incremental_state, new_order)
 
         self.apply(apply_reorder_incremental_state)
-
-    def set_beam_size(self, beam_size):
-        """Sets the beam size in the decoder and all children."""
-        if getattr(self, '_beam_size', -1) != beam_size:
-            seen = set()
-
-            def apply_set_beam_size(module):
-                if module != self and hasattr(module, 'set_beam_size') \
-                        and module not in seen:
-                    seen.add(module)
-                    module.set_beam_size(beam_size)
-
-            self.apply(apply_set_beam_size)
-            self._beam_size = beam_size
 
     def step(self, *input, **kwargs):
         for hook in self._forward_pre_hooks.values():
@@ -205,12 +200,8 @@ class EncoderDecoderModel(Model):
         :return: (FloatTensor) Output from the decoder.
         """
         encoder_out = self.encoder(encoder_inputs, encoder_mask)
-        decoder_out = self.decoder(decoder_inputs, encoder_out, decoder_mask, encoder_mask)
-        return decoder_out
+        decoder_out, attention_weight = self.decoder(decoder_inputs, encoder_out, decoder_mask, encoder_mask)
+        return decoder_out, attention_weight
 
-    @staticmethod
-    def convert_state_dict(opt, state_dict):
-        res = Model.convert_state_dict(opt, state_dict)
-        res['decoder'] = {'future_mask': state_dict['decoder']['mask']}
-        opt.no_future_masking = False
-        return res
+    def get_normalized_probs(self, net_output, *args, log_probs=False, **kwargs):
+        return self.decoder.get_normalized_probs(net_output, *args, **kwargs, log_probs=log_probs)

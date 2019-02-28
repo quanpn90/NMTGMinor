@@ -25,7 +25,7 @@ class Model(nn.Module):
         """Build a new model instance."""
         return cls(**cls.map_options(args).__dict__)
 
-    def get_normalized_probs(self, net_output, log_probs):
+    def get_normalized_probs(self, net_output, *args, log_probs=False, **kwargs):
         """Get normalized probabilities (or log probs) from a net's output."""
         if torch.is_tensor(net_output):
             logits = net_output.float()
@@ -72,3 +72,7 @@ class Model(nn.Module):
         """Freeze this model's parameters"""
         for p in self.parameters():
             p.requires_grad_(False)
+
+    @staticmethod
+    def upgrade_args(args):
+        pass

@@ -18,8 +18,6 @@ if __name__ == '__main__':
     trainer_class.add_training_options(parser)
     add_log_options(parser)
 
-    parser.add_argument('-reset_optim', action='store_true',
-                        help='Reset the optimizer running variables')
     parser.add_argument('-load_from', type=str,
                         help='If training from a checkpoint then this is the'
                              'path to the pretrained model.')
@@ -40,7 +38,7 @@ if __name__ == '__main__':
     if args.load_from is not None:
         logger.info("Loading checkpoint {}".format(args.load_from))
         checkpoint = convert.load_checkpoint(args.load_from)
-        train_data = trainer.load_checkpoint(checkpoint, True, args.reset_optim)
+        train_data = trainer.load_checkpoint(checkpoint, for_training=True)
     else:
         train_data = trainer.load_data()
 

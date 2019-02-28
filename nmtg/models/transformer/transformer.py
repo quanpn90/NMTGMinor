@@ -18,7 +18,7 @@ class Transformer(EncoderDecoderModel):
                  feed_forward_dropout=0.1, attn_dropout=0.1, residual_dropout=0.1, embedding_dropout=0.1,
                  weight_norm=False, masked_layers=False, future_masking=True, gated_residuals=False, batch_first=False,
                  feed_forward_type='linear_relu_linear', positional_encoding=None,
-                 ignore_context=False, share_encoder_decoder=False, checkpointing=0):
+                 ignore_context=False, share_encoder_decoder=False, checkpointing=0, single_head_final_layer=False):
         self.model_dim = model_dim
         self.num_heads = num_heads
         self.layers = layers
@@ -36,6 +36,7 @@ class Transformer(EncoderDecoderModel):
         self.share_encoder_decoder = share_encoder_decoder
         self.checkpointing = checkpointing
         self.batch_first = batch_first
+        self.single_head_final_layer = single_head_final_layer
 
         encoder = self.get_encoder(positional_encoding)
         decoder = self.get_decoder(positional_encoding, encoder)
@@ -80,6 +81,7 @@ class Transformer(EncoderDecoderModel):
             positional_encoding=positional_encoding,
             checkpointing=self.checkpointing,
             ignore_context=self.ignore_context,
+            single_head_final_layer=self.single_head_final_layer,
             encoder_to_share=encoder if self.share_encoder_decoder else None
         )
         return decoder
@@ -128,6 +130,9 @@ class Transformer(EncoderDecoderModel):
                                  'This will prevent incremental decoding (i.e. beam search)!')
         parser.add_argument('-ignore_context', action='store_true',
                             help='Ignore the output of the encoder when decoding. Experimental')
+        parser.add_argument('-single_head_final_layer', action='store_true',
+                            help='Only use one attention head on the final decoder layer. '
+                                 'This allows the final attention layer to be used as a prediction of alignment')
 
         parser.set_defaults(optimizer='adam', update_method='noam')
 
@@ -170,74 +175,15 @@ class Transformer(EncoderDecoderModel):
         opts.ignore_context = args.ignore_context
         opts.checkpointing = args.checkpointing
         opts.share_encoder_decoder = args.share_enc_dec_weights
+        opts.single_head_final_layer = args.single_head_final_layer
 
         return opts
 
     @staticmethod
-    def convert_state_dict(opt, state_dict):
-        res = EncoderDecoderModel.convert_state_dict(opt, state_dict)
-        res['encoder'] = {}
-        if opt.time in ('lstm', 'gru'):
-            res['encoder']['positional_encoding'] = {'rnn': state_dict['encoder']['time_transformer']}
-            res['decoder']['positional_encoding'] = {'rnn': state_dict['decoder']['time_transformer']}
-        else:
-            res['encoder']['positional_encoding'] = state_dict['encoder']['time_transformer']
-            res['decoder']['positional_encoding'] = state_dict['decoder']['time_transformer']
-        res['encoder']['postprocess'] = state_dict['encoder']['postprocess_layer']
-        res['decoder']['postprocess'] = state_dict['decoder']['postprocess_layer']
-
-        def convert_linear_relu_linear(ffn_dict):
-            return {'layer_1': ffn_dict['fc_1']['linear'], 'layer_2': ffn_dict['fc_2']['linear']}
-
-        def convert_maxout(ffn_dict):
-            return {'linear': ffn_dict['lin']}
-
-        convert_ffn = convert_linear_relu_linear if opt.activation_layer == 'linear_relu_linear' else convert_maxout
-
-        res['encoder']['layers'] = {}
-        res['decoder']['layers'] = {}
-        for i in range(opt.layers):
-            layer_in = state_dict['encoder']['layer_modules'][str(i)]
-            layer_dict = {
-                'preprocess_attn': layer_in['preprocess_attn'],
-                'preprocess_ffn': layer_in['preprocess_ffn'],
-                'attention': {
-                    'query_projection': {'function': layer_in['multihead']['fc_query']['function']['linear']},
-                    'key_projection': {'function': layer_in['multihead']['fc_key']['function']['linear']},
-                    'value_projection': {'function': layer_in['multihead']['fc_value']['function']['linear']},
-                    'out_projection': {'function': layer_in['multihead']['fc_concat']['function']['linear']}
-                },
-                'feed_forward': {'function': convert_ffn(layer_in['feedforward']['function'])}
-            }
-            res['encoder']['layers'][str(i)] = layer_dict
-
-            layer_in = state_dict['decoder']['layer_modules'][str(i)]
-            layer_dict = {
-                'preprocess_self_attn': layer_in['preprocess_attn'],
-                'preprocess_ffn': layer_in['preprocess_ffn'],
-                'self_attention': {
-                    'query_projection': {'function': layer_in['multihead_tgt']['fc_query']['function']['linear']},
-                    'key_projection': {'function': layer_in['multihead_tgt']['fc_key']['function']['linear']},
-                    'value_projection': {'function': layer_in['multihead_tgt']['fc_value']['function']['linear']},
-                    'out_projection': {'function': layer_in['multihead_tgt']['fc_concat']['function']['linear']}
-                },
-                'feed_forward': {'function': convert_ffn(layer_in['feedforward']['function'])},
-                'preprocess_enc_attn': layer_in['preprocess_src_attn'],
-                'enc_attention': {
-                    'query_projection': {'function': layer_in['multihead_src']['fc_query']['function']['linear']},
-                    'key_projection': {'function': layer_in['multihead_src']['fc_key']['function']['linear']},
-                    'value_projection': {'function': layer_in['multihead_src']['fc_value']['function']['linear']},
-                    'out_projection': {'function': layer_in['multihead_src']['fc_concat']['function']['linear']}
-                }
-            }
-            res['decoder']['layers'][str(i)] = layer_dict
-
-        opt.batch_first = False
-        opt.ignore_context = False
-        opt.freeze_embeddings = False
-        opt.mask_layers = False
-
-        return res
+    def upgrade_args(args):
+        EncoderDecoderModel.upgrade_args(args)
+        if 'single_head_final_layer' not in args:
+            args.single_head_final_layer = False
 
 
 class TransformerEncoder(Encoder):
@@ -361,6 +307,7 @@ class TransformerDecoder(IncrementalDecoder):
     def __init__(self, *, model_dim=512, num_heads=8, layers=6, feed_forward_dim=2048,
                  feed_forward_dropout=0.1, attn_dropout=0.1, residual_dropout=0.1, embedding_dropout=0.1,
                  weight_norm=False, gated_residuals=False, masked_layers=False, future_masking=True, batch_first=False,
+                 single_head_final_layer=False,
                  feed_forward_type='linear_relu_linear', positional_encoding=None,
                  ignore_context=False, checkpointing=0, encoder_to_share=None):
         super().__init__(future_masking, encoder_to_share)
@@ -380,6 +327,7 @@ class TransformerDecoder(IncrementalDecoder):
         self.batch_first = batch_first
         self.checkpointing = checkpointing
         self.ignore_context = ignore_context
+        self.single_head_final_layer = single_head_final_layer
 
         self.preprocess = PrePostProcessing(model_dim, 'd', embedding_dropout,
                                             gated_residuals=gated_residuals)
@@ -394,7 +342,7 @@ class TransformerDecoder(IncrementalDecoder):
     def build_layers(self, encoder=None):
         self.layers = nn.ModuleList([TransformerDecoderLayer(
             model_dim=self.model_dim,
-            num_heads=self.num_heads,
+            num_heads=1 if i == self.num_layers - 1 and self.single_head_final_layer else self.num_heads,
             feed_forward_dim=self.feed_forward_dim,
             feed_forward_dropout=self.feed_forward_dropout,
             attention_dropout=self.attn_dropout,
@@ -420,17 +368,18 @@ class TransformerDecoder(IncrementalDecoder):
             decoder_inputs += positions
 
         decoder_inputs = self.preprocess(decoder_inputs)
+        attention = None
         self_attention_bias = self.get_self_attention_bias(decoder_inputs, self.batch_first, input_mask)
         encoder_attention_bias = self.get_encoder_attention_bias(encoder_outputs, self.batch_first, encoder_mask)
 
         for i, layer in enumerate(self.layers):
             if self.checkpointing > 0 and self.training and (i + 1) % self.checkpointing == 0:
-                decoder_inputs = torch.utils.checkpoint.checkpoint(
+                decoder_inputs, attention = torch.utils.checkpoint.checkpoint(
                     layer, decoder_inputs, encoder_outputs, input_mask,
                     encoder_mask, self_attention_bias, encoder_attention_bias)
             else:
-                decoder_inputs = layer(decoder_inputs, encoder_outputs, input_mask,
-                                       encoder_mask, self_attention_bias, encoder_attention_bias)
+                decoder_inputs, attention = layer(decoder_inputs, encoder_outputs, input_mask,
+                                                  encoder_mask, self_attention_bias, encoder_attention_bias)
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -438,7 +387,7 @@ class TransformerDecoder(IncrementalDecoder):
         # a whole stack of unnormalized layer outputs.
         outputs = self.postprocess(decoder_inputs, mask=input_mask)
 
-        return outputs
+        return outputs, attention
 
     def _step(self, decoder_inputs, encoder_outputs, incremental_state, input_mask=None, encoder_mask=None):
         if self.positional_encoding is not None:
@@ -452,18 +401,19 @@ class TransformerDecoder(IncrementalDecoder):
             decoder_inputs += positions
 
         decoder_inputs = self.preprocess(decoder_inputs)
+        attention = None
         self_attention_bias = self.get_self_attention_bias(decoder_inputs, self.batch_first, input_mask,
                                                            future_masking=False)
         encoder_attention_bias = self.get_encoder_attention_bias(encoder_outputs, self.batch_first, encoder_mask)
 
         for i, layer in enumerate(self.layers):
-            decoder_inputs = layer.step(decoder_inputs, encoder_outputs, incremental_state,
-                                        input_mask, encoder_mask,
-                                        self_attention_bias, encoder_attention_bias)
+            decoder_inputs, attention = layer.step(decoder_inputs, encoder_outputs, incremental_state,
+                                                   input_mask, encoder_mask,
+                                                   self_attention_bias, encoder_attention_bias)
 
         outputs = self.postprocess(decoder_inputs, mask=input_mask)
 
-        return outputs
+        return outputs, None
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -556,7 +506,7 @@ class TransformerEncoderLayer(nn.Module):
 
     def self_attention_layer(self, inputs, input_mask=None, self_attention_bias=None):
         query = self.preprocess_attn(inputs, mask=input_mask)
-        self_attention_out = self.attention(query, query, query, self_attention_bias, input_mask)
+        self_attention_out, _ = self.attention(query, query, query, self_attention_bias, input_mask)
         self_attention_out = self.postprocess_attn(self_attention_out, inputs)
         return self_attention_out
 
@@ -694,14 +644,14 @@ class TransformerDecoderLayer(IncrementalModule):
 
     def self_attention_layer(self, inputs, input_mask=None, self_attention_bias=None):
         query = self.preprocess_self_attn(inputs, mask=input_mask)
-        self_attention_out = self.self_attention(query, query, query, self_attention_bias, input_mask)
+        self_attention_out, _ = self.self_attention(query, query, query, self_attention_bias, input_mask)
         self_attention_out = self.postprocess_self_attn(self_attention_out, inputs)
         return self_attention_out
 
     def self_attention_step(self, inputs, incremental_state, input_mask=None, self_attention_bias=None):
         query = self.preprocess_self_attn(inputs, mask=input_mask)
-        self_attention_out = self.self_attention.step(query, query, query, incremental_state,
-                                                      self_attention_bias, input_mask)
+        self_attention_out, _ = self.self_attention.step(query, query, query, incremental_state,
+                                                         self_attention_bias, input_mask)
         self_attention_out = self.postprocess_self_attn(self_attention_out, inputs)
         return self_attention_out
 
@@ -716,19 +666,20 @@ class TransformerDecoderLayer(IncrementalModule):
     def encoder_attention_layer(self, inputs, encoder_outputs, input_mask=None,
                                 context_mask=None, encoder_attention_bias=None):
         query = self.preprocess_enc_attn(inputs, mask=input_mask)
-        enc_attention_out = self.enc_attention(query, encoder_outputs, encoder_outputs,
-                                               encoder_attention_bias, input_mask, context_mask)
+        enc_attention_out, attention_weights = self.enc_attention(query, encoder_outputs, encoder_outputs,
+                                                                  encoder_attention_bias, input_mask, context_mask)
         enc_attention_out = self.postprocess_enc_attn(enc_attention_out, inputs)
-        return enc_attention_out
+        return enc_attention_out, attention_weights
 
     def encoder_attention_step(self, inputs, encoder_outputs, incremental_state, input_mask=None,
                                context_mask=None, encoder_attention_bias=None):
         query = self.preprocess_enc_attn(inputs, mask=input_mask)
-        enc_attention_out = self.enc_attention.step(query, encoder_outputs, encoder_outputs, incremental_state,
-                                                    encoder_attention_bias, input_mask, context_mask,
-                                                    static_kv=True)
+        enc_attention_out, attention_weights = self.enc_attention.step(query, encoder_outputs, encoder_outputs,
+                                                                       incremental_state,
+                                                                       encoder_attention_bias, input_mask, context_mask,
+                                                                       static_kv=True)
         enc_attention_out = self.postprocess_enc_attn(enc_attention_out, inputs)
-        return enc_attention_out
+        return enc_attention_out, attention_weights
 
     # noinspection PyAttributeOutsideInit
     def build_feed_forward(self):
@@ -762,13 +713,14 @@ class TransformerDecoderLayer(IncrementalModule):
         self_attention_out = self.self_attention_layer(inputs, input_mask, self_attention_bias)
 
         if not self.ignore_context:
-            context_attention_out = self.encoder_attention_layer(
+            context_attention_out, attention_weights = self.encoder_attention_layer(
                 self_attention_out, context, input_mask, context_mask, encoder_attention_bias)
         else:
             context_attention_out = self_attention_out
+            attention_weights = None
 
         out = self.feed_forward_layer(context_attention_out, input_mask)
-        return out
+        return out, attention_weights
 
     def _step(self, inputs, encoder_outputs, incremental_state, input_mask=None, context_mask=None,
               self_attention_bias=None,
@@ -776,21 +728,24 @@ class TransformerDecoderLayer(IncrementalModule):
         self_attention_out = self.self_attention_step(inputs, incremental_state, input_mask, self_attention_bias)
 
         if not self.ignore_context:
-            enc_attention_out = self.encoder_attention_step(self_attention_out, encoder_outputs, incremental_state,
-                                                            input_mask, context_mask, encoder_attention_bias)
+            enc_attention_out, attention_weights = self.encoder_attention_step(
+                self_attention_out, encoder_outputs, incremental_state,
+                input_mask, context_mask, encoder_attention_bias)
         else:
             enc_attention_out = self_attention_out
+            attention_weights = None
 
         out = self.feed_forward_step(enc_attention_out, input_mask)
-        return out
+        return out, attention_weights
 
     def _update_names(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
-        version = local_metadata.get('version', None)
+        version = local_metadata.get('version', 1)
         if version == 1 and prefix + 'version' not in state_dict:
             for key in self.preprocess_self_attn.state_dict().keys():
                 state_dict[prefix + 'preprocess_self_attn.' + key] = state_dict.pop(prefix + 'preprocess_attn.' + key)
             for key in self.preprocess_enc_attn.state_dict().keys():
-                state_dict[prefix + 'preprocess_enc_attn.' + key] = state_dict.pop(prefix + 'preprocess_src_attn.' + key)
+                state_dict[prefix + 'preprocess_enc_attn.' + key] = state_dict.pop(
+                    prefix + 'preprocess_src_attn.' + key)
             for key in self.self_attention.state_dict().keys():
                 state_dict[prefix + 'self_attention.' + key] = state_dict.pop(prefix + 'attention_tgt.' + key)
             for key in self.enc_attention.state_dict().keys():

@@ -38,8 +38,6 @@ class DialectTrainData(TrainData):
 @register_trainer('dialect')
 class DialectTrainer(NMTTrainer):
 
-    _version = 2
-
     @classmethod
     def add_preprocess_options(cls, parser):
         super().add_preprocess_options(parser)
@@ -137,19 +135,14 @@ class DialectTrainer(NMTTrainer):
                                 self._get_training_metrics())
 
     def _get_loss_train(self, train_data, batch) -> (Tensor, float):
-        if isinstance(batch, Sequence):
-            # Multi evaluation
-            self.loss = self.translation_loss
-            translation_loss, translation_display_loss = self._get_loss(train_data.model, batch[0])
+        # Multi evaluation
+        self.loss = self.translation_loss
+        translation_loss, translation_display_loss = self._get_loss(train_data.model, batch[0])
 
-            self.loss = self.denoising_loss
-            denoising_loss, denoising_display_loss = self._get_loss(train_data.second_model, batch[1])
+        self.loss = self.denoising_loss
+        denoising_loss, denoising_display_loss = self._get_loss(train_data.second_model, batch[1])
 
-            return translation_loss + denoising_loss, translation_display_loss + denoising_display_loss
-        else:
-            # Just translation
-            self.loss = self.translation_loss
-            return self._get_loss(train_data.model, batch)
+        return translation_loss + denoising_loss, translation_display_loss + denoising_display_loss
 
     def _get_batch_weight(self, batch):
         # This overnormalizes the decoders. Hopefully, that's ok...
@@ -179,7 +172,7 @@ class DialectTrainer(NMTTrainer):
     # noinspection PyProtectedMember
     @staticmethod
     def upgrade_checkpoint(checkpoint):
-        if 'version' not in checkpoint:
+        if 'denoising_model' not in checkpoint['train_data']:
             model_dict = checkpoint['train_data']['model']
             metadata = checkpoint['train_data']['model']._metadata
             first, second = _split_by_key(model_dict, 'first_model')
@@ -189,10 +182,11 @@ class DialectTrainer(NMTTrainer):
             first, second = _split_by_key(metadata, 'first_model')
             checkpoint['train_data']['model']._metadata = first
             checkpoint['train_data']['denoising_model']._metadata = second
-            return
-        version = checkpoint['version']
-        if version < 2:
-            checkpoint['args'].translation_noise = False
+
+        args = checkpoint['args']
+        if 'translation_noise' not in args:
+            args.translation_noise = False
+        NMTTrainer.upgrade_checkpoint(checkpoint)
 
 
 def _split_by_key(data, prefix):
