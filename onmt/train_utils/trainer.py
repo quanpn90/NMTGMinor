@@ -148,7 +148,7 @@ class XETrainer(BaseTrainer):
         total_words = 0
 
         self.model.eval()
-        """ New semantics of PyTorch: save space by not creating gradients """
+        """ save space by not creating gradients """
         with torch.no_grad():
             for i in range(len(data)):
                 batch = data.next()[0]
@@ -223,16 +223,21 @@ class XETrainer(BaseTrainer):
 
                 tgt_mask = batch.get('tgt_mask')
 
-                params = defaultdict(0.0)
+                params = defaultdict(lambda: 0.0)
                 params['l2'] = self.opt.l2_coeff
                 loss_output = self.loss_function(outputs, targets, generator=self.model.generator,
-                                                 backward=True, tgt_mask=tgt_mask)
+                                                 backward=True, tgt_mask=tgt_mask, params=params)
 
                 ## take the negative likelihood
                 loss_data = loss_output['nll']
-                for key in loss_output:
-                    if key in self.meters:
-                        self.meters.update(loss_output[key], batch.size)
+                # average l2 per position
+
+                if 'l2_target' in loss_output:
+                    self.meters['l2_target'].update(loss_output['l2_target'], batch.tgt_size)
+
+                if 'l2' in loss_output:
+                    self.meters['l2'].update(loss_output['l2'], batch.size)
+
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
@@ -283,8 +288,6 @@ class XETrainer(BaseTrainer):
                 self.meters['report_src_words'].update(src_size)
                 self.meters['total_loss'].update(loss_data)
                 self.meters['total_words'].update(num_words)
-
-                optim = self.optim
 
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
 

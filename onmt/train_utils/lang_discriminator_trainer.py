@@ -50,13 +50,15 @@ class DynamicLossScaler:
 
 class LanguageDiscriminatorTrainer(BaseTrainer):
 
-    def __init__(self, cls_model, nmt_model, loss_function, train_data, valid_data, dicts, opt):
+    def __init__(self, cls_model, nmt_model, loss_function, train_data, valid_data, dicts, opt, nmt_type='transformer'):
         super().__init__(cls_model, loss_function, train_data, valid_data, dicts, opt   )
         self.optim = onmt.Optim(opt)
         self.scaler = DynamicLossScaler(opt.fp16_loss_scale, scale_window=2000)
         self.n_samples = 1
         self.start_time = time.time()
         self.nmt_model = nmt_model
+        self.nmt_type = nmt_type
+
 
         if self.cuda:
             torch.cuda.set_device(self.opt.gpus[0])

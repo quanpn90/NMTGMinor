@@ -7,7 +7,6 @@ import datetime
 from onmt.Meters import AverageMeter, TimeMeter
 
 
-
 class Logger(object):
 
     def __init__(self, optim, scaler=None):
@@ -36,6 +35,7 @@ class Logger(object):
         self.meters["q_var"] = AverageMeter()
 
         self.meters["l2"] = AverageMeter()
+        self.meters["l2_target"] = AverageMeter()
 
         self.meters["total_lang_correct"] = AverageMeter()
         self.meters["total_sents"] = AverageMeter()
@@ -67,6 +67,7 @@ class Logger(object):
         q_var = self.meters['q_var'].avg
         kl_prior = self.meters['kl_prior'].avg
         l2 = self.meters['l2'].avg if 'l2' in self.meters else None
+        l2_target = self.meters['l2_target'].avg if 'l2_target' in self.meters else None
 
         log_string = (("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d "
                        + "%5.0f tgt tok/s; gnorm %.3f; oom %d") %
@@ -109,6 +110,9 @@ class Logger(object):
 
         if l2 is not None:
             log_string += "; l2 %.3f" % l2
+
+        if l2_target is not None:
+            log_string += "; l2 target %.3f" % l2_target
 
         # Don't forget to print this ...
         print(log_string)

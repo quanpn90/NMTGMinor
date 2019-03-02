@@ -10,19 +10,36 @@ from torch.utils.checkpoint import checkpoint
 from onmt.modules.Utilities import mean_with_mask_backpropable as mean_with_mask
 from onmt.modules.Utilities import max_with_mask
 from onmt.modules.Transformer.Layers import PrePostProcessing
+import copy
 
-from onmt.modules.Transformer.Models import Transformer
+# to do: create an external decoder and synchronize it every parameter update
 
-
-class ParallelTransformer(Transformer):
+class ParallelTransformer(NMTModel):
     """Main model in 'Attention is all you need' """
 
-    def __init__(self, encoder, decoder, generator=None, tgt_encoder=None):
+    def __init__(self, encoder, decoder, generator=None, tgt_encoder=None, tgt_decoder=None):
         super().__init__(encoder, decoder, generator=generator)
         self.tgt_encoder = tgt_encoder
+        self.tgt_decoder = tgt_decoder
+
+        # freeze the parameters for non-embedding (which is shared anyways)
+        for child in tgt_decoder.children():
+            if not (isinstance(child, torch.nn.modules.sparse.Embedding)):
+                for param in child.parameters():
+                    param.requires_grad = False
 
 
-    def forward(self, batch, external_models=None):
+
+
+    def _synchronize(self):
+
+        # every time model parameters are updated, we synchronize the paramters of the target decoder
+        # with the regular decoder
+        self.tgt_decoder.load_state_dict(self.decoder.state_dict())
+        return
+
+
+    def forward(self, batch):
         """
         Inputs Shapes:
             src: len_src x batch_size
@@ -32,9 +49,6 @@ class ParallelTransformer(Transformer):
             out:   a dictionary containing output hidden state and coverage
 
         """
-
-        assert external_models is not None
-
         src = batch.get('source')
         tgt = batch.get('target_input')
         tgt_attbs = batch.get('tgt_attbs')  # vector of length B
@@ -51,7 +65,7 @@ class ParallelTransformer(Transformer):
             tgt_context, _ = self.tgt_encoder(tgt_)
 
             # generate the target distribution on top of the tgt hiddens
-            tgt_hiddens, _ = self.decoder(tgt, tgt_attbs, tgt_context, tgt_)
+            tgt_hiddens, _ = self.tgt_decoder(tgt, tgt_attbs, tgt_context, tgt_, freeze_embedding=True)
         else:
             tgt_hiddens = None
 

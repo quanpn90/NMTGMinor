@@ -43,7 +43,8 @@ class NMTModel(nn.Module):
         super(NMTModel, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
-        self.generator = generator        
+        self.generator = generator
+
         
     def tie_weights(self):
         assert self.generator is not None, "The generator needs to be created before sharing weights"
@@ -57,7 +58,21 @@ class NMTModel(nn.Module):
         
         self.encoder.mark_pretrained()
         self.decoder.mark_pretrained()
-        
+
+    def forward(self, batch, external_models=None):
+
+        raise NotImplementedError
+
+    def _synchronize(self):
+
+        # not doing anything by default
+        return
+
+    def zero_grad(self):
+
+        self._synchronize()
+        super(NMTModel, self).zero_grad()
+
     def load_state_dict(self, state_dict, strict=True):
         
         def condition(param_name):
@@ -86,7 +101,10 @@ class NMTModel(nn.Module):
         for k,v in model_dict.items():
             if k not in filtered:
                 filtered[k] = v
-        super().load_state_dict(filtered)   
+        super().load_state_dict(filtered)
+
+
+        self._synchronize()
 
 
 class Reconstructor(nn.Module):

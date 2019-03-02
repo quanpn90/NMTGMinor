@@ -157,7 +157,9 @@ class FP16XETrainer(XETrainer):
     
         
     def train_epoch(self, epoch, resume=False, batch_order=None, iteration=0):
-        
+
+        self.meters['total_loss'].reset()
+        self.meters['total_words'].reset()
         opt = self.opt
         train_data = self.train_data
         
@@ -289,7 +291,7 @@ class FP16XETrainer(XETrainer):
                     
                     else:
                         try:
-
+                            self.meters['gnorm'].update(grad_norm)
                             max_norm = 5.0
                             if grad_norm > max_norm > 0:
                                 clip_coef = max_norm / (grad_norm + 1e-6)
@@ -367,13 +369,28 @@ class FP16XETrainer(XETrainer):
 
         
         if checkpoint is not None:
+
+            if not opt.reset_optim:
+
+                self.optim.load_state_dict(checkpoint['optim'])
+                batch_order = checkpoint['batch_order']
+                iteration = checkpoint['iteration'] + 1
+                opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
+                resume = True
+            else:
+                batch_order = None
+                iteration = 0
+                resume = False
+
             print('Loading model and optim from checkpoint at %s' % save_file)
             self.convert_fp16(checkpoint['model'], checkpoint['optim'])
-            batch_order = checkpoint['batch_order']
-            iteration = checkpoint['iteration'] + 1
-            opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
-            resume=True  
-            
+
+            # self.convert_fp16(checkpoint['model'], checkpoint['optim'])
+            # batch_order = checkpoint['batch_order']
+            # iteration = checkpoint['iteration'] + 1
+            # opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
+            # resume=True
+            #
             del checkpoint['model']
             del checkpoint['optim']
             del checkpoint

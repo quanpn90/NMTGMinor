@@ -17,12 +17,12 @@ from onmt.train_utils.lang_discriminator_trainer import LanguageDiscriminatorTra
 from onmt.ModelConstructor import build_model, init_model_parameters
 from onmt.data_utils.IndexedDataset import IndexedInMemoryDataset
 from onmt.modules.Transformer.Layers import PositionalEncoding
+from options import make_parser
 
 
 parser = argparse.ArgumentParser(description='train_language_discriminator.py')
 onmt.Markdown.add_md_help_argument(parser)
 
-from options import make_parser
 # Please look at the options file to see the options regarding models and data
 parser = make_parser(parser)
 
@@ -111,7 +111,9 @@ def main():
     num_params = sum([p.nelement() for p in cls_model.parameters()])
     print('* number of parameters: %d' % num_params)
 
-    trainer = LanguageDiscriminatorTrainer(cls_model, nmt_model, loss_function, train_data, valid_data, dicts, opt)
+    nmt_type = opt.model
+    trainer = LanguageDiscriminatorTrainer(cls_model, nmt_model, loss_function,
+                                           train_data, valid_data, dicts, opt, nmt_type)
 
     trainer.run(save_file=opt.load_from)
 

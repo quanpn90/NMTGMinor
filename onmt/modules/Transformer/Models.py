@@ -257,7 +257,7 @@ class TransformerDecoder(nn.Module):
         mask = torch.ByteTensor(np.triu(np.ones((new_len, new_len)), k=1).astype('uint8'))
         self.register_buffer('mask', mask)
 
-    def forward(self, input, input_attbs, context, src, **kwargs):
+    def forward(self, input, input_attbs, context, src, freeze_embeddings=False, **kwargs):
         """
         Inputs Shapes: 
             input: (Tensor) batch_size x len_tgt (to be transposed)
@@ -269,7 +269,18 @@ class TransformerDecoder(nn.Module):
         """
 
         """ Embedding: batch_size x len_tgt x d_model """
-        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        len_tgt = input.size(1)
+        input_attbs = input_attbs.unsqueeze(1).repeat(1, len_tgt)
+
+        if freeze_embeddings:
+            with torch.no_grad:
+                emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+                attb_emb = self.feat_lut(input_attbs)
+        else:
+            emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+            attb_emb = self.feat_lut(input_attbs)
+
+
         if self.time == 'positional_encoding':
             emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
@@ -277,15 +288,10 @@ class TransformerDecoder(nn.Module):
         if isinstance(emb, tuple):
             emb = emb[0]
 
-        len_tgt = input.size(1)
-
         # B x T x H
         emb = self.preprocess_layer(emb)
 
         # expand B to B x T
-        input_attbs = input_attbs.unsqueeze(1).repeat(1, len_tgt)
-        attb_emb = self.feat_lut(input_attbs)
-
         emb = torch.cat([emb, attb_emb], dim=-1)
 
         emb = torch.relu(self.feature_projector(emb))

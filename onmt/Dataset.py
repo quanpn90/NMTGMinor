@@ -16,25 +16,25 @@ class Batch(object):
         self.has_target = False
         self.tensors['source'], self.src_lengths = self.collate(src_data, align_right=src_align_right)
         self.tensors['source'] = self.tensors['source'].t().contiguous()
-        self.tensors['src_attn_mask'] = self.tensors['source'].eq(onmt.Constants.PAD).unsqueeze(1)
-        self.tensors['src_pad_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
+        # self.tensors['src_attn_mask'] = self.tensors['source'].eq(onmt.Constants.PAD).unsqueeze(1)
+        # self.tensors['src_pad_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
         self.tensors['src_length'] = torch.LongTensor(self.src_lengths)
         self.tensors['src_attbs'] = torch.LongTensor(src_attbs)
 
         # always need tgt attbs to know which language we translate to
         assert (tgt_attbs is not None)
+        self.tensors['tgt_attbs'] = torch.LongTensor(tgt_attbs)
 
         if tgt_data is not None:
             target_full, self.tgt_lengths = self.collate(tgt_data, align_right=tgt_align_right)
             target_full = target_full.t().contiguous()
             self.tensors['target_input'] = target_full[:-1]
             self.tensors['target_output'] = target_full[1:]
-            self.tensors['tgt_pad_mask'] = self.tensors['target_input'].ne(onmt.Constants.PAD)
-            self.tensors['tgt_attn_mask'] = self.tensors['target_input'].ne(onmt.Constants.PAD)
-            self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.Constants.PAD)
-            self.tensors['src_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
+            # self.tensors['tgt_pad_mask'] = self.tensors['target_input'].ne(onmt.Constants.PAD)
+            # self.tensors['tgt_attn_mask'] = self.tensors['target_input'].ne(onmt.Constants.PAD)
+            # self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.Constants.PAD)
+            # self.tensors['src_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
             self.tensors['tgt_length'] = torch.LongTensor(self.tgt_lengths)
-            self.tensors['tgt_attbs'] = torch.LongTensor(tgt_attbs)
             self.has_target = True
             self.tgt_size = sum([len(x) - 1 for x in tgt_data])
 
@@ -75,13 +75,17 @@ class Dataset(object):
                  batch_size_sents=128,
                  multiplier=1):
         self.src = src_data['words']
-        self.src_attbs =  src_data['attbs']
-        if tgt_data:
+        self.src_attbs = src_data['attbs']
+        if tgt_data is not None:
             self.tgt = tgt_data['words']
             self.tgt_attbs = tgt_data['attbs']
-            assert(len(self.src) == len(self.tgt))
+
+            if self.tgt is not None:
+                assert(len(self.src) == len(self.tgt))
         else:
             self.tgt = None
+
+        assert(self.tgt_attbs is not None)
         self.fullSize = len(self.src)
 
         self.batch_size_words = batch_size_words

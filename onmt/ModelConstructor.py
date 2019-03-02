@@ -161,6 +161,20 @@ def build_model(opt, dicts):
 
         loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
 
+    elif opt.model == 'simplified_transformer_v2':
+
+        from onmt.modules.SimplifiedTransformerv2.Models import SimplifiedTransformerEncoder, SimplifiedTransformer
+
+        encoder = SimplifiedTransformerEncoder(opt, embedding_src, positional_encoder)
+
+        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
+
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+
+        model = SimplifiedTransformer(encoder, decoder, generator)
+
+        loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+
     elif opt.model == 'l2_transformer':
 
         from onmt.modules.SimplifiedTransformer.Models import SimplifiedTransformerEncoder, SimplifiedTransformer
@@ -192,23 +206,39 @@ def build_model(opt, dicts):
 
         loss_function = NMTL2Loss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
 
-    elif opt.model == 'ptransformer':
-    
-        from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder
-        
-        onmt.Constants.weight_norm = opt.weight_norm
-        onmt.Constants.init_value = opt.param_init
-        
-        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN )
-        
-        encoder = ParallelTransformerEncoder(opt, embedding_src, positional_encoder)
-        decoder = ParallelTransformerDecoder(opt, embedding_tgt, positional_encoder)
-        
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
-        
-        model = Transformer(encoder, decoder, generator)   
+    elif opt.model == 'parallel_transformer':
 
-        loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing) 
+        from onmt.modules.ParallelTransformer.Models import ParallelTransformer
+        from onmt.modules.ParallelTransformer.NMTL2Loss import NMTL2Loss
+
+        encoder = TransformerEncoder(opt, embedding_src, positional_encoder)
+        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
+
+        tgt_encoder = TransformerEncoder(opt, embedding_tgt, positional_encoder, share=encoder)
+
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+
+        model = ParallelTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder)
+
+        loss_function = NMTL2Loss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+
+    elif opt.model == 'parallel_transformer_v2':
+
+        from onmt.modules.ParallelTransformerv2.Models import ParallelTransformer
+        from onmt.modules.ParallelTransformer.NMTL2Loss import NMTL2Loss
+
+        encoder = TransformerEncoder(opt, embedding_src, positional_encoder)
+        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
+
+        tgt_encoder = TransformerEncoder(opt, embedding_tgt, positional_encoder, share=encoder)
+
+        tgt_decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
+
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+
+        model = ParallelTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder, tgt_decoder=tgt_decoder)
+
+        loss_function = NMTL2Loss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
     
     elif opt.model in ['universal_transformer', 'utransformer'] :
     
