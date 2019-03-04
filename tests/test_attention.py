@@ -4,84 +4,13 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from nmtg.modules.dropout import StaticDropout
+import nmtg.models
+from nmtg.modules.attention import MultiHeadAttention
 from nmtg.modules.linear import XavierLinear, group_linear
 from nmtg.modules.masking import MaskedFunction
 
-
-class MultiHeadAttention(nn.Module):
-    def __init__(self, h, d_model, attn_p=0.1, static=True, share=3):
-        super(MultiHeadAttention, self).__init__()
-        self.h = h
-        self.d = d_model
-        self.share = share
-
-        assert d_model % h == 0
-
-        self.d_head = d_model // h
-        self.fc_query = MaskedFunction(XavierLinear(d_model, h * self.d_head, bias=False))
-        self.fc_key = MaskedFunction(XavierLinear(d_model, h * self.d_head, bias=False))
-        self.fc_value = MaskedFunction(XavierLinear(d_model, h * self.d_head, bias=False))
-
-        self.fc_concat = MaskedFunction(XavierLinear(h * self.d_head, d_model, bias=False))
-
-        self.sm = nn.Softmax(dim=-1)
-
-        if static:
-            self.attn_dropout = StaticDropout(attn_p)
-        else:
-            self.attn_dropout = nn.Dropout(attn_p)
-
-    def forward(self, query, key, value, mask, query_mask=None, value_mask=None):
-
-        len_query, b = query.size(0), query.size(1)
-        len_key, b_ = key.size(0), key.size(1)
-
-        key_mask = value_mask
-
-        # batch_size*num_heads x len_query x head_dim
-        # project inputs to multi-heads
-        if self.share == 1:
-            shared_qkv = group_linear(
-                [self.fc_query.function, self.fc_key.function, self.fc_value.function], query)
-            proj_query, proj_key, proj_value = shared_qkv.chunk(3, dim=-1)
-        elif self.share == 2:
-            proj_query = self.fc_query(query)  # batch_size x len_query x num_heads*head_dim
-            shared_kv = group_linear([self.fc_key.function, self.fc_value.function], key)
-            proj_key, proj_value = shared_kv.chunk(2, dim=-1)
-        else:
-            proj_query = self.fc_query(query, mask=query_mask)
-            proj_key = self.fc_key(key, mask=key_mask)  # batch_size x len_key x num_heads*head_dim
-            proj_value = self.fc_value(value, mask=value_mask)  # batch_size x len_key x num_heads*head_dim
-
-        q, k, v = proj_query, proj_key, proj_value
-        # prepare the shape for applying softmax
-        q = q.contiguous().view(len_query, b * self.h, self.d_head).transpose(0, 1)
-        k = k.contiguous().view(len_key, b * self.h, self.d_head).transpose(0, 1)
-        v = v.contiguous().view(len_key, b * self.h, self.d_head).transpose(0, 1)
-
-        q = q * (self.d_head ** -0.5)
-
-        # get dotproduct softmax attns for each head
-        attns = torch.bmm(q, k.transpose(1, 2))  # batch_size*num_heads x len_query x len_key
-
-        attns = attns.view(b, self.h, len_query, len_key)
-        mask_ = mask.unsqueeze(-3)
-        # FP16 support: cast to float and back
-        attns = attns.float().masked_fill_(mask_, -float('inf')).type_as(attns)
-        attns = F.softmax(attns.float(), dim=-1).type_as(attns)
-        # return mean attention from all heads as coverage
-        coverage = torch.mean(attns, dim=1)
-        attns = self.attn_dropout(attns)
-        attns = attns.view(b * self.h, len_query, len_key)
-
-        # apply attns on value
-        out = torch.bmm(attns, v)  # batch_size*num_heads x len_query x head_dim
-        out = out.transpose(0, 1).contiguous().view(len_query, b, self.d)
-
-        out = self.fc_concat(out)
-
-        return out, coverage
+import onmt.Constants
+from onmt.modules.Transformer.Layers import MultiHeadAttention as QuanAttention
 
 
 def make_mask_random(size, fill):
@@ -111,7 +40,6 @@ def sequence_mask(sequence_length, max_len=None):
     return seq_range_expand < seq_length_expand
 
 
-import nmtg.modules.attention
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('--cuda', action='store_true')
@@ -148,7 +76,10 @@ elif sa:
 else:
     mask_quan = src_mask_quan.unsqueeze(1)
 
-quan_attention = MultiHeadAttention(8, 512, 0.0, False, 2)
+onmt.Constants.weight_norm = False
+onmt.Constants.attention_out = 'default'
+
+quan_attention = QuanAttention(8, 512, 0.0, False, 2)
 
 if cuda:
     quan_attention.cuda()
@@ -159,8 +90,8 @@ in_b_quan = in_tensor_A if sa else in_tensor_B
 
 out_tensor_quan, _ = quan_attention(in_a_quan, in_b_quan, in_b_quan, mask_quan)
 out_tensor_quan.sum().backward()
-grads_quan = quan_attention.fc_query.function.weight.grad.clone().detach().cpu()
-grads_quan2 = quan_attention.fc_concat.function.weight.grad.clone().detach().cpu()
+grads_quan = quan_attention.fc_query.function.linear.weight.grad.clone().detach().cpu()
+grads_quan2 = quan_attention.fc_concat.function.linear.weight.grad.clone().detach().cpu()
 quan_attention.zero_grad()
 
 
@@ -187,13 +118,13 @@ elif sa:
 else:
     bias_felix = in_a_felix.new_full(src_mask_felix.size(), float('-inf')).masked_fill(src_mask_felix, 0).unsqueeze(1)
 
-felix_attention = nmtg.modules.attention.MultiHeadAttention(512, 8, 0.0, bf, False)
-felix_attention.query_projection.function.weight = quan_attention.fc_query.function.weight
-felix_attention.key_projection.function.weight = quan_attention.fc_key.function.weight
-felix_attention.value_projection.function.weight = quan_attention.fc_value.function.weight
-felix_attention.out_projection.function.weight = quan_attention.fc_concat.function.weight
+felix_attention = MultiHeadAttention(512, 8, 0.0, bf, False)
+felix_attention.query_projection.function.weight = quan_attention.fc_query.function.linear.weight
+felix_attention.key_projection.function.weight = quan_attention.fc_key.function.linear.weight
+felix_attention.value_projection.function.weight = quan_attention.fc_value.function.linear.weight
+felix_attention.out_projection.function.weight = quan_attention.fc_concat.function.linear.weight
 
-out_tensor_felix = felix_attention(in_a_felix, in_b_felix, in_b_felix, bias_felix, tgt_mask_felix, src_mask_felix)
+out_tensor_felix, _ = felix_attention(in_a_felix, in_b_felix, in_b_felix, bias_felix, tgt_mask_felix, src_mask_felix)
 if bf:
     out_tensor_felix = out_tensor_felix.transpose(0, 1).contiguous()
 out_tensor_felix.sum().backward()

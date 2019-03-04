@@ -3,8 +3,7 @@ from torch import nn
 from torch import nn
 
 from nmtg.models import register_model
-from nmtg.models.transformer import Transformer
-from nmtg.models.transformer.transformer import TransformerDecoder, TransformerDecoderLayer
+from nmtg.models.transformer.transformer import TransformerDecoder, TransformerDecoderLayer, Transformer
 from nmtg.modules.attention import AverageAttention
 from nmtg.modules.transformer_layers import get_feed_forward
 

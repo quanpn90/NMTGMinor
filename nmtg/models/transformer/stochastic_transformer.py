@@ -3,9 +3,8 @@ import torch
 from torch import nn
 
 from nmtg.models import register_model
-from nmtg.models.transformer import Transformer
 from nmtg.models.transformer.transformer import TransformerEncoder, TransformerDecoder, TransformerEncoderLayer, \
-    TransformerDecoderLayer
+    TransformerDecoderLayer, Transformer
 
 
 @register_model('stochastic_transformer')

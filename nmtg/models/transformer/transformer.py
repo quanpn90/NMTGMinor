@@ -356,7 +356,7 @@ class TransformerDecoder(IncrementalDecoder):
             encoder_to_share=encoder.layers[i] if encoder is not None else None
         ) for i in range(self.num_layers)])
 
-    def forward(self, decoder_inputs, encoder_outputs, input_mask=None, encoder_mask=None):
+    def forward(self, decoder_inputs, encoder_outputs, decoder_mask=None, encoder_mask=None):
         if self.positional_encoding is not None:
             positions = self.positional_encoding(decoder_inputs)
         else:
@@ -369,27 +369,27 @@ class TransformerDecoder(IncrementalDecoder):
 
         decoder_inputs = self.preprocess(decoder_inputs)
         attention = None
-        self_attention_bias = self.get_self_attention_bias(decoder_inputs, self.batch_first, input_mask)
+        self_attention_bias = self.get_self_attention_bias(decoder_inputs, self.batch_first, decoder_mask)
         encoder_attention_bias = self.get_encoder_attention_bias(encoder_outputs, self.batch_first, encoder_mask)
 
         for i, layer in enumerate(self.layers):
             if self.checkpointing > 0 and self.training and (i + 1) % self.checkpointing == 0:
                 decoder_inputs, attention = torch.utils.checkpoint.checkpoint(
-                    layer, decoder_inputs, encoder_outputs, input_mask,
+                    layer, decoder_inputs, encoder_outputs, decoder_mask,
                     encoder_mask, self_attention_bias, encoder_attention_bias)
             else:
-                decoder_inputs, attention = layer(decoder_inputs, encoder_outputs, input_mask,
+                decoder_inputs, attention = layer(decoder_inputs, encoder_outputs, decoder_mask,
                                                   encoder_mask, self_attention_bias, encoder_attention_bias)
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.
-        outputs = self.postprocess(decoder_inputs, mask=input_mask)
+        outputs = self.postprocess(decoder_inputs, mask=decoder_mask)
 
         return outputs, attention
 
-    def _step(self, decoder_inputs, encoder_outputs, incremental_state, input_mask=None, encoder_mask=None):
+    def _step(self, decoder_inputs, encoder_outputs, incremental_state, decoder_mask=None, encoder_mask=None):
         if self.positional_encoding is not None:
             positions = self.positional_encoding.step(decoder_inputs, incremental_state)
         else:
@@ -402,18 +402,18 @@ class TransformerDecoder(IncrementalDecoder):
 
         decoder_inputs = self.preprocess(decoder_inputs)
         attention = None
-        self_attention_bias = self.get_self_attention_bias(decoder_inputs, self.batch_first, input_mask,
+        self_attention_bias = self.get_self_attention_bias(decoder_inputs, self.batch_first, decoder_mask,
                                                            future_masking=False)
         encoder_attention_bias = self.get_encoder_attention_bias(encoder_outputs, self.batch_first, encoder_mask)
 
         for i, layer in enumerate(self.layers):
             decoder_inputs, attention = layer.step(decoder_inputs, encoder_outputs, incremental_state,
-                                                   input_mask, encoder_mask,
+                                                   decoder_mask, encoder_mask,
                                                    self_attention_bias, encoder_attention_bias)
 
-        outputs = self.postprocess(decoder_inputs, mask=input_mask)
+        outputs = self.postprocess(decoder_inputs, mask=decoder_mask)
 
-        return outputs, None
+        return outputs, attention
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -480,12 +480,6 @@ class TransformerEncoderLayer(nn.Module):
         self.batch_first = batch_first
         self.feed_forward_type = feed_forward_type
 
-        self.preprocess_attn = PrePostProcessing(model_dim, 'n', masking=masked_layers)
-        self.postprocess_attn = PrePostProcessing(model_dim, 'da', residual_dropout,
-                                                  gated_residuals=gated_residuals)
-        self.preprocess_ffn = PrePostProcessing(model_dim, 'n', masking=masked_layers)
-        self.postprocess_ffn = PrePostProcessing(model_dim, 'da', residual_dropout,
-                                                 gated_residuals=gated_residuals)
         self.build_self_attention()
 
         self.build_feed_forward()

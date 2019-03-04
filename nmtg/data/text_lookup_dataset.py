@@ -1,4 +1,7 @@
 import logging
+import os
+
+import numpy as np
 
 from nmtg.data import data_utils
 from nmtg.data.dictionary import Dictionary
@@ -50,3 +53,21 @@ class TextLookupDataset(Dataset):
                                                         self.dictionary.pad(),
                                                         self.align_right)
         return {'indices': indices, 'lengths': lengths, 'size': lengths.sum().item()}
+
+    @classmethod
+    def load(cls, filename, dictionary, data_dir, load_into_memory=False, words=True, *args, **kwargs):
+        base_name = os.path.basename(filename)
+
+        if load_into_memory:
+            text_data = TextLineDataset.load_into_memory(filename)
+            if words:
+                lengths = np.array([len(sample.split()) for sample in text_data])
+            else:
+                lengths = np.array([len(sample) for sample in text_data])
+        else:
+            offsets_filename = os.path.join(data_dir, base_name + '.idx.npy')
+            text_data = TextLineDataset.load_indexed(filename, offsets_filename)
+            lengths_filename = os.path.join(data_dir, base_name + '.len.npy')
+            lengths = np.load(lengths_filename)
+
+        return cls(text_data, dictionary, words, *args, **kwargs), lengths

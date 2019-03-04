@@ -93,7 +93,7 @@ class DenoisingTextTrainer(NMTTrainer):
             noisy_offset_filename = os.path.join(args.data_dir_out, train_noisy_name + '.idx.npy')
             np.save(noisy_offset_filename, noisy_offsets)
         else:
-            ((offsets, lengths, counter), ) = outputs
+            ((offsets, lengths, counter),) = outputs
 
         out_offsets = os.path.join(args.data_dir_out, train_clean_name + '.idx.npy')
         out_lengths = os.path.join(args.data_dir_out, train_clean_name + '.len.npy')
@@ -117,40 +117,27 @@ class DenoisingTextTrainer(NMTTrainer):
         logger.info('Loading training data')
         split_words = self.args.input_type == 'word'
 
-        train_clean_name = os.path.basename(self.args.train_clean)
-
-        if self.args.load_into_memory:
-            clean_data = TextLineDataset.load_into_memory(self.args.train_clean)
-            if split_words:
-                lengths = np.array([len(sample.split()) for sample in clean_data])
-            else:
-                lengths = np.array([len(sample) for sample in clean_data])
-        else:
-            offsets = os.path.join(self.args.data_dir, train_clean_name + '.idx.npy')
-            clean_data = TextLineDataset.load_indexed(self.args.train_clean, offsets)
-            clean_len_filename = os.path.join(self.args.data_dir, train_clean_name + '.len.npy')
-            lengths = np.load(clean_len_filename)
+        clean_data, lengths = TextLookupDataset.load(self.args.train_clean, self.dictionary, self.args.data_dir,
+                                                     self.args.load_into_memory, split_words,
+                                                     bos=True, eos=True, trunc_len=self.args.seq_length_trunc,
+                                                     lower=self.args.lower)
 
         if self.args.train_noisy is not None:
-            train_noisy_name = os.path.basename(self.args.train_noisy)
-            if self.args.load_into_memory:
-                noisy_data = TextLineDataset.load_into_memory(self.args.train_noisy)
-            else:
-                offsets = os.path.join(self.args.data_dir, train_noisy_name + '.idx.npy')
-                noisy_data = TextLineDataset.load_indexed(self.args.train_noisy, offsets)
+            noisy_data, _ = TextLookupDataset.load(self.args.train_noisy, self.dictionary, self.args.data_dir,
+                                                   self.args.load_into_memory, split_words,
+                                                   bos=False, eos=False, trunc_len=self.args.seq_length_trunc,
+                                                   lower=self.args.lower)
         else:
-            noisy_data = clean_data
+            noisy_data = TextLookupDataset(clean_data.source, self.dictionary, words=split_words, bos=False, eos=False,
+                                           trunc_len=self.args.seq_length_trunc, lower=self.args.lower)
 
         noisy_data = NoisyTextDataset(
-            TextLookupDataset(noisy_data, self.dictionary, words=split_words, bos=False, eos=False,
-                              trunc_len=self.args.seq_length_trunc, lower=self.args.lower),
+            noisy_data,
             self.args.word_shuffle,
             self.args.word_dropout,
             self.args.word_blank,
             self.args.bpe_symbol)
 
-        clean_data = TextLookupDataset(clean_data, self.dictionary, words=split_words, bos=True, eos=True,
-                                       trunc_len=self.args.seq_length_trunc, lower=self.args.lower)
         dataset = ParallelDataset(noisy_data, clean_data)
         logger.info('Number of training sentences: {:,d}'.format(len(dataset)))
 
@@ -202,16 +189,3 @@ class DenoisingTextTrainer(NMTTrainer):
     def load_state_dict(self, state_dict):
         super().load_state_dict(state_dict)
         self.dictionary = self.src_dict
-
-    def convert_checkpoint(self, checkpoint, original_trainer_class):
-        if original_trainer_class.__name__ == 'DialectTrainer':
-            logger.info('Converting checkpoint from {}'.format(original_trainer_class.__name__))
-            checkpoint['train_data']['model'] = checkpoint['train_data']['denoising_model']
-            args = checkpoint['args']
-            if not args.join_vocab:
-                args.join_vocab = True
-                checkpoint['dict'] = checkpoint['src_dict']
-            args.join_embedding = True
-        else:
-            super().convert_checkpoint(checkpoint, original_trainer_class)
-

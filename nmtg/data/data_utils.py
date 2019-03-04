@@ -65,7 +65,10 @@ def get_indices_and_vocabulary(filenames, split_words=True, lower=False, progres
                     offset.append(f.tell())
 
                 for length, counter, line in zip(lengths, counters, proc_lines):
-                    length.append(len(line))
+                    ll = len(line)
+                    if ll == 0:
+                        logger.warning('Empty line {}'.format(i))
+                    length.append(ll)
                     counter.update(line)
 
                 i += 1
@@ -179,23 +182,29 @@ def _generate_length_based_batches(lengths, indices, length_per_batch, max_examp
         sample_length = lengths[i]
 
         if batch_is_full():
-            current_size = len(cur_batch)
-
-            scaled_size = current_size
-            # cut down batch size to a multiple of batch_size_align
-            if current_size > batch_size_align:
-                scaled_size = batch_size_align * (current_size // batch_size_align)
-
-            trunc_batch = cur_batch[:scaled_size]
             if batch_size_align > 1:
-                assert (len(trunc_batch) < batch_size_align or len(trunc_batch) % batch_size_align == 0), \
-                    'Batch size is not a multiple of {}, current batch_size is {}' \
-                    .format(batch_size_align, len(trunc_batch))
-            batches.append(trunc_batch)  # add this batch into the batch list
+                current_size = len(cur_batch)
 
-            cur_batch = cur_batch[scaled_size:]  # reset the current batch
-            cur_batch_sizes = cur_batch_sizes[scaled_size:]
-            cur_batch_size = sum(cur_batch_sizes)
+                scaled_size = current_size
+                # cut down batch size to a multiple of batch_size_align
+                if current_size > batch_size_align:
+                    scaled_size = batch_size_align * (current_size // batch_size_align)
+
+                trunc_batch = cur_batch[:scaled_size]
+                if len(trunc_batch) > batch_size_align and len(trunc_batch) % batch_size_align != 0:
+                    raise ValueError('Batch size is not a multiple of {}, current batch_size is {}'
+                                     .format(batch_size_align, len(trunc_batch)))
+
+                batches.append(trunc_batch)  # add this batch into the batch list
+
+                cur_batch = cur_batch[scaled_size:]  # reset the current batch
+                cur_batch_sizes = cur_batch_sizes[scaled_size:]
+                cur_batch_size = sum(cur_batch_sizes)
+            else:
+                batches.append(cur_batch)
+                cur_batch = []
+                cur_batch_sizes = []
+                cur_batch_size = 0
 
         cur_batch.append(i)
         cur_batch_size += sample_length

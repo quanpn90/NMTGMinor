@@ -257,33 +257,15 @@ class NMTTrainer(Trainer):
     def _load_parallel_dataset(self):
         logger.info('Loading training data')
         split_words = self.args.input_type == 'word'
-
-        train_src_name = os.path.basename(self.args.train_src)
-        train_tgt_name = os.path.basename(self.args.train_tgt)
-
-        if self.args.load_into_memory:
-            src_data = TextLineDataset.load_into_memory(self.args.train_src)
-            tgt_data = TextLineDataset.load_into_memory(self.args.train_tgt)
-            if split_words:
-                src_lengths = np.array([len(sample.split(' ')) for sample in src_data])
-                tgt_lengths = np.array([len(sample.split(' ')) for sample in tgt_data])
-            else:
-                src_lengths = np.array([len(sample) for sample in src_data])
-                tgt_lengths = np.array([len(sample) for sample in tgt_data])
-        else:
-            offsets_src = os.path.join(self.args.data_dir, train_src_name + '.idx.npy')
-            offsets_tgt = os.path.join(self.args.data_dir, train_tgt_name + '.idx.npy')
-            src_data = TextLineDataset.load_indexed(self.args.train_src, offsets_src)
-            tgt_data = TextLineDataset.load_indexed(self.args.train_tgt, offsets_tgt)
-            src_len_filename = os.path.join(self.args.data_dir, train_src_name + '.len.npy')
-            tgt_len_filename = os.path.join(self.args.data_dir, train_tgt_name + '.len.npy')
-            src_lengths = np.load(src_len_filename)
-            tgt_lengths = np.load(tgt_len_filename)
-
-        src_data = TextLookupDataset(src_data, self.src_dict, words=split_words, bos=False, eos=False,
-                                     trunc_len=self.args.src_seq_length_trunc, lower=self.args.lower)
-        tgt_data = TextLookupDataset(tgt_data, self.tgt_dict, words=split_words, bos=True, eos=True,
-                                     trunc_len=self.args.tgt_seq_length_trunc, lower=self.args.lower)
+        
+        src_data, src_lengths = TextLookupDataset.load(self.args.train_src, self.src_dirct, self.args.data_dir,
+                                                       self.args.load_into_memory, split_words,
+                                                       bos=False, eos=False, trunc_len=self.args.src_seq_length_trunc,
+                                                       lower=self.args.lower)
+        tgt_data, tgt_lengths = TextLookupDataset.load(self.args.train_tgt, self.tgt_dirct, self.args.data_dir,
+                                                       self.args.load_into_memory, split_words,
+                                                       bos=True, eos=True, trunc_len=self.args.tgt_seq_length_trunc,
+                                                       lower=self.args.lower)
         dataset = ParallelDataset(src_data, tgt_data)
         logger.info('Number of training sentences: {:,d}'.format(len(dataset)))
 
@@ -451,11 +433,3 @@ class NMTTrainer(Trainer):
         args = checkpoint['args']
         NMTModel.upgrade_args(args)
         Trainer.upgrade_checkpoint(checkpoint)
-
-    def convert_checkpoint(self, checkpoint, original_trainer_class):
-        if original_trainer_class.__name__ == 'DialectTrainer':
-            # no operation necessary
-            logger.info('Converting checkpoint from {}'.format(original_trainer_class.__name__))
-        else:
-            super().convert_checkpoint(checkpoint, original_trainer_class)
-

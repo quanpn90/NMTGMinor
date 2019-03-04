@@ -44,12 +44,12 @@ class Decoder(nn.Module):
             self.future_mask = torch.tril(self.future_mask.resize_(dim, dim).fill_(1), 0)
         return self.future_mask[:dim, :dim]
 
-    def forward(self, decoder_inputs, encoder_outputs, input_mask=None, encoder_mask=None):
+    def forward(self, decoder_inputs, encoder_outputs, decoder_mask=None, encoder_mask=None):
         """
         Run the decoder
         :param decoder_inputs: (FloatTensor) Input to the decoder
         :param encoder_outputs: (FloatTensor) Outputs from the encoder
-        :param input_mask: (ByteTensor) Optional mask for invalid decoder inputs (i.e. padding)
+        :param decoder_mask: (ByteTensor) Optional mask for invalid decoder inputs (i.e. padding)
         :param encoder_mask: (ByteTensor) Optional mask for invalid encoder outputs (i.e. padding)
         :return: The decoder output and attention weights
         """
@@ -162,12 +162,12 @@ class IncrementalDecoder(Decoder):
                     "didn't return None".format(hook))
         return result
 
-    def _step(self, decoder_inputs, encoder_outputs, incremental_state, input_mask=None, encoder_mask=None):
+    def _step(self, decoder_inputs, encoder_outputs, incremental_state, decoder_mask=None, encoder_mask=None):
         """
         Run the decoder
         :param decoder_inputs: (FloatTensor) Input to the decoder
         :param encoder_outputs: (FloatTensor) Outputs from the encoder
-        :param input_mask: (ByteTensor) Optional mask for invalid decoder inputs (i.e. padding)
+        :param decoder_mask: (ByteTensor) Optional mask for invalid decoder inputs (i.e. padding)
         :param encoder_mask: (ByteTensor) Optional mask for invalid encoder outputs (i.e. padding)
         :param incremental_state: dict for storing state during incremental decoding
         :return:
@@ -204,4 +204,4 @@ class EncoderDecoderModel(Model):
         return decoder_out, attention_weight
 
     def get_normalized_probs(self, net_output, *args, log_probs=False, **kwargs):
-        return self.decoder.get_normalized_probs(net_output, *args, **kwargs, log_probs=log_probs)
+        return self.decoder.get_normalized_probs(net_output, *args, log_probs=log_probs, **kwargs)

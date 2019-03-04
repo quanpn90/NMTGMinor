@@ -59,7 +59,8 @@ args.tie_weights = True
 args.batch_first = False
 args.max_position_length = 60
 args.share_enc_dec_weights = False
-args.masked_layers = False
+args.mask_layers = False
+args.single_head_final_layer = False
 args.ignore_context = False
 args.no_future_masking = False
 
@@ -101,8 +102,8 @@ elif args.init_embedding == 'normal':
 
 loss_function_quan = onmt.modules.Loss.NMTLossFunc(30000, label_smoothing=0)
 
-encoder_input = torch.randint(5, 30000, (55, 20)).cuda()
-decoder_input = torch.randint(5, 30000, (60, 20)).cuda()
+encoder_input = torch.randint(6, 30000, (55, 20)).cuda()
+decoder_input = torch.randint(6, 30000, (60, 20)).cuda()
 encoder_mask = make_mask_seq((20, 55), 54/55).eq(0).cuda()
 decoder_mask = make_mask_seq((20, 60), 54/55).eq(0).cuda()
 encoder_input.masked_fill_(encoder_mask.transpose(0, 1), onmt.Constants.PAD)
@@ -114,7 +115,7 @@ optim = torch.optim.Adam(quan_transformer.parameters())
 
 
 # quan_transformer.encoder.layer_modules[0].multihead.attn_dropout.register_forward_hook(lambda m, i, o: print(i, o))
-
+# quan_transformer.decoder.layer_modules[0].multihead_tgt.register_forward_hook(lambda m, i, o: print(o[0]))
 
 inputs = {'source': encoder_input, 'target_input': decoder_input}
 output_dict = quan_transformer(inputs)
@@ -127,6 +128,7 @@ optim.zero_grad()
 print("Making Felix Transformer")
 
 dictionary = Dictionary()
+dictionary.pad_index = onmt.Constants.PAD
 felix_transformer = Transformer.build_model(args)
 felix_transformer = NMTModel(NMTEncoder(felix_transformer.encoder, embedding_src, args.word_dropout),
                              NMTDecoder(felix_transformer.decoder, embedding_tgt, args.word_dropout, generator.linear),
@@ -163,17 +165,17 @@ for felix_layer, quan_layer in zip(felix_transformer.encoder.encoder.layers, qua
 felix_transformer.decoder.decoder.postprocess.layer_norm.function.weight = quan_transformer.decoder.postprocess_layer.layer_norm.function.weight
 felix_transformer.decoder.decoder.postprocess.layer_norm.function.bias = quan_transformer.decoder.postprocess_layer.layer_norm.function.bias
 for felix_layer, quan_layer in zip(felix_transformer.decoder.decoder.layers, quan_transformer.decoder.layer_modules):
-    felix_layer.preprocess_attn.layer_norm.function.weight = quan_layer.preprocess_attn.layer_norm.function.weight
-    felix_layer.preprocess_attn.layer_norm.function.bias = quan_layer.preprocess_attn.layer_norm.function.bias
+    felix_layer.preprocess_self_attn.layer_norm.function.weight = quan_layer.preprocess_attn.layer_norm.function.weight
+    felix_layer.preprocess_self_attn.layer_norm.function.bias = quan_layer.preprocess_attn.layer_norm.function.bias
     felix_layer.preprocess_ffn.layer_norm.function.weight = quan_layer.preprocess_ffn.layer_norm.function.weight
     felix_layer.preprocess_ffn.layer_norm.function.bias = quan_layer.preprocess_ffn.layer_norm.function.bias
-    felix_layer.preprocess_src_attn.layer_norm.function.weight = quan_layer.preprocess_src_attn.layer_norm.function.weight
-    felix_layer.preprocess_src_attn.layer_norm.function.bias = quan_layer.preprocess_src_attn.layer_norm.function.bias
+    felix_layer.preprocess_enc_attn.layer_norm.function.weight = quan_layer.preprocess_src_attn.layer_norm.function.weight
+    felix_layer.preprocess_enc_attn.layer_norm.function.bias = quan_layer.preprocess_src_attn.layer_norm.function.bias
     felix_layer.feed_forward.function.layer_1.weight = quan_layer.feedforward.function.fc_1.linear.weight
     felix_layer.feed_forward.function.layer_1.bias = quan_layer.feedforward.function.fc_1.linear.bias
     felix_layer.feed_forward.function.layer_2.weight = quan_layer.feedforward.function.fc_2.linear.weight
     felix_layer.feed_forward.function.layer_2.bias = quan_layer.feedforward.function.fc_2.linear.bias
-    for felix_attn, quan_attn in zip([felix_layer.attention_src, felix_layer.attention_tgt], [quan_layer.multihead_src, quan_layer.multihead_tgt]):
+    for felix_attn, quan_attn in zip([felix_layer.self_attention, felix_layer.enc_attention], [quan_layer.multihead_tgt, quan_layer.multihead_src]):
         felix_attn.query_projection.function.weight = quan_attn.fc_query.function.linear.weight
         felix_attn.query_projection.function.bias = quan_attn.fc_query.function.linear.bias
         felix_attn.key_projection.function.weight = quan_attn.fc_key.function.linear.weight
@@ -184,15 +186,16 @@ for felix_layer, quan_layer in zip(felix_transformer.decoder.decoder.layers, qua
         felix_attn.out_projection.function.bias = quan_attn.fc_concat.function.linear.bias
 
 # felix_transformer.encoder.encoder.layers[0].attention.attn_dropout.register_forward_hook(lambda m, i, o: print(i, o))
+# qfelix_transformer.decoder.decoder.layers[0].self_attention.register_forward_hook(lambda m, i, o: print(o[0]))
 
-outputs = felix_transformer(encoder_input, decoder_input)
+outputs, attention_weights = felix_transformer(encoder_input, decoder_input)
 outputs_felix = outputs.clone().detach().cpu()
-lprobs = felix_transformer.get_normalized_probs(outputs, True)
+lprobs = felix_transformer.get_normalized_probs(outputs, attention_weights, log_probs=True)
 loss = loss_function_felix(lprobs, decoder_input)[0]
 loss.backward()
 loss_felix = loss.clone().detach().cpu()
 grads_felix = felix_transformer.encoder.encoder.layers[0].attention.query_projection.function.weight.grad.clone().detach().cpu()
-grads_felix2 = felix_transformer.decoder.decoder.layers[-1].attention_src.out_projection.function.weight.grad.clone().detach().cpu()
+grads_felix2 = felix_transformer.decoder.decoder.layers[-1].enc_attention.out_projection.function.weight.grad.clone().detach().cpu()
 
 if torch.allclose(outputs_felix, outputs_quan):
     print("Outputs match")
@@ -206,7 +209,7 @@ else:
     print("Gradients mismatch:")
     print(grads_felix)
     print(grads_quan)
-    print(torch.max(torch.abs(grads_felix2 - grads_quan2)))
+    print(torch.max(torch.abs(grads_felix - grads_quan)))
 if torch.allclose(grads_felix2, grads_quan2):
     print("Gradients match")
 else:

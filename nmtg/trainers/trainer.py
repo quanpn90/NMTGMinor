@@ -262,9 +262,6 @@ class Trainer:
         """
         raise NotImplementedError
 
-    def _get_loss_train(self, train_data, batch) -> (Tensor, float):
-        return self._get_loss(train_data.model, batch)
-
     def _get_batch_weight(self, batch):
         """
         Get the weight of the batch, i.e. the batch size.
@@ -337,12 +334,14 @@ class Trainer:
                 weight = self._get_batch_weight(batch)
                 meters['fwbw_wall'].start()
                 try:
-                    loss, display_loss = self._get_loss_train(train_data, batch)
+                    loss, display_loss = self._get_loss(train_data.model, batch)
                     train_data.optimizer.backward(loss)
                 except RuntimeError as e:
                     if 'out of memory' in str(e) or 'get_temporary_buffer' in str(e):
                         logger.warning('Ran out of memory in step {}'.format(train_data.sampler.index))
-                        self._reset_state(train_data)
+                        logger.warning(str(e))
+                        train_data.optimizer.zero_grad()
+                        del loss, batch
                         if self.args.cuda:
                             torch.cuda.empty_cache()
                         meters['oom'].update()
@@ -358,7 +357,6 @@ class Trainer:
                 perplexity = math.exp(meters['nll'].avg)
                 specific_metrics = self._update_training_metrics(train_data, batch)
 
-                # TODO: factor 0.95?
                 if total_weight >= self.args.batch_size_update:
                     meters['train_wall'].start()
                     try:
@@ -375,7 +373,7 @@ class Trainer:
                     except RuntimeError as e:
                         if 'out of memory' in str(e):
                             logger.warning('Ran out of memory in step {}'.format(train_data.sampler.index))
-                            self._reset_state(train_data)
+                            train_data.optimizer.zero_grad()
                             if self.args.cuda:
                                 torch.cuda.empty_cache()
                             meters['oom'].update()
@@ -432,14 +430,6 @@ class Trainer:
 
         return grad_norm
 
-    def _reset_state(self, train_data: TrainData):
-        def reset_state(m):
-            if hasattr(m, 'reset_state'):
-                m.reset_state()
-
-        train_data.model.apply(reset_state)
-        train_data.optimizer.zero_grad()
-
     def save_checkpoint(self, train_data: TrainData, valid_ppl, destination=None):
         logger.info('Saving checkpoint')
         if destination is None:
@@ -465,10 +455,11 @@ class Trainer:
 
     def load_checkpoint(self, checkpoint, for_training=False):
         args = checkpoint['args']
+        if args.trainer != self.args.trainer:
+            logger.warning('Model was trained with Trainer {}, but is running with Trainer {}, problems may occur'
+                           .format(args.trainer, self.args.trainer))
         original_trainer_class = nmtg.trainers.get_trainer_type(args.trainer)
         original_trainer_class.upgrade_checkpoint(checkpoint)
-        if original_trainer_class is not type(self):
-            self.convert_checkpoint(checkpoint, original_trainer_class)
         model_class = nmtg.models.get_model_type(args.model)
         model_class.upgrade_args(args)
         self.load_args(args)
@@ -496,10 +487,6 @@ class Trainer:
     def upgrade_checkpoint(checkpoint):
         """Update the checkpoint to the newest version"""
         pass
-
-    def convert_checkpoint(self, checkpoint, original_trainer_class):
-        raise NotImplementedError('Cannot convert checkpoint from {} to {}'.format(original_trainer_class.__name__,
-                                                                                   type(self).__name__))
 
 
 def checkpoint_paths(path, pattern=r'(.*)_ppl_(\d+\.\d+)\_e(\d+\.\d+)\.pt'):

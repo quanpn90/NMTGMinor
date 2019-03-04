@@ -11,6 +11,7 @@ from nmtg.models import Model
 from nmtg.models.nmt_model import NMTModel, NMTDecoder
 from nmtg.modules.linear import XavierLinear
 from nmtg.modules.loss import NMTLoss
+from nmtg.tasks.denoising_text_task import DenoisingTextTask
 from nmtg.trainers import register_trainer
 from nmtg.trainers.denoising_text_trainer import DenoisingTextTrainer
 from nmtg.trainers.nmt_trainer import NMTTrainer
@@ -19,20 +20,11 @@ from nmtg.trainers.trainer import TrainData
 logger = logging.getLogger(__name__)
 
 
-class DialectTrainData(TrainData):
-
-    def __init__(self, model, denoising_model, dataset, sampler, lr_scheduler, optimizer, meters):
-        super().__init__(model, dataset, sampler, lr_scheduler, optimizer, meters)
+class DialectTranslationModel(Model):
+    def __init__(self, translation_model, denoising_model):
+        super().__init__()
+        self.translation_model = translation_model
         self.denoising_model = denoising_model
-
-    def state_dict(self):
-        state_dict = super().state_dict()
-        state_dict['denoising_mdoel'] = self.denoising_model
-        return state_dict
-
-    def load_state_dict(self, state_dict, reset_optim=False):
-        self.denoising_model.load_state_dict(state_dict['denoising_model'])
-        super().load_state_dict(state_dict, reset_optim)
 
 
 @register_trainer('dialect')
@@ -82,6 +74,7 @@ class DialectTrainer(NMTTrainer):
         if self.args.cuda:
             loss.cuda()
         self.translation_loss = loss
+        self.loss = loss
 
         loss = NMTLoss(len(self.src_dict), self.src_dict.pad(), self.args.label_smoothing)
         if self.args.cuda:
@@ -89,21 +82,20 @@ class DialectTrainer(NMTTrainer):
         self.denoising_loss = loss
 
     def _build_model(self, args):
-        model = super()._build_model(args)
-        second_model = super(NMTTrainer, self)._build_model(args)
+        translation_model = super()._build_model(args)
+        denoising_model = super(NMTTrainer, self)._build_model(args)
+        del denoising_model.encoder
 
-        embedding = model.encoder.embedded_dropout.embedding
-
-        linear = XavierLinear(model.decoder.linear.weight.size(1), len(self.src_dict))
+        embedding = translation_model.encoder.embedded_dropout.embedding
+        linear = XavierLinear(translation_model.decoder.linear.weight.size(1), len(self.src_dict))
 
         if args.tie_dual_weights:
             linear.weight = embedding.weight
 
-        second_decoder = NMTDecoder(second_model.decoder, embedding, args.word_dropout, linear)
-        second_model = NMTModel(model.encoder, second_decoder, self.src_dict, self.src_dict, model.batch_first)
-        compound_model = Model()
-        compound_model.first_model = model
-        compound_model.second_model = second_model
+        denoising_decoder = NMTDecoder(denoising_model.decoder, embedding, args.word_dropout, linear)
+        denoising_model = NMTModel(translation_model.encoder, denoising_decoder, self.src_dict, self.src_dict,
+                                   translation_model.batch_first, translation_model.freeze_old)
+        compound_model = DialectTranslationModel(translation_model, denoising_model)
         return compound_model
 
     def load_data(self, model_args=None):
@@ -127,22 +119,23 @@ class DialectTrainer(NMTTrainer):
         dataset = MultiDataset(parallel_data, noisy_data)
         sampler = MultiSampler(parallel_sampler, noisy_sampler)
         model = self.build_model(model_args)
-        second_model = model.second_model
-        model = model.first_model
         params = list(filter(lambda p: p.requires_grad, model.parameters()))
         lr_scheduler, optimizer = self._build_optimizer(params)
-        return DialectTrainData(model, second_model, dataset, sampler, lr_scheduler, optimizer,
-                                self._get_training_metrics())
+        return TrainData(model, dataset, sampler, lr_scheduler, optimizer, self._get_training_metrics())
 
-    def _get_loss_train(self, train_data, batch) -> (Tensor, float):
-        # Multi evaluation
-        self.loss = self.translation_loss
-        translation_loss, translation_display_loss = self._get_loss(train_data.model, batch[0])
+    def _get_loss(self, model, batch) -> (Tensor, float):
+        if isinstance(batch, Sequence):
+            # Multi evaluation
+            self.loss = self.denoising_loss
+            denoising_loss, denoising_display_loss = super()._get_loss(model.denoising_model, batch[1])
 
-        self.loss = self.denoising_loss
-        denoising_loss, denoising_display_loss = self._get_loss(train_data.second_model, batch[1])
+            self.loss = self.translation_loss
+            translation_loss, translation_display_loss = super()._get_loss(model.translation_model, batch[0])
 
-        return translation_loss + denoising_loss, translation_display_loss + denoising_display_loss
+            return translation_loss + denoising_loss, translation_display_loss + denoising_display_loss
+        else:
+            # Single evaluation
+            return super()._get_loss(model.translation_model, batch)
 
     def _get_batch_weight(self, batch):
         # This overnormalizes the decoders. Hopefully, that's ok...
@@ -162,27 +155,28 @@ class DialectTrainer(NMTTrainer):
 
         return ['{:5.0f}|{:5.0f} tok/s'.format(meters['srctok'].avg, meters['tgttok'].avg)]
 
-    def load_checkpoint(self, checkpoint, for_training=False, reset_optim=False):
-        if not for_training:
-            raise NotImplementedError('To evaluate, use NMTTrainer or DenoisingTextTrainer, '
-                                      'this class if for training only.')
+    def solve(self, model_or_ensemble, task):
+        if not isinstance(model_or_ensemble, Sequence):
+            model_or_ensemble = [model_or_ensemble]
+
+        if isinstance(task, DenoisingTextTask):
+            return DenoisingTextTrainer.solve(self, [model.denoising_model for model in model_or_ensemble], task)
         else:
-            return super().load_checkpoint(checkpoint, for_training, reset_optim)
+            return NMTTrainer.solve(self, [model.translation_model for model in model_or_ensemble], task)
 
     # noinspection PyProtectedMember
     @staticmethod
     def upgrade_checkpoint(checkpoint):
-        if 'denoising_model' not in checkpoint['train_data']:
-            model_dict = checkpoint['train_data']['model']
-            metadata = checkpoint['train_data']['model']._metadata
-            first, second = _split_by_key(model_dict, 'first_model')
-            checkpoint['train_data']['model'] = first
-            checkpoint['train_data']['denoising_model'] = second
-
-            first, second = _split_by_key(metadata, 'first_model')
-            checkpoint['train_data']['model']._metadata = first
-            checkpoint['train_data']['denoising_model']._metadata = second
-
+        if 'denoising_model' in checkpoint['train_data']:
+            new_state_dict = _join_state_dicts(translation_model=checkpoint['train_data']['model'],
+                                               denoising_model=checkpoint['train_data']['denoising_model'])
+            checkpoint['train_data']['model'] = new_state_dict
+            del checkpoint['train_data']['denoising_model']
+        elif any(k.startswith('first_model') for k in checkpoint['train_data']['model'].keys()):
+            translation, denoising = _split_by_key(checkpoint['train_data']['model'], 'first_model')
+            new_state_dict = _join_state_dicts(translation_model=translation,
+                                               denoising_model=denoising)
+            checkpoint['train_data']['model'] = new_state_dict
         args = checkpoint['args']
         if 'translation_noise' not in args:
             args.translation_noise = False
@@ -200,4 +194,25 @@ def _split_by_key(data, prefix):
             first_output[new_key] = value
         else:
             second_output[new_key] = value
+
+    if hasattr(data, '_metadata'):
+        first_metadata, second_metadata = _split_by_key(data._metadata, prefix)
+        first_output._metadata = first_metadata
+        second_output._metadata = second_metadata
     return first_output, second_output
+
+
+def _join_state_dicts(**state_dicts):
+    new_state_dict = OrderedDict()
+    new_metadata = OrderedDict()
+    for name, state_dict in state_dicts.items():
+        for k, v in state_dict.items():
+            new_state_dict[name + '.' + k] = v
+        if hasattr(state_dict, '_metadata'):
+            for k, v in state_dict._metadata.items():
+                if k == '':
+                    new_metadata[name] = v
+                else:
+                    new_metadata[name + '.' + k] = v
+    new_state_dict._metadata = new_metadata
+    return new_state_dict
