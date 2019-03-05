@@ -22,7 +22,7 @@ class ParallelTransformer(Transformer):
         self.tgt_encoder = tgt_encoder
 
 
-    def forward(self, batch, external_models=None):
+    def forward(self, batch):
         """
         Inputs Shapes:
             src: len_src x batch_size
@@ -32,8 +32,6 @@ class ParallelTransformer(Transformer):
             out:   a dictionary containing output hidden state and coverage
 
         """
-
-        assert external_models is not None
 
         src = batch.get('source')
         tgt = batch.get('target_input')

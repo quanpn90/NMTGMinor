@@ -135,7 +135,7 @@ class MultiHeadAttention(nn.Module):
         
     """
     
-    def __init__(self, h, d_model, attn_p=0.1, static=True, share=3):
+    def __init__(self, h, d_model, attn_p=0.1, static=False, share=3):
         super(MultiHeadAttention, self).__init__()      
         self.h = h
         self.d = d_model

@@ -69,7 +69,6 @@ class NMTModel(nn.Module):
         return
 
     def zero_grad(self):
-
         self._synchronize()
         super(NMTModel, self).zero_grad()
 
@@ -88,7 +87,7 @@ class NMTModel(nn.Module):
             #     if 'time_transformer' in param_name and self.encoder.time == 'positional_encoding':
             #         return False
             # we don't need to load the decoder mask (not weight)
-            if param_name == 'decoder.mask':
+            if param_name in ['decoder.mask', 'tgt_decoder.mask']:
                 return False
             
             return True

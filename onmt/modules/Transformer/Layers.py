@@ -168,7 +168,8 @@ class DecoderLayer(nn.Module):
         """
         
         # input and context should be time first ?
-        
+        # output = dict()
+
         query = self.preprocess_attn(input)
         
         self_context = query

@@ -11,10 +11,11 @@ from onmt.modules.Utilities import mean_with_mask_backpropable as mean_with_mask
 from onmt.modules.Utilities import max_with_mask
 from onmt.modules.Transformer.Layers import PrePostProcessing
 import copy
+from onmt.modules.Transformer.Models import Transformer
 
 # to do: create an external decoder and synchronize it every parameter update
 
-class ParallelTransformer(NMTModel):
+class ParallelTransformer(Transformer):
     """Main model in 'Attention is all you need' """
 
     def __init__(self, encoder, decoder, generator=None, tgt_encoder=None, tgt_decoder=None):
@@ -27,8 +28,6 @@ class ParallelTransformer(NMTModel):
             if not (isinstance(child, torch.nn.modules.sparse.Embedding)):
                 for param in child.parameters():
                     param.requires_grad = False
-
-
 
 
     def _synchronize(self):
@@ -58,6 +57,8 @@ class ParallelTransformer(NMTModel):
 
         context, src_mask = self.encoder(src)
 
+        # the first token is <BOS>
+        # the encoder side is not patched with <BOS>
         tgt_ = tgt[:, 1:]
 
         if self.tgt_encoder is not None:

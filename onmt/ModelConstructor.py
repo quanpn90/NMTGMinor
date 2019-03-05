@@ -147,7 +147,7 @@ def build_model(opt, dicts):
         
         model = Transformer(encoder, decoder, generator)
 
-    elif opt.model == 'simplified_transformer':
+    elif opt.model == 'simplified_transformer' or opt.model == 'l2_transformer':
 
         from onmt.modules.SimplifiedTransformer.Models import SimplifiedTransformerEncoder, SimplifiedTransformer
 
@@ -157,39 +157,51 @@ def build_model(opt, dicts):
 
         generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
 
-        model = SimplifiedTransformer(encoder, decoder, generator)
-
-        loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
-
-    elif opt.model == 'simplified_transformer_v2':
-
-        from onmt.modules.SimplifiedTransformerv2.Models import SimplifiedTransformerEncoder, SimplifiedTransformer
-
-        encoder = SimplifiedTransformerEncoder(opt, embedding_src, positional_encoder)
-
-        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
-
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
-
-        model = SimplifiedTransformer(encoder, decoder, generator)
-
-        loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
-
-    elif opt.model == 'l2_transformer':
-
-        from onmt.modules.SimplifiedTransformer.Models import SimplifiedTransformerEncoder, SimplifiedTransformer
-        from onmt.modules.SimplifiedTransformer.NMTL2Loss import NMTL2Loss
-
-        encoder = SimplifiedTransformerEncoder(opt, embedding_src, positional_encoder)
-        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
-
-        tgt_encoder = SimplifiedTransformerEncoder(opt, embedding_tgt, positional_encoder, share=encoder)
-
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+        tgt_encoder = SimplifiedTransformerEncoder(opt, embedding_tgt, positional_encoder, share=encoder) \
+                            if opt.model == 'l2_transformer' else None
 
         model = SimplifiedTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder)
 
-        loss_function = NMTL2Loss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+        if opt.model == 'simplified_transformer':
+
+            loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+        elif opt.model == 'l2_transformer':
+
+            from onmt.modules.SimplifiedTransformer.NMTL2Loss import NMTL2Loss
+            loss_function = NMTL2Loss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+
+    elif opt.model == 'simplified_transformer_v2' or opt.model == 'l2_simplified_transformer_v2' :
+
+        from onmt.modules.CompressedTransformer.Models import CompressedTransformerEncoder
+        from onmt.modules.SimplifiedTransformer.Models import SimplifiedTransformerEncoder, SimplifiedTransformer
+
+        encoder = CompressedTransformerEncoder(opt, embedding_src, positional_encoder)
+
+        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
+
+        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+
+        tgt_encoder = None
+
+        model = SimplifiedTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder)
+
+        loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+
+    # elif opt.model == 'l2_transformer':
+    #
+    #     from onmt.modules.SimplifiedTransformer.Models import SimplifiedTransformerEncoder, SimplifiedTransformer
+    #     from onmt.modules.SimplifiedTransformer.NMTL2Loss import NMTL2Loss
+    #
+    #     encoder = SimplifiedTransformerEncoder(opt, embedding_src, positional_encoder)
+    #     decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
+    #
+    #     tgt_encoder = SimplifiedTransformerEncoder(opt, embedding_tgt, positional_encoder, share=encoder)
+    #
+    #     generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
+    #
+    #     model = SimplifiedTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder)
+    #
+    #     loss_function = NMTL2Loss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
 
     elif opt.model == 'l2_full_transformer':
 
