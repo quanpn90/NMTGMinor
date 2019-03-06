@@ -1,6 +1,7 @@
 import numpy as np
 import torch, math
 import torch.nn as nn
+from collections import defaultdict
 from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, PositionalEncoding, variational_dropout, \
     PrePostProcessing
 from onmt.modules.BaseModel import NMTModel, Reconstructor, DecoderState
@@ -271,6 +272,7 @@ class TransformerDecoder(nn.Module):
         """ Embedding: batch_size x len_tgt x d_model """
         len_tgt = input.size(1)
         input_attbs = input_attbs.unsqueeze(1).repeat(1, len_tgt)
+        returns = defaultdict(lambda: None)
 
         if freeze_embeddings:
             with torch.no_grad:
@@ -308,12 +310,22 @@ class TransformerDecoder(nn.Module):
 
         for i, layer in enumerate(self.layer_modules):
 
+            returns[i] = dict()
+
             if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:
                 # batch_size x len_src x d_model
-                output, coverage = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src)
+                output_dict = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src)
+
 
             else:
-                output, coverage = layer(output, context, mask_tgt, mask_src)  # batch_size x len_src x d_model
+                output_dict = layer(output, context, mask_tgt, mask_src)  # batch_size x len_src x d_model
+
+            returns[i]['attn_out'] = output_dict['attn_out']
+
+            #placeholder when new things need to be included to return
+
+            output = output_dict['final_state']
+            returns['coverage'] = output_dict['coverage']
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -321,7 +333,10 @@ class TransformerDecoder(nn.Module):
         # a whole stack of unnormalized layer outputs.    
         output = self.postprocess_layer(output)
 
-        return output, None
+        returns['final_state'] = output
+
+        # return output, None
+        return returns
 
     def step(self, input, decoder_state):
         """
@@ -435,11 +450,11 @@ class Transformer(NMTModel):
 
         context, src_mask = self.encoder(src, grow=grow)
 
-        output, coverage = self.decoder(tgt, tgt_attbs, context, src, grow=grow)
+        decoder_output = self.decoder(tgt, tgt_attbs, context, src, grow=grow)
 
         output_dict = dict()
-        output_dict['hiddens'] = output
-        output_dict['coverage'] = coverage
+        output_dict['hiddens'] = decoder_output['final_state']
+        output_dict['coverage'] = decoder_output['coverage']
 
         # additional loss term for multilingual
         # forcing the source and target context to be the same
@@ -487,7 +502,9 @@ class Transformer(NMTModel):
         gold_scores = context.new(batch_size).zero_()
         gold_words = 0
 
-        output, coverage = self.decoder(tgt_input, tgt_attbs, context, src)
+        decoder_output = self.decoder(tgt_input, tgt_attbs, context, src)
+
+        output = decoder_output['final_state']
 
         for dec_t, tgt_t in zip(output, tgt_output):
             gen_t = self.generator(dec_t)

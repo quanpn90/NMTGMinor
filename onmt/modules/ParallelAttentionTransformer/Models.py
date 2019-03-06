@@ -1,7 +1,6 @@
 import numpy as np
 import torch, math
 import torch.nn as nn
-from collections import defaultdict
 import onmt
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, TransformerDecodingState
 from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer
@@ -13,15 +12,30 @@ from onmt.modules.Utilities import max_with_mask
 from onmt.modules.Transformer.Layers import PrePostProcessing
 
 from onmt.modules.Transformer.Models import Transformer
+from collections import defaultdict
 
 
-class ParallelTransformer(Transformer):
+class ParallelAttentionTransformer(Transformer):
     """Main model in 'Attention is all you need' """
 
     def __init__(self, encoder, decoder, generator=None, tgt_encoder=None):
         super().__init__(encoder, decoder, generator=generator)
         self.tgt_encoder = tgt_encoder
 
+    def extract_attention(self, dec_output):
+
+        n_layers = self.decoder.layers
+
+        if len(dec_output) < n_layers:
+            return None
+
+        attn_outs = dict()
+
+        for i in range(n_layers):
+            # each one should be T x B x H
+            attn_outs[i] = dec_output[i]['attn_out']
+
+        return attn_outs
 
     def forward(self, batch):
         """
@@ -63,5 +77,7 @@ class ParallelTransformer(Transformer):
         output_dict['hiddens'] = dec_output['final_state']
         output_dict['coverage'] = dec_output['coverage']
         output_dict['tgt_hiddens'] = tgt_dec_output['final_state']
+        output_dict['attn_outs'] = self.extract_attention(dec_output)
+        output_dict['tgt_attn_outs'] = self.extract_attention(tgt_dec_output)
 
         return output_dict

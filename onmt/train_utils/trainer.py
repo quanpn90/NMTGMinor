@@ -160,8 +160,10 @@ class XETrainer(BaseTrainer):
                 """
                 outputs = self.model(batch)
                 targets = batch.get('target_output')
+                tgt_mask = batch.get('tgt_mask')
 
-                loss_output = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
+                loss_output = self.loss_function(outputs, targets, generator=self.model.generator,
+                                                 tgt_mask=tgt_mask, backward=False)
 
                 loss_data = loss_output['nll']
                 # ~

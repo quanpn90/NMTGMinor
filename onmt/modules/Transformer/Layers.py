@@ -8,6 +8,7 @@ from onmt.modules.Linear import XavierLinear, group_linear, FeedForward
 from onmt.modules.MaxOut import MaxOut
 from onmt.modules.GlobalAttention import MultiHeadAttention
 from onmt.modules.PrePostProcessing import PrePostProcessing
+from collections import defaultdict
 
 Linear = XavierLinear
 
@@ -166,9 +167,8 @@ class DecoderLayer(nn.Module):
         """ Self attention layer 
             layernorm > attn > dropout > residual
         """
-        
-        # input and context should be time first ?
-        # output = dict()
+
+        output = defaultdict(lambda: None)
 
         query = self.preprocess_attn(input)
         
@@ -185,6 +185,7 @@ class DecoderLayer(nn.Module):
             query = self.preprocess_src_attn(input)
             # note: "out" represents the weight sum of the source representation
             out, coverage = self.multihead_src(query, context, context, mask_src)
+            output['attn_out'] = out
             input = self.postprocess_src_attn(out, input)
         else:
             coverage = None
@@ -198,8 +199,12 @@ class DecoderLayer(nn.Module):
         """
         out = self.feedforward(self.preprocess_ffn(input))
         input = self.postprocess_ffn(out, input)
-    
-        return input, coverage
+
+        output['final_state'] = input
+        output['coverage'] = coverage
+
+        return output
+        # return input, coverage
         
     def step(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, latent_z=None, buffer=None):
         """ Self attention layer 

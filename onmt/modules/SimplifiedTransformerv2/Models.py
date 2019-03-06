@@ -212,11 +212,11 @@ class SimplifiedTransformer(NMTModel):
         # and the context does not have masking any more
         # so we create a 'fake' input sequence for the decoder
         fake_src = src.new(context.size(1), context.size(0)).fill_(onmt.Constants.BOS)
-        output, coverage = self.decoder(tgt, tgt_attbs, context, fake_src)
+        dec_output = self.decoder(tgt, tgt_attbs, context, fake_src)
 
         output_dict = dict()
-        output_dict['hiddens'] = output
-        output_dict['coverage'] = coverage
+        output_dict['hiddens'] = dec_output['final_state']
+        output_dict['coverage'] = dec_output['coverage']
         output_dict['tgt_context'] = tgt_context
         output_dict['src_context'] = src_context
         return output_dict
@@ -239,7 +239,8 @@ class SimplifiedTransformer(NMTModel):
 
         fake_src = src.new(context.size(1), context.size(0)).fill_(onmt.Constants.BOS)
 
-        output, coverage = self.decoder(tgt_input, tgt_attbs, context, fake_src)
+        dec_output = self.decoder(tgt_input, tgt_attbs, context, fake_src)
+        output = dec_output['final_state']
 
         # scan through the sequence to get the sentence log probs
         for dec_t, tgt_t in zip(output, tgt_output):

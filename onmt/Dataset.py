@@ -32,7 +32,7 @@ class Batch(object):
             self.tensors['target_output'] = target_full[1:]
             # self.tensors['tgt_pad_mask'] = self.tensors['target_input'].ne(onmt.Constants.PAD)
             # self.tensors['tgt_attn_mask'] = self.tensors['target_input'].ne(onmt.Constants.PAD)
-            # self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.Constants.PAD)
+            self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.Constants.PAD)
             # self.tensors['src_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
             self.tensors['tgt_length'] = torch.LongTensor(self.tgt_lengths)
             self.has_target = True

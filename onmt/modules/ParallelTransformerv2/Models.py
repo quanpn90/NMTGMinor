@@ -2,6 +2,7 @@ import numpy as np
 import torch, math
 import torch.nn as nn
 import onmt
+from collections import defaultdict
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, TransformerDecodingState
 from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer
 from onmt.modules.BaseModel import NMTModel
@@ -66,18 +67,18 @@ class ParallelTransformer(Transformer):
             tgt_context, _ = self.tgt_encoder(tgt_)
 
             # generate the target distribution on top of the tgt hiddens
-            tgt_hiddens, _ = self.tgt_decoder(tgt, tgt_attbs, tgt_context, tgt_, freeze_embedding=True)
+            tgt_dec_output = self.tgt_decoder(tgt, tgt_attbs, tgt_context, tgt_, freeze_embedding=True)
         else:
-            tgt_hiddens = None
+            tgt_dec_output = defaultdict(lambda: None)
 
         # because the context size does not depend on the input size
         # and the context does not have masking any more
         # so we create a 'fake' input sequence for the decoder
-        output, coverage = self.decoder(tgt, tgt_attbs, context, src)
+        dec_output = self.decoder(tgt, tgt_attbs, context, src)
 
         output_dict = dict()
-        output_dict['hiddens'] = output
-        output_dict['coverage'] = coverage
-        output_dict['tgt_hiddens'] = tgt_hiddens
+        output_dict['hiddens'] = dec_output['final_state']
+        output_dict['coverage'] = dec_output['coverage']
+        output_dict['tgt_hiddens'] = tgt_dec_output['final_state']
 
         return output_dict
