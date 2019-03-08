@@ -87,7 +87,7 @@ class EncoderLayer(nn.Module):
         out = self.feedforward(self.preprocess_ffn(input))
         input = self.postprocess_ffn(out, input)
         
-        if return_norm_input == False:
+        if not return_norm_input:
             return input
         else:
             return input, query
@@ -156,7 +156,7 @@ class DecoderLayer(nn.Module):
             self.multihead_tgt = encoder_to_share.multihead
             self.feedforward = encoder_to_share.feedforward
 
-        if self.ignore_source == False:
+        if not self.ignore_source:
             self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
             self.postprocess_src_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
             self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
@@ -181,12 +181,13 @@ class DecoderLayer(nn.Module):
         """ Context Attention layer 
             layernorm > attn > dropout > residual
         """
-        if self.ignore_source == False:
+        if not self.ignore_source:
             query = self.preprocess_src_attn(input)
-            # note: "out" represents the weight sum of the source representation
+
             out, coverage = self.multihead_src(query, context, context, mask_src)
             output['attn_out'] = out
             input = self.postprocess_src_attn(out, input)
+
         else:
             coverage = None
 
@@ -197,7 +198,12 @@ class DecoderLayer(nn.Module):
         """ Feed forward layer 
             layernorm > ffn > dropout > residual
         """
-        out = self.feedforward(self.preprocess_ffn(input))
+        normalized_input = self.preprocess_ffn(input)
+
+        # note: "attn_out" represents the weight sum of the source representation
+        # for stability's sake: combining with the input and normalized
+        # output['attn_out'] = input
+        out = self.feedforward(normalized_input)
         input = self.postprocess_ffn(out, input)
 
         output['final_state'] = input
@@ -221,7 +227,7 @@ class DecoderLayer(nn.Module):
             layernorm > attn > dropout > residual
         """
         
-        if self.ignore_source == False:
+        if not self.ignore_source:
             query = self.preprocess_src_attn(input)
             out, coverage, buffer = self.multihead_src.step(query, context, context, mask_src, buffer=buffer)
             input = self.postprocess_src_attn(out, input)
@@ -238,7 +244,8 @@ class DecoderLayer(nn.Module):
         """ Feed forward layer 
             layernorm > ffn > dropout > residual
         """
-        out = self.feedforward(self.preprocess_ffn(input))                                           
+        normalized_input = self.preprocess_ffn(input)
+        out = self.feedforward(normalized_input)
         input = self.postprocess_ffn(out, input)
         
         return input, coverage, buffer

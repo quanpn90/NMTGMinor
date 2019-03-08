@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch, math
 
 from torch.nn.modules.loss import _Loss
+import torch.nn.functional as F
 from onmt.modules.Loss import LossFuncBase
 from collections import defaultdict
 from onmt.modules.Loss import NMTLossFunc
@@ -70,6 +71,15 @@ class NMTL2Loss(NMTLossFunc):
             attn_outs_ = torch.stack([attn_outs[i] for i in attn_outs])
             tgt_attn_outs_ = torch.stack([tgt_attn_outs[i] for i in tgt_attn_outs])
 
+            # normalize
+            shape = (attn_outs_.size(-1), )
+            normalized_shape = torch.Size(shape)
+            attn_outs_ = F.layer_norm(attn_outs_, normalized_shape, None, None, 1e-5)
+
+            tgt_attn_outs_ = F.layer_norm(tgt_attn_outs_, normalized_shape, None, None, 1e-5)
+
+            n_layers = len(attn_outs)
+
         else:
             # print("* Padding is required to mask the hidden ")
             raise NotImplementedError
@@ -84,7 +94,7 @@ class NMTL2Loss(NMTLossFunc):
         loss, loss_data = self._compute_loss(dists_from_src, clean_targets)
 
         # l2_loss = (clean_output_from_src.float() - clean_output_from_tgt.float()) ** 2
-        l2_loss = (attn_outs_.float() - tgt_attn_outs_.float()) ** 2
+        l2_loss = ((attn_outs_.float() - tgt_attn_outs_.float()) ** 2) / n_layers
         l2_loss = l2_loss.sum()
 
         loss = loss + params['l2'] * l2_loss

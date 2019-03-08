@@ -60,6 +60,7 @@ class CompressedTransformerEncoder(TransformerEncoder):
 
             self.ffn_norm = shared_encoder.ffn_norm
             self.final_norm = shared_encoder.final_norm
+            self.feed_forward = shared_encoder.feed_forward
         else:
             print("* Creating a compressed attention encoder layer")
             self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout,
