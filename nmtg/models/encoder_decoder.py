@@ -203,5 +203,8 @@ class EncoderDecoderModel(Model):
         decoder_out, attention_weight = self.decoder(decoder_inputs, encoder_out, decoder_mask, encoder_mask)
         return decoder_out, attention_weight
 
-    def get_normalized_probs(self, net_output, *args, log_probs=False, **kwargs):
-        return self.decoder.get_normalized_probs(net_output, *args, log_probs=log_probs, **kwargs)
+    # noinspection PyMethodOverriding
+    def get_normalized_probs(self, decoder_outputs, attention_weights, encoder_inputs=None,
+                             encoder_mask=None, decoder_mask=None, log_probs=False):
+        return self.decoder.get_normalized_probs(decoder_outputs, attention_weights, encoder_inputs,
+                                                 encoder_mask, decoder_mask, log_probs)

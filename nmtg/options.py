@@ -1,6 +1,7 @@
 import argparse
 
 from nmtg.models import get_model_type, get_model_names
+from nmtg.preprocessors import get_preprocessor_names, get_preprocessor_type
 from nmtg.trainers import get_trainer_names, get_trainer_type
 from nmtg.tasks import get_task_names, get_task_type
 
@@ -79,8 +80,17 @@ def add_task_option(parser):
 
 def add_trainer_option(parser):
     parser.add_argument('-trainer', default='nmt', choices=get_trainer_names(),
-                        help='Select the solution')
+                        help='Select the trainer')
     args, _ = parser.parse_known_args()
 
     trainer_class = get_trainer_type(args.trainer)
     return trainer_class
+
+
+def add_preprocessor_option(parser):
+    parser.add_argument('preprocessor', default='bilingual', choices=get_preprocessor_names(),
+                        help='Select the preprocessor')
+    args, _ = parser.parse_known_args()
+
+    preprocessor_class = get_preprocessor_type(args.preprocessor)
+    return preprocessor_class

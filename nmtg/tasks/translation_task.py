@@ -19,12 +19,18 @@ class TranslationTask(Task):
         parser.add_argument('-bpe_symbol', type=str, default='@@ ',
                             help='Strip this symbol from the output')
         parser.add_argument('-lower', action='store_true', help='lowercase data')
+        parser.add_argument('-valid_src_lang',
+                            help='Source language. Only required for multilingual models')
+        parser.add_argument('-valid_tgt_lang',
+                            help='Target language. Only required for multilingual models')
 
-    def __init__(self, src_dataset, tgt_dataset=None, bpe_symbol='@@ ', lower=False):
-        super().__init__(src_dataset)
+    def __init__(self, src_dataset, tgt_dataset=None, source_language=None, target_language=None,
+                 bpe_symbol='@@ ', lower=False):
         self.src_dataset = src_dataset
         self.tgt_dataset = tgt_dataset
         self.bpe_symbol = bpe_symbol
+        self.source_language = source_language
+        self.target_language = target_language
         self.lower = lower
 
     @classmethod
@@ -39,14 +45,18 @@ class TranslationTask(Task):
 
         logger.info('Number of validation sentences: {:,d}'.format(len(src_dataset)))
 
-        return cls(src_dataset, tgt_dataset, args.bpe_symbol, args.lower)
+        return cls(src_dataset, tgt_dataset, args.valid_src_lang, args.valid_tgt_lang, args.bpe_symbol, args.lower)
 
     def score_results(self, results):
         if self.tgt_dataset is None:
             return []
 
         ref_stream = (line.replace(self.bpe_symbol, '') for line in self.tgt_dataset)
-        sys_stream = (line.replace(self.bpe_symbol, '') for line in results[::len(results) // len(self.dataset)])
+        sys_stream = (line.replace(self.bpe_symbol, '') for line in results[::len(results) // len(self.tgt_dataset)])
+        if self.lower:
+            ref_stream = map(str.lower, ref_stream)
+            sys_stream = map(str.lower, sys_stream)
+
         bleu = sacrebleu.raw_corpus_bleu(sys_stream, [ref_stream])
         return ["{:.2f} BLEU".format(bleu.score)]
 

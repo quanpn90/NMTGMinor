@@ -76,8 +76,9 @@ class Dataset(torch.utils.data.Dataset):
 
 
 class RawDataset(Dataset):
-    def __init__(self, data):
+    def __init__(self, data, filename):
         self.data = data
+        self.filename = filename
 
     def __getitem__(self, index):
         return self.data[index]
@@ -85,21 +86,25 @@ class RawDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
+    @property
+    def in_memory(self):
+        return isinstance(self.data, IndexedData)
+
     @classmethod
     def load_into_memory(cls, filename, offsets_filename=None):
         if offsets_filename is None:
             samples = cls.load_raw(filename)
-            return cls(samples)
+            return cls(samples, filename)
         else:
             offsets = np.load(offsets_filename)
             data = IndexedData(filename, offsets, cls.decode)
-            return cls(list(data))
+            return cls(list(data), filename)
 
     @classmethod
     def load_indexed(cls, filename, offsets_filename):
         offsets = np.load(offsets_filename)
         data = IndexedData(filename, offsets, cls.decode)
-        return cls(data)
+        return cls(data, filename)
 
     def save(self, filename, offsets_filename=None):
         if offsets_filename is None:
@@ -189,17 +194,22 @@ class ConcatDataset(Dataset):
         self.length = sum(len(d) for d in datasets)
 
     def __getitem__(self, index):
-        for dataset in self.datasets:
+        for i, dataset in enumerate(self.datasets):
             if index >= len(dataset):
                 index -= len(dataset)
             else:
-                return dataset[index]
+                out = dataset[index]
+                if isinstance(out, dict):
+                    out['dataset_index'] = i
+                return out
 
     def __len__(self):
         return self.length
 
     def collate_samples(self, samples):
-        return self.datasets[0].collate_samples(samples)
+        out = self.datasets[0].collate_samples(samples)
+        if isinstance(out, dict):
+            out['dataset_index'] = [sample['dataset_index'] for sample in samples]
 
 
 class MultiDataset(Dataset):

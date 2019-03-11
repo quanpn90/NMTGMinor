@@ -171,7 +171,7 @@ class Dictionary:
         self.indices = new_indices
 
     @classmethod
-    def load(cls, f, ignore_utf_errors=False):
+    def load(cls, f, ignore_utf_errors=False, **kwargs):
         """Loads the dictionary from a text file with the format:
 
         ```
@@ -194,7 +194,7 @@ class Dictionary:
                 raise Exception("Incorrect encoding detected in {}, please "
                                 "rebuild the dataset".format(f))
 
-        d = cls()
+        d = cls(**kwargs)
         for line in f.readlines():
             idx = line.rfind(' ')
             if idx == -1:
@@ -217,7 +217,7 @@ class Dictionary:
         self.indices = indices
 
     @classmethod
-    def infer_from_text(cls, lines, words=True, lower=False, progress_bar=True):
+    def infer_from_text(cls, lines, words=True, lower=False, progress_bar=True, **kwargs):
         """Infer a dictionary from an iterable of text lines (stripped of newlines)
         :param lines: Iterable of text
         :param words: Whether to create a word or a character dictionary
@@ -232,7 +232,7 @@ class Dictionary:
             if words:
                 line = line.split()
             counter.update(line)
-        dictionary = cls()
+        dictionary = cls(**kwargs)
         for w, c in counter.items():
             dictionary.add_symbol(w, c)
         return dictionary
@@ -246,13 +246,13 @@ class Dictionary:
         for symbol, count in zip(self.symbols[self.nspecial:], self.count[self.nspecial:]):
             print('{} {}'.format(symbol, count), file=f)
 
-    @classmethod
-    def convert(cls, old_dict):
+    @staticmethod
+    def convert(old_dict):
         pad_word = '<blank>'
         unk_word = '<unk>'
         bos_word = '<s>'
         eos_word = '</s>'
-        new_dict = cls(pad=pad_word, unk=unk_word, bos=bos_word, eos=eos_word)
+        new_dict = Dictionary(pad=pad_word, unk=unk_word, bos=bos_word, eos=eos_word)
         new_dict.indices = old_dict.labelToIdx
         new_dict.symbols = [old_dict.idxToLabel[i] for i in range(len(old_dict.idxToLabel))]
         new_dict.count = [old_dict.frequencies[old_dict.labelToIdx[w]] for w in new_dict.symbols]
@@ -261,3 +261,34 @@ class Dictionary:
         new_dict.bos_index = new_dict.indices[bos_word]
         new_dict.eos_index = new_dict.indices[eos_word]
         return new_dict
+
+    @classmethod
+    def from_counters(cls, *counters, **kwargs):
+        dictionary = cls(**kwargs)
+        for counter in counters:
+            for word, count in counter:
+                dictionary.add_symbol(word, count)
+        return dictionary
+
+
+class MultilingualDictionary(Dictionary):
+    def __init__(self, languages, pad='<pad>', unk='<unk>', eos='</s>'):
+        super().__init__(pad=pad, unk=unk, eos=eos)
+
+        self.language_indices = {}
+
+        for lang in languages:
+            self.language_indices[lang] = self.add_symbol('##{}##'.format(lang.upper()))
+
+        self.nspecial = len(self.symbols)
+
+    def to_indices(self, words, bos=True, eos=True, lang=None):
+        if not bos or lang is None:
+            return super().to_indices(words, bos, eos)
+
+        vec = [self.language_indices[lang]]
+        vec.extend(self.index(sym) for sym in words)
+        if eos:
+            vec.append(self.eos())
+
+        return torch.tensor(vec, dtype=torch.int64)

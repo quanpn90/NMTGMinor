@@ -1,8 +1,6 @@
 import logging
 from argparse import ArgumentParser
 
-from nmtg.data import Dataset
-
 logger = logging.getLogger(__name__)
 
 
@@ -11,9 +9,6 @@ class Task:
     def add_options(parser: ArgumentParser):
         """Add task-specific command line options"""
         raise NotImplementedError
-
-    def __init__(self, dataset: Dataset):
-        self.dataset = dataset
 
     @classmethod
     def setup_task(cls, args):

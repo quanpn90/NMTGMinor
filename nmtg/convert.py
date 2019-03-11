@@ -20,6 +20,8 @@ def load_checkpoint(filename):
 
     if 'batchOrder' in checkpoint:
         checkpoint = convert_checkpoint(checkpoint)
+    if 'train_data' in checkpoint:
+        checkpoint.update(checkpoint.pop('train_data'))
 
     return checkpoint
 

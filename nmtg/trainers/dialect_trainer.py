@@ -1,46 +1,36 @@
 import logging
 from collections import OrderedDict
-from typing import Sequence
-
-from torch import Tensor
 
 from nmtg.data.dataset import MultiDataset
-from nmtg.data.noisy_text import NoisyTextDataset
 from nmtg.data.samplers import MultiSampler
-from nmtg.models import Model
-from nmtg.models.nmt_model import NMTModel, NMTDecoder
+from nmtg.models import Model, build_model
+from nmtg.models.encoder_decoder import EncoderDecoderModel
+from nmtg.models.nmt_model import NMTDecoder
 from nmtg.modules.linear import XavierLinear
 from nmtg.modules.loss import NMTLoss
-from nmtg.tasks.denoising_text_task import DenoisingTextTask
+from nmtg.sequence_generator import SequenceGenerator
 from nmtg.trainers import register_trainer
-from nmtg.trainers.denoising_text_trainer import DenoisingTextTrainer
 from nmtg.trainers.nmt_trainer import NMTTrainer
-from nmtg.trainers.trainer import TrainData
 
 logger = logging.getLogger(__name__)
-
-
-class DialectTranslationModel(Model):
-    def __init__(self, translation_model, denoising_model):
-        super().__init__()
-        self.translation_model = translation_model
-        self.denoising_model = denoising_model
 
 
 @register_trainer('dialect')
 class DialectTrainer(NMTTrainer):
 
-    @classmethod
-    def add_preprocess_options(cls, parser):
-        super().add_preprocess_options(parser)
-        parser.add_argument('-train_clean', type=str, required=True,
-                            help='Path to the clean training data')
-        parser.add_argument('-train_noisy', type=str,
-                            help='(Optional) training data with pre-generated noise. Further noise will be applied')
+    class DialectTranslationModel(Model):
+        def __init__(self, translation_model, denoising_model):
+            super().__init__()
+            self.translation_model = translation_model
+            self.denoising_model = denoising_model
 
     @classmethod
-    def add_training_options(cls, parser):
-        super().add_training_options(parser)
+    def add_training_options(cls, parser, argv=None):
+        super().add_training_options(parser, argv)
+        parser.add_argument('-train_clean', required=True,
+                            help='Clean data for denoising')
+        parser.add_argument('-train_noisy',
+                            help='Noisy data for denoising')
         parser.add_argument('-tie_dual_weights', action='store_true',
                             help='Share weights between embedding and second softmax')
         parser.add_argument('-freeze_dual_embeddings', action='store_true',
@@ -50,137 +40,116 @@ class DialectTrainer(NMTTrainer):
                             help='Path to the clean training data')
         parser.add_argument('-train_noisy', type=str,
                             help='(Optional) training data with pre-generated noise. Further noise will be applied')
-        parser.add_argument('-translation_noise', action='store_true',
-                            help='Also apply noise to the translation input')
-        parser.add_argument('-word_shuffle', type=int, default=3,
-                            help='Maximum number of positions a word can move (0 to disable)')
-        parser.add_argument('-word_blank', type=float, default=0.2,
-                            help='Probability to replace a word with the unknown word (0 to disable)')
-        parser.add_argument('-noise_word_dropout', type=float, default=0.1,
-                            help='Probability to remove a word (0 to disable)')
-
-    @staticmethod
-    def preprocess(args):
-        logger.info('Preprocessing parallel data')
-        NMTTrainer.preprocess(args)
-
-        args.vocab = args.src_vocab
-        args.vocab_size = args.src_vocab_size
-        logger.info('Preprocessing monolingual data')
-        DenoisingTextTrainer.preprocess(args)
 
     def _build_loss(self):
         loss = NMTLoss(len(self.tgt_dict), self.tgt_dict.pad(), self.args.label_smoothing)
         if self.args.cuda:
             loss.cuda()
         self.translation_loss = loss
-        self.loss = loss
 
         loss = NMTLoss(len(self.src_dict), self.src_dict.pad(), self.args.label_smoothing)
         if self.args.cuda:
             loss.cuda()
         self.denoising_loss = loss
 
-    def _build_model(self, args):
-        translation_model = super()._build_model(args)
-        denoising_model = super(NMTTrainer, self)._build_model(args)
+    def _build_model(self, model_args):
+        logger.info('Building translation model')
+        super()._build_model(model_args)
+        translation_model = self.model
+
+        logger.info('Building denoising model')
+        denoising_model = build_model(model_args.model, model_args)
         del denoising_model.encoder
 
         embedding = translation_model.encoder.embedded_dropout.embedding
         linear = XavierLinear(translation_model.decoder.linear.weight.size(1), len(self.src_dict))
 
-        if args.tie_dual_weights:
+        if model_args.tie_dual_weights:
             linear.weight = embedding.weight
 
-        denoising_decoder = NMTDecoder(denoising_model.decoder, embedding, args.word_dropout, linear)
-        denoising_model = NMTModel(translation_model.encoder, denoising_decoder, self.src_dict, self.src_dict,
-                                   translation_model.batch_first, translation_model.freeze_old)
-        compound_model = DialectTranslationModel(translation_model, denoising_model)
-        return compound_model
-
-    def load_data(self, model_args=None):
-        parallel_data, parallel_sampler = self._load_parallel_dataset()
-
-        if self.args.translation_noise:
-            src_dataset = parallel_data.src_data
-            src_dataset = NoisyTextDataset(src_dataset, self.args.word_shuffle,
-                                           self.args.noise_word_dropout, self.args.word_blank,
-                                           self.args.bpe_symbol)
-            # This means the batching will be less efficient, but still ok.
-            # At worst, there will be somewhat more padding, but the batches will not become larger
-            parallel_data.src_dataset = src_dataset
-
-        self.dictionary = self.src_dict
-        self.args.seq_length = self.args.src_seq_length
-        self.args.seq_length_trunc = self.args.src_seq_length_trunc
-        # noinspection PyProtectedMember
-        noisy_data, noisy_sampler = DenoisingTextTrainer._load_noisy_data(self)
-
-        dataset = MultiDataset(parallel_data, noisy_data)
-        sampler = MultiSampler(parallel_sampler, noisy_sampler)
-        model = self.build_model(model_args)
-        params = list(filter(lambda p: p.requires_grad, model.parameters()))
-        lr_scheduler, optimizer = self._build_optimizer(params)
-        return TrainData(model, dataset, sampler, lr_scheduler, optimizer, self._get_training_metrics())
-
-    def _get_loss(self, model, batch) -> (Tensor, float):
-        if isinstance(batch, Sequence):
-            # Multi evaluation
-            self.loss = self.denoising_loss
-            denoising_loss, denoising_display_loss = super()._get_loss(model.denoising_model, batch[1])
-
-            self.loss = self.translation_loss
-            translation_loss, translation_display_loss = super()._get_loss(model.translation_model, batch[0])
-
-            return translation_loss + denoising_loss, translation_display_loss + denoising_display_loss
+        if model_args.copy_decoder:
+            masked_layers = getattr(model_args, 'masked_layers', False)
+            attention_dropout = getattr(model_args, 'attn_dropout', 0.0)
+            decoder = NMTDecoder(denoising_model.decoder, embedding, model_args.word_dropout, linear,
+                                 copy_decoder=True,
+                                 batch_first=model_args.batch_first,
+                                 extra_attention=model_args.extra_attention,
+                                 masked_layers=masked_layers,
+                                 attention_dropout=attention_dropout)
         else:
-            # Single evaluation
-            return super()._get_loss(model.translation_model, batch)
+            decoder = NMTDecoder(denoising_model.decoder, embedding, model_args.word_dropout, linear)
 
-    def _get_batch_weight(self, batch):
-        # This overnormalizes the decoders. Hopefully, that's ok...
-        if isinstance(batch, Sequence):
-            return batch[0]['tgt_size'] + batch[1]['tgt_size']
-        else:
-            return batch['tgt_size']
+        denoising_model = EncoderDecoderModel(translation_model.encoder, decoder)
+        compound_model = self.DialectTranslationModel(translation_model, denoising_model)
+        compound_model.batch_first = translation_model.batch_first
+        self.model = compound_model
 
-    def _update_training_metrics(self, train_data, batch):
-        meters = train_data.meters
-        batch_time = meters['fwbw_wall'].val
-        src_tokens = batch[0]['src_size'] + batch[1]['src_size']
-        tgt_tokens = batch[0]['tgt_size'] + batch[1]['tgt_size']
+    def _get_train_dataset(self):
+        logger.info('Loading parallel data')
+        parallel_dataset = super()._get_train_dataset()
 
-        meters['srctok'].update(src_tokens, batch_time)
-        meters['tgttok'].update(tgt_tokens, batch_time)
+        logger.info('Loading denoising data')
+        translation_noise = self.args.translation_noise
+        train_src = self.args.train_src
+        train_tgt = self.args.train_tgt
+        self.args.train_src = self.args.train_noisy or self.args.train_clean
+        self.args.train_tgt = self.args.train_clean
+        self.args.translation_noise = True
 
-        return ['{:5.0f}|{:5.0f} tok/s'.format(meters['srctok'].avg, meters['tgttok'].avg)]
+        denoising_dataset = super()._get_train_dataset()
 
-    def solve(self, model_or_ensemble, task):
-        if not isinstance(model_or_ensemble, Sequence):
-            model_or_ensemble = [model_or_ensemble]
+        self.args.translation_noise = translation_noise
+        self.args.train_src = train_src
+        self.args.train_tgt = train_tgt
 
-        if isinstance(task, DenoisingTextTask):
-            return DenoisingTextTrainer.solve(self, [model.denoising_model for model in model_or_ensemble], task)
-        else:
-            return NMTTrainer.solve(self, [model.translation_model for model in model_or_ensemble], task)
+        dataset = MultiDataset(parallel_dataset, denoising_dataset)
+        return dataset
+
+    def _get_train_sampler(self, dataset):
+        parallel_sampler = super()._get_train_sampler(dataset.datasets[0])
+        denoising_sampler = super()._get_train_sampler(dataset.datasets[1])
+        return MultiSampler(parallel_sampler, denoising_sampler)
+
+    def _forward_backward_pass(self, batch, metrics):
+        parallel_batch, denoising_batch = batch
+        parallel_loss, parallel_display_loss = self._forward(parallel_batch, self.model.translation_model,
+                                                             self.translation_loss)
+
+        denoising_loss, denoising_display_loss = self._forward(parallel_batch, self.model.denoising_mdoel,
+                                                               self.denoising_loss)
+        loss = parallel_loss + denoising_loss
+        self.optimizer.backward(loss)
+        display_loss = parallel_display_loss + denoising_display_loss
+        src_size = parallel_batch.get('src_size') + denoising_batch.get('src_size')
+        tgt_size = parallel_batch.get('tgt_size') + denoising_batch.get('tgt_size')
+        metrics['nll'].update(display_loss, tgt_size)
+        metrics['src_tokens'] += src_size
+        metrics['tgt_tokens'] += tgt_size
+
+    def _eval_pass(self, batch, metrics):
+        tgt_size = batch.get('tgt_size')
+        _, display_loss = self._forward(batch, self.model.translation_model, self.loss.translation_loss, False)
+        metrics['nll'].update(display_loss, tgt_size)
+
+    def _get_sequence_generator(self):
+        return SequenceGenerator([self.model.translation_model], self.tgt_dict, self.model.batch_first,
+                                 self.args.beam_size, maxlen_b=20, normalize_scores=self.args.normalize,
+                                 len_penalty=self.args.alpha, unk_penalty=self.args.beta)
 
     # noinspection PyProtectedMember
-    @staticmethod
-    def upgrade_checkpoint(checkpoint):
-        if 'denoising_model' in checkpoint['train_data']:
-            new_state_dict = _join_state_dicts(translation_model=checkpoint['train_data']['model'],
-                                               denoising_model=checkpoint['train_data']['denoising_model'])
-            checkpoint['train_data']['model'] = new_state_dict
-            del checkpoint['train_data']['denoising_model']
-        elif any(k.startswith('first_model') for k in checkpoint['train_data']['model'].keys()):
-            translation, denoising = _split_by_key(checkpoint['train_data']['model'], 'first_model')
+    @classmethod
+    def upgrade_checkpoint(cls, checkpoint):
+        super().upgrade_checkpoint(checkpoint)
+        if 'denoising_model' in checkpoint:
+            new_state_dict = _join_state_dicts(translation_model=checkpoint['model'],
+                                               denoising_model=checkpoint['denoising_model'])
+            checkpoint['model'] = new_state_dict
+            del checkpoint['denoising_model']
+        elif any(k.startswith('first_model') for k in checkpoint['model'].keys()):
+            translation, denoising = _split_by_key(checkpoint['model'], 'first_model')
             new_state_dict = _join_state_dicts(translation_model=translation,
                                                denoising_model=denoising)
-            checkpoint['train_data']['model'] = new_state_dict
-        args = checkpoint['args']
-        if 'translation_noise' not in args:
-            args.translation_noise = False
-        NMTTrainer.upgrade_checkpoint(checkpoint)
+            checkpoint['model'] = new_state_dict
 
 
 def _split_by_key(data, prefix):

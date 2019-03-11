@@ -22,6 +22,10 @@ def get_lr_scheduler_names():
     return list(LR_SCHEDULER_REGISTRY.keys())
 
 
+def build_lr_scheduler(name, args, optimizer):
+    return get_lr_scheduler_type(name).build_lr_scheduler(args, optimizer)
+
+
 def register_lr_scheduler(name):
     """Decorator to register a new LR scheduler."""
 

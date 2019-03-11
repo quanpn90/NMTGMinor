@@ -68,11 +68,6 @@ class Model(nn.Module):
         self.eval()
         self.train = train
 
-    def freeze(self):
-        """Freeze this model's parameters"""
-        for p in self.parameters():
-            p.requires_grad_(False)
-
     @staticmethod
     def upgrade_args(args):
         pass

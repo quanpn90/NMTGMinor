@@ -3,14 +3,15 @@ import argparse
 import numpy as np
 import torch
 
-from nmtg import convert
-from nmtg.custom_logging import add_log_options, setup_logging
+from nmtg.convert import load_checkpoint
+from nmtg.custom_logging import add_log_options, setup_logging_from_args
 from nmtg.options import add_general_options, add_task_option, add_trainer_option
 from nmtg.trainers import Trainer
 from nmtg.tasks import Task
 
+
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="train.py")
+    parser = argparse.ArgumentParser(description="train.py", allow_abbrev=False)
     add_general_options(parser)
     task_class = add_task_option(parser)
     task_class.add_options(parser)
@@ -21,10 +22,11 @@ if __name__ == '__main__':
     parser.add_argument('-load_from', type=str,
                         help='If training from a checkpoint then this is the'
                              'path to the pretrained model.')
+    parser.add_argument('-reset_optim', action='store_true')
 
     args = parser.parse_args()
 
-    logger = setup_logging(args.log_dir, 'train', args.log_level_file, args.log_level_console)
+    logger = setup_logging_from_args(args, 'train')
 
     logger.debug('Torch version: {}'.format(torch.__version__))
     logger.debug(args)
@@ -33,13 +35,13 @@ if __name__ == '__main__':
     np.random.seed(args.seed)
 
     task = task_class.setup_task(args)  # type: Task
-    trainer = trainer_class(args)  # type: Trainer
 
     if args.load_from is not None:
         logger.info("Loading checkpoint {}".format(args.load_from))
-        checkpoint = convert.load_checkpoint(args.load_from)
-        train_data = trainer.load_checkpoint(checkpoint, for_training=True)
+        checkpoint = load_checkpoint(args.load_from)
     else:
-        train_data = trainer.load_data()
+        checkpoint = None
 
-    trainer.train(train_data, task)
+    trainer = trainer_class(args, checkpoint=checkpoint, for_training=True)  # type: Trainer
+
+    trainer.train(task, checkpoint=checkpoint if not args.reset_optim else None)

@@ -2,7 +2,7 @@ import torch
 from torch import nn, Tensor
 
 
-def masked_function(function, *inputs, mask=None):
+def masked_function(function, *inputs, mask=None, restore_shape=True):
     """
     Apply a function to the masked part of an input tensor.
     :param function: The function to apply.
@@ -27,6 +27,9 @@ def masked_function(function, *inputs, mask=None):
     # forward pass on the clean input only
     clean_output = function(*clean_inputs)
 
+    if not restore_shape:
+        return clean_output
+
     # after that, scatter the output (the position where we don't scatter are masked zeros anyways)
     flat_output = inputs[0].new_zeros(num_items, clean_output.size(-1))
     flat_output.index_copy_(0, valid_indices, clean_output)
@@ -43,9 +46,10 @@ class MaskedFunction(nn.Module):
     (at least 50% zeros). Otherwise, running the operation normally may be faster.
     """
 
-    def __init__(self, function):
+    def __init__(self, function, restore_shape=True):
         super().__init__()
         self.function = function
+        self.restore_shape = restore_shape
 
     def forward(self, inputs: Tensor, mask=None):
         """
@@ -55,4 +59,4 @@ class MaskedFunction(nn.Module):
         :return: The output of applying the function to only the masked part of the tensor,
         but in the original shape
         """
-        return masked_function(self.function, inputs, mask=mask)
+        return masked_function(self.function, inputs, mask=mask, restore_shape=self.restore_shape)

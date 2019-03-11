@@ -1,6 +1,6 @@
 import logging
 
-import torch
+from nmtg import convert
 
 logger = logging.getLogger(__name__)
 
@@ -10,20 +10,18 @@ def average_checkpoints(filenames, method='mean'):
         raise ValueError('No filenames specified')
 
     logger.info('Loading {}'.format(filenames[0]))
-    checkpoint = torch.load(filenames[0], map_location='cpu')
-    state_dict = checkpoint['train_data']['model']
+    checkpoint = convert.load_checkpoint(filenames[0])
+    state_dict = checkpoint['model']
 
     # If some parameters are shared, don't consider them twice
     keys = list({value.data_ptr(): key for key, value in state_dict.items()}.values())
 
-    for key in list(checkpoint['train_data'].keys()):
-        if key not in ['model', 'epoch', 'num_updates', 'training_time']:
-            del checkpoint['train_data'][key]
+    del checkpoint['optimizer'], checkpoint['lr_scheduler']
 
     for filename in filenames[1:]:
         logger.info('Loading {}'.format(filename))
-        new_checkpoint = torch.load(filename, map_location='cpu')
-        new_dict = new_checkpoint['train_data']['model']
+        new_checkpoint = convert.load_checkpoint(filenames[0])
+        new_dict = new_checkpoint['model']
 
         if method == 'mean':
             # Arithmetic mean
@@ -35,8 +33,7 @@ def average_checkpoints(filenames, method='mean'):
                 state_dict[key].mul_(new_dict[key])
 
         for key in ('epoch', 'num_updates', 'training_time'):
-            checkpoint['train_data'][key] = max(checkpoint['train_data'][key],
-                                                new_checkpoint['train_data'][key])
+            checkpoint[key] = max(checkpoint[key], new_checkpoint[key])
 
         del new_dict
         del new_checkpoint

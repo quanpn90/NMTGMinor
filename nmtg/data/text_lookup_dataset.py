@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class TextLookupDataset(Dataset):
     def __init__(self, text_dataset: TextLineDataset, dictionary: Dictionary, words=True,
-                 lower=False, bos=True, eos=True, align_right=False, trunc_len=0):
+                 lower=False, bos=True, eos=True, align_right=False, trunc_len=0, lang=None):
         """
         A dataset which contains indices derived by splitting
         text lines and looking up indices in a dictionary
@@ -32,6 +32,7 @@ class TextLookupDataset(Dataset):
         self.eos = eos
         self.align_right = align_right
         self.trunc_len = trunc_len
+        self.lang = lang
 
     def __len__(self):
         return len(self.source)
@@ -46,7 +47,11 @@ class TextLookupDataset(Dataset):
             line = line[:self.trunc_len]
         if len(line) == 0:
             logger.warning('Zero-length input at {}'.format(index))
-        return self.dictionary.to_indices(line, bos=self.bos, eos=self.eos)
+        if self.lang is None:
+            return self.dictionary.to_indices(line, bos=self.bos, eos=self.eos)
+        else:
+            # noinspection PyArgumentList
+            return self.dictionary.to_indices(line, bos=self.bos, eos=self.eos, lang=self.lang)
 
     def collate_samples(self, samples):
         indices, lengths = data_utils.collate_sequences(samples,
@@ -55,7 +60,7 @@ class TextLookupDataset(Dataset):
         return {'indices': indices, 'lengths': lengths, 'size': lengths.sum().item()}
 
     @classmethod
-    def load(cls, filename, dictionary, data_dir, load_into_memory=False, words=True, *args, **kwargs):
+    def load(cls, filename, dictionary, data_dir, load_into_memory=False, words=True, **kwargs):
         base_name = os.path.basename(filename)
 
         if load_into_memory:
@@ -70,4 +75,4 @@ class TextLookupDataset(Dataset):
             lengths_filename = os.path.join(data_dir, base_name + '.len.npy')
             lengths = np.load(lengths_filename)
 
-        return cls(text_data, dictionary, words, *args, **kwargs), lengths
+        return cls(text_data, dictionary, words, **kwargs), lengths

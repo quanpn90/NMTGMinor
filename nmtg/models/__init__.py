@@ -37,3 +37,7 @@ def get_model_type(name):
 
 def get_model_names():
     return list(MODEL_REGISTRY.keys())
+
+
+def build_model(name, args):
+    return get_model_type(name).build_model(args)
