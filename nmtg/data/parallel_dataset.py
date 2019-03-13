@@ -89,6 +89,20 @@ class MultiParallelDataset(Dataset):
     def __len__(self):
         return self.num_sentences * self.pairs_per_sentence
 
+    def _get_src(self, src_lang, tgt_lang, index):
+        src_dataset = self.datasets[src_lang]
+        src_dataset.lang = tgt_lang
+        src_dataset.bos = self.src_bos
+        source = src_dataset[index]
+        return source
+
+    def _get_tgt(self, tgt_lang, index):
+        tgt_dataset = self.datasets[tgt_lang]
+        tgt_dataset.lang = tgt_lang if self.tgt_lang_bos else None
+        tgt_dataset.bos, tgt_dataset.eos = True, True
+        target = tgt_dataset[index]
+        return target
+
     def __getitem__(self, index):
         pair_index, sentence_index = divmod(index, self.num_sentences)
         for excluded in self._excluded_indices:
@@ -101,15 +115,9 @@ class MultiParallelDataset(Dataset):
         if src_index >= tgt_index:
             src_index += 1
 
-        src_dataset = self.datasets[self.languages[src_index]]
-        src_dataset.lang = self.languages[tgt_index]
-        src_dataset.bos = self.src_bos
-        source = src_dataset[sentence_index]
+        source = self._get_src(self.languages[src_index], self.languages[tgt_index], sentence_index)
 
-        tgt_dataset = self.datasets[self.languages[tgt_index]]
-        tgt_dataset.lang = self.languages[tgt_index] if self.tgt_lang_bos else None
-        tgt_dataset.bos, tgt_dataset.eos = True, True
-        target = tgt_dataset[sentence_index]
+        target = self._get_tgt(self.languages[tgt_index], sentence_index)
 
         res = {'sentence_id': sentence_index,
                'src_lang': self.languages[src_index], 'tgt_lang': self.languages[tgt_index],

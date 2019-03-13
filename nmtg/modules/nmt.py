@@ -29,7 +29,7 @@ class NMTDecoder(IncrementalDecoder):
     """Wraps a Decoder and adds embedding and projection"""
 
     def __init__(self, decoder, embedding, dropout, linear, *, copy_decoder=False, batch_first=False,
-                 extra_attention=False, masked_layers=False, attention_dropout=0.1, language_embeddings=None):
+                 extra_attention=False, masked_layers=False, attention_dropout=0.1, language_embedding=None):
         super().__init__()
         self.decoder = decoder
         self.embedded_dropout = EmbeddingDropout(embedding, dropout)
@@ -46,12 +46,11 @@ class NMTDecoder(IncrementalDecoder):
 
             self._register_load_state_dict_pre_hook(self._load_nmt_model_compatibility)
 
-        if language_embeddings is not None:
+        if language_embedding is not None:
+            self.language_embedding = language_embedding
             model_dim = self.embedded_dropout.embedding.weight.size(1)
-            self.language_embedding = nn.Embedding(self.langauge_embeddings,
-                                                   model_dim)
-            nn.init.xavier_uniform_(self.language_embedding.weight)
-            self.merge_layer = XavierLinear(model_dim * 2, model_dim)
+            emb_dim = language_embedding.weight.size(1)
+            self.merge_layer = XavierLinear(model_dim + emb_dim, model_dim)
         else:
             self.language_embedding = None
 

@@ -16,7 +16,7 @@ class Preprocessor:
                             help='Report status every this many sentences')
 
     @classmethod
-    def preprocess(cls, args, save_data=True):
+    def preprocess(cls, args):
         raise NotImplementedError
 
 

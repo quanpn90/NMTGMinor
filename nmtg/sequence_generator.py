@@ -12,8 +12,7 @@ class SequenceGenerator:
                  beam_size=1, minlen=1, maxlen_a=1.0, maxlen_b=0, stop_early=True,
                  normalize_scores=True, len_penalty=1., unk_penalty=0., retain_dropout=False,
                  sampling=False, sampling_topk=-1, sampling_temperature=1.,
-                 diverse_beam_groups=-1, diverse_beam_strength=0.5, no_repeat_ngram_size=0,
-                 output_select=None):
+                 diverse_beam_groups=-1, diverse_beam_strength=0.5, no_repeat_ngram_size=0):
         """Stores parameters for generating a target sequence.
 
         :param models: List of EncoderDecoderModel, ensemble of models to generate for
@@ -48,7 +47,6 @@ class SequenceGenerator:
         self.models = models
         assert all(isinstance(model.decoder, IncrementalDecoder) for model in models)
         self.batch_first = batch_first
-        self.output_select = output_select
         self.dictionary = dictionary
         self.beam_size = beam_size
         self.minlen = minlen
@@ -70,8 +68,7 @@ class SequenceGenerator:
         else:
             self.search = search.BeamSearch(self.dictionary.eos())
 
-    def generate(self, encoder_input, source_lengths, encoder_mask=None, gold_prefix=None, input_language=None,
-                 output_language=None):
+    def generate(self, encoder_input, source_lengths, encoder_mask=None, gold_prefix=None, bos=None):
         """Generate a batch of translations.
 
         :param encoder_input: (FloatTensor) Inputs to the encoder
@@ -80,14 +77,10 @@ class SequenceGenerator:
         :param gold_prefix: (LongTensor, optional): force decoder to begin with these tokens
         """
         with torch.no_grad():
-            return self._generate(encoder_input, source_lengths, encoder_mask, gold_prefix,
-                                  input_language, output_language)
+            return self._generate(encoder_input, source_lengths, encoder_mask, gold_prefix, bos)
 
-    def _generate(self, encoder_input, source_lengths, encoder_mask=None, gold_prefix=None, input_language=None,
-                  output_language=None):
+    def _generate(self, encoder_input, source_lengths, encoder_mask=None, gold_prefix=None, bos=None):
         """See generate"""
-        if self.output_select is not None and (input_language is None or output_language is None):
-            raise ValueError('For multilingual models, specify input and output language')
 
         if self.batch_first:
             batch_size, srclen = encoder_input.size()[:2]
@@ -106,10 +99,7 @@ class SequenceGenerator:
             incremental_states.append(IncrementalState())
 
             # compute the encoder output for each beam
-            if input_language is None:
-                encoder_out = model.encoder(encoder_input, encoder_mask)
-            else:
-                encoder_out = model.encoders[input_language](encoder_input, encoder_mask)
+            encoder_out = model.encoder(encoder_input, encoder_mask)
             encoder_out = self._reorder_encoder_out(encoder_out, new_order)
             encoder_outs.append(encoder_out)
 
@@ -122,8 +112,8 @@ class SequenceGenerator:
         scores_buf = scores.clone()
         tokens = encoder_input.data.new(batch_size * self.beam_size, maxlen + 2).fill_(self.dictionary.pad())
         tokens_buf = tokens.clone()
-        if self.output_select == 'decoder_bos':
-            tokens[:, 0] = self.dictionary.language_indices[output_language]
+        if bos is not None:
+            tokens[:, 0] = bos
         else:
             tokens[:, 0] = self.dictionary.bos()
         attn, attn_buf = None, None
@@ -281,7 +271,7 @@ class SequenceGenerator:
                     encoder_mask = encoder_mask.index_select(0 if self.batch_first else 1, reorder_state)
 
             lprobs, avg_attn_scores = self._decode(tokens[:, :step + 1], encoder_input, encoder_outs,
-                                                   incremental_states, encoder_mask, output_language)
+                                                   incremental_states, encoder_mask)
 
             lprobs[:, self.dictionary.pad()] = -math.inf  # never select pad
             if self.unk_penalty > 0:
@@ -479,17 +469,16 @@ class SequenceGenerator:
 
         return finalized
 
-    def _decode(self, tokens, encoder_inputs, encoder_outs, incremental_states, encoder_mask=None,
-                target_language=None):
+    def _decode(self, tokens, encoder_inputs, encoder_outs, incremental_states, encoder_mask=None):
         if len(self.models) == 1:
             return self._decode_one(tokens, self.models[0], encoder_inputs, encoder_outs[0], incremental_states[0],
-                                    encoder_mask, log_probs=True, target_language=target_language)
+                                    encoder_mask, log_probs=True)
 
         log_probs = []
         avg_attn = None
         for model, encoder_out, incremental_state, in zip(self.models, encoder_outs, incremental_states):
             probs, attn = self._decode_one(tokens, model, encoder_inputs, encoder_out, incremental_state,
-                                           encoder_mask, log_probs=True, target_language=target_language)
+                                           encoder_mask, log_probs=True)
             log_probs.append(probs)
             if attn is not None:
                 if avg_attn is None:
@@ -505,26 +494,18 @@ class SequenceGenerator:
         return avg_probs, avg_attn
 
     def _decode_one(self, tokens, model: EncoderDecoderModel, encoder_inputs, encoder_out, incremental_state,
-                    encoder_mask, log_probs, target_language=None):
+                    encoder_mask, log_probs):
         if incremental_state is not None:
             tokens = tokens[:, -1:]
             if not self.batch_first:
                 tokens = tokens.transpose(0, 1)
-            if target_language is None:
-                decoder_out, attn_weights = model.decoder.step(tokens, encoder_out, encoder_mask=encoder_mask,
-                                                               incremental_state=incremental_state)
-            else:
-                decoder_out, attn_weights = model.decoders[target_language]\
-                    .step(tokens, encoder_out, encoder_mask=encoder_mask, incremental_state=incremental_state)
+            decoder_out, attn_weights = model.decoder.step(tokens, encoder_out, encoder_mask=encoder_mask,
+                                                           incremental_state=incremental_state)
         else:
             decoder_out, attn_weights = model.decoder(tokens, encoder_out)
 
-        if target_language is None:
-            probs = model.get_normalized_probs(decoder_out, attn_weights, encoder_inputs,
-                                               encoder_mask=encoder_mask, log_probs=log_probs)
-        else:
-            probs = model.get_normalized_probs(decoder_out, attn_weights, encoder_inputs, target_language,
-                                               encoder_mask=encoder_mask, log_probs=log_probs)
+        probs = model.get_normalized_probs(decoder_out, attn_weights, encoder_inputs,
+                                           encoder_mask=encoder_mask, log_probs=log_probs)
         probs = probs.squeeze(1 if self.batch_first else 0)
 
         if attn_weights is not None:

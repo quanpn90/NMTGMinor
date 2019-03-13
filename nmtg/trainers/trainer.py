@@ -141,7 +141,7 @@ class Trainer:
 
         with torch.no_grad():
             for batch in tqdm(eval_iterator, desc='evaluation', disable=self.args.no_progress):
-                self._eval_pass(batch, metrics)
+                self._eval_pass(eval_task, batch, metrics)
         return metrics
 
     def _get_eval_dataset(self, task):
@@ -156,7 +156,7 @@ class Trainer:
     def _format_eval_metrics(self, metrics):
         return []
 
-    def _eval_pass(self, batch, metrics):
+    def _eval_pass(self, task, batch, metrics):
         raise NotImplementedError
 
     def solve(self, test_task):
@@ -187,9 +187,9 @@ class Trainer:
         if eval_task is not None:
             eval_metrics = self.evaluate(eval_task)
             logger.info(' | '.join(self._format_eval_metrics(eval_metrics)))
-            test_results = self.solve(eval_task)
-            test_metrics = eval_task.score_results(test_results)
-            logger.info(' | '.join(test_metrics))
+            # test_results = self.solve(eval_task)
+            # test_metrics = eval_task.score_results(test_results)
+            # logger.info(' | '.join(test_metrics))
 
         self.training_time.start()
 
@@ -211,6 +211,7 @@ class Trainer:
         self.model.train()
         iterator = self._get_iterator(dataset, sampler)
 
+        metrics['it_wall'].start()
         with tqdm(total=len(sampler), initial=sampler.index + 1, disable=self.args.no_progress) as pbar:
             for index, batch in enumerate(iterator, sampler.index + 1):
                 metrics['fwbw_wall'].start()
@@ -278,9 +279,11 @@ class Trainer:
                     self._reset_training_metrics(metrics)
 
                 pbar.update()
+                metrics['it_wall'].update()
 
         sampler.shuffle = epoch >= self.args.curriculum
         sampler.reset()
+        self._reset_training_metrics(metrics)
 
     def _do_training_step(self, metrics, batch):
         return True
@@ -301,7 +304,8 @@ class Trainer:
             'gnorm': AverageMeter(),
             'oom': AverageMeter(),
             'fwbw_wall': StopwatchMeter(),
-            'train_wall': StopwatchMeter()}
+            'train_wall': StopwatchMeter(),
+            'it_wall': TimeMeter()}
         return meters
 
     def _format_train_metrics(self, metrics):
@@ -318,6 +322,8 @@ class Trainer:
         metrics['fwbw_wall'].reset()
         metrics['train_wall'].reset()
         metrics['gnorm'].reset()
+        metrics['it_wall'].reset()
+        metrics['it_wall'].start()
 
     def _get_checkpoint(self, epoch, train_sampler):
         checkpoint = {'sampler': train_sampler.state_dict(),

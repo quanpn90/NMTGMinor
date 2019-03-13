@@ -13,13 +13,10 @@ class JoinDictionaries(Preprocessor):
         parser.add_argument('-out_name', default='dict')
 
     @classmethod
-    def preprocess(cls, args, save_data=True):
+    def preprocess(cls, args):
         dictionaries = [Dictionary.load(filename) for filename in args.dicts]
         dictionary = dictionaries[0]
         for x in dictionaries[1:]:
             dictionary.update(x)
 
-        if save_data:
-            dictionary.save(os.path.join(args.data_dir_out, args.out_name))
-        else:
-            return dictionary
+        dictionary.save(os.path.join(args.data_dir_out, args.out_name))

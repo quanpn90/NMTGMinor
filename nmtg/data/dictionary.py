@@ -184,10 +184,10 @@ class Dictionary:
             try:
                 if not ignore_utf_errors:
                     with open(f, 'r', encoding='utf-8') as fd:
-                        return cls.load(fd)
+                        return cls.load(fd, **kwargs)
                 else:
                     with open(f, 'r', encoding='utf-8', errors='ignore') as fd:
-                        return cls.load(fd)
+                        return cls.load(fd, **kwargs)
             except FileNotFoundError as fnfe:
                 raise fnfe
             except UnicodeError:
@@ -269,6 +269,9 @@ class Dictionary:
             for word, count in counter:
                 dictionary.add_symbol(word, count)
         return dictionary
+
+    def __hash__(self):
+        return id(self)
 
 
 class MultilingualDictionary(Dictionary):

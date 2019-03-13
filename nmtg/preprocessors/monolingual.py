@@ -20,7 +20,7 @@ class MonolingualPreprocessor(NLPPreprocessor):
                             help='Discard vocabulary words that occur less often than this threshold')
 
     @classmethod
-    def preprocess(cls, args, save_data=True):
+    def preprocess(cls, args):
         split_words = args.input_type == 'word'
 
         os.makedirs(args.data_dir_out, exist_ok=True)
@@ -40,7 +40,4 @@ class MonolingualPreprocessor(NLPPreprocessor):
 
         dictionary.finalize(nwords=args.vocab_size, threshold=args.vocab_threshold or -1)
 
-        if save_data:
-            dictionary.save(os.path.join(args.data_dir_out, 'dict'))
-        else:
-            return dictionary
+        dictionary.save(os.path.join(args.data_dir_out, 'dict'))

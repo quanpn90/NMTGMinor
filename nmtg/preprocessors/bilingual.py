@@ -27,7 +27,7 @@ class BilingualPreprocessor(NLPPreprocessor):
                             help='Discard vocabulary words that occur less often than this threshold')
 
     @classmethod
-    def preprocess(cls, args, save_data=True):
+    def preprocess(cls, args):
         split_words = args.input_type == 'word'
 
         os.makedirs(args.data_dir_out, exist_ok=True)
@@ -68,20 +68,15 @@ class BilingualPreprocessor(NLPPreprocessor):
             src_dictionary.finalize(nwords=args.src_vocab_size,
                                     threshold=args.vocab_threshold or -1)
 
-            if save_data:
-                src_dictionary.save(os.path.join(args.data_dir_out, 'dict'))
-            else:
-                return src_dictionary, src_dictionary
+            src_dictionary.save(os.path.join(args.data_dir_out, 'dict'))
+
         else:
             src_dictionary.finalize(nwords=args.src_vocab_size,
                                     threshold=args.vocab_threshold or -1)
             tgt_dictionary.finalize(nwords=args.tgt_vocab_size,
                                     threshold=args.vocab_threshold or -1)
 
-            if save_data:
-                src_dictionary.save(os.path.join(args.data_dir_out, 'src.dict'))
-                tgt_dictionary.save(os.path.join(args.data_dir_out, 'tgt.dict'))
-            else:
-                return src_dictionary, tgt_dictionary
+            src_dictionary.save(os.path.join(args.data_dir_out, 'src.dict'))
+            tgt_dictionary.save(os.path.join(args.data_dir_out, 'tgt.dict'))
 
 

@@ -16,7 +16,7 @@ from nmtg.data.text_lookup_dataset import TextLookupDataset
 from nmtg.meters import AverageMeter
 from nmtg.models import build_model
 from nmtg.models.encoder_decoder import EncoderDecoderModel
-from nmtg.models.nmt_model import NMTEncoder, NMTDecoder
+from nmtg.modules.nmt import NMTEncoder, NMTDecoder
 from nmtg.modules.linear import XavierLinear
 from nmtg.modules.loss import NMTLoss
 from nmtg.sequence_generator import SequenceGenerator
@@ -29,9 +29,18 @@ logger = logging.getLogger(__name__)
 
 @register_trainer('nmt')
 class NMTTrainer(Trainer):
+
+    @classmethod
+    def _add_inference_data_options(cls, parser, argv=None):
+        parser.add_argument('-src_seq_length_trunc', type=int, default=0,
+                            help='Truncate source sequences to this length. 0 (default) to disable')
+        parser.add_argument('-tgt_seq_length_trunc', type=int, default=0,
+                            help='Truncate target sequences to this length. 0 (default) to disable')
+
     @classmethod
     def add_inference_options(cls, parser, argv=None):
         super().add_inference_options(parser, argv)
+        cls._add_inference_data_options(parser, argv)
         parser.add_argument('-input_type', default='word', choices=['word', 'char'],
                             help='Type of dictionary to create.')
         parser.add_argument('-beam_size', type=int, default=5, help='Beam size')
@@ -49,33 +58,47 @@ class NMTTrainer(Trainer):
                             help='Output finished translations as they are generated')
         parser.add_argument('-return_scores', action='store_true',
                             help='Return scores in the online translation')
-        parser.add_argument('-src_seq_length_trunc', type=int, default=0,
-                            help='Truncate source sequences to this length. 0 (default) to disable')
-        parser.add_argument('-tgt_seq_length_trunc', type=int, default=0,
-                            help='Truncate target sequences to this length. 0 (default) to disable')
 
         parser.add_argument('-eval_noise', action='store_true',
                             help='Also apply noise when evaluating')
         parser.add_argument('-word_shuffle', type=int, default=3,
                             help='Maximum number of positions a word can move (0 to disable)')
-        parser.add_argument('-word_blank', type=float, default=0.2,
+        parser.add_argument('-word_blank', type=float, default=0.1,
                             help='Probability to replace a word with the unknown word (0 to disable)')
         parser.add_argument('-noise_word_dropout', type=float, default=0.1,
                             help='Probability to remove a word (0 to disable)')
 
     @classmethod
-    def add_training_options(cls, parser, argv=None):
-        super().add_training_options(parser, argv)
+    def _add_train_data_options(cls, parser, argv=None):
         parser.add_argument('-train_src', type=str, required=True,
                             help='Path to the training source file')
         parser.add_argument('-train_tgt', type=str, required=True,
                             help='Path to the training target file')
+        parser.add_argument('-join_vocab', action='store_true',
+                            help='Share dictionary for source and target')
+        parser.add_argument('-src_seq_length', type=int, default=64,
+                            help='Discard source sequences above this length')
+        parser.add_argument('-tgt_seq_length', type=int, default=64,
+                            help='Discard target sequences above this length')
+        parser.add_argument('-translation_noise', action='store_true',
+                            help='Apply noise to the source when translating')
+        parser.add_argument('-pre_word_vecs_enc', type=str,
+                            help='If a valid path is specified, then this will load '
+                                 'pretrained word embeddings on the encoder side. '
+                                 'See README for specific formatting instructions.')
+        parser.add_argument('-pre_word_vecs_dec', type=str,
+                            help='If a valid path is specified, then this will load '
+                                 'pretrained word embeddings on the decoder side. '
+                                 'See README for specific formatting instructions.')
+
+    @classmethod
+    def add_training_options(cls, parser, argv=None):
+        super().add_training_options(parser, argv)
+        cls._add_train_data_options(parser, argv)
         parser.add_argument('-data_dir', type=str, required=True,
                             help='Path to an auxiliary data')
         parser.add_argument('-load_into_memory', action='store_true',
                             help='Load the dataset into memory')
-        parser.add_argument('-join_vocab', action='store_true',
-                            help='Share dictionary for source and target')
         parser.add_argument('-batch_size_words', type=int, default=2048,
                             help='Maximum number of words in a batch')
         parser.add_argument('-batch_size_sents', type=int, default=128,
@@ -88,26 +111,11 @@ class NMTTrainer(Trainer):
                             help='Divide gradient by the number of tokens')
         parser.add_argument('-pad_count', action='store_true',
                             help='Count padding words when batching')
-        parser.add_argument('-src_seq_length', type=int, default=64,
-                            help='Discard source sequences above this length')
-        parser.add_argument('-tgt_seq_length', type=int, default=64,
-                            help='Discard target sequences above this length')
-
-        parser.add_argument('-translation_noise', action='store_true',
-                            help='Apply noise to the source when translating')
 
         parser.add_argument('-tie_weights', action='store_true',
                             help='Share weights between embedding and softmax')
         parser.add_argument('-freeze_embeddings', action='store_true',
                             help='Do not train word embeddings')
-        parser.add_argument('-pre_word_vecs_enc', type=str,
-                            help='If a valid path is specified, then this will load '
-                                 'pretrained word embeddings on the encoder side. '
-                                 'See README for specific formatting instructions.')
-        parser.add_argument('-pre_word_vecs_dec', type=str,
-                            help='If a valid path is specified, then this will load '
-                                 'pretrained word embeddings on the decoder side. '
-                                 'See README for specific formatting instructions.')
         parser.add_argument('-word_vec_size', type=int,
                             help='Word embedding sizes')
         parser.add_argument('-word_dropout', type=float, default=0.0,
@@ -196,6 +204,7 @@ class NMTTrainer(Trainer):
     def _load_data(self, checkpoint):
         super()._load_data(checkpoint)
         args = checkpoint['args']
+        self.args.join_vocab = args.join_vocab
 
         if args.join_vocab:
             self.src_dict = Dictionary()
@@ -242,12 +251,14 @@ class NMTTrainer(Trainer):
         dummy_output, _ = model(dummy_input, dummy_input)
         output_size = dummy_output.size(-1)
 
-        src_embedding = self._get_embedding(model_args, self.src_dict, embedding_size, model_args.pre_word_vecs_enc)
+        src_embedding = self._get_embedding(model_args, self.src_dict, embedding_size,
+                                            getattr(self.args, 'pre_word_vecs_enc', None))
 
         if model_args.join_vocab:
             tgt_embedding = src_embedding
         else:
-            tgt_embedding = self._get_embedding(model_args, self.tgt_dict, embedding_size, model_args.pre_word_vecs_dec)
+            tgt_embedding = self._get_embedding(model_args, self.tgt_dict, embedding_size,
+                                                getattr(self.args, 'pre_word_vecs_dev', None))
 
         tgt_linear = XavierLinear(output_size, len(self.tgt_dict))
 
@@ -404,25 +415,26 @@ class NMTTrainer(Trainer):
         perplexity = math.exp(metrics['nll'].avg)
         formatted.insert(1, 'ppl {:6.2f}'.format(perplexity))
 
-        srctok = metrics['src_tps'].sum / metrics['fwbw_wall'].sum
-        tgttok = metrics['tgt_tps'].sum / metrics['fwbw_wall'].sum
+        srctok = metrics['src_tps'].sum / metrics['it_wall'].elapsed_time
+        tgttok = metrics['tgt_tps'].sum / metrics['it_wall'].elapsed_time
         formatted.append('{:5.0f}|{:5.0f} tok/s'.format(srctok, tgttok))
         return formatted
 
-    def _forward(self, batch, model, loss, training=True):
+    def _forward(self, batch, model, src_dict, tgt_dict, loss, training=True):
         encoder_input = batch.get('src_indices')
         decoder_input = batch.get('tgt_input')
         targets = batch.get('tgt_output')
 
-        if not self.args.batch_first:
+        if not self.model.batch_first:
             encoder_input = encoder_input.transpose(0, 1).contiguous()
             decoder_input = decoder_input.transpose(0, 1).contiguous()
             targets = targets.transpose(0, 1).contiguous()
 
-        encoder_mask = encoder_input.ne(self.src_dict.pad())
-        decoder_mask = decoder_input.ne(self.tgt_dict.pad())
+        encoder_mask = encoder_input.ne(src_dict.pad())
+        decoder_mask = decoder_input.ne(tgt_dict.pad())
         outputs, attn_out = model(encoder_input, decoder_input, encoder_mask, decoder_mask)
-        lprobs = model.get_normalized_probs(outputs, attn_out, encoder_input, encoder_mask, decoder_mask, True)
+        lprobs = model.get_normalized_probs(outputs, attn_out, encoder_input,
+                                            encoder_mask, decoder_mask, log_probs=True)
         if training:
             targets = targets.masked_select(decoder_mask)
         return loss(lprobs, targets)
@@ -430,7 +442,7 @@ class NMTTrainer(Trainer):
     def _forward_backward_pass(self, batch, metrics):
         src_size = batch.get('src_size')
         tgt_size = batch.get('tgt_size')
-        loss, display_loss = self._forward(batch, self.model, self.loss)
+        loss, display_loss = self._forward(batch, self.model, self.src_dict, self.tgt_dict, self.loss)
         self.optimizer.backward(loss)
         metrics['nll'].update(display_loss, tgt_size)
         metrics['src_tps'].update(src_size)
@@ -456,47 +468,39 @@ class NMTTrainer(Trainer):
         formatted.append('Validation perplexity: {:.2f}'.format(math.exp(metrics['nll'].avg)))
         return formatted
 
-    def _eval_pass(self, batch, metrics):
+    def _eval_pass(self, task, batch, metrics):
         tgt_size = batch.get('tgt_size')
-        _, display_loss = self._forward(batch, self.model, self.loss, False)
+        _, display_loss = self._forward(batch, self.model, self.src_dict, self.tgt_dict, self.loss, False)
         metrics['nll'].update(display_loss, tgt_size)
 
-    def _get_sequence_generator(self):
+    def _get_sequence_generator(self, task):
         return SequenceGenerator([self.model], self.tgt_dict, self.model.batch_first,
                                  self.args.beam_size, maxlen_b=20, normalize_scores=self.args.normalize,
                                  len_penalty=self.args.alpha, unk_penalty=self.args.beta)
 
+    def _restore_src_string(self, task, output, join_str, bpe_symbol):
+        return self.src_dict.string(output, join_str=join_str, bpe_symbol=bpe_symbol)
+
+    def _restore_tgt_string(self, task, output, join_str, bpe_symbol):
+        return self.tgt_dict.string(output, join_str=join_str, bpe_symbol=bpe_symbol)
+
     def solve(self, test_task):
         self.model.eval()
 
-        generator = self._get_sequence_generator()
+        generator = self._get_sequence_generator(test_task)
 
         test_dataset = self._get_eval_dataset(test_task)
         test_sampler = self._get_eval_sampler(test_dataset)
         test_iterator = self._get_iterator(test_dataset, test_sampler)
 
-        join_str = ' ' if self.args.input_type == 'word' else ''
-
         results = []
         for batch in tqdm(test_iterator, desc='inference', disable=self.args.no_progress):
-            encoder_input = batch.get('src_indices')
-            source_lengths = batch.get('src_lengths')
 
-            if not generator.batch_first:
-                encoder_input = encoder_input.transpose(0, 1).contiguous()
-
-            encoder_mask = encoder_input.ne(self.src_dict.pad())
-
-            res = [self.tgt_dict.string(tr['tokens'], join_str=join_str)
-                   for beams in generator.generate(encoder_input, source_lengths, encoder_mask)
-                   for tr in beams[:self.args.n_best]]
+            res, src = self._inference_pass(test_task, batch, generator)
 
             if self.args.print_translations:
-                for i in range(len(batch['src_indices'])):
-                    reference = batch['src_indices'][i][:batch['src_lengths'][i]]
-                    reference = self.src_dict.string(reference, join_str=join_str,
-                                                     bpe_symbol=self.args.bpe_symbol)
-                    tqdm.write("Src {}: {}".format(len(results) + i, reference))
+                for i, source in enumerate(src):
+                    tqdm.write("Src {}: {}".format(len(results) + i, source))
                     for j in range(self.args.n_best):
                         translation = res[i * self.args.n_best + j]
                         tqdm.write("Hyp {}.{}: {}".format(len(results) + i, j + 1,
@@ -506,6 +510,27 @@ class NMTTrainer(Trainer):
             results.extend(res)
 
         return results
+
+    def _inference_pass(self, task, batch, generator):
+        encoder_input = batch.get('src_indices')
+        source_lengths = batch.get('src_lengths')
+        join_str = ' ' if self.args.input_type == 'word' else ''
+
+        if not generator.batch_first:
+            encoder_input = encoder_input.transpose(0, 1).contiguous()
+
+        encoder_mask = encoder_input.ne(self.src_dict.pad())
+
+        res = [self.tgt_dict.string(tr['tokens'], join_str=join_str)
+               for beams in generator.generate(encoder_input, source_lengths, encoder_mask)
+               for tr in beams[:self.args.n_best]]
+        src = []
+        if self.args.print_translations:
+            for i in range(len(batch['src_indices'])):
+                ind = batch['src_indices'][i][:batch['src_lengths'][i]]
+                ind = self.src_dict.string(ind, join_str=join_str, bpe_symbol=self.args.bpe_symbol)
+                src.append(ind)
+        return res, src
 
     @classmethod
     def upgrade_checkpoint(cls, checkpoint):

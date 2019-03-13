@@ -3,6 +3,7 @@ import torch
 import numpy as np
 
 from nmtg.data import Dataset
+from nmtg.data.parallel_dataset import MultiParallelDataset
 from nmtg.data.text_lookup_dataset import TextLookupDataset
 
 
@@ -102,3 +103,32 @@ class NoisyTextDataset(Dataset):
         else:
             word_idx = np.arange(len(sample))
         return word_idx
+
+
+class NoisyMultiParallelDataset(MultiParallelDataset):
+
+    def __init__(self, exclude_pairs=None, src_bos=False, tgt_lang_bos=False, word_shuffle=3,
+                 word_dropout=0.1, word_blank=0.2, bpe_symbol='@@ ', noisy_languages=tuple(), **datasets):
+        super().__init__(exclude_pairs, src_bos, tgt_lang_bos, **datasets)
+        self.word_shuffle = word_shuffle
+        self.word_dropout = word_dropout
+        self.word_blank = word_blank
+        self.bpe_symbol = bpe_symbol
+        self.noisy_languages = set(noisy_languages)
+
+    def _get_src(self, src_lang, tgt_lang, index):
+        sample = super()._get_src(src_lang, tgt_lang, index)
+        if src_lang not in self.noisy_languages:
+            return sample
+
+        self.source = self.datasets[src_lang]
+        self.dictionary = self.source.dictionary
+        sample = self.shuffle(sample)
+        sample = self.dropout(sample)
+        sample = self.blank(sample)
+        return sample
+
+    shuffle = NoisyTextDataset.shuffle
+    dropout = NoisyTextDataset.dropout
+    blank = NoisyTextDataset.blank
+    get_word_idx = NoisyTextDataset.get_word_idx

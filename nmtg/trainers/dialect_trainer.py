@@ -5,7 +5,7 @@ from nmtg.data.dataset import MultiDataset
 from nmtg.data.samplers import MultiSampler
 from nmtg.models import Model, build_model
 from nmtg.models.encoder_decoder import EncoderDecoderModel
-from nmtg.models.nmt_model import NMTDecoder
+from nmtg.modules.nmt import NMTDecoder
 from nmtg.modules.linear import XavierLinear
 from nmtg.modules.loss import NMTLoss
 from nmtg.sequence_generator import SequenceGenerator
@@ -15,6 +15,7 @@ from nmtg.trainers.nmt_trainer import NMTTrainer
 logger = logging.getLogger(__name__)
 
 
+# Deprecated, can be achieved through multilingualTrainer now
 @register_trainer('dialect')
 class DialectTrainer(NMTTrainer):
 

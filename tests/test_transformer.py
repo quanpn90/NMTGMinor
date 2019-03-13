@@ -8,7 +8,7 @@ import onmt.modules.Transformer.Layers
 import onmt.Constants
 import onmt.modules.Loss
 from nmtg.data import Dictionary
-from nmtg.models.nmt_model import NMTModel, NMTEncoder, NMTDecoder
+from nmtg.modules.nmt import NMTModel, NMTEncoder, NMTDecoder
 from nmtg.models.transformer.transformer import Transformer
 from nmtg.modules.loss import NMTLoss
 

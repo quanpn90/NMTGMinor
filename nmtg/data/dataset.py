@@ -5,6 +5,7 @@
 # the root directory of this source tree. An additional grant of patent rights
 # can be found in the PATENTS file in the same directory.
 import io
+import math
 from typing import Mapping, Sequence
 
 import numpy as np
@@ -189,19 +190,33 @@ class TextLineDataset(RawDataset):
 
 
 class ConcatDataset(Dataset):
-    def __init__(self, *datasets):
+    def __init__(self, *datasets, balance=False):
         self.datasets = datasets
-        self.length = sum(len(d) for d in datasets)
+        self.balance = balance
+        self.maxlen = max(len(d) for d in datasets)
+        if balance:
+            self.length =  self.maxlen * len(datasets)
+        else:
+            self.length = sum(len(d) for d in datasets)
 
     def __getitem__(self, index):
-        for i, dataset in enumerate(self.datasets):
-            if index >= len(dataset):
-                index -= len(dataset)
-            else:
-                out = dataset[index]
-                if isinstance(out, dict):
-                    out['dataset_index'] = i
-                return out
+        if not self.balance:
+            for i, dataset in enumerate(self.datasets):
+                if index >= len(dataset):
+                    index -= len(dataset)
+                else:
+                    out = dataset[index]
+                    if isinstance(out, dict):
+                        out['dataset_index'] = i
+                    return out
+        else:
+            dataset_index, index = divmod(index, self.maxlen)
+            dataset = self.datasets[dataset_index]
+            index %= len(dataset)
+            out = dataset[index]
+            if isinstance(out, dict):
+                out['dataset_index'] = dataset_index
+            return out
 
     def __len__(self):
         return self.length
@@ -210,6 +225,15 @@ class ConcatDataset(Dataset):
         out = self.datasets[0].collate_samples(samples)
         if isinstance(out, dict):
             out['dataset_index'] = [sample['dataset_index'] for sample in samples]
+        return out
+
+    def concat_lengths(self, *lengths):
+        assert len(lengths) == len(self.datasets)
+        if not self.balance:
+            return np.concatenate(lengths)
+        else:
+            tiled = [np.tile(length, int(math.ceil(self.maxlen / len(length))))[:self.maxlen] for length in lengths]
+            return np.concatenate(tiled)
 
 
 class MultiDataset(Dataset):
