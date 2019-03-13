@@ -463,8 +463,8 @@ class NMTTrainer(Trainer):
         metrics['nll'] = AverageMeter()
         return metrics
 
-    def _format_eval_metrics(self, metrics):
-        formatted = super()._format_eval_metrics(metrics)
+    def format_eval_metrics(self, metrics):
+        formatted = super().format_eval_metrics(metrics)
         formatted.append('Validation perplexity: {:.2f}'.format(math.exp(metrics['nll'].avg)))
         return formatted
 

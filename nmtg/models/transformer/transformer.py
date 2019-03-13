@@ -145,7 +145,7 @@ class Transformer(EncoderDecoderModel):
                 args.model_size, args.batch_first, args.max_position_length)
         elif args.time == 'learned':
             positional_encoding = LearnedPositionalEncoding(
-                args.model_dim, args.max_position_length, args.batch_first)
+                args.model_size, args.max_position_length, args.batch_first)
         elif args.time == 'gru':
             positional_encoding = RNNPositionalEncoding(
                 nn.GRU(args.model_size, args.model_size, 1, batch_first=args.batch_first))

@@ -153,7 +153,7 @@ class Trainer:
     def _get_eval_metrics(self):
         return {}
 
-    def _format_eval_metrics(self, metrics):
+    def format_eval_metrics(self, metrics):
         return []
 
     def _eval_pass(self, task, batch, metrics):
@@ -186,7 +186,7 @@ class Trainer:
 
         if eval_task is not None:
             eval_metrics = self.evaluate(eval_task)
-            logger.info(' | '.join(self._format_eval_metrics(eval_metrics)))
+            logger.info(' | '.join(self.format_eval_metrics(eval_metrics)))
             # test_results = self.solve(eval_task)
             # test_metrics = eval_task.score_results(test_results)
             # logger.info(' | '.join(test_metrics))
@@ -199,7 +199,7 @@ class Trainer:
 
         if eval_task is not None:
             eval_metrics = self.evaluate(eval_task)
-            logger.info(' | '.join(self._format_eval_metrics(eval_metrics)))
+            logger.info(' | '.join(self.format_eval_metrics(eval_metrics)))
             test_results = self.solve(eval_task)
             test_metrics = eval_task.score_results(test_results)
             logger.info(' | '.join(test_metrics))
@@ -257,7 +257,7 @@ class Trainer:
                     if self.args.save_every > 0 and (self.training_steps + 1) % self.args.save_every == 0:
                         if eval_task is not None:
                             eval_metrics = self.evaluate(eval_task)
-                            logger.info(' | '.join(self._format_eval_metrics(eval_metrics)))
+                            logger.info(' | '.join(self.format_eval_metrics(eval_metrics)))
                             test_results = self.solve(eval_task)
                             test_metrics = eval_task.score_results(test_results)
                             logger.info(' | '.join(test_metrics))

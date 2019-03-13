@@ -58,6 +58,7 @@ def convert_checkpoint(checkpoint):
         new_checkpoint['tgt_dict'] = tgt_state_dict
     args = checkpoint['opt']
     args.join_vocab = join_vocab
+    args.word_vec_size = None
     input_chars = all(len(x[0]) == 1 for x in src_state_dict['dict'])
     args.input_type = 'char' if input_chars else 'word'
     new_checkpoint['args'] = args
@@ -127,7 +128,7 @@ def convert_transformer(opt, state_dict):
         layer_dict = {
             'preprocess_attn': layer_in['preprocess_attn'],
             'preprocess_ffn': layer_in['preprocess_ffn'],
-            'tgt_attention': {
+            'attention_tgt': {
                 'query_projection': {'function': layer_in['multihead_tgt']['fc_query']['function']['linear']},
                 'key_projection': {'function': layer_in['multihead_tgt']['fc_key']['function']['linear']},
                 'value_projection': {'function': layer_in['multihead_tgt']['fc_value']['function']['linear']},
@@ -135,7 +136,7 @@ def convert_transformer(opt, state_dict):
             },
             'feed_forward': {'function': convert_ffn(layer_in['feedforward']['function'])},
             'preprocess_src_attn': layer_in['preprocess_src_attn'],
-            'src_attention': {
+            'attention_src': {
                 'query_projection': {'function': layer_in['multihead_src']['fc_query']['function']['linear']},
                 'key_projection': {'function': layer_in['multihead_src']['fc_key']['function']['linear']},
                 'value_projection': {'function': layer_in['multihead_src']['fc_value']['function']['linear']},
