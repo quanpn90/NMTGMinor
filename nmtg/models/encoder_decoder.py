@@ -59,6 +59,8 @@ class Decoder(nn.Module):
                               error_msgs):
         if prefix + 'future_mask' in state_dict:
             old_mask = state_dict[prefix + 'future_mask']
+            if old_mask is None:
+                return
             if self.future_mask is None:
                 self.future_mask = old_mask.new(old_mask.size())
             else:

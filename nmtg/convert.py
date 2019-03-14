@@ -69,12 +69,11 @@ def convert_checkpoint(checkpoint):
 def convert_nmt_model(opt, state_dict):
     res = {
         'encoder': {
-            'embedded_dropout': {'embedding': {'weight': state_dict['encoder']['word_lut']['weight']}},
+            'embedded_dropout': {'embedding': state_dict['encoder']['word_lut']},
         },
         'decoder': {
-            'embedded_dropout': {'embedding': {'weight': state_dict['decoder']['word_lut']['weight']}},
-            'linear': {'weight': state_dict['generator']['linear']['weight'],
-                       'bias': state_dict['generator']['linear']['bias']}
+            'embedded_dropout': {'embedding': state_dict['decoder']['word_lut']},
+            'linear': state_dict['generator']['linear']
         }
     }
     model_type = opt.model
@@ -87,7 +86,7 @@ def convert_nmt_model(opt, state_dict):
 
 
 def convert_transformer(opt, state_dict):
-    res = {'decoder': {'future_mask': state_dict['decoder']['mask']},
+    res = {'decoder': {'future_mask': state_dict['decoder']['mask'].eq(0)},
            'encoder': {}}
 
     if opt.time in ('lstm', 'gru'):

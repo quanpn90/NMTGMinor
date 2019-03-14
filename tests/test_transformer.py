@@ -8,7 +8,8 @@ import onmt.modules.Transformer.Layers
 import onmt.Constants
 import onmt.modules.Loss
 from nmtg.data import Dictionary
-from nmtg.modules.nmt import NMTModel, NMTEncoder, NMTDecoder
+from nmtg.models.encoder_decoder import EncoderDecoderModel
+from nmtg.modules.nmt import NMTEncoder, NMTDecoder
 from nmtg.models.transformer.transformer import Transformer
 from nmtg.modules.loss import NMTLoss
 
@@ -130,9 +131,10 @@ print("Making Felix Transformer")
 dictionary = Dictionary()
 dictionary.pad_index = onmt.Constants.PAD
 felix_transformer = Transformer.build_model(args)
-felix_transformer = NMTModel(NMTEncoder(felix_transformer.encoder, embedding_src, args.word_dropout),
-                             NMTDecoder(felix_transformer.decoder, embedding_tgt, args.word_dropout, generator.linear),
-                             dictionary, dictionary)
+felix_transformer = EncoderDecoderModel(NMTEncoder(felix_transformer.encoder, embedding_src, args.word_dropout),
+                                        NMTDecoder(felix_transformer.decoder, embedding_tgt, args.word_dropout,
+                                                   generator.linear))
+felix_transformer.eval()
 loss_function_felix = NMTLoss(30000, onmt.Constants.PAD, 0.0)
 felix_transformer.cuda()
 loss_function_felix.cuda()
@@ -188,7 +190,8 @@ for felix_layer, quan_layer in zip(felix_transformer.decoder.decoder.layers, qua
 # felix_transformer.encoder.encoder.layers[0].attention.attn_dropout.register_forward_hook(lambda m, i, o: print(i, o))
 # qfelix_transformer.decoder.decoder.layers[0].self_attention.register_forward_hook(lambda m, i, o: print(o[0]))
 
-outputs, attention_weights = felix_transformer(encoder_input, decoder_input)
+outputs, attention_weights = felix_transformer(encoder_input, decoder_input, encoder_input.ne(onmt.Constants.PAD),
+                                               decoder_input.ne(onmt.Constants.PAD))
 outputs_felix = outputs.clone().detach().cpu()
 lprobs = felix_transformer.get_normalized_probs(outputs, attention_weights, log_probs=True)
 loss = loss_function_felix(lprobs, decoder_input)[0]
