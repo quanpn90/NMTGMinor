@@ -32,6 +32,9 @@ def build_model(opt, dicts):
     if not hasattr(opt, 'ctc_loss'):
         opt.ctc_loss = 0
 
+    if not hasattr(opt, 'encoder_layers'):
+        opt.encoder_layers = -1
+
 
     onmt.Constants.layer_norm = opt.layer_norm
     onmt.Constants.weight_norm = opt.weight_norm

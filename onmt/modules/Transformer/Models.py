@@ -35,7 +35,10 @@ class TransformerEncoder(nn.Module):
         self.model_size = opt.model_size
         self.n_heads = opt.n_heads
         self.inner_size = opt.inner_size
-        self.layers = opt.layers
+        if(hasattr(opt,'encoder_layers') and opt.encoder_layers != -1):
+            self.layers = opt.encoder_layers
+        else:
+            self.layers = opt.layers
         self.dropout = opt.dropout
         self.word_dropout = opt.word_dropout
         self.attn_dropout = opt.attn_dropout

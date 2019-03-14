@@ -23,6 +23,8 @@ def make_parser(parser):
                         help="Optimization method. [recurrent|transformer|stochastic_transformer]")
     parser.add_argument('-layers', type=int, default=2,
                         help='Number of layers in the LSTM encoder/decoder')                   
+    parser.add_argument('-encoder_layers', type=int, default=-1,
+                        help='Number of layers in the LSTM encoder if different')                   
     # Recurrent Model options
     parser.add_argument('-rnn_size', type=int, default=512,
                         help='Size of LSTM hidden states')
