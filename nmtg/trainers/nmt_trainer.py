@@ -470,7 +470,7 @@ class NMTTrainer(Trainer):
 
     def _eval_pass(self, task, batch, metrics):
         tgt_size = batch.get('tgt_size')
-        _, display_loss = self._forward(batch, self.model, self.src_dict, self.tgt_dict, self.loss, False)
+        _, display_loss = self._forward(batch, self.model, self.src_dict, self.tgt_dict, self.loss, training=False)
         metrics['nll'].update(display_loss, tgt_size)
 
     def _get_sequence_generator(self, task):

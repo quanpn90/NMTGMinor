@@ -42,7 +42,7 @@ class TextLookupDataset(Dataset):
         if self.lower:
             line = line.lower()
         if self.words:
-            line = line.split(' ')
+            line = line.split()
         if self.trunc_len > 0:
             line = line[:self.trunc_len]
         if len(line) == 0:

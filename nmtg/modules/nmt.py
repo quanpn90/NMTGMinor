@@ -4,6 +4,7 @@ import logging
 import torch
 from torch import nn
 
+from nmtg.models import Model
 from nmtg.models.encoder_decoder import Encoder, IncrementalDecoder
 from nmtg.modules.attention import MultiHeadAttention
 from nmtg.modules.dropout import EmbeddingDropout
@@ -165,3 +166,16 @@ class NMTDecoder(IncrementalDecoder):
         for key, value in items:
             assert key not in state_dict
             state_dict[key] = value
+
+
+class Discriminator(Model):
+    def __init__(self, encoder_dim, hidden_dim, output_dim, dropout=0.1, num_layers=3):
+        super().__init__()
+        layers = [XavierLinear(encoder_dim, hidden_dim), nn.LeakyReLU(0.2), nn.Dropout(dropout)]
+        for i in range(num_layers - 1):
+            layers.extend([XavierLinear(hidden_dim, hidden_dim), nn.LeakyReLU(0.2), nn.Dropout(dropout)])
+        layers.append(XavierLinear(hidden_dim, output_dim))
+        self.layers = nn.Sequential(*layers)
+
+    def forward(self, encoder_outputs, encoder_mask=None):
+        return self.layers(encoder_outputs)

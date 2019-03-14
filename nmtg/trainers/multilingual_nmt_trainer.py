@@ -29,10 +29,11 @@ logger = logging.getLogger(__name__)
 @register_trainer('multilingual')
 class MultilingualNMTTrainer(NMTTrainer):
     class MultilingualNMTModel(Model):
-        def __init__(self, encoders, decoders):
+        def __init__(self, encoders, decoders, discriminator=None):
             super().__init__()
             self.encoders = nn.ModuleDict(encoders)
             self.decoders = nn.ModuleDict(decoders)
+            self.discriminator = discriminator
 
     class DecoderWrapper(IncrementalDecoder):
         def __init__(self, decoder: IncrementalDecoder, language):
@@ -84,6 +85,14 @@ class MultilingualNMTTrainer(NMTTrainer):
                             required=True, help='How to select the output language')
         parser.add_argument('-separate_encoders', action='store_true',
                             help='Create one encoder per language')
+        parser.add_argument('-discriminator', action='store_true',
+                            help='Train a discriminator to detect input language')
+        parser.add_argument('-dis_num_layers', type=int, default=3,
+                            help='Number of layers in the decoder')
+        parser.add_argument('-dis_hidden_dim', type=int, default=128,
+                            help='Number of hidden units per layer for the discriminator')
+        parser.add_argument('-dis_label_smoothing', type=float, default=0.0,
+                            help='Label smoothing for adversarial loss')
 
     def _get_dict_keys(self):
         if self.args.join_lang_vocab == ['all']:

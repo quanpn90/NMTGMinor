@@ -105,8 +105,8 @@ loss_function_quan = onmt.modules.Loss.NMTLossFunc(30000, label_smoothing=0)
 
 encoder_input = torch.randint(6, 30000, (55, 20)).cuda()
 decoder_input = torch.randint(6, 30000, (60, 20)).cuda()
-encoder_mask = make_mask_seq((20, 55), 54/55).eq(0).cuda()
-decoder_mask = make_mask_seq((20, 60), 54/55).eq(0).cuda()
+encoder_mask = make_mask_seq((20, 55), 30/55).eq(0).cuda()
+decoder_mask = make_mask_seq((20, 60), 30/55).eq(0).cuda()
 encoder_input.masked_fill_(encoder_mask.transpose(0, 1), onmt.Constants.PAD)
 decoder_input.masked_fill_(decoder_mask.transpose(0, 1), onmt.Constants.PAD)
 
