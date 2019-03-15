@@ -63,8 +63,8 @@ class BilingualPreprocessor(NLPPreprocessor):
         if args.join_vocab:
             # If we explicitly load a target dictionary to merge
             # or we are inferring both dictionaries
-            if args.tgt_vocab is not None or args.src_vocab is None:
-                src_dictionary.update(tgt_dictionary)
+            # if args.tgt_vocab is not None or args.src_vocab is None:
+            #     src_dictionary.update(tgt_dictionary)
             src_dictionary.finalize(nwords=args.src_vocab_size,
                                     threshold=args.vocab_threshold or -1)
 
