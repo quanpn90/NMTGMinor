@@ -313,9 +313,10 @@ class Trainer:
             'Updates {:5d}'.format(self.training_steps),
             'lr {:.4e}'.format(self.optimizer.get_lr()),
             'gnorm {:.2f}'.format(metrics['gnorm'].val),
-            'ooms {:d}'.format(metrics['oom'].sum),
-            'fw/bw {:.0f}ms'.format(metrics['fwbw_wall'].avg * 1000),
-            'train {:.0f}ms'.format(metrics['train_wall'].avg * 1000)]
+            # 'ooms {:d}'.format(metrics['oom'].sum),
+            # 'fw/bw {:.0f}ms'.format(metrics['fwbw_wall'].avg * 1000),
+            # 'train {:.0f}ms'.format(metrics['train_wall'].avg * 1000)
+        ]
         return formatted
 
     def _reset_training_metrics(self, metrics):

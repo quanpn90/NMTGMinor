@@ -6,7 +6,7 @@
 # can be found in the PATENTS file in the same directory.
 import io
 import math
-from typing import Mapping, Sequence
+from typing import Mapping, List
 
 import numpy as np
 
@@ -37,7 +37,7 @@ def _batch_to_cuda(batch):
         return batch.cuda()
     elif isinstance(batch, Mapping):
         return {k: _batch_to_cuda(v) for k, v in batch.items()}
-    elif isinstance(batch, Sequence):
+    elif isinstance(batch, List):
         return [_batch_to_cuda(x) for x in batch]
     else:
         return batch

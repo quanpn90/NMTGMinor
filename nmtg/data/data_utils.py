@@ -1,13 +1,10 @@
 import logging
-from collections import Counter
+from typing import Mapping, List
 
 import numpy as np
-from typing import Mapping, Sequence
-
 import torch
 import torch.utils.data
 from torch import Tensor
-from tqdm import tqdm
 
 from nmtg.data.dictionary import Dictionary
 
@@ -179,7 +176,7 @@ def collate_tensor_structures(samples):
         return torch.stack(samples)
     elif isinstance(test, Mapping):
         return {k: collate_tensor_structures([item[k] for item in samples]) for k in test.keys()}
-    elif isinstance(test, Sequence):
+    elif isinstance(test, List):
         return [collate_tensor_structures([item[i] for item in samples]) for i in range(len(test))]
     else:
         raise NotImplementedError

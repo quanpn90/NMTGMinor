@@ -129,14 +129,20 @@ class FP16Optimizer(Optimizer):
             self.scaler.loss_scale = state_dict['loss_scale']
         self.fp32_optimizer.load_state_dict(state_dict, optimizer_overrides)
 
-    def backward(self, loss):
+    def backward(self, tensor, gradient=None, retain_graph=None, create_graph=None):
         """Computes the sum of gradients of the given tensor w.r.t. graph leaves.
         Compared to :func:`fairseq.optim.FairseqOptimizer.backward`, this
         function additionally dynamically scales the loss to avoid gradient
         underflow.
+        :param gradient:
+        :param retain_graph:
+        :param create_graph:
         """
-        loss = loss * self.scaler.loss_scale
-        loss.backward()
+        if gradient is not None:
+            gradient = gradient * self.scaler.loss_scale
+        else:
+            tensor = tensor * self.scaler.loss_scale
+        tensor.backward(gradient, retain_graph, create_graph)
         self._needs_sync = True
 
     def _sync_fp16_grads_to_fp32(self, multiply_grads=1.):
@@ -332,14 +338,17 @@ class MemoryEfficientFP16Optimizer(Optimizer):
         self.wrapped_optimizer.load_state_dict(state_dict, optimizer_overrides)
         ConvertToFP32.unwrap_optimizer_(self.wrapped_optimizer.optimizer)
 
-    def backward(self, loss):
+    def backward(self, tensor, gradient=None, retain_graph=None, create_graph=None):
         """Computes the sum of gradients of the given tensor w.r.t. graph leaves.
         Compared to :func:`fairseq.optim.FairseqOptimizer.backward`, this
         function additionally dynamically scales the loss to avoid gradient
         underflow.
+        :param gradient:
+        :param retain_graph:
+        :param create_graph:
         """
-        loss = loss * self.scaler.loss_scale
-        loss.backward()
+        tensor = tensor * self.scaler.loss_scale
+        tensor.backward()
         self._grads_are_scaled = True
 
     def _unscale_grads(self, multiply_grads=1.):

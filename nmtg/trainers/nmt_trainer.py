@@ -132,63 +132,6 @@ class NMTTrainer(Trainer):
                                  'the copy decoder. For models like transformer, that have no clear attention '
                                  'alignment.')
 
-    def online_translate(self, model_or_ensemble, in_stream):
-        # TODO: deprecated
-        models = model_or_ensemble
-        if not isinstance(models, Sequence):
-            models = [model_or_ensemble]
-
-        for model in models:
-            model.eval()
-
-        split_words = self.args.input_type == 'word'
-
-        generator = SequenceGenerator(models, self.tgt_dict, models[0].batch_first,
-                                      self.args.beam_size, maxlen_b=20, normalize_scores=self.args.normalize,
-                                      len_penalty=self.args.alpha, unk_penalty=self.args.beta)
-
-        join_str = ' ' if self.args.input_type == 'word' else ''
-
-        for line in in_stream:
-            line = line.rstrip()
-            if self.args.lower:
-                line = line.lower()
-            if split_words:
-                line = line.split(' ')
-
-            src_indices = self.src_dict.to_indices(line, bos=False, eos=False)
-            encoder_inputs = src_indices.unsqueeze(0 if models[0].batch_first else 1)
-            source_lengths = torch.tensor([len(line)])
-            encoder_mask = encoder_inputs.ne(self.src_dict.pad())
-
-            if self.args.cuda:
-                encoder_inputs = encoder_inputs.cuda()
-                source_lengths = source_lengths.cuda()
-                encoder_mask = encoder_mask.cuda()
-
-            res = []
-            scores = []
-            positional_scores = []
-            for tr in generator.generate(encoder_inputs, source_lengths, encoder_mask)[0][:self.args.n_best]:
-                res.append(self.tgt_dict.string(tr['tokens'], join_str=join_str))
-                scores.append(tr['score'])
-                positional_scores.append(tr['positional_scores'])
-
-            if self.args.print_translations:
-                tqdm.write(line)
-                for i, hyp in enumerate(res):
-                    tqdm.write("Hyp {}/{}: {}".format(i + 1, len(hyp), hyp))
-
-            if len(res) == 1:
-                res = res[0]
-                scores = scores[0]
-                positional_scores = positional_scores[0]
-
-            if self.args.return_scores:
-                yield res, scores, positional_scores.tolist()
-            else:
-                yield res
-
     def _build_data(self):
         super()._build_data()
 
@@ -420,7 +363,7 @@ class NMTTrainer(Trainer):
         formatted.append('{:5.0f}|{:5.0f} tok/s'.format(srctok, tgttok))
         return formatted
 
-    def _forward(self, batch, model, src_dict, tgt_dict, loss, training=True):
+    def _forward(self, batch, training=True):
         encoder_input = batch.get('src_indices')
         decoder_input = batch.get('tgt_input')
         targets = batch.get('tgt_output')
@@ -430,19 +373,19 @@ class NMTTrainer(Trainer):
             decoder_input = decoder_input.transpose(0, 1).contiguous()
             targets = targets.transpose(0, 1).contiguous()
 
-        encoder_mask = encoder_input.ne(src_dict.pad())
-        decoder_mask = decoder_input.ne(tgt_dict.pad())
-        outputs, attn_out = model(encoder_input, decoder_input, encoder_mask, decoder_mask)
-        lprobs = model.get_normalized_probs(outputs, attn_out, encoder_input,
+        encoder_mask = encoder_input.ne(self.src_dict.pad())
+        decoder_mask = decoder_input.ne(self.tgt_dict.pad())
+        outputs, attn_out = self.model(encoder_input, decoder_input, encoder_mask, decoder_mask)
+        lprobs = self.model.get_normalized_probs(outputs, attn_out, encoder_input,
                                             encoder_mask, decoder_mask, log_probs=True)
         if training:
             targets = targets.masked_select(decoder_mask)
-        return loss(lprobs, targets)
+        return self.loss(lprobs, targets)
 
     def _forward_backward_pass(self, batch, metrics):
         src_size = batch.get('src_size')
         tgt_size = batch.get('tgt_size')
-        loss, display_loss = self._forward(batch, self.model, self.src_dict, self.tgt_dict, self.loss)
+        loss, display_loss = self._forward(batch)
         self.optimizer.backward(loss)
         metrics['nll'].update(display_loss, tgt_size)
         metrics['src_tps'].update(src_size)
@@ -470,7 +413,7 @@ class NMTTrainer(Trainer):
 
     def _eval_pass(self, task, batch, metrics):
         tgt_size = batch.get('tgt_size')
-        _, display_loss = self._forward(batch, self.model, self.src_dict, self.tgt_dict, self.loss, training=False)
+        _, display_loss = self._forward(batch, training=False)
         metrics['nll'].update(display_loss, tgt_size)
 
     def _get_sequence_generator(self, task):
@@ -502,14 +445,63 @@ class NMTTrainer(Trainer):
                 for i, source in enumerate(src):
                     tqdm.write("Src {}: {}".format(len(results) + i, source))
                     for j in range(self.args.n_best):
-                        translation = res[i * self.args.n_best + j]
+                        translation = res[i * self.args.n_best + j]['tokens']
                         tqdm.write("Hyp {}.{}: {}".format(len(results) + i, j + 1,
                                                           translation.replace(self.args.bpe_symbol, '')))
                     tqdm.write("")
 
-            results.extend(res)
+            results.extend(beam['tokens'] for beam in res)
 
         return results
+
+    def online_translate(self, in_stream, **kwargs):
+        self.model.eval()
+        split_words = self.args.input_type == 'word'
+
+        task = TranslationTask(in_stream, bpe_symbol=self.args.bpe_symbol, lower=self.args.lower, **kwargs)
+
+        generator = self._get_sequence_generator(task)
+
+        for j, line in enumerate(in_stream):
+            line = line.rstrip()
+            if self.args.lower:
+                line = line.lower()
+            if split_words:
+                line = line.split()
+
+            src_indices = self.src_dict.to_indices(line, bos=False, eos=False)
+            encoder_inputs = src_indices.unsqueeze(0 if self.model.batch_first else 1)
+            source_lengths = torch.tensor([len(line)])
+
+            if self.args.cuda:
+                encoder_inputs = encoder_inputs.cuda()
+                source_lengths = source_lengths.cuda()
+
+            batch = {'src_indices': encoder_inputs, 'src_lengths': source_lengths}
+
+            res, src = self._inference_pass(task, batch, generator)
+            source = src[0]
+
+            if self.args.print_translations:
+                tqdm.write("Src {}: {}".format(j, source))
+                for i in range(self.args.n_best):
+                    translation = res[i]['tokens']
+                    tqdm.write("Hyp {}.{}: {}".format(j, i + 1,
+                                                      translation.replace(self.args.bpe_symbol, '')))
+                tqdm.write("")
+
+            scores = [r['scores'] for r in res]
+            positional_scores = [r['positional_scores'] for r in res]
+
+            if len(res) == 1:
+                res = res[0]
+                scores = scores[0]
+                positional_scores = positional_scores[0]
+
+            if self.args.return_scores:
+                yield res, scores, positional_scores.tolist()
+            else:
+                yield res
 
     def _inference_pass(self, task, batch, generator):
         encoder_input = batch.get('src_indices')
@@ -521,9 +513,13 @@ class NMTTrainer(Trainer):
 
         encoder_mask = encoder_input.ne(self.src_dict.pad())
 
-        res = [self.tgt_dict.string(tr['tokens'], join_str=join_str)
+        res = [tr
                for beams in generator.generate(encoder_input, source_lengths, encoder_mask)
                for tr in beams[:self.args.n_best]]
+
+        for beam in res:
+            beam['tokens'] = self.tgt_dict.string(beam['tokens'], join_str=join_str)
+
         src = []
         if self.args.print_translations:
             for i in range(len(batch['src_indices'])):
