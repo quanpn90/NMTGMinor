@@ -76,7 +76,7 @@ class NMTL2Loss(LossFuncBase):
 
         return loss, loss_data
 
-    def forward(self, output_dict, targets, generator=None, backward=False,
+    def forward(self, output_dict, targets, model=None, backward=False,
                 tgt_mask=None, normalizer=1, params=None, **kwargs):
         """
         Compute the loss. Subclass must define this method.
@@ -86,7 +86,7 @@ class NMTL2Loss(LossFuncBase):
             targets: the validate target to compare output with. time x batch
             backward
             tgt_mask: for masking the target (saving memory)
-            generator: in case we want to save memory and
+            model:
             normalizer: the denomination term of the loss
             l2_coeff: coefficient for the l2 regularization
             **kwargs(optional): additional info for computing loss.
@@ -117,7 +117,7 @@ class NMTL2Loss(LossFuncBase):
             clean_input = outputs
             clean_targets = targets
 
-        dists = generator(clean_input)
+        dists = model.generator(clean_input)
 
         loss, loss_data = self._compute_loss(dists, clean_targets)
 

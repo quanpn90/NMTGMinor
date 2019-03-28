@@ -18,6 +18,7 @@ from onmt.ModelConstructor import init_model_parameters
 from onmt.train_utils.trainer import BaseTrainer
 from onmt.Stats import Logger
 from statistics import mean, stdev
+from onmt.ModelConstructor import build_model, init_model_parameters
 
 
 
@@ -50,15 +51,15 @@ class DynamicLossScaler:
 
 class LanguageDiscriminatorTrainer(BaseTrainer):
 
-    def __init__(self, cls_model, nmt_model, loss_function, train_data, valid_data, dicts, opt, nmt_type='transformer'):
-        super().__init__(cls_model, loss_function, train_data, valid_data, dicts, opt   )
+    def __init__(self, cls_model, loss_function, train_data, valid_data, dicts, opt, nmt_type='transformer'):
+        super().__init__(cls_model, loss_function, train_data, valid_data, dicts, opt)
         self.optim = onmt.Optim(opt)
         self.scaler = DynamicLossScaler(opt.fp16_loss_scale, scale_window=2000)
         self.n_samples = 1
         self.start_time = time.time()
-        self.nmt_model = nmt_model
+        # self.nmt_model = nmt_model
         self.nmt_type = nmt_type
-
+        self.encoder_length_type = opt.encoder_length_type
 
         if self.cuda:
             torch.cuda.set_device(self.opt.gpus[0])
@@ -67,7 +68,7 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
             # Loss function needs to be in fp32
             self.loss_function = self.loss_function.cuda()
             self.model = self.model.cuda()
-            self.nmt_model = self.nmt_model.cuda()
+            # self.nmt_model = self.nmt_model.cuda()
 
         # prepare some meters
         self.logger = Logger(self.optim, scaler=self.scaler)
@@ -154,7 +155,11 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                 # print(src)
                 # print(target)
                 src = src.transpose(0, 1)
+
                 src_context, _  = self.nmt_model.encoder(src)
+
+                if self.encoder_length_type == 'fix':
+                    src = src.new(src_context.size(1), src_context.size(0)).fill_(onmt.Constants.BOS)
 
                 outputs = self.model(src, src_context)
 
@@ -229,6 +234,9 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                     src = src.transpose(0, 1)
                     src_context, _ = self.nmt_model.encoder(src)
 
+                    if self.encoder_length_type == 'fix':
+                        src = src.new(src_context.size(1), src_context.size(0)).fill_(onmt.Constants.BOS)
+
                 outputs = self.model( src, src_context.detach())
                 # print("DEBUGGING 2")
                 loss_output = self.loss_function(outputs, target)
@@ -253,9 +261,6 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
                 self.meters['total_lang_correct'].update(num_correct)
                 self.meters["total_sents"].update(batch.size)
 
-                # print(loss_data)
-
-                # print("DEBUGGING 1")
 
             except RuntimeError as e:
                 if 'out of memory' in str(e) or 'get_temporary_buffer' in str(e):
@@ -392,6 +397,24 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
         if save_file:
             checkpoint = torch.load(save_file)
 
+        if opt.load_pretrained_nmt:
+            print("Loading pretrained NMT from %s " % opt.load_pretrained_nmt)
+            pretrained_cp = torch.load(opt.load_pretrained_nmt, map_location=lambda storage, loc: storage)
+
+            transformer_model_weights = pretrained_cp['model']
+            transformer_opt           = pretrained_cp['opt']
+
+            self.nmt_model, _ = build_model(transformer_opt, self.dicts)
+
+            self.nmt_model.load_state_dict(transformer_model_weights)
+
+            if self.cuda:
+                self.nmt_model = self.nmt_model.cuda()
+
+            print("Done")
+        else:
+            raise NotImplementedError
+
         if checkpoint is not None:
             print('Loading model and optim from checkpoint at %s' % save_file)
             self.convert_fp16(checkpoint['model'], checkpoint['optim'])
@@ -416,15 +439,7 @@ class LanguageDiscriminatorTrainer(BaseTrainer):
             else:
                 self.convert_fp32()
 
-        if opt.load_pretrained_nmt:
-            print("Loading pretrained NMT from %s " % opt.load_pretrained_nmt)
 
-            pretrained_cp = torch.load(opt.load_pretrained_nmt, map_location=lambda storage, loc: storage)
-
-            transformer_model_weights = pretrained_cp['model']
-            self.nmt_model.load_state_dict(transformer_model_weights)
-
-            print("Done")
 
         valid_loss = self.eval(self.valid_data)
         valid_ppl = math.exp(min(valid_loss, 100))

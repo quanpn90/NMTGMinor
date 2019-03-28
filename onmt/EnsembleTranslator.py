@@ -197,7 +197,7 @@ class EnsembleTranslator(object):
             tokens = tokens[:-1]  # EOS
         length = len(pred)
         
-        return tokens
+        return token    s
 
     def translate_batch(self, batch):
         

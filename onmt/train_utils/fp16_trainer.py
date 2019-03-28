@@ -135,7 +135,7 @@ class FP16XETrainer(XETrainer):
                     targets = batch.get('target_output')
                     tgt_mask = batch.get('tgt_mask')
                     
-                    loss_output = self.loss_function(outputs, targets, generator=self.model.generator,
+                    loss_output = self.loss_function(outputs, targets, model=self.model ,
                                                      tgt_mask=tgt_mask, backward=False)
                     
                     loss_data = loss_output['nll']
@@ -222,7 +222,7 @@ class FP16XETrainer(XETrainer):
                 params = defaultdict(lambda: 0.0)
                 params['l2'] = self.opt.l2_coeff
                 
-                loss_output = self.loss_function(outputs, targets, generator=self.model.generator, 
+                loss_output = self.loss_function(outputs, targets, model=self.model,
                                                              backward=True, tgt_mask=tgt_mask, normalizer=normalizer,
                                                              params=params)
                 

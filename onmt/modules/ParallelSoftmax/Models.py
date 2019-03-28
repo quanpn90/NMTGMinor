@@ -2,6 +2,7 @@ import numpy as np
 import torch, math
 import torch.nn as nn
 import onmt
+from collections import defaultdict
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, TransformerDecodingState
 from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer
 from onmt.modules.BaseModel import NMTModel
@@ -10,13 +11,12 @@ from torch.utils.checkpoint import checkpoint
 from onmt.modules.Utilities import mean_with_mask_backpropable as mean_with_mask
 from onmt.modules.Utilities import max_with_mask
 from onmt.modules.Transformer.Layers import PrePostProcessing
-
-from onmt.modules.Transformer.Models import Transformer
-from collections import defaultdict
 import copy
+from onmt.modules.Transformer.Models import Transformer
 
+# to do: create an external decoder and synchronize it every parameter update
 
-class ParallelAttentionTransformer(Transformer):
+class ParallelTransformer(Transformer):
     """Main model in 'Attention is all you need' """
 
     def __init__(self, encoder, decoder, generator=None, tgt_encoder=None, tgt_decoder=None):
@@ -30,6 +30,15 @@ class ParallelAttentionTransformer(Transformer):
                 for param in child.parameters():
                     param.requires_grad = False
 
+        assert (generator is not None)
+
+        tgt_generator = copy.deepcopy(generator)
+
+        for child in tgt_generator.children():
+            for param in child.parameters():
+                param.requires_grad = False
+
+        self.tgt_generator = tgt_generator
 
 
     def _synchronize(self):
@@ -37,22 +46,9 @@ class ParallelAttentionTransformer(Transformer):
         # every time model parameters are updated, we synchronize the paramters of the target decoder
         # with the regular decoder
         self.tgt_decoder.load_state_dict(self.decoder.state_dict())
+        self.tgt_generator.load_state_dict(self.generator.state_dict())
         return
 
-    def extract_attention(self, dec_output):
-
-        n_layers = self.decoder.layers
-
-        if len(dec_output) < n_layers:
-            return None
-
-        attn_outs = dict()
-
-        for i in range(n_layers):
-            # each one should be T x B x H
-            attn_outs[i] = dec_output[i]['attn_out']
-
-        return attn_outs
 
     def forward(self, batch):
         """
@@ -64,7 +60,6 @@ class ParallelAttentionTransformer(Transformer):
             out:   a dictionary containing output hidden state and coverage
 
         """
-
         src = batch.get('source')
         tgt = batch.get('target_input')
         tgt_attbs = batch.get('tgt_attbs')  # vector of length B
@@ -74,6 +69,8 @@ class ParallelAttentionTransformer(Transformer):
 
         context, src_mask = self.encoder(src)
 
+        # the first token is <BOS>
+        # the encoder side is not patched with <BOS>
         tgt_ = tgt[:, 1:]
 
         if self.tgt_encoder is not None:
@@ -81,7 +78,7 @@ class ParallelAttentionTransformer(Transformer):
             tgt_context, _ = self.tgt_encoder(tgt_)
 
             # generate the target distribution on top of the tgt hiddens
-            tgt_dec_output = self.tgt_decoder(tgt, tgt_attbs, tgt_context, tgt_,  freeze_embedding=True)
+            tgt_dec_output = self.tgt_decoder(tgt, tgt_attbs, tgt_context, tgt_, freeze_embedding=True)
         else:
             tgt_dec_output = defaultdict(lambda: None)
 
@@ -94,7 +91,5 @@ class ParallelAttentionTransformer(Transformer):
         output_dict['hiddens'] = dec_output['final_state']
         output_dict['coverage'] = dec_output['coverage']
         output_dict['tgt_hiddens'] = tgt_dec_output['final_state']
-        output_dict['attn_outs'] = self.extract_attention(dec_output)
-        output_dict['tgt_attn_outs'] = self.extract_attention(tgt_dec_output)
 
         return output_dict

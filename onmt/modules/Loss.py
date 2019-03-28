@@ -107,7 +107,7 @@ class NMTLossFunc(LossFuncBase):
 
         return loss, loss_data
 
-    def forward(self, output_dict, targets, generator=None, backward=False, tgt_mask=None, normalizer=1, **kwargs):
+    def forward(self, output_dict, targets, model=None, backward=False, tgt_mask=None, normalizer=1, **kwargs):
         """
         Compute the loss. Subclass must define this method.
         Args:
@@ -143,7 +143,7 @@ class NMTLossFunc(LossFuncBase):
             clean_input = outputs
             clean_targets = targets
         
-        dists = generator(clean_input)
+        dists = model.generator(clean_input)
         
         loss, loss_data = self._compute_loss(dists, clean_targets)
         

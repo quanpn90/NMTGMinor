@@ -25,6 +25,8 @@ onmt.Markdown.add_md_help_argument(parser)
 
 # Please look at the options file to see the options regarding models and data
 parser = make_parser(parser)
+parser.add_argument('-encoder_length_type', default='variable',
+                        help="""The encoder output type: variable|fix. default is variable""")
 
 opt = parser.parse_args()
 
@@ -94,7 +96,7 @@ def main():
     # Go to ModelConstructor for more details
     from onmt.modules.LanguageDiscriminator.Models import LanguageDiscriminator
 
-    nmt_model, _ = build_model(opt, dicts)
+    # nmt_model, _ = build_model(opt, dicts)
 
     n_languages = dicts['atb'].size()
 
@@ -112,7 +114,7 @@ def main():
     print('* number of parameters: %d' % num_params)
 
     nmt_type = opt.model
-    trainer = LanguageDiscriminatorTrainer(cls_model, nmt_model, loss_function,
+    trainer = LanguageDiscriminatorTrainer(cls_model, loss_function,
                                            train_data, valid_data, dicts, opt, nmt_type)
 
     trainer.run(save_file=opt.load_from)
