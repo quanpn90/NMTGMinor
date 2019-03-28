@@ -33,7 +33,7 @@ def make_parser(parser):
                         additional input (via concatenation with the word
                         embeddings) to the decoder.""")
 
-    parser.add_argument('-brnn_merge', default='concat',
+    parser.add_argument('-loss_function', type=int, default=0,
                         help="""Merge action for the bidirectional hidden states:
                         [concat|sum]""")
 
