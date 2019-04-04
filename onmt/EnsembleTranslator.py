@@ -100,8 +100,6 @@ class EnsembleTranslator(object):
             if opt.fp16:
                 self.autoencoder = self.autoencoder.half()
                 self.models[0] = self.models[0].half()
-
-
         
         if opt.verbose:
             print('Done')
@@ -195,39 +193,38 @@ class EnsembleTranslator(object):
         # This needs to be the same as preprocess.py.
         
         if self.start_with_bos:
-            srcData = [self.src_dict.convertToIdx(b,
+            src_data = [self.src_dict.convertToIdx(b,
                               onmt.Constants.UNK_WORD,
                               onmt.Constants.BOS_WORD)
                        for b in srcBatch]
         else:
-            srcData = [self.src_dict.convertToIdx(b,
+            src_data = [self.src_dict.convertToIdx(b,
                               onmt.Constants.UNK_WORD)
                        for b in srcBatch]
 
-        tgtData = None
+        tgt_data = None
         if goldBatch:
-            tgtData = [self.tgt_dict.convertToIdx(b,
+            tgt_data = [self.tgt_dict.convertToIdx(b,
                        onmt.Constants.UNK_WORD,
                        onmt.Constants.BOS_WORD,
                        onmt.Constants.EOS_WORD) for b in goldBatch]
 
-        return onmt.Dataset(srcData, tgtData, 9999,
-                            [self.opt.gpu], data_type=self._type,
-                            max_seq_num =self.opt.batch_size)
+        return onmt.Dataset(src_data, tgt_data, 9999
+                            , data_type=self._type,
+                            batch_size_sents =self.opt.batch_size)
 
-    def buildASRData(self, srcData, goldBatch):
+    def buildASRData(self, src_data, goldBatch):
         # This needs to be the same as preprocess.py.
 
-        tgtData = None
+        tgt_data = None
         if goldBatch:
-            tgtData = [self.tgt_dict.convertToIdx(b,
+            tgt_data = [self.tgt_dict.convertToIdx(b,
                        onmt.Constants.UNK_WORD,
                        onmt.Constants.BOS_WORD,
                        onmt.Constants.EOS_WORD) for b in goldBatch]
 
-        return onmt.Dataset(srcData, tgtData, sys.maxsize,
-                            [self.opt.gpu],
-                            data_type=self._type, max_seq_num =self.opt.batch_size)
+        return onmt.Dataset(src_data, tgt_data, sys.maxsize,
+                            data_type=self._type, batch_size_sents =self.opt.batch_size)
 
     def buildTargetTokens(self, pred, src, attn):
         tokens = self.tgt_dict.convertToLabels(pred, onmt.Constants.EOS)

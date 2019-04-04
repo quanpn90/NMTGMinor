@@ -46,19 +46,7 @@ def build_model(opt, dicts):
     MAX_LEN = onmt.Constants.max_position_length  # This should be the longest sentence from the dataset
 
     
-    if opt.model == 'recurrent' or opt.model == 'rnn':
-    
-        from onmt.modules.rnn.Models import RecurrentEncoder, RecurrentDecoder, RecurrentModel 
-
-        encoder = RecurrentEncoder(opt, dicts['src'])
-
-        decoder = RecurrentDecoder(opt, dicts['tgt'])
-        
-        generators = [onmt.modules.BaseModel.Generator(opt.rnn_size, dicts['tgt'].size())]
-        
-        model = RecurrentModel(encoder, decoder, nn.ModuleList(generators))
-        
-    elif opt.model == 'transformer':
+    if opt.model == 'transformer':
         # raise NotImplementedError
 
         onmt.Constants.init_value = opt.param_init
@@ -76,7 +64,8 @@ def build_model(opt, dicts):
         decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder)
         
         generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
-        if(opt.ctc_loss != 0):
+
+        if opt.ctc_loss != 0:
             generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
         
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
@@ -103,47 +92,9 @@ def build_model(opt, dicts):
         decoder = StochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
         
         generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
-        if(opt.ctc_loss != 0):
+
+        if opt.ctc_loss != 0:
             generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
-
-        model = Transformer(encoder, decoder, nn.ModuleList(generators))
-        
-        
-        
-    elif opt.model == 'fctransformer':
-    
-        from onmt.modules.FCTransformer.Models import FCTransformerEncoder, FCTransformerDecoder
-
-        onmt.Constants.weight_norm = opt.weight_norm
-        onmt.Constants.init_value = opt.param_init
-        
-        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN )
-        
-        encoder = FCTransformerEncoder(opt, dicts['src'], positional_encoder)
-        decoder = FCTransformerDecoder(opt, dicts['tgt'], positional_encoder)
-        
-        generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
-        if(opt.ctc_loss != 0):
-            generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
-
-        
-        model = Transformer(encoder, decoder, nn.ModuleList(generators))
-    elif opt.model == 'ptransformer':
-    
-        from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder
-
-        onmt.Constants.weight_norm = opt.weight_norm
-        onmt.Constants.init_value = opt.param_init
-        
-        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN )
-        
-        encoder = ParallelTransformerEncoder(opt, dicts['src'], positional_encoder)
-        decoder = ParallelTransformerDecoder(opt, dicts['tgt'], positional_encoder)
-        
-        generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
-        if(opt.ctc_loss != 0):
-            generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
-
 
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
 
@@ -207,7 +158,7 @@ def build_model(opt, dicts):
     for g in model.generator:
         init.xavier_uniform_(g.linear.weight)
 
-    if(opt.encoder_type == "audio"):
+    if opt.encoder_type == "audio":
         init.xavier_uniform_(model.encoder.audio_trans.weight.data)
         if opt.init_embedding == 'xavier':
             init.xavier_uniform_(model.decoder.word_lut.weight)
@@ -224,8 +175,8 @@ def build_model(opt, dicts):
     return model
     
 def init_model_parameters(model, opt):
-    
-    if opt.model == 'recurrent':
-        for p in model.parameters():
-            p.data.uniform_(-opt.param_init, opt.param_init)
+
+    # currently this function does not do anything
+    # because the parameters are locally initialized
+    pass
 

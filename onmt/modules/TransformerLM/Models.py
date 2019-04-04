@@ -18,7 +18,7 @@ def custom_layer(module):
     return custom_forward
 
 
-class TransformerEncoder(nn.Module):
+class TransformerLMEncoder(nn.Module):
     """Encoder in 'Attention is all you need'
     
     Args:
@@ -59,11 +59,11 @@ class TransformerEncoder(nn.Module):
             self.time_transformer = nn.GRU(self.model_size, self.model_size, 1, batch_first=True)
         elif opt.time == 'lstm':
             self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
-        
+
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
-        
+
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
-        
+
         self.positional_encoder = positional_encoder
 
         self.build_modules()
@@ -74,13 +74,13 @@ class TransformerEncoder(nn.Module):
 
     def forward(self, input, **kwargs):
         """
-        Inputs Shapes: 
+        Inputs Shapes:
             input: batch_size x len_src (wanna tranpose)
-        
+
         Outputs Shapes:
             out: batch_size x len_src x d_model
-            mask_src 
-            
+            mask_src
+
         """
 
         """ Embedding: batch_size x len_src x d_model """
@@ -98,19 +98,19 @@ class TransformerEncoder(nn.Module):
             #     print(emb.requires_grad)
             # emb.requires_grad=True
         """ Scale the emb by sqrt(d_model) """
-        
+
         emb = emb * math.sqrt(self.model_size)
 
         """ Adding positional encoding """
         emb = self.time_transformer(emb)
 
         emb = self.preprocess_layer(emb)
-        
+
         context = emb.transpose(0, 1).contiguous()
-        
+
         for i, layer in enumerate(self.layer_modules):
-            
-            if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:        
+
+            if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:
                 context = checkpoint(custom_layer(layer), context, mask_src)
 
             else:
@@ -119,10 +119,10 @@ class TransformerEncoder(nn.Module):
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
         # on the output, since the output can grow very large, being the sum of
-        # a whole stack of unnormalized layer outputs.    
+        # a whole stack of unnormalized layer outputs.
         context = self.postprocess_layer(context)
 
-        return context, mask_src    
+        return context, mask_src
 
 
 class TransformerDecoder(nn.Module):
@@ -401,84 +401,3 @@ class TransformerDecodingState(DecoderState):
 
         self.input_seq = None
         self.attention_buffers = dict()
-
-
-    def _update_attention_buffer(self, buffer, layer):
-
-        self.attention_buffers[layer] = buffer # dict of 2 keys (k, v) : T x B x H
-
-    def _update_beam(self, beam, b, remainingSents, idx):
-
-        for tensor in [self.src, self.input_seq]  :
-
-            t_, br = tensor.size()
-            sent_states = tensor.view(t_, self.beamSize, remainingSents)[:, :, idx]
-
-            if isinstance(tensor, Variable):
-                sent_states.data.copy_(sent_states.data.index_select(
-                            1, beam[b].getCurrentOrigin()))
-            else:
-                sent_states.copy_(sent_states.index_select(
-                            1, beam[b].getCurrentOrigin()))
-
-        for l in self.attention_buffers:
-            buffer_ = self.attention_buffers[l]
-
-            for k in buffer_:
-                t_, br_, d_ = buffer_[k].size()
-                sent_states = buffer_[k].view(t_, self.beamSize, remainingSents, d_)[:, :, idx, :]
-
-                sent_states.data.copy_(sent_states.data.index_select(
-                            1, beam[b].getCurrentOrigin()))
-
-    # in this section, the sentences that are still active are
-    # compacted so that the decoder is not run on completed sentences
-    def _prune_complete_beam(self, activeIdx, remainingSents):
-
-        model_size = self.context.size(-1)
-
-        def updateActive(t):
-            # select only the remaining active sentences
-            view = t.data.view(-1, remainingSents, model_size)
-            newSize = list(t.size())
-            newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
-            return Variable(view.index_select(1, activeIdx)
-                            .view(*newSize))
-
-        def updateActive2D(t):
-            if isinstance(t, Variable):
-                # select only the remaining active sentences
-                view = t.data.view(-1, remainingSents)
-                newSize = list(t.size())
-                newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
-                return Variable(view.index_select(1, activeIdx)
-                                .view(*newSize))
-            else:
-                view = t.view(-1, remainingSents)
-                newSize = list(t.size())
-                newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
-                new_t = view.index_select(1, activeIdx).view(*newSize)
-
-                return new_t
-
-        def updateActive4D(t):
-            # select only the remaining active sentences
-            nl, t_, br_, d_ = t.size()
-            view = t.data.view(nl, -1, remainingSents, model_size)
-            newSize = list(t.size())
-            newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
-            return Variable(view.index_select(2, activeIdx)
-                            .view(*newSize))
-
-        self.context = updateActive(self.context)
-
-        self.input_seq = updateActive2D(self.input_seq)
-
-        self.src = updateActive2D(self.src)
-
-        for l in self.attention_buffers:
-            buffer_ = self.attention_buffers[l]
-
-            for k in buffer_:
-                buffer_[k] = updateActive(buffer_[k])
-
