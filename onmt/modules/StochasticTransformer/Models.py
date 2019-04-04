@@ -18,7 +18,8 @@ def custom_layer(module):
         output = module(*args)
         return output
     return custom_forward
-    
+
+
 def expected_length(length, death_rate):
     
     e_length = 0
@@ -29,6 +30,7 @@ def expected_length(length, death_rate):
         e_length += survival_rate
         
     return e_length
+
 
 class StochasticTransformerEncoder(TransformerEncoder):
     """Encoder in 'Attention is all you need'
@@ -99,7 +101,6 @@ class StochasticTransformerDecoder(TransformerDecoder):
             self.layer_modules.append(block)
 
 
-
 class StochasticTransformer(NMTModel):
     """Main model in 'Attention is all you need' """
     
@@ -132,7 +133,7 @@ class StochasticTransformer(NMTModel):
 
     def create_decoder_state(self, src, context, beamSize=1):
         
-        from onmt.modules.Transformer.Models import TransformerDecodingState
+        from onmt.modules.TransformerLM.Models import TransformerDecodingState
         
         decoder_state = TransformerDecodingState(src, context, beamSize=beamSize)
         return decoder_state

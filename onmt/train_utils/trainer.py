@@ -136,7 +136,7 @@ class XETrainer(BaseTrainer):
                         hidden states from decoder or
                         prob distribution from decoder generator
                 """
-                outputs,encoder,src_mask = self.model(batch)
+                outputs, encoder, src_mask = self.model(batch)
                 targets = batch[1][1:]
 
                 tgt_mask = targets.data.ne(onmt.Constants.PAD)
@@ -147,8 +147,6 @@ class XETrainer(BaseTrainer):
                     _,loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator[0],
                                                              backward=False, mask=tgt_mask)
 
-
-#~ 
                 total_loss += loss_data
                 total_words += targets.data.ne(onmt.Constants.PAD).sum().item()
 
@@ -212,18 +210,13 @@ class XETrainer(BaseTrainer):
                 tgt_mask = torch.autograd.Variable(tgt_mask)
                 normalizer = 1
 
-
                 if(self.opt.ctc_loss != 0):
-                    _,loss_data,grad_outputs = self.loss_function(outputs,encoder,targets,generator=self.model.generator,backward=True,
+                    _,loss_data,grad_outputs = self.loss_function(outputs, encoder,targets,generator=self.model.generator,backward=True,
                                                                   source_mask=src_mask,target_mask=tgt_mask)
                 else:
                     _,loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator[0],
                                                              backward=True, mask=tgt_mask)
 
-
-
-                #~ outputs.backward(grad_outputs)
-                
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     print('| WARNING: ran out of memory on GPU , skipping batch')

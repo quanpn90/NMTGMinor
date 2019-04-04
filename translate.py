@@ -159,7 +159,7 @@ def main():
                 add = (opt.concat-line.size()[0]%opt.concat)%opt.concat
                 z= torch.FloatTensor(add, line.size()[1]).zero_()
                 line = torch.cat((line,z),0)
-                line = line.reshape((line.size()[0]/opt.concat,line.size()[1]*opt.concat))
+                line = line.reshape((line.size()[0]//opt.concat,line.size()[1]*opt.concat))
 
             #~ srcTokens = line.split()
             if(opt.previous_context > 0):

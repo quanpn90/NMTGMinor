@@ -60,16 +60,15 @@ def main():
 
 
         trainData = onmt.Dataset(dataset['train']['src'],
-                                 dataset['train']['tgt'], opt.batch_size_words, opt.gpus,
+                                 dataset['train']['tgt'], opt.batch_size_words,
                                  data_type=dataset.get("type", "text"),
-                                 max_seq_num=opt.batch_size_sents,
-                                 pad_count = opt.pad_count,
+                                 batch_size_sents=opt.batch_size_sents,
                                  multiplier = opt.batch_size_multiplier,
                                  sort_by_target=opt.sort_by_target)
         validData = onmt.Dataset(dataset['valid']['src'],
-                                 dataset['valid']['tgt'], opt.batch_size_words, opt.gpus,
+                                 dataset['valid']['tgt'], opt.batch_size_words,
                                  data_type=dataset.get("type", "text"),
-                                 max_seq_num=opt.batch_size_sents)
+                                 batch_size_sents=opt.batch_size_sents)
 
         dicts = dataset['dicts']
         if("src" in dicts):
@@ -94,8 +93,7 @@ def main():
 
         trainData = onmt.Dataset(train_src,
                                  train_tgt, opt.batch_size_words, opt.gpus,
-                                 max_seq_num=opt.batch_size_sents,
-                                 pad_count = opt.pad_count,
+                                 batch_size_sents=opt.batch_size_sents,
                                  multiplier = opt.batch_size_multiplier,
                                  sort_by_target=opt.sort_by_target)
 
@@ -105,7 +103,7 @@ def main():
 
         validData = onmt.Dataset(valid_src,
                                  valid_tgt, opt.batch_size_words, opt.gpus,
-                                 max_seq_num=opt.batch_size_sents)
+                                 batch_size_sents=opt.batch_size_sents)
 
     else:
         raise NotImplementedError
