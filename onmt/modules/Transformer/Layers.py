@@ -188,8 +188,6 @@ class MultiHeadAttention(nn.Module):
         self.fc_query = Bottle(Linear(d_model, h*self.d_head, bias=False))
         self.fc_key = Bottle(Linear(d_model, h*self.d_head, bias=False))
         self.fc_value = Bottle(Linear(d_model, h*self.d_head, bias=False))
-        
-        self.attention_out = onmt.Constants.attention_out
         self.fc_concat = Bottle(Linear(h*self.d_head, d_model, bias=False))
 
         self.sm = nn.Softmax(dim=-1)
@@ -507,6 +505,8 @@ class DecoderLayer(nn.Module):
             query = self.preprocess_src_attn(input)
             out, coverage = self.multihead_src(query, context, context, mask_src)
             input = self.postprocess_src_attn(out, input)
+        else:
+            coverage = None
         
         """ Feed forward layer 
             layernorm > ffn > dropout > residual

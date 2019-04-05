@@ -209,7 +209,7 @@ class EnsembleTranslator(object):
                        onmt.Constants.BOS_WORD,
                        onmt.Constants.EOS_WORD) for b in tgt_sents]
 
-        return onmt.Dataset(src_data, tgt_data, 9999
+        return onmt.Dataset(src_data, tgt_data, sys.maxsize
                             , data_type=self._type,
                             batch_size_sents =self.opt.batch_size)
 
@@ -232,7 +232,7 @@ class EnsembleTranslator(object):
         
         return tokens
 
-    def translateBatch(self, batch):
+    def translate_batch(self, batch):
         
         torch.set_grad_enabled(False)
         # Batch size is in different location depending on data.
@@ -240,8 +240,6 @@ class EnsembleTranslator(object):
         beam_size = self.opt.beam_size
         batch_size = batch.size
         
-        contexts = dict()
-
         gold_scores = batch.get('source').data.new(batch_size).float().zero_()
         gold_words = 0
         allgold_scores = []
@@ -251,7 +249,7 @@ class EnsembleTranslator(object):
             model_ = self.models[0]
 
             gold_words, gold_scores, allgold_scores = model_.decode(batch)
-            
+
         #  (3) Start decoding
             
         # time x batch * beam
@@ -265,7 +263,6 @@ class EnsembleTranslator(object):
         decoder_states = dict()
         
         for i in range(self.n_models):
-            # decoder_states[i] = self.models[i].create_decoder_state(src, contexts[i], beam_size)
             decoder_states[i] = self.models[i].create_decoder_state(batch, beam_size)
 
         for i in range(self.opt.max_sent_length):
@@ -369,17 +366,13 @@ class EnsembleTranslator(object):
     def translate(self, src_data, tgt_data):
         #  (1) convert words to indexes
         dataset = self.buildData(src_data, tgt_data)
-        # batch = self.to_variable(dataset.next()[0])
         batch = dataset.next()[0]
         if self.cuda:
             batch.cuda(fp16=self.fp16)
-        # src, tgt = batch
-        # batch_size = self._getbatch_size(src)
         batch_size = batch.size
 
         #  (2) translate
-        pred, pred_score, attn, pred_length, gold_score, gold_words, allgold_words = self.translateBatch(batch)
-
+        pred, pred_score, attn, pred_length, gold_score, gold_words, allgold_words = self.translate_batch(batch)
 
         #  (3) convert indexes to words
         predBatch = []
@@ -394,16 +387,14 @@ class EnsembleTranslator(object):
     def translateASR(self, src_data, tgt_data):
         #  (1) convert words to indexes
         dataset = self.buildASRData(src_data, tgt_data)
-        # batch = self.to_variable(dataset.next()[0])
         # src, tgt = batch
         batch = dataset.next()[0]
         if self.cuda:
             batch.cuda(fp16=self.fp16)
-        # batch_size = self._getbatch_size(src)
         batch_size = batch.size
 
         #  (2) translate
-        pred, pred_score, attn, pred_length, gold_score, gold_words,allgold_words = self.translateBatch(batch)
+        pred, pred_score, attn, pred_length, gold_score, gold_words,allgold_words = self.translate_batch(batch)
 
         #  (3) convert indexes to words
         predBatch = []

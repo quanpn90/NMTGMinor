@@ -135,7 +135,7 @@ class TransformerDecoder(nn.Module):
 
     """
 
-    def __init__(self, opt, dicts, positional_encoder):
+    def __init__(self, opt, dicts, positional_encoder, ignore_source=False):
 
         super(TransformerDecoder, self).__init__()
 
@@ -150,13 +150,16 @@ class TransformerDecoder(nn.Module):
         self.time = opt.time
         self.version = opt.version
         self.encoder_type = opt.encoder_type
+        self.ignore_source = ignore_source
 
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
-        elif opt.time == 'gru':
-            self.time_transformer = nn.GRU(self.model_size, self.model_size, 1, batch_first=True)
-        elif opt.time == 'lstm':
-            self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
+        else:
+            raise NotImplementedError
+        # elif opt.time == 'gru':
+        #     self.time_transformer = nn.GRU(self.model_size, self.model_size, 1, batch_first=True)
+        # elif opt.time == 'lstm':
+        #     self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
 
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
 
@@ -175,7 +178,10 @@ class TransformerDecoder(nn.Module):
         self.build_modules()
 
     def build_modules(self):
-        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in range(self.layers)])
+        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size,
+                                                         self.dropout, self.inner_size,
+                                                         self.attn_dropout,
+                                                         ignore_source=self.ignore_source) for _ in range(self.layers)])
 
     def renew_buffer(self, new_len):
 
@@ -183,27 +189,6 @@ class TransformerDecoder(nn.Module):
         self.positional_encoder.renew(new_len)
         mask = torch.ByteTensor(np.triu(np.ones((new_len,new_len)), k=1).astype('uint8'))
         self.register_buffer('mask', mask)
-
-    def mark_pretrained(self):
-
-        self.pretrained_point = self.layers
-
-
-    def add_layers(self, n_new_layer):
-
-        self.new_modules = list()
-        self.layers += n_new_layer
-
-        for i in range(n_new_layer):
-            layer = EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout)
-
-            # the first layer will use the preprocessing which is the last postprocessing
-            if i == 0:
-                layer.preprocess_attn = self.postprocess_layer
-                # replace the last postprocessing layer with a new one
-                self.postprocess_layer = PrePostProcessing(d_model, 0, sequence='n')
-
-            self.layer_modules.append(layer)
 
     def forward(self, input, context, src, **kwargs):
         """

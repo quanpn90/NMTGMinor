@@ -48,10 +48,11 @@ class DynamicLossScaler:
 
 class FP16XETrainer(XETrainer):
 
-    def __init__(self, model, loss_function, trainData, validData, dicts, opt):
-        super().__init__(model, loss_function, trainData, validData, dicts, opt)
+    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt):
+        super().__init__(model, loss_function, train_data, valid_data, dicts, opt)
         self.optim = onmt.Optim(opt)
         self.scaler = DynamicLossScaler(opt.fp16_loss_scale)
+        self.fp16 = True
         
         if self.cuda:
            torch.cuda.set_device(self.opt.gpus[0])
@@ -80,14 +81,6 @@ class FP16XETrainer(XETrainer):
         # we optimize on the fp32 params
         self.optim.set_parameters([self.fp32_params])
 
-    def to_variable(self,data):
-        for i, t in enumerate(data):
-            if self.cuda:
-                if data[i].type() == "torch.FloatTensor":
-                    data[i] = data[i].half()
-                data[i] = data[i].cuda()
-        return data
-
         
     def eval(self, data):
         total_loss = 0
@@ -99,21 +92,22 @@ class FP16XETrainer(XETrainer):
         with torch.no_grad():
             for i in range(len(data)):
                     
-                samples = data.next()
+                batch = data.next()[0]
                 
-                batch = self.to_variable(samples[0])
+                # batch = self.to_variable(samples[0])
 
+                batch.cuda(fp16=self.fp16)
                 
                 """ outputs can be either 
                         hidden states from decoder or
                         prob distribution from decoder generator
                 """
-                outputs,encoder, src_mask = self.model(batch)
-                targets = batch[1][1:]
-                tgt_mask = targets.data.ne(onmt.Constants.PAD)
+                outputs, encoder, src_mask = self.model(batch)
+                targets = batch.get('target_output')
+                tgt_mask = targets.ne(onmt.Constants.PAD)
                 
                 # loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
-                if (self.opt.ctc_loss != 0):
+                if self.opt.ctc_loss != 0:
                     _, loss_data, grad_outputs = self.loss_function(outputs, encoder, targets,
                                                                     generator=self.model.generator, backward=False,
                                                                     source_mask=src_mask, target_mask=tgt_mask)
@@ -122,7 +116,7 @@ class FP16XETrainer(XETrainer):
                                                                     backward=False, mask=tgt_mask)
                 
                 total_loss += loss_data
-                total_words += targets.data.ne(onmt.Constants.PAD).sum().item()
+                total_words += batch.tgt_size
 
         self.model.train()
         return total_loss / total_words
@@ -130,29 +124,29 @@ class FP16XETrainer(XETrainer):
     def train_epoch(self, epoch, resume=False, batchOrder=None, iteration=0):
         
         opt = self.opt
-        trainData = self.trainData
+        train_data = self.train_data
         
         # Clear the gradients of the model
         self.model.zero_grad()
         self.optim.zero_grad() 
 
         if opt.extra_shuffle and epoch > opt.curriculum:
-            trainData.shuffle()
+            train_data.shuffle()
 
         # Shuffle mini batch order.
         if resume:
-            trainData.batchOrder = batchOrder
-            trainData.set_index(iteration)
+            train_data.batchOrder = batchOrder
+            train_data.set_index(iteration)
             print("Resuming from iteration: %d" % iteration)
         else:
-            batchOrder = trainData.create_order()
+            batchOrder = train_data.create_order()
             iteration = 0
 
         total_loss, total_words = 0, 0
         report_loss, report_tgt_words = 0, 0
         report_src_words = 0
         start = time.time()
-        nSamples = len(trainData)
+        nSamples = len(train_data)
         
         counter = 0
         num_accumulated_words = 0
@@ -163,22 +157,21 @@ class FP16XETrainer(XETrainer):
 
             curriculum = (epoch < opt.curriculum)
             
-            samples = trainData.next(curriculum=curriculum)
-                        
-            batch = self.to_variable(samples[0])
-            
+            batch = train_data.next(curriculum=curriculum)[0]
+            batch.cuda(fp16=self.fp16)
+
             oom = False
             try:
 
                 outputs, encoder, src_mask = self.model(batch)
                     
-                targets = batch[1][1:]
-                tgt_inputs = batch[1][:-1]
+                targets = batch.get('target_output')
+                tgt_inputs = batch.get('target_input')
                 
-                batch_size = targets.size(1)
+                batch_size = batch.size
                 
                 tgt_mask = targets.data.ne(onmt.Constants.PAD)
-                tgt_size = tgt_mask.sum().item()
+                tgt_size = batch.tgt_size
                                 
                 # Scale UP the loss so that the gradients are not cutoff
                 normalizer = 1.0 / self.scaler.loss_scale
@@ -201,8 +194,8 @@ class FP16XETrainer(XETrainer):
                     raise e        
                 
             if not oom:
-                src_size = batch[0].data.ne(onmt.Constants.PAD).sum().item()
-                tgt_size = targets.data.ne(onmt.Constants.PAD).sum().item()
+                src_size = batch.src_size
+                tgt_size = batch.tgt_size
 
                 counter = counter + 1 
                 num_accumulated_words += tgt_size
@@ -258,7 +251,7 @@ class FP16XETrainer(XETrainer):
                         num_accumulated_sents = 0
                         num_updates = self.optim._step
                         if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
-                            valid_loss = self.eval(self.validData)
+                            valid_loss = self.eval(self.valid_data)
                             valid_ppl = math.exp(min(valid_loss, 100))
                             print('Validation perplexity: %g' % valid_ppl)
                             
@@ -279,7 +272,7 @@ class FP16XETrainer(XETrainer):
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
                     print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
                            "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; oom %d; %s elapsed") %
-                          (epoch, i+1, len(trainData),
+                          (epoch, i+1, len(train_data),
                            math.exp(report_loss / report_tgt_words),
                            optim.getLearningRate(),
                            optim._step,
@@ -313,7 +306,7 @@ class FP16XETrainer(XETrainer):
             print('Loading model and optim from checkpoint at %s' % save_file)
             self.model.load_state_dict(checkpoint['model'])
             
-            if opt.reset_optim == False:
+            if not opt.reset_optim:
                 self.optim.load_state_dict(checkpoint['optim'])
                 batchOrder = checkpoint['batchOrder']
                 iteration = checkpoint['iteration'] + 1
@@ -336,7 +329,7 @@ class FP16XETrainer(XETrainer):
             resume=False
         
         
-        valid_loss = self.eval(self.validData)
+        valid_loss = self.eval(self.valid_data)
         valid_ppl = math.exp(min(valid_loss, 100))
         print('Validation perplexity: %g' % valid_ppl)
         #~ 
@@ -353,7 +346,7 @@ class FP16XETrainer(XETrainer):
             print('Train perplexity: %g' % train_ppl)
 
             #  (2) evaluate on the validation set
-            valid_loss = self.eval(self.validData)
+            valid_loss = self.eval(self.valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
             print('Validation perplexity: %g' % valid_ppl)
             
