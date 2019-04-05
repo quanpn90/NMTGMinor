@@ -2,9 +2,86 @@ from __future__ import division
 
 import math
 import torch
-from torch.autograd import Variable
+from collections import defaultdict
+
 
 import onmt
+
+
+class Batch(object):
+
+    def __init__(self, src_data, tgt_data=None,
+                 src_type='text',
+                 src_align_right=False, tgt_align_right=False):
+
+        self.tensors = defaultdict(lambda: None)
+        self.has_target = False
+        self.src_type = src_type
+        if src_data is not None:
+            self.tensors['source'], self.src_lengths = self.collate(src_data, align_right=src_align_right,
+                                                                    type=self.src_type)
+            self.tensors['source'] = self.tensors['source'].transpose(0, 1).contiguous()
+            # self.tensors['src_attn_mask'] = self.tensors['source'].eq(onmt.Constants.PAD).unsqueeze(1)
+            # self.tensors['src_pad_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
+            self.tensors['src_length'] = torch.LongTensor(self.src_lengths)
+
+
+        if tgt_data is not None:
+            target_full, self.tgt_lengths = self.collate(tgt_data, align_right=tgt_align_right)
+            target_full = target_full.t().contiguous()
+            self.tensors['target_input'] = target_full[:-1]
+            self.tensors['target_output'] = target_full[1:]
+            # self.tensors['tgt_pad_mask'] = self.tensors['target_input'].ne(onmt.Constants.PAD)
+            # self.tensors['tgt_attn_mask'] = self.tensors['target_input'].ne(onmt.Constants.PAD)
+            self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.Constants.PAD)
+            # self.tensors['src_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
+            self.tensors['tgt_length'] = torch.LongTensor(self.tgt_lengths)
+            self.has_target = True
+            self.tgt_size = sum([len(x) - 1 for x in tgt_data])
+
+        self.size = len(src_data) if src_data is not None else len(tgt_data)
+
+        self.src_size = sum([len(x) for x in src_data])
+
+    def collate(self, data, align_right=False, type="text"):
+
+        lengths = [x.size(0) for x in data]
+        max_length = max(lengths)
+        # initialize with batch_size * length first
+        if type == "text":
+            tensor = data[0].new(len(data), max_length).fill_(onmt.Constants.PAD)
+
+            for i in range(len(data)):
+                data_length = data[i].size(0)
+                offset = max_length - data_length if align_right else 0
+                tensor[i].narrow(0, offset, data_length).copy_(data[i])
+
+        elif type == "audio":
+            tensor = data[0].new(len(data), max_length, data[0].size(1) + 1).fill_(onmt.Constants.PAD)
+
+            for i in range(len(data)):
+                data_length = data[i].size(0)
+                offset = max_length - data_length if align_right else 0
+
+                tensor[i].narrow(0, offset, data_length).narrow(1, 1, data[0].size(1)).copy_(data[i])
+                tensor[i].narrow(0, offset, data_length).narrow(1, 0, 1).fill_(1)
+        else:
+            raise NotImplementedError
+
+        return tensor, lengths
+
+    def get(self, name):
+        if name in self.tensors:
+            return self.tensors[name]
+        else:
+            return None
+
+    def cuda(self, fp16=False):
+        for key, tensor in self.tensors.items():
+            if tensor.type() == "torch.FloatTensor" and fp16:
+                self.tensors[key] = value.half()
+            self.tensors[key] = self.tensors[key].cuda()
+
 
 class Dataset(object):
     '''
@@ -124,33 +201,41 @@ class Dataset(object):
     def __getitem__(self, index):
         assert index < self.num_batches, "%d > %d" % (index, self.num_batches)
         
-        batch = self.batches[index]
-        src_data = [self.src[i] for i in batch]
-        src_batch, lengths = self._batchify(
-            src_data,
-            align_right=False, include_lengths=True, dtype=self._type)
+        batch_ids = self.batches[index]
+        if self.src:
+            src_data = [self.src[i] for i in batch_ids]
+        else:
+            tgt_data = None
+            # src_batch, lengths = self._batchify(
+            #     src_data,
+            #     align_right=False, include_lengths=True, dtype=self._type)
 
         if self.tgt:
-            tgt_data = [self.tgt[i] for i in batch]
-            tgt_batch = self._batchify(
-                        tgt_data,
-                        dtype="text")
+            tgt_data = [self.tgt[i] for i in batch_ids]
+            # tgt_batch = self._batchify(
+            #             tgt_data,
+            #             dtype="text")
         else:
-                tgt_batch = None
+            # tgt_batch = None
+            tgt_data = None
 
-        def wrap(b, dtype="text"):
-            if b is None:
-                return b
-            b = b.transpose(0,1).contiguous()
+        # def wrap(b, dtype="text"):
+        #     if b is None:
+        #         return b
+        #     b = b.transpose(0,1).contiguous()
+        #
+        #     return b
 
-            return b
+        # src_tensor = wrap(src_batch, self._type)
+        # tgt_tensor = wrap(tgt_batch, "text")
 
-        src_tensor = wrap(src_batch, self._type)
-        tgt_tensor = wrap(tgt_batch, "text")
+        batch = Batch(src_data, tgt_data=tgt_data, src_align_right=False, tgt_align_right=False,
+                      src_type=self._type)
         
         
-        return [src_tensor, tgt_tensor]
-       
+        # return [src_tensor, tgt_tensor]
+        return batch
+
 
     def __len__(self):
         return self.num_batches
@@ -164,27 +249,28 @@ class Dataset(object):
         self.cur_index = 0
         
         return self.batchOrder
-        
+
     def next(self, curriculum=False, reset=True, split_sizes=1):
-        
+
          # reset iterator if reach data size limit
         if self.cur_index >= self.num_batches:
             if reset:
                 self.cur_index = 0
             else: return None
-        
+
         if curriculum or self.batchOrder is None:
             batch_index = self.cur_index
         else:
             batch_index = self.batchOrder[self.cur_index]
-            
+
         batch = self[batch_index]
-        
+
         # move the iterator one step
         self.cur_index += 1
-       
-        return [[batch[0], batch[1]]]
-    
+
+        # return [[batch[0], batch[1]]]
+        return [batch]
+
 
     def shuffle(self):
         data = list(zip(self.src, self.tgt))

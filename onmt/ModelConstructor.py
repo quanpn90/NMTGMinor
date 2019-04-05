@@ -78,9 +78,7 @@ def build_model(opt, dicts):
 
         onmt.Constants.weight_norm = opt.weight_norm
         onmt.Constants.init_value = opt.param_init
-        
-        
-        
+
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
         #~ positional_encoder = None
         
@@ -180,3 +178,10 @@ def init_model_parameters(model, opt):
     # because the parameters are locally initialized
     pass
 
+def build_language_model(opt, dicts):
+
+    from onmt.modules.TransformerLM.Models import TransformerLMEncoder
+
+    positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
+
+    decoder = TransformerLMDecoder(opt, dicts['tgt'], positional_encoder)
