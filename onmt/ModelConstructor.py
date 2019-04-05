@@ -5,7 +5,9 @@ import onmt
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer
 from onmt.modules.Transformer.Layers import PositionalEncoding
 
+init = torch.nn.init
 
+MAX_LEN = onmt.Constants.max_position_length  # This should be the longest sentence from the dataset
 
 def build_model(opt, dicts):
 
@@ -42,8 +44,6 @@ def build_model(opt, dicts):
     onmt.Constants.version = 1.0
     onmt.Constants.attention_out = opt.attention_out
     onmt.Constants.residual_type = opt.residual_type
-    
-    MAX_LEN = onmt.Constants.max_position_length  # This should be the longest sentence from the dataset
 
     
     if opt.model == 'transformer':
@@ -136,7 +136,6 @@ def build_model(opt, dicts):
         if(opt.ctc_loss != 0):
             generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
 
-
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
 
 
@@ -151,7 +150,7 @@ def build_model(opt, dicts):
         print("Joining the weights of encoder and decoder word embeddings")
         model.share_enc_dec_embedding()
 
-    init = torch.nn.init
+
 
     for g in model.generator:
         init.xavier_uniform_(g.linear.weight)
@@ -180,8 +179,30 @@ def init_model_parameters(model, opt):
 
 def build_language_model(opt, dicts):
 
-    from onmt.modules.TransformerLM.Models import TransformerLMEncoder
+    onmt.Constants.layer_norm = opt.layer_norm
+    onmt.Constants.weight_norm = opt.weight_norm
+    onmt.Constants.activation_layer = opt.activation_layer
+    onmt.Constants.version = 1.0
+    onmt.Constants.attention_out = opt.attention_out
+    onmt.Constants.residual_type = opt.residual_type
+
+    from onmt.modules.TransformerLM.Models import TransformerLM
 
     positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
 
-    decoder = TransformerLMDecoder(opt, dicts['tgt'], positional_encoder)
+    decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder, ignore_source=True)
+
+    generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
+
+    model = TransformerLM(None, decoder, nn.ModuleList(generators))
+
+    if opt.tie_weights:
+        print("Joining the weights of decoder input and output embeddings")
+        model.tie_weights()
+
+    for g in model.generator:
+        init.xavier_uniform_(g.linear.weight)
+
+    init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
+
+    return model

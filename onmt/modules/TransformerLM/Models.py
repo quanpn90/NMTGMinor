@@ -21,7 +21,7 @@ def custom_layer(module):
 class TransformerLM(NMTModel):
     """Main model in 'Attention is all you need' """
 
-    def forward(self, input, grow=False):
+    def forward(self, batch):
         """
         Inputs Shapes:
             src: len_src x batch_size
@@ -32,15 +32,14 @@ class TransformerLM(NMTModel):
 
 
         """
-        # src = input[0]
-        tgt = input[1][:-1]  # exclude last target from inputs
-
-        src = src.transpose(0, 1)  # transpose to have batch first
+        # we only need target for language model
+        tgt = batch.get('target_input')
         tgt = tgt.transpose(0, 1)
 
-        context, src_mask = self.encoder(src, grow=grow)
+        context = None
+        src = None
 
-        output, coverage = self.decoder(tgt, context, src, grow=grow)
+        output, _ = self.decoder(tgt, context, src)
 
-        return output, context, src_mask
+        return output, _, _
 

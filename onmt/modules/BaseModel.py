@@ -22,8 +22,7 @@ class Generator(nn.Module):
         torch.nn.init.uniform_(self.linear.weight, -stdv, stdv)
         
         self.linear.bias.data.zero_()
-        
-        
+
         
     def forward(self, input, log_softmax=True):
         

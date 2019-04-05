@@ -18,19 +18,17 @@ from onmt.ModelConstructor import init_model_parameters
 
 class BaseTrainer(object):
     
-    def __init__(self, model, loss_function, trainData, validData, dicts, opt):
+    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt):
         
         self.model = model
-        self.trainData = trainData
-        self.validData = validData
+        self.train_data = train_data
+        self.valid_data = valid_data
         self.dicts = dicts
         self.opt = opt
         self.cuda = (len(opt.gpus) >= 1)
         
         self.loss_function = loss_function
         self.start_time = 0
-
-        
         
     def run(self, *args,**kwargs):
         
@@ -79,8 +77,8 @@ class BaseTrainer(object):
 
 class XETrainer(BaseTrainer):
 
-    def __init__(self, model, loss_function, trainData, validData, dicts, opt):
-        super().__init__(model, loss_function, trainData, validData, dicts, opt)
+    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt):
+        super().__init__(model, loss_function, train_data, valid_data, dicts, opt)
         self.optim = onmt.Optim(opt)
         
         if self.cuda:
@@ -96,7 +94,6 @@ class XETrainer(BaseTrainer):
         opt = self.opt
         model = self.model
         dicts = self.dicts
-        
 
         model_state_dict = self.model.state_dict()
         optim_state_dict = self.optim.state_dict()
@@ -124,7 +121,7 @@ class XETrainer(BaseTrainer):
                 
         batch_order = data.create_order(random=False)
         self.model.eval()
-        """ New semantics of PyTorch: save space by not creating gradients """
+        """ PyTorch semantics: save space by not creating gradients """
         with torch.no_grad():
             for i in range(len(data)):
                     
@@ -141,8 +138,9 @@ class XETrainer(BaseTrainer):
 
                 tgt_mask = targets.data.ne(onmt.Constants.PAD)
 
-                if(self.opt.ctc_loss != 0):
-                    _,loss_data,grad_outputs = self.loss_function(outputs,encoder,targets,generator=self.model.generator,backward=False,source_mask=src_mask,target_mask=tgt_mask)
+                if self.opt.ctc_loss != 0:
+                    _,loss_data,grad_outputs = self.loss_function(outputs,encoder,targets,generator=self.model.generator,backward=False,
+                                                                  source_mask=src_mask,target_mask=tgt_mask)
                 else:
                     _,loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator[0],
                                                              backward=False, mask=tgt_mask)
@@ -156,30 +154,30 @@ class XETrainer(BaseTrainer):
     def train_epoch(self, epoch, resume=False, batchOrder=None, iteration=0):
         
         opt = self.opt
-        trainData = self.trainData
+        train_data = self.train_data
         
         # Clear the gradients of the model
         # self.runner.zero_grad()
         self.model.zero_grad()
 
         if opt.extra_shuffle and epoch > opt.curriculum:
-            trainData.shuffle()
+            train_data.shuffle()
 
         # Shuffle mini batch order.
         
         if resume:
-            trainData.batchOrder = batchOrder
-            trainData.set_index(iteration)
+            train_data.batchOrder = batchOrder
+            train_data.set_index(iteration)
             print("Resuming from iteration: %d" % iteration)
         else:
-            batchOrder = trainData.create_order()
+            batchOrder = train_data.create_order()
             iteration = 0
 
         total_loss, total_words = 0, 0
         report_loss, report_tgt_words = 0, 0
         report_src_words = 0
         start = time.time()
-        nSamples = len(trainData)
+        nSamples = len(train_data)
         
         counter = 0
         num_accumulated_words = 0
@@ -189,7 +187,7 @@ class XETrainer(BaseTrainer):
 
             curriculum = (epoch < opt.curriculum)
             
-            samples = trainData.next(curriculum=curriculum)
+            samples = train_data.next(curriculum=curriculum)
                         
             batch = self.to_variable(samples[0])
             
@@ -210,7 +208,7 @@ class XETrainer(BaseTrainer):
                 tgt_mask = torch.autograd.Variable(tgt_mask)
                 normalizer = 1
 
-                if(self.opt.ctc_loss != 0):
+                if self.opt.ctc_loss != 0:
                     _,loss_data,grad_outputs = self.loss_function(outputs, encoder,targets,generator=self.model.generator,backward=True,
                                                                   source_mask=src_mask,target_mask=tgt_mask)
                 else:
@@ -251,7 +249,7 @@ class XETrainer(BaseTrainer):
                     num_accumulated_sents = 0
                     num_updates = self.optim._step
                     if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
-                        valid_loss = self.eval(self.validData)
+                        valid_loss = self.eval(self.valid_data)
                         valid_ppl = math.exp(min(valid_loss, 100))
                         print('Validation perplexity: %g' % valid_ppl)
                         
@@ -274,7 +272,7 @@ class XETrainer(BaseTrainer):
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
                     print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
                            "%5.0f src tok/s; %5.0f tgt tok/s; %s elapsed") %
-                          (epoch, i+1, len(trainData),
+                          (epoch, i+1, len(train_data),
                            math.exp(report_loss / report_tgt_words),
                            optim.getLearningRate(),
                            optim._step,
@@ -328,7 +326,7 @@ class XETrainer(BaseTrainer):
             init_model_parameters(model, opt)
             resume=False
         
-        valid_loss = self.eval(self.validData)
+        valid_loss = self.eval(self.valid_data)
         valid_ppl = math.exp(min(valid_loss, 100))
         print('Validation perplexity: %g' % valid_ppl)
         
@@ -345,7 +343,7 @@ class XETrainer(BaseTrainer):
             print('Train perplexity: %g' % train_ppl)
 
             #  (2) evaluate on the validation set
-            valid_loss = self.eval(self.validData)
+            valid_loss = self.eval(self.valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
             print('Validation perplexity: %g' % valid_ppl)
             
