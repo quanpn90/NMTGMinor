@@ -229,13 +229,17 @@ class TransformerDecoder(nn.Module):
             emb = emb[0]
         emb = self.preprocess_layer(emb)
 
-        if self.encoder_type == "audio":
-            mask_src = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
-            pad_mask_src = src.data.narrow(2, 0, 1).squeeze(2).ne(onmt.Constants.PAD)  # batch_size x len_src
-        else:
+        if context is not None:
+            if self.encoder_type == "audio":
+                mask_src = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+                pad_mask_src = src.data.narrow(2, 0, 1).squeeze(2).ne(onmt.Constants.PAD)  # batch_size x len_src
+            else:
 
-            mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
-            pad_mask_src = src.data.ne(onmt.Constants.PAD)
+                mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
+                pad_mask_src = src.data.ne(onmt.Constants.PAD)
+        else:
+            mask_src = None
+            pad_mask_src = None
 
         len_tgt = input.size(1)
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
@@ -275,9 +279,8 @@ class TransformerDecoder(nn.Module):
 
         """
         context = decoder_state.context
-        #~ buffer = decoder_state.buffer
         buffers = decoder_state.attention_buffers
-        src = decoder_state.src.transpose(0, 1)
+        src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
 
         if decoder_state.input_seq is None:
             decoder_state.input_seq = input
@@ -287,9 +290,9 @@ class TransformerDecoder(nn.Module):
         input = decoder_state.input_seq.transpose(0, 1)
         input_ = input[:,-1].unsqueeze(1)
 
-        output_buffer = list()
+        # output_buffer = list()
 
-        batch_size = input_.size(0)
+        # batch_size = input_.size(0)
 
         """ Embedding: batch_size x 1 x d_model """
         emb = self.word_lut(input_)
@@ -315,10 +318,13 @@ class TransformerDecoder(nn.Module):
 
         # batch_size x 1 x len_src
 
-        if (self.encoder_type == "audio" and src.data.dim() == 3):
-            mask_src = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+        if context is not None:
+            if self.encoder_type == "audio" and src.data.dim() == 3:
+                mask_src = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+            else:
+                mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
         else:
-            mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
+            mask_src = None
 
         len_tgt = input.size(1)
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
@@ -333,7 +339,7 @@ class TransformerDecoder(nn.Module):
             assert(output.size(0) == 1)
             output, coverage, buffer = layer.step(output, context, mask_tgt, mask_src, buffer=buffer) # batch_size x len_src x d_model
 
-            decoder_state._update_attention_buffer(buffer, i)
+            decoder_state.update_attention_buffer(buffer, i)
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -349,7 +355,8 @@ class Transformer(NMTModel):
     """Main model in 'Attention is all you need' """
     
         
-    def forward(self, input, grow=False):
+    # def forward(self, input, grow=False):
+    def forward(self, batch):
         """
         Inputs Shapes: 
             src: len_src x batch_size
@@ -360,59 +367,103 @@ class Transformer(NMTModel):
             
             
         """
-        src = input[0]
-        tgt = input[1][:-1]  # exclude last target from inputs
-        
-        src = src.transpose(0, 1) # transpose to have batch first
+        src = batch.get('source')
+        tgt = batch.get('target_input')
+
+        src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
         
-        context, src_mask = self.encoder(src, grow=grow)
+        context, src_mask = self.encoder(src)
         
-        output, coverage = self.decoder(tgt, context, src, grow=grow)
+        output, coverage = self.decoder(tgt, context, src)
 
-        return output,context,src_mask
-        
-    def create_decoder_state(self, src, context, beamSize=1):
-        
-        from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder
-        from onmt.modules.StochasticTransformer.Models import StochasticTransformerEncoder, StochasticTransformerDecoder
-        from onmt.modules.UniversalTransformer.Models import UniversalTransformerDecoder
+        return output, context, src_mask
 
-        if isinstance(self.decoder, TransformerDecoder) or isinstance(self.decoder, StochasticTransformerDecoder) or isinstance(self.decoder, UniversalTransformerDecoder) :
-            decoder_state = TransformerDecodingState(src, context, beamSize=beamSize)
-        elif isinstance(self.decoder, ParallelTransformerDecoder):
-            from onmt.modules.ParallelTransformer.Models import ParallelTransformerDecodingState
-            decoder_state = ParallelTransformerDecodingState(src, context, beamSize=beamSize)
+    def decode(self, batch):
+        """
+        :param batch: (onmt.Dataset.Batch) an object containing tensors needed for training
+        :return: gold_scores (torch.Tensor) log probs for each sentence
+                 gold_words  (Int) the total number of non-padded tokens
+                 allgold_scores (list of Tensors) log probs for each word in the sentence
+        """
+
+        src = batch.get('source')
+        tgt_input = batch.get('target_input')
+        tgt_output = batch.get('target_output')
+
+        # transpose to have batch first
+        src = src.transpose(0, 1)
+        tgt_input = tgt_input.transpose(0, 1)
+        batch_size = tgt_input.size(0)
+
+        context, src_mask = self.encoder(src)
+
+        if (hasattr(self,
+            'autoencoder') and self.autoencoder and self.autoencoder.representation == "EncoderHiddenState"):
+            context = self.autoencoder.autocode(context)
+
+        gold_scores = context.new(batch_size).zero_()
+        gold_words = 0
+        allgold_scores = list()
+
+        decoder_output, coverage = self.decoder(tgt_input, context, src)
+
+        output = decoder_output
+
+        if (hasattr(self, 'autoencoder')
+                     and self.autoencoder and self.autoencoder.representation == "DecoderHiddenState"):
+            output = self.autoencoder.autocode(output)
+
+        for dec_t, tgt_t in zip(output, tgt_output):
+            gen_t = self.generator(dec_t)
+            tgt_t = tgt_t.unsqueeze(1)
+            scores = gen_t.gather(1, tgt_t)
+            scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
+            gold_scores += scores.squeeze(1).type_as(gold_scores)
+            gold_words += tgt_t.ne(onmt.Constants.PAD).sum().item()
+            allgold_scores.append(scores.squeeze(1).type_as(gold_scores))
+
+        return gold_words, gold_scores, allgold_scores
+
+    def create_decoder_state(self, batch, beam_size=1):
+
+        src = batch.get('source')
+
+        src_transposed = src.transpose(0, 1)
+        context, _ = self.encoder(src_transposed)
+
+        decoder_state = TransformerDecodingState(src, context, beam_size=beam_size)
+
         return decoder_state
 
 
 class TransformerDecodingState(DecoderState):
     
-    def __init__(self, src, context, beamSize=1):
+    def __init__(self, src, context, beam_size=1):
 
         # if audio only take one dimension since only used for mask
-        if(src.dim() == 3):
-            self.src = src.narrow(2,0,1).squeeze(2).repeat(1,beamSize)
+        self.original_src = src
+        if src.dim() == 3:
+            self.src = src.narrow(2, 0, 1).squeeze(2).repeat(1, beam_size)
         else:
-            self.src = src.repeat(1,beamSize)
+            self.src = src.repeat(1, beam_size)
 
-        self.context = context.repeat(1,beamSize,1)
-        self.beamSize = beamSize
+        self.context = context.repeat(1, beam_size, 1)
+        self.beam_size = beam_size
 
         self.input_seq = None
         self.attention_buffers = dict()
 
-
-    def _update_attention_buffer(self, buffer, layer):
+    def update_attention_buffer(self, buffer, layer):
 
         self.attention_buffers[layer] = buffer # dict of 2 keys (k, v) : T x B x H
 
-    def _update_beam(self, beam, b, remainingSents, idx):
+    def update_beam(self, beam, b, remaining_sents, idx):
 
         for tensor in [self.src, self.input_seq]  :
 
             t_, br = tensor.size()
-            sent_states = tensor.view(t_, self.beamSize, remainingSents)[:, :, idx]
+            sent_states = tensor.view(t_, self.beam_size, remaining_sents)[:, :, idx]
 
             if isinstance(tensor, Variable):
                 sent_states.data.copy_(sent_states.data.index_select(
@@ -426,59 +477,43 @@ class TransformerDecodingState(DecoderState):
 
             for k in buffer_:
                 t_, br_, d_ = buffer_[k].size()
-                sent_states = buffer_[k].view(t_, self.beamSize, remainingSents, d_)[:, :, idx, :]
+                sent_states = buffer_[k].view(t_, self.beam_size, remaining_sents, d_)[:, :, idx, :]
 
                 sent_states.data.copy_(sent_states.data.index_select(
                             1, beam[b].getCurrentOrigin()))
 
     # in this section, the sentences that are still active are
     # compacted so that the decoder is not run on completed sentences
-    def _prune_complete_beam(self, activeIdx, remainingSents):
+    def prune_complete_beam(self, active_idx, remaining_sents):
 
         model_size = self.context.size(-1)
 
-        def updateActive(t):
+        def update_active(t):
             # select only the remaining active sentences
-            view = t.data.view(-1, remainingSents, model_size)
-            newSize = list(t.size())
-            newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
-            return Variable(view.index_select(1, activeIdx)
-                            .view(*newSize))
+            view = t.data.view(-1, remaining_sents, model_size)
+            new_size = list(t.size())
+            new_size[-2] = new_size[-2] * len(active_idx) // remaining_sents
+            return Variable(view.index_select(1, active_idx)
+                            .view(*new_size))
 
-        def updateActive2D(t):
-            if isinstance(t, Variable):
-                # select only the remaining active sentences
-                view = t.data.view(-1, remainingSents)
-                newSize = list(t.size())
-                newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
-                return Variable(view.index_select(1, activeIdx)
-                                .view(*newSize))
-            else:
-                view = t.view(-1, remainingSents)
-                newSize = list(t.size())
-                newSize[-1] = newSize[-1] * len(activeIdx) // remainingSents
-                new_t = view.index_select(1, activeIdx).view(*newSize)
+        def update_active_2d(t):
+            view = t.view(-1, remaining_sents)
+            new_size = list(t.size())
+            new_size[-1] = new_size[-1] * len(active_idx) // remaining_sents
+            new_t = view.index_select(1, active_idx).view(*new_size)
 
-                return new_t
+            return new_t
 
-        def updateActive4D(t):
-            # select only the remaining active sentences
-            nl, t_, br_, d_ = t.size()
-            view = t.data.view(nl, -1, remainingSents, model_size)
-            newSize = list(t.size())
-            newSize[-2] = newSize[-2] * len(activeIdx) // remainingSents
-            return Variable(view.index_select(2, activeIdx)
-                            .view(*newSize))
 
-        self.context = updateActive(self.context)
+        self.context = update_active(self.context)
 
-        self.input_seq = updateActive2D(self.input_seq)
+        self.input_seq = update_active_2d(self.input_seq)
 
-        self.src = updateActive2D(self.src)
+        self.src = update_active_2d(self.src)
 
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]
 
             for k in buffer_:
-                buffer_[k] = updateActive(buffer_[k])
+                buffer_[k] = update_active(buffer_[k])
 

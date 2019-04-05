@@ -196,8 +196,8 @@ def main():
                 continue
 
             print("Batch size:",len(srcBatch),len(tgtBatch))
-            predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores  = translator.translateASR(srcBatch,
-                                                                                    tgtBatch)
+            predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores  = translator.translateASR(srcBatch, tgtBatch)
+
             print("Result:",len(predBatch))
             count,predScore,predWords,goldScore,goldWords = translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords, allGoldScores,opt.input_type)
             predScoreTotal += predScore
