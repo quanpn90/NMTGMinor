@@ -114,7 +114,7 @@ class Dataset(object):
 
         self.pad_count = True
         # if self.balance:
-        self.allocateBatch()
+        self.allocate_batch()
         self.cur_index = 0
         self.batchOrder = None
 
@@ -123,7 +123,7 @@ class Dataset(object):
         return self.fullSize
 
     # This function allocates the mini-batches (grouping sentences with the same size)
-    def allocateBatch(self):
+    def allocate_batch(self):
             
         self.batches = []
         cur_batch = []
@@ -145,9 +145,10 @@ class Dataset(object):
 
         i = 0
         while i < self.fullSize:
-        #~ for i in range(1, self.fullSize):
 
-            if self.tgt is not None:
+            if self.tgt is not None and self.src is not None:
+                sentence_length = max(self.tgt[i].size(0) - 1, self.src[i].size(0))
+            elif self.tgt is not None:
                 sentence_length = self.tgt[i].size(0) - 1
             else:
                 sentence_length = self.src[i].size(0)

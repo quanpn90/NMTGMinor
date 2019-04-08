@@ -1,4 +1,5 @@
 import torch
+import re
 
 
 class Dict(object):
@@ -23,9 +24,12 @@ class Dict(object):
     def loadFile(self, filename):
         "Load entries from a file."
         for line in open(filename):
-            fields = line.split()
+
+            # NOTE: a vocab entry might be a space
+            fields = re.split(r'(\s+)', line)
+            # print(fields)
             label = fields[0]
-            idx = int(fields[1])
+            idx = int(fields[2])
             self.add(label, idx)
         
         
