@@ -89,7 +89,7 @@ class XETrainer(BaseTrainer):
         
         self.optim.set_parameters(self.model.parameters())
 
-    def save(self, epoch, valid_ppl, batchOrder=None, iteration=-1):
+    def save(self, epoch, valid_ppl, batch_order=None, iteration=-1):
         
         opt = self.opt
         model = self.model
@@ -105,7 +105,7 @@ class XETrainer(BaseTrainer):
                 'opt': opt,
                 'epoch': epoch,
                 'iteration' : iteration,
-                'batchOrder' : batchOrder,
+                'batch_order' : batch_order,
                 'optim': optim_state_dict
         }
         
@@ -124,21 +124,26 @@ class XETrainer(BaseTrainer):
         """ PyTorch semantics: save space by not creating gradients """
         with torch.no_grad():
             for i in range(len(data)):
-                    
-                samples = data.next()
-                
-                batch = self.to_variable(samples[0])
+
+                batch = data.next()[0]
+
+                batch.cuda()
                 
                 """ outputs can be either 
                         hidden states from decoder or
                         prob distribution from decoder generator
                 """
-                outputs, encoder, src_mask = self.model(batch)
-                targets = batch[1][1:]
 
-                tgt_mask = targets.data.ne(onmt.Constants.PAD)
+                """ outputs can be either 
+                                        hidden states from decoder or
+                                        prob distribution from decoder generator
+                                """
+                outputs, encoder, src_mask = self.model(batch)
+                targets = batch.get('target_output')
+                tgt_mask = targets.ne(onmt.Constants.PAD)
 
                 if self.opt.ctc_loss != 0:
+
                     _,loss_data,grad_outputs = self.loss_function(outputs,encoder,targets,generator=self.model.generator,backward=False,
                                                                   source_mask=src_mask,target_mask=tgt_mask)
                 else:
@@ -146,12 +151,12 @@ class XETrainer(BaseTrainer):
                                                              backward=False, mask=tgt_mask)
 
                 total_loss += loss_data
-                total_words += targets.data.ne(onmt.Constants.PAD).sum().item()
+                total_words += batch.tgt_size
 
         self.model.train()
         return total_loss / total_words
         
-    def train_epoch(self, epoch, resume=False, batchOrder=None, iteration=0):
+    def train_epoch(self, epoch, resume=False, batch_order=None, iteration=0):
         
         opt = self.opt
         train_data = self.train_data
@@ -166,46 +171,43 @@ class XETrainer(BaseTrainer):
         # Shuffle mini batch order.
         
         if resume:
-            train_data.batchOrder = batchOrder
+            train_data.batch_order = batch_order
             train_data.set_index(iteration)
             print("Resuming from iteration: %d" % iteration)
         else:
-            batchOrder = train_data.create_order()
+            batch_order = train_data.create_order()
             iteration = 0
 
         total_loss, total_words = 0, 0
         report_loss, report_tgt_words = 0, 0
         report_src_words = 0
         start = time.time()
-        nSamples = len(train_data)
+        n_samples = len(train_data)
         
         counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
         
-        for i in range(iteration, nSamples):
+        for i in range(iteration, n_samples):
 
             curriculum = (epoch < opt.curriculum)
-            
-            samples = train_data.next(curriculum=curriculum)
-                        
-            batch = self.to_variable(samples[0])
+
+            batch = train_data.next(curriculum=curriculum)[0]
+            batch.cuda()
             
             oom = False
             try:
             
-                #print("Input size:",batch[0].size())
                 outputs, encoder,src_mask = self.model(batch)
-                    
-                targets = batch[1][1:]
-                tgt_inputs = batch[1][:-1]
+
+                targets = batch.get('target_output')
+                tgt_inputs = batch.get('target_input')
+
+                batch_size = batch.size
+
+                tgt_mask = targets.ne(onmt.Constants.PAD)
+                tgt_size = batch.tgt_size
                 
-                batch_size = targets.size(1)
-                
-                tgt_mask = targets.data.ne(onmt.Constants.PAD)
-                tgt_size = tgt_mask.sum()
-                
-                tgt_mask = torch.autograd.Variable(tgt_mask)
                 normalizer = 1
 
                 if self.opt.ctc_loss != 0:
@@ -224,8 +226,8 @@ class XETrainer(BaseTrainer):
                     raise e        
                 
             if not oom:
-                src_size = batch[0].data.ne(onmt.Constants.PAD).sum().item()
-                tgt_size = targets.data.ne(onmt.Constants.PAD).sum().item()
+                src_size = batch.src_size
+                tgt_size = batch.tgt_size
                 
                 
                 counter = counter + 1 
@@ -253,9 +255,9 @@ class XETrainer(BaseTrainer):
                         valid_ppl = math.exp(min(valid_loss, 100))
                         print('Validation perplexity: %g' % valid_ppl)
                         
-                        ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
+                        ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
                         
-                        self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
+                        self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
                 
 
                 num_words = tgt_size
@@ -306,12 +308,12 @@ class XETrainer(BaseTrainer):
             
             if opt.reset_optim == False:
                 self.optim.load_state_dict(checkpoint['optim'])
-                batchOrder = checkpoint['batchOrder']
+                batch_order = checkpoint['batch_order']
                 iteration = checkpoint['iteration'] + 1
                 opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
                 resume=True  
             else:
-                batchOrder = None
+                batch_order = None
                 iteration = 0
                 resume=False
 
@@ -320,7 +322,7 @@ class XETrainer(BaseTrainer):
             del checkpoint['optim']
             del checkpoint
         else:
-            batchOrder = None
+            batch_order = None
             iteration = 0
             print('Initializing model parameters')
             init_model_parameters(model, opt)
@@ -337,7 +339,7 @@ class XETrainer(BaseTrainer):
 
             #  (1) train for one epoch on the training set
             train_loss = self.train_epoch(epoch, resume=resume,
-                                                 batchOrder=batchOrder,
+                                                 batch_order=batch_order,
                                                  iteration=iteration)
             train_ppl = math.exp(min(train_loss, 100))
             print('Train perplexity: %g' % train_ppl)
@@ -349,7 +351,7 @@ class XETrainer(BaseTrainer):
             
             
             self.save(epoch, valid_ppl)
-            batchOrder = None
+            batch_order = None
             iteration = None
             resume = False
         

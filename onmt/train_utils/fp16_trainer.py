@@ -93,8 +93,6 @@ class FP16XETrainer(XETrainer):
             for i in range(len(data)):
                     
                 batch = data.next()[0]
-                
-                # batch = self.to_variable(samples[0])
 
                 batch.cuda(fp16=self.fp16)
                 

@@ -52,9 +52,8 @@ def data_file_path(prefix_path):
 class IndexedDataset(torch.utils.data.Dataset):
     """Loader for TorchNet IndexedDataset"""
 
-    def __init__(self, path, fix_lua_indexing=True):
+    def __init__(self, path):
         super().__init__()
-        self.fix_lua_indexing = fix_lua_indexing
         with open(index_file_path(path), 'rb') as f:
             magic = f.read(8)
             assert magic == b'TNTIDX\x00\x00'
@@ -85,8 +84,6 @@ class IndexedDataset(torch.utils.data.Dataset):
         self.data_file.seek(self.data_offsets[i] * self.element_size)
         self.data_file.readinto(a)
         item = torch.from_numpy(a).long()
-        if self.fix_lua_indexing:
-            item -= 1  # subtract 1 for 0-based indexing
         return item
 
     def __len__(self):
@@ -108,8 +105,6 @@ class IndexedInMemoryDataset(IndexedDataset):
         self.buffer = np.empty(self.data_offsets[-1], dtype=self.dtype)
         self.data_file.readinto(self.buffer)
         self.data_file.close()
-        if self.fix_lua_indexing:
-            self.buffer -= 1  # subtract 1 for 0-based indexing
 
     def __del__(self):
         pass
@@ -187,7 +182,7 @@ class IndexedDatasetBuilder(object):
 
     def add_item(self, tensor):
         # +1 for Lua compatibility
-        bytes = self.out_file.write(np.array(tensor.numpy() + 1, dtype=self.dtype))
+        bytes = self.out_file.write(np.array(tensor.numpy(), dtype=self.dtype))
         self.data_offsets.append(self.data_offsets[-1] + bytes / self.element_size)
         for s in tensor.size():
             self.sizes.append(s)
