@@ -17,8 +17,13 @@ class FusionNetwork(nn.Module):
     """Main model in 'Attention is all you need' """
 
     def __init__(self, tm_model, lm_model):
+        super(FusionNetwork, self).__init__()
         self.tm_model = tm_model
         self.lm_model = lm_model
+
+        # freezing the parameters for the language model
+        for param in self.lm_model.parameters():
+            param.requires_grad = False
 
 
     def forward(self, batch):
@@ -32,29 +37,20 @@ class FusionNetwork(nn.Module):
 
 
         """
-        # we only need target for language model
-        # tgt = batch.get('target_input')
-        # tgt = tgt.transpose(0, 1)
 
         nmt_output_dict = self.tm_model(batch)
 
-        lm_output_dict = self.lm_model(batch)
+        # no gradient for the LM side
+        with torch.no_grad():
+            lm_output_dict = self.lm_model(batch)
 
 
         output_dict = defaultdict(lambda: None)
 
-        output_dict['nmt'] = nmt_output_dict
+        output_dict['tm'] = nmt_output_dict
         output_dict['lm']  = lm_output_dict
-        # context = None
-        # src = None
-        #
-        # output, _ = self.decoder(tgt, context, src)
-        #
-        # output_dict = defaultdict(lambda: None)
-        # output_dict['hidden'] = output
-        #
-        # return output, _, _
 
+        return output_dict
 
 
 

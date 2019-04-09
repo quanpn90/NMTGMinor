@@ -174,6 +174,7 @@ def build_language_model(opt, dicts):
 def build_fusion(opt, dicts):
 
     # the fusion model requires a pretrained language model
+    print("Loading pre-trained language model from %s" % opt.lm_checkpoint)
     lm_checkpoint = torch.load(opt.lm_checkpoint)
 
     # first we build the lm model and lm checkpoint
@@ -184,10 +185,10 @@ def build_fusion(opt, dicts):
     # load parameter for pretrained model
     lm_model.load_state_dict(lm_checkpoint['model'])
 
-    # main model
-
+    # main model for seq2seq (translation, asr)
     tm_model = build_model(opt, dicts)
 
+    from onmt.modules.FusionNetwork.Models import FusionNetwork
     model = FusionNetwork(tm_model, lm_model)
 
     return model

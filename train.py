@@ -110,21 +110,27 @@ def main():
         raise NotImplementedError
 
     print('Building model...')
-    model = build_model(opt, dicts)
-    
-    
-    """ Building the loss function """
-    if opt.ctc_loss != 0:
-        loss_function = NMTAndCTCLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing,ctc_weight = opt.ctc_loss)
+
+    if not opt.fusion:
+        model = build_model(opt, dicts)
+
+        """ Building the loss function """
+        if opt.ctc_loss != 0:
+            loss_function = NMTAndCTCLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing,ctc_weight = opt.ctc_loss)
+        else:
+            loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
     else:
-        loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+        from onmt.ModelConstructor import build_fusion
+        from onmt.modules.Loss import FusionLoss
+
+        model = build_fusion(opt, dicts)
+
+        loss_function = FusionLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
 
 
-    nParams = sum([p.nelement() for p in model.parameters()])
-    print('* number of parameters: %d' % nParams)
-    
-    optim = None
-    
+    n_params = sum([p.nelement() for p in model.parameters()])
+    print('* number of parameters: %d' % n_params)
+
     if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
         #~ trainer = MultiGPUXETrainer(model, loss_function, train_data, valid_data, dataset, opt)
         raise NotImplementedError("Warning! Multi-GPU training is not fully tested and potential bugs can happen.")

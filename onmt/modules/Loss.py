@@ -2,7 +2,7 @@ import onmt
 import onmt.modules
 import torch.nn as nn
 import torch, math
-
+import torch.nn.functional as F
 from torch.nn.modules.loss import _Loss
 
 import numpy
@@ -91,13 +91,13 @@ class NMTLossFunc(CrossEntropyLossBase):
         if mask is not None:
             """ We remove all positions with PAD """
             flattened_mask = mask.view(-1)
-            
+
             non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
-            
+
             clean_input = outputs.index_select(0, non_pad_indices)
-            
+
             clean_targets = targets.index_select(0, non_pad_indices)
-        
+
         else:
             clean_input = outputs
             clean_targets = targets
@@ -265,4 +265,56 @@ class FusionLoss(CrossEntropyLossBase):
             **kwargs(optional): additional info for computing loss.
         """
 
-        pass
+        # in this implementation, the PRENORM algorithm is used
+
+        tm_outputs = model_outputs['tm']['hidden']
+
+        lm_outputs = model_outputs['lm']['hidden']
+
+        mask = model_outputs['tgt_mask']
+
+        # flatten the output
+        tm_outputs = tm_outputs.contiguous().view(-1, tm_outputs.size(-1))
+        lm_outputs = lm_outputs.contiguous().view(-1, lm_outputs.size(-1))
+        targets = targets.view(-1)
+
+        if mask is not None:
+            """ We remove all positions with PAD """
+            flattened_mask = mask.view(-1)
+
+            non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
+
+            clean_tm_input = tm_outputs.index_select(0, non_pad_indices)
+            clean_lm_input = lm_outputs.index_select(0, non_pad_indices)
+
+            clean_targets = targets.index_select(0, non_pad_indices)
+
+        else:
+            clean_tm_input = tm_outputs
+            clean_lm_input = lm_outputs
+            clean_targets = targets
+
+        if model is not None:
+            # the 'first' generator is the decoder softmax one
+            tm_logits = model.tm_model.generator[0](clean_tm_input, log_softmax=False)
+
+            with torch.no_grad():
+                log_lm = model.lm_model.generator[0](clean_lm_input, log_softmax=True)
+
+            # PRENORM algorithm from
+            # https://arxiv.org/pdf/1809.00125.pdf
+            # Simple Fusion: Return of the Language Model
+            dists = F.log_softmax(tm_logits + log_lm)
+
+        else:
+            raise NotImplementedError
+
+        loss, loss_data = self._compute_loss(dists, clean_targets)
+
+        if backward:
+            loss.div(normalizer).backward()
+
+        output_dict = {"loss": loss, "data": loss_data}
+
+        # return loss, loss_data, None
+        return output_dict
