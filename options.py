@@ -182,6 +182,11 @@ def make_parser(parser):
                         help="Print stats at this interval.")
     parser.add_argument('-save_every', type=int, default=-1,
                         help="Save every this interval.")
-    
+
+    # for FUSION
+    parser.add_argument('-lm_checkpoint', default='', type=str,
+                        help="""If training from a checkpoint then this is the
+                            path to the pretrained model.""")
+
     
     return parser

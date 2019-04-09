@@ -114,7 +114,7 @@ def main():
     
     
     """ Building the loss function """
-    if(opt.ctc_loss != 0):
+    if opt.ctc_loss != 0:
         loss_function = NMTAndCTCLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing,ctc_weight = opt.ctc_loss)
     else:
         loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)

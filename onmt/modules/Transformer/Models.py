@@ -5,9 +5,9 @@ from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, Position
 from onmt.modules.BaseModel import NMTModel, Reconstructor, DecoderState
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
-#~ from onmt.modules.Checkpoint import checkpoint
 from torch.utils.checkpoint import checkpoint
-from torch.autograd import Variable
+from collections import defaultdict
+
 
 
 
@@ -94,9 +94,6 @@ class TransformerEncoder(nn.Module):
             emb = self.audio_trans(input.contiguous().view(-1, input.size(2))).view(input.size(0),
                                                                                     input.size(1), -1)
 
-            # if self.training:
-            #     print(emb.requires_grad)
-            # emb.requires_grad=True
         """ Scale the emb by sqrt(d_model) """
         
         emb = emb * math.sqrt(self.model_size)
@@ -122,7 +119,10 @@ class TransformerEncoder(nn.Module):
         # a whole stack of unnormalized layer outputs.    
         context = self.postprocess_layer(context)
 
-        return context, mask_src    
+        output_dict = { 'context': context, 'src_mask': mask_src }
+
+        # return context, mask_src
+        return output_dict
 
 
 class TransformerDecoder(nn.Module):
@@ -248,8 +248,10 @@ class TransformerDecoder(nn.Module):
         # a whole stack of unnormalized layer outputs.
         output = self.postprocess_layer(output)
 
+        output_dict = { 'hidden': output, 'coverage': coverage }
 
-        return output, None
+        # return output, None
+        return output_dict
 
     def step(self, input, decoder_state):
         """
@@ -358,11 +360,18 @@ class Transformer(NMTModel):
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
         
-        context, src_mask = self.encoder(src)
+        encoder_output = self.encoder(src)
+        context = encoder_output['context']
         
-        output, coverage = self.decoder(tgt, context, src)
+        decoder_output = self.decoder(tgt, context, src)
+        output = decoder_output['hidden']
 
-        return output, context, src_mask
+        output_dict = defaultdict(lambda: None)
+        output_dict['hidden'] = output
+        output_dict['encoder'] = context
+        output_dict['src_mask'] = encoder_output['src_mask']
+
+        return output_dict
 
     def decode(self, batch):
         """
@@ -381,7 +390,7 @@ class Transformer(NMTModel):
         tgt_input = tgt_input.transpose(0, 1)
         batch_size = tgt_input.size(0)
 
-        context, src_mask = self.encoder(src)
+        context = self.encoder(src)['context']
 
         if (hasattr(self,
             'autoencoder') and self.autoencoder and self.autoencoder.representation == "EncoderHiddenState"):
@@ -391,7 +400,7 @@ class Transformer(NMTModel):
         gold_words = 0
         allgold_scores = list()
 
-        decoder_output, coverage = self.decoder(tgt_input, context, src)
+        decoder_output = self.decoder(tgt_input, context, src)['hidden']
 
         output = decoder_output
 
@@ -415,9 +424,9 @@ class Transformer(NMTModel):
         src = batch.get('source')
 
         src_transposed = src.transpose(0, 1)
-        context, _ = self.encoder(src_transposed)
+        encoder_output = self.encoder(src_transposed)
 
-        decoder_state = TransformerDecodingState(src, context, beam_size=beam_size)
+        decoder_state = TransformerDecodingState(src, encoder_output['context'], beam_size=beam_size)
 
         return decoder_state
 
@@ -450,12 +459,9 @@ class TransformerDecodingState(DecoderState):
             t_, br = tensor.size()
             sent_states = tensor.view(t_, self.beam_size, remaining_sents)[:, :, idx]
 
-            if isinstance(tensor, Variable):
-                sent_states.data.copy_(sent_states.data.index_select(
-                            1, beam[b].getCurrentOrigin()))
-            else:
-                sent_states.copy_(sent_states.index_select(
-                            1, beam[b].getCurrentOrigin()))
+            sent_states.copy_(sent_states.index_select(
+                1, beam[b].getCurrentOrigin()))
+
 
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]
@@ -478,15 +484,14 @@ class TransformerDecodingState(DecoderState):
             view = t.data.view(-1, remaining_sents, model_size)
             new_size = list(t.size())
             new_size[-2] = new_size[-2] * len(active_idx) // remaining_sents
-            return Variable(view.index_select(1, active_idx)
-                            .view(*new_size))
+            return view.index_select(1, active_idx).view(*new_size)
+
 
         def update_active_2d(t):
             view = t.view(-1, remaining_sents)
             new_size = list(t.size())
             new_size[-1] = new_size[-1] * len(active_idx) // remaining_sents
             new_t = view.index_select(1, active_idx).view(*new_size)
-
             return new_t
 
 

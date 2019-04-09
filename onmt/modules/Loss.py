@@ -8,7 +8,7 @@ from torch.nn.modules.loss import _Loss
 import numpy
 
 
-class LossFuncBase(_Loss):
+class CrossEntropyLossBase(_Loss):
 
     """
     Class for managing efficient loss computation. Handles
@@ -21,117 +21,72 @@ class LossFuncBase(_Loss):
         output_size: number of words in vocabulary()
     """
     
-    def __init__(self, output_size):
-        super(LossFuncBase, self).__init__()
+    def __init__(self, output_size, label_smoothing):
+        super(CrossEntropyLossBase, self).__init__()
         self.output_size = output_size
         self.padding_idx = onmt.Constants.PAD
-    
+        self.smoothing_value = label_smoothing / (output_size - 2)
+        self.confidence = 1.0 - label_smoothing
+        self.label_smoothing = label_smoothing
+
     def _compute_loss(self, scores, targets):
-        return NotImplementedError
+
+        gtruth = targets.view(-1)  # batch * time
+        scores = scores.view(-1, scores.size(-1))  # batch * time X vocab_size
+
+        lprobs = scores
+        non_pad_mask = gtruth.ne(self.padding_idx)
+        nll_loss = -lprobs.gather(1, gtruth.unsqueeze(1))[non_pad_mask]
+        smooth_loss = -lprobs.sum(dim=-1, keepdim=True)[non_pad_mask]
+        nll_loss = nll_loss.sum()
+        smooth_loss = smooth_loss.sum()
+
+        eps_i = self.smoothing_value
+        loss = (1. - self.label_smoothing) * nll_loss + eps_i * smooth_loss
+        loss_data = nll_loss.data.item()
+
+        return loss, loss_data
     
-    def forward(self, dists, targets, hiddens, **kwargs):
-        """
-        Compute the loss. Subclass must define this method.
-        Args:
-            batch: the current batch.
-            output: the predict output from the model.
-            target: the validate target to compare output with.
-            **kwargs(optional): additional info for computing loss.
-        """
+    def forward(self, model_outputs, targets, hiddens, **kwargs):
+
         return NotImplementedError
         
         
 
-class NMTLossFunc(LossFuncBase):
+class NMTLossFunc(CrossEntropyLossBase):
     
     
     """
     Standard NMT Loss Computation.
     """
-    def __init__(self, output_size, label_smoothing=0.0, shard_size=1):
-        super(NMTLossFunc, self).__init__(output_size)
-        self.shard_split = shard_size
-        
-        if label_smoothing > 0:
-            # When label smoothing is turned on,
-            # KL-divergence between q_{smoothed ground truth prob.}(w)
-            # and p_{prob. computed by model}(w) is minimized.
-            # If label smoothing value is set to zero, the loss
-            # is equivalent to NLLLoss or CrossEntropyLoss.
-            # All non-true labels are uniformly set to low-confidence.
-            #~ self.func = nn.KLDivLoss(size_average=False)
-            #~ one_hot = torch.randn(1, output_size)
-            #~ one_hot.fill_(self.smoothing_value)
-            #~ one_hot[0][self.padding_idx] = 0
-            #~ self.register_buffer('one_hot', one_hot)
-            self.smoothing_value = label_smoothing / (output_size - 2)
 
-            
-        else:
-            weight = torch.ones(output_size)
-            weight[self.padding_idx] = 0     
-            self.func = nn.NLLLoss(weight, reduction='sum')
-        self.confidence = 1.0 - label_smoothing
-        self.label_smoothing = label_smoothing
-
-        
-    def _compute_loss(self, scores, targets):
-        
-        gtruth = targets.view(-1) # batch * time
-        scores = scores.view(-1, scores.size(-1)) # batch * time X vocab_size
-        
-        if self.confidence < 1: # label smoothing
-            tdata = gtruth.data
-            
-            #~ # squeeze is a trick to know if mask has dimension or not
-            #~ mask = torch.nonzero(tdata.eq(self.padding_idx)).squeeze()
-            #~ likelihood = torch.gather(scores.data, 1, tdata.unsqueeze(1))
-            #~ tmp_ = self.one_hot.repeat(gtruth.size(0), 1)
-            #~ tmp_.scatter_(1, tdata.unsqueeze(1), self.confidence)
-            #~ if mask.numel() > 0:
-                #~ likelihood.index_fill_(0, mask, 0)
-                #~ tmp_.index_fill_(0, mask, 0)
-           
-            #~ gtruth = torch.autograd.Variable(tmp_, requires_grad=False)
-            #~ loss = self.func(scores, gtruth)
-            #~ oss_data = - likelihood.sum(0)
-            
-            lprobs = scores
-            non_pad_mask = gtruth.ne(self.padding_idx)
-            nll_loss = -lprobs.gather(1, gtruth.unsqueeze(1))[non_pad_mask]
-            smooth_loss = -lprobs.sum(dim=-1, keepdim=True)[non_pad_mask]
-            nll_loss = nll_loss.sum()
-            smooth_loss = smooth_loss.sum()
-
-            eps_i = self.smoothing_value
-            loss = (1. - self.label_smoothing)   * nll_loss + eps_i * smooth_loss
-            loss_data = nll_loss.data.item()
-            
-        else:
-            loss = self.func(scores.float(), gtruth)
-            loss_data = loss.data.item()
-
-        return (loss, loss_data)
-
-    def forward(self, outputs, targets, generator=None, backward=False, mask=None, normalizer=1):
+    def forward(self, model_outputs, targets, model=None, backward=False, normalizer=1, **kwargs):
         """
         Compute the loss. Subclass must define this method.
         Args:
              
-            outputs: the predictive output from the model. time x batch x vocab_size
+            model_outputs: a dictionary containing the predictive output from the model.
+                                                      time x batch x vocab_size
                                                    or time x batch x hidden_size 
-            target: the validate target to compare output with. time x batch
-            generator: in case we want to save memory and 
+            targets: the validate target to compare output with. time x batch
+            model: passing the model in for necessary components
+            backward: to control if we should perform backward pass (to free the graph) or not
+            normalizer: the denominator of the loss before backward
             **kwargs(optional): additional info for computing loss.
         """
-        
-        original_outputs = outputs
-        batch_size = outputs.size(1)
-        h_size = outputs.size(-1)
+
+        outputs = model_outputs['hidden']
+
+
+        # original_outputs = hiddens
+        # batch_size = outputs.size(1)
+        # h_size = outputs.size(-1)
         
         # flatten the output
         outputs = outputs.contiguous().view(-1, outputs.size(-1))
         targets = targets.view(-1)
+
+        mask = model_outputs['tgt_mask']
 
         if mask is not None:
             """ We remove all positions with PAD """
@@ -146,24 +101,24 @@ class NMTLossFunc(LossFuncBase):
         else:
             clean_input = outputs
             clean_targets = targets
-        
-        detached_outputs = clean_input
-        """ detaching makes backward pass split into two steps:
-            one in the linear softmax (big)
-            one in the rest of the network
-            saving a lot of memory 
-        """
-        dists = generator(clean_input)
+
+        if model is not None:
+            # the 'first' generator is the decoder softmax one
+            dists = model.generator[0](clean_input)
+        else:
+            dists = clean_input
 
         loss, loss_data = self._compute_loss(dists, clean_targets)
 
         if backward:
             loss.div(normalizer).backward()
-        
-        return loss, loss_data, None
 
+        output_dict = {"loss": loss, "data": loss_data}
 
-class CTCLossFunc(LossFuncBase):
+        # return loss, loss_data, None
+        return output_dict
+
+class CTCLossFunc(_Loss):
     """
     Standard NMT Loss Computation.
     """
@@ -171,59 +126,33 @@ class CTCLossFunc(LossFuncBase):
     def __init__(self, output_size, label_smoothing=0.0, shard_size=1):
         super(CTCLossFunc, self).__init__(output_size)
         self.shard_split = shard_size
+        self.ctc = nn.CTCLoss(output_size-1, reduction='sum')
 
-        if label_smoothing > 0:
-            self.smoothing_value = label_smoothing / (output_size - 2)
-        else:
-            weight = torch.ones(output_size)
-            weight[self.padding_idx] = 0
-        self.func = nn.CTCLoss(output_size-1, reduction='sum')
-        self.confidence = 1.0 - label_smoothing
-        self.label_smoothing = label_smoothing
 
-    def _compute_loss(self, scores, targets):
-
-        gtruth = targets.view(-1)  # batch * time
-        scores = scores.view(-1, scores.size(-1))  # batch * time X vocab_size
-
-        if self.confidence < 1:  # label smoothing
-            tdata = gtruth.data
-
-            lprobs = scores
-            non_pad_mask = gtruth.ne(self.padding_idx)
-            nll_loss = -lprobs.gather(1, gtruth.unsqueeze(1))[non_pad_mask]
-            smooth_loss = -lprobs.sum(dim=-1, keepdim=True)[non_pad_mask]
-            nll_loss = nll_loss.sum()
-            smooth_loss = smooth_loss.sum()
-
-            eps_i = self.smoothing_value
-            loss = (1. - self.label_smoothing) * nll_loss + eps_i * smooth_loss
-            loss_data = nll_loss.data.item()
-
-        else:
-            loss = self.func(scores.float(), gtruth)
-            loss_data = loss.data.item()
-
-        return (loss, loss_data)
-
-    def forward(self, outputs, targets, generator=None, backward=False, target_mask=None, source_mask = None, normalizer=1):
+    def forward(self, model_outputs, targets, model=None, backward=False, normalizer=1, **kwargs):
         """
-        Compute the loss. Subclass must define this method.
         Args:
 
-            outputs: the predictive output from the model. time x batch x vocab_size
+            model_outputs: a dictionary containing the predictive output from the model.
+                                                      time x batch x vocab_size
                                                    or time x batch x hidden_size
-            target: the validate target to compare output with. time x batch
-            generator: in case we want to save memory and
+            targets: the validate target to compare output with. time x batch
+            model: passing the model in for necessary components
+            backward: to control if we should perform backward pass (to free the graph) or not
+            normalizer: the denominator of the loss before backward
             **kwargs(optional): additional info for computing loss.
         """
 
+        outputs = model_outputs['encoder']
         original_outputs = outputs
         batch_size = outputs.size(1)
         h_size = outputs.size(-1)
 
+        source_mask = model_outputs['src_mask']
+        target_mask = model_outputs['tgt_mask']
+
         target_length = target_mask.sum(0)
-        if(source_mask.dim() == 3):
+        if source_mask.dim() == 3:
             input_length = (1-source_mask).squeeze(1).sum(1)
         else:
             input_length = (1-source_mask).sum(1)
@@ -239,58 +168,101 @@ class CTCLossFunc(LossFuncBase):
         size = outputs.size()
         outputs = outputs.contiguous().view(-1, outputs.size(-1))
 
-        detached_outputs = outputs
+        clean_input = outputs
 
-        dists = generator(outputs)
+        # dists = generator(outputs)
+        if model is not None:
+            # the 'second' generator is the encoder softmax one
+            dists = model.generator[1](clean_input)
+        else:
+            dists = clean_input
 
-        dists = dists.view(size[0],size[1],-1)
+        # reshape back to 3D for CTC
+        dists = dists.view(size[0], size[1], -1)
 
-        loss = self.func(dists,targets.transpose(0,1),input_length,target_length)
+        loss = self.ctc(dists,targets.transpose(0,1), input_length, target_length)
 
         loss_data = loss.data.item()
 
-        if(not numpy.isfinite(loss_data)):
-            print("Input:",input_length)
-            print("Target:",target_length)
-            print("Compare:",comp)
-            print("Selected:",comp.nonzero().squeeze().size())
-            loss = torch.zeros_like(loss)
-            loss_data = loss.data.item()
+        # if not numpy.isfinite(loss_data):
+        #     print("Input:", input_length)
+        #     print("Target:", target_length)
+        #     print("Compare:", comp)
+        #     print("Selected:", comp.nonzero().squeeze().size())
+        #     loss = torch.zeros_like(loss)
+        #     loss_data = loss.data.item()
 
         if backward:
             loss.div(normalizer).backward()
 
-        return loss,loss_data, None
+        output_dict = {"loss": loss, "data": loss_data}
+        return output_dict
+        # return loss,loss_data, None
 
 
-class NMTAndCTCLossFunc(LossFuncBase):
+class NMTAndCTCLossFunc(_Loss):
     """
     Standard NMT Loss Computation.
     """
 
-    def __init__(self, output_size, label_smoothing=0.0, shard_size=1,ctc_weight = 0.0):
+    def __init__(self, output_size, label_smoothing=0.0, ctc_weight = 0.0):
         super(NMTAndCTCLossFunc, self).__init__(output_size)
-        self.shard_split = shard_size
-        self.ctc_weight = 0.0
-        self.nmt = NMTLossFunc(output_size,label_smoothing,shard_size)
-        self.ctc = CTCLossFunc(output_size+1,label_smoothing,shard_size)
+        self.ctc_weight = ctc_weight
+        self.ce_loss = NMTLossFunc(output_size,label_smoothing)
+        self.ctc_loss = CTCLossFunc(output_size+1,label_smoothing)
 
-    def forward(self, outputs, enc_output, targets, generator=None, backward=False, target_mask=None, source_mask = None, normalizer=1):
-        n_loss,n_loss_data,_ = self.nmt.forward(outputs,targets,generator[0],False,target_mask,normalizer)
-        ctc_loss,ctc_loss_data,_ = self.ctc.forward(enc_output,targets,generator[1],False,target_mask,source_mask,normalizer);
-        loss = self.ctc_weight * ctc_loss + (1-self.ctc_weight)*n_loss
-        loss_data = self.ctc_weight * ctc_loss_data + (1-self.ctc_weight)*n_loss_data
-        if(not numpy.isfinite(ctc_loss_data)):
-            print("CTC_Loss:",ctc_loss_data)
-            print("NMT_Loss:",n_loss_data)
+    def forward(self, model_outputs, targets, model=None, backward=False, normalizer=1, **kwargs):
+        """
+        Args:
+
+            model_outputs: a dictionary containing the predictive output from the model.
+                                                      time x batch x vocab_size
+                                                   or time x batch x hidden_size
+            targets: the validate target to compare output with. time x batch
+            model: passing the model in for necessary components
+            backward: to control if we should perform backward pass (to free the graph) or not
+            normalizer: the denominator of the loss before backward
+            **kwargs(optional): additional info for computing loss.
+        """
+        ce_loss = self.ce_loss(model_outputs, targets, model,False, normalizer)
+        ctc_loss = self.ctc_loss(model_outputs, targets, model, False, normalizer)
+
+        loss = self.ctc_weight * ctc_loss['loss'] + (1-self.ctc_weight) * ce_loss['loss']
+        loss_data = self.ctc_weight * ctc_loss['data'] + (1-self.ctc_weight) * ce_loss['data']
+
+        if not numpy.isfinite(ctc_loss['data']):
+            print("CTC_Loss:",ctc_loss['data'])
+            print("NMT_Loss:",ce_loss['data'])
             print("Loss:",loss_data)
             exit()
+
         if backward:
             loss.div(normalizer).backward()
 
-        return loss,loss_data,None
+        output_dict = {"loss": loss, "data": loss_data}
+
+        return output_dict
 
     def cuda(self):
-        self.nmt = self.nmt.cuda()
-        self.ctc = self.ctc.cuda()
+        self.ce_loss = self.ce_loss.cuda()
+        self.ctc_loss = self.ctc_loss.cuda()
         return self
+
+
+class FusionLoss(CrossEntropyLossBase):
+
+    def forward(self, model_outputs, targets, model=None, backward=False, normalizer=1, **kwargs):
+        """
+        Args:
+
+            model_outputs: a dictionary containing the predictive output from the model.
+                                                      time x batch x vocab_size
+                                                   or time x batch x hidden_size
+            targets: the validate target to compare output with. time x batch
+            model: passing the model in for necessary components
+            backward: to control if we should perform backward pass (to free the graph) or not
+            normalizer: the denominator of the loss before backward
+            **kwargs(optional): additional info for computing loss.
+        """
+
+        pass
