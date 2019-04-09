@@ -50,12 +50,9 @@ class CrossEntropyLossBase(_Loss):
     def forward(self, model_outputs, targets, hiddens, **kwargs):
 
         return NotImplementedError
-        
-        
+
 
 class NMTLossFunc(CrossEntropyLossBase):
-    
-    
     """
     Standard NMT Loss Computation.
     """
@@ -117,6 +114,7 @@ class NMTLossFunc(CrossEntropyLossBase):
 
         # return loss, loss_data, None
         return output_dict
+
 
 class CTCLossFunc(_Loss):
     """

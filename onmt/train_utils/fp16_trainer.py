@@ -124,7 +124,7 @@ class FP16XETrainer(XETrainer):
         self.model.train()
         return total_loss / total_words
         
-    def train_epoch(self, epoch, resume=False, batchOrder=None, iteration=0):
+    def train_epoch(self, epoch, resume=False, batch_order=None, iteration=0):
         
         opt = self.opt
         train_data = self.train_data
@@ -138,11 +138,11 @@ class FP16XETrainer(XETrainer):
 
         # Shuffle mini batch order.
         if resume:
-            train_data.batchOrder = batchOrder
+            train_data.batch_order = batch_order
             train_data.set_index(iteration)
             print("Resuming from iteration: %d" % iteration)
         else:
-            batchOrder = train_data.create_order()
+            batch_order = train_data.create_order()
             iteration = 0
 
         total_loss, total_words = 0, 0
@@ -264,7 +264,7 @@ class FP16XETrainer(XETrainer):
                             
                             ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
                             
-                            self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
+                            self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
                 
 
                 num_words = tgt_size
@@ -315,12 +315,12 @@ class FP16XETrainer(XETrainer):
             
             if not opt.reset_optim:
                 self.optim.load_state_dict(checkpoint['optim'])
-                batchOrder = checkpoint['batchOrder']
+                batch_order = checkpoint['batch_order']
                 iteration = checkpoint['iteration'] + 1
                 opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
                 resume=True  
             else:
-                batchOrder = None
+                batch_order = None
                 iteration = 0
                 resume=False
                 
@@ -329,7 +329,7 @@ class FP16XETrainer(XETrainer):
             del checkpoint['optim']
             del checkpoint
         else:
-            batchOrder = None
+            batch_order = None
             iteration = 0
             print('Initializing model parameters')
             init_model_parameters(model, opt)
@@ -347,7 +347,7 @@ class FP16XETrainer(XETrainer):
 
             #  (1) train for one epoch on the training set
             train_loss = self.train_epoch(epoch, resume=resume,
-                                                 batchOrder=batchOrder,
+                                                 batch_order=batch_order,
                                                  iteration=iteration)
             train_ppl = math.exp(min(train_loss, 100))
             print('Train perplexity: %g' % train_ppl)
@@ -359,7 +359,7 @@ class FP16XETrainer(XETrainer):
             
             
             self.save(epoch, valid_ppl)
-            batchOrder = None
+            batch_order = None
             iteration = None
             resume = False
         
