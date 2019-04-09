@@ -134,11 +134,13 @@ def build_model(opt, dicts):
 
     return model
 
+
 def init_model_parameters(model, opt):
 
     # currently this function does not do anything
     # because the parameters are locally initialized
     pass
+
 
 def build_language_model(opt, dicts):
 
@@ -175,7 +177,7 @@ def build_fusion(opt, dicts):
 
     # the fusion model requires a pretrained language model
     print("Loading pre-trained language model from %s" % opt.lm_checkpoint)
-    lm_checkpoint = torch.load(opt.lm_checkpoint)
+    lm_checkpoint = torch.load(opt.lm_checkpoint, map_location=lambda storage, loc: storage)
 
     # first we build the lm model and lm checkpoint
     lm_opt = lm_checkpoint['opt']
