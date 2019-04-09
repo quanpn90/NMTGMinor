@@ -38,10 +38,10 @@ class TransformerLM(NMTModel):
         context = None
         src = None
 
-        output, _ = self.decoder(tgt, context, src)
+        decoder_output = self.decoder(tgt, context, src)
 
         output_dict = defaultdict(lambda: None)
-        output_dict['hidden'] = output
+        output_dict['hidden'] = decoder_output['hidden']
 
         return output_dict
 

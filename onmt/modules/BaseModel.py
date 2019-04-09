@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 import torch.nn.functional as F
 import onmt, math
 
@@ -64,8 +63,9 @@ class NMTModel(nn.Module):
             
             if 'positional_encoder' in param_name:
                 return False
-            if 'time_transformer' in param_name and self.encoder.time == 'positional_encoding':
-                return False
+            if 'time_transformer' in param_name:
+                if self.encoder is not None and self.encoder.time == 'positional_encoding':
+                    return False
             if param_name == 'decoder.mask':
                 return False
             
@@ -73,12 +73,9 @@ class NMTModel(nn.Module):
         
 
         #restore old generated if necessay for loading
-        if("generator.linear.weight" in state_dict and type(self.generator) is nn.ModuleList):
+        if "generator.linear.weight" in state_dict and type(self.generator) is nn.ModuleList:
             self.generator = self.generator[0]
 
-        #~ filtered_dict = dict()
-        
-        #~ for
         filtered = {k: v for k, v in state_dict.items() if condition(k)}
         
         #~ for k, v in filtered.items():
@@ -94,7 +91,7 @@ class NMTModel(nn.Module):
 
         super().load_state_dict(filtered)   
 
-        if(type(self.generator) is not nn.ModuleList):
+        if type(self.generator) is not nn.ModuleList:
             self.generator = nn.ModuleList([self.generator])
 
         #~ for name, param in state_dict.items():

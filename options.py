@@ -187,6 +187,8 @@ def make_parser(parser):
     parser.add_argument('-lm_checkpoint', default='', type=str,
                         help="""If training from a checkpoint then this is the
                             path to the pretrained model.""")
+    parser.add_argument('-fusion', action='store_true',
+                        help='Use fusion training with language model')
 
     
     return parser
