@@ -7,8 +7,7 @@ import onmt
 from onmt.modules.WordDrop import embedded_dropout
 #~ from onmt.modules.Checkpoint import checkpoint
 from torch.utils.checkpoint import checkpoint
-from torch.autograd import Variable
-
+from collections import defaultdict
 
 
 def custom_layer(module):
@@ -41,5 +40,8 @@ class TransformerLM(NMTModel):
 
         output, _ = self.decoder(tgt, context, src)
 
-        return output, _, _
+        output_dict = defaultdict(lambda: None)
+        output_dict['hidden'] = output
+
+        return output_dict
 

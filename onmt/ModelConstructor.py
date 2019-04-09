@@ -45,16 +45,23 @@ def build_model(opt, dicts):
     onmt.Constants.attention_out = opt.attention_out
     onmt.Constants.residual_type = opt.residual_type
 
+    # BUILD POSITIONAL ENCODING
+    if opt.time == 'positional_encoding':
+        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
+    else:
+        positional_encoder = None
+        raise NotImplementedError
+
+    # BUILD GENERATOR
+    generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
+
+    if opt.ctc_loss != 0:
+        generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size() + 1))
     
     if opt.model == 'transformer':
         # raise NotImplementedError
 
         onmt.Constants.init_value = opt.param_init
-        
-        if opt.time == 'positional_encoding':
-            positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
-        else:
-            positional_encoder = None
 
         if opt.encoder_type == "text":
             encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
@@ -62,25 +69,15 @@ def build_model(opt, dicts):
             encoder = TransformerEncoder(opt, opt.input_size, positional_encoder)
 
         decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder)
-        
-        generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
 
-        if opt.ctc_loss != 0:
-            generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
-        
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
-        
-        #~ print(encoder)
-        
+
     elif opt.model == 'stochastic_transformer':
         
         from onmt.modules.StochasticTransformer.Models import StochasticTransformerEncoder, StochasticTransformerDecoder
 
         onmt.Constants.weight_norm = opt.weight_norm
         onmt.Constants.init_value = opt.param_init
-
-        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
-        #~ positional_encoder = None
         
         if opt.encoder_type == "text":
             encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder)
@@ -88,13 +85,9 @@ def build_model(opt, dicts):
             encoder = StochasticTransformerEncoder(opt, opt.input_size, positional_encoder)
 
         decoder = StochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
-        
-        generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
-
-        if opt.ctc_loss != 0:
-            generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
 
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
+
 
     elif opt.model in ['universal_transformer', 'utransformer'] :
 
@@ -104,40 +97,12 @@ def build_model(opt, dicts):
         onmt.Constants.weight_norm = opt.weight_norm
         onmt.Constants.init_value = opt.param_init
 
-        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN )
         time_encoder = TimeEncoding(opt.model_size, len_max=32)
-
 
         encoder = UniversalTransformerEncoder(opt, dicts['src'], positional_encoder, time_encoder)
         decoder = UniversalTransformerDecoder(opt, dicts['tgt'], positional_encoder, time_encoder)
 
-        generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
-        if(opt.ctc_loss != 0):
-            generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
-
-        
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
-
-    elif opt.model in ['iid_stochastic_transformer'] :
-
-        from onmt.modules.IIDStochasticTransformer.Models import IIDStochasticTransformerEncoder, IIDStochasticTransformerDecoder
-
-        onmt.Constants.weight_norm = opt.weight_norm
-        onmt.Constants.init_value = opt.param_init
-
-        positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
-        #~ positional_encoder = None
-
-        encoder = IIDStochasticTransformerEncoder(opt, dicts['src'], positional_encoder)
-
-        decoder = IIDStochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
-
-        generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
-        if(opt.ctc_loss != 0):
-            generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size()+1))
-
-        model = Transformer(encoder, decoder, nn.ModuleList(generators))
-
 
     else:
         raise NotImplementedError
@@ -149,8 +114,6 @@ def build_model(opt, dicts):
     if opt.join_embedding:
         print("Joining the weights of encoder and decoder word embeddings")
         model.share_enc_dec_embedding()
-
-
 
     for g in model.generator:
         init.xavier_uniform_(g.linear.weight)
@@ -170,7 +133,7 @@ def build_model(opt, dicts):
             init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
 
     return model
-    
+
 def init_model_parameters(model, opt):
 
     # currently this function does not do anything
@@ -204,5 +167,27 @@ def build_language_model(opt, dicts):
         init.xavier_uniform_(g.linear.weight)
 
     init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
+
+    return model
+
+
+def build_fusion(opt, dicts):
+
+    # the fusion model requires a pretrained language model
+    lm_checkpoint = torch.load(opt.lm_checkpoint)
+
+    # first we build the lm model and lm checkpoint
+    lm_opt = lm_checkpoint['opt']
+
+    lm_model = build_language_model(lm_opt, dicts)
+
+    # load parameter for pretrained model
+    lm_model.load_state_dict(lm_checkpoint['model'])
+
+    # main model
+
+    tm_model = build_model(opt, dicts)
+
+    model = FusionNetwork(tm_model, lm_model)
 
     return model

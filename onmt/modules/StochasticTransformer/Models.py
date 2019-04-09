@@ -101,39 +101,39 @@ class StochasticTransformerDecoder(TransformerDecoder):
             self.layer_modules.append(block)
 
 
-class StochasticTransformer(NMTModel):
-    """Main model in 'Attention is all you need' """
-    
-        
-    def forward(self, input):
-        """
-        Inputs Shapes: 
-            src: len_src x batch_size
-            tgt: len_tgt x batch_size
-        
-        Outputs Shapes:
-            out:      batch_size*len_tgt x model_size
-            
-            
-        """
-        src = input[0]
-        tgt = input[1][:-1]  # exclude last target from inputs
-        
-        src = src.transpose(0, 1) # transpose to have batch first
-        tgt = tgt.transpose(0, 1)
-        
-        context, src_mask = self.encoder(src)
-        
-        output, coverage = self.decoder(tgt, context, src)
-        
-        output = output.transpose(0, 1) # transpose to have time first, like RNN models
-        
-        return output
-
-
-    def create_decoder_state(self, src, context, beamSize=1):
-        
-        from onmt.modules.TransformerLM.Models import TransformerDecodingState
-        
-        decoder_state = TransformerDecodingState(src, context, beamSize=beamSize)
-        return decoder_state
+# class StochasticTransformer(NMTModel):
+#     """Main model in 'Attention is all you need' """
+#
+#
+#     def forward(self, input):
+#         """
+#         Inputs Shapes:
+#             src: len_src x batch_size
+#             tgt: len_tgt x batch_size
+#
+#         Outputs Shapes:
+#             out:      batch_size*len_tgt x model_size
+#
+#
+#         """
+#         src = input[0]
+#         tgt = input[1][:-1]  # exclude last target from inputs
+#
+#         src = src.transpose(0, 1) # transpose to have batch first
+#         tgt = tgt.transpose(0, 1)
+#
+#         context, src_mask = self.encoder(src)
+#
+#         output, coverage = self.decoder(tgt, context, src)
+#
+#         output = output.transpose(0, 1) # transpose to have time first, like RNN models
+#
+#         return output
+#
+#
+#     def create_decoder_state(self, src, context, beamSize=1):
+#
+#         from onmt.modules.TransformerLM.Models import TransformerDecodingState
+#
+#         decoder_state = TransformerDecodingState(src, context, beamSize=beamSize)
+#         return decoder_state

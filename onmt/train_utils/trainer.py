@@ -134,21 +134,14 @@ class XETrainer(BaseTrainer):
                         prob distribution from decoder generator
                 """
 
-                """ outputs can be either 
-                                        hidden states from decoder or
-                                        prob distribution from decoder generator
-                                """
-                outputs, encoder, src_mask = self.model(batch)
+                outputs = self.model(batch)
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.Constants.PAD)
+                outputs['tgt_mask'] = tgt_mask
 
-                if self.opt.ctc_loss != 0:
-
-                    _,loss_data,grad_outputs = self.loss_function(outputs,encoder,targets,generator=self.model.generator,backward=False,
-                                                                  source_mask=src_mask,target_mask=tgt_mask)
-                else:
-                    _,loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator[0],
-                                                             backward=False, mask=tgt_mask)
+                loss_dict = self.loss_function(outputs, targets, model=self.model,
+                                               backward=False)
+                loss_data = loss_dict['data']
 
                 total_loss += loss_data
                 total_words += batch.tgt_size
@@ -197,25 +190,22 @@ class XETrainer(BaseTrainer):
             
             oom = False
             try:
-            
-                outputs, encoder,src_mask = self.model(batch)
+
+                outputs = self.model(batch)
 
                 targets = batch.get('target_output')
                 tgt_inputs = batch.get('target_input')
 
                 batch_size = batch.size
 
-                tgt_mask = targets.ne(onmt.Constants.PAD)
-                tgt_size = batch.tgt_size
+                tgt_mask = targets.data.ne(onmt.Constants.PAD)
+                outputs['tgt_mask'] = tgt_mask
                 
                 normalizer = 1
 
-                if self.opt.ctc_loss != 0:
-                    _,loss_data,grad_outputs = self.loss_function(outputs, encoder,targets,generator=self.model.generator,backward=True,
-                                                                  source_mask=src_mask,target_mask=tgt_mask)
-                else:
-                    _,loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator[0],
-                                                             backward=True, mask=tgt_mask)
+                loss_dict = self.loss_function(outputs, targets, model=self.model,
+                                               backward=True, normalizer=normalizer)
+                loss_data = loss_dict['data']
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
