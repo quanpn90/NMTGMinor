@@ -73,8 +73,6 @@ class NMTLossFunc(CrossEntropyLossBase):
         """
 
         outputs = model_outputs['hidden']
-
-
         # original_outputs = hiddens
         # batch_size = outputs.size(1)
         # h_size = outputs.size(-1)
