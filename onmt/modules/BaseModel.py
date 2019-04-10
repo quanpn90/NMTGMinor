@@ -3,9 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import onmt, math
 
-
-#~ from onmt.modules.Transformer.Layers import XavierLinear
-
 class Generator(nn.Module):
 
     def __init__(self, hidden_size, output_size):
@@ -105,10 +102,6 @@ class NMTModel(nn.Module):
                 #~ continue
         #~ pretrained_dict = {k: v for k, v in state_dict.items() if v}
 
-        
-        
-    
-
 
 class Reconstructor(nn.Module):
     
@@ -125,5 +118,11 @@ class DecoderState(object):
     input_feeding and non-recurrent models.
     Modules need to implement this to utilize beam search decoding.
     """
-    
-    
+
+    def update_beam(self, beam, b, remaining_sents, idx):
+
+        raise NotImplementedError
+
+    def prune_complete_beam(self, active_idx, remaining_sents):
+
+        raise NotImplementedError
