@@ -290,9 +290,10 @@ class TransformerDecoder(nn.Module):
         if self.time == 'positional_encoding':
             emb = self.time_transformer(emb, t=input.size(1))
         else:
-            prev_h = buffer[0] if buffer is None else None
-            emb = self.time_transformer(emb, prev_h)
-            buffer[0] = emb[1]
+            # prev_h = buffer[0] if buffer is None else None
+            # emb = self.time_transformer(emb, prev_h)
+            # buffer[0] = emb[1]
+            raise NotImplementedError
 
         if isinstance(emb, tuple):
             emb = emb[0]
@@ -324,7 +325,8 @@ class TransformerDecoder(nn.Module):
 
             buffer = buffers[i] if i in buffers else None
             assert(output.size(0) == 1)
-            output, coverage, buffer = layer.step(output, context, mask_tgt, mask_src, buffer=buffer) # batch_size x len_src x d_model
+
+            output, coverage, buffer = layer.step(output, context, mask_tgt, mask_src, buffer=buffer)
 
             decoder_state.update_attention_buffer(buffer, i)
 
@@ -337,12 +339,13 @@ class TransformerDecoder(nn.Module):
         return output, coverage
 
 
-
 class Transformer(NMTModel):
     """Main model in 'Attention is all you need' """
-    
-        
-    # def forward(self, input, grow=False):
+
+    def __init__(self, encoder, decoder, generator=None):
+        super().__init__( encoder, decoder, generator)
+        self.model_size = self.decoder.model_size
+
     def forward(self, batch):
         """
         Inputs Shapes: 
@@ -392,8 +395,8 @@ class Transformer(NMTModel):
 
         context = self.encoder(src)['context']
 
-        if (hasattr(self,
-            'autoencoder') and self.autoencoder and self.autoencoder.representation == "EncoderHiddenState"):
+        if hasattr(self,'autoencoder') and self.autoencoder \
+                and self.autoencoder.representation == "EncoderHiddenState":
             context = self.autoencoder.autocode(context)
 
         gold_scores = context.new(batch_size).zero_()
@@ -404,8 +407,8 @@ class Transformer(NMTModel):
 
         output = decoder_output
 
-        if (hasattr(self, 'autoencoder')
-                     and self.autoencoder and self.autoencoder.representation == "DecoderHiddenState"):
+        if hasattr(self, 'autoencoder')  and self.autoencoder and \
+                self.autoencoder.representation == "DecoderHiddenState":
             output = self.autoencoder.autocode(output)
 
         for dec_t, tgt_t in zip(output, tgt_output):
@@ -419,21 +422,49 @@ class Transformer(NMTModel):
 
         return gold_words, gold_scores, allgold_scores
 
-    def create_decoder_state(self, batch, beam_size=1):
+    def step(self, input_t, decoder_state):
+        """
+        Decoding function:
+        generate new decoder output based on the current input and current decoder state
+        the decoder state is updated in the process
+        :param input_t: the input word index at time t
+        :param decoder_state: object DecoderState containing the buffers required for decoding
+        :return: a dictionary containing: log-prob output and the attention coverage
+        """
+        hidden, coverage = self.decoder.step(input_t, decoder_state)
 
+        log_prob = self.generator[0](hidden.squeeze(1))
+
+        last_coverage = coverage[:, -1, :].squeeze(1)
+
+        output_dict = defaultdict(lambda: None)
+
+        output_dict['log_prob'] = log_prob
+        output_dict['coverage'] = last_coverage
+
+        return output_dict
+
+    def create_decoder_state(self, batch, beam_size=1):
+        """
+        Generate a new decoder state based on the batch input
+        :param batch: Batch object (may not contain target during decoding)
+        :param beam_size: Size of beam used in beam search
+        :return:
+        """
         src = batch.get('source')
 
         src_transposed = src.transpose(0, 1)
         encoder_output = self.encoder(src_transposed)
 
-        decoder_state = TransformerDecodingState(src, encoder_output['context'], beam_size=beam_size)
+        decoder_state = TransformerDecodingState(src, encoder_output['context'],
+                                                 beam_size=beam_size, model_size=self.model_size)
 
         return decoder_state
 
 
 class TransformerDecodingState(DecoderState):
     
-    def __init__(self, src, context, beam_size=1):
+    def __init__(self, src, context, beam_size=1, model_size=512):
 
         # if audio only take one dimension since only used for mask
         self.original_src = src
@@ -442,11 +473,15 @@ class TransformerDecodingState(DecoderState):
         else:
             self.src = src.repeat(1, beam_size)
 
-        self.context = context.repeat(1, beam_size, 1)
+        if context is not None:
+            self.context = context.repeat(1, beam_size, 1)
+        else:
+            self.context = None
         self.beam_size = beam_size
 
         self.input_seq = None
         self.attention_buffers = dict()
+        self.model_size = model_size
 
     def update_attention_buffer(self, buffer, layer):
 
@@ -462,9 +497,11 @@ class TransformerDecodingState(DecoderState):
             sent_states.copy_(sent_states.index_select(
                 1, beam[b].getCurrentOrigin()))
 
-
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]
+
+            if buffer_ is None:
+                continue
 
             for k in buffer_:
                 t_, br_, d_ = buffer_[k].size()
@@ -477,23 +514,25 @@ class TransformerDecodingState(DecoderState):
     # compacted so that the decoder is not run on completed sentences
     def prune_complete_beam(self, active_idx, remaining_sents):
 
-        model_size = self.context.size(-1)
+        model_size = self.model_size
 
         def update_active(t):
+            if t is None:
+                return t
             # select only the remaining active sentences
             view = t.data.view(-1, remaining_sents, model_size)
             new_size = list(t.size())
             new_size[-2] = new_size[-2] * len(active_idx) // remaining_sents
             return view.index_select(1, active_idx).view(*new_size)
 
-
         def update_active_2d(t):
+            if t is None:
+                return t
             view = t.view(-1, remaining_sents)
             new_size = list(t.size())
             new_size[-1] = new_size[-1] * len(active_idx) // remaining_sents
             new_t = view.index_select(1, active_idx).view(*new_size)
             return new_t
-
 
         self.context = update_active(self.context)
 

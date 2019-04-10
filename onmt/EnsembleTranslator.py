@@ -3,13 +3,13 @@ import onmt.modules
 import torch.nn as nn
 import torch
 import math
-from torch.autograd import Variable
 from onmt.ModelConstructor import build_model
 from ae.Autoencoder import Autoencoder
 import torch.nn.functional as F
 import sys
 
 model_list = ['transformer', 'stochastic_transformer']
+
 
 class EnsembleTranslator(object):
     def __init__(self, opt):
@@ -55,14 +55,14 @@ class EnsembleTranslator(object):
                 if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:
                     print("Not enough len to decode. Renewing .. ")    
                     model.decoder.renew_buffer(self.opt.max_sent_length)
-            
+
+            if opt.fp16:
+                model = model.half()
+
             if opt.cuda:
                 model = model.cuda()
             else:
                 model = model.cpu()
-
-            if opt.fp16:
-                model = model.half()
 
             model.eval()
             
@@ -126,7 +126,7 @@ class EnsembleTranslator(object):
                 
             output.div(len(outputs))
             
-            #~ output = torch.log(output)
+            # output = torch.log(output)
             output = F.log_softmax(output, dim=-1)
         elif self.ensemble_op == "mean":
             output = torch.exp(outputs[0])
@@ -137,7 +137,7 @@ class EnsembleTranslator(object):
                 
             output.div(len(outputs))
             
-            #~ output = torch.log(output)
+            # output = torch.log(output)
             output = torch.log(output)
         elif self.ensemble_op == 'gmean':
             output = torch.exp(outputs[0])
@@ -170,26 +170,7 @@ class EnsembleTranslator(object):
         
         return attn
 
-#     def _getbatch_size(self, batch):
-# #        if self._type == "text":
-#             return batch.size(1)
-# #        else:
-# #            return batch.size(0)
-            
-    # def to_variable(self, data):
-    #     for i, t in enumerate(data):
-    #         if data[i] is not None:
-    #             if self.cuda:
-    #                 if(data[i].type() == "torch.FloatTensor" and self.fp16):
-    #                     data[i] = data[i].half()
-    #                 data[i] = Variable(data[i].cuda())
-    #             else:
-    #                 data[i] = Variable(data[i])
-    #         else:
-    #             data[i] = None
-    #     return data
-
-    def buildData(self, src_sents, tgt_sents):
+    def build_data(self, src_sents, tgt_sents):
         # This needs to be the same as preprocess.py.
         
         if self.start_with_bos:
@@ -213,7 +194,7 @@ class EnsembleTranslator(object):
                             , data_type=self._type,
                             batch_size_sents =self.opt.batch_size)
 
-    def buildASRData(self, src_data, tgt_sents):
+    def build_asr_data(self, src_data, tgt_sents):
         # This needs to be the same as preprocess.py.
 
         tgt_data = None
@@ -279,17 +260,22 @@ class EnsembleTranslator(object):
             attns = dict()
             
             for k in range(self.n_models):
-                decoder_hidden, coverage = self.models[k].decoder.step(decoder_input.clone(), decoder_states[k])
-                
-                # take the last decoder state
-                decoder_hidden = decoder_hidden.squeeze(1)
-                attns[k] = coverage[:, -1, :].squeeze(1) # batch * beam x src_len
+                # decoder_hidden, coverage = self.models[k].decoder.step(decoder_input.clone(), decoder_states[k])
+                decoder_output = self.models[k].step(decoder_input.clone(), decoder_states[k])
 
-#                if(hasattr(self, 'autoencoder') and self.autoencoder and self.autoencoder.representation == "DecoderHiddenState"):
+                outs[k] = decoder_output['log_prob']
+                attns[k] = decoder_output['coverage']
+
+                # outs[k] = self.models[k].generator[0](decoder_hidden)
+                # take the last decoder state
+                # decoder_hidden = decoder_hidden.squeeze(1)
+                # attns[k] = coverage[:, -1, :].squeeze(1) # batch * beam x src_len
+
+#                if(hasattr(self, 'autoencoder') and self.autoencoder
+                #                and self.autoencoder.representation == "DecoderHiddenState"):
 #                    decoder_hidden = self.autoencoder.autocode(decoder_hidden)
 
-                # batch * beam x vocab_size 
-                outs[k] = self.models[k].generator[0](decoder_hidden)
+                # batch * beam x vocab_size
             
             out = self._combineOutputs(outs)
             attn = self._combineAttention(attns)
@@ -311,8 +297,7 @@ class EnsembleTranslator(object):
                     
                 for j in range(self.n_models):
                     decoder_states[j].update_beam(beam, b, remaining_sents, idx)
-               
-                
+
             if not active:
                 break
                 
@@ -365,7 +350,7 @@ class EnsembleTranslator(object):
 
     def translate(self, src_data, tgt_data):
         #  (1) convert words to indexes
-        dataset = self.buildData(src_data, tgt_data)
+        dataset = self.build_data(src_data, tgt_data)
         batch = dataset.next()[0]
         if self.cuda:
             batch.cuda(fp16=self.fp16)
@@ -386,7 +371,7 @@ class EnsembleTranslator(object):
 
     def translateASR(self, src_data, tgt_data):
         #  (1) convert words to indexes
-        dataset = self.buildASRData(src_data, tgt_data)
+        dataset = self.build_asr_data(src_data, tgt_data)
         # src, tgt = batch
         batch = dataset.next()[0]
         if self.cuda:

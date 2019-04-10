@@ -191,6 +191,8 @@ class XETrainer(BaseTrainer):
             oom = False
             try:
 
+                # outputs is a dictionary containing keys/values necessary for loss function
+                # can be flexibly controlled within models for easier extensibility
                 outputs = self.model(batch)
 
                 targets = batch.get('target_output')
@@ -219,15 +221,14 @@ class XETrainer(BaseTrainer):
                 src_size = batch.src_size
                 tgt_size = batch.tgt_size
                 
-                
                 counter = counter + 1 
                 num_accumulated_words += tgt_size
                 num_accumulated_sents += batch_size
                 
                 # We only update the parameters after getting gradients from n mini-batches
                 # simulating the multi-gpu situation
-                #~ if counter == opt.virtual_gpu:
-                #~ if counter >= opt.batch_size_update:
+                # if counter == opt.virtual_gpu:
+                # if counter >= opt.batch_size_update:
                 
                 if num_accumulated_words >= opt.batch_size_update * 0.95:
                     grad_denom = 1
@@ -248,7 +249,6 @@ class XETrainer(BaseTrainer):
                         ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
                         
                         self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
-                
 
                 num_words = tgt_size
                 report_loss += loss_data
@@ -256,11 +256,8 @@ class XETrainer(BaseTrainer):
                 report_src_words += src_size
                 total_loss += loss_data
                 total_words += num_words
-                
                 optim = self.optim
-                
-                
-                
+
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
                     print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
                            "%5.0f src tok/s; %5.0f tgt tok/s; %s elapsed") %
@@ -275,12 +272,9 @@ class XETrainer(BaseTrainer):
                     report_loss, report_tgt_words = 0, 0
                     report_src_words = 0
                     start = time.time()
-            
-            
+
         return total_loss / total_words
-    
-    
-    
+
     def run(self, save_file=None):
         
         opt = self.opt
@@ -296,7 +290,7 @@ class XETrainer(BaseTrainer):
             print('Loading model and optim from checkpoint at %s' % save_file)
             self.model.load_state_dict(checkpoint['model'])
             
-            if opt.reset_optim == False:
+            if not opt.reset_optim:
                 self.optim.load_state_dict(checkpoint['optim'])
                 batch_order = checkpoint['batch_order']
                 iteration = checkpoint['iteration'] + 1
@@ -307,7 +301,6 @@ class XETrainer(BaseTrainer):
                 iteration = 0
                 resume=False
 
-            
             del checkpoint['model']
             del checkpoint['optim']
             del checkpoint
@@ -338,8 +331,7 @@ class XETrainer(BaseTrainer):
             valid_loss = self.eval(self.valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
             print('Validation perplexity: %g' % valid_ppl)
-            
-            
+
             self.save(epoch, valid_ppl)
             batch_order = None
             iteration = None
