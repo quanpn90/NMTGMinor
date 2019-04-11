@@ -422,6 +422,9 @@ class Transformer(NMTModel):
 
         return gold_words, gold_scores, allgold_scores
 
+    def renew_buffer(self, new_len):
+        self.decoder.renew_buffer(new_len)
+
     def step(self, input_t, decoder_state):
         """
         Decoding function:
@@ -431,6 +434,7 @@ class Transformer(NMTModel):
         :param decoder_state: object DecoderState containing the buffers required for decoding
         :return: a dictionary containing: log-prob output and the attention coverage
         """
+
         hidden, coverage = self.decoder.step(input_t, decoder_state)
 
         log_prob = self.generator[0](hidden.squeeze(1))
@@ -468,10 +472,13 @@ class TransformerDecodingState(DecoderState):
 
         # if audio only take one dimension since only used for mask
         self.original_src = src
-        if src.dim() == 3:
-            self.src = src.narrow(2, 0, 1).squeeze(2).repeat(1, beam_size)
+        if src is not None:
+            if src.dim() == 3:
+                self.src = src.narrow(2, 0, 1).squeeze(2).repeat(1, beam_size)
+            else:
+                self.src = src.repeat(1, beam_size)
         else:
-            self.src = src.repeat(1, beam_size)
+            self.src = None
 
         if context is not None:
             self.context = context.repeat(1, beam_size, 1)
@@ -490,6 +497,9 @@ class TransformerDecodingState(DecoderState):
     def update_beam(self, beam, b, remaining_sents, idx):
 
         for tensor in [self.src, self.input_seq]  :
+
+            if tensor is None:
+                continue
 
             t_, br = tensor.size()
             sent_states = tensor.view(t_, self.beam_size, remaining_sents)[:, :, idx]

@@ -54,9 +54,14 @@ class FusionNetwork(nn.Module):
         # (2) generate the logits for tm
         tm_logits = self.tm_model.generator[0](tm_state, log_softmax=False)
 
-        dists = F.log_softmax(tm_logits + log_lm)
+        # (3) add the bias of lm to the logits
+        dists = F.log_softmax(tm_logits + log_lm, dim=-1)
 
         return dists
+
+    def renew_buffer(self, new_len):
+        self.tm_model.decoder.renew_buffer(new_len)
+        self.lm_model.decoder.renew_buffer(new_len)
 
     def decode(self, batch):
         """
@@ -120,6 +125,8 @@ class FusionNetwork(nn.Module):
         :return: a dictionary containing: log-prob output and the attention coverage
         """
 
+        # print(input_t)
+
         # (1) decode using the translation model
         tm_hidden, coverage = self.tm_model.decoder.step(input_t, decoder_state.tm_state)
 
@@ -150,10 +157,10 @@ class FusionNetwork(nn.Module):
         encoder_output = self.tm_model.encoder(src_transposed)
 
         tm_decoder_state = TransformerDecodingState(src, encoder_output['context'],
-                                                    beam_size=beam_size, model_size=self.tm_model_size)
+                                                    beam_size=beam_size, model_size=self.tm_model.model_size)
 
-        lm_decoder_state = TransformerDecodingState(src, encoder_output['context'],
-                                                    beam_size=beam_size, model_size=self.tm_model_size)
+        lm_decoder_state = TransformerDecodingState(None, None,
+                                                    beam_size=beam_size, model_size=self.tm_model.model_size)
 
         decoder_state = FusionDecodingState(tm_decoder_state, lm_decoder_state)
 

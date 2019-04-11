@@ -300,7 +300,7 @@ class FusionLoss(CrossEntropyLossBase):
             # PRENORM algorithm from
             # https://arxiv.org/pdf/1809.00125.pdf
             # Simple Fusion: Return of the Language Model
-            dists = F.log_softmax(tm_logits + log_lm)
+            dists = F.log_softmax(tm_logits + log_lm, dim=-1)
 
         else:
             raise NotImplementedError
