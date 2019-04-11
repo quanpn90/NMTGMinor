@@ -3,7 +3,7 @@ import onmt.modules
 import torch.nn as nn
 import torch
 import math
-from onmt.ModelConstructor import build_model
+from onmt.ModelConstructor import build_model, build_fusion
 from ae.Autoencoder import Autoencoder
 import torch.nn.functional as F
 import sys
@@ -40,21 +40,26 @@ class EnsembleTranslator(object):
             model_opt = checkpoint['opt']
             
             if i == 0:
-                if("src" in checkpoint['dicts']):
+                if "src" in checkpoint['dicts']:
                     self.src_dict = checkpoint['dicts']['src']
                 else:
                     self._type = "audio"
                 self.tgt_dict = checkpoint['dicts']['tgt']
             
             # Build model from the saved option
-            model = build_model(model_opt, checkpoint['dicts'])
-            
+            if hasattr(model_opt, 'fusion') and model_opt.fusion == True:
+                print("* Loading a FUSION model")
+                model = build_fusion(model_opt, checkpoint['dicts'])
+            else:
+                model = build_model(model_opt, checkpoint['dicts'])
+
             model.load_state_dict(checkpoint['model'])
             
             if model_opt.model in model_list:
-                if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:
-                    print("Not enough len to decode. Renewing .. ")    
-                    model.decoder.renew_buffer(self.opt.max_sent_length)
+                # if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:
+                #     print("Not enough len to decode. Renewing .. ")
+                #     model.decoder.renew_buffer(self.opt.max_sent_length)
+                model.renew_buffer(self.opt.max_sent_length)
 
             if opt.fp16:
                 model = model.half()
@@ -177,11 +182,11 @@ class EnsembleTranslator(object):
             src_data = [self.src_dict.convertToIdx(b,
                               onmt.Constants.UNK_WORD,
                               onmt.Constants.BOS_WORD)
-                       for b in src_data]
+                       for b in src_sents]
         else:
             src_data = [self.src_dict.convertToIdx(b,
                               onmt.Constants.UNK_WORD)
-                       for b in src_data]
+                       for b in src_sents]
 
         tgt_data = None
         if tgt_sents:
@@ -210,7 +215,7 @@ class EnsembleTranslator(object):
     def buildTargetTokens(self, pred, src, attn):
         tokens = self.tgt_dict.convertToLabels(pred, onmt.Constants.EOS)
         tokens = tokens[:-1]  # EOS
-        
+
         return tokens
 
     def translate_batch(self, batch):

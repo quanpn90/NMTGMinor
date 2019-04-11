@@ -94,20 +94,25 @@ torch.manual_seed(opt.seed)
 
 
 def split_line_by_char(line, word_list=["<unk>"]):
+
+
+    # words = line.strip()
+    # chars = list(words)
+
     # first we split by words
-    # words = line.strip().split()
-    words = line.strip()
-    chars = list(words)
-    #
-    # for i, word in enumerate(words):
-    #     if word in word_list:
-    #         chars.append(word)
-    #     else:
-    #         for c in word:
-    #             chars.append(c)
-    #
-    #     if i < (len(words) - 1):
-    #         chars.append(' ')
+    chars = list()
+
+    words = line.strip().split()
+
+    for i, word in enumerate(words):
+        if word in word_list:
+            chars.append(word)
+        else:
+            for c in word:
+                chars.append(c)
+
+        if i < (len(words) - 1):
+            chars.append(' ')
 
     return chars
 
@@ -146,20 +151,22 @@ def make_vocab(filename, size, input_type='word'):
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
                       lower=opt.lower)
 
+    unk_count = 0
+
     with open(filename) as f:
         for sent in f.readlines():
             if input_type == "word":
                 for word in sent.split():
-                    vocab.add(word)
+                    idx = vocab.add(word)
             elif input_type == "char":
-                # sent = sent.strip()
-                # for char in sent:
-                #     vocab.add(char)
                 chars = split_line_by_char(sent)
                 for char in chars:
-                    vocab.add(char)
+                    idx = vocab.add(char)
             else:
                 raise NotImplementedError("Input type not implemented")
+
+            if idx == 'onmt.Constants.UNK':
+                unk_count += 1
 
     original_size = vocab.size()
     vocab = vocab.prune(size)
@@ -367,6 +374,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
     src_sizes = []
     tgt_sizes = []
     count, ignored = 0, 0
+    n_unk_words = 0
 
     print('Processing %s & %s ...' % (src_file, tgt_file))
 
@@ -427,12 +435,23 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
 
             # For src text, we use BOS for possible reconstruction
             src += [sline]
-            tgt += [tgt_dicts.convertToIdx(tgt_words,
+
+            tgt_tensor = tgt_dicts.convertToIdx(tgt_words,
                                           onmt.Constants.UNK_WORD,
                                           onmt.Constants.BOS_WORD,
-                                          onmt.Constants.EOS_WORD)]
+                                          onmt.Constants.EOS_WORD)
+            tgt += [tgt_tensor]
             src_sizes += [len(sline)]
             tgt_sizes += [len(tgt_words)]
+
+            unks =  tgt_tensor.eq(onmt.Constants.UNK).sum().item()
+            n_unk_words += unks
+
+            if unks > 0:
+                if ("<unk>") not in tline:
+                    print(tline)
+
+
         else:
             ignored += 1
 
@@ -443,6 +462,8 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
 
     srcf.close()
     tgtf.close()
+
+    print('Total number of unk words: %d' % n_unk_words)
 
     if opt.shuffle == 1:
         print('... shuffling sentences')

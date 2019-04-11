@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 from __future__ import division
 
 import onmt
@@ -217,8 +219,6 @@ def main():
             goldScoreTotal += goldScore
             goldWordsTotal += goldWords
             srcBatch, tgtBatch = [], []
-            
-
 
     else:
         
@@ -247,8 +247,7 @@ def main():
                 # at the end of file, check last batch
                 if len(srcBatch) == 0:
                     break
-                    
-            
+
             predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores  = translator.translate(srcBatch,
                                                                                     tgtBatch)
 
@@ -304,11 +303,6 @@ def translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, p
             outF.flush()
 
         if opt.verbose:
-            #~ srcSent = ' '.join(srcBatch[b])
-            #srcSent = ''.join(srcBatch[b])
-            #if translator.tgt_dict.lower:
-            #    srcSent = srcSent.lower()
-            #print('SENT %d: %s' % (count, srcSent))
             print('PRED %d: %s' % (count, getSentenceFromTokens(predBatch[b][0], input_type)))
             print("PRED SCORE: %.4f" %  predScore[b][0])
 
@@ -323,7 +317,7 @@ def translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, p
                     print(allGoldScores[j][b].item(),end =" ")
                 print ()
             if opt.print_nbest:
-                print('\nBEST HYP:')
+                print('\n BEST HYP:')
                 for n in range(opt.n_best):
                     idx = n
                     print("[%.4f] %s" % (predScore[b][idx],
@@ -333,8 +327,6 @@ def translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, p
 
     return count,predScoreTotal,predWordsTotal,goldScoreTotal,goldWordsTotal
     
-    
-
 
 if __name__ == "__main__":
     main()

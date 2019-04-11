@@ -45,6 +45,8 @@ def build_model(opt, dicts):
     onmt.Constants.attention_out = opt.attention_out
     onmt.Constants.residual_type = opt.residual_type
 
+
+
     # BUILD POSITIONAL ENCODING
     if opt.time == 'positional_encoding':
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
