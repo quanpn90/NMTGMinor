@@ -8,7 +8,7 @@ from ae.Autoencoder import Autoencoder
 import torch.nn.functional as F
 import sys
 
-model_list = ['transformer', 'stochastic_transformer']
+model_list = ['transformer', 'stochastic_transformer', 'fusion_network']
 
 
 class EnsembleTranslator(object):

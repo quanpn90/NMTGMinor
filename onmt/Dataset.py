@@ -9,7 +9,7 @@ import onmt
 
 
 class Batch(object):
-    "An object to manage the "
+    # An object to manage the data within a minibatch
     def __init__(self, src_data, tgt_data=None,
                  src_type='text',
                  src_align_right=False, tgt_align_right=False):
@@ -154,15 +154,15 @@ class Dataset(object):
                 sentence_length = self.src[i].size(0)
 
             oversized = oversize_(cur_batch)
-            # if the current length makes the batch exceeds
-            # the we create a new batch
+            # if the current item makes the batch exceed max size
+            # then we create a new batch
             if oversized:
 
+                # cut-off the current list to fit the multiplier
                 current_size = len(cur_batch)
                 scaled_size = max(
                     self.multiplier * (current_size // self.multiplier),
                     current_size % self.multiplier)
-
 
                 batch_ =  cur_batch[:scaled_size]
                 self.batches.append(batch_) # add this batch into the batch list
@@ -204,7 +204,6 @@ class Dataset(object):
 
         return batch
 
-
     def __len__(self):
         return self.num_batches
         
@@ -237,7 +236,6 @@ class Dataset(object):
         self.cur_index += 1
 
         return [batch]
-
 
     def shuffle(self):
         data = list(zip(self.src, self.tgt))

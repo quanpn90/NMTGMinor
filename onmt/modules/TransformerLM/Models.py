@@ -1,7 +1,7 @@
 import numpy as np
 import torch, math
 import torch.nn as nn
-from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, PositionalEncoding, variational_dropout, PrePostProcessing
+from onmt.modules.Transformer.Models import TransformerDecodingState
 from onmt.modules.BaseModel import NMTModel, Reconstructor, DecoderState
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
@@ -19,6 +19,10 @@ def custom_layer(module):
 
 class TransformerLM(NMTModel):
     """Main model in 'Attention is all you need' """
+
+    def __init__(self, encoder, decoder, generator=None):
+        super().__init__( encoder, decoder, generator)
+        self.model_size = self.decoder.model_size
 
     def forward(self, batch):
         """
@@ -44,4 +48,9 @@ class TransformerLM(NMTModel):
         output_dict['hidden'] = decoder_output['hidden']
 
         return output_dict
+
+
+    def create_decoder_state(self, batch, beam_size=1):
+
+        return TransformerDecodingState(None, None, beam_size=beam_size, model_size=self.model_size)
 
