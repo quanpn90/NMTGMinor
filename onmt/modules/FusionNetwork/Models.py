@@ -125,8 +125,6 @@ class FusionNetwork(nn.Module):
         :return: a dictionary containing: log-prob output and the attention coverage
         """
 
-        # print(input_t)
-
         # (1) decode using the translation model
         tm_hidden, coverage = self.tm_model.decoder.step(input_t, decoder_state.tm_state)
 
@@ -134,6 +132,7 @@ class FusionNetwork(nn.Module):
         lm_hidden, ________ = self.lm_model.decoder.step(input_t, decoder_state.lm_state)
 
         log_prob = self.fuse_states(tm_hidden, lm_hidden)
+        # log_prob = self.tm_model.generator[0](tm_hidden)
 
         last_coverage = coverage[:, -1, :].squeeze(1)
 
@@ -151,16 +150,9 @@ class FusionNetwork(nn.Module):
         :param beam_size: Size of beam used in beam search
         :return:
         """
-        src = batch.get('source')
+        tm_decoder_state = self.tm_model.create_decoder_state(batch, beam_size=beam_size)
 
-        src_transposed = src.transpose(0, 1)
-        encoder_output = self.tm_model.encoder(src_transposed)
-
-        tm_decoder_state = TransformerDecodingState(src, encoder_output['context'],
-                                                    beam_size=beam_size, model_size=self.tm_model.model_size)
-
-        lm_decoder_state = TransformerDecodingState(None, None,
-                                                    beam_size=beam_size, model_size=self.tm_model.model_size)
+        lm_decoder_state = self.lm_model.create_decoder_state(batch, beam_size=beam_size)
 
         decoder_state = FusionDecodingState(tm_decoder_state, lm_decoder_state)
 

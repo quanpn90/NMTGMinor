@@ -315,8 +315,13 @@ class FP16XETrainer(XETrainer):
             
             if not opt.reset_optim:
                 self.optim.load_state_dict(checkpoint['optim'])
-                batch_order = checkpoint['batch_order']
-                iteration = checkpoint['iteration'] + 1
+
+                if 'batch_order' in checkpoint:
+                    batch_order = checkpoint['batch_order']
+                    iteration = checkpoint['iteration'] + 1
+                else:
+                    batch_order = None
+                    iteration = 0
                 opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
                 resume=True  
             else:

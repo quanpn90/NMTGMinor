@@ -312,5 +312,4 @@ class FusionLoss(CrossEntropyLossBase):
 
         output_dict = {"loss": loss, "data": loss_data}
 
-        # return loss, loss_data, None
         return output_dict
