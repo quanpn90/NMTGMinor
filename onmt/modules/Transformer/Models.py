@@ -601,6 +601,8 @@ class TransformerDecodingState(DecoderState):
         model_size = self.context.size(-1)
 
         def update_active_with_hidden(t):
+            if t is None:
+                return t
             # select only the remaining active sentences
             view = t.data.view(-1, remaining_sents, model_size)
             new_size = list(t.size())
@@ -608,7 +610,8 @@ class TransformerDecodingState(DecoderState):
             return view.index_select(1, active_idx).view(*new_size)
 
         def update_active_without_hidden(t):
-
+            if t is None:
+                return t
             view = t.view(-1, remaining_sents)
             new_size = list(t.size())
             new_size[-1] = new_size[-1] * len(active_idx) // remaining_sents

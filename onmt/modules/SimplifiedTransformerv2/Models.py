@@ -125,7 +125,7 @@ class SimplifiedTransformerEncoder(TransformerEncoder):
         # time first
         context = emb.transpose(0, 1).contiguous()
 
-        if return_stack == False:
+        if not return_stack:
 
             for i, layer in enumerate(self.layer_modules):
 
@@ -178,9 +178,6 @@ class SimplifiedTransformer(NMTModel):
     def __init__(self, encoder, decoder, generator=None, tgt_encoder=None):
         super().__init__(encoder, decoder, generator=generator)
         self.tgt_encoder = tgt_encoder
-
-        # if tgt_encoder is not None:
-
 
     def forward(self, batch, grow=False):
         """

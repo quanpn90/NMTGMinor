@@ -197,7 +197,7 @@ class EnsembleTranslator(object):
             tokens = tokens[:-1]  # EOS
         length = len(pred)
         
-        return token    s
+        return tokens
 
     def translate_batch(self, batch):
         
@@ -238,76 +238,76 @@ class EnsembleTranslator(object):
         beam = [onmt.Beam(beam_size, cuda=self.opt.cuda) for k in range(batch_size)]
         
         batchIdx = list(range(batch_size))
-        remainingSents = batch_size
-        
+        remaining_sents = batch_size
+
         decoder_states = dict()
 
         for i in range(self.n_models):
             # decoder_states[i] = self.models[i].create_decoder_state(src, contexts[i], src_mask, beam_size, type='old')
             decoder_states[i] = self.models[i].create_decoder_state(batch, beam_size)
-        
+
         for i in range(self.opt.max_sent_length):
             # Prepare decoder input.
-            
+
             # input size: 1 x ( batch * beam )
             input = torch.stack([b.getCurrentState() for b in beam if not b.done]).t().contiguous().view(1, -1)
-            
+
             """  
                 Inefficient decoding implementation
                 We re-compute all states for every time step
                 A better buffering algorithm will be implemented
             """
-           
+
             decoder_input = input
-            
+
             # require batch first for everything
             outs = dict()
             attns = dict()
-            
+
             for k in range(self.n_models):
                 decoder_hidden, coverage = self.models[k].decoder.step(decoder_input.clone(), decoder_states[k])
-                
+
                 # take the last decoder state
                 decoder_hidden = decoder_hidden.squeeze(1)
                 attns[k] = coverage[:, -1, :].squeeze(1) # batch * beam x src_len
-                
-                # batch * beam x vocab_size 
+
+                # batch * beam x vocab_size
                 outs[k] = self.models[k].generator(decoder_hidden)
-            
+
             out = self._combineOutputs(outs)
             attn = self._combineAttention(attns)
-                
-            wordLk = out.view(beam_size, remainingSents, -1) \
+
+            wordLk = out.view(beam_size, remaining_sents, -1) \
                         .transpose(0, 1).contiguous()
-            attn = attn.view(beam_size, remainingSents, -1) \
+            attn = attn.view(beam_size, remaining_sents, -1) \
                        .transpose(0, 1).contiguous()
-                       
+
             active = []
-            
+
             for b in range(batch_size):
                 if beam[b].done:
                     continue
-                
+
                 idx = batchIdx[b]
-                
+
                 if not beam[b].advance(wordLk.data[idx], attn.data[idx]):
                     active += [b]
-                    
+
                 for i in range(self.n_models):
-                    decoder_states[i]._update_beam(beam, b, remainingSents, idx)
+                    decoder_states[i]._update_beam(beam, b, remaining_sents, idx)
 
             if not active:
                 break
-                
+
             # in this section, the sentences that are still active are
             # compacted so that the decoder is not run on completed sentences
             activeIdx = self.tt.LongTensor([batchIdx[k] for k in active])
             batchIdx = {beam: idx for idx, beam in enumerate(active)}
 
             for k in range(self.n_models):
-                decoder_states[k]._prune_complete_beam(activeIdx, remainingSents)
+                decoder_states[k]._prune_complete_beam(activeIdx, remaining_sents)
 
-            remainingSents = len(active)
+            remaining_sents = len(active)
             
         #  (4) package everything up
         allHyp, allScores, allAttn = [], [], []
