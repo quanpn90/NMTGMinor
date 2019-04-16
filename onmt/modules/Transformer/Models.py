@@ -201,6 +201,7 @@ class TransformerDecoder(nn.Module):
         self.emb_dropout = opt.emb_dropout
         self.time = opt.time
         self.residual_dropout = opt.residual_dropout
+        self.copy_generator = opt.copy_generator
         self.pooling = opt.var_pooling
 
         if opt.time == 'positional_encoding':
@@ -240,6 +241,7 @@ class TransformerDecoder(nn.Module):
                                                              self.attn_dropout, self.residual_dropout)
                                                 for _ in range(self.layers)])
         else:
+
             print("* Sharing Encoder and Decoder weights for self attention and feed forward layers ...")
             self.layer_modules = nn.ModuleList()
 
@@ -306,6 +308,7 @@ class TransformerDecoder(nn.Module):
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
 
+        # transpose to T x B x H
         output = emb.transpose(0, 1).contiguous()
 
         for i, layer in enumerate(self.layer_modules):
@@ -313,7 +316,6 @@ class TransformerDecoder(nn.Module):
             returns[i] = dict()
 
             if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:
-                # batch_size x len_src x d_model
                 output_dict = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src)
 
 
@@ -419,8 +421,15 @@ class TransformerDecoder(nn.Module):
         # a whole stack of unnormalized layer outputs.    
         output = self.postprocess_layer(output)
 
-        return output, coverage
+        returns = dict()
 
+        returns['hiddens'] = output
+        returns['coverage'] = coverage
+        returns['src'] = src
+
+        # return output, coverage
+
+        return returns
 
 class Transformer(NMTModel):
     """Main model in 'Attention is all you need' """
@@ -442,7 +451,7 @@ class Transformer(NMTModel):
         """
         src = batch.get('source')
         tgt = batch.get('target_input')
-
+        original_src = src
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
@@ -453,6 +462,7 @@ class Transformer(NMTModel):
         decoder_output = self.decoder(tgt, tgt_attbs, context, src, grow=grow)
 
         output_dict = dict()
+        output_dict['src'] = src
         output_dict['hiddens'] = decoder_output['final_state']
         output_dict['coverage'] = decoder_output['coverage']
 
@@ -515,6 +525,18 @@ class Transformer(NMTModel):
             gold_words += tgt_t.ne(onmt.Constants.PAD).sum().item()
 
         return gold_words, gold_scores
+
+    def step(self, input, decoder_state):
+
+        decoder_output = self.decoder.step(input, decoder_state)
+
+        # decoder_hidden = decoder_output['hiddens'].squeeze(1)
+        coverage = decoder_output['coverage'][:, -1, :].squeeze(1) # batch * beam x src_len
+
+        log_dist = self.generator(decoder_output).squeeze(1)
+
+        return log_dist, coverage
+        # return self.decoder.step(input, decoder_state)
 
     def create_decoder_state(self, batch, beam_size):
 

@@ -55,6 +55,9 @@ def update_backward_compatibility(opt):
     if not hasattr(opt, 'var_combine_z'):
         opt.var_combine_z = 'once'
 
+    if not hasattr(opt, 'copy_generator'):
+        opt.copy_generator = False
+
     if not hasattr(opt, 'loss_function'):
 
         if opt.model in ['transformer', 'simplified_transformer', 'simplified_transformer_v2']:
@@ -103,6 +106,16 @@ def build_model(opt, dicts):
     #
     positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
 
+    if opt.copy_generator:
+
+        from onmt.modules.CopyGenerator import  CopyGenerator
+        generator = CopyGenerator(opt.model_size, dicts['tgt'].size())
+
+    else:
+
+        from onmt.modules.BaseModel import Generator
+        generator = Generator(opt.model_size, dicts['tgt'].size())
+
     # new model construction:
     # base model is always transformer
 
@@ -120,7 +133,6 @@ def build_model(opt, dicts):
         decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding,
                                      encoder_to_share=encoder if opt.share_enc_dec_weights else None)
 
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
 
         model = Transformer(encoder, decoder, generator)
 
@@ -137,8 +149,6 @@ def build_model(opt, dicts):
 
         decoder = StochasticTransformerDecoder(opt, embedding_tgt, positional_encoder)
 
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
-
         model = Transformer(encoder, decoder, generator)
 
         # loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
@@ -150,8 +160,6 @@ def build_model(opt, dicts):
         encoder = SimplifiedTransformerEncoder(opt, embedding_src, positional_encoder)
 
         decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
-
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
 
         tgt_encoder = SimplifiedTransformerEncoder(opt, embedding_tgt, positional_encoder, share=encoder) \
                             if opt.model == 'l2_transformer' else None
@@ -166,8 +174,6 @@ def build_model(opt, dicts):
         encoder = CompressedTransformerEncoder(opt, embedding_src, positional_encoder)
 
         decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
-
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
 
         tgt_encoder = CompressedTransformerEncoder(opt, embedding_tgt, positional_encoder, share=encoder) \
             if opt.model == 'l2_simplified_transformer_v2' else None
@@ -186,8 +192,6 @@ def build_model(opt, dicts):
 
         tgt_decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
 
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
-
         model = ParallelAttentionTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder, tgt_decoder=tgt_decoder)
 
     # this is 'probably' the model that uses normalization like Google
@@ -199,8 +203,6 @@ def build_model(opt, dicts):
         decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
 
         tgt_encoder = TransformerEncoder(opt, embedding_tgt, positional_encoder, share=encoder)
-
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
 
         model = Transformer(encoder, decoder, generator, tgt_encoder=tgt_encoder)
 
@@ -231,8 +233,6 @@ def build_model(opt, dicts):
 
         tgt_decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
 
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
-
         model = ParallelTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder, tgt_decoder=tgt_decoder)
 
     elif opt.model == 'parallel_softmax_transformer':
@@ -247,8 +247,6 @@ def build_model(opt, dicts):
 
         tgt_decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
 
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
-
         model = ParallelTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder, tgt_decoder=tgt_decoder)
 
     elif opt.model == 'parallel_simplified_transformer':
@@ -258,8 +256,6 @@ def build_model(opt, dicts):
         encoder = SimplifiedTransformerEncoder(opt, embedding_src, positional_encoder)
 
         decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
-
-        generator = onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())
 
         tgt_encoder = SimplifiedTransformerEncoder(opt, embedding_tgt, positional_encoder, share=encoder)
 
@@ -291,7 +287,7 @@ def build_model(opt, dicts):
 
     init = torch.nn.init
         
-    init.xavier_uniform_(model.generator.linear.weight)
+    # init.xavier_uniform_(model.generator.linear.weight)
     
     if opt.init_embedding == 'xavier':
         init.xavier_uniform_(model.encoder.word_lut.weight)

@@ -24,16 +24,20 @@ class Generator(nn.Module):
         self.linear.bias.data.zero_()
         
 
-    def forward(self, input, log_softmax=True):
-        
+    # def forward(self, input, log_softmax=True):
+    def forward(self, net_output, log_softmax=True):
+
         # added float to the end 
         # print(input.size())
+        input = net_output['hiddens']
+
         logits = self.linear(input).float() 
         
         if log_softmax:
             output = F.log_softmax(logits, dim=-1)
         else:
             output = logits
+
         return output
         
 

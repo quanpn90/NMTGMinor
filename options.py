@@ -33,6 +33,8 @@ def make_parser(parser):
                         additional input (via concatenation with the word
                         embeddings) to the decoder.""")
 
+    parser.add_argument('-copy_generator', action='store_true',
+                        help='Use copy generator during training')
     parser.add_argument('-loss_function', type=int, default=0,
                         help="""Merge action for the bidirectional hidden states:
                         [concat|sum]""")

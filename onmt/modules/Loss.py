@@ -40,7 +40,6 @@ class LossFuncBase(_Loss):
 
 class NMTLossFunc(LossFuncBase):
     
-    
     """
     Standard NMT Loss Computation.
     """
@@ -122,10 +121,17 @@ class NMTLossFunc(LossFuncBase):
         """
         
         outputs = output_dict['hiddens']
+        attn = output_dict['coverage'].transpose(0, 1)
+        src = output_dict['src']
+
         mask = tgt_mask
         # flatten the output
         outputs = outputs.contiguous().view(-1, outputs.size(-1))
         targets = targets.view(-1)
+
+        src = src.unsqueeze(0).expand_as(attn).contiguous().view(-1, src.size(-1))
+        attn = attn.contiguous().view(-1, attn.size(-1))
+
 
         if mask is not None:
             """ We remove all positions with PAD 
@@ -138,12 +144,22 @@ class NMTLossFunc(LossFuncBase):
             clean_input = outputs.index_select(0, non_pad_indices)
             
             clean_targets = targets.index_select(0, non_pad_indices)
-        
+
+            clean_attn = attn.index_select(0, non_pad_indices)
+
+            clean_src  = src.index_select(0, non_pad_indices)
+
         else:
             clean_input = outputs
             clean_targets = targets
+            clean_attn = attn
+            clean_src = src
+
+        output_dict['hiddens'] = clean_input
+        output_dict['coverage'] = clean_attn
+        output_dict['src'] = clean_src
         
-        dists = model.generator(clean_input)
+        dists = model.generator(output_dict)
         
         loss, loss_data = self._compute_loss(dists, clean_targets)
         

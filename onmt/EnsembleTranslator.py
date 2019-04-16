@@ -21,6 +21,7 @@ class EnsembleTranslator(object):
         self.start_with_bos = opt.start_with_bos
         self.fp16 = opt.fp16
         self.bos_token = opt.bos_token
+        self.start_with_tag = opt.start_with_tag
 
         print("* Starting token %s " % self.bos_token)
         
@@ -153,9 +154,15 @@ class EnsembleTranslator(object):
     def build_data(self, src_batch, gold_batch):
         # This needs to be the same as preprocess.py.
 
-        src_words = [ s[1:] for s in src_batch]
-        src_attbs = [self.atb_dict.convertToIdx([s[0]], onmt.Constants.UNK_WORD)
-                     for s in src_batch]
+        if self.start_with_tag:
+            src_words = [ s[1:] for s in src_batch]
+            src_attbs = [self.atb_dict.convertToIdx([s[0]], onmt.Constants.UNK_WORD)
+                         for s in src_batch]
+        else:
+            src_words = src_batch
+
+            src_attbs = [self.atb_dict.convertToIdx(onmt.Constants.UNK_WORD)
+                         for _ in src_batch]
 
         if self.start_with_bos:
             src_data = [self.src_dict.convertToIdx(b,
@@ -265,14 +272,18 @@ class EnsembleTranslator(object):
             attns = dict()
 
             for k in range(self.n_models):
-                decoder_hidden, coverage = self.models[k].decoder.step(decoder_input.clone(), decoder_states[k])
 
-                # take the last decoder state
-                decoder_hidden = decoder_hidden.squeeze(1)
-                attns[k] = coverage[:, -1, :].squeeze(1) # batch * beam x src_len
+                # note: keeping the old code just in case
+                # decoder_hidden, coverage = self.models[k].decoder.step(decoder_input.clone(), decoder_states[k])
+                #
+                # # take the last decoder state
+                # decoder_hidden = decoder_hidden.squeeze(1)
+                # attns[k] = coverage[:, -1, :].squeeze(1) # batch * beam x src_len
+                #
+                # # batch * beam x vocab_size
+                # outs[k] = self.models[k].generator(decoder_hidden)
 
-                # batch * beam x vocab_size
-                outs[k] = self.models[k].generator(decoder_hidden)
+                outs[k], attns[k] = self.models[k].step(decoder_input.clone(), decoder_states[k])
 
             out = self._combineOutputs(outs)
             attn = self._combineAttention(attns)

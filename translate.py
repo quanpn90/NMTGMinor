@@ -65,6 +65,8 @@ parser.add_argument('-normalize', action='store_true',
                     help='To normalize the scores based on output length')
 parser.add_argument('-fp16', action='store_true',
                     help='To use floating point 16 in decoding')
+parser.add_argument('-start_with_tag', action='store_true',
+                    help='If the data format has language tags in the beginning')
 parser.add_argument('-gpu', type=int, default=-1,
                     help="Device to run on")
 

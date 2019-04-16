@@ -27,7 +27,7 @@ class Batch(object):
 
         if tgt_data is not None:
             target_full, self.tgt_lengths = self.collate(tgt_data, align_right=tgt_align_right)
-            target_full = target_full.t().contiguous()
+            target_full = target_full.t().contiguous() # T x B
             self.tensors['target_input'] = target_full[:-1]
             self.tensors['target_output'] = target_full[1:]
             # self.tensors['tgt_pad_mask'] = self.tensors['target_input'].ne(onmt.Constants.PAD)

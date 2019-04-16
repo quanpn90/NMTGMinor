@@ -5,20 +5,12 @@ import torch
 
 from onmt.data_utils.IndexedDataset import IndexedDatasetBuilder
 
-
-def loadImageLibs():
-    "Conditional import of torch image libs."
-    global Image, transforms
-    from PIL import Image
-    from torchvision import transforms
-
-
 parser = argparse.ArgumentParser(description='preprocess.py')
 onmt.Markdown.add_md_help_argument(parser)
 
 # **Preprocess Options**
 
-parser.add_argument('-config',    help="Read options from this file")
+parser.add_argument('-config', help="Read options from this file")
 
 parser.add_argument('-src_type', default="text",
                     help="Type of the source input. Options are [text|img].")
@@ -28,7 +20,6 @@ parser.add_argument('-input_type', default="word",
                     help="Input type: word/char")
 parser.add_argument('-format', default="bin",
                     help="Save data format: binary or raw. Binary should be used to load faster")
-
 
 parser.add_argument('-train_src', required=True,
                     help="Path to the training source data")
@@ -61,10 +52,10 @@ parser.add_argument('-tgt_seq_length', type=int, default=66,
 parser.add_argument('-tgt_seq_length_trunc', type=int, default=0,
                     help="Truncate target sequence length.")
 
-parser.add_argument('-shuffle',    type=int, default=1,
+parser.add_argument('-shuffle', type=int, default=1,
                     help="Shuffle data")
-                    
-parser.add_argument('-seed',       type=int, default=3435,
+
+parser.add_argument('-seed', type=int, default=3435,
                     help="Random seed")
 
 parser.add_argument('-lower', action='store_true', help='lowercase data')
@@ -81,7 +72,6 @@ opt = parser.parse_args()
 
 torch.manual_seed(opt.seed)
 
-
 """
 About the data format used in this project: 
 
@@ -90,6 +80,7 @@ About the data format used in this project:
 - We need to create word dictionary (for source and target) and attb dictionary
 
 """
+
 
 #
 # def make_attb_vocabulary(filenames):
@@ -108,23 +99,22 @@ About the data format used in this project:
 
 
 def make_join_vocabulary(filenames, size, input_type="word", dict_atb=None, use_atb=True):
-    
     vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
                       lower=opt.lower)
 
     if dict_atb is None and use_atb:
         dict_atb = onmt.Dict()
-    
+
     for filename in filenames:
         print("Reading file %s ... " % filename)
         with open(filename) as f:
             for sent in f.readlines():
-                
+
                 if input_type == "word":
                     tokens = sent.split()
-                    attb = tokens[0] # the first token is the language atb
-                    words = tokens[1:] # normal words from the second token
+                    attb = tokens[0]  # the first token is the language atb
+                    words = tokens[1:]  # normal words from the second token
                     for word in words:
                         vocab.add(word)
                     dict_atb.add(attb)
@@ -186,7 +176,6 @@ def make_vocabulary(filename, size, input_type='word', dict_atb=None, use_atb=Tr
 
 
 def init_vocabulary(name, dataFile, vocabFile, vocabSize, join=False, input_type='word', dict_atb=None):
-
     vocab = None
     if vocabFile is not None:
         # If given, load existing word dictionary.
@@ -196,7 +185,7 @@ def init_vocabulary(name, dataFile, vocabFile, vocabSize, join=False, input_type
         print('Loaded ' + str(vocab.size()) + ' ' + name + ' words')
 
     if vocab is None:
-        
+
         # If a dictionary is still missing, generate it.
         if join:
             print('Building ' + 'shared' + ' vocabulary...')
@@ -269,11 +258,11 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
                 n_duplicate += 1
                 # ~ print('WARNING: ignoring a duplicated pair ('+str(count+1)+')')
                 continue
-            
+
         if sline == "" or tline == "":
-            print('WARNING: ignoring an empty line ('+str(count+1)+')')
+            print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
             continue
-        
+
         if input_type == 'word':
             src_words = src_words[1:]
             tgt_words = tgt_words[1:]
@@ -282,7 +271,7 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
             tgt_words = list(" ".join(tgt_words[1:]))
 
         if len(src_words) <= max_src_length \
-           and len(tgt_words) <= max_tgt_length - 2:
+                and len(tgt_words) <= max_tgt_length - 2:
 
             # Check truncation condition.
             if opt.src_seq_length_trunc != 0:
@@ -299,9 +288,9 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
             src_attbs += [src_attb]
 
             tgt_sent = tgt_dicts.convertToIdx(tgt_words,
-                                          onmt.Constants.UNK_WORD,
-                                          bosWord=bos_word,
-                                          eosWord=onmt.Constants.EOS_WORD)
+                                              onmt.Constants.UNK_WORD,
+                                              bosWord=bos_word,
+                                              eosWord=onmt.Constants.EOS_WORD)
 
             # convert the atb into index
             # this should be a vector of 1 element
@@ -320,7 +309,7 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
 
         if count % opt.report_every == 0:
             print('... %d sentences prepared' % count)
-    
+
     if remove_duplicate:
         print(' ... %d sentences removed for duplication' % n_duplicate)
     srcF.close()
@@ -341,14 +330,19 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
     tgt_attbs = [z_[5] for z_ in sorted_by_tgt_z]
 
     print(('Prepared %d sentences ' +
-          '(%d ignored due to error or src len > %d or tgt len > %d)') %
+           '(%d ignored due to error or src len > %d or tgt len > %d)') %
           (len(src), ignored, max_src_length, max_tgt_length))
 
     return src, tgt, src_attbs, tgt_attbs
 
 
-def main():
+class Preprocessor(object):
 
+    def __init__(self, opt):
+        self.opt = opt
+
+
+def main():
     dicts = dict()
 
     # first, we read the attb
@@ -362,15 +356,18 @@ def main():
 
     if opt.join_vocab:
         dicts['src'], dicts['atb'] = init_vocabulary('joined', [opt.train_src, opt.train_tgt], opt.src_vocab,
-                                      opt.tgt_vocab_size, join=True, input_type=opt.input_type, dict_atb=dicts['atb'])
+                                                     opt.tgt_vocab_size, join=True, input_type=opt.input_type,
+                                                     dict_atb=dicts['atb'])
 
         dicts['tgt'] = dicts['src']
     else:
         dicts['src'], dicts['atb'] = init_vocabulary('source', opt.train_src, opt.src_vocab,
-                                      opt.src_vocab_size, input_type=opt.input_type, dict_atb=dicts['atb'])
+                                                     opt.src_vocab_size, input_type=opt.input_type,
+                                                     dict_atb=dicts['atb'])
 
         dicts['tgt'], dicts['atb'] = init_vocabulary('target', opt.train_tgt, opt.tgt_vocab,
-                                      opt.tgt_vocab_size, input_type=opt.input_type, dict_atb=dicts['atb'])
+                                                     opt.tgt_vocab_size, input_type=opt.input_type,
+                                                     dict_atb=dicts['atb'])
 
     print("Created a language attribute dictionary with %d languages" % dicts['atb'].size())
 
@@ -380,27 +377,27 @@ def main():
     train['src'], train['tgt'] = dict(), dict()
 
     print('Preparing training ...')
-        
+
     train['src']['words'], train['tgt']['words'], train['src']['attbs'], train['tgt']['attbs'] = make_data(
-                                          opt.train_src, opt.train_tgt,
-                                          dicts['src'], dicts['tgt'], dicts['atb'],
-                                          max_src_length=opt.src_seq_length,
-                                          max_tgt_length=opt.tgt_seq_length, 
-                                          input_type=opt.input_type,
-                                          remove_duplicate=opt.remove_duplicate,
-                                          bos_word=opt.bos_word)
+        opt.train_src, opt.train_tgt,
+        dicts['src'], dicts['tgt'], dicts['atb'],
+        max_src_length=opt.src_seq_length,
+        max_tgt_length=opt.tgt_seq_length,
+        input_type=opt.input_type,
+        remove_duplicate=opt.remove_duplicate,
+        bos_word=opt.bos_word)
 
     print('Preparing validation ...')
 
     valid['src'], valid['tgt'] = dict(), dict()
 
     valid['src']['words'], valid['tgt']['words'], valid['src']['attbs'], valid['tgt']['attbs'] = make_data(
-                                          opt.valid_src, opt.valid_tgt,
-                                          dicts['src'], dicts['tgt'], dicts['atb'],
-                                          max_src_length=9999,
-                                          max_tgt_length=9999,
-                                          input_type=opt.input_type,
-                                          bos_word=opt.bos_word)
+        opt.valid_src, opt.valid_tgt,
+        dicts['src'], dicts['tgt'], dicts['atb'],
+        max_src_length=9999,
+        max_tgt_length=9999,
+        input_type=opt.input_type,
+        bos_word=opt.bos_word)
 
     # saving data to disk
     # save dicts in this format
