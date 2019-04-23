@@ -528,6 +528,7 @@ class Transformer(NMTModel):
             scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
             gold_scores += scores.squeeze(1).type_as(gold_scores)
             gold_scores += scores.squeeze(1).type_as(gold_scores)
+            gold_words += tgt_t.ne(onmt.Constants.PAD).sum().item()
         # for dec_t, tgt_t in zip(output, tgt_output):
         #
         #
