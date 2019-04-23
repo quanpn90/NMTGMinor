@@ -231,19 +231,35 @@ class SimplifiedTransformer(NMTModel):
 
         fake_src = src.new(context.size(1), context.size(0)).fill_(onmt.Constants.BOS)
 
-        dec_output = self.decoder(tgt_input, tgt_attbs, context, fake_src)
-        output = dec_output['final_state']
+        decoder_output = self.decoder(tgt_input, tgt_attbs, context, fake_src)
 
-        # scan through the sequence to get the sentence log probs
-        for dec_t, tgt_t in zip(output, tgt_output):
-            gen_t = self.generator(dec_t)
+        output_dict = dict()
+        output_dict['src'] = src
+        output_dict['hiddens'] = decoder_output['final_state']
+        output_dict['coverage'] = decoder_output['coverage']
+
+        gens = self.generator(output_dict)
+
+        for gen_t, tgt_t in zip(gens, tgt_output):
             tgt_t = tgt_t.unsqueeze(1)
             scores = gen_t.gather(1, tgt_t)
             scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
             gold_scores += scores.squeeze(1).type_as(gold_scores)
-            gold_words += tgt_t.ne(onmt.Constants.PAD).sum().item()
+            gold_scores += scores.squeeze(1).type_as(gold_scores)
 
         return gold_words, gold_scores
+
+    def step(self, input, decoder_state):
+
+        decoder_output = self.decoder.step(input, decoder_state)
+
+        # decoder_hidden = decoder_output['hiddens'].squeeze(1)
+        coverage = decoder_output['coverage'][:, -1, :].squeeze(1) # batch * beam x src_len
+
+        log_dist = self.generator(decoder_output).squeeze(1)
+
+        return log_dist, coverage
+        # return self.decoder.step(input, decoder_state)
 
     def create_decoder_state(self, batch, beam_size=1):
 

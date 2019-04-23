@@ -31,6 +31,15 @@ class CopyGenerator(nn.Module):
         # 2 dimensional for ( T x B ) x H format or the tensor with pads cleaned
         n_input_dim = input.dim()
 
+        # note:
+        # during training, we use masking to reduce computation
+        # so we have to clean mask from attn and src as well
+        # during testing, the input has 3 dimensions
+        if n_input_dim == 3:
+            if src.dim() == 2:
+                attn = attn.transpose(0, 1)
+                src = src.t().unsqueeze(0).expand_as(attn)
+
         # added float to the end
         # print(input.size())
         logits = self.linear(input).float() # len_tgt x B x H
@@ -45,6 +54,7 @@ class CopyGenerator(nn.Module):
         # p_g.scatter_add_(1, src.t().repeat(tlen, 1), p_c)
         # print(attn.size(), gate.size())
         p_c = torch.mul(attn, gate) # len_tgt x B x len_src
+
 
         # add up the probabilities into p_g
         p_g.scatter_add_(n_input_dim-1, src, p_c)

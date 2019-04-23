@@ -161,7 +161,7 @@ class EnsembleTranslator(object):
         else:
             src_words = src_batch
 
-            src_attbs = [self.atb_dict.convertToIdx(onmt.Constants.UNK_WORD)
+            src_attbs = [self.atb_dict.convertToIdx([onmt.Constants.UNK_WORD], onmt.Constants.UNK_WORD)
                          for _ in src_batch]
 
         if self.start_with_bos:

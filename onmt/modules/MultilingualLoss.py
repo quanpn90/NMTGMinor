@@ -29,32 +29,13 @@ class MSEEncoderLoss(NMTLossFunc):
             **kwargs(optional): additional info for computing loss.
         """
 
-        outputs = output_dict['hiddens']
-        mask = tgt_mask
-        # flatten the output
-        outputs = outputs.contiguous().view(-1, outputs.size(-1))
-        targets = targets.view(-1)
-
         if params is None:
             params = defaultdict(lambda: 0.0)
 
-        if mask is not None:
-            """ We remove all positions with PAD 
-                to save memory on unwanted positions
-            """
-            flattened_mask = mask.view(-1)
+        output_dict, targets = self.clean_padding(output_dict, targets, tgt_mask)
 
-            non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
 
-            clean_input = outputs.index_select(0, non_pad_indices)
-
-            clean_targets = targets.index_select(0, non_pad_indices)
-
-        else:
-            clean_input = outputs
-            clean_targets = targets
-
-        dists = model.generator(clean_input)
+        dists = model.generator(output_dict)
 
         loss, loss_data = self._compute_loss(dists, clean_targets)
 
@@ -225,7 +206,9 @@ class MSEDecoderLoss(NMTLossFunc):
             clean_targets = targets
             clean_output_from_tgt = tgt_outputs
 
-        dists_from_src = model.generator(clean_output_from_src)
+        net_src_output = { 'hiddens': clean_output_from_src }
+
+        dists_from_src = model.generator(net_src_output)
 
         loss, loss_data = self._compute_loss(dists_from_src, clean_targets)
 

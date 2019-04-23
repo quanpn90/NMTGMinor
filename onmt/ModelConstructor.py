@@ -169,16 +169,31 @@ def build_model(opt, dicts):
     elif opt.model == 'simplified_transformer_v2' or opt.model == 'l2_simplified_transformer_v2' :
 
         from onmt.modules.CompressedTransformer.Models import CompressedTransformerEncoder
-        from onmt.modules.SimplifiedTransformer.Models import SimplifiedTransformer
+        from onmt.modules.SimplifiedTransformer.Models import SimplifiedTransformer, ParallelSimplifiedTransformer
 
         encoder = CompressedTransformerEncoder(opt, embedding_src, positional_encoder)
 
         decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
 
-        tgt_encoder = CompressedTransformerEncoder(opt, embedding_tgt, positional_encoder, share=encoder) \
-            if opt.model == 'l2_simplified_transformer_v2' else None
+        # tgt_encoder = CompressedTransformerEncoder(opt, embedding_tgt, positional_encoder, share=encoder) \
+        #     if opt.model == 'l2_simplified_transformer_v2' else None
+        if opt.loss_function == 0:
+            tgt_encoder = None
 
-        model = SimplifiedTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder)
+            model = SimplifiedTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder)
+
+        else:
+            tgt_encoder = CompressedTransformerEncoder(opt, embedding_tgt, positional_encoder, share=encoder)
+
+            if opt.loss_function==2:
+                tgt_decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding)
+
+                model = ParallelSimplifiedTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder,
+                                                      tgt_decoder=tgt_decoder)
+
+            else:
+                raise NotImplementedError
+
 
     elif opt.model == 'parallel_attention_transformer':
 

@@ -106,25 +106,12 @@ class NMTLossFunc(LossFuncBase):
 
         return loss, loss_data
 
-    def forward(self, output_dict, targets, model=None, backward=False, tgt_mask=None, normalizer=1, **kwargs):
-        """
-        Compute the loss. Subclass must define this method.
-        Args:
-            output_dict: the predictive output from the model. time x batch x vocab_size
-                                                   or time x batch x hidden_size 
-            targets: the validate target to compare output with. time x batch
-            backward
-            tgt_mask: for masking the target (saving memory)
-            generator: in case we want to save memory and
-            normalizer: the denomination term of the loss
-            **kwargs(optional): additional info for computing loss.
-        """
-        
+    def clean_padding(self, output_dict, targets, mask):
+
         outputs = output_dict['hiddens']
         attn = output_dict['coverage'].transpose(0, 1)
         src = output_dict['src']
 
-        mask = tgt_mask
         # flatten the output
         outputs = outputs.contiguous().view(-1, outputs.size(-1))
         targets = targets.view(-1)
@@ -132,22 +119,21 @@ class NMTLossFunc(LossFuncBase):
         src = src.unsqueeze(0).expand_as(attn).contiguous().view(-1, src.size(-1))
         attn = attn.contiguous().view(-1, attn.size(-1))
 
-
         if mask is not None:
             """ We remove all positions with PAD 
                 to save memory on unwanted positions
             """
             flattened_mask = mask.view(-1)
-            
+
             non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
-            
+
             clean_input = outputs.index_select(0, non_pad_indices)
-            
+
             clean_targets = targets.index_select(0, non_pad_indices)
 
             clean_attn = attn.index_select(0, non_pad_indices)
 
-            clean_src  = src.index_select(0, non_pad_indices)
+            clean_src = src.index_select(0, non_pad_indices)
 
         else:
             clean_input = outputs
@@ -158,10 +144,28 @@ class NMTLossFunc(LossFuncBase):
         output_dict['hiddens'] = clean_input
         output_dict['coverage'] = clean_attn
         output_dict['src'] = clean_src
+
+        return output_dict, clean_targets
+
+    def forward(self, output_dict, targets, model=None, backward=False, tgt_mask=None, normalizer=1, **kwargs):
+        """
+        Compute the loss. Subclass must define this method.
+        Args:
+            output_dict: the predictive output from the model. time x batch x vocab_size
+                                                   or time x batch x hidden_size 
+            targets: the validate target to compare output with. time x batch
+            backward
+            tgt_mask: for masking the target (saving memory)
+            model: the translator model
+            normalizer: the denomination term of the loss
+            **kwargs(optional): additional info for computing loss.
+        """
+        
+        output_dict, targets = self.clean_padding(output_dict, targets, tgt_mask)
         
         dists = model.generator(output_dict)
         
-        loss, loss_data = self._compute_loss(dists, clean_targets)
+        loss, loss_data = self._compute_loss(dists, targets)
         
         if backward:
             loss.div(normalizer).backward()

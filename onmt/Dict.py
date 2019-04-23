@@ -119,7 +119,7 @@ class Dict(object):
         if bosWord is not None:
             vec += [self.lookup(bosWord)]
 
-        unk = self.lookup(unkWord)
+        unk = self.lookup(unkWord, default=-1)
         vec += [self.lookup(label, default=unk) for label in labels]
 
         if eosWord is not None:
