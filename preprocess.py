@@ -192,7 +192,7 @@ def init_vocabulary(name, dataFile, vocabFile, vocabSize, join=False, input_type
             gen_word_vocab = make_join_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
         else:
             print('Building ' + name + ' vocabulary...')
-            gen_word_vocab = make_vocabulary(dataFile, vocabSize, input_type=input_type, dict_tab=dict_atb)
+            gen_word_vocab = make_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
 
         vocab = gen_word_vocab
 
