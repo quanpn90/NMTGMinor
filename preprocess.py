@@ -197,7 +197,7 @@ def init_vocabulary(name, dataFile, vocabFile, vocabSize, join=False, input_type
         vocab = gen_word_vocab
 
     print()
-    return vocab
+    return vocab, dict_atb
 
 
 def save_vocabulary(name, vocab, file):
@@ -352,12 +352,14 @@ def main():
         print('Reading attribute vocabulary from \'' + opt.attb_vocab + '\'...')
         dicts['atb'] = onmt.Dict()
         dicts['atb'].loadFile(opt.attb_vocab)
-        print('Loaded ' + str(dicts['atb'].size()) + ' ' + name + ' attributes')
+        print('Loaded ' + str(dicts['atb'].size()) + ' attributes')
+    else:
+        dicts['atb'] = onmt.Dict()
 
     if opt.join_vocab:
         dicts['src'], dicts['atb'] = init_vocabulary('joined', [opt.train_src, opt.train_tgt], opt.src_vocab,
-                                                     opt.tgt_vocab_size, join=True, input_type=opt.input_type,
-                                                     dict_atb=dicts['atb'])
+                                                     opt.tgt_vocab_size, join=True,  dict_atb=dicts['atb'])
+
 
         dicts['tgt'] = dicts['src']
     else:

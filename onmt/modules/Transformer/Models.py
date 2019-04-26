@@ -425,7 +425,7 @@ class TransformerDecoder(nn.Module):
 
         returns['hiddens'] = output
         returns['coverage'] = coverage
-        returns['src'] = src
+        returns['src'] = src.t()
 
         # return output, coverage
 
@@ -515,7 +515,7 @@ class Transformer(NMTModel):
         decoder_output = self.decoder(tgt_input, tgt_attbs, context, src)
 
         output_dict = dict()
-        output_dict['src'] = src
+        output_dict['src'] = src.t()
         output_dict['hiddens'] = decoder_output['final_state']
         output_dict['coverage'] = decoder_output['coverage']
 

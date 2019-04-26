@@ -25,7 +25,7 @@ class CopyGenerator(nn.Module):
 
         input = net_output['hiddens'] # (len_tgt x B x H) or (LxB x H)
         src = net_output['src'] # T x B
-        attn = net_output['coverage'] # len_tgt x B x len_src or (LxB x len_src)
+        attn = net_output['coverage'] # (LxB x len_src) or (BxTxlen_src)
 
         # 3 dimensional for T x B x H format
         # 2 dimensional for ( T x B ) x H format or the tensor with pads cleaned
@@ -36,9 +36,11 @@ class CopyGenerator(nn.Module):
         # so we have to clean mask from attn and src as well
         # during testing, the input has 3 dimensions
         if n_input_dim == 3:
-            if src.dim() == 2:
-                attn = attn.transpose(0, 1)
-                src = src.t().unsqueeze(0).expand_as(attn)
+            # if src.dim() == 2:
+            #     attn = attn.transpose(0, 1)
+            #     src = src.t().unsqueeze(0).expand_as(attn)
+            attn = attn.transpose(0, 1) #  len_tgt x B x len_src
+            src = src.t().unsqueeze(0).expand_as(attn)
 
         # added float to the end
         # print(input.size())
