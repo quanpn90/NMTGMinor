@@ -135,7 +135,7 @@ def make_join_vocabulary(filenames, size, input_type="word", dict_atb=None, use_
     print('Created dictionary of size %d (pruned from %d)' %
           (vocab.size(), original_size))
 
-    return vocab, dict_atb
+    return vocab
 
 
 def make_vocabulary(filename, size, input_type='word', dict_atb=None, use_atb=True):
