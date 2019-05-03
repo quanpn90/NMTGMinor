@@ -33,6 +33,8 @@ class Dict(object):
             right_space_idx = line.rfind(' ')
             label = line[:right_space_idx]
             idx = int(line[right_space_idx+1:])
+
+            print(label, idx)
             self.add(label, idx)
 
     def writeFile(self, filename):

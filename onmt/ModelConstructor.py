@@ -37,6 +37,8 @@ def build_model(opt, dicts):
     if not hasattr(opt, 'encoder_layers'):
         opt.encoder_layers = -1
 
+    if not hasattr(opt, 'fusion'):
+        opt.fusion = False
 
     onmt.Constants.layer_norm = opt.layer_norm
     onmt.Constants.weight_norm = opt.weight_norm
@@ -45,14 +47,23 @@ def build_model(opt, dicts):
     onmt.Constants.attention_out = opt.attention_out
     onmt.Constants.residual_type = opt.residual_type
 
+    if not opt.fusion:
+        model = build_tm_model(opt, dicts)
+    else:
+        model = build_fusion(opt, dicts)
+
+    return model
+
+
+def build_tm_model(opt, dicts):
 
 
     # BUILD POSITIONAL ENCODING
     if opt.time == 'positional_encoding':
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
     else:
-        positional_encoder = None
         raise NotImplementedError
+
 
     # BUILD GENERATOR
     generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
@@ -190,7 +201,7 @@ def build_fusion(opt, dicts):
     lm_model.load_state_dict(lm_checkpoint['model'])
 
     # main model for seq2seq (translation, asr)
-    tm_model = build_model(opt, dicts)
+    tm_model = build_tm_model(opt, dicts)
 
     from onmt.modules.FusionNetwork.Models import FusionNetwork
     model = FusionNetwork(tm_model, lm_model)

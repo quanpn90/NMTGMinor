@@ -77,6 +77,8 @@ parser.add_argument('-asr',    action='store_true',
                     help="prepare data for asr task")
 parser.add_argument('-lm',    action='store_true',
                     help="prepare data for LM task")
+parser.add_argument('-fp16',    action='store_true',
+                    help="store ASR data in fp16")
 
 parser.add_argument('-seed',       type=int, default=3435,
                     help="Random seed")
@@ -95,24 +97,24 @@ torch.manual_seed(opt.seed)
 
 def split_line_by_char(line, word_list=["<unk>"]):
 
-
-    words = line.strip()
-    chars = list(words)
+    #
+    # words = line.strip()
+    # chars = list(words)
 
     # first we split by words
-    # chars = list()
-    #
-    # words = line.strip().split()
-    #
-    # for i, word in enumerate(words):
-    #     if word in word_list:
-    #         chars.append(word)
-    #     else:
-    #         for c in word:
-    #             chars.append(c)
-    #
-    #     if i < (len(words) - 1):
-    #         chars.append(' ')
+    chars = list()
+
+    words = line.strip().split()
+
+    for i, word in enumerate(words):
+        if word in word_list:
+            chars.append(word)
+        else:
+            for c in word:
+                chars.append(c)
+
+        if i < (len(words) - 1):
+            chars.append(' ')
 
     return chars
 
@@ -450,7 +452,6 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
             if unks > 0:
                 if ("<unk>") not in tline:
                     print(tline)
-
 
         else:
             ignored += 1
