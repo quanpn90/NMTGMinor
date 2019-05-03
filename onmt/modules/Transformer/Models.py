@@ -9,8 +9,6 @@ from torch.utils.checkpoint import checkpoint
 from collections import defaultdict
 
 
-
-
 def custom_layer(module):
     def custom_forward(*args):
         output = module(*args)

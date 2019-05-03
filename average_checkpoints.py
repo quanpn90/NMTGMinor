@@ -48,12 +48,7 @@ def main():
     main_checkpoint = checkpoint
     model_opt = checkpoint['opt']
     dicts = checkpoint['dicts']
-    
-    #~ if hasattr(model_opt, 'grow_layer'):
-        #~ model_opt.layers = model_opt.layers + model_opt.grow_layer
-        
-    print(model_opt.layers)
-    
+
     main_model = build_model(model_opt, checkpoint['dicts'])
     
     main_model.load_state_dict(checkpoint['model'])
@@ -62,7 +57,8 @@ def main():
         main_model = main_model.cuda()
     
     for i in range(1, len(models)):
-        
+
+
         model = models[i]
         print("Loading model from %s ..." % models[i])
         checkpoint = torch.load(model, map_location=lambda storage, loc: storage)
