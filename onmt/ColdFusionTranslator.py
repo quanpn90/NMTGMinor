@@ -3,7 +3,7 @@ import onmt.modules
 import torch.nn as nn
 import torch
 import math
-from onmt.ModelConstructor import build_model, build_fusion
+from onmt.ModelConstructor import build_model, build_fusion, build_language_model
 from ae.Autoencoder import Autoencoder
 import torch.nn.functional as F
 import sys
@@ -47,12 +47,12 @@ class EnsembleTranslator(object):
                 self.tgt_dict = checkpoint['dicts']['tgt']
             
             # Build model from the saved option
-            if hasattr(model_opt, 'fusion') and model_opt.fusion == True:
-                print("* Loading a FUSION model")
-                model = build_fusion(model_opt, checkpoint['dicts'])
-            else:
-                model = build_model(model_opt, checkpoint['dicts'])
-
+            # if hasattr(model_opt, 'fusion') and model_opt.fusion == True:
+            #     print("* Loading a FUSION model")
+            #     model = build_fusion(model_opt, checkpoint['dicts'])
+            # else:
+            #     model = build_model(model_opt, checkpoint['dicts'])
+            model = build_model(model_opt)
             model.load_state_dict(checkpoint['model'])
             
             if model_opt.model in model_list:
@@ -73,11 +73,14 @@ class EnsembleTranslator(object):
             
             self.models.append(model)
             self.model_types.append(model_opt.model)
+
+        # language model
+        if
             
         self.cuda = opt.cuda
         self.ensemble_op = opt.ensemble_op
 
-        if (opt.autoencoder != None):
+        if opt.autoencoder is not None :
             if opt.verbose:
                 print('Loading autoencoder from %s' % opt.autoencoder)
             checkpoint = torch.load(opt.autoencoder,
@@ -109,7 +112,7 @@ class EnsembleTranslator(object):
         if opt.verbose:
             print('Done')
 
-    def initBeamAccum(self):
+    def init_beam_accum(self):
         self.beam_accum = {
             "predicted_ids": [],
             "beam_parent_ids": [],
@@ -117,7 +120,7 @@ class EnsembleTranslator(object):
             "log_probs": []}
     
     # Combine distributions from different models
-    def _combineOutputs(self, outputs):
+    def _combine_outputs(self, outputs):
         
         if len(outputs) == 1:
             return outputs[0]
@@ -164,7 +167,7 @@ class EnsembleTranslator(object):
         return output
     
     # Take the average of attention scores
-    def _combineAttention(self, attns):
+    def _combine_attention(self, attns):
         
         attn = attns[0]
         
@@ -212,7 +215,7 @@ class EnsembleTranslator(object):
         return onmt.Dataset(src_data, tgt_data, sys.maxsize,
                             data_type=self._type, batch_size_sents =self.opt.batch_size)
 
-    def buildTargetTokens(self, pred, src, attn):
+    def build_target_tokens(self, pred, src, attn):
         tokens = self.tgt_dict.convertToLabels(pred, onmt.Constants.EOS)
         tokens = tokens[:-1]  # EOS
 
@@ -282,8 +285,8 @@ class EnsembleTranslator(object):
 
                 # batch * beam x vocab_size
             
-            out = self._combineOutputs(outs)
-            attn = self._combineAttention(attns)
+            out = self._combine_outputs(outs)
+            attn = self._combine_attention(attns)
                 
             wordLk = out.view(beam_size, remaining_sents, -1) \
                         .transpose(0, 1).contiguous()
@@ -365,16 +368,16 @@ class EnsembleTranslator(object):
         pred, pred_score, attn, pred_length, gold_score, gold_words, allgold_words = self.translate_batch(batch)
 
         #  (3) convert indexes to words
-        predBatch = []
+        pred_batch = []
         for b in range(batch_size):
-            predBatch.append(
-                [self.buildTargetTokens(pred[b][n], src_data[b], attn[b][n])
+            pred_batch.append(
+                [self.build_target_tokens(pred[b][n], src_data[b], attn[b][n])
                  for n in range(self.opt.n_best)]
             )
 
-        return predBatch, pred_score, pred_length, gold_score, gold_words,allgold_words
+        return pred_batch, pred_score, pred_length, gold_score, gold_words,allgold_words
 
-    def translateASR(self, src_data, tgt_data):
+    def translate_asr(self, src_data, tgt_data):
         #  (1) convert words to indexes
         dataset = self.build_asr_data(src_data, tgt_data)
         # src, tgt = batch
@@ -387,13 +390,13 @@ class EnsembleTranslator(object):
         pred, pred_score, attn, pred_length, gold_score, gold_words,allgold_words = self.translate_batch(batch)
 
         #  (3) convert indexes to words
-        predBatch = []
+        pred_batch = []
         for b in range(batch_size):
-            predBatch.append(
-                [self.buildTargetTokens(pred[b][n], src_data[b], attn[b][n])
+            pred_batch.append(
+                [self.build_target_tokens(pred[b][n], src_data[b], attn[b][n])
                  for n in range(self.opt.n_best)]
             )
 
-        return predBatch, pred_score, pred_length, gold_score, gold_words,allgold_words
+        return pred_batch, pred_score, pred_length, gold_score, gold_words,allgold_words
 
 

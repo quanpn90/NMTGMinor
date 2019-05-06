@@ -64,7 +64,8 @@ class Batch(object):
 
         elif type == "audio":
             # the last feature dimension is for padding or not, hence + 1
-            tensor = data[0].new(len(data), max_length, data[0].size(1) + 1).fill_(onmt.Constants.PAD)
+
+            tensor = data[0].float().new(len(data), max_length, data[0].size(1) + 1).fill_(onmt.Constants.PAD)
 
             for i in range(len(data)):
                 data_length = data[i].size(0)

@@ -7,7 +7,7 @@ import argparse
 import math
 import numpy
 import os, sys
-from onmt.ModelConstructor import build_model
+from onmt.ModelConstructor import build_model, build_language_model
 from copy import deepcopy
 
 
@@ -16,6 +16,8 @@ onmt.Markdown.add_md_help_argument(parser)
 
 parser.add_argument('-models', required=True,
                     help='Path to model .pt file')
+parser.add_argument('-lm', action='store_true',
+                    help='Language model (default is seq2seq model')
 parser.add_argument('-output', default='model.averaged',
                     help="""Path to output averaged model""")
 parser.add_argument('-gpu', type=int, default=-1,
@@ -24,7 +26,15 @@ parser.add_argument('-top', type=int, default=5,
                     help="Device to run on")
 parser.add_argument('-method', default='mean',
                     help="method to average: mean|gmean")
-                    
+
+def custom_build_model(opt, dict, lm=False):
+
+    if not lm:
+        model = build_model(opt, dict)
+    else:
+        model = build_language_model(opt,   dict)
+
+    return model
 
 def main():
     
@@ -79,7 +89,7 @@ def main():
 
     print(model_opt.layers)
 
-    main_model = build_model(model_opt, checkpoint['dicts'])
+    main_model = custom_build_model(model_opt, checkpoint['dicts'], lm=opt.lm)
 
     main_model.load_state_dict(checkpoint['model'])
 
@@ -98,7 +108,7 @@ def main():
         if 'optim' in checkpoint:
             del checkpoint['optim']
 
-        current_model = build_model(model_opt, checkpoint['dicts'])
+        current_model = custom_build_model(model_opt, checkpoint['dicts'], lm=opt.lm)
 
         current_model.load_state_dict(checkpoint['model'])
 

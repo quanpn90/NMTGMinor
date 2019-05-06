@@ -3,8 +3,7 @@ from onmt.OnlineTranslator import TranslatorParameter, OnlineTranslator
 import sys
 
 
-# filename="/model/model.conf"
-filename="./model.conf"
+filename="/model/model.conf"
 
 t = OnlineTranslator(filename)
 print("NMT initialized")

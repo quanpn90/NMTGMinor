@@ -370,7 +370,7 @@ def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_lengt
 
 
 def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_length=64,
-                  input_type='word',stride=1,concat=1,prev_context = 0):
+                  input_type='word', stride=1, concat=1, prev_context = 0, fp16=False):
     src, tgt = [], []
     # sizes = []
     src_sizes = []
@@ -435,7 +435,8 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
             if opt.tgt_seq_length_trunc != 0:
                 tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
 
-            # For src text, we use BOS for possible reconstruction
+            if fp16:
+                sline = sline.half()
             src += [sline]
 
             tgt_tensor = tgt_dicts.convertToIdx(tgt_words,
@@ -540,7 +541,9 @@ def main():
                                                  max_src_length=opt.src_seq_length,
                                                  max_tgt_length=opt.tgt_seq_length,
                                                  input_type=opt.input_type,
-                                                 stride=opt.stride,concat=opt.concat,prev_context=opt.previous_context)
+                                                 stride=opt.stride,concat=opt.concat,
+                                                   prev_context=opt.previous_context,
+                                                   fp16=opt.fp16)
 
         print('Preparing validation ...')
         valid = dict()
@@ -549,7 +552,9 @@ def main():
                                                  max_src_length=max(1024,opt.src_seq_length),
                                                  max_tgt_length=max(1024,opt.tgt_seq_length),
                                                  input_type=opt.input_type,
-                                                 stride=opt.stride,concat=opt.concat,prev_context=opt.previous_context)
+                                                 stride=opt.stride,concat=opt.concat,
+                                                   prev_context=opt.previous_context,
+                                                   fp16=opt.fp16)
 
     else:
         print('Preparing training translation model...')
