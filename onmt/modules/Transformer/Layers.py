@@ -188,8 +188,6 @@ class MultiHeadAttention(nn.Module):
         self.fc_query = Bottle(Linear(d_model, h*self.d_head, bias=False))
         self.fc_key = Bottle(Linear(d_model, h*self.d_head, bias=False))
         self.fc_value = Bottle(Linear(d_model, h*self.d_head, bias=False))
-        
-        self.attention_out = onmt.Constants.attention_out
         self.fc_concat = Bottle(Linear(h*self.d_head, d_model, bias=False))
 
         self.sm = nn.Softmax(dim=-1)
@@ -449,22 +447,25 @@ class DecoderLayer(nn.Module):
         
     """    
     
-    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0):
+    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0, ignore_source=False):
         super(DecoderLayer, self).__init__()
         self.version = version
-        
+        self.ignore_source = ignore_source
+
         self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
         self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
-        
-        self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_src_attn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
+
+        if not self.ignore_source:
+            self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
+            self.postprocess_src_attn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
+            self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
         
         self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
         self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
         
         
         self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=1)
-        self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
+
         
         if onmt.Constants.activation_layer == 'linear_relu_linear':
             ff_p = p
@@ -500,10 +501,12 @@ class DecoderLayer(nn.Module):
         """ Context Attention layer 
             layernorm > attn > dropout > residual
         """
-        
-        query = self.preprocess_src_attn(input)
-        out, coverage = self.multihead_src(query, context, context, mask_src)
-        input = self.postprocess_src_attn(out, input)
+        if not self.ignore_source:
+            query = self.preprocess_src_attn(input)
+            out, coverage = self.multihead_src(query, context, context, mask_src)
+            input = self.postprocess_src_attn(out, input)
+        else:
+            coverage = None
         
         """ Feed forward layer 
             layernorm > ffn > dropout > residual
@@ -522,18 +525,17 @@ class DecoderLayer(nn.Module):
         
         out, _, buffer = self.multihead_tgt.step(query, query, query, mask_tgt, buffer=buffer)
 
-        
-
         input = self.postprocess_attn(out, input)
         
         """ Context Attention layer 
             layernorm > attn > dropout > residual
         """
-        
-        query = self.preprocess_src_attn(input)
-        out, coverage, buffer = self.multihead_src.step(query, context, context, mask_src, buffer=buffer)
-
-        input = self.postprocess_src_attn(out, input)
+        if not self.ignore_source:
+            query = self.preprocess_src_attn(input)
+            out, coverage, buffer = self.multihead_src.step(query, context, context, mask_src, buffer=buffer)
+            input = self.postprocess_src_attn(out, input)
+        else:
+            coverage = None
         
         """ Feed forward layer 
             layernorm > ffn > dropout > residual
@@ -589,8 +591,8 @@ class PositionalEncoding(nn.Module):
         scaled_time = position.unsqueeze(1) * inv_timescales.unsqueeze(0)
         pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 1)
         
-        if(cuda):
-                pos_emb = pos_emb.cuda()
+        if cuda:
+            pos_emb = pos_emb.cuda()
 
         if self.data_type is not None:
             pos_emb.type(self.data_type)

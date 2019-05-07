@@ -36,7 +36,7 @@ parser.add_argument('-previous_context', type=int, default=0,
                     help="Number of previous sentence for context")
 parser.add_argument('-input_type', default="word",
                     help="Input type: word/char")
-parser.add_argument('-format', default="bin",
+parser.add_argument('-format', default="raw",
                     help="Save data format: binary or raw. Binary should be used to load faster")
 
 
@@ -73,8 +73,12 @@ parser.add_argument('-tgt_seq_length_trunc', type=int, default=0,
 parser.add_argument('-shuffle',    type=int, default=1,
                     help="Shuffle data")
                     
-parser.add_argument('-asr',    type=int, default=0,
-                    help="h5 input")
+parser.add_argument('-asr',    action='store_true',
+                    help="prepare data for asr task")
+parser.add_argument('-lm',    action='store_true',
+                    help="prepare data for LM task")
+parser.add_argument('-fp16',    action='store_true',
+                    help="store ASR data in fp16")
 
 parser.add_argument('-seed',       type=int, default=3435,
                     help="Random seed")
@@ -90,7 +94,31 @@ opt = parser.parse_args()
 
 torch.manual_seed(opt.seed)
 
-def makeJoinVocabulary(filenames, size, input_type="word"):
+
+def split_line_by_char(line, word_list=["<unk>"]):
+
+    #
+    # words = line.strip()
+    # chars = list(words)
+
+    # first we split by words
+    chars = list()
+
+    words = line.strip().split()
+
+    for i, word in enumerate(words):
+        if word in word_list:
+            chars.append(word)
+        else:
+            for c in word:
+                chars.append(c)
+
+        if i < (len(words) - 1):
+            chars.append(' ')
+
+    return chars
+
+def make_join_vocab(filenames, size, input_type="word"):
     
     vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
@@ -105,47 +133,52 @@ def makeJoinVocabulary(filenames, size, input_type="word"):
                     for word in sent.split():
                         vocab.add(word)
                 elif input_type == "char":
-                    sent = sent.strip()
-                    for char in sent:
+                    chars = split_line_by_char(sent)
+                    for char in chars:
                         vocab.add(char)
                 else:
                     raise NotImplementedError("Input type not implemented")
 
 
-    originalSize = vocab.size()
+    original_size = vocab.size()
     vocab = vocab.prune(size)
     print('Created dictionary of size %d (pruned from %d)' %
-          (vocab.size(), originalSize))
+          (vocab.size(), original_size))
 
     return vocab
 
 
-def makeVocabulary(filename, size, input_type='word'):
+def make_vocab(filename, size, input_type='word'):
     vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
                       lower=opt.lower)
+
+    unk_count = 0
 
     with open(filename) as f:
         for sent in f.readlines():
             if input_type == "word":
                 for word in sent.split():
-                    vocab.add(word)
+                    idx = vocab.add(word)
             elif input_type == "char":
-                sent = sent.strip()
-                for char in sent:
-                    vocab.add(char)
+                chars = split_line_by_char(sent)
+                for char in chars:
+                    idx = vocab.add(char)
             else:
                 raise NotImplementedError("Input type not implemented")
 
-    originalSize = vocab.size()
+            if idx == 'onmt.Constants.UNK':
+                unk_count += 1
+
+    original_size = vocab.size()
     vocab = vocab.prune(size)
     print('Created dictionary of size %d (pruned from %d)' %
-          (vocab.size(), originalSize))
+          (vocab.size(), original_size))
 
     return vocab
 
 
-def initVocabulary(name, dataFile, vocabFile, vocabSize, join=False, input_type='word'):
+def init_vocab(name, dataFile, vocabFile, vocabSize, join=False, input_type='word'):
 
     vocab = None
     if vocabFile is not None:
@@ -161,34 +194,100 @@ def initVocabulary(name, dataFile, vocabFile, vocabSize, join=False, input_type=
         if join:
             
             print('Building ' + 'shared' + ' vocabulary...')
-            genWordVocab = makeJoinVocabulary(dataFile, vocabSize, input_type=input_type)
+            gen_word_vocab = make_join_vocab(dataFile, vocabSize, input_type=input_type)
         else:
             print('Building ' + name + ' vocabulary...')
-            genWordVocab = makeVocabulary(dataFile, vocabSize, input_type=input_type)
+            gen_word_vocab = make_vocab(dataFile, vocabSize, input_type=input_type)
 
-        vocab = genWordVocab
+        vocab = gen_word_vocab
 
     print()
     return vocab
 
 
-def saveVocabulary(name, vocab, file):
+def save_vocabulary(name, vocab, file):
     print('Saving ' + name + ' vocabulary to \'' + file + '\'...')
     vocab.writeFile(file)
 
 
-def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_length=64, sort_by_target=False, input_type='word'):
-    src, tgt = [], []
+def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
+
+    tgt = []
     sizes = []
     count, ignored = 0, 0
 
-    print('Processing %s & %s ...' % (srcFile, tgtFile))
-    srcF = open(srcFile)
-    tgtF = open(tgtFile)
+    print('Processing %s ...' % (tgt_file))
+    tgtf = open(tgt_file)
+
 
     while True:
-        sline = srcF.readline()
-        tline = tgtF.readline()
+        tline = tgtf.readline()
+
+        # normal end of file
+        if tline == "": break
+
+        tline = tline.strip()
+
+        # source and/or target are empty
+        if tline == "":
+            print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
+            continue
+
+        if input_type == 'word':
+            tgt_words = tline.split()
+        elif input_type == 'char':
+            tgt_words = split_line_by_char(tline)
+
+        if len(tgt_words) <= max_tgt_length - 2:
+
+            if opt.tgt_seq_length_trunc != 0:
+                tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
+
+            tgt += [tgt_dicts.convertToIdx(tgt_words,
+                                          onmt.Constants.UNK_WORD,
+                                          onmt.Constants.BOS_WORD,
+                                          onmt.Constants.EOS_WORD)]
+            sizes += [len(tgt_words)]
+        else:
+            ignored += 1
+
+        count += 1
+
+        if count % opt.report_every == 0:
+            print('... %d sentences prepared' % count)
+
+    tgtf.close()
+
+    if opt.shuffle == 1:
+        print('... shuffling sentences')
+        perm = torch.randperm(len(tgt))
+        tgt = [tgt[idx] for idx in perm]
+        sizes = [sizes[idx] for idx in perm]
+
+    print('... sorting sentences by size')
+    _, perm = torch.sort(torch.Tensor(sizes), descending=(opt.sort_type == 'descending'))
+    tgt = [tgt[idx] for idx in perm]
+
+    print(('Prepared %d sentences ' +
+           '(%d ignored due to length == 0 or tgt len > %d)') %
+          (len(tgt), ignored, max_tgt_length))
+
+    return tgt
+
+def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_length=64, max_tgt_length=64, sort_by_target=False,
+             input_type='word'):
+    src, tgt = [], []
+    src_sizes = []
+    tgt_sizes = []
+    count, ignored = 0, 0
+
+    print('Processing %s & %s ...' % (src_file, tgt_file))
+    srcf = open(src_file)
+    tgtf = open(tgt_file)
+
+    while True:
+        sline = srcf.readline()
+        tline = tgtf.readline()
 
         # normal end of file
         if sline == "" and tline == "":
@@ -204,39 +303,35 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
 
         # source and/or target are empty
         if sline == "" or tline == "":
-            print('WARNING: ignoring an empty line ('+str(count+1)+')')
+            print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
             continue
 
         if input_type == 'word':
-            srcWords = sline.split()
-            tgtWords = tline.split()
+            src_words = sline.split()
+            tgt_words = tline.split()
         elif input_type == 'char':
-            srcWords = list(sline)
-            tgtWords = list(tline)
+            src_words = split_line_by_char(sline)
+            tgt_words = split_line_by_char(tline)
 
-        if len(srcWords) <= max_src_length \
-           and len(tgtWords) <= max_tgt_length - 2:
+        if len(src_words) <= max_src_length \
+                and len(tgt_words) <= max_tgt_length - 2:
 
             # Check truncation condition.
             if opt.src_seq_length_trunc != 0:
-                srcWords = srcWords[:opt.src_seq_length_trunc]
+                src_words = src_words[:opt.src_seq_length_trunc]
             if opt.tgt_seq_length_trunc != 0:
-                tgtWords = tgtWords[:opt.tgt_seq_length_trunc]
-            
-            
-            # For src text, we use BOS for possible reconstruction
-            src += [srcDicts.convertToIdx(srcWords,
-                                              onmt.Constants.UNK_WORD)]
-                                              
+                tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
 
-            tgt += [tgtDicts.convertToIdx(tgtWords,
+            # For src text, we use BOS for possible reconstruction
+            src += [srcDicts.convertToIdx(src_words,
+                                          onmt.Constants.UNK_WORD)]
+
+            tgt += [tgt_dicts.convertToIdx(tgt_words,
                                           onmt.Constants.UNK_WORD,
                                           onmt.Constants.BOS_WORD,
                                           onmt.Constants.EOS_WORD)]
-            if sort_by_target:
-                sizes += [len(tgtWords)]
-            else:
-                sizes += [len(srcWords)]
+            src_sizes += [len(src_words)]
+            tgt_sizes += [len(tgt_words)]
         else:
             ignored += 1
 
@@ -245,36 +340,47 @@ def makeData(srcFile, tgtFile, srcDicts, tgtDicts, max_src_length=64, max_tgt_le
         if count % opt.report_every == 0:
             print('... %d sentences prepared' % count)
 
-    srcF.close()
-    tgtF.close()
+    srcf.close()
+    tgtf.close()
 
     if opt.shuffle == 1:
         print('... shuffling sentences')
         perm = torch.randperm(len(src))
         src = [src[idx] for idx in perm]
         tgt = [tgt[idx] for idx in perm]
-        sizes = [sizes[idx] for idx in perm]
+        src_sizes = [src_sizes[idx] for idx in perm]
+        tgt_sizes = [tgt_sizes[idx] for idx in perm]
+
 
     print('... sorting sentences by size')
-    _, perm = torch.sort(torch.Tensor(sizes), descending=(opt.sort_type == 'descending'))
-    src = [src[idx] for idx in perm]
-    tgt = [tgt[idx] for idx in perm]
+
+    z = zip(src, tgt, src_sizes, tgt_sizes)
+
+    # ultimately sort by target size
+    sorted_z = sorted(sorted(z, key=lambda x: x[2]), key=lambda x: x[3])
+
+    src = [z_[0] for z_ in sorted_z]
+    tgt = [z_[1] for z_ in sorted_z]
 
     print(('Prepared %d sentences ' +
-          '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
+           '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
           (len(src), ignored, max_src_length, max_tgt_length))
 
     return src, tgt
 
 
-def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64,sort_by_target=False, input_type='word',stride=1,concat=1,prev_context = 0):
+def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_length=64,
+                  input_type='word', stride=1, concat=1, prev_context = 0, fp16=False):
     src, tgt = [], []
-    sizes = []
+    # sizes = []
+    src_sizes = []
+    tgt_sizes = []
     count, ignored = 0, 0
+    n_unk_words = 0
 
-    print('Processing %s & %s ...' % (srcFile, tgtFile))
+    print('Processing %s & %s ...' % (src_file, tgt_file))
 
-    #srcF = open(srcFile)
+
     fileIdx = -1;
     if(srcFile[-2:] == "h5"):
         srcF = h5.File(srcFile,'r')
@@ -283,13 +389,13 @@ def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64
         srcF = h5.File(srcFile+"."+str(fileIdx)+".h5",'r')
     tgtF = open(tgtFile)
 
-    index = 0;
+    index = 0
 
     s_prev_context = []
     t_prev_context = []
 
     while True:
-        tline = tgtF.readline()
+        tline = tgtf.readline()
         # normal end of file
         if tline == "":
             break
@@ -310,26 +416,23 @@ def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64
         else:
             sline = torch.from_numpy(featureVectors[0::opt.stride])
 
-
-        if(concat != 1):
+        if concat != 1:
             add = (concat-sline.size()[0]%concat)%concat
             z= torch.FloatTensor(add, sline.size()[1]).zero_()
             sline = torch.cat((sline,z),0)
-            sline = sline.reshape((sline.size()[0]/concat,sline.size()[1]*concat))
+            sline = sline.reshape((int(sline.size()[0]/concat), sline.size()[1]*concat))
         index += 1;
-
-
 
         tline = tline.strip()
 
-        if(prev_context > 0):
+        if prev_context > 0:
             s_prev_context.append(sline)
             t_prev_context.append(tline)
             for i in range(1,prev_context+1):
-                if(i < len(s_prev_context)):
+                if i < len(s_prev_context):
                     sline = torch.cat((torch.cat((s_prev_context[-i-1],torch.zeros(1,sline.size()[1]))),sline))
                     tline = t_prev_context[-i-1]+" # "+tline
-            if(len(s_prev_context) > prev_context):
+            if len(s_prev_context) > prev_context:
                 s_prev_context = s_prev_context[-1*prev_context:]
                 t_prev_context = t_prev_context[-1*prev_context:]
 
@@ -339,23 +442,35 @@ def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64
             continue
 
         if input_type == 'word':
-            tgtWords = tline.split()
+            tgt_words = tline.split()
         elif input_type == 'char':
-            tgtWords = list(tline)
+            tgt_words = split_line_by_char(tline)
 
-        if len(tgtWords) <= max_tgt_length - 2 and sline.size(0) <= max_src_length:
+        if len(tgt_words) <= max_tgt_length - 2 and sline.size(0) <= max_src_length:
 
             # Check truncation condition.
             if opt.tgt_seq_length_trunc != 0:
-                tgtWords = tgtWords[:opt.tgt_seq_length_trunc]
+                tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
 
-            # For src text, we use BOS for possible reconstruction
+            if fp16:
+                sline = sline.half()
             src += [sline]
-            tgt += [tgtDicts.convertToIdx(tgtWords,
+
+            tgt_tensor = tgt_dicts.convertToIdx(tgt_words,
                                           onmt.Constants.UNK_WORD,
                                           onmt.Constants.BOS_WORD,
-                                          onmt.Constants.EOS_WORD)]
-            sizes += [len(sline)]
+                                          onmt.Constants.EOS_WORD)
+            tgt += [tgt_tensor]
+            src_sizes += [len(sline)]
+            tgt_sizes += [len(tgt_words)]
+
+            unks =  tgt_tensor.eq(onmt.Constants.UNK).sum().item()
+            n_unk_words += unks
+
+            if unks > 0:
+                if ("<unk>") not in tline:
+                    print(tline)
+
         else:
             ignored += 1
 
@@ -364,20 +479,32 @@ def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64
         if count % opt.report_every == 0:
             print('... %d sentences prepared' % count)
 
-    srcF.close()
-    tgtF.close()
+    srcf.close()
+    tgtf.close()
+
+    print('Total number of unk words: %d' % n_unk_words)
 
     if opt.shuffle == 1:
         print('... shuffling sentences')
         perm = torch.randperm(len(src))
         src = [src[idx] for idx in perm]
         tgt = [tgt[idx] for idx in perm]
-        sizes = [sizes[idx] for idx in perm]
+        src_sizes = [src_sizes[idx] for idx in perm]
+        tgt_sizes = [tgt_sizes[idx] for idx in perm]
 
     print('... sorting sentences by size')
-    _, perm = torch.sort(torch.Tensor(sizes), descending=(opt.sort_type == 'descending'))
-    src = [src[idx] for idx in perm]
-    tgt = [tgt[idx] for idx in perm]
+
+
+    # _, perm = torch.sort(torch.Tensor(sizes), descending=(opt.sort_type == 'descending'))
+    # src = [src[idx] for idx in perm]
+    # tgt = [tgt[idx] for idx in perm]
+    z = zip(src, tgt, src_sizes, tgt_sizes)
+
+    # ultimately sort by source size
+    sorted_z = sorted(sorted(z, key=lambda x: x[3]), key=lambda x: x[2])
+
+    src = [z_[0] for z_ in sorted_z]
+    tgt = [z_[1] for z_ in sorted_z]
 
     print(('Prepared %d sentences ' +
            '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
@@ -390,53 +517,66 @@ def main():
 
     dicts = {}
 
-
-    if opt.asr:
-        dicts['tgt'] = initVocabulary('target', opt.train_tgt, opt.tgt_vocab,
+    # for ASR and LM we only need to build vocab for the 'target' language
+    if opt.asr or opt.lm:
+        dicts['tgt'] = init_vocab('target', opt.train_tgt, opt.tgt_vocab,
                                       opt.tgt_vocab_size, input_type=opt.input_type)
-
     elif opt.join_vocab:
-        dicts['src'] = initVocabulary('source', [opt.train_src, opt.train_tgt], opt.src_vocab,
+        dicts['src'] = init_vocab('source', [opt.train_src, opt.train_tgt], opt.src_vocab,
                                       opt.tgt_vocab_size, join=True, input_type=opt.input_type)
         dicts['tgt'] = dicts['src']
 
     else:
-        dicts['src'] = initVocabulary('source', opt.train_src, opt.src_vocab,
+        dicts['src'] = init_vocab('source', opt.train_src, opt.src_vocab,
                                       opt.src_vocab_size, input_type=opt.input_type)
 
-        dicts['tgt'] = initVocabulary('target', opt.train_tgt, opt.tgt_vocab,
+        dicts['tgt'] = init_vocab('target', opt.train_tgt, opt.tgt_vocab,
                                       opt.tgt_vocab_size, input_type=opt.input_type)
-    train = {}
-    valid = {}
-
-    print('Preparing training ...')
 
 
-    if opt.asr == 1:
-        print('Preparing training ...')
-        train = {}
-        train['src'], train['tgt'] = makeASRData(opt.train_src, opt.train_tgt,
+    if opt.lm:
+        print('Preparing training language model ...')
+        train = dict()
+        train['tgt'] = make_lm_data( opt.train_tgt,
+                                     dicts['tgt'],
+                                     max_tgt_length=opt.tgt_seq_length,
+                                     input_type=opt.input_type)
+        train['src'] = None
+
+        valid = dict()
+        valid['tgt'] = make_lm_data(opt.valid_tgt,
+                                   dicts['tgt'],
+                                   max_tgt_length=max(1024, opt.tgt_seq_length),
+                                   input_type=opt.input_type)
+        valid['src'] = None
+
+    elif opt.asr:
+        print('Preparing training acoustic model ...')
+        train = dict()
+        train['src'], train['tgt'] = make_asr_data(opt.train_src, opt.train_tgt,
                                            dicts['tgt'],
-                                          max_src_length=opt.src_seq_length,
+                                                 max_src_length=opt.src_seq_length,
                                                  max_tgt_length=opt.tgt_seq_length,
-                                                 sort_by_target=opt.sort_by_target,
                                                  input_type=opt.input_type,
-                                                 stride=opt.stride,concat=opt.concat,prev_context=opt.previous_context)
+                                                 stride=opt.stride,concat=opt.concat,
+                                                   prev_context=opt.previous_context,
+                                                   fp16=opt.fp16)
 
         print('Preparing validation ...')
-        valid = {}
-        valid['src'], valid['tgt'] = makeASRData(opt.valid_src, opt.valid_tgt,
+        valid = dict()
+        valid['src'], valid['tgt'] = make_asr_data(opt.valid_src, opt.valid_tgt,
                                              dicts['tgt'],
-                                          max_src_length=max(1024,opt.src_seq_length),
+                                                 max_src_length=max(1024,opt.src_seq_length),
                                                  max_tgt_length=max(1024,opt.tgt_seq_length),
-                                                 sort_by_target=opt.sort_by_target,
                                                  input_type=opt.input_type,
-                                                 stride=opt.stride,concat=opt.concat,prev_context=opt.previous_context)
+                                                 stride=opt.stride,concat=opt.concat,
+                                                   prev_context=opt.previous_context,
+                                                   fp16=opt.fp16)
 
     else:
-        print('Preparing training ...')
-        train = {}
-        train['src'], train['tgt'] = makeData(opt.train_src, opt.train_tgt,
+        print('Preparing training translation model...')
+        train = dict()
+        train['src'], train['tgt'] = make_translation_data(opt.train_src, opt.train_tgt,
                                           dicts['src'], dicts['tgt'],
                                           max_src_length=opt.src_seq_length,
                                           max_tgt_length=opt.tgt_seq_length,
@@ -444,20 +584,20 @@ def main():
                                           input_type=opt.input_type)
 
         print('Preparing validation ...')
-
-        valid['src'], valid['tgt'] = makeData(opt.valid_src, opt.valid_tgt,
+        valid = dict()
+        valid['src'], valid['tgt'] = make_translation_data(opt.valid_src, opt.valid_tgt,
                                           dicts['src'], dicts['tgt'], 
                                           max_src_length=max(1024,opt.src_seq_length),
                                           max_tgt_length=max(1024,opt.tgt_seq_length),
                                           input_type=opt.input_type)
 
+    if opt.src_vocab is None and opt.asr == False and opt.lm == False:
+        save_vocabulary('source', dicts['src'], opt.save_data + '.src.dict')
+    if opt.tgt_vocab is None:
+        save_vocabulary('target', dicts['tgt'], opt.save_data + '.tgt.dict')
+
+
     if opt.format == 'raw':
-
-
-        if opt.src_vocab is None and opt.asr == 0:
-            saveVocabulary('source', dicts['src'], opt.save_data + '.src.dict')
-        if opt.tgt_vocab is None:
-            saveVocabulary('target', dicts['tgt'], opt.save_data + '.tgt.dict')
 
         print('Saving data to \'' + opt.save_data + '.train.pt\'...')
         save_data = {'dicts': dicts,
@@ -466,31 +606,55 @@ def main():
                      'valid': valid}
         torch.save(save_data, opt.save_data + '.train.pt')
         print("Done")
+
     elif opt.format == 'bin':
-        # save the dictionary first
+        print('Saving data to indexed data files')
+
+        if opt.asr:
+            print("ASR data format isn't compatible with binary")
+            raise AssertionError
+        # save dicts in this format
         torch.save(dicts, opt.save_data + '.dict.pt')
 
-        train_bin = dict()
-
-        # binarize the data now
+        # binarize the training set first
         for set in ['src', 'tgt']:
-            train_bin[set] = IndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set )
 
-            for tensor_sent in train[set]:
-                train_bin[set].add_item(tensor_sent)
+            if train[set] is None:
+                continue
+            dtype=np.int32
 
-            train_bin[set].finalize(opt.save_data + ".train.%s.idx" % set)
+            if set == 'src' and opt.asr:
+                dtype=np.double
 
-        valid_bin = dict()
+            data = IndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set, dtype=dtype)
+
+            # add item from training data to the indexed data
+            for tensor in train[set]:
+                data.add_item(tensor)
+
+            data.finalize(opt.save_data + ".train.%s.idx" % set)
+
+        # binarize the validation set
         for set in ['src', 'tgt']:
-            valid_bin[set] = IndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set )
 
-            for tensor_sent in valid[set]:
-                valid_bin[set].add_item(tensor_sent)
+            if valid[set] is None:
+                continue
 
-            valid_bin[set].finalize(opt.save_data + ".valid.%s.idx" % set)
+            dtype = np.int32
+
+            if set == 'src' and opt.asr:
+                dtype = np.double
+
+            data = IndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set, dtype=dtype)
+
+            # add item from training data to the indexed data
+            for tensor in valid[set]:
+                data.add_item(tensor)
+
+            data.finalize(opt.save_data + ".valid.%s.idx" % set)
 
         print("Done")
+
     else: raise NotImplementedError
 
 
