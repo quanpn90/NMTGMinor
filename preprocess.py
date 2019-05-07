@@ -275,7 +275,12 @@ def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64
     print('Processing %s & %s ...' % (srcFile, tgtFile))
 
     #srcF = open(srcFile)
-    srcF = h5.File(srcFile,'r')
+    fileIdx = -1;
+    if(srcFile[-2:] == "h5"):
+        srcF = h5.File(srcFile,'r')
+    else:
+        fileIdx = 0
+        srcF = h5.File(srcFile+"."+str(fileIdx)+".h5",'r')
     tgtF = open(tgtFile)
 
     index = 0;
@@ -289,10 +294,21 @@ def makeASRData(srcFile, tgtFile, tgtDicts, max_src_length=64, max_tgt_length=64
         if tline == "":
             break
 
-        if(stride == 1):
-            sline = torch.from_numpy(np.array(srcF[str(index)]))
+        if(str(index) in srcF):
+            featureVectors = np.array(srcF[str(index)])
+        elif(fileIdx != -1):
+            srcF.close()
+            fileIdx += 1
+            srcF = h5.File(srcFile+"."+str(fileIdx)+".h5",'r')
+            featureVectors = np.array(srcF[str(index)])
         else:
-            sline = torch.from_numpy(np.array(srcF[str(index)])[0::opt.stride])
+            print("No feature vector for index:",index,file=sys.stderr)
+            exit(-1)
+
+        if(stride == 1):
+            sline = torch.from_numpy(featureVectors)
+        else:
+            sline = torch.from_numpy(featureVectors[0::opt.stride])
 
 
         if(concat != 1):
