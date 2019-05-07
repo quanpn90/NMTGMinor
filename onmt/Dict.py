@@ -1,4 +1,5 @@
 import torch
+import re
 
 
 class Dict(object):
@@ -23,12 +24,18 @@ class Dict(object):
     def loadFile(self, filename):
         "Load entries from a file."
         for line in open(filename):
-            fields = line.split()
-            label = fields[0]
-            idx = int(fields[1])
+
+            # NOTE: a vocab entry might be a space
+            # so we want to find the right most space index in the line
+            # the left part is the label
+            # the right part is the index
+
+            right_space_idx = line.rfind(' ')
+            label = line[:right_space_idx]
+            idx = int(line[right_space_idx+1:])
+
+            print(label, idx)
             self.add(label, idx)
-        
-        
 
     def writeFile(self, filename):
         "Write entries to a file."
@@ -44,6 +51,7 @@ class Dict(object):
         try:
             return self.labelToIdx[key]
         except KeyError:
+            print(key)
             return default
 
     def getLabel(self, idx, default=None):
@@ -138,8 +146,9 @@ class Dict(object):
         labels = []
 
         for i in idx:
-            
-            labels += [self.getLabel(int(i))]
+
+            word = self.getLabel(int(i))
+            labels += [word]
             if i == stop:
                 break
 

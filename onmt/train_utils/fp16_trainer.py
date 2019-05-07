@@ -17,7 +17,6 @@ from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 from onmt.ModelConstructor import init_model_parameters
 from onmt.train_utils.trainer import BaseTrainer, XETrainer
     
-    
 
 class DynamicLossScaler:
 
@@ -49,15 +48,15 @@ class DynamicLossScaler:
 
 class FP16XETrainer(XETrainer):
 
-    def __init__(self, model, loss_function, trainData, validData, dicts, opt):
-        super().__init__(model, loss_function, trainData, validData, dicts, opt)
+    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt):
+        super().__init__(model, loss_function, train_data, valid_data, dicts, opt)
         self.optim = onmt.Optim(opt)
         self.scaler = DynamicLossScaler(opt.fp16_loss_scale)
+        self.fp16 = True
         
         if self.cuda:
            torch.cuda.set_device(self.opt.gpus[0])
            torch.manual_seed(self.opt.seed)
-           
            #~ print(torch.cuda.get_device_capability(0)[0])
            
            # Important:
@@ -82,17 +81,6 @@ class FP16XETrainer(XETrainer):
         # we optimize on the fp32 params
         self.optim.set_parameters([self.fp32_params])
 
-    def to_variable(self,data):
-        for i, t in enumerate(data):
-            if self.cuda:
-                if(data[i].type() == "torch.FloatTensor"):
-                    data[i] = data[i].half()
-                data[i] = Variable(data[i].cuda())
-            else:
-                data[i] = Variable(data[i])
-
-        return data
-
         
     def eval(self, data):
         total_loss = 0
@@ -104,51 +92,64 @@ class FP16XETrainer(XETrainer):
         with torch.no_grad():
             for i in range(len(data)):
                     
-                samples = data.next()
-                
-                batch = self.to_variable(samples[0])
+                batch = data.next()[0]
+
+                batch.cuda(fp16=self.fp16)
                 
                 """ outputs can be either 
                         hidden states from decoder or
                         prob distribution from decoder generator
                 """
                 outputs = self.model(batch)
-                targets = batch[1][1:]
+                targets = batch.get('target_output')
+                tgt_mask = targets.ne(onmt.Constants.PAD)
+                outputs['tgt_mask'] = tgt_mask
                 
-                loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
+                # loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
+                # if self.opt.ctc_loss != 0:
+                #     _, loss_data, grad_outputs = self.loss_function(outputs, encoder, targets,
+                #                                                     generator=self.model.generator, backward=False,
+                #                                                     source_mask=src_mask, target_mask=tgt_mask)
+                # else:
+                #     _, loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator[0],
+                #                                                     backward=False, mask=tgt_mask)
+
+                loss_dict = self.loss_function(outputs, targets, model=self.model,
+                                                                 backward=False)
+                loss_data = loss_dict['data']
                 
                 total_loss += loss_data
-                total_words += targets.data.ne(onmt.Constants.PAD).sum().item()
+                total_words += batch.tgt_size
 
         self.model.train()
         return total_loss / total_words
         
-    def train_epoch(self, epoch, resume=False, batchOrder=None, iteration=0):
+    def train_epoch(self, epoch, resume=False, batch_order=None, iteration=0):
         
         opt = self.opt
-        trainData = self.trainData
+        train_data = self.train_data
         
         # Clear the gradients of the model
         self.model.zero_grad()
         self.optim.zero_grad() 
 
         if opt.extra_shuffle and epoch > opt.curriculum:
-            trainData.shuffle()
+            train_data.shuffle()
 
         # Shuffle mini batch order.
         if resume:
-            trainData.batchOrder = batchOrder
-            trainData.set_index(iteration)
+            train_data.batch_order = batch_order
+            train_data.set_index(iteration)
             print("Resuming from iteration: %d" % iteration)
         else:
-            batchOrder = trainData.create_order()
+            batch_order = train_data.create_order()
             iteration = 0
 
         total_loss, total_words = 0, 0
         report_loss, report_tgt_words = 0, 0
         report_src_words = 0
         start = time.time()
-        nSamples = len(trainData)
+        nSamples = len(train_data)
         
         counter = 0
         num_accumulated_words = 0
@@ -159,28 +160,36 @@ class FP16XETrainer(XETrainer):
 
             curriculum = (epoch < opt.curriculum)
             
-            samples = trainData.next(curriculum=curriculum)
-                        
-            batch = self.to_variable(samples[0])
-            
+            batch = train_data.next(curriculum=curriculum)[0]
+            batch.cuda(fp16=self.fp16)
+
             oom = False
             try:
-            
+
                 outputs = self.model(batch)
                     
-                targets = batch[1][1:]
-                tgt_inputs = batch[1][:-1]
+                targets = batch.get('target_output')
+                tgt_inputs = batch.get('target_input')
                 
-                batch_size = targets.size(1)
+                batch_size = batch.size
                 
                 tgt_mask = targets.data.ne(onmt.Constants.PAD)
-                tgt_size = tgt_mask.sum().item()
+                outputs['tgt_mask'] = tgt_mask
                                 
                 # Scale UP the loss so that the gradients are not cutoff
-                normalizer = 1.0 / self.scaler.loss_scale 
-                
-                loss_data, _ = self.loss_function(outputs, targets, generator=self.model.generator, 
-                                                             backward=True, mask=None, normalizer=normalizer)
+                normalizer = 1.0 / self.scaler.loss_scale
+
+                # if self.opt.ctc_loss != 0:
+                #
+                #     _, loss_data, grad_outputs = self.loss_function(outputs, encoder, targets,
+                #                                                     generator=self.model.generator, backward=True,
+                #                                                     source_mask=src_mask, target_mask=tgt_mask, normalizer=normalizer)
+                # else:
+                #     _, loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator[0],
+                #                                                     backward=True, mask=tgt_mask, normalizer=normalizer)
+                loss_dict = self.loss_function(outputs, targets, model=self.model,
+                                                                 backward=True, normalizer=normalizer)
+                loss_data = loss_dict['data']
                 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
@@ -192,26 +201,22 @@ class FP16XETrainer(XETrainer):
                     raise e        
                 
             if not oom:
-                src_size = batch[0].data.ne(onmt.Constants.PAD).sum().item()
-                tgt_size = targets.data.ne(onmt.Constants.PAD).sum().item()
-                
-                
+                src_size = batch.src_size
+                tgt_size = batch.tgt_size
+
                 counter = counter + 1 
                 num_accumulated_words += tgt_size
                 num_accumulated_sents += batch_size
                 
                 # We only update the parameters after getting gradients from n mini-batches
                 # simulating the multi-gpu situation
-                #~ if counter == opt.virtual_gpu:
-                #~ if counter >= opt.batch_size_update:
                 normalizer = num_accumulated_words if opt.normalize_gradient else 1
                 if num_accumulated_words >= opt.batch_size_update * 0.95:
                     # Update the parameters.
                     
                     # First we have to copy the grads from fp16 to fp32
                     self._get_flat_grads(out=self.fp32_params.grad)
-                    
-                    
+
                     normalizer = normalizer * self.scaler.loss_scale 
                     # rescale and clip grads
                     self.fp32_params.grad.data.div_(normalizer)
@@ -237,6 +242,7 @@ class FP16XETrainer(XETrainer):
                     else:
                         self.optim.step(grad_denom=1)
 
+                        # re-copy the parameters from fp32 to fp16
                         offset = 0
                         for p in self.model.parameters():
                             if not p.requires_grad:
@@ -252,13 +258,13 @@ class FP16XETrainer(XETrainer):
                         num_accumulated_sents = 0
                         num_updates = self.optim._step
                         if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
-                            valid_loss = self.eval(self.validData)
+                            valid_loss = self.eval(self.valid_data)
                             valid_ppl = math.exp(min(valid_loss, 100))
                             print('Validation perplexity: %g' % valid_ppl)
                             
                             ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
                             
-                            self.save(ep, valid_ppl, batchOrder=batchOrder, iteration=i)
+                            self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
                 
 
                 num_words = tgt_size
@@ -269,13 +275,11 @@ class FP16XETrainer(XETrainer):
                 total_words += num_words
                 
                 optim = self.optim
-                
-                
-                
+
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
                     print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
                            "%5.0f src tok/s; %5.0f tgt tok/s; lscale %0.2f; oom %d; %s elapsed") %
-                          (epoch, i+1, len(trainData),
+                          (epoch, i+1, len(train_data),
                            math.exp(report_loss / report_tgt_words),
                            optim.getLearningRate(),
                            optim._step,
@@ -292,8 +296,7 @@ class FP16XETrainer(XETrainer):
             
         return total_loss / total_words
     
-    
-    
+
     def run(self, save_file=None):
         
         opt = self.opt
@@ -310,14 +313,19 @@ class FP16XETrainer(XETrainer):
             print('Loading model and optim from checkpoint at %s' % save_file)
             self.model.load_state_dict(checkpoint['model'])
             
-            if opt.reset_optim == False:
+            if not opt.reset_optim:
                 self.optim.load_state_dict(checkpoint['optim'])
-                batchOrder = checkpoint['batchOrder']
-                iteration = checkpoint['iteration'] + 1
+
+                if 'batch_order' in checkpoint:
+                    batch_order = checkpoint['batch_order']
+                    iteration = checkpoint['iteration'] + 1
+                else:
+                    batch_order = None
+                    iteration = 0
                 opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
                 resume=True  
             else:
-                batchOrder = None
+                batch_order = None
                 iteration = 0
                 resume=False
                 
@@ -326,14 +334,14 @@ class FP16XETrainer(XETrainer):
             del checkpoint['optim']
             del checkpoint
         else:
-            batchOrder = None
+            batch_order = None
             iteration = 0
             print('Initializing model parameters')
             init_model_parameters(model, opt)
             resume=False
         
         
-        valid_loss = self.eval(self.validData)
+        valid_loss = self.eval(self.valid_data)
         valid_ppl = math.exp(min(valid_loss, 100))
         print('Validation perplexity: %g' % valid_ppl)
         #~ 
@@ -344,19 +352,19 @@ class FP16XETrainer(XETrainer):
 
             #  (1) train for one epoch on the training set
             train_loss = self.train_epoch(epoch, resume=resume,
-                                                 batchOrder=batchOrder,
+                                                 batch_order=batch_order,
                                                  iteration=iteration)
             train_ppl = math.exp(min(train_loss, 100))
             print('Train perplexity: %g' % train_ppl)
 
             #  (2) evaluate on the validation set
-            valid_loss = self.eval(self.validData)
+            valid_loss = self.eval(self.valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
             print('Validation perplexity: %g' % valid_ppl)
             
             
             self.save(epoch, valid_ppl)
-            batchOrder = None
+            batch_order = None
             iteration = None
             resume = False
         

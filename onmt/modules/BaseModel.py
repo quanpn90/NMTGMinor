@@ -1,11 +1,7 @@
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 import torch.nn.functional as F
 import onmt, math
-
-
-#~ from onmt.modules.Transformer.Layers import XavierLinear
 
 class Generator(nn.Module):
 
@@ -22,8 +18,7 @@ class Generator(nn.Module):
         torch.nn.init.uniform_(self.linear.weight, -stdv, stdv)
         
         self.linear.bias.data.zero_()
-        
-        
+
         
     def forward(self, input, log_softmax=True):
         
@@ -44,13 +39,12 @@ class NMTModel(nn.Module):
         super(NMTModel, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
-        self.generator = generator        
-        
+        self.generator = generator
+
     def tie_weights(self):
         assert self.generator is not None, "The generator needs to be created before sharing weights"
         self.generator[0].linear.weight = self.decoder.word_lut.weight
-        
-    
+
     def share_enc_dec_embedding(self):
         self.encoder.word_lut.weight = self.decoder.word_lut.weight
         
@@ -65,8 +59,9 @@ class NMTModel(nn.Module):
             
             if 'positional_encoder' in param_name:
                 return False
-            if 'time_transformer' in param_name and self.encoder.time == 'positional_encoding':
-                return False
+            if 'time_transformer' in param_name:
+                if self.encoder is not None and self.encoder.time == 'positional_encoding':
+                    return False
             if param_name == 'decoder.mask':
                 return False
             
@@ -74,12 +69,9 @@ class NMTModel(nn.Module):
         
 
         #restore old generated if necessay for loading
-        if("generator.linear.weight" in state_dict and type(self.generator) is nn.ModuleList):
+        if "generator.linear.weight" in state_dict and type(self.generator) is nn.ModuleList:
             self.generator = self.generator[0]
 
-        #~ filtered_dict = dict()
-        
-        #~ for
         filtered = {k: v for k, v in state_dict.items() if condition(k)}
         
         #~ for k, v in filtered.items():
@@ -95,7 +87,7 @@ class NMTModel(nn.Module):
 
         super().load_state_dict(filtered)   
 
-        if(type(self.generator) is not nn.ModuleList):
+        if type(self.generator) is not nn.ModuleList:
             self.generator = nn.ModuleList([self.generator])
 
         #~ for name, param in state_dict.items():
@@ -109,10 +101,6 @@ class NMTModel(nn.Module):
             #~ else:
                 #~ continue
         #~ pretrained_dict = {k: v for k, v in state_dict.items() if v}
-
-        
-        
-    
 
 
 class Reconstructor(nn.Module):
@@ -130,5 +118,11 @@ class DecoderState(object):
     input_feeding and non-recurrent models.
     Modules need to implement this to utilize beam search decoding.
     """
-    
-    
+
+    def update_beam(self, beam, b, remaining_sents, idx):
+
+        raise NotImplementedError
+
+    def prune_complete_beam(self, active_idx, remaining_sents):
+
+        raise NotImplementedError
