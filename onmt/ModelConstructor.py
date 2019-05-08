@@ -190,6 +190,8 @@ def build_model(opt, dicts):
 
                 model = ParallelSimplifiedTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder,
                                                       tgt_decoder=tgt_decoder)
+            elif opt.loss_function==1:
+                model = SimplifiedTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder)
 
             else:
                 raise NotImplementedError
@@ -279,6 +281,7 @@ def build_model(opt, dicts):
         model = ParallelSimplifiedTransformer(encoder, decoder, generator, tgt_encoder=tgt_encoder, tgt_decoder=tgt_decoder)
 
     else:
+        print(opt.model)
         raise NotImplementedError
 
     # now we have to build the loss function

@@ -135,7 +135,7 @@ def make_join_vocabulary(filenames, size, input_type="word", dict_atb=None, use_
     print('Created dictionary of size %d (pruned from %d)' %
           (vocab.size(), original_size))
 
-    return vocab
+    return vocab, dict_atb
 
 
 def make_vocabulary(filename, size, input_type='word', dict_atb=None, use_atb=True):
@@ -197,7 +197,7 @@ def init_vocabulary(name, dataFile, vocabFile, vocabSize, join=False, input_type
         vocab = gen_word_vocab
 
     print()
-    return vocab, dict_atb
+    return vocab
 
 
 def save_vocabulary(name, vocab, file):
@@ -235,9 +235,12 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
             break
 
         # source or target does not have same number of lines
-        if sline == "" or tline == "":
-            print('WARNING: src and tgt do not have the same # of sentences')
-            break
+
+        sline_without_tag = " ".join(sline.split()[1:]).strip()
+        tline_without_tag = " ".join(tline.split()[1:]).strip()
+        # if sline_without_tag == "" or tline_without_tag == "":
+        #     print('WARNING: src and tgt do not have the same # of sentences')
+        #     break
 
         # note: here we have to remove the
         sline = sline.strip()
@@ -259,7 +262,7 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
                 # ~ print('WARNING: ignoring a duplicated pair ('+str(count+1)+')')
                 continue
 
-        if sline == "" or tline == "":
+        if sline_without_tag == "" or tline_without_tag == "":
             print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
             continue
 
