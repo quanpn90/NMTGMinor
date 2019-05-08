@@ -127,7 +127,8 @@ class XETrainer(BaseTrainer):
 
                 batch = data.next()[0]
 
-                batch.cuda()
+                if(self.cuda):
+                    batch.cuda()
                 
                 """ outputs can be either 
                         hidden states from decoder or
@@ -186,7 +187,8 @@ class XETrainer(BaseTrainer):
             curriculum = (epoch < opt.curriculum)
 
             batch = train_data.next(curriculum=curriculum)[0]
-            batch.cuda()
+            if(self.cuda):
+                batch.cuda()
             
             oom = False
             try:
