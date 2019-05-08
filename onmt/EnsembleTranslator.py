@@ -144,6 +144,13 @@ class EnsembleTranslator(object):
             
             # output = torch.log(output)
             output = torch.log(output)
+        elif self.ensemble_op == "max":
+            output = outputs[0]
+
+            for i in range(1, len(outputs)):
+                output = torch.max(output,outputs[i])
+
+
         elif self.ensemble_op == 'gmean':
             output = torch.exp(outputs[0])
             
