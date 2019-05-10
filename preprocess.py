@@ -135,7 +135,7 @@ def make_join_vocabulary(filenames, size, input_type="word", dict_atb=None, use_
     print('Created dictionary of size %d (pruned from %d)' %
           (vocab.size(), original_size))
 
-    return vocab
+    return vocab, dict_abt
 
 
 def make_vocabulary(filename, size, input_type='word', dict_atb=None, use_atb=True):
@@ -189,11 +189,10 @@ def init_vocabulary(name, dataFile, vocabFile, vocabSize, join=False, input_type
         # If a dictionary is still missing, generate it.
         if join:
             print('Building ' + 'shared' + ' vocabulary...')
-            gen_word_vocab = make_join_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
+            gen_word_vocab, dict_atb = make_join_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
         else:
             print('Building ' + name + ' vocabulary...')
-            gen_word_vocab, gen_atb_vocab = make_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
-            dict_atb = gen_atb_vocab
+            gen_word_vocab, dict_atb = make_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
 
         vocab = gen_word_vocab
 
@@ -236,9 +235,12 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
             break
 
         # source or target does not have same number of lines
-        if sline == "" or tline == "":
-            print('WARNING: src and tgt do not have the same # of sentences')
-            break
+
+        sline_without_tag = " ".join(sline.split()[1:]).strip()
+        tline_without_tag = " ".join(tline.split()[1:]).strip()
+        # if sline_without_tag == "" or tline_without_tag == "":
+        #     print('WARNING: src and tgt do not have the same # of sentences')
+        #     break
 
         # note: here we have to remove the
         sline = sline.strip()
@@ -260,7 +262,7 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
                 # ~ print('WARNING: ignoring a duplicated pair ('+str(count+1)+')')
                 continue
 
-        if sline == "" or tline == "":
+        if sline_without_tag == "" or tline_without_tag == "":
             print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
             continue
 
@@ -279,6 +281,7 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
                 src_words = src_words[:opt.src_seq_length_trunc]
             if opt.tgt_seq_length_trunc != 0:
                 tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
+
             src_sent = src_dicts.convertToIdx(src_words,
                                               onmt.Constants.UNK_WORD)
 
@@ -379,7 +382,6 @@ def main():
     train['src'], train['tgt'] = dict(), dict()
 
     print('Preparing training ...')
-    print(dicts['src'])
 
     train['src']['words'], train['tgt']['words'], train['src']['attbs'], train['tgt']['attbs'] = make_data(
         opt.train_src, opt.train_tgt,

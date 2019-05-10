@@ -110,9 +110,13 @@ class StochasticTransformerEncoder(TransformerEncoder):
             
             # pre-generate coin to use 
             seed = torch.rand(1)
-            coin = (seed[0].item() >= self.death_rates[i])
+
+            if self.training:
+                coin = (seed[0].item() >= self.death_rates[i])
+            else:
+                coin = True
             
-            if coin == True:
+            if coin:
             
                 if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:        
                     context = checkpoint(custom_layer(layer), context, mask_src)
@@ -247,12 +251,15 @@ class StochasticTransformerDecoder(TransformerDecoder):
 
         for i, layer in enumerate(self.layer_modules):
             
-            # pre-generate coin to use 
-            seed = torch.rand(1)
-            coin = (seed[0].item() >= self.death_rates[i])
-            
-            if coin == True:
-            
+            # pre-generate coin to use
+
+            if self.training:
+                seed = torch.rand(1)
+                coin = (seed[0].item() >= self.death_rates[i])
+            else:
+                coin = True
+
+            if coin:
                 if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:           
                     
                     output = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src) 
