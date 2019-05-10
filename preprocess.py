@@ -192,7 +192,8 @@ def init_vocabulary(name, dataFile, vocabFile, vocabSize, join=False, input_type
             gen_word_vocab = make_join_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
         else:
             print('Building ' + name + ' vocabulary...')
-            gen_word_vocab = make_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
+            gen_word_vocab, gen_atb_vocab = make_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
+            dict_atb = gen_atb_vocab
 
         vocab = gen_word_vocab
 
@@ -278,7 +279,6 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
                 src_words = src_words[:opt.src_seq_length_trunc]
             if opt.tgt_seq_length_trunc != 0:
                 tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
-
             src_sent = src_dicts.convertToIdx(src_words,
                                               onmt.Constants.UNK_WORD)
 
@@ -379,6 +379,7 @@ def main():
     train['src'], train['tgt'] = dict(), dict()
 
     print('Preparing training ...')
+    print(dicts['src'])
 
     train['src']['words'], train['tgt']['words'], train['src']['attbs'], train['tgt']['attbs'] = make_data(
         opt.train_src, opt.train_tgt,
