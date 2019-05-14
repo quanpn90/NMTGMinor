@@ -22,6 +22,7 @@ class EnsembleTranslator(object):
         self.fp16 = opt.fp16
         self.bos_token = opt.bos_token
         self.start_with_tag = opt.start_with_tag
+        self.force_target_length = opt.force_target_length
 
         print("* Starting token %s " % self.bos_token)
         
@@ -206,7 +207,7 @@ class EnsembleTranslator(object):
         
         return tokens
 
-    def translate_batch(self, batch):
+    def translate_batch(self, batch,length_batch=None):
         
         torch.set_grad_enabled(False)
         # Batch size is in different location depending on data.
@@ -251,7 +252,7 @@ class EnsembleTranslator(object):
 
         for i in range(self.n_models):
             # decoder_states[i] = self.models[i].create_decoder_state(src, contexts[i], src_mask, beam_size, type='old')
-            decoder_states[i] = self.models[i].create_decoder_state(batch, beam_size)
+            decoder_states[i] = self.models[i].create_decoder_state(batch, beam_size,length_batch)
 
         for i in range(self.opt.max_sent_length):
             # Prepare decoder input.
@@ -283,7 +284,7 @@ class EnsembleTranslator(object):
                 # # batch * beam x vocab_size
                 # outs[k] = self.models[k].generator(decoder_hidden)
 
-                outs[k], attns[k] = self.models[k].step(decoder_input.clone(), decoder_states[k])
+                outs[k], attns[k] = self.models[k].step(decoder_input.clone(), decoder_states[k],i)
 
             out = self._combineOutputs(outs)
             attn = self._combineAttention(attns)
@@ -301,11 +302,19 @@ class EnsembleTranslator(object):
 
                 idx = batchIdx[b]
 
-                if not beam[b].advance(wordLk.data[idx], attn.data[idx]):
+                if self.force_target_length and length_batch and length_batch[b] == i:
+                    #finish hyp b since it has desired length
+                    beam[b].advanceEOS(wordLk.data[idx],attn.data[idx])
+                elif self.force_target_length and length_batch:
+                    #ignore EOS since we are not at the end
+                    wordLk[idx].select(1, onmt.Constants.EOS).zero_().add_(-1000)
+                    if not beam[b].advance(wordLk.data[idx], attn.data[idx]):
+                        active += [b]
+                elif not beam[b].advance(wordLk.data[idx], attn.data[idx]):
                     active += [b]
 
-                for i in range(self.n_models):
-                    decoder_states[i]._update_beam(beam, b, remaining_sents, idx)
+                for j in range(self.n_models):
+                    decoder_states[j]._update_beam(beam, b, remaining_sents, idx)
 
             if not active:
                 break
@@ -319,7 +328,6 @@ class EnsembleTranslator(object):
                 decoder_states[k]._prune_complete_beam(activeIdx, remaining_sents)
 
             remaining_sents = len(active)
-            
         #  (4) package everything up
         allHyp, allScores, allAttn = [], [], []
         n_best = self.opt.n_best
@@ -353,7 +361,7 @@ class EnsembleTranslator(object):
 
         return allHyp, allScores, allAttn, allLengths, gold_scores, gold_words
 
-    def translate(self, src_batch, gold_batch):
+    def translate(self, src_batch, gold_batch,length=None):
         #  (1) convert words to indexes
         dataset = self.build_data(src_batch, gold_batch)
         batch = dataset.next()[0]
@@ -366,7 +374,7 @@ class EnsembleTranslator(object):
         batch_size = batch.size
 
         #  (2) translate
-        pred, predScore, attn, predLength, goldScore, gold_words = self.translate_batch(batch)
+        pred, predScore, attn, predLength, goldScore, gold_words = self.translate_batch(batch,length)
 
         #  (3) convert indexes to words
         predBatch = []

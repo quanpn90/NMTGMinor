@@ -316,7 +316,7 @@ class TransformerDecoder(nn.Module):
 
         if(self.fixed_target_length):
             tgt_length = input.data.ne(onmt.Constants.PAD).sum(1).unsqueeze(1).expand_as(input.data)
-            index = torch.arange(input.data.size(1)).unsqueeze(0).expand_as(tgt_length)
+            index = torch.arange(input.data.size(1)).unsqueeze(0).expand_as(tgt_length).type_as(tgt_length)
             tgt_length = (tgt_length - index) * input.data.ne(onmt.Constants.PAD).long()
             tgt_emb = self.length_lut(tgt_length);
             emb = torch.cat([emb, tgt_emb], dim=-1)
@@ -366,7 +366,7 @@ class TransformerDecoder(nn.Module):
         # return output, None
         return returns
 
-    def step(self, input, decoder_state):
+    def step(self, input, decoder_state,current_step=-1):
         """
         Inputs Shapes: 
             input: (Variable) batch_size x len_tgt
@@ -382,6 +382,8 @@ class TransformerDecoder(nn.Module):
         buffers = decoder_state.attention_buffers
         mask_src = decoder_state.src_mask
         input_attbs = decoder_state.tgt_attbs
+        if(self.fixed_target_length):
+            tgt_length = decoder_state.tgt_length
 
         if decoder_state.concat_input_seq :
             if decoder_state.input_seq is None:
@@ -410,12 +412,22 @@ class TransformerDecoder(nn.Module):
         # Preprocess layer: adding dropout
         emb = self.preprocess_layer(emb)
 
-        input_attbs = input_attbs.unsqueeze(1)
-        attb_emb = self.feat_lut(input_attbs)
+        if(self.enable_feature):
+            input_attbs = input_attbs.unsqueeze(1)
+            attb_emb = self.feat_lut(input_attbs)
 
-        emb = torch.cat([emb, attb_emb], dim=-1)
+            emb = torch.cat([emb, attb_emb], dim=-1)
 
-        emb = torch.relu(self.feature_projector(emb))
+            emb = torch.relu(self.feature_projector(emb))
+
+        if(self.fixed_target_length):
+            tgt_length = tgt_length - current_step + 1
+            tgt_length = tgt_length.unsqueeze(1)
+            tgt_emb = self.length_lut(tgt_length);
+            emb = torch.cat([emb, tgt_emb], dim=-1)
+
+            emb = torch.relu(self.length_projector(emb))
+
 
         emb = emb.transpose(0, 1)
 
@@ -568,9 +580,9 @@ class Transformer(NMTModel):
 
         return gold_words, gold_scores
 
-    def step(self, input, decoder_state):
+    def step(self, input, decoder_state,current_step=-1):
 
-        decoder_output = self.decoder.step(input, decoder_state)
+        decoder_output = self.decoder.step(input, decoder_state,current_step)
 
         # decoder_hidden = decoder_output['hiddens'].squeeze(1)
         coverage = decoder_output['coverage'][:, -1, :].squeeze(1) # batch * beam x src_len
@@ -580,7 +592,7 @@ class Transformer(NMTModel):
         return log_dist, coverage
         # return self.decoder.step(input, decoder_state)
 
-    def create_decoder_state(self, batch, beam_size):
+    def create_decoder_state(self, batch, beam_size,length_batch=None):
 
         # from onmt.modules.ParallelTransformer.Models import ParallelTransformerEncoder, ParallelTransformerDecoder
         from onmt.modules.StochasticTransformer.Models import StochasticTransformerDecoder
@@ -595,7 +607,7 @@ class Transformer(NMTModel):
 
         if isinstance(self.decoder, TransformerDecoder) or isinstance(self.decoder, StochasticTransformerDecoder) \
                 or isinstance(self.decoder, UniversalTransformerDecoder):
-            decoder_state = TransformerDecodingState(src, tgt_attbs, context, beam_size=beam_size)
+            decoder_state = TransformerDecodingState(src, tgt_attbs, context, length_batch,beam_size=beam_size)
         else:
             raise NotImplementedError
         # elif isinstance(self.decoder, ParallelTransformerDecoder):
@@ -606,7 +618,7 @@ class Transformer(NMTModel):
 
 class TransformerDecodingState(DecoderState):
 
-    def __init__(self, src, tgt_attbs, context, beam_size=1):
+    def __init__(self, src, tgt_attbs, context, length_batch = None, beam_size=1):
 
         self.beam_size = beam_size
 
@@ -614,12 +626,18 @@ class TransformerDecodingState(DecoderState):
         self.attention_buffers = dict()
         self.original_src = src
 
+
         self.src = src.repeat(1, beam_size)
         self.context = context.repeat(1, beam_size, 1)
         self.beam_size = beam_size
         self.src_mask = None
         self.concat_input_seq = True
         self.tgt_attbs = tgt_attbs.repeat(beam_size)  # size: Bxb
+        if(length_batch):
+            self.use_tgt_length = True
+            self.tgt_length = torch.tensor(length_batch).repeat(beam_size).type_as(self.tgt_attbs)
+        else:
+            self.use_tgt_length = False
 
     def _update_attention_buffer(self, buffer, layer):
 
@@ -658,6 +676,11 @@ class TransformerDecodingState(DecoderState):
 
         state_.copy_(state_.index_select(0, beam[b].getCurrentOrigin()))
 
+        if(self.use_tgt_length):
+            state_ = self.tgt_length.view(self.beam_size, remaining_sents)[:, idx]
+            state_.copy_(state_.index_select(0, beam[b].getCurrentOrigin()))
+
+
     # in this section, the sentences that are still active are
     # compacted so that the decoder is not run on completed sentences
     def _prune_complete_beam(self, active_idx, remaining_sents):
@@ -690,6 +713,8 @@ class TransformerDecodingState(DecoderState):
         self.src = update_active_without_hidden(self.src)
 
         self.tgt_attbs = update_active_without_hidden(self.tgt_attbs)
+        if(self.use_tgt_length):
+            self.tgt_length = update_active_without_hidden(self.tgt_length)
 
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]
