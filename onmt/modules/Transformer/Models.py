@@ -204,8 +204,9 @@ class TransformerDecoder(nn.Module):
         self.copy_generator = opt.copy_generator
         self.pooling = opt.var_pooling
         self.fixed_target_length = 0
-        if opt.fixed_target_length == "int":
-            self.fixed_target_length = 1
+        if hasattr(opt, 'fix_target_length'):
+            if opt.fixed_target_length == "int":
+                self.fixed_target_length = 1
 
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
