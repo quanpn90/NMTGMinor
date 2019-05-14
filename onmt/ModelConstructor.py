@@ -58,6 +58,9 @@ def update_backward_compatibility(opt):
     if not hasattr(opt, 'copy_generator'):
         opt.copy_generator = False
 
+    if not hasattr(opt, 'fixed_target_length')
+        opt.fixed_target_length = 'no'
+
     if not hasattr(opt, 'loss_function'):
 
         if opt.model in ['transformer', 'simplified_transformer', 'simplified_transformer_v2']:
