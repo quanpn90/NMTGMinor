@@ -315,7 +315,7 @@ class TransformerDecoder(nn.Module):
 
         if(self.fixed_target_length):
             tgt_length = input.data.ne(onmt.Constants.PAD).sum(1).unsqueeze(1).expand_as(input.data)
-            index = torch.arange(input.data.size(1)).unsqueeze(0).expand_as(tgt_length)
+            index = torch.arange(input.data.size(1)).unsqueeze(0).expand_as(tgt_length).type_as(tgt_length)
             tgt_length = (tgt_length - index) * input.data.ne(onmt.Constants.PAD).long()
             tgt_emb = self.length_lut(tgt_length);
             emb = torch.cat([emb, tgt_emb], dim=-1)

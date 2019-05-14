@@ -23,6 +23,8 @@ parser.add_argument('-src',   required=True,
                     help='Source sequence to decode (one line per sequence)')
 parser.add_argument('-tgt',
                     help='True target sequence (optional)')
+parser.add_argument('-tgt_length',
+                    help='Wanted length of the output (optional)')
 parser.add_argument('-output', default='pred.txt',
                     help="""Path to output the predictions (each line will
                     be the decoded sequence""")
@@ -69,6 +71,8 @@ parser.add_argument('-start_with_tag', action='store_true',
                     help='If the data format has language tags in the beginning')
 parser.add_argument('-gpu', type=int, default=-1,
                     help="Device to run on")
+parser.add_argument('-force_target_length', action="store_true",
+                    help='Force output target length as in the length file')
 
 
 def reportScore(name, score_total, wordsTotal):
@@ -118,11 +122,12 @@ def main():
 
     pred_score_total, pred_words_total, gold_scores_total, gold_words_total = 0, 0, 0, 0
 
-    src_batch, tgt_batch = [], []
+    src_batch, tgt_batch,tgt_length_batch = [], [],[]
 
     count = 0
 
     tgtF = open(opt.tgt) if opt.tgt else None
+    tgt_lengthF = open(opt.tgt_length) if opt.tgt_length else None
 
     # here we are trying to check if online decoding is used
     in_file = None
@@ -147,6 +152,9 @@ def main():
                 if tgtF:
                     tgt_tokens = tgtF.readline().split() if tgtF else None
                     tgt_batch += [tgt_tokens]
+                if tgt_lengthF:
+                    tgt_length_int = int(tgt_lengthF.readline())
+                    tgt_length_batch += [tgt_length_int]
 
             elif opt.input_type == 'char':
                 src_tokens = list(line.strip())
@@ -155,6 +163,9 @@ def main():
                     # tgt_tokens = tgtF.readline().split() if tgtF else None
                     tgt_tokens = list(tgtF.readline().strip()) if tgtF else None
                     tgt_batch += [tgt_tokens]
+                if tgt_lengthF:
+                    tgt_length_int = int(tgt_lengthF.readline())
+                    tgt_length_batch += [tgt_length_int]
             else:
                 raise NotImplementedError("Input type unknown")
 
@@ -166,7 +177,7 @@ def main():
                 break
 
         pred_batch, pred_score, pred_length, gold_scores, num_gold_words  = translator.translate(src_batch,
-                                                                                    tgt_batch)
+                                                                                    tgt_batch,tgt_length_batch)
         if opt.normalize and opt.version == 1.0:
             pred_batch_ = []
             pred_score_ = []
@@ -221,7 +232,7 @@ def main():
                             
                 print('')
 
-        src_batch, tgt_batch = [], []
+        src_batch, tgt_batch,tgt_length_batch = [], [],[]
         
     if opt.verbose:
         reportScore('PRED', pred_score_total, pred_words_total)
@@ -230,6 +241,8 @@ def main():
 
     if tgtF:
         tgtF.close()
+    if tgt_lengthF:
+        tgt_lengthF.close()
 
     if opt.dump_beam:
         json.dump(translator.beam_accum, open(opt.dump_beam, 'w'))

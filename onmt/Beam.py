@@ -91,6 +91,51 @@ class Beam(object):
 
         return self.done
 
+
+    def advanceEOS(self, wordLk, attnOut):
+        """
+        Given prob over words for every last beam `wordLk` and attention
+        `attnOut`: Compute and update the beam search. Are are at the desired length -> select eos
+
+        Parameters:
+
+        * `wordLk`- probs of advancing from the last step (K x words)
+        * `attnOut`- attention at the last step
+
+        Returns: True if beam search is complete.
+        """
+        numWords = wordLk.size(1)
+
+        # Sum the previous scores.
+        if len(self.prevKs) > 0:
+            beamLk = wordLk + self.scores.unsqueeze(1).expand_as(wordLk)
+        else:
+            beamLk = wordLk[0]
+
+        flatBeamLk = beamLk.view(-1)
+
+        bestScoresId = torch.arange(0,flatBeamLk.size()[0],numWords) + onmt.Constants.EOS
+        bestScoresId = bestScoresId.type_as(flatBeamLk).long()
+        bestScores = torch.index_select(flatBeamLk,0,bestScoresId)
+
+        self.allScores.append(self.scores)
+        self.scores = bestScores
+
+        # bestScoresId is flattened beam x word array, so calculate which
+        # word and beam each score came from
+        prevK = bestScoresId / numWords
+        self.prevKs.append(prevK)
+        self.nextYs.append(bestScoresId - prevK * numWords)
+        self.attn.append(attnOut.index_select(0, prevK))
+
+        # End condition is when top-of-beam is EOS.
+        if self.nextYs[-1][0] == onmt.Constants.EOS:
+            self.done = True
+            self.allScores.append(self.scores)
+
+        return self.done
+
+
     def sortBest(self):
         return torch.sort(self.scores, 0, True)
 
