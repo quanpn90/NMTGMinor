@@ -252,7 +252,7 @@ class EnsembleTranslator(object):
 
         for i in range(self.n_models):
             # decoder_states[i] = self.models[i].create_decoder_state(src, contexts[i], src_mask, beam_size, type='old')
-            decoder_states[i] = self.models[i].create_decoder_state(batch, beam_size)
+            decoder_states[i] = self.models[i].create_decoder_state(batch, beam_size,length_batch)
 
         for i in range(self.opt.max_sent_length):
             # Prepare decoder input.
@@ -284,7 +284,7 @@ class EnsembleTranslator(object):
                 # # batch * beam x vocab_size
                 # outs[k] = self.models[k].generator(decoder_hidden)
 
-                outs[k], attns[k] = self.models[k].step(decoder_input.clone(), decoder_states[k])
+                outs[k], attns[k] = self.models[k].step(decoder_input.clone(), decoder_states[k],i)
 
             out = self._combineOutputs(outs)
             attn = self._combineAttention(attns)
@@ -305,7 +305,11 @@ class EnsembleTranslator(object):
                 if self.force_target_length and length_batch and length_batch[b] == i:
                     #finish hyp b since it has desired length
                     beam[b].advanceEOS(wordLk.data[idx],attn.data[idx])
-
+                elif self.force_target_length and length_batch:
+                    #ignore EOS since we are not at the end
+                    wordLk[idx].select(1, onmt.Constants.EOS).zero_().add_(-1000)
+                    if not beam[b].advance(wordLk.data[idx], attn.data[idx]):
+                        active += [b]
                 elif not beam[b].advance(wordLk.data[idx], attn.data[idx]):
                     active += [b]
 
