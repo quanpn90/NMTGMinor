@@ -415,7 +415,6 @@ class TransformerDecoder(nn.Module):
             input_attbs = input_attbs.unsqueeze(1)
             attb_emb = self.feat_lut(input_attbs)
 
-            print("att: ",emb.size(),attb_emb.size())
             emb = torch.cat([emb, attb_emb], dim=-1)
 
             emb = torch.relu(self.feature_projector(emb))
@@ -424,7 +423,6 @@ class TransformerDecoder(nn.Module):
             tgt_length = tgt_length - current_step + 1
             tgt_length = tgt_length.unsqueeze(1)
             tgt_emb = self.length_lut(tgt_length);
-            print("tgt: ",emb.size(),tgt_emb.size())
             emb = torch.cat([emb, tgt_emb], dim=-1)
 
             emb = torch.relu(self.length_projector(emb))
@@ -639,7 +637,6 @@ class TransformerDecodingState(DecoderState):
             self.tgt_length = torch.tensor(length_batch).repeat(beam_size).type_as(self.tgt_attbs)
         else:
             self.use_tgt_length = False
-        print("Create decoder state")
 
     def _update_attention_buffer(self, buffer, layer):
 
