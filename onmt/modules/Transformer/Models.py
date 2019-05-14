@@ -203,6 +203,9 @@ class TransformerDecoder(nn.Module):
         self.residual_dropout = opt.residual_dropout
         self.copy_generator = opt.copy_generator
         self.pooling = opt.var_pooling
+        self.fixed_target_length = 0
+        if opt.fixed_target_length == "int":
+            self.fixed_target_length = 1
 
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
@@ -226,6 +229,14 @@ class TransformerDecoder(nn.Module):
             self.enable_feature = False
 
         self.positional_encoder = positional_encoder
+
+        if (self.fixed_target_length):
+            self.length_lut =  nn.Embedding(8192,
+                                     opt.model_size,
+                                     padding_idx=onmt.Constants.PAD)
+
+            self.length_projector = nn.Linear(opt.model_size * 2,opt.model_size);
+
 
         len_max = self.positional_encoder.len_max
         mask = torch.ByteTensor(np.triu(np.ones((len_max, len_max)), k=1).astype('uint8'))
@@ -296,17 +307,31 @@ class TransformerDecoder(nn.Module):
         emb = self.preprocess_layer(emb)
 
         # expand B to B x T
-        emb = torch.cat([emb, attb_emb], dim=-1)
+        if(self.enable_feature):
+            emb = torch.cat([emb, attb_emb], dim=-1)
 
-        emb = torch.relu(self.feature_projector(emb))
+            emb = torch.relu(self.feature_projector(emb))
+
+
+        if(self.fixed_target_length):
+            tgt_length = input.data.ne(onmt.Constants.PAD).sum(1).unsqueeze(1).expand_as(input.data)
+            index = torch.arange(input.data.size(1)).unsqueeze(0).expand_as(tgt_length)
+            tgt_length = (tgt_length - index) * input.data.ne(onmt.Constants.PAD).long()
+            tgt_emb = self.length_lut(tgt_length);
+            emb = torch.cat([emb, tgt_emb], dim=-1)
+
+            emb = torch.relu(self.length_projector(emb))
+
 
         mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
+
 
         # unused variable
         # pad_mask_src = src.data.ne(onmt.Constants.PAD)
 
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
+
 
         # transpose to T x B x H
         output = emb.transpose(0, 1).contiguous()

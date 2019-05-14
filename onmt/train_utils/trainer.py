@@ -152,7 +152,8 @@ class XETrainer(BaseTrainer):
         with torch.no_grad():
             for i in range(len(data)):
                 batch = data.next()[0]
-                batch.cuda()
+                if(self.cuda):
+                    batch.cuda()
 
                 """ outputs can be either 
                         hidden states from decoder or
@@ -215,7 +216,8 @@ class XETrainer(BaseTrainer):
             try:
                 # ~ batch = self.to_variable(samples[0])
                 batch = samples[0]
-                batch.cuda()
+                if self.cuda:
+                    batch.cuda()
 
                 outputs = self.model(batch)
 

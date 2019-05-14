@@ -135,7 +135,7 @@ def make_join_vocabulary(filenames, size, input_type="word", dict_atb=None, use_
     print('Created dictionary of size %d (pruned from %d)' %
           (vocab.size(), original_size))
 
-    return vocab, dict_atb
+    return vocab, dict_abt
 
 
 def make_vocabulary(filename, size, input_type='word', dict_atb=None, use_atb=True):
@@ -189,15 +189,15 @@ def init_vocabulary(name, dataFile, vocabFile, vocabSize, join=False, input_type
         # If a dictionary is still missing, generate it.
         if join:
             print('Building ' + 'shared' + ' vocabulary...')
-            gen_word_vocab = make_join_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
+            gen_word_vocab, dict_atb = make_join_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
         else:
             print('Building ' + name + ' vocabulary...')
-            gen_word_vocab = make_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
+            gen_word_vocab, dict_atb = make_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
 
         vocab = gen_word_vocab
 
     print()
-    return vocab
+    return vocab, dict_atb
 
 
 def save_vocabulary(name, vocab, file):
