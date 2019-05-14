@@ -303,10 +303,10 @@ class PositionalEncoding(nn.Module):
             self.renew(len_seq)
         
         if word_emb.size(1) == len_seq:
-            out = word_emb + Variable(self.pos_emb[:len_seq, :], requires_grad=False)
+            out = word_emb + self.pos_emb[:len_seq, :].type_as(word_emb)
         else:
             # out = word_emb + Variable(self.pos_emb[:len_seq, :][-1, :], requires_grad=False)
-            time_emb = Variable(self.pos_emb[len_seq-1, :], requires_grad=False) # 1 x dim
+            time_emb = self.pos_emb[len_seq-1, :] # 1 x dim
             # out should have size bs x 1 x dim
-            out = word_emb + time_emb.unsqueeze(0).repeat(word_emb.size(0), 1, 1)
+            out = word_emb + time_emb.unsqueeze(0).repeat(word_emb.size(0), 1, 1).type_as(word_emb)
         return out
