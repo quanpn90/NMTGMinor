@@ -1,6 +1,6 @@
 from __future__ import division
 
-import sys, tempfile
+import sys, tempfile, os
 import onmt
 import onmt.Markdown
 import onmt.modules
