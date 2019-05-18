@@ -361,7 +361,8 @@ def main():
 
     if opt.join_vocab:
         dicts['src'], dicts['atb'] = init_vocabulary('joined', [opt.train_src, opt.train_tgt], opt.src_vocab,
-                                                     opt.tgt_vocab_size, join=True,  dict_atb=dicts['atb'])
+                                                     opt.tgt_vocab_size, join=True, input_type=opt.input_type, 
+													 dict_atb=dicts['atb'])
 
 
         dicts['tgt'] = dicts['src']
