@@ -270,12 +270,9 @@ class FP16XETrainer(XETrainer):
                     self.fp32_params.grad.data.div_(normalizer)
 
                     grad_norm = torch.norm(self.fp32_params.grad.data).item()
-                    
-                    
+
                     overflow = DynamicLossScaler.has_overflow(grad_norm)
                     self.scaler.update_scale(overflow)
-
-
                     
                     if overflow:
                         if self.scaler.loss_scale <= 1e-4:
