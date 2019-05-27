@@ -204,9 +204,11 @@ class TransformerDecoder(nn.Module):
         self.copy_generator = opt.copy_generator
         self.pooling = opt.var_pooling
         self.fixed_target_length = 0
-        if opt.fixed_target_length == "int":
-            self.fixed_target_length = 1
-
+        if hasattr(opt, 'fixed_target_length'):
+            if opt.fixed_target_length == "int":
+                self.fixed_target_length = 1
+            elif opt.fixed_target_length == "encoding":
+                self.fixed_target_length = 2
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
         elif opt.time == 'gru':
@@ -230,7 +232,7 @@ class TransformerDecoder(nn.Module):
 
         self.positional_encoder = positional_encoder
 
-        if (self.fixed_target_length):
+        if (self.fixed_target_length == 1):
             self.length_lut =  nn.Embedding(8192,
                                      opt.model_size,
                                      padding_idx=onmt.Constants.PAD)
@@ -299,7 +301,21 @@ class TransformerDecoder(nn.Module):
         if self.time == 'positional_encoding':
             emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
-        emb = self.time_transformer(emb)
+        if(self.fixed_target_length == 2):
+            #add target length encoding
+            tgt_length = input.data.ne(onmt.Constants.PAD).sum(1).unsqueeze(1).expand_as(input.data)
+            index = torch.arange(input.data.size(1)).unsqueeze(0).expand_as(tgt_length).type_as(tgt_length)
+            tgt_length = (tgt_length - index) * input.data.ne(onmt.Constants.PAD).long()
+
+            num_timescales = self.model_size // 2
+            log_timescale_increment = math.log(10000) / (num_timescales - 1)
+            inv_timescales = torch.exp(torch.arange(0, num_timescales).float() * -log_timescale_increment)
+            scaled_time = tgt_length.float().unsqueeze(2) * inv_timescales.unsqueeze(0).unsqueeze(0)
+            pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 2)
+            emb = emb + pos_emb
+
+        else:
+            emb = self.time_transformer(emb)
         if isinstance(emb, tuple):
             emb = emb[0]
 
@@ -313,7 +329,7 @@ class TransformerDecoder(nn.Module):
             emb = torch.relu(self.feature_projector(emb))
 
 
-        if(self.fixed_target_length):
+        if(self.fixed_target_length == 1):
             tgt_length = input.data.ne(onmt.Constants.PAD).sum(1).unsqueeze(1).expand_as(input.data)
             index = torch.arange(input.data.size(1)).unsqueeze(0).expand_as(tgt_length).type_as(tgt_length)
             tgt_length = (tgt_length - index) * input.data.ne(onmt.Constants.PAD).long()
@@ -381,7 +397,7 @@ class TransformerDecoder(nn.Module):
         buffers = decoder_state.attention_buffers
         mask_src = decoder_state.src_mask
         input_attbs = decoder_state.tgt_attbs
-        if(self.fixed_target_length):
+        if(self.fixed_target_length == 1 or self.fixed_target_length == 2):
             tgt_length = decoder_state.tgt_length
 
         if decoder_state.concat_input_seq :
@@ -402,7 +418,19 @@ class TransformerDecoder(nn.Module):
 
         emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
-        emb = self.time_transformer(emb, t=input.size(1))
+        if(self.fixed_target_length == 2):
+            #add target length encoding
+            tgt_length = tgt_length - current_step + 1
+            tgt_length = tgt_length.unsqueeze(1)
+            num_timescales = self.model_size // 2
+            log_timescale_increment = math.log(10000) / (num_timescales - 1)
+            inv_timescales = torch.exp(torch.arange(0, num_timescales).float() * -log_timescale_increment)
+            scaled_time = tgt_length.float().unsqueeze(2) * inv_timescales.unsqueeze(0).unsqueeze(0)
+            pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 2)
+            emb = emb + pos_emb
+
+        else:
+            emb = self.time_transformer(emb, t=input.size(1))
 
         if isinstance(emb, tuple):
             emb = emb[0]
@@ -419,7 +447,7 @@ class TransformerDecoder(nn.Module):
 
             emb = torch.relu(self.feature_projector(emb))
 
-        if(self.fixed_target_length):
+        if(self.fixed_target_length == 1):
             tgt_length = tgt_length - current_step + 1
             tgt_length = tgt_length.unsqueeze(1)
             tgt_emb = self.length_lut(tgt_length);
@@ -637,7 +665,6 @@ class TransformerDecodingState(DecoderState):
             self.tgt_length = torch.tensor(length_batch).repeat(beam_size).type_as(self.tgt_attbs)
         else:
             self.use_tgt_length = False
-        print("Create decoder state")
 
     def _update_attention_buffer(self, buffer, layer):
 
