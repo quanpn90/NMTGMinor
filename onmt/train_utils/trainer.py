@@ -85,7 +85,7 @@ class BaseTrainer(object):
                 continue
             if p.grad is None:
                 raise RuntimeError('Model parameter did not receive gradient: ' + name + '. '
-                                                                                         'Use the param in the forward pass or set requires_grad=False.' +
+                                   'Use the param in the forward pass or set requires_grad=False.' +
                                    ' If you are using Stochastic model + fp16 - try to increase the number of minibatches' +
                                    ' each update to avoid uninitialized gradients.')
             total_norm += p.grad.data.norm(2).item()

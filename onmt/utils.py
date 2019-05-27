@@ -45,7 +45,8 @@ def checkpoint_paths(path, pattern=r'model_ppl_(\d+).(\d+)\_e(\d+).(\d+).pt'):
     descending order.
     """
     pt_regexp = re.compile(pattern)
-    files = os.listdir(path)
+    files = [filename for filename in os.listdir(path) if pt_regexp.fullmatch(filename)]
+
     
     # sort py perplexity (ascending)
     files = sorted(files, key=lambda s: float(s.split("_")[2]))
