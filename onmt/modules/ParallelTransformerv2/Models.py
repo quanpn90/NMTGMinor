@@ -80,5 +80,6 @@ class ParallelTransformer(Transformer):
         output_dict['hiddens'] = dec_output['final_state']
         output_dict['coverage'] = dec_output['coverage']
         output_dict['tgt_hiddens'] = tgt_dec_output['final_state']
+        output_dict['src'] = src
 
         return output_dict
