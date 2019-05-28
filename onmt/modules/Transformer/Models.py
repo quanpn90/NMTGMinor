@@ -268,12 +268,16 @@ class TransformerDecoder(nn.Module):
         self.copy_generator = opt.copy_generator
         self.pooling = opt.var_pooling
         self.fixed_target_length = 0
+
         self.stochastic = stochastic
         self.death_rate = opt.death_rate
 
-        if hasattr(opt, 'fix_target_length'):
+
+        if hasattr(opt, 'fixed_target_length'):
             if opt.fixed_target_length == "int":
                 self.fixed_target_length = 1
+            elif opt.fixed_target_length == "encoding":
+                self.fixed_target_length = 2
 
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
@@ -298,7 +302,7 @@ class TransformerDecoder(nn.Module):
 
         self.positional_encoder = positional_encoder
 
-        if (self.fixed_target_length):
+        if self.fixed_target_length == 1:
             self.length_lut =  nn.Embedding(8192,
                                      opt.model_size,
                                      padding_idx=onmt.Constants.PAD)
@@ -321,11 +325,6 @@ class TransformerDecoder(nn.Module):
         if encoder_to_share is not None:
             print("Sharing weights (attention and feed-forward) with the encoder")
 
-        # if encoder_to_share is None:
-            # self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size,
-            #                                                  self.dropout, self.inner_size,
-            #                                                  self.attn_dropout, self.residual_dropout)
-            #                                     for _ in range(self.layers)])
         self.layer_modules = nn.ModuleList()
 
         for i in range(self.layers):
@@ -368,7 +367,21 @@ class TransformerDecoder(nn.Module):
         if self.time == 'positional_encoding':
             emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
-        emb = self.time_transformer(emb)
+        if(self.fixed_target_length == 2):
+            #add target length encoding
+            tgt_length = input.data.ne(onmt.Constants.PAD).sum(1).unsqueeze(1).expand_as(input.data)
+            index = torch.arange(input.data.size(1)).unsqueeze(0).expand_as(tgt_length).type_as(tgt_length)
+            tgt_length = (tgt_length - index) * input.data.ne(onmt.Constants.PAD).long()
+
+            num_timescales = self.model_size // 2
+            log_timescale_increment = math.log(10000) / (num_timescales - 1)
+            inv_timescales = torch.exp(torch.arange(0, num_timescales).float() * -log_timescale_increment)
+            scaled_time = tgt_length.float().unsqueeze(2) * inv_timescales.unsqueeze(0).unsqueeze(0)
+            pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 2)
+            emb = emb + pos_emb
+
+        else:
+            emb = self.time_transformer(emb)
         if isinstance(emb, tuple):
             emb = emb[0]
 
@@ -380,7 +393,7 @@ class TransformerDecoder(nn.Module):
 
             emb = torch.relu(self.feature_projector(emb))
 
-        if self.fixed_target_length:
+        if(self.fixed_target_length == 1):
             tgt_length = input.data.ne(onmt.Constants.PAD).sum(1).unsqueeze(1).expand_as(input.data)
             index = torch.arange(input.data.size(1)).unsqueeze(0).expand_as(tgt_length).type_as(tgt_length)
             tgt_length = (tgt_length - index) * input.data.ne(onmt.Constants.PAD).long()
@@ -468,7 +481,7 @@ class TransformerDecoder(nn.Module):
         buffers = decoder_state.attention_buffers
         mask_src = decoder_state.src_mask
         input_attbs = decoder_state.tgt_attbs
-        if(self.fixed_target_length):
+        if self.fixed_target_length == 1 or self.fixed_target_length == 2:
             tgt_length = decoder_state.tgt_length
 
         if decoder_state.concat_input_seq :
@@ -489,7 +502,19 @@ class TransformerDecoder(nn.Module):
 
         emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
-        emb = self.time_transformer(emb, t=input.size(1))
+        if self.fixed_target_length == 2:
+            #add target length encoding
+            tgt_length = tgt_length - current_step + 1
+            tgt_length = tgt_length.unsqueeze(1)
+            num_timescales = self.model_size // 2
+            log_timescale_increment = math.log(10000) / (num_timescales - 1)
+            inv_timescales = torch.exp(torch.arange(0, num_timescales).float() * -log_timescale_increment)
+            scaled_time = tgt_length.float().unsqueeze(2) * inv_timescales.unsqueeze(0).unsqueeze(0)
+            pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 2)
+            emb = emb + pos_emb
+
+        else:
+            emb = self.time_transformer(emb, t=input.size(1))
 
         if isinstance(emb, tuple):
             emb = emb[0]
@@ -498,7 +523,7 @@ class TransformerDecoder(nn.Module):
         # Preprocess layer: adding dropout
         emb = self.preprocess_layer(emb)
 
-        if(self.enable_feature):
+        if self.enable_feature:
             input_attbs = input_attbs.unsqueeze(1)
             attb_emb = self.feat_lut(input_attbs)
 
@@ -506,7 +531,7 @@ class TransformerDecoder(nn.Module):
 
             emb = torch.relu(self.feature_projector(emb))
 
-        if(self.fixed_target_length):
+        if self.fixed_target_length == 1:
             tgt_length = tgt_length - current_step + 1
             tgt_length = tgt_length.unsqueeze(1)
             tgt_emb = self.length_lut(tgt_length);
@@ -711,14 +736,13 @@ class TransformerDecodingState(DecoderState):
         self.attention_buffers = dict()
         self.original_src = src
 
-
         self.src = src.repeat(1, beam_size)
         self.context = context.repeat(1, beam_size, 1)
         self.beam_size = beam_size
         self.src_mask = None
         self.concat_input_seq = True
         self.tgt_attbs = tgt_attbs.repeat(beam_size)  # size: Bxb
-        if(length_batch):
+        if length_batch:
             self.use_tgt_length = True
             self.tgt_length = torch.tensor(length_batch).repeat(beam_size).type_as(self.tgt_attbs)
         else:
@@ -761,7 +785,7 @@ class TransformerDecodingState(DecoderState):
 
         state_.copy_(state_.index_select(0, beam[b].getCurrentOrigin()))
 
-        if(self.use_tgt_length):
+        if self.use_tgt_length:
             state_ = self.tgt_length.view(self.beam_size, remaining_sents)[:, idx]
             state_.copy_(state_.index_select(0, beam[b].getCurrentOrigin()))
 
@@ -798,7 +822,7 @@ class TransformerDecodingState(DecoderState):
         self.src = update_active_without_hidden(self.src)
 
         self.tgt_attbs = update_active_without_hidden(self.tgt_attbs)
-        if(self.use_tgt_length):
+        if self.use_tgt_length:
             self.tgt_length = update_active_without_hidden(self.tgt_length)
 
         for l in self.attention_buffers:
