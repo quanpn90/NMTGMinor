@@ -4,7 +4,8 @@ import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.init as init
 import torch.nn.utils.weight_norm as WeightNorm
-import onmt 
+import onmt
+from onmt.modules.VariationalDropout import VariationalDropout
 import torch.nn.functional as F
 
 
@@ -59,6 +60,7 @@ Linear=XavierLinear
 
 class FeedForward(nn.Module):
     """Applies position-wise feed forward to inputs
+       With variational dropout
     
     Args:
         d_model: dimension of model 
@@ -90,13 +92,15 @@ class FeedForward(nn.Module):
         if static:
             self.dropout = StaticDropout(p)
         else:
-            self.dropout = nn.Dropout(p)
-        
+            # self.dropout = nn.Dropout(p)
+            self.var_dropout = VariationalDropout(p, batch_first=False)
     def forward(self, input):
         
         out = F.relu(self.fc_1(input), inplace=True)
-        out = self.dropout(out)
+        # out = self.dropout(out)
+        out = self.var_dropout(out)
         out = self.fc_2(out)
+
         return out
 
 

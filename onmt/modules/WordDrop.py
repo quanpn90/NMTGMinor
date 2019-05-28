@@ -24,3 +24,4 @@ def embedded_dropout(embed, words, dropout=0.1, scale=None):
             embed.norm_type, embed.scale_grad_by_freq, embed.sparse)
 
     return x
+

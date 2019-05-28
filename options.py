@@ -232,4 +232,6 @@ def make_parser(parser):
 
     parser.add_argument('-l2_coeff', type=float, default=1.0,
                         help="""l2 coefficient in the loss function for multilingual""")
+    parser.add_argument('-l2_warmup', type=int, default=0,
+                        help="""number of steps before using actual l2 coefficient in the loss function for multilingual""")
     return parser

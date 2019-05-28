@@ -2,8 +2,7 @@ import numpy as np
 import torch, math
 import torch.nn as nn
 from collections import defaultdict
-from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, PositionalEncoding, variational_dropout, \
-    PrePostProcessing
+from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, PositionalEncoding, PrePostProcessing
 from onmt.modules.BaseModel import NMTModel, Reconstructor, DecoderState
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
@@ -12,13 +11,35 @@ from onmt.modules.Utilities import mean_with_mask_backpropable as mean_with_mask
 from onmt.modules.Utilities import max_with_mask
 
 
-
 def custom_layer(module):
     def custom_forward(*args):
         output = module(*args)
         return output
 
     return custom_forward
+
+def expected_length(length, death_rate):
+    e_length = 0
+    death_rates = dict()
+
+    death_type = 'linear_decay'
+
+    for l in range(length):
+
+        if death_type == 'linear_decay':
+            survival_rate = 1.0 - (l + 1) / length * death_rate
+        elif death_type == 'linear_reverse':
+            # the bottom layers will die more often
+            survival_rate = 1.0 - (length - l) / length * death_rate
+        elif death_type == 'uniform':
+            survival_rate = 1.0 - death_rate
+        else:
+            raise NotImplementedError
+
+        e_length += survival_rate
+        death_rates[l] = 1 - survival_rate
+
+    return death_rates, e_length
 
 
 class TransformerEncoder(nn.Module):
@@ -30,7 +51,7 @@ class TransformerEncoder(nn.Module):
         
     """
 
-    def __init__(self, opt, embedding, positional_encoder, feature_embedding=None, share=None):
+    def __init__(self, opt, embedding, positional_encoder, feature_embedding=None, share=None, stochastic=False):
 
         super(TransformerEncoder, self).__init__()
 
@@ -44,6 +65,8 @@ class TransformerEncoder(nn.Module):
         self.emb_dropout = opt.emb_dropout
         self.time = opt.time
         self.residual_dropout = opt.residual_dropout
+        self.death_rate = opt.death_rate
+        self.stochastic = stochastic
 
         # lookup table for words
         self.word_lut = embedding
@@ -64,7 +87,7 @@ class TransformerEncoder(nn.Module):
         elif opt.time == 'lstm':
             self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
 
-        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
+        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='v', static=False)
 
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
 
@@ -74,6 +97,10 @@ class TransformerEncoder(nn.Module):
 
     def build_modules(self, shared_encoder=None):
 
+        if self.stochastic:
+            self.death_rates, e_length = expected_length(self.layers, self.death_rate)
+            print("Stochastic Encoder with %.2f expected layers" % e_length)
+
         if shared_encoder is not None:
 
             print("* Shaing encoder parameters with another encoder")
@@ -82,24 +109,23 @@ class TransformerEncoder(nn.Module):
             self.postprocess_layer = shared_encoder.postprocess_layer
         else:
 
-            self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout,
-                                                             self.inner_size, self.attn_dropout, self.residual_dropout)
-                                                for _ in range(self.layers)])
+            # self.layer_modules = nn.ModuleList([EncoderLayer(self.n_heads, self.model_size, self.dropout,
+            #                                                  self.inner_size, self.attn_dropout, self.residual_dropout)
+            #                                     for _ in range(self.layers)])
+            self.layer_modules = nn.ModuleList()
+
+            for i in range(self.layers):
+                death_r = self.death_rates[i] if self.stochastic else 0.0
+
+                block = EncoderLayer(self.n_heads, self.model_size, self.dropout,
+                                     self.inner_size, self.attn_dropout, self.residual_dropout,
+                                     stochastic=self.stochastic, death_rate=death_r)
+
+                self.layer_modules.append(block)
 
             self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
 
-    def forward(self, input, freeze_embedding=False, return_stack=False, additional_sequence=None, **kwargs):
-        """
-        Inputs Shapes: 
-            input: batch_size x len_src (wanna tranpose)
-        
-        Outputs Shapes:
-            out: batch_size x len_src x d_model
-            mask_src 
-            
-        """
-
-        """ Embedding: batch_size x len_src x d_model """
+    def embedding_processing(self, input, freeze_embedding=False, additional_sequence=None):
 
         add_emb = None
         if freeze_embedding:
@@ -131,16 +157,53 @@ class TransformerEncoder(nn.Module):
         if add_emb is not None:
             add_emb = self.time_transformer(add_emb)
 
-            # batch first 
+            # batch first
             emb = torch.cat([emb, add_emb], dim=1)
             input = torch.cat([input, additional_sequence], dim=1)
 
-        emb = self.preprocess_layer(emb)
+        return emb, input
+
+    def stochastic_toss(self, death_rate):
+
+        if self.stochastic and self.training:
+            # pre-generate coin to use
+            seed = torch.rand(1)
+
+            if self.training:
+                coin = (seed[0].item() >= death_rate)
+            else:
+                coin = True
+
+            return coin
+
+        else:
+            # always perform the forward pass in testing or non-stochastic mode
+            return True
+
+    def forward(self, input, freeze_embedding=False, return_stack=False, additional_sequence=None, **kwargs):
+        """
+        Inputs Shapes: 
+            input: batch_size x len_src (wanna tranpose)
+        
+        Outputs Shapes:
+            out: batch_size x len_src x d_model
+            mask_src 
+            
+        """
+
+        """ Embedding: batch_size x len_src x d_model """
+
+
+        emb, input = self.embedding_processing(input, freeze_embedding=freeze_embedding,
+                                               additional_sequence=additional_sequence)
 
         mask_src = input.eq(onmt.Constants.PAD).unsqueeze(1)  # batch_size x 1 x len_src for broadcasting
 
         # time first 
         context = emb.transpose(0, 1).contiguous()
+
+        # add dropout (variational)
+        context = self.preprocess_layer(context)
 
         if not return_stack:
 
@@ -187,7 +250,8 @@ class TransformerDecoder(nn.Module):
         encoder to share: sharing parameters with encoder if needed
     """
 
-    def __init__(self, opt, embedding, positional_encoder, feature_embedding=None, encoder_to_share=None):
+    def __init__(self, opt, embedding, positional_encoder, feature_embedding=None,
+                 encoder_to_share=None, stochastic=False):
 
         super(TransformerDecoder, self).__init__()
 
@@ -204,6 +268,9 @@ class TransformerDecoder(nn.Module):
         self.copy_generator = opt.copy_generator
         self.pooling = opt.var_pooling
         self.fixed_target_length = 0
+        self.stochastic = stochastic
+        self.death_rate = opt.death_rate
+
         if hasattr(opt, 'fix_target_length'):
             if opt.fixed_target_length == "int":
                 self.fixed_target_length = 1
@@ -215,7 +282,7 @@ class TransformerDecoder(nn.Module):
         elif opt.time == 'lstm':
             self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
 
-        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
+        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='v', static=False)
 
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
 
@@ -247,21 +314,34 @@ class TransformerDecoder(nn.Module):
 
     def build_modules(self, encoder_to_share=None):
 
-        if encoder_to_share is None:
-            self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size,
-                                                             self.dropout, self.inner_size,
-                                                             self.attn_dropout, self.residual_dropout)
-                                                for _ in range(self.layers)])
-        else:
+        if self.stochastic:
+            self.death_rates, e_length = expected_length(self.layers, self.death_rate)
+            print("Stochastic Encoder with %.2f expected layers" % e_length)
 
-            print("* Sharing Encoder and Decoder weights for self attention and feed forward layers ...")
-            self.layer_modules = nn.ModuleList()
+        if encoder_to_share is not None:
+            print("Sharing weights (attention and feed-forward) with the encoder")
 
-            for i in range(self.layers):
-                decoder_layer = DecoderLayer(self.n_heads, self.model_size, self.dropout,
-                                             self.inner_size, self.attn_dropout, self.residual_dropout,
-                                             encoder_to_share=encoder_to_share.layer_modules[i])
-                self.layer_modules.append(decoder_layer)
+        # if encoder_to_share is None:
+            # self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size,
+            #                                                  self.dropout, self.inner_size,
+            #                                                  self.attn_dropout, self.residual_dropout)
+            #                                     for _ in range(self.layers)])
+        self.layer_modules = nn.ModuleList()
+
+        for i in range(self.layers):
+
+            death_r = self.death_rates[i] if self.stochastic else 0.0
+
+            encoder_ = encoder_to_share.layer_modules[i] if  encoder_to_share is not None else None
+
+
+            block = DecoderLayer(self.n_heads, self.model_size,
+                                 self.dropout, self.inner_size,
+                                 self.attn_dropout, self.residual_dropout,
+                                 stochastic=self.stochastic, death_rate=death_r,
+                                 encoder_to_share=encoder_)
+
+            self.layer_modules.append(block)
 
     def renew_buffer(self, new_len):
 
@@ -271,6 +351,45 @@ class TransformerDecoder(nn.Module):
             del self.mask
         mask = torch.ByteTensor(np.triu(np.ones((new_len, new_len)), k=1).astype('uint8'))
         self.register_buffer('mask', mask)
+
+    def embedding_processing(self, input, input_attbs, freeze_embeddings=False):
+
+        len_tgt = input.size(1)
+        input_attbs = input_attbs.unsqueeze(1).repeat(1, len_tgt)
+
+        if freeze_embeddings:
+            with torch.no_grad:
+                emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+                attb_emb = self.feat_lut(input_attbs)
+        else:
+            emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+            attb_emb = self.feat_lut(input_attbs)
+
+        if self.time == 'positional_encoding':
+            emb = emb * math.sqrt(self.model_size)
+        """ Adding positional encoding """
+        emb = self.time_transformer(emb)
+        if isinstance(emb, tuple):
+            emb = emb[0]
+
+        # now emb should have size B x T x H
+
+        # expand B to B x T
+        if self.enable_feature:
+            emb = torch.cat([emb, attb_emb], dim=-1)
+
+            emb = torch.relu(self.feature_projector(emb))
+
+        if self.fixed_target_length:
+            tgt_length = input.data.ne(onmt.Constants.PAD).sum(1).unsqueeze(1).expand_as(input.data)
+            index = torch.arange(input.data.size(1)).unsqueeze(0).expand_as(tgt_length).type_as(tgt_length)
+            tgt_length = (tgt_length - index) * input.data.ne(onmt.Constants.PAD).long()
+            tgt_emb = self.length_lut(tgt_length);
+            emb = torch.cat([emb, tgt_emb], dim=-1)
+
+            emb = torch.relu(self.length_projector(emb))
+
+        return emb
 
     def forward(self, input, input_attbs, context, src, freeze_embeddings=False, **kwargs):
         """
@@ -284,58 +403,24 @@ class TransformerDecoder(nn.Module):
         """
 
         """ Embedding: batch_size x len_tgt x d_model """
-        len_tgt = input.size(1)
-        input_attbs = input_attbs.unsqueeze(1).repeat(1, len_tgt)
+
         returns = defaultdict(lambda: None)
 
-        if freeze_embeddings:
-            with torch.no_grad:
-                emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
-                attb_emb = self.feat_lut(input_attbs)
-        else:
-            emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
-            attb_emb = self.feat_lut(input_attbs)
-
-
-        if self.time == 'positional_encoding':
-            emb = emb * math.sqrt(self.model_size)
-        """ Adding positional encoding """
-        emb = self.time_transformer(emb)
-        if isinstance(emb, tuple):
-            emb = emb[0]
-
-        # B x T x H
-        emb = self.preprocess_layer(emb)
-
-        # expand B to B x T
-        if(self.enable_feature):
-            emb = torch.cat([emb, attb_emb], dim=-1)
-
-            emb = torch.relu(self.feature_projector(emb))
-
-
-        if(self.fixed_target_length):
-            tgt_length = input.data.ne(onmt.Constants.PAD).sum(1).unsqueeze(1).expand_as(input.data)
-            index = torch.arange(input.data.size(1)).unsqueeze(0).expand_as(tgt_length).type_as(tgt_length)
-            tgt_length = (tgt_length - index) * input.data.ne(onmt.Constants.PAD).long()
-            tgt_emb = self.length_lut(tgt_length);
-            emb = torch.cat([emb, tgt_emb], dim=-1)
-
-            emb = torch.relu(self.length_projector(emb))
-
+        emb = self.embedding_processing(input, input_attbs, freeze_embeddings=freeze_embeddings)
 
         mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
 
-
         # unused variable
         # pad_mask_src = src.data.ne(onmt.Constants.PAD)
-
+        len_tgt = input.size(1)
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
 
-
         # transpose to T x B x H
         output = emb.transpose(0, 1).contiguous()
+
+        # add dropout to initial embedding
+        output = self.preprocess_layer(output)
 
         for i, layer in enumerate(self.layer_modules):
 
@@ -360,6 +445,7 @@ class TransformerDecoder(nn.Module):
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.    
         output = self.postprocess_layer(output)
+
 
         returns['final_state'] = output
 
@@ -476,7 +562,7 @@ class Transformer(NMTModel):
         self.tgt_encoder = tgt_encoder
         self.pooling = self.decoder.pooling
 
-    def forward(self, batch, grow=False):
+    def forward(self, batch, **kwargs):
         """
         The forward function served in training (for back propagation)
 
@@ -495,9 +581,9 @@ class Transformer(NMTModel):
 
         tgt_attbs = batch.get('tgt_attbs')  # vector of length B
 
-        context, src_mask = self.encoder(src, grow=grow)
+        context, src_mask = self.encoder(src)
 
-        decoder_output = self.decoder(tgt, tgt_attbs, context, src, grow=grow)
+        decoder_output = self.decoder(tgt, tgt_attbs, context, src)
 
         output_dict = dict()
         output_dict['src'] = src
@@ -564,7 +650,6 @@ class Transformer(NMTModel):
             tgt_t = tgt_t.unsqueeze(1)
             scores = gen_t.gather(1, tgt_t)
             scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
-            gold_scores += scores.squeeze(1).type_as(gold_scores)
             gold_scores += scores.squeeze(1).type_as(gold_scores)
             gold_words += tgt_t.ne(onmt.Constants.PAD).sum().item()
         # for dec_t, tgt_t in zip(output, tgt_output):

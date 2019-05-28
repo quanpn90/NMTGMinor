@@ -115,20 +115,8 @@ def build_model(opt, dicts):
         generator = CopyGenerator(opt.model_size, dicts['tgt'].size())
 
     else:
-
         from onmt.modules.BaseModel import Generator
         generator = Generator(opt.model_size, dicts['tgt'].size())
-
-    # new model construction:
-    # base model is always transformer
-
-    # encoder type can be: regular|simplified|compress_attention
-
-    # decoder is always regular (at the moment when decoder modification is minimal)
-
-    # model is always Transformer (needs to cover more)
-
-    # loss function can be 
 
     if opt.model == 'transformer':
 
@@ -139,22 +127,20 @@ def build_model(opt, dicts):
 
         model = Transformer(encoder, decoder, generator)
 
-        # loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
-
     elif opt.model == 'stochastic_transformer':
-
-        from onmt.modules.StochasticTransformer.Models import StochasticTransformerEncoder, StochasticTransformerDecoder
-
-        onmt.Constants.weight_norm = opt.weight_norm
-        onmt.Constants.init_value = opt.param_init
-
-        encoder = StochasticTransformerEncoder(opt, embedding_src, positional_encoder)
-
-        decoder = StochasticTransformerDecoder(opt, embedding_tgt, positional_encoder)
+        """
+        The stochastic implementation of the Transformer as in 
+        "Very Deep Self-Attention Networks for End-to-End Speech Recognition"
+        """
+        encoder = TransformerEncoder(opt, embedding_src, positional_encoder,
+                                     stochastic=True)
+        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, feat_embedding,
+                                     encoder_to_share=encoder if opt.share_enc_dec_weights else None,
+                                     stochastic=True)
 
         model = Transformer(encoder, decoder, generator)
 
-        # loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+        model = Transformer(encoder, decoder, generator)
 
     elif opt.model == 'simplified_transformer' or opt.model == 'l2_transformer':
 
