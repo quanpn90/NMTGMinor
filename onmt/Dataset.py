@@ -4,13 +4,14 @@ import math
 import torch
 from collections import defaultdict
 import onmt
+from onmt.speech.Augmenter import Augmenter
 
 class Batch(object):
     # An object to manage the data within a minibatch
     def __init__(self, src_data, tgt_data=None,
                  src_type='text',
                  src_align_right=False, tgt_align_right=False,
-                 reshape_speech=0):
+                 reshape_speech=0, augmenter=None):
 
         self.tensors = defaultdict(lambda: None)
         self.has_target = False
@@ -19,7 +20,8 @@ class Batch(object):
         if src_data is not None:
             self.tensors['source'], self.src_lengths = self.collate(src_data,
                                                                     align_right=src_align_right,
-                                                                    type=self.src_type)
+                                                                    type=self.src_type,
+                                                                    augmenter=augmenter)
             self.tensors['source'] = self.tensors['source'].transpose(0, 1).contiguous()
             # self.tensors['src_attn_mask'] = self.tensors['source'].eq(onmt.Constants.PAD).unsqueeze(1)
             # self.tensors['src_pad_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
@@ -68,7 +70,7 @@ class Batch(object):
 
         return
 
-    def collate(self, data, align_right=False, type="text"):
+    def collate(self, data, align_right=False, type="text", augmenter=None):
 
         lengths = [x.size(0) for x in data]
         max_length = max(lengths)
@@ -100,7 +102,12 @@ class Batch(object):
 
             for i in range(len(data)):
 
-                feature = self.downsample(data[i])
+                sample = data[i]
+
+                if augmenter is not None:
+                    sample = augmenter.augment(sample)
+
+                feature = self.downsample(sample)
 
                 data_length = feature.size(0)
                 offset = max_length - data_length if align_right else 0
@@ -128,7 +135,8 @@ class Batch(object):
 class Dataset(object):
     def __init__(self, src_data, tgt_data, batch_size_words,
                  data_type="text", balance=False, batch_size_sents=128,
-                 multiplier=1, sort_by_target=False, reshape_speech=4):
+                 multiplier=1, sort_by_target=False,
+                 reshape_speech=4, augment=False):
         self.src = src_data
         self._type = data_type
         self.reshape_speech = reshape_speech
@@ -153,6 +161,11 @@ class Dataset(object):
         self.allocate_batch()
         self.cur_index = 0
         self.batchOrder = None
+
+        if augment:
+            self.augmenter = Augmenter()
+        else:
+            self.augmenter = None
 
     def size(self):
 
@@ -211,7 +224,6 @@ class Dataset(object):
                 cur_batch_sizes = cur_batch_sizes[:-scaled_size]
                 cur_batch_size  = sum(cur_batch_sizes)
 
-            
             cur_batch.append(i)
             cur_batch_size += sentence_length
             cur_batch_sizes.append(sentence_length)
@@ -240,7 +252,8 @@ class Dataset(object):
 
         batch = Batch(src_data, tgt_data=tgt_data,
                       src_align_right=False, tgt_align_right=False,
-                      src_type=self._type, reshape_speech=self.reshape_speech)
+                      src_type=self._type, reshape_speech=self.reshape_speech,
+                      augmenter=self.augmenter)
 
         return batch
 
