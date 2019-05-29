@@ -45,8 +45,10 @@ class FusionNetwork(nn.Module):
         return output_dict
 
     # an utility function to fuse two states
+    # return log prob
     def fuse_states(self, tm_state, lm_state):
 
+        # PRENORM algorithm
         # (1) generate the log P_lm
         with torch.no_grad():
             log_lm = self.lm_model.generator[0](lm_state, log_softmax=True)
@@ -56,6 +58,16 @@ class FusionNetwork(nn.Module):
 
         # (3) add the bias of lm to the logits
         dists = F.log_softmax(tm_logits + log_lm, dim=-1)
+
+        # ## POSTNORM
+        # # (1) generate the P_lm
+        # with torch.no_grad():
+        #     lm_logits = self.lm_model.generator[0](lm_state, log_softmax=False)
+        #
+        # # (2) generate the logits for tm
+        # tm_logits = self.tm_model.generator[0](tm_state, log_softmax=False)
+        #
+        # dists = F.log_softmax(F.softmax(tm_logits, dim=-1) * F.softmax(lm_logits, dim=-1), dim=-1)
 
         return dists
 

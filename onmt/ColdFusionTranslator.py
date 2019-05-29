@@ -75,7 +75,26 @@ class EnsembleTranslator(object):
             self.model_types.append(model_opt.model)
 
         # language model
-        if
+        if opt.lm is not None:
+            if opt.verbose:
+                print('Loading language model from %s' % opt.lm)
+
+            lm_chkpoint = torch.load(opt.lm, map_location=lambda storage, loc: storage)
+
+            lm_opt = lm_chkpoint['opt']
+
+            lm_model = build_language_model(lm_opt, lm_chkpoint['dicts'])
+
+            if opt.fp16:
+                lm_model = lm_model.half()
+
+            if opt.cuda:
+                lm_model = lm_model.cuda()
+            else:
+                lm_model = lm_model.cpu()
+
+            self.lm_model = lm_model
+
             
         self.cuda = opt.cuda
         self.ensemble_op = opt.ensemble_op
@@ -159,7 +178,6 @@ class EnsembleTranslator(object):
             norm_ = torch.norm(output, p=1, dim=-1)
             output.div_(norm_.unsqueeze(-1))
 
-            
             output = torch.log(output)
         else:
             raise ValueError('Emsemble operator needs to be "mean" or "logSum", the current value is %s' % self.ensemble_op)
@@ -254,6 +272,9 @@ class EnsembleTranslator(object):
         for i in range(self.n_models):
             decoder_states[i] = self.models[i].create_decoder_state(batch, beam_size)
 
+        if self.opt.lm:
+            lm_decoder_states = self.lm_model.create_decoder_state(batch, beam_size)
+
         for i in range(self.opt.max_sent_length):
             # Prepare decoder input.
             
@@ -271,6 +292,8 @@ class EnsembleTranslator(object):
                 # decoder_hidden, coverage = self.models[k].decoder.step(decoder_input.clone(), decoder_states[k])
                 decoder_output = self.models[k].step(decoder_input.clone(), decoder_states[k])
 
+
+
                 outs[k] = decoder_output['log_prob']
                 attns[k] = decoder_output['coverage']
 
@@ -287,8 +310,14 @@ class EnsembleTranslator(object):
             
             out = self._combine_outputs(outs)
             attn = self._combine_attention(attns)
-                
-            wordLk = out.view(beam_size, remaining_sents, -1) \
+
+            if self.opt.lm:
+                lm_decoder_output = self.lm_model.step(decoder_input.clone(), lm_decoder_states)
+
+                # fusion 
+                out = out + 0.3 * lm_decoder_output
+
+            word_lk = out.view(beam_size, remaining_sents, -1) \
                         .transpose(0, 1).contiguous()
             attn = attn.view(beam_size, remaining_sents, -1) \
                        .transpose(0, 1).contiguous()
@@ -300,7 +329,7 @@ class EnsembleTranslator(object):
                     continue
                 
                 idx = batch_idx[b]
-                if not beam[b].advance(wordLk.data[idx], attn.data[idx]):
+                if not beam[b].advance(word_lk.data[idx], attn.data[idx]):
                     active += [b]
                     
                 for j in range(self.n_models):

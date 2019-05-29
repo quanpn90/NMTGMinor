@@ -292,15 +292,25 @@ class FusionLoss(CrossEntropyLossBase):
 
         if model is not None:
             # the 'first' generator is the decoder softmax one
+
+            # PRENORM algorithm from
+            # https://arxiv.org/pdf/1809.00125.pdf
+            # Simple Fusion: Return of the Language Model
             tm_logits = model.tm_model.generator[0](clean_tm_input, log_softmax=False)
 
             with torch.no_grad():
                 log_lm = model.lm_model.generator[0](clean_lm_input, log_softmax=True)
 
-            # PRENORM algorithm from
-            # https://arxiv.org/pdf/1809.00125.pdf
-            # Simple Fusion: Return of the Language Model
             dists = F.log_softmax(tm_logits + log_lm, dim=-1)
+
+
+            # # POSTNORM algorithm
+            # tm_logits =  model.tm_model.generator[0](clean_tm_input, log_softmax=False)
+            #
+            # with torch.no_grad():
+            #     lm_logits = model.lm_model.generator[0](clean_lm_input, log_softmax=False)
+            #
+            # dists = F.log_softmax(F.softmax(tm_logits, dim=-1) * F.softmax(lm_logits, dim=-1), dim=-1)
 
         else:
             raise NotImplementedError
