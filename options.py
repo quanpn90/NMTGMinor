@@ -195,6 +195,7 @@ def make_parser(parser):
     # for Speech
     parser.add_argument('-reshape_speech', type=int, default=0,
                         help="Reshaping the speech data (0 is ignored, done at preprocessing).")
+    parser.add_argument('-augment_speech', action='store_true',
+                        help='Use f/t augmentation for speech')
 
-    
     return parser

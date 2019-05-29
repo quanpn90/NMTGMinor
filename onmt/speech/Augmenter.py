@@ -4,9 +4,9 @@ from collections import defaultdict
 import onmt
 import random
 
-class SpectralAugmenter(object):
+class Augmenter(object):
 
-    def __init__(self, F=27, mf=2, T=70, max_t=0.2, mt=2):
+    def __init__(self, F=13, mf=2, T=70, max_t=0.2, mt=2):
 
         self.F = F
         self.mf = mf
@@ -21,7 +21,8 @@ class SpectralAugmenter(object):
         # because log mel has 40 features
         reshape_size = feat_size / 40
 
-        tensor_ = tensor.view(-1, 40)
+        tensor = tensor.float()
+        tensor_ = tensor.view(-1, 40).new(*tensor.size()).copy_(tensor)
 
         for _ in range(self.mf):
 
@@ -30,7 +31,7 @@ class SpectralAugmenter(object):
             f = int(random.uniform(0.0, self.F))
             f_0 = int(random.uniform(0.0, 40 - f))
 
-            tensor_[:, f_0;f_0 + f].zero_()
+            tensor_[:, f_0:f_0 + f].zero_()
 
         for _ in range(self.mt):
             # time masking (first dimension)
@@ -38,7 +39,7 @@ class SpectralAugmenter(object):
 
             t = min(t, int(self.max_t * original_len))
 
-            t_0 = int(random.uniform(0.0, original_len - t))
+            t_0 = int(random.uniform(0.0, original_len - t - 1))
 
             tensor_[t_0: t_0 + t].zero_()
 

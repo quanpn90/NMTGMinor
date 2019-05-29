@@ -62,7 +62,8 @@ def main():
                                  data_type=dataset.get("type", "text"),
                                  batch_size_sents=opt.batch_size_sents,
                                  multiplier = opt.batch_size_multiplier,
-                                 reshape_speech=opt.reshape_speech)
+                                 reshape_speech=opt.reshape_speech,
+                                 augment=opt.augment_speech)
         valid_data = onmt.Dataset(dataset['valid']['src'],
                                  dataset['valid']['tgt'], opt.batch_size_words,
                                  data_type=dataset.get("type", "text"),
@@ -133,8 +134,7 @@ def main():
     print('* number of parameters: %d' % n_params)
 
     if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
-        #~ trainer = MultiGPUXETrainer(model, loss_function, train_data, valid_data, dataset, opt)
-        raise NotImplementedError("Warning! Multi-GPU training is not fully tested and potential bugs can happen.")
+            raise NotImplementedError("Warning! Multi-GPU training is not fully tested and potential bugs can happen.")
     else:
         if opt.fp16:
             trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)

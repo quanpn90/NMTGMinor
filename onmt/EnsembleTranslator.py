@@ -148,7 +148,7 @@ class EnsembleTranslator(object):
             for i in range(1, len(outputs)):
                 output += (outputs[i])
 
-            output.div(len(outputs))
+            output.div_(len(outputs))
 
             # output = torch.log(output)
             output = F.log_softmax(output, dim=-1)
@@ -159,12 +159,7 @@ class EnsembleTranslator(object):
             for i in range(1, len(outputs)):
                 output += torch.exp(outputs[i])
 
-<<<<<<< HEAD
-=======
-
->>>>>>> 71a3bca52800b60a894d7f56d6e5b703c5913f5a
             output.div_(len(outputs))
-
             # output = torch.log(output)
             output = torch.log(output)
         elif self.ensemble_op == "max":
