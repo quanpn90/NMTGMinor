@@ -159,10 +159,27 @@ class EnsembleTranslator(object):
             for i in range(1, len(outputs)):
                 output += torch.exp(outputs[i])
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> 71a3bca52800b60a894d7f56d6e5b703c5913f5a
             output.div_(len(outputs))
 
             # output = torch.log(output)
             output = torch.log(output)
+        elif self.ensemble_op == "max":
+            output = outputs[0]
+
+            for i in range(1, len(outputs)):
+                output = torch.max(output,outputs[i])
+
+        elif self.ensemble_op == "min":
+            output = outputs[0]
+
+            for i in range(1, len(outputs)):
+                output = torch.min(output,outputs[i])
+
+
         elif self.ensemble_op == 'gmean':
             output = torch.exp(outputs[0])
 
@@ -179,7 +196,6 @@ class EnsembleTranslator(object):
         else:
             raise ValueError(
                 'Emsemble operator needs to be "mean" or "logSum", the current value is %s' % self.ensemble_op)
-
         return output
 
     # Take the average of attention scores
