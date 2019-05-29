@@ -11,10 +11,14 @@ from torch import cuda
 from torch.autograd import Variable
 import math
 import time, datetime
+import os
 import random 
 import numpy as np
 from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 from onmt.ModelConstructor import init_model_parameters
+from onmt.utils import checkpoint_paths
+
+
 
 class BaseTrainer(object):
     
@@ -114,7 +118,12 @@ class XETrainer(BaseTrainer):
         torch.save(checkpoint, file_name)
         
         # check te save directory here
-        
+        checkpoint_dir = os.path.dirname(opt.save_model)
+        existed_save_files = checkpoint_paths(checkpoint_dir)
+        for save_file in existed_save_files[opt.keep_save_files:]:
+            print (" * Deleting old save file %s ...." % save_file)
+            os.remove(save_file)
+
     def eval(self, data):
         total_loss = 0
         total_words = 0
@@ -127,7 +136,8 @@ class XETrainer(BaseTrainer):
 
                 batch = data.next()[0]
 
-                batch.cuda()
+                if(self.cuda):
+                    batch.cuda()
                 
                 """ outputs can be either 
                         hidden states from decoder or
@@ -186,7 +196,8 @@ class XETrainer(BaseTrainer):
             curriculum = (epoch < opt.curriculum)
 
             batch = train_data.next(curriculum=curriculum)[0]
-            batch.cuda()
+            if(self.cuda):
+                batch.cuda()
             
             oom = False
             try:
