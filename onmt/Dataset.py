@@ -3,20 +3,19 @@ from __future__ import division
 import math
 import torch
 from collections import defaultdict
-
-
 import onmt
-
 
 class Batch(object):
     # An object to manage the data within a minibatch
     def __init__(self, src_data, tgt_data=None,
                  src_type='text',
-                 src_align_right=False, tgt_align_right=False):
+                 src_align_right=False, tgt_align_right=False,
+                 reshape_speech=0):
 
         self.tensors = defaultdict(lambda: None)
         self.has_target = False
         self.src_type = src_type
+        self.reshape_speech = reshape_speech
         if src_data is not None:
             self.tensors['source'], self.src_lengths = self.collate(src_data,
                                                                     align_right=src_align_right,
@@ -47,7 +46,27 @@ class Batch(object):
 
         self.size = len(src_data) if src_data is not None else len(tgt_data)
 
+    # down sampling the speech signal by simply concatenating n features (reshaping)
+    def downsample(self, data):
 
+        if self.reshape_speech == 0:
+            return data
+
+        else:
+            concat = self.reshape_speech
+            tensor_ = data.float()  # adding float because of fp16 data storage
+            add = (concat - tensor_.size()[0] % concat) % concat
+            z = torch.FloatTensor(add, tensor_.size()[1]).zero_()
+
+            # adding an additional dimension as padding
+            tensor_ = torch.cat((tensor_, z), 0)
+            tensor_ = tensor_.reshape((int(tensor_.size()[0] / concat), tensor_.size()[1] * concat))
+
+            return tensor_
+
+    def augment_speech(self):
+
+        return
 
     def collate(self, data, align_right=False, type="text"):
 
@@ -65,13 +84,29 @@ class Batch(object):
         elif type == "audio":
             # the last feature dimension is for padding or not, hence + 1
 
-            tensor = data[0].float().new(len(data), max_length, data[0].size(1) + 1).fill_(onmt.Constants.PAD)
+            def find_length(x, concat):
+
+                add = ( concat - x.size(0) % concat ) % concat
+
+                return int((x.size(0) + add) / concat)
+
+            if self.reshape_speech >= 1:
+                lengths = [find_length(x, self.reshape_speech) for x in data]
+
+            # allocate data for the batch speech
+            feature_size = data[0].size(1) * self.reshape_speech if self.reshape_speech >= 1 else data[0].size(1)
+            batch_size = len(data)
+            tensor = data[0].float().new(batch_size, max_length, feature_size + 1).fill_(onmt.Constants.PAD)
 
             for i in range(len(data)):
-                data_length = data[i].size(0)
+
+                feature = self.downsample(data[i])
+
+                data_length = feature.size(0)
                 offset = max_length - data_length if align_right else 0
 
-                tensor[i].narrow(0, offset, data_length).narrow(1, 1, data[0].size(1)).copy_(data[i])
+                tensor[i].narrow(0, offset, data_length).narrow(1, 1, feature.size(1)).copy_(feature)
+                # padding dimension: 1 is not padded, 1 is padded
                 tensor[i].narrow(0, offset, data_length).narrow(1, 0, 1).fill_(1)
         else:
             raise NotImplementedError
@@ -90,13 +125,13 @@ class Batch(object):
                 self.tensors[key] = tensor.half()
             self.tensors[key] = self.tensors[key].cuda()
 
-
 class Dataset(object):
     def __init__(self, src_data, tgt_data, batch_size_words,
                  data_type="text", balance=False, batch_size_sents=128,
-                 multiplier=1, sort_by_target=False):
+                 multiplier=1, sort_by_target=False, reshape_speech=4):
         self.src = src_data
         self._type = data_type
+        self.reshape_speech = reshape_speech
         if tgt_data:
             self.tgt = tgt_data
 
@@ -122,6 +157,10 @@ class Dataset(object):
     def size(self):
 
         return self.fullSize
+
+    def switchout(self, batch):
+
+        pass
 
     # This function allocates the mini-batches (grouping sentences with the same size)
     def allocate_batch(self):
@@ -201,23 +240,26 @@ class Dataset(object):
 
         batch = Batch(src_data, tgt_data=tgt_data,
                       src_align_right=False, tgt_align_right=False,
-                      src_type=self._type)
+                      src_type=self._type, reshape_speech=self.reshape_speech)
 
         return batch
 
     def __len__(self):
         return self.num_batches
-        
+
+    # genereate a new batch - order (static)
     def create_order(self, random=True):
         
         if random:
             self.batchOrder = torch.randperm(self.num_batches)
         else:
             self.batchOrder = torch.arange(self.num_batches).long()
+
         self.cur_index = 0
         
         return self.batchOrder
 
+    # return the next batch according to the iterator
     def next(self, curriculum=False, reset=True, split_sizes=1):
 
          # reset iterator if reach data size limit

@@ -164,11 +164,11 @@ def build_language_model(opt, dicts):
     onmt.Constants.attention_out = opt.attention_out
     onmt.Constants.residual_type = opt.residual_type
 
-    from onmt.modules.TransformerLM.Models import TransformerLM
+    from onmt.modules.TransformerLM.Models import TransformerLM, TransformerLMDecoder
 
     positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
 
-    decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder, ignore_source=True)
+    decoder = TransformerLMDecoder(opt, dicts['tgt'], positional_encoder)
 
     generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
 

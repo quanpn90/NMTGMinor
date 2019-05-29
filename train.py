@@ -57,16 +57,17 @@ def main():
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
         print("Done after %s" % elapse )
 
-
         train_data = onmt.Dataset(dataset['train']['src'],
                                  dataset['train']['tgt'], opt.batch_size_words,
                                  data_type=dataset.get("type", "text"),
                                  batch_size_sents=opt.batch_size_sents,
-                                 multiplier = opt.batch_size_multiplier)
+                                 multiplier = opt.batch_size_multiplier,
+                                 reshape_speech=opt.reshape_speech)
         valid_data = onmt.Dataset(dataset['valid']['src'],
                                  dataset['valid']['tgt'], opt.batch_size_words,
                                  data_type=dataset.get("type", "text"),
-                                 batch_size_sents=opt.batch_size_sents)
+                                 batch_size_sents=opt.batch_size_sents,
+                                 reshape_speech=opt.reshape_speech)
 
         dicts = dataset['dicts']
         if "src" in dicts:

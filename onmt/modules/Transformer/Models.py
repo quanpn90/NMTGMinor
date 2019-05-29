@@ -282,10 +282,9 @@ class TransformerDecoder(nn.Module):
         """ Embedding: batch_size x 1 x d_model """
         emb = self.word_lut(input_)
 
-        if self.time == 'positional_encoding':
-            emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
         if self.time == 'positional_encoding':
+            emb = emb * math.sqrt(self.model_size)
             emb = self.time_transformer(emb, t=input.size(1))
         else:
             # prev_h = buffer[0] if buffer is None else None
@@ -306,9 +305,9 @@ class TransformerDecoder(nn.Module):
 
         if context is not None:
             if self.encoder_type == "audio" and src.data.dim() == 3:
-                mask_src = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+                mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
             else:
-                mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
+                mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
         else:
             mask_src = None
 
@@ -316,6 +315,7 @@ class TransformerDecoder(nn.Module):
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
+        print(mask_tgt)
 
         output = emb.contiguous()
 
@@ -434,8 +434,8 @@ class Transformer(NMTModel):
         """
 
         hidden, coverage = self.decoder.step(input_t, decoder_state)
-
-        log_prob = self.generator[0](hidden.squeeze(1))
+        # squeeze to remove the time step dimension
+        log_prob = self.generator[0](hidden.squeeze(0))
 
         last_coverage = coverage[:, -1, :].squeeze(1)
 

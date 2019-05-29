@@ -200,7 +200,7 @@ def main():
                 continue
 
             print("Batch size:",len(srcBatch),len(tgtBatch))
-            predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores  = translator.translateASR(srcBatch, tgtBatch)
+            predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores  = translator.translate_asr(srcBatch, tgtBatch)
 
             print("Result:",len(predBatch))
             count,predScore,predWords,goldScore,goldWords = translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords, allGoldScores,opt.input_type)
@@ -212,7 +212,7 @@ def main():
 
         if len(srcBatch) != 0:
             print("Batch size:",len(srcBatch),len(tgtBatch))
-            predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores  = translator.translateASR(srcBatch,
+            predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores  = translator.translate_asr(srcBatch,
                                                                                     tgtBatch)
             print("Result:",len(predBatch))
             count,predScore,predWords,goldScore,goldWords = translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores,opt.input_type)

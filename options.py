@@ -190,5 +190,9 @@ def make_parser(parser):
     parser.add_argument('-fusion', action='store_true',
                         help='Use fusion training with language model')
 
+    # for Speech
+    parser.add_argument('-reshape_speech', type=int, default=0,
+                        help="Reshaping the speech data (0 is ignored, done at preprocessing).")
+
     
     return parser

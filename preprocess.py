@@ -87,8 +87,11 @@ parser.add_argument('-lower', action='store_true', help='lowercase data')
 parser.add_argument('-sort_by_target', action='store_true', help='lowercase data')
 parser.add_argument('-join_vocab', action='store_true', help='Using one dictionary for both source and target')
 
+
 parser.add_argument('-report_every', type=int, default=100000,
                     help="Report status every this many sentences")
+parser.add_argument('-reshape_speech', type=int, default=1,
+                    help="Reshaping the speech segments here. Mostly for compatibility..")
 
 opt = parser.parse_args()
 
@@ -218,7 +221,6 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
 
     print('Processing %s ...' % (tgt_file))
     tgtf = open(tgt_file)
-
 
     while True:
         tline = tgtf.readline()
@@ -370,7 +372,7 @@ def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_lengt
 
 
 def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_length=64,
-                  input_type='word', stride=1, concat=1, prev_context = 0, fp16=False):
+                  input_type='word', stride=1, concat=1, prev_context = 0, fp16=False, reshape=True):
     src, tgt = [], []
     # sizes = []
     src_sizes = []
@@ -399,25 +401,30 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
         else:
             sline = torch.from_numpy(np.array(srcf[str(index)])[0::opt.stride])
 
-        if concat != 1:
-            add = (concat-sline.size()[0]%concat)%concat
-            z= torch.FloatTensor(add, sline.size()[1]).zero_()
-            sline = torch.cat((sline,z),0)
-            sline = sline.reshape((int(sline.size()[0]/concat), sline.size()[1]*concat))
+        if reshape:
+            if concat != 1:
+                add = (concat-sline.size()[0]%concat)%concat
+                z= torch.FloatTensor(add, sline.size()[1]).zero_()
+                sline = torch.cat((sline,z),0)
+                sline = sline.reshape((int(sline.size()[0]/concat), sline.size()[1]*concat))
         index += 1;
 
         tline = tline.strip()
 
         if prev_context > 0:
-            s_prev_context.append(sline)
-            t_prev_context.append(tline)
-            for i in range(1,prev_context+1):
-                if i < len(s_prev_context):
-                    sline = torch.cat((torch.cat((s_prev_context[-i-1],torch.zeros(1,sline.size()[1]))),sline))
-                    tline = t_prev_context[-i-1]+" # "+tline
-            if len(s_prev_context) > prev_context:
-                s_prev_context = s_prev_context[-1*prev_context:]
-                t_prev_context = t_prev_context[-1*prev_context:]
+
+            print("Multiple ASR context isn't supported at the moment   ")
+            raise NotImplementedError
+
+            # s_prev_context.append(sline)
+            # t_prev_context.append(tline)
+            # for i in range(1,prev_context+1):
+            #     if i < len(s_prev_context):
+            #         sline = torch.cat((torch.cat((s_prev_context[-i-1],torch.zeros(1,sline.size()[1]))),sline))
+            #         tline = t_prev_context[-i-1]+" # "+tline
+            # if len(s_prev_context) > prev_context:
+            #     s_prev_context = s_prev_context[-1*prev_context:]
+            #     t_prev_context = t_prev_context[-1*prev_context:]
 
         # source and/or target are empty
         if tline == "":
@@ -451,8 +458,8 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
             n_unk_words += unks
 
             if unks > 0:
-                if ("<unk>") not in tline:
-                    print(tline)
+                if "<unk>" not in tline:
+                    print("DEBUGGING: This line contains UNK: %s" % tline)
 
         else:
             ignored += 1
@@ -543,7 +550,7 @@ def main():
                                                  input_type=opt.input_type,
                                                  stride=opt.stride,concat=opt.concat,
                                                    prev_context=opt.previous_context,
-                                                   fp16=opt.fp16)
+                                                   fp16=opt.fp16,reshape=(opt.reshape_speech==1))
 
         print('Preparing validation ...')
         valid = dict()
@@ -554,7 +561,7 @@ def main():
                                                  input_type=opt.input_type,
                                                  stride=opt.stride,concat=opt.concat,
                                                    prev_context=opt.previous_context,
-                                                   fp16=opt.fp16)
+                                                   fp16=opt.fp16,reshape=(opt.reshape_speech==1))
 
     else:
         print('Preparing training translation model...')
