@@ -62,6 +62,8 @@ parser.add_argument('-lower', action='store_true', help='lowercase data')
 parser.add_argument('-remove_duplicate', action='store_true', help='remove duplicated sequences')
 parser.add_argument('-join_vocab', action='store_true', help='Using one dictionary for both source and target')
 parser.add_argument('-multilingual_tags', action='store_true', help='Treating the data as multilingual')
+parser.add_argument('-no_atb', action='store_true',
+                    help='Data does not contain language language tags as BOS marker')
 parser.add_argument('-bos_word', default="default",
                     help="Type of the source input. Options are [text|img].")
 
@@ -106,6 +108,10 @@ def make_join_vocabulary(filenames, size, input_type="word", dict_atb=None, use_
     if dict_atb is None and use_atb:
         dict_atb = onmt.Dict()
 
+    # seqences start at the 1st token if using attributes and at the
+    # 0th token if not using attributes
+    seq_start = use_atb
+
     for filename in filenames:
         print("Reading file %s ... " % filename)
         with open(filename) as f:
@@ -113,20 +119,24 @@ def make_join_vocabulary(filenames, size, input_type="word", dict_atb=None, use_
 
                 if input_type == "word":
                     tokens = sent.split()
-                    attb = tokens[0]  # the first token is the language atb
-                    words = tokens[1:]  # normal words from the second token
+                    # either the first token is the language atb, or result is empty list
+                    attbs = tokens[:seq_start]
+                    # normal words from either the first or second token
+                    words = tokens[seq_start:]
                     for word in words:
                         vocab.add(word)
-                    dict_atb.add(attb)
+                    for attb in attbs:
+                        dict_atb.add(attb)
                 elif input_type == "char":
                     tokens = sent.split()
-                    attb = tokens[0]
+                    attbs = tokens[:seq_start]
 
-                    sent_wo_atb = " ".join(tokens[1:])
+                    sent_wo_atb = " ".join(tokens[seq_start:])
                     for char in sent_wo_atb:
                         vocab.add(char)
 
-                    dict_atb.add(attb)
+                    for attb in attbs:
+                        dict_atb.add(attb)
                 else:
                     raise NotImplementedError("Input type not implemented")
 
@@ -146,24 +156,32 @@ def make_vocabulary(filename, size, input_type='word', dict_atb=None, use_atb=Tr
     if dict_atb is None and use_atb:
         dict_atb = onmt.Dict()
 
+    # seqences start at the 1st token if using attributes and at the
+    # 0th token if not using attributes
+    seq_start = use_atb
+
     with open(filename) as f:
         for sent in f.readlines():
             if input_type == "word":
                 tokens = sent.strip().split()
-                attb = tokens[0]  # the first token is the language atb
-                words = tokens[1:]  # normal words from the second token
+                # either the first token is the language atb, or result is empty list
+                attbs = tokens[:seq_start]
+                # normal words from either the first or second token
+                words = tokens[seq_start:]
                 for word in words:
                     vocab.add(word)
-                dict_atb.add(attb)
+                for attb in attbs:
+                    dict_atb.add(attb)
             elif input_type == "char":
                 tokens = sent.strip().split()
-                attb = tokens[0]
+                attbs = tokens[:seq_start]
 
-                sent_wo_atb = " ".join(tokens[1:])
+                sent_wo_atb = " ".join(tokens[seq_start:])
                 for char in sent_wo_atb:
                     vocab.add(char)
 
-                dict_atb.add(attb)
+                for attb in attbs:
+                    dict_atb.add(attb)
             else:
                 raise NotImplementedError("Input type not implemented")
 
@@ -175,7 +193,7 @@ def make_vocabulary(filename, size, input_type='word', dict_atb=None, use_atb=Tr
     return vocab, dict_atb
 
 
-def init_vocabulary(name, dataFile, vocabFile, vocabSize, join=False, input_type='word', dict_atb=None):
+def init_vocabulary(name, dataFile, vocabFile, vocabSize, join=False, input_type='word', dict_atb=None, use_atb=True):
     vocab = None
     if vocabFile is not None:
         # If given, load existing word dictionary.
@@ -189,10 +207,12 @@ def init_vocabulary(name, dataFile, vocabFile, vocabSize, join=False, input_type
         # If a dictionary is still missing, generate it.
         if join:
             print('Building ' + 'shared' + ' vocabulary...')
-            gen_word_vocab, dict_atb = make_join_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
+            gen_word_vocab, dict_atb = make_join_vocabulary(dataFile, vocabSize, input_type=input_type,
+                                                            dict_atb=dict_atb, use_atb=use_atb)
         else:
             print('Building ' + name + ' vocabulary...')
-            gen_word_vocab, dict_atb = make_vocabulary(dataFile, vocabSize, input_type=input_type, dict_atb=dict_atb)
+            gen_word_vocab, dict_atb = make_vocabulary(dataFile, vocabSize, input_type=input_type,
+                                                       dict_atb=dict_atb, use_atb=use_atb)
 
         vocab = gen_word_vocab
 
@@ -205,7 +225,7 @@ def save_vocabulary(name, vocab, file):
     vocab.writeFile(file)
 
 
-def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length=64, max_tgt_length=64,
+def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, use_atb, max_src_length=64, max_tgt_length=64,
               input_type='word', remove_duplicate=False, bos_word="default"):
     src, tgt = [], []
     count, ignored = 0, 0
@@ -234,10 +254,14 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
         if sline == "" and tline == "":
             break
 
+        # seqences start at the 1st token if using attributes and at the
+        # 0th token if not using attributes (same as in make_vocabulary)
+        seq_start = use_atb
+
         # source or target does not have same number of lines
 
-        sline_without_tag = " ".join(sline.split()[1:]).strip()
-        tline_without_tag = " ".join(tline.split()[1:]).strip()
+        sline_without_tag = " ".join(sline.split()[seq_start:]).strip()
+        tline_without_tag = " ".join(tline.split()[seq_start:]).strip()
         # if sline_without_tag == "" or tline_without_tag == "":
         #     print('WARNING: src and tgt do not have the same # of sentences')
         #     break
@@ -249,11 +273,12 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
         src_words = sline.split()
         tgt_words = tline.split()
 
-        src_attb = src_words[0]
-        tgt_attb = tgt_words[0]
+        # empty list if attributes not in use
+        src_attb = src_words[:seq_start]
+        tgt_attb = tgt_words[:seq_start]
 
-        sline = sline[1:]
-        tline = tline[1:]
+        sline = sline[seq_start:]
+        tline = tline[seq_start:]
 
         # source and/or target are empty
         if remove_duplicate:
@@ -285,7 +310,7 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
             src_sent = src_dicts.convertToIdx(src_words,
                                               onmt.Constants.UNK_WORD)
 
-            src_attb = atb_dict.convertToIdx([src_attb], None)
+            src_attb = atb_dict.convertToIdx(src_attb, None)
 
             src += [src_sent]
             src_attbs += [src_attb]
@@ -296,8 +321,8 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, max_src_length
                                               eosWord=onmt.Constants.EOS_WORD)
 
             # convert the atb into index
-            # this should be a vector of 1 element
-            tgt_attb = atb_dict.convertToIdx([tgt_attb], None)
+            # this should be a vector of 1 or 0 elements
+            tgt_attb = atb_dict.convertToIdx(tgt_attb, None)
 
             tgt += [tgt_sent]
             tgt_attbs += [tgt_attb]
@@ -349,6 +374,7 @@ def main():
     dicts = dict()
 
     # first, we read the attb
+    use_atb = not opt.no_atb
     dicts['atb'] = None
     if opt.attb_vocab is not None:
         # If given, load existing word dictionary.
@@ -362,18 +388,18 @@ def main():
     if opt.join_vocab:
         dicts['src'], dicts['atb'] = init_vocabulary('joined', [opt.train_src, opt.train_tgt], opt.src_vocab,
                                                      opt.tgt_vocab_size, join=True, input_type=opt.input_type,
-													 dict_atb=dicts['atb'])
+                                                     use_atb=use_atb, dict_atb=dicts['atb'])
 
 
         dicts['tgt'] = dicts['src']
     else:
         dicts['src'], dicts['atb'] = init_vocabulary('source', opt.train_src, opt.src_vocab,
                                                      opt.src_vocab_size, input_type=opt.input_type,
-                                                     dict_atb=dicts['atb'])
+                                                     use_atb=use_atb, dict_atb=dicts['atb'])
 
         dicts['tgt'], dicts['atb'] = init_vocabulary('target', opt.train_tgt, opt.tgt_vocab,
                                                      opt.tgt_vocab_size, input_type=opt.input_type,
-                                                     dict_atb=dicts['atb'])
+                                                     use_atb=use_atb, dict_atb=dicts['atb'])
 
     print("Created a language attribute dictionary with %d languages" % dicts['atb'].size())
 
@@ -391,7 +417,8 @@ def main():
         max_tgt_length=opt.tgt_seq_length,
         input_type=opt.input_type,
         remove_duplicate=opt.remove_duplicate,
-        bos_word=opt.bos_word)
+        bos_word=opt.bos_word,
+        use_atb=use_atb)
 
     print('Preparing validation ...')
 
@@ -403,7 +430,8 @@ def main():
         max_src_length=9999,
         max_tgt_length=9999,
         input_type=opt.input_type,
-        bos_word=opt.bos_word)
+        bos_word=opt.bos_word,
+        use_atb=use_atb)
 
     # saving data to disk
     # save dicts in this format
