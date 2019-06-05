@@ -1,6 +1,6 @@
 import onmt
 import onmt.modules
-
+from onmt.EnsembleTranslator import EnsembleTranslator
 
 class TranslatorParameter(object):
 
@@ -20,8 +20,14 @@ class TranslatorParameter(object):
         self.gpu = -1;
         self.cuda = 0;
         self.verbose = False
-        
+        self.alpha = 1.0
+        self.beta = 1.0 
+        self.start_with_bos = True
+        self.fp16 = False 
+        self.ensemble_op = 'logSum' 
         self.readFile(filename)
+        self.autoencoder = None 
+        self.encoder_type = 'text'
 
     def readFile(self,filename):
 
@@ -44,11 +50,11 @@ class TranslatorParameter(object):
 class OnlineTranslator(object):
     def __init__(self,model):
         opt = TranslatorParameter(model)
-        self.translator = onmt.Translator(opt)
+        self.translator = EnsembleTranslator(opt)
     
 
     def translate(self,input):
-              predBatch, predScore, goldScore = self.translator.translate([input.split()],[])
+              predBatch, predScore, _, goldScore, _, _  = self.translator.translate([input.split()],[])
               return " ".join(predBatch[0][0])
   
 
