@@ -225,6 +225,8 @@ def outputResults(srcBatch,r,outF):
 #        outF.write("\n")
 #        outF.flush()
 
+
+
     x=0
     j=0
     out= []

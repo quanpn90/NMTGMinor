@@ -72,9 +72,10 @@ class AETrainer(BaseTrainer):
         """ New semantics of PyTorch: save space by not creating gradients """
         with torch.no_grad():
             for i in range(len(data)):
-                samples = data.next()
 
-                batch = self.to_variable(samples[0])
+                batch = data.next()[0]
+                if (self.cuda):
+                    batch.cuda()
 
                 """ outputs can be either 
                         hidden states from decoder or
@@ -95,7 +96,7 @@ class AETrainer(BaseTrainer):
     def train_epoch(self, epoch, resume=False, batchOrder=None, iteration=0):
 
         opt = self.opt
-        trainData = self.trainData
+        train_data = self.train_data
 
         # Clear the gradients of the model
         # self.runner.zero_grad()
@@ -103,23 +104,23 @@ class AETrainer(BaseTrainer):
         self.model.eval()
 
         if opt.extra_shuffle and epoch > opt.curriculum:
-            trainData.shuffle()
+            train_data.shuffle()
 
         # Shuffle mini batch order.
 
         if resume:
-            trainData.batchOrder = batchOrder
-            trainData.set_index(iteration)
+            train_data.batchOrder = batchOrder
+            train_data.set_index(iteration)
             print("Resuming from iteration: %d" % iteration)
         else:
-            batchOrder = trainData.create_order()
+            batchOrder = train_data.create_order()
             iteration = 0
 
         total_loss, total_words = 0, 0
         report_loss, report_mu,report_sig,report_el,report_mse, report_kl, report_tgt_words = 0, 0,0,0,0,0,0
         report_src_words = 0
         start = time.time()
-        nSamples = len(trainData)
+        nSamples = len(train_data)
 
         counter = 0
         num_accumulated_words = 0
@@ -129,14 +130,14 @@ class AETrainer(BaseTrainer):
 
             curriculum = (epoch < opt.curriculum)
 
-            samples = trainData.next(curriculum=curriculum)
-
-            batch = self.to_variable(samples[0])
+            batch = train_data.next(curriculum=curriculum)[0]
+            if (self.cuda):
+                batch.cuda()
 
             oom = False
             try:
 
-                batch_size = batch[1][1:].size(1)
+                batch_size = batch.size
 
                 # print("Input size:",batch[0].size())
                 targets,outputs = self.autoencoder(batch)
@@ -188,7 +189,7 @@ class AETrainer(BaseTrainer):
                     num_updates = self.optim._step
 
                     if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every:
-                        valid_loss = self.eval(self.validData)
+                        valid_loss = self.eval(self.valid_data)
                         print('Validation perplexity: %g' % valid_loss)
 
                         ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
@@ -206,7 +207,7 @@ class AETrainer(BaseTrainer):
                 if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
                     print(("Epoch %2d, %5d/%5d; ; loss: %6.2f (%6.2f, %6.2f) ; var: mu %6.2f sig: %6.2f; lr: %.7f ; num updates: %7d " +
                            "%5.0f src tok/s; %s elapsed") %
-                          (epoch, i + 1, len(trainData),
+                          (epoch, i + 1, len(train_data),
                            report_loss / report_tgt_words,report_mse/report_tgt_words,report_kl/report_tgt_words,
                            report_mu / max(1,report_el), report_sig / max(1,report_el),
                            optim.getLearningRate(),
@@ -234,7 +235,7 @@ class AETrainer(BaseTrainer):
         autoencoder.init_model_parameters()
         resume = False
 
-        valid_loss = self.eval(self.validData)
+        valid_loss = self.eval(self.valid_data)
         print('Validation loss: %g' % valid_loss)
 
         self.start_time = time.time()
@@ -249,7 +250,7 @@ class AETrainer(BaseTrainer):
             print('Train loss: %g' % train_loss)
 
             #  (2) evaluate on the validation set
-            valid_loss = self.eval(self.validData)
+            valid_loss = self.eval(self.valid_data)
             print('Validation perplexity: %g' % valid_loss)
 
             self.save(epoch, valid_loss)
