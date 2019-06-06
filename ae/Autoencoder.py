@@ -23,6 +23,8 @@ class Autoencoder(nn.Module):
             self.inputSize = nmt_model.encoder.model_size
         elif (opt.representation == "DecoderHiddenState"):
             self.inputSize = nmt_model.decoder.model_size
+        elif (opt.representation == "EncoderDecoderHiddenState"):
+            self.inputSize = nmt_model.encoder.model_size
         elif (opt.representation == "Probabilities"):
             if(type(nmt_model.generator) is nn.ModuleList):
                 self.inputSize = nmt_model.generator[0].output_size
@@ -31,6 +33,9 @@ class Autoencoder(nn.Module):
         else:
             raise NotImplementedError("Waring!"+opt.represenation+" not implemented for auto encoder")
 
+        self.outputSize = self.inputSize
+        if (opt.representation == "EncoderDecoderHiddenState"):
+            self.outputSize = self.inputSize = nmt_model.decoder.model_size
         self.hiddenSize = opt.auto_encoder_hidden_size
 
         layers = []
@@ -49,7 +54,7 @@ class Autoencoder(nn.Module):
 #            layers.append(nn.Dropout(opt.auto_encoder_drop_out,inplace=True))
 
 
-        layers.append(nn.Linear(self.hiddenSize, self.inputSize))
+        layers.append(nn.Linear(self.hiddenSize, self.outputSize))
 
         self.model = nn.Sequential(*layers)
 
@@ -75,6 +80,7 @@ class Autoencoder(nn.Module):
                 flattened_mask = src_mask.squeeze(1).transpose(0,1).contiguous().view(-1)
                 non_pad_indices = torch.nonzero(1-flattened_mask).squeeze(1)
                 clean_context = flattened_context.index_select(0, non_pad_indices)
+                clean_output = clean_context
         elif(self.representation == "DecoderHiddenState"):
             with torch.no_grad():
 
@@ -84,7 +90,6 @@ class Autoencoder(nn.Module):
                 decoder_output = self.nmt.decoder(tgt, context, src)
                 output = decoder_output['hidden']
 
-
                 tgt_mask = tgt.data.eq(onmt.Constants.PAD).unsqueeze(1)
                 tgt_mask2 = tgt.data.eq(onmt.Constants.EOS).unsqueeze(1)
                 tgt_mask = tgt_mask + tgt_mask2
@@ -92,6 +97,31 @@ class Autoencoder(nn.Module):
                 flattened_mask = tgt_mask.squeeze(1).transpose(0,1).contiguous().view(-1)
                 non_pad_indices = torch.nonzero(1-flattened_mask).squeeze(1)
                 clean_context = flattened_output.index_select(0, non_pad_indices)
+                clean_output = clean_context
+        elif (self.representation == "EncoderDecoderHiddenState"):
+            with torch.no_grad():
+                encoder_output = self.nmt.encoder(src)
+                context = encoder_output['context']
+
+                decoder_output = self.nmt.decoder(tgt, context, src)
+                output = decoder_output['hidden']
+
+                # predict sum of target for all inputs
+                tgt_mask = tgt.data.eq(onmt.Constants.PAD).unsqueeze(1)
+                tgt_mask2 = tgt.data.eq(onmt.Constants.EOS).unsqueeze(1)
+                tgt_mask = (tgt_mask + tgt_mask2).squeeze(1).transpose(0,1)
+                output.masked_fill_(tgt_mask.unsqueeze(2).expand(-1,-1,output.size(2)),0)
+                output = output.sum(0).unsqueeze(0).expand(context.size(0),-1,-1)
+
+                #select encoder states
+                src_mask = encoder_output['src_mask']
+
+                flattened_context = context.contiguous().view(-1, context.size(-1))
+                flattened_mask = src_mask.squeeze(1).transpose(0,1).contiguous().view(-1)
+                non_pad_indices = torch.nonzero(1-flattened_mask).squeeze(1)
+                clean_context = flattened_context.index_select(0, non_pad_indices)
+                clean_output = output.contiguous().view(-1, output.size(-1)).index_select(0,non_pad_indices)
+
         elif(self.representation == "Probabilities"):
             with torch.no_grad():
 
@@ -113,6 +143,7 @@ class Autoencoder(nn.Module):
                     clean_context = self.nmt.generator[0](clean_context)
                 else:
                     clean_context = self.nmt.generator(clean_context)
+                clean_output = clean_context
 
 
         else:
@@ -120,7 +151,7 @@ class Autoencoder(nn.Module):
         
         # clean_context.require_grad=False
         clean_context.detach_()
-
+        clean_output.detach_()
         
         #result = self.model(clean_context)
 
@@ -133,10 +164,43 @@ class Autoencoder(nn.Module):
             result = F.log_softmax(result, dim=-1)
 
 
+        return clean_output,result
 
-        return clean_context,result
+    def calcAlignment(self, batch):
 
+        src = batch.get('source')
+        tgt = batch.get('target_input')
 
+        src = src.transpose(0, 1)  # transpose to have batch first
+        tgt = tgt.transpose(0, 1)
+
+        if (self.representation == "EncoderDecoderHiddenState"):
+            with torch.no_grad():
+                encoder_output = self.nmt.encoder(src)
+                context = encoder_output['context']
+                decoder_output = self.nmt.decoder(tgt, context, src)
+                output = decoder_output['hidden']
+
+                flat_context = context.contiguous().view(-1, context.size(-1))
+
+        else:
+            raise NotImplementedError("Waring!" + opt.represenation + " not implemented for auto encoder")
+
+        # clean_context.require_grad=False
+        flat_context = flat_context.detach()
+        output = output.detach()
+
+        # result = self.model(clean_context)
+
+        result = flat_context
+
+        for i in range(len(self.layers)):
+            result = self.layers[i](result)
+
+        if (self.representation == "Probabilities"):
+            result = F.log_softmax(result, dim=-1)
+
+        return output, result.view(context.size(0),context.size(1),-1)
 
     def autocode(self,input):
 
