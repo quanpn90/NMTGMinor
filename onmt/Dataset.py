@@ -19,11 +19,11 @@ class Batch(object):
         # self.tensors['src_attn_mask'] = self.tensors['source'].eq(onmt.Constants.PAD).unsqueeze(1)
         # self.tensors['src_pad_mask'] = self.tensors['source'].ne(onmt.Constants.PAD)
         self.tensors['src_length'] = torch.LongTensor(self.src_lengths)
-        self.tensors['src_attbs'] = torch.LongTensor(src_attbs)
+        self.tensors['src_attbs'] = torch.cat(src_attbs)
 
         # always need tgt attbs to know which language we translate to
         assert (tgt_attbs is not None)
-        self.tensors['tgt_attbs'] = torch.LongTensor(tgt_attbs)
+        self.tensors['tgt_attbs'] = torch.cat(tgt_attbs)
 
         if tgt_data is not None:
             target_full, self.tgt_lengths = self.collate(tgt_data, align_right=tgt_align_right)

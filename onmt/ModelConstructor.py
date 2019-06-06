@@ -108,7 +108,10 @@ def build_model(opt, dicts):
                                      opt.model_size,
                                      padding_idx=onmt.Constants.PAD)
     #
-    feat_embedding = nn.Embedding(dicts['atb'].size(), opt.model_size)
+    if dicts['atb'].size() > 0:
+        feat_embedding = nn.Embedding(dicts['atb'].size(), opt.model_size)
+    else:
+        feat_embedding = None
     #
     positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
 

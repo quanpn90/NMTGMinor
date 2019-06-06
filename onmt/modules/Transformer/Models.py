@@ -358,10 +358,16 @@ class TransformerDecoder(nn.Module):
         if freeze_embeddings:
             with torch.no_grad:
                 emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
-                attb_emb = self.feat_lut(input_attbs)
+                if self.feat_lut is not None:
+                    attb_emb = self.feat_lut(input_attbs)
+                else:
+                    attb_emb = []
         else:
             emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
-            attb_emb = self.feat_lut(input_attbs)
+            if self.feat_lut is not None:
+                attb_emb = self.feat_lut(input_attbs)
+            else:
+                attb_emb = []
 
         if self.time == 'positional_encoding':
             emb = emb * math.sqrt(self.model_size)
