@@ -5,7 +5,7 @@ from collections import defaultdict
 from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, PositionalEncoding, PrePostProcessing
 from onmt.modules.BaseModel import NMTModel, Reconstructor, DecoderState
 import onmt
-from onmt.modules.WordDrop import embedded_dropout
+from onmt.modules.WordDrop import embedded_dropout, switchout
 from torch.utils.checkpoint import checkpoint
 from onmt.modules.Utilities import mean_with_mask_backpropable as mean_with_mask
 from onmt.modules.Utilities import max_with_mask
@@ -67,6 +67,7 @@ class TransformerEncoder(nn.Module):
         self.residual_dropout = opt.residual_dropout
         self.death_rate = opt.death_rate
         self.stochastic = stochastic
+        self.switchout = opt.switchout
 
         # lookup table for words
         self.word_lut = embedding
@@ -125,9 +126,12 @@ class TransformerEncoder(nn.Module):
 
             self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
 
-    def embedding_processing(self, input, freeze_embedding=False, additional_sequence=None):
+    def embedding_processing(self, input, freeze_embedding=False, **kwargs):
 
-        add_emb = None
+        if self.switchout > 0 and self.training:
+            vocab_size = self.word_lut.weight.size(0)
+            input = switchout(input, vocab_size, self.switchout)
+
         if freeze_embedding:
             with torch.no_grad():
                 emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
@@ -135,31 +139,22 @@ class TransformerEncoder(nn.Module):
                 """ Scale the emb by sqrt(d_model) """
                 emb = emb * math.sqrt(self.model_size)
 
-                if additional_sequence is not None:
-                    add_input = additional_sequence
-                    add_emb = embedded_dropout(self.word_lut, add_input,
-                                               dropout=self.word_dropout if self.training else 0)
 
-                    # emb = torch.cat([emb, add_emb], dim=0)
         else:
             emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
 
             """ Scale the emb by sqrt(d_model) """
             emb = emb * math.sqrt(self.model_size)
 
-            if additional_sequence is not None:
-                add_input = additional_sequence
-                add_emb = embedded_dropout(self.word_lut, add_input, dropout=self.word_dropout if self.training else 0)
+        """ (Experimental) Adding switch out algorithm 
+            (Probably best when word dropout is not used)
+        """
+        # if self.switchout > 0:
+        #    vocab_size = self.word_lut.weight.size(0)
+        #    emb = switchout(emb, vocab_size, self.switchout)
 
         """ Adding positional encoding """
         emb = self.time_transformer(emb)
-
-        if add_emb is not None:
-            add_emb = self.time_transformer(add_emb)
-
-            # batch first
-            emb = torch.cat([emb, add_emb], dim=1)
-            input = torch.cat([input, additional_sequence], dim=1)
 
         return emb, input
 
@@ -271,7 +266,7 @@ class TransformerDecoder(nn.Module):
 
         self.stochastic = stochastic
         self.death_rate = opt.death_rate
-
+        self.switchout = opt.switchout
 
         if hasattr(opt, 'fixed_target_length'):
             if opt.fixed_target_length == "int":
@@ -355,6 +350,10 @@ class TransformerDecoder(nn.Module):
 
         len_tgt = input.size(1)
         input_attbs = input_attbs.unsqueeze(1).repeat(1, len_tgt)
+
+        if self.switchout > 0 and self.training:
+            vocab_size = self.word_lut.weight.size(0)
+            input = switchout(input, vocab_size, self.switchout)
 
         if freeze_embeddings:
             with torch.no_grad:

@@ -67,7 +67,7 @@ class ParallelTransformer(Transformer):
         # so we create a 'fake' input sequence for the decoder
         dec_output = self.decoder(tgt, tgt_attbs, context, src)
 
-        if not fast_mode:
+            if not fast_mode:
             if self.tgt_encoder is not None:
                 # don't look at the first token of the target
                 tgt_context, _ = self.tgt_encoder(tgt_)
