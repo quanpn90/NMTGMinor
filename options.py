@@ -110,6 +110,8 @@ def make_parser(parser):
                         help='Dropout probability; applied between LSTM stacks.')
     parser.add_argument('-word_dropout', type=float, default=0.0,
                         help='Dropout probability; applied on embedding indices.')
+    parser.add_argument('-switchout', type=float, default=1.0,
+                        help='Switchout algorithm')
     parser.add_argument('-label_smoothing', type=float, default=0.0,
                         help='Label smoothing value for loss functions.')
     parser.add_argument('-scheduled_sampling_rate', type=float, default=0.0,
@@ -161,14 +163,6 @@ def make_parser(parser):
                         help='Tie the weights between the decoder embeddings and softmax')
     parser.add_argument('-join_embedding', action='store_true',
                         help='Jointly train the embedding of encoder and decoder in one weight matrix')
-    parser.add_argument('-pre_word_vecs_enc',
-                        help="""If a valid path is specified, then this will load
-                        pretrained word embeddings on the encoder side.
-                        See README for specific formatting instructions.""")
-    parser.add_argument('-pre_word_vecs_dec',
-                        help="""If a valid path is specified, then this will load
-                        pretrained word embeddings on the decoder side.
-                        See README for specific formatting instructions.""")
 
     # GPU
     parser.add_argument('-gpus', default=[], nargs='+', type=int,
@@ -232,4 +226,6 @@ def make_parser(parser):
 
     parser.add_argument('-l2_coeff', type=float, default=1.0,
                         help="""l2 coefficient in the loss function for multilingual""")
+    parser.add_argument('-l2_warmup', type=int, default=0,
+                        help="""number of steps before using actual l2 coefficient in the loss function for multilingual""")
     return parser

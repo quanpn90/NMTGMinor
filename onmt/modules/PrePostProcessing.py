@@ -6,6 +6,7 @@ import torch.optim as optim
 import torch.nn as nn
 import onmt
 from onmt.modules.Bottle import Bottle
+from onmt.modules.VariationalDropout import VariationalDropout
 
 
 class PrePostProcessing(nn.Module):
@@ -37,7 +38,11 @@ class PrePostProcessing(nn.Module):
             ln = nn.LayerNorm((self.d_model,), elementwise_affine=elementwise_affine)
             self.layer_norm = Bottle(ln)
         if 'd' in self.steps:
+            # assert('v' not in self.steps)
             self.dropout = nn.Dropout(self.dropout_p, inplace=False)
+        if 'v' in self.steps:
+            # assert('d' not in self.steps)
+            self.var_dropout = VariationalDropout(self.dropout_p, batch_first=False)
     
     def forward(self, tensor, input_tensor=None, mask=None):
         output = tensor
@@ -53,4 +58,7 @@ class PrePostProcessing(nn.Module):
                         output = output + input_tensor
                     else:
                         output = F.relu(self.k) * output + input_tensor
+            if step == 'v':
+                output = self.var_dropout(output)
+
         return output

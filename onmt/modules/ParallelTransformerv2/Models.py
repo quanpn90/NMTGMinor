@@ -39,7 +39,7 @@ class ParallelTransformer(Transformer):
         return
 
 
-    def forward(self, batch):
+    def forward(self, batch, fast_mode=False, **kwargs):
         """
         Inputs Shapes:
             src: len_src x batch_size
@@ -62,19 +62,25 @@ class ParallelTransformer(Transformer):
         # the encoder side is not patched with <BOS>
         tgt_ = tgt[:, 1:]
 
-        if self.tgt_encoder is not None:
-            # don't look at the first token of the target
-            tgt_context, _ = self.tgt_encoder(tgt_)
-
-            # generate the target distribution on top of the tgt hiddens
-            tgt_dec_output = self.tgt_decoder(tgt, tgt_attbs, tgt_context, tgt_, freeze_embedding=True)
-        else:
-            tgt_dec_output = defaultdict(lambda: None)
-
         # because the context size does not depend on the input size
         # and the context does not have masking any more
         # so we create a 'fake' input sequence for the decoder
         dec_output = self.decoder(tgt, tgt_attbs, context, src)
+
+            if not fast_mode:
+            if self.tgt_encoder is not None:
+                # don't look at the first token of the target
+                tgt_context, _ = self.tgt_encoder(tgt_)
+
+                # generate the target distribution on top of the tgt hiddens
+                tgt_dec_output = self.tgt_decoder(tgt, tgt_attbs, tgt_context, tgt_, freeze_embedding=True)
+            else:
+                tgt_dec_output = defaultdict(lambda: None)
+
+        else:
+            tgt_dec_output = defaultdict(lambda: None)
+            tgt_dec_output['final_state'] = \
+                dec_output['final_state'].new(*dec_output['final_state'].size()).copy_( dec_output['final_state'])
 
         output_dict = dict()
         output_dict['hiddens'] = dec_output['final_state']

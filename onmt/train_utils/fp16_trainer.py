@@ -205,7 +205,16 @@ class FP16XETrainer(XETrainer):
                 # ~ batch = self.to_variable(samples[0])
                 batch = samples[0]
                 batch.cuda()
-            
+
+                params = defaultdict(lambda: 0.0)
+                # if self.optim._step > self.opt.l2_warmup:
+                #     params['l2'] = self.opt.l2_coeff
+                #     fast_mode = False
+                # else:
+                #     params['l2'] = 0.0
+                #     fast_mode = True
+                params['l2'] = self.opt.l2_coeff
+
                 outputs = self.model(batch)
                     
                 targets = batch.get('target_output')
@@ -219,9 +228,6 @@ class FP16XETrainer(XETrainer):
                 ## Scale UP the loss so that the gradients are not cutoff
                 normalizer = 1.0 / self.scaler.loss_scale
 
-                params = defaultdict(lambda: 0.0)
-                params['l2'] = self.opt.l2_coeff
-                
                 loss_output = self.loss_function(outputs, targets, model=self.model,
                                                              backward=True, tgt_mask=tgt_mask, normalizer=normalizer,
                                                              params=params)
@@ -249,8 +255,7 @@ class FP16XETrainer(XETrainer):
             if not oom:
                 src_size = batch.src_size
                 tgt_size = batch.tgt_size
-                
-                
+
                 counter = counter + 1 
                 num_accumulated_words += tgt_size
                 num_accumulated_sents += batch_size

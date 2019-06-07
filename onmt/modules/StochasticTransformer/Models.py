@@ -52,7 +52,7 @@ class StochasticTransformerEncoder(TransformerEncoder):
         
     """
     
-    def __init__(self, opt, dicts, positional_encoder):
+    def __init__(self, opt, embedding, positional_encoder, feature_embedding=None, share=None):
     
         self.death_rate = opt.death_rate
         self.death_type = opt.death_type
@@ -62,24 +62,32 @@ class StochasticTransformerEncoder(TransformerEncoder):
         
         self.death_rates, e_length = expected_length(self.layers, self.death_rate, self.death_type)  
         
-        super(StochasticTransformerEncoder, self).__init__(opt, dicts, positional_encoder)
+        super(StochasticTransformerEncoder, self).__init__(opt, embedding, positional_encoder, feature_embedding=feature_embedding, share=share)
             
         print("Stochastic Encoder with %.2f expected layers" % e_length) 
        
-    def build_modules(self):
-        
-        self.layer_modules = nn.ModuleList()
-        
-        for l in range(self.layers):
-            
-            death_r = self.death_rates[l]
-            
-            block = StochasticEncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout, death_rate=death_r)
-            
-            self.layer_modules.append(block)
+    def build_modules(self, shared_encoder=None):
+
+        if shared_encoder is not None:
+            print("* Shaing encoder parameters with another encoder")
+            self.layer_modules = shared_encoder.layer_modules
+
+            self.postprocess_layer = shared_encoder.postprocess_layer
+        else:
+            self.layer_modules = nn.ModuleList()
+
+            for l in range(self.layers):
+
+                death_r = self.death_rates[l]
+
+                block = StochasticEncoderLayer(self.n_heads, self.model_size, self.dropout,
+                                               self.inner_size, self.attn_dropout, self.residual_dropout,
+                                               death_rate=death_r)
+
+                self.layer_modules.append(block)
             
     
-    def forward(self, input, **kwargs):
+    def forward(self, input, freeze_embedding=False, return_stack=False, additional_sequence=None, **kwargs):
         """
         Inputs Shapes: 
             input: batch_size x len_src (wanna tranpose)
@@ -90,17 +98,8 @@ class StochasticTransformerEncoder(TransformerEncoder):
             
         """
 
-        """ Embedding: batch_size x len_src x d_model """
-        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
-        
-        """ Scale the emb by sqrt(d_model) """
-        
-        emb = emb * math.sqrt(self.model_size)
-            
-        """ Adding positional encoding """
-        emb = self.time_transformer(emb)
-        
-        emb = self.preprocess_layer(emb)
+        emb, input = self.embedding_processing(input, freeze_embedding=freeze_embedding,
+                                               additional_sequence=additional_sequence)
         
         mask_src = input.eq(onmt.Constants.PAD).unsqueeze(1) # batch_size x 1 x len_src for broadcasting
                 
@@ -201,7 +200,8 @@ class StochasticTransformerDecoder(TransformerDecoder):
     
     def build_modules(self, encoder_to_share=None):
         
-        if encoder_to_share == None:
+        if encoder_to_share is None:
+
             self.layer_modules = nn.ModuleList()
                     
             for l in range(self.layers):
@@ -214,34 +214,25 @@ class StochasticTransformerDecoder(TransformerDecoder):
         else:
             raise NotImplementedError
             
-    def forward(self, input, context, src, **kwargs):
+    def forward(self, input, input_attbs, context, src, freeze_embeddings=False, **kwargs):
         """
         Inputs Shapes: 
-            input: (Variable) batch_size x len_tgt (wanna tranpose)
-            context: (Variable) batch_size x len_src x d_model
-            mask_src (Tensor) batch_size x len_src
+            input: (Tensor) batch_size x len_tgt (to be transposed)
+            context: (Tensor) len_src x batch_size x d_model
         Outputs Shapes:
-            out: batch_size x len_tgt x d_model
+            out: tgt_len x batch_size x d_model
             coverage: batch_size x len_tgt x len_src
-            
+
         """
-        
+
         """ Embedding: batch_size x len_tgt x d_model """
-        
-        
-        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
-        if self.time == 'positional_encoding':
-            emb = emb * math.sqrt(self.model_size)
-        """ Adding positional encoding """
-        emb = self.time_transformer(emb)
-        if isinstance(emb, tuple):
-            emb = emb[0]
-        emb = self.preprocess_layer(emb)
+
+        returns = defaultdict(lambda: None)
+
+        emb = self.embedding_processing(input, input_attbs, freeze_embeddings=freeze_embeddings)
         
         mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
-        
-        pad_mask_src = src.data.ne(onmt.Constants.PAD)
-        
+
         len_tgt = input.size(1)
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
@@ -252,6 +243,7 @@ class StochasticTransformerDecoder(TransformerDecoder):
         for i, layer in enumerate(self.layer_modules):
             
             # pre-generate coin to use
+            returns[i] = dict()
 
             if self.training:
                 seed = torch.rand(1)
@@ -262,25 +254,32 @@ class StochasticTransformerDecoder(TransformerDecoder):
             if coin:
                 if len(self.layer_modules) - i <= onmt.Constants.checkpointing and self.training:           
                     
-                    output = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src) 
+                    output_dict = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src)
                                                                                   # batch_size x len_src x d_model
                     
                 else:
-                    output = layer(output, context, mask_tgt, mask_src) # batch_size x len_src x d_model
+                    output_dict = layer(output, context, mask_tgt, mask_src) # batch_size x len_src x d_model
+
+                returns[i]['attn_out'] = output_dict['attn_out']
+
+                # placeholder when new things need to be included to return
+
+                output = output_dict['final_state']
+                returns['coverage'] = output_dict['coverage']
+            else:
+                returns[i]['attn_out'] = None
+                returns['coverage'] = None
                     
-            # ~ output = output_dict['feature']
-            
-            # ~ if 'coverage' in output_dict:
-                # ~ coverage = output_dict['coverage']
-            
+
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
         # on the output, since the output can grow very large, being the sum of
         # a whole stack of unnormalized layer outputs.    
         output = self.postprocess_layer(output)
-            
-        
-        return output, coverage
+
+        returns['final_state'] = output
+
+        return returns
             
     def step_sample(self, input, decoder_state):
         """
@@ -365,42 +364,3 @@ class StochasticTransformerDecoder(TransformerDecoder):
         output = self.postprocess_layer(output)
 
         return output, coverage, setup
-            
-        
-        
-class StochasticTransformer(NMTModel):
-    """Main model in 'Attention is all you need' """
-    
-        
-    def forward(self, input):
-        """
-        Inputs Shapes: 
-            src: len_src x batch_size
-            tgt: len_tgt x batch_size
-        
-        Outputs Shapes:
-            out:      batch_size*len_tgt x model_size
-            
-            
-        """
-        src = input[0]
-        tgt = input[1][:-1]  # exclude last target from inputs
-        
-        src = src.transpose(0, 1) # transpose to have batch first
-        tgt = tgt.transpose(0, 1)
-        
-        context, src_mask = self.encoder(src)
-        
-        output, coverage = self.decoder(tgt, context, src)
-        
-        output = output.transpose(0, 1) # transpose to have time first, like RNN models
-        
-        return output
-
-
-    def create_decoder_state(self, src, context, beamSize=1):
-        
-        from onmt.modules.Transformer.Models import TransformerDecodingState
-        
-        decoder_state = TransformerDecodingState(src, context, beamSize=beamSize)
-        return decoder_state
