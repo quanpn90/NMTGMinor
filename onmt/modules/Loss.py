@@ -116,7 +116,8 @@ class NMTLossFunc(LossFuncBase):
         outputs = outputs.contiguous().view(-1, outputs.size(-1))
         targets = targets.view(-1)
 
-        src = src.unsqueeze(0).expand_as(attn).contiguous().view(-1, src.size(-1))
+        if src is not None:
+            src = src.unsqueeze(0).expand_as(attn).contiguous().view(-1, src.size(-1))
         attn = attn.contiguous().view(-1, attn.size(-1))
 
         if mask is not None:
@@ -133,7 +134,10 @@ class NMTLossFunc(LossFuncBase):
 
             clean_attn = attn.index_select(0, non_pad_indices)
 
-            clean_src = src.index_select(0, non_pad_indices)
+            if src is not None:
+                clean_src = src.index_select(0, non_pad_indices)
+            else:
+                clean_src = None
 
         else:
             clean_input = outputs

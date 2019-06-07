@@ -211,6 +211,7 @@ class SimplifiedTransformer(NMTModel):
         output_dict['coverage'] = dec_output['coverage']
         output_dict['tgt_context'] = tgt_context
         output_dict['src_context'] = src_context
+        output_dict['src'] = None
         return output_dict
 
     def decode(self, batch):

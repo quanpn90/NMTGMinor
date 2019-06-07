@@ -34,7 +34,6 @@ class MSEEncoderLoss(NMTLossFunc):
 
         output_dict, targets = self.clean_padding(output_dict, targets, tgt_mask)
 
-
         dists = model.generator(output_dict)
 
         loss, loss_data = self._compute_loss(dists, clean_targets)
