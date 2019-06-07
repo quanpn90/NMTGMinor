@@ -209,6 +209,9 @@ class TransformerDecoder(nn.Module):
                 self.fixed_target_length = 1
             elif opt.fixed_target_length == "encoding":
                 self.fixed_target_length = 2
+            elif opt.fixed_target_length == "forward_backward_encoding":
+                self.fixed_target_length = 3
+
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
         elif opt.time == 'gru':
@@ -301,7 +304,13 @@ class TransformerDecoder(nn.Module):
         if self.time == 'positional_encoding':
             emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
-        if(self.fixed_target_length == 2):
+        if(self.fixed_target_length == 2 or self.fixed_target_length == 3):
+
+            if(self.fixed_target_length == 3):
+                emb = self.time_transformer(emb)
+                emb = emb * math.sqrt(self.model_size)
+                
+                
             #add target length encoding
             tgt_length = input.data.ne(onmt.Constants.PAD).sum(1).unsqueeze(1).expand_as(input.data)
             index = torch.arange(input.data.size(1)).unsqueeze(0).expand_as(tgt_length).type_as(tgt_length)
@@ -310,7 +319,7 @@ class TransformerDecoder(nn.Module):
             num_timescales = self.model_size // 2
             log_timescale_increment = math.log(10000) / (num_timescales - 1)
             inv_timescales = torch.exp(torch.arange(0, num_timescales).float() * -log_timescale_increment)
-            scaled_time = tgt_length.float().unsqueeze(2) * inv_timescales.unsqueeze(0).unsqueeze(0)
+            scaled_time = tgt_length.float().unsqueeze(2) * inv_timescales.unsqueeze(0).unsqueeze(0).type_as(emb)
             pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 2)
             emb = emb + pos_emb
 
@@ -397,7 +406,7 @@ class TransformerDecoder(nn.Module):
         buffers = decoder_state.attention_buffers
         mask_src = decoder_state.src_mask
         input_attbs = decoder_state.tgt_attbs
-        if(self.fixed_target_length == 1 or self.fixed_target_length == 2):
+        if(self.fixed_target_length > 0):
             tgt_length = decoder_state.tgt_length
 
         if decoder_state.concat_input_seq :
@@ -418,13 +427,18 @@ class TransformerDecoder(nn.Module):
 
         emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
-        if(self.fixed_target_length == 2):
+        if(self.fixed_target_length == 2 or self.fixed_target_length == 3):
+
+            if self.fixed_target_length == 3:
+                emb =  self.time_transformer(emb, t=input.size(1))
+                emb = emb * math.sqrt(self.model_size)
+                
             #add target length encoding
             tgt_length = tgt_length - current_step + 1
             tgt_length = tgt_length.unsqueeze(1)
             num_timescales = self.model_size // 2
             log_timescale_increment = math.log(10000) / (num_timescales - 1)
-            inv_timescales = torch.exp(torch.arange(0, num_timescales).float() * -log_timescale_increment)
+            inv_timescales = torch.exp(torch.arange(0, num_timescales).type_as(emb) * -log_timescale_increment)
             scaled_time = tgt_length.float().unsqueeze(2) * inv_timescales.unsqueeze(0).unsqueeze(0)
             pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 2)
             emb = emb + pos_emb
