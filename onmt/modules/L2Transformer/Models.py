@@ -197,6 +197,7 @@ class SimplifiedL2Transformer(NMTModel):
         output_dict['coverage'] = coverage
         output_dict['tgt_context'] = tgt_context
         output_dict['src_context'] = src_context
+        returns['src'] = src.t()
         return output_dict
 
     def decode(self, src, tgt):
