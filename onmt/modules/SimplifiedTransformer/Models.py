@@ -251,9 +251,9 @@ class SimplifiedTransformer(NMTModel):
 
         return gold_words, gold_scores
 
-    def step(self, input, decoder_state):
+    def step(self, input, decoder_state,current_step=-1):
 
-        decoder_output = self.decoder.step(input, decoder_state)
+        decoder_output = self.decoder.step(input, decoder_state,current_step)
 
         # decoder_hidden = decoder_output['hiddens'].squeeze(1)
         coverage = decoder_output['coverage'][:, -1, :].squeeze(1) # batch * beam x src_len
@@ -263,7 +263,7 @@ class SimplifiedTransformer(NMTModel):
         return log_dist, coverage
         # return self.decoder.step(input, decoder_state)
 
-    def create_decoder_state(self, batch, beam_size=1):
+    def create_decoder_state(self, batch, beam_size=1,length_batch=None):
 
         src = batch.get('source')
         tgt_attbs = batch.get('tgt_attbs')  # vector of length B
@@ -273,7 +273,7 @@ class SimplifiedTransformer(NMTModel):
         context, _ = self.encoder(src_transposed)
 
         fake_src = src.new(context.size(0), context.size(1)).fill_(onmt.Constants.EOS)
-        decoder_state = TransformerDecodingState(fake_src, tgt_attbs, context, beam_size=beam_size)
+        decoder_state = TransformerDecodingState(fake_src, tgt_attbs, context, length_batch, beam_size=beam_size)
         return decoder_state
 
 

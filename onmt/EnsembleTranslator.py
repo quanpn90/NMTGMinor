@@ -358,7 +358,6 @@ class EnsembleTranslator(object):
                      for t in beam[b].nextYs][1:])
 
         torch.set_grad_enabled(True)
-
         return allHyp, allScores, allAttn, allLengths, gold_scores, gold_words
 
     def translate(self, src_batch, gold_batch,length=None):
