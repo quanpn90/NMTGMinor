@@ -106,21 +106,23 @@ class Autoencoder(nn.Module):
                 decoder_output = self.nmt.decoder(tgt, context, src)
                 output = decoder_output['hidden']
 
+                clean_output = output.clone()
                 # predict sum of target for all inputs
-                tgt_mask = tgt.data.eq(onmt.Constants.PAD).unsqueeze(1)
-                tgt_mask2 = tgt.data.eq(onmt.Constants.EOS).unsqueeze(1)
-                tgt_mask = (tgt_mask + tgt_mask2).squeeze(1).transpose(0,1)
-                output.masked_fill_(tgt_mask.unsqueeze(2).expand(-1,-1,output.size(2)),0)
-                output = output.sum(0).unsqueeze(0).expand(context.size(0),-1,-1)
+                #tgt_mask = tgt.data.eq(onmt.Constants.PAD).unsqueeze(1)
+                #tgt_mask2 = tgt.data.eq(onmt.Constants.EOS).unsqueeze(1)
+                #tgt_mask = (tgt_mask + tgt_mask2).squeeze(1).transpose(0,1)
+                #output.masked_fill_(tgt_mask.unsqueeze(2).expand(-1,-1,output.size(2)),0)
+                #output = output.sum(0).unsqueeze(0).expand(context.size(0),-1,-1)
 
                 #select encoder states
                 src_mask = encoder_output['src_mask']
 
-                flattened_context = context.contiguous().view(-1, context.size(-1))
-                flattened_mask = src_mask.squeeze(1).transpose(0,1).contiguous().view(-1)
-                non_pad_indices = torch.nonzero(1-flattened_mask).squeeze(1)
-                clean_context = flattened_context.index_select(0, non_pad_indices)
-                clean_output = output.contiguous().view(-1, output.size(-1)).index_select(0,non_pad_indices)
+                #flattened_context = context.contiguous().view(-1, context.size(-1))
+                #flattened_mask = src_mask.squeeze(1).transpose(0,1).contiguous().view(-1)
+                ##non_pad_indices = torch.nonzero(1-flattened_mask).squeeze(1)
+                #clean_context = flattened_context.index_select(0, non_pad_indices)
+                #clean_output = output.contiguous().view(-1, output.size(-1)).index_select(0,non_pad_indices)
+                clean_context = context.contiguous().view(-1, context.size(-1)).clone()
 
         elif(self.representation == "Probabilities"):
             with torch.no_grad():
@@ -163,7 +165,31 @@ class Autoencoder(nn.Module):
         if (self.representation == "Probabilities"):
             result = F.log_softmax(result, dim=-1)
 
+        if (self.representation == "EncoderDecoderHiddenState"):
+            result = result.view(src_mask.size(-1),src_mask.size(0),-1)
 
+            expand_result = result.unsqueeze(1).expand(-1,clean_output.size(0),-1,-1)
+            clean_output = clean_output.unsqueeze(0).expand(result.size(0),-1, -1, -1)
+            cos = nn.CosineSimilarity(dim=-1, eps=1e-6)
+            sim = cos(expand_result,clean_output)
+
+            tgt_mask = tgt.data.eq(onmt.Constants.PAD).unsqueeze(1)
+            tgt_mask2 = tgt.data.eq(onmt.Constants.EOS).unsqueeze(1)
+            tgt_mask = (tgt_mask + tgt_mask2).squeeze(1).transpose(0,1).unsqueeze(0).expand(result.size(0),-1,-1)
+            src_mask_align = src_mask.transpose(0,2).expand(-1,tgt_mask.size(1),-1)
+            mask = torch.max(src_mask_align,tgt_mask)
+
+            sim.masked_fill_(mask,-float('inf'))
+            alignment = F.softmax(sim,dim=0).masked_fill_(mask,0)
+
+            clean_output = (alignment.unsqueeze(-1).expand(-1,-1,-1,result.size(-1)) * clean_output).sum(1)
+
+            flattened_result = result.contiguous().view(-1, result.size(-1))
+            flattened_output = clean_output.contiguous().view(-1, clean_output.size(-1))
+            flattened_mask = src_mask.squeeze(1).transpose(0,1).contiguous().view(-1)
+            non_pad_indices = torch.nonzero(1-flattened_mask).squeeze(1)
+            result = flattened_result.index_select(0, non_pad_indices)
+            clean_output = flattened_output.index_select(0, non_pad_indices)
         return clean_output,result
 
     def calcAlignment(self, batch):
