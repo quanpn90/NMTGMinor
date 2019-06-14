@@ -233,7 +233,6 @@ def main():
                 print('')
 
         src_batch, tgt_batch,tgt_length_batch = [], [],[]
-        
     if opt.verbose:
         reportScore('PRED', pred_score_total, pred_words_total)
         if tgtF: reportScore('GOLD', gold_scores_total, gold_words_total)
