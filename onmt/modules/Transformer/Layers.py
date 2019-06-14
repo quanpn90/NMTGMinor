@@ -59,9 +59,9 @@ class EncoderLayer(StochasticModule):
         super(EncoderLayer, self).__init__()
 
         self.preprocess_attn = PrePostProcessing(d_model, 0.0, sequence='n')
-        self.postprocess_attn = PrePostProcessing(d_model, residual_p, sequence='va', static=onmt.Constants.static)
+        self.postprocess_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
         self.preprocess_ffn = PrePostProcessing(d_model, 0.0, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(d_model, residual_p, sequence='va', static=onmt.Constants.static)
+        self.postprocess_ffn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
         self.multihead = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=1)
         
         if onmt.Constants.activation_layer == 'linear_relu_linear':
@@ -147,10 +147,10 @@ class DecoderLayer(StochasticModule):
         if encoder_to_share is None:
 
             self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
-            self.postprocess_attn = PrePostProcessing(d_model, residual_p, sequence='va', static=onmt.Constants.static)
+            self.postprocess_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
 
             self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
-            self.postprocess_ffn = PrePostProcessing(d_model, residual_p, sequence='va', static=onmt.Constants.static)
+            self.postprocess_ffn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
 
             self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=1)
 
@@ -181,7 +181,7 @@ class DecoderLayer(StochasticModule):
                 n_head_src = 1
 
             self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
-            self.postprocess_src_attn = PrePostProcessing(d_model, residual_p, sequence='va', static=onmt.Constants.static)
+            self.postprocess_src_attn = PrePostProcessing(d_model, residual_p, sequence='da', static=onmt.Constants.static)
             self.multihead_src = MultiHeadAttention(n_head_src, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
 
     def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None):

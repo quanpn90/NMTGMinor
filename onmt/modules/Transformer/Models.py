@@ -88,7 +88,7 @@ class TransformerEncoder(nn.Module):
         elif opt.time == 'lstm':
             self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
 
-        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='v', static=False)
+        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
 
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
 
@@ -283,7 +283,7 @@ class TransformerDecoder(nn.Module):
         elif opt.time == 'lstm':
             self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
 
-        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='v', static=False)
+        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
 
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
 

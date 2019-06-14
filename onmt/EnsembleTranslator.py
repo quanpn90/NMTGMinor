@@ -49,8 +49,8 @@ class EnsembleTranslator(object):
                 self.tgt_dict = checkpoint['dicts']['tgt']
                 self.atb_dict = checkpoint['dicts']['atb']
 
-                assert(self.bos_token in self.atb_dict.labelToIdx), "the start of sentence token must be in the atb dictionary"
-            
+                # assert(self.bos_token in self.atb_dict.labelToIdx), "the start of sentence token must be in the atb dictionary"
+
             # Build model from the saved option
             model, _ = build_model(model_opt, checkpoint['dicts'])
             
