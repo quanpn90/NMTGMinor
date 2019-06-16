@@ -1,23 +1,15 @@
 from __future__ import division
 
-import sys, tempfile, os
 import onmt
 import onmt.Markdown
 import onmt.modules
-import argparse
 import torch
-import torch.nn as nn
-from torch import cuda
-from torch.autograd import Variable
 import math
 import time, datetime
-import random 
-import numpy as np
-from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 from onmt.ModelConstructor import init_model_parameters
 from onmt.train_utils.trainer import BaseTrainer, XETrainer
-    
 
+    
 class DynamicLossScaler:
 
     def __init__(self, init_scale=2**7, scale_factor=2., scale_window=2000):
@@ -101,8 +93,10 @@ class FP16XETrainer(XETrainer):
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.Constants.PAD)
                 outputs['tgt_mask'] = tgt_mask
-                loss_dict = self.loss_function(outputs, targets, model=self.model,
-                                                                 backward=False)
+                loss_dict = self.loss_function(outputs, targets,
+                                               model=self.model,
+                                               backward=False)
+
                 loss_data = loss_dict['data']
                 
                 total_loss += loss_data
@@ -166,8 +160,10 @@ class FP16XETrainer(XETrainer):
                 # Scale UP the loss so that the gradients are not cutoff
                 normalizer = 1.0 / self.scaler.loss_scale
 
-                loss_dict = self.loss_function(outputs, targets, model=self.model,
-                                                                 backward=True, normalizer=normalizer)
+                loss_dict = self.loss_function(outputs, targets,
+                                               model=self.model,
+                                               backward=True,
+                                               normalizer=normalizer)
                 loss_data = loss_dict['data']
                 
             except RuntimeError as e:
@@ -243,7 +239,6 @@ class FP16XETrainer(XETrainer):
                             ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
                             
                             self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
-                
 
                 num_words = tgt_size
                 report_loss += loss_data
@@ -270,23 +265,19 @@ class FP16XETrainer(XETrainer):
                     report_loss, report_tgt_words = 0, 0
                     report_src_words = 0
                     start = time.time()
-            
-            
+
         return total_loss / total_words
-    
 
     def run(self, save_file=None):
         
         opt = self.opt
         model = self.model
-        optim = self.optim
-        
+
         # Try to load the save_file
         checkpoint = None
         if save_file:
             checkpoint = torch.load(save_file)
-        
-        
+
         if checkpoint is not None:
             print('Loading model and optim from checkpoint at %s' % save_file)
             self.model.load_state_dict(checkpoint['model'])
@@ -301,13 +292,12 @@ class FP16XETrainer(XETrainer):
                     batch_order = None
                     iteration = 0
                 opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
-                resume=True  
+                resume = True
             else:
                 batch_order = None
                 iteration = 0
                 resume=False
-                
-            
+
             del checkpoint['model']
             del checkpoint['optim']
             del checkpoint
@@ -316,13 +306,11 @@ class FP16XETrainer(XETrainer):
             iteration = 0
             print('Initializing model parameters')
             init_model_parameters(model, opt)
-            resume=False
-        
-        
+            resume = False
+
         valid_loss = self.eval(self.valid_data)
         valid_ppl = math.exp(min(valid_loss, 100))
         print('Validation perplexity: %g' % valid_ppl)
-        #~ 
         self.start_time = time.time()
         
         for epoch in range(opt.start_epoch, opt.start_epoch + opt.epochs):
@@ -330,8 +318,8 @@ class FP16XETrainer(XETrainer):
 
             #  (1) train for one epoch on the training set
             train_loss = self.train_epoch(epoch, resume=resume,
-                                                 batch_order=batch_order,
-                                                 iteration=iteration)
+                                          batch_order=batch_order,
+                                          iteration=iteration)
             train_ppl = math.exp(min(train_loss, 100))
             print('Train perplexity: %g' % train_ppl)
 
@@ -339,14 +327,8 @@ class FP16XETrainer(XETrainer):
             valid_loss = self.eval(self.valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
             print('Validation perplexity: %g' % valid_ppl)
-            
-            
+
             self.save(epoch, valid_ppl)
             batch_order = None
             iteration = None
             resume = False
-        
-        
-    
-    
-    
