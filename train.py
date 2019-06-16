@@ -5,21 +5,16 @@ import onmt.Markdown
 import onmt.modules
 import argparse
 import torch
-import torch.nn as nn
-from torch import cuda
-from torch.autograd import Variable
-import math
 import time, datetime
 from onmt.train_utils.trainer import XETrainer
 from onmt.train_utils.fp16_trainer import FP16XETrainer
-from onmt.train_utils.multiGPUtrainer import MultiGPUXETrainer
 from onmt.modules.Loss import NMTLossFunc, NMTAndCTCLossFunc
-from onmt.ModelConstructor import build_model, init_model_parameters
+from onmt.ModelConstructor import build_model
+from options import make_parser
 
 parser = argparse.ArgumentParser(description='train.py')
 onmt.Markdown.add_md_help_argument(parser)
 
-from options import make_parser
 # Please look at the options file to see the options regarding models and data
 parser = make_parser(parser)
 
@@ -58,17 +53,17 @@ def main():
         print("Done after %s" % elapse )
 
         train_data = onmt.Dataset(dataset['train']['src'],
-                                 dataset['train']['tgt'], opt.batch_size_words,
-                                 data_type=dataset.get("type", "text"),
-                                 batch_size_sents=opt.batch_size_sents,
-                                 multiplier = opt.batch_size_multiplier,
-                                 reshape_speech=opt.reshape_speech,
-                                 augment=opt.augment_speech)
+                                  dataset['train']['tgt'], opt.batch_size_words,
+                                  data_type=dataset.get("type", "text"),
+                                  batch_size_sents=opt.batch_size_sents,
+                                  multiplier=opt.batch_size_multiplier,
+                                  reshape_speech=opt.reshape_speech,
+                                  augment=opt.augment_speech)
         valid_data = onmt.Dataset(dataset['valid']['src'],
-                                 dataset['valid']['tgt'], opt.batch_size_words,
-                                 data_type=dataset.get("type", "text"),
-                                 batch_size_sents=opt.batch_size_sents,
-                                 reshape_speech=opt.reshape_speech)
+                                  dataset['valid']['tgt'], opt.batch_size_words,
+                                  data_type=dataset.get("type", "text"),
+                                  batch_size_sents=opt.batch_size_sents,
+                                  reshape_speech=opt.reshape_speech)
 
         dicts = dataset['dicts']
         if "src" in dicts:
@@ -78,8 +73,7 @@ def main():
             print(' * vocabulary size. target = %d' %
             (dicts['tgt'].size()))
 
-        print(' * number of training sentences. %d' %
-          len(dataset['train']['src']))
+        print(' * number of training sentences. %d' % len(dataset['train']['src']))
         print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
 
     elif opt.data_format == 'bin':
@@ -88,25 +82,25 @@ def main():
 
         dicts = torch.load(opt.data + ".dict.pt")
 
-        #~ train = {}
         train_path = opt.data + '.train'
         train_src = IndexedInMemoryDataset(train_path + '.src')
         train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
 
         train_data = onmt.Dataset(train_src,
-                                 train_tgt, opt.batch_size_words,
-                                 data_type=opt.encoder_type,
-                                 batch_size_sents=opt.batch_size_sents,
-                                 multiplier = opt.batch_size_multiplier)
+                                  train_tgt,
+                                  opt.batch_size_words,
+                                  data_type=opt.encoder_type,
+                                  batch_size_sents=opt.batch_size_sents,
+                                  multiplier = opt.batch_size_multiplier)
 
         valid_path = opt.data + '.valid'
         valid_src = IndexedInMemoryDataset(valid_path + '.src')
         valid_tgt = IndexedInMemoryDataset(valid_path + '.tgt')
 
         valid_data = onmt.Dataset(valid_src,
-                                 valid_tgt, opt.batch_size_words,
-                                 data_type=opt.encoder_type,
-                                 batch_size_sents=opt.batch_size_sents)
+                                  valid_tgt, opt.batch_size_words,
+                                  data_type=opt.encoder_type,
+                                  batch_size_sents=opt.batch_size_sents)
 
     else:
         raise NotImplementedError
@@ -118,9 +112,12 @@ def main():
 
         """ Building the loss function """
         if opt.ctc_loss != 0:
-            loss_function = NMTAndCTCLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing,ctc_weight = opt.ctc_loss)
+            loss_function = NMTAndCTCLossFunc(dicts['tgt'].size(),
+                                              label_smoothing=opt.label_smoothing,
+                                              ctc_weight=opt.ctc_loss)
         else:
-            loss_function = NMTLossFunc(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+            loss_function = NMTLossFunc(dicts['tgt'].size(),
+                                        label_smoothing=opt.label_smoothing)
     else:
         from onmt.ModelConstructor import build_fusion
         from onmt.modules.Loss import FusionLoss
@@ -129,20 +126,19 @@ def main():
 
         loss_function = FusionLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
 
-
     n_params = sum([p.nelement() for p in model.parameters()])
     print('* number of parameters: %d' % n_params)
 
     if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
-            raise NotImplementedError("Warning! Multi-GPU training is not fully tested and potential bugs can happen.")
+        raise NotImplementedError("Warning! Multi-GPU training is not fully tested and potential bugs can happen.")
     else:
         if opt.fp16:
             trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
         else:
             trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
 
-    
     trainer.run(save_file=opt.load_from)
+
 
 if __name__ == "__main__":
     main()
