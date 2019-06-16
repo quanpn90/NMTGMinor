@@ -36,7 +36,6 @@ class DynamicLossScaler:
             self._last_overflow_iter = self._iter
         elif (self._iter - self._last_overflow_iter) % self.scale_window == 0:
             self.loss_scale *= self.scale_factor
-        
 
     @staticmethod
     def has_overflow(grad_norm):
@@ -49,20 +48,19 @@ class DynamicLossScaler:
 class FP16XETrainer(XETrainer):
 
     def __init__(self, model, loss_function, train_data, valid_data, dicts, opt):
-        super().__init__(model, loss_function, train_data, valid_data, dicts, opt)
+        super().__init__(model, loss_function, train_data, valid_data, dicts, opt, setup_optimizer=False)
         self.optim = onmt.Optim(opt)
         self.scaler = DynamicLossScaler(opt.fp16_loss_scale)
         self.fp16 = True
         
         if self.cuda:
-           torch.cuda.set_device(self.opt.gpus[0])
-           torch.manual_seed(self.opt.seed)
-           #~ print(torch.cuda.get_device_capability(0)[0])
-           
-           # Important:
-           # Loss function needs to be in fp32
-           self.loss_function = self.loss_function.cuda()
-           self.model = self.model.cuda().half()
+            torch.cuda.set_device(self.opt.gpus[0])
+            torch.manual_seed(self.opt.seed)
+            print("Cuda device compatibility: %.2f " % torch.cuda.get_device_capability(0)[0])
+            # Important:
+            # Loss function needs to be in fp32
+            self.loss_function = self.loss_function.cuda()
+            self.model = self.model.cuda().half()
            
         params = [p for p in self.model.parameters() if p.requires_grad]
         total_param_size = sum(p.data.numel() for p in params)
@@ -81,7 +79,6 @@ class FP16XETrainer(XETrainer):
         # we optimize on the fp32 params
         self.optim.set_parameters([self.fp32_params])
 
-        
     def eval(self, data):
         total_loss = 0
         total_words = 0
@@ -104,16 +101,6 @@ class FP16XETrainer(XETrainer):
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.Constants.PAD)
                 outputs['tgt_mask'] = tgt_mask
-                
-                # loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, backward=False)
-                # if self.opt.ctc_loss != 0:
-                #     _, loss_data, grad_outputs = self.loss_function(outputs, encoder, targets,
-                #                                                     generator=self.model.generator, backward=False,
-                #                                                     source_mask=src_mask, target_mask=tgt_mask)
-                # else:
-                #     _, loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator[0],
-                #                                                     backward=False, mask=tgt_mask)
-
                 loss_dict = self.loss_function(outputs, targets, model=self.model,
                                                                  backward=False)
                 loss_data = loss_dict['data']
@@ -149,14 +136,14 @@ class FP16XETrainer(XETrainer):
         report_loss, report_tgt_words = 0, 0
         report_src_words = 0
         start = time.time()
-        nSamples = len(train_data)
+        n_samples = len(train_data)
         
         counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
         oom_count = 0
         
-        for i in range(iteration, nSamples):
+        for i in range(iteration, n_samples):
 
             curriculum = (epoch < opt.curriculum)
             
@@ -179,21 +166,13 @@ class FP16XETrainer(XETrainer):
                 # Scale UP the loss so that the gradients are not cutoff
                 normalizer = 1.0 / self.scaler.loss_scale
 
-                # if self.opt.ctc_loss != 0:
-                #
-                #     _, loss_data, grad_outputs = self.loss_function(outputs, encoder, targets,
-                #                                                     generator=self.model.generator, backward=True,
-                #                                                     source_mask=src_mask, target_mask=tgt_mask, normalizer=normalizer)
-                # else:
-                #     _, loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator[0],
-                #                                                     backward=True, mask=tgt_mask, normalizer=normalizer)
                 loss_dict = self.loss_function(outputs, targets, model=self.model,
                                                                  backward=True, normalizer=normalizer)
                 loss_data = loss_dict['data']
                 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
-                    #~ print('| WARNING: ran out of memory on GPU , skipping batch')
+                    # print('| WARNING: ran out of memory on GPU , skipping batch')
                     oom = True
                     torch.cuda.empty_cache()
                     oom_count += 1
@@ -222,8 +201,7 @@ class FP16XETrainer(XETrainer):
                     self.fp32_params.grad.data.div_(normalizer)
 
                     grad_norm = torch.norm(self.fp32_params.grad.data).item()
-                    
-                    
+
                     overflow = DynamicLossScaler.has_overflow(grad_norm)
                     self.scaler.update_scale(overflow)
                     
@@ -262,7 +240,7 @@ class FP16XETrainer(XETrainer):
                             valid_ppl = math.exp(min(valid_loss, 100))
                             print('Validation perplexity: %g' % valid_ppl)
                             
-                            ep = float(epoch) - 1. + ((float(i) + 1.) / nSamples)
+                            ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
                             
                             self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
                 

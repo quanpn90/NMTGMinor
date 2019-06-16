@@ -1,21 +1,11 @@
 from __future__ import division
 
-import sys, tempfile
 import onmt
-import onmt.Markdown
-import onmt.modules
-import argparse
 import torch
-import torch.nn as nn
-from torch import cuda
-from torch.autograd import Variable
 import math
 import time, datetime
-import random 
-import numpy as np
 from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 from onmt.train_utils.trainer import BaseTrainer
-from onmt.utils import torch_persistent_save
 from onmt.ModelConstructor import init_model_parameters
 
 
