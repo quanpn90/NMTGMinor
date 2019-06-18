@@ -315,8 +315,6 @@ class TransformerDecoder(nn.Module):
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
-        print(mask_tgt)
-
         output = emb.contiguous()
 
         for i, layer in enumerate(self.layer_modules):
