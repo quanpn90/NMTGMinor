@@ -137,7 +137,7 @@ class Dataset(object):
     def __init__(self, src_data, tgt_data, batch_size_words,
                  data_type="text", batch_size_sents=128,
                  multiplier=1, sort_by_target=False,
-                 reshape_speech=4, augment=False):
+                 reshape_speech=0, augment=False):
         self.src = src_data
         self._type = data_type
         self.reshape_speech = reshape_speech
