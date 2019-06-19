@@ -342,6 +342,9 @@ class Transformer(NMTModel):
         super().__init__( encoder, decoder, generator)
         self.model_size = self.decoder.model_size
 
+    def reset_states(self):
+        return
+
     def forward(self, batch):
         """
         Inputs Shapes: 

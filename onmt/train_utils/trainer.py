@@ -122,13 +122,14 @@ class XETrainer(BaseTrainer):
                 
         batch_order = data.create_order(random=False)
         self.model.eval()
+        self.model.reset_states()
         """ PyTorch semantics: save space by not creating gradients """
         with torch.no_grad():
             for i in range(len(data)):
 
                 batch = data.next()[0]
 
-                if(self.cuda):
+                if self.cuda:
                     batch.cuda()
                 
                 """ outputs can be either 
@@ -159,6 +160,7 @@ class XETrainer(BaseTrainer):
         # Clear the gradients of the model
         # self.runner.zero_grad()
         self.model.zero_grad()
+        self.model.reset_states()
 
         if opt.extra_shuffle and epoch > opt.curriculum:
             train_data.shuffle()
@@ -188,7 +190,7 @@ class XETrainer(BaseTrainer):
             curriculum = (epoch < opt.curriculum)
 
             batch = train_data.next(curriculum=curriculum)[0]
-            if(self.cuda):
+            if self.cuda:
                 batch.cuda()
             
             oom = False
