@@ -50,6 +50,11 @@ class LSTMLMDecoder(nn.Module):
 
         self.rnn = nn.LSTM(self.model_size, self.model_size, num_layers=3, dropout=self.dropout)
 
+        self.postprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
+
+        self.h = None
+        self.c = None
+
     def renew_buffer(self, new_len):
 
         return
@@ -66,11 +71,21 @@ class LSTMLMDecoder(nn.Module):
 
         emb = self.preprocess_layer(emb)
 
-        output, (h, c) = self.rnn(emb)
+        if self.h is None:
+            lstm_mem = None
+        else:
+            lstm_mem = (self.h.detach(), self.c.detach())
+
+        output, (h, c) = self.rnn(emb, lstm_mem)
+
+        output = self.postprocess_layer(output)
 
         output_dict = defaultdict(lambda: None)
         output_dict['hidden'] = output
         output_dict['lstm_mem'] = (h, c)
+
+        self.h = h
+        self.c = c
 
         return output_dict
 
@@ -168,6 +183,11 @@ class LSTMLM(NMTModel):
         output_dict['hidden'] = decoder_output['hidden']
 
         return output_dict
+
+    def reset_states(self):
+
+        self.decoder.h = None
+        self.decoder.c = None
 
     def step(self, input_t, decoder_state):
         """
