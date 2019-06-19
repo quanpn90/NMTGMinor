@@ -15,6 +15,7 @@ from onmt.train_utils.fp16_trainer import FP16XETrainer
 from onmt.train_utils.multiGPUtrainer import MultiGPUXETrainer
 from onmt.modules.Loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.ModelConstructor import build_language_model
+from onmt.Dataset import LanguageModelDataset
 
 parser = argparse.ArgumentParser(description='train.py')
 onmt.Markdown.add_md_help_argument(parser)
@@ -54,16 +55,14 @@ def main():
         print("Done after %s" % elapse )
 
 
-        train_data = onmt.Dataset(dataset['train']['src'],
-                                 dataset['train']['tgt'], opt.batch_size_words,
-                                 data_type=dataset.get("type", "text"),
+        train_data = LanguageModelDataset(
+                                 dataset['train']['tgt'],
                                  batch_size_sents=opt.batch_size_sents,
-                                 multiplier = opt.batch_size_multiplier,
-                                 sort_by_target=opt.sort_by_target)
-        valid_data = onmt.Dataset(dataset['valid']['src'],
-                                 dataset['valid']['tgt'], opt.batch_size_words,
-                                 data_type=dataset.get("type", "text"),
-                                 batch_size_sents=opt.batch_size_sents)
+                                 seq_length=opt.lm_seq_length)
+        valid_data = LanguageModelDataset(
+                                 dataset['valid']['tgt'],
+                                 batch_size_sents=opt.batch_size_sents,
+                                 seq_length=opt.lm_seq_length)
 
         dicts = dataset['dicts']
         if "src" in dicts:
@@ -82,7 +81,8 @@ def main():
 
     print('Building model...')
     model = build_language_model(opt, dicts)
-    
+
+    print(model)
     
     """ Building the loss function """
 
@@ -92,12 +92,12 @@ def main():
     print('* number of parameters: %d' % n_params)
     
     if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
-        raise NotImplementedError("Warning! Multi-GPU training is not fully tested and potential bugs can happen.")
+        raise NotImplementedError("Multi-GPU training is not supported ATM.")
     else:
-        if opt.fp16:
-            trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
-        else:
-            trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
+        # if opt.fp16:
+        #     trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
+        # else:
+        trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
 
     
     trainer.run(save_file=opt.load_from)
