@@ -24,13 +24,11 @@ class LSTMLMDecoder(nn.Module):
     Args:
         opt
         dicts
-
-
     """
 
     def __init__(self, opt, dicts):
 
-        super(TransformerLMDecoder, self).__init__()
+        super().__init__()
 
         self.model_size = opt.model_size
         self.n_heads = opt.n_heads
@@ -42,11 +40,6 @@ class LSTMLMDecoder(nn.Module):
         self.emb_dropout = opt.emb_dropout
         self.time = opt.time
         self.encoder_type = opt.encoder_type
-
-        if opt.time == 'positional_encoding':
-            self.time_transformer = positional_encoder
-        else:
-            raise NotImplementedError
 
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
 
@@ -64,17 +57,10 @@ class LSTMLMDecoder(nn.Module):
     def forward(self, input,  **kwargs):
         """
         Inputs Shapes:
-            input: (Variable) batch_size x len_tgt (wanna tranpose)
-            context: (Variable) batch_size x len_src x d_model
-            mask_src (Tensor) batch_size x len_src
+            input: (Variable)  len_tgt x batch_size
         Outputs Shapes:
-            out: batch_size x len_tgt x d_model
-            coverage: batch_size x len_tgt x len_src
-
+            out: len_tgt x batch_size x  d_model
         """
-
-        """ Embedding: batch_size x len_tgt x d_model """
-
 
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
 
@@ -82,7 +68,9 @@ class LSTMLMDecoder(nn.Module):
 
         output, (h, c) = self.rnn(emb)
 
-        output_dict = { 'hidden': output, 'coverage': None }
+        output_dict = defaultdict(lambda: None)
+        output_dict['hidden'] = output
+        output_dict['lstm_mem'] = (h, c)
 
         return output_dict
 
@@ -171,8 +159,8 @@ class LSTMLM(NMTModel):
 
         """
         # we only need target for language model
-        tgt = batch.get('target_input')
-        tgt_out = batch.get('target_output')
+        tgt = batch.get('target_input') # T x B
+        tgt_out = batch.get('target_output') # T x B
 
         decoder_output = self.decoder(tgt)
 

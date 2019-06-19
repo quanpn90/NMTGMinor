@@ -222,14 +222,17 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
     print('Processing %s ...' % (tgt_file))
     tgtf = open(tgt_file)
 
+    eos = torch.LongTensor(1).fill_(onmt.Constants.EOS)
+    # print(eos.size())
+    tensors = [eos]
+
+    # find the number of words in the sentence
     while True:
         tline = tgtf.readline()
 
         # normal end of file
         if tline == "": break
-
         tline = tline.strip()
-
         # source and/or target are empty
         if tline == "":
             print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
@@ -240,41 +243,24 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
         elif input_type == 'char':
             tgt_words = split_line_by_char(tline)
 
-        if len(tgt_words) <= max_tgt_length - 2:
+        tensor = tgt_dicts.convertToIdx(tgt_words,
+                                         onmt.Constants.UNK_WORD,
+                                         None,
+                                         onmt.Constants.EOS_WORD)
+        # print(tensor.size())
+        tensors.append(tensor)
 
-            if opt.tgt_seq_length_trunc != 0:
-                tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
-
-            tgt += [tgt_dicts.convertToIdx(tgt_words,
-                                          onmt.Constants.UNK_WORD,
-                                          onmt.Constants.BOS_WORD,
-                                          onmt.Constants.EOS_WORD)]
-            sizes += [len(tgt_words)]
-        else:
-            ignored += 1
-
-        count += 1
+        count = count + 1
 
         if count % opt.report_every == 0:
             print('... %d sentences prepared' % count)
 
     tgtf.close()
 
-    if opt.shuffle == 1:
-        print('... shuffling sentences')
-        perm = torch.randperm(len(tgt))
-        tgt = [tgt[idx] for idx in perm]
-        sizes = [sizes[idx] for idx in perm]
+    # concatenate all tensors into one
+    tensor = torch.cat(tensors, dim=-1)
 
-    print('... sorting sentences by size')
-    _, perm = torch.sort(torch.Tensor(sizes), descending=(opt.sort_type == 'descending'))
-    tgt = [tgt[idx] for idx in perm]
-
-    print(('Prepared %d sentences ' +
-           '(%d ignored due to length == 0 or tgt len > %d)') %
-          (len(tgt), ignored, max_tgt_length))
-
-    return tgt
+    return tensor
 
 def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_length=64, max_tgt_length=64, sort_by_target=False,
              input_type='word'):
@@ -545,16 +531,12 @@ def main():
         print('Preparing training language model ...')
         train = dict()
         train['tgt'] = make_lm_data( opt.train_tgt,
-                                     dicts['tgt'],
-                                     max_tgt_length=opt.tgt_seq_length,
-                                     input_type=opt.input_type)
+                                     dicts['tgt'])
         train['src'] = None
 
         valid = dict()
         valid['tgt'] = make_lm_data(opt.valid_tgt,
-                                   dicts['tgt'],
-                                   max_tgt_length=max(1024, opt.tgt_seq_length),
-                                   input_type=opt.input_type)
+                                   dicts['tgt'])
         valid['src'] = None
 
     elif opt.asr:

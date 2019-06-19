@@ -164,15 +164,23 @@ def build_language_model(opt, dicts):
     onmt.Constants.attention_out = opt.attention_out
     onmt.Constants.residual_type = opt.residual_type
 
-    from onmt.modules.TransformerLM.Models import TransformerLM, TransformerLMDecoder
+    # from onmt.modules.TransformerLM.Models import TransformerLM, TransformerLMDecoder
+    #
+    # positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
+    #
+    # decoder = TransformerLMDecoder(opt, dicts['tgt'], positional_encoder)
+    #
+    #
+    #
+    # model = TransformerLM(None, decoder, )
 
-    positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
+    from onmt.modules.LSTMLM.Models import LSTMLMDecoder, LSTMLM
 
-    decoder = TransformerLMDecoder(opt, dicts['tgt'], positional_encoder)
+    decoder = LSTMLMDecoder(opt, dicts['tgt'])
 
     generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
 
-    model = TransformerLM(None, decoder, nn.ModuleList(generators))
+    model = LSTMLM(None, decoder, nn.ModuleList(generators))
 
     if opt.tie_weights:
         print("Joining the weights of decoder input and output embeddings")
