@@ -53,25 +53,30 @@ torch.manual_seed(opt.seed)
 
 
 def main():
-    start = time.time()
-    print("Loading data from '%s'" % opt.data)
 
     if opt.data_format == 'raw':
-        dataset = torch.load(opt.data)
+        start = time.time()
+        print("Loading data from '%s'" % opt.data)
+
+        if opt.data.endswith(".train.pt"):
+            print("Loading data from '%s'" % opt.data)
+            dataset = torch.load(opt.data)
+        else:
+            print("Loading data from %s" % opt.data + ".train.pt")
+            dataset = torch.load(opt.data + ".train.pt")
+
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
         print("Done after %s" % elapse)
 
         trainData = onmt.Dataset(dataset['train']['src'],
-                                 dataset['train']['tgt'], opt.batch_size_words, opt.gpus,
+                                 dataset['train']['tgt'], opt.batch_size_words,
                                  data_type=dataset.get("type", "text"),
-                                 max_seq_num=opt.batch_size_sents,
-                                 pad_count=opt.pad_count,
-                                 multiplier=opt.batch_size_multiplier,
-                                 sort_by_target=opt.sort_by_target)
+                                 batch_size_sents=opt.batch_size_sents,
+                                 multiplier=opt.batch_size_multiplier)
         validData = onmt.Dataset(dataset['valid']['src'],
-                                 dataset['valid']['tgt'], opt.batch_size_words, opt.gpus,
+                                 dataset['valid']['tgt'], opt.batch_size_words,
                                  data_type=dataset.get("type", "text"),
-                                 max_seq_num=opt.batch_size_sents)
+                                 batch_size_sents=opt.batch_size_sents)
 
         dicts = dataset['dicts']
         if ("src" in dicts):
@@ -95,19 +100,17 @@ def main():
         train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
 
         trainData = onmt.Dataset(train_src,
-                                 train_tgt, opt.batch_size_words, opt.gpus,
-                                 max_seq_num=opt.batch_size_sents,
-                                 pad_count=opt.pad_count,
-                                 multiplier=opt.batch_size_multiplier,
-                                 sort_by_target=opt.sort_by_target)
+                                 train_tgt, opt.batch_size_words,
+                                 batch_size_sents=opt.batch_size_sents,
+                                 multiplier=opt.batch_size_multiplier)
 
         valid_path = opt.data + '.valid'
         valid_src = IndexedInMemoryDataset(valid_path + '.src')
         valid_tgt = IndexedInMemoryDataset(valid_path + '.tgt')
 
         validData = onmt.Dataset(valid_src,
-                                 valid_tgt, opt.batch_size_words, opt.gpus,
-                                 max_seq_num=opt.batch_size_sents)
+                                 valid_tgt, opt.batch_size_words,
+                                 batch_size_sents=opt.batch_size_sents)
 
     else:
         raise NotImplementedError

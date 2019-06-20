@@ -56,22 +56,35 @@ class Autoencoder(nn.Module):
         self.layers = layers
         print("Autoencoder:",self.model)
 
-    def forward(self,input):
+    def forward(self,batch):
 
-        src = input[0].transpose(0,1)
-        tgt = input[1][:-1].transpose(0, 1)
+        src = batch.get('source')
+        tgt = batch.get('target_input')
+
+        src = src.transpose(0, 1)  # transpose to have batch first
+        tgt = tgt.transpose(0, 1)
+
 
         if(self.representation == "EncoderHiddenState"):
             with torch.no_grad():
-                context, src_mask = self.nmt.encoder(src,grow=False)
+                encoder_output = self.nmt.encoder(src)
+                context = encoder_output['context']
+                src_mask = encoder_output['src_mask']
+
                 flattened_context = context.contiguous().view(-1, context.size(-1))
                 flattened_mask = src_mask.squeeze(1).transpose(0,1).contiguous().view(-1)
                 non_pad_indices = torch.nonzero(1-flattened_mask).squeeze(1)
                 clean_context = flattened_context.index_select(0, non_pad_indices)
         elif(self.representation == "DecoderHiddenState"):
             with torch.no_grad():
-                context, src_mask = self.nmt.encoder(src, grow=False)
-                output, coverage = self.nmt.decoder(tgt, context, src, grow=False)
+
+                encoder_output = self.nmt.encoder(src)
+                context = encoder_output['context']
+
+                decoder_output = self.nmt.decoder(tgt, context, src)
+                output = decoder_output['hidden']
+
+
                 tgt_mask = tgt.data.eq(onmt.Constants.PAD).unsqueeze(1)
                 tgt_mask2 = tgt.data.eq(onmt.Constants.EOS).unsqueeze(1)
                 tgt_mask = tgt_mask + tgt_mask2
@@ -81,8 +94,14 @@ class Autoencoder(nn.Module):
                 clean_context = flattened_output.index_select(0, non_pad_indices)
         elif(self.representation == "Probabilities"):
             with torch.no_grad():
-                context, src_mask = self.nmt.encoder(src, grow=False)
-                output, coverage = self.nmt.decoder(tgt, context, src, grow=False)
+
+                encoder_output = self.nmt.encoder(src)
+                context = encoder_output['context']
+
+                decoder_output = self.nmt.decoder(tgt, context, src)
+                output = decoder_output['hidden']
+
+
                 tgt_mask = tgt.data.eq(onmt.Constants.PAD).unsqueeze(1)
                 tgt_mask2 = tgt.data.eq(onmt.Constants.EOS).unsqueeze(1)
                 tgt_mask = tgt_mask + tgt_mask2
