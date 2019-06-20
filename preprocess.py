@@ -75,6 +75,8 @@ parser.add_argument('-shuffle',    type=int, default=1,
                     
 parser.add_argument('-asr',    action='store_true',
                     help="prepare data for asr task")
+parser.add_argument('-asr_format', default="h5",
+                    help="Format of asr data h5 or scp")
 parser.add_argument('-lm',    action='store_true',
                     help="prepare data for LM task")
 parser.add_argument('-fp16',    action='store_true',
@@ -358,7 +360,7 @@ def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_lengt
 
 
 def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_length=64,
-                  input_type='word', stride=1, concat=1, prev_context = 0, fp16=False, reshape=True):
+                  input_type='word', stride=1, concat=1, prev_context = 0, fp16=False, reshape=True,asr_format="h5"):
     src, tgt = [], []
     # sizes = []
     src_sizes = []
@@ -369,13 +371,19 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
     print('Processing %s & %s ...' % (src_file, tgt_file))
 
 
-    fileIdx = -1;
-    if(srcFile[-2:] == "h5"):
-        srcF = h5.File(srcFile,'r')
-    else:
-        fileIdx = 0
-        srcF = h5.File(srcFile+"."+str(fileIdx)+".h5",'r')
-    tgtF = open(tgtFile)
+    if(asr_format == "h5"):
+        fileIdx = -1;
+        if(src_file[-2:] == "h5"):
+            srcf = h5.File(src_file,'r')
+        else:
+            fileIdx = 0
+            srcf = h5.File(src_file+"."+str(fileIdx)+".h5",'r')
+    elif(asr_format == "scp"):
+        import kaldiio
+        from kaldiio import ReadHelper
+        audio_data =  iter(ReadHelper('scp:'+src_file))
+    
+    tgtf = open(tgt_file)
 
     index = 0
 
@@ -388,16 +396,19 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
         if tline == "":
             break
 
-        if(str(index) in srcF):
-            featureVectors = np.array(srcF[str(index)])
-        elif(fileIdx != -1):
-            srcF.close()
-            fileIdx += 1
-            srcF = h5.File(srcFile+"."+str(fileIdx)+".h5",'r')
-            featureVectors = np.array(srcF[str(index)])
-        else:
-            print("No feature vector for index:",index,file=sys.stderr)
-            exit(-1)
+        if(asr_format == "h5" ):
+            if(str(index) in srcf):
+                featureVectors = np.array(srcf[str(index)])
+            elif(fileIdx != -1):
+                srcf.close()
+                fileIdx += 1
+                srcf = h5.File(src_file+"."+str(fileIdx)+".h5",'r')
+                featureVectors = np.array(srcf[str(index)])
+            else:
+                print("No feature vector for index:",index,file=sys.stderr)
+                exit(-1)
+        elif(asr_format == "scp"):
+            _,featureVectors = next(audio_data)
 
         if(stride == 1):
             sline = torch.from_numpy(featureVectors)
@@ -471,8 +482,8 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
 
         if count % opt.report_every == 0:
             print('... %d sentences prepared' % count)
-
-    srcf.close()
+    if (asr_format == "h5"):
+        srcf.close()
     tgtf.close()
 
     print('Total number of unk words: %d' % n_unk_words)
@@ -549,7 +560,7 @@ def main():
                                                  input_type=opt.input_type,
                                                  stride=opt.stride,concat=opt.concat,
                                                    prev_context=opt.previous_context,
-                                                   fp16=opt.fp16,reshape=(opt.reshape_speech==1))
+                                                   fp16=opt.fp16,reshape=(opt.reshape_speech==1),asr_format=opt.asr_format)
 
         print('Preparing validation ...')
         valid = dict()
@@ -560,7 +571,7 @@ def main():
                                                  input_type=opt.input_type,
                                                  stride=opt.stride,concat=opt.concat,
                                                    prev_context=opt.previous_context,
-                                                   fp16=opt.fp16,reshape=(opt.reshape_speech==1))
+                                                   fp16=opt.fp16,reshape=(opt.reshape_speech==1),asr_format=opt.asr_format)
 
     else:
         print('Preparing training translation model...')

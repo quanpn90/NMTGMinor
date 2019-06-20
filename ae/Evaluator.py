@@ -219,8 +219,8 @@ class Evaluator(object):
 
 
         return onmt.Dataset(srcData, tgtData, 9999,
-                            [self.opt.gpu], data_type=self._type,
-                            max_seq_num=self.opt.batch_size)
+                            data_type=self._type,
+                            batch_size_sents=self.opt.batch_size)
 
     def buildASRData(self, srcData, goldBatch):
         # This needs to be the same as preprocess.py.
@@ -242,27 +242,25 @@ class Evaluator(object):
 
         return tokens
 
-    def evalBatch(self, srcBatch, tgtBatch):
+    def evalBatch(self, batch):
 
         torch.set_grad_enabled(False)
         # Batch size is in different location depending on data.
 
-        batchSize = self._getBatchSize(srcBatch)
 
-
-        state, prediction = self.autoencoder((srcBatch,tgtBatch))
+        state, prediction = self.autoencoder(batch)
 
         return state,prediction
 
     def eval(self, srcBatch, goldBatch):
         #  (1) convert words to indexes
         dataset = self.buildData(srcBatch, goldBatch)
-        batch = self.to_variable(dataset.next()[0])
-        src, tgt = batch
-        batchSize = self._getBatchSize(src)
+        batch = dataset.next()[0]
+        if self.cuda:
+            batch.cuda()
 
         #  (2) eval
-        state,prediction = self.evalBatch(src, tgt)
+        state,prediction = self.evalBatch(batch)
 
         #  (3) convert indexes to words
         return self.calcDistance(state,prediction)
