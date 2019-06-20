@@ -1,23 +1,15 @@
 from __future__ import division
 
-import sys, tempfile
 import onmt
 import onmt.Markdown
 import onmt.modules
-import argparse
 import torch
-import torch.nn as nn
-from torch import cuda
 from torch.autograd import Variable
 import math
 import time, datetime
 import os
-import random 
-import numpy as np
-from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 from onmt.ModelConstructor import init_model_parameters
 from onmt.utils import checkpoint_paths
-
 
 
 class BaseTrainer(object):
@@ -51,7 +43,6 @@ class BaseTrainer(object):
                 data[i] = Variable(data[i])
 
         return data
-            
 
     def _get_grads(self):
         grads = []
@@ -81,17 +72,18 @@ class BaseTrainer(object):
 
 class XETrainer(BaseTrainer):
 
-    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt):
+    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt, setup_optimizer=True):
         super().__init__(model, loss_function, train_data, valid_data, dicts, opt)
-        self.optim = onmt.Optim(opt)
-        
+
         if self.cuda:
-           torch.cuda.set_device(self.opt.gpus[0])
-           torch.manual_seed(self.opt.seed)
-           self.loss_function = self.loss_function.cuda()
-           self.model = self.model.cuda()
-        
-        self.optim.set_parameters(self.model.parameters())
+            torch.cuda.set_device(self.opt.gpus[0])
+            torch.manual_seed(self.opt.seed)
+            self.loss_function = self.loss_function.cuda()
+            self.model = self.model.cuda()
+
+        if setup_optimizer:
+            self.optim = onmt.Optim(opt)
+            self.optim.set_parameters(self.model.parameters())
 
     def save(self, epoch, valid_ppl, batch_order=None, iteration=-1):
         
@@ -113,7 +105,7 @@ class XETrainer(BaseTrainer):
                 'optim': optim_state_dict
         }
         
-        file_name = '%s_ppl_%.2f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
+        file_name = '%s_ppl_%.6f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
         print('Writing to %s' % file_name)
         torch.save(checkpoint, file_name)
         

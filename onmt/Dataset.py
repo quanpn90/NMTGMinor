@@ -6,6 +6,7 @@ from collections import defaultdict
 import onmt
 from onmt.speech.Augmenter import Augmenter
 
+
 class Batch(object):
     # An object to manage the data within a minibatch
     def __init__(self, src_data, tgt_data=None,
@@ -29,7 +30,6 @@ class Batch(object):
             self.src_size = sum(self.src_lengths)
         else:
             self.src_size = 0
-
 
         if tgt_data is not None:
             target_full, self.tgt_lengths = self.collate(tgt_data, align_right=tgt_align_right)
@@ -88,7 +88,7 @@ class Batch(object):
 
             def find_length(x, concat):
 
-                add = ( concat - x.size(0) % concat ) % concat
+                add = (concat - x.size(0) % concat) % concat
 
                 return int((x.size(0) + add) / concat)
 
@@ -132,11 +132,12 @@ class Batch(object):
                 self.tensors[key] = tensor.half()
             self.tensors[key] = self.tensors[key].cuda()
 
+
 class Dataset(object):
     def __init__(self, src_data, tgt_data, batch_size_words,
-                 data_type="text", balance=False, batch_size_sents=128,
+                 data_type="text", batch_size_sents=128,
                  multiplier=1, sort_by_target=False,
-                 reshape_speech=4, augment=False):
+                 reshape_speech=0, augment=False):
         self.src = src_data
         self._type = data_type
         self.reshape_speech = reshape_speech
@@ -150,14 +151,12 @@ class Dataset(object):
         self.fullSize = len(self.src) if self.src is not None else len(self.tgt)
         self.batch_size_words = batch_size_words
 
-        self.balance = balance
-        self.batch_size_sents = batch_size_sents 
+        self.batch_size_sents = batch_size_sents
         
         self.multiplier = multiplier
         self.sort_by_target = sort_by_target
 
         self.pad_count = True
-        # if self.balance:
         self.allocate_batch()
         self.cur_index = 0
         self.batchOrder = None
@@ -181,20 +180,24 @@ class Dataset(object):
         self.batches = []
         cur_batch = []
         cur_batch_size = 0
-        cur_batch_sizes = [0]
+        cur_batch_sizes = []
         
-        def oversize_(cur_batch):
+        def oversize_(cur_batch, sent_size):
 
-            if len(cur_batch) == self.batch_size_sents:
-                    return True
+            if len(cur_batch) >= self.batch_size_sents:
+                return True
 
             if not self.pad_count:
-                if cur_batch_size + sentence_length > self.batch_size_words:
+                if cur_batch_size + sent_size > self.batch_size_words:
                     return True
             else:
-                if (max(max(cur_batch_sizes), sentence_length)) * (len(cur_batch)+1) > self.batch_size_words:
+                if len(cur_batch_sizes) == 0:
+                    return False
+
+                if (max(max(cur_batch_sizes), sent_size)) * (len(cur_batch)+1) > self.batch_size_words:
                     return True
             return False
+
 
         i = 0
         while i < self.fullSize:
@@ -206,23 +209,22 @@ class Dataset(object):
             else:
                 sentence_length = self.src[i].size(0)
 
-            oversized = oversize_(cur_batch)
+            oversized = oversize_(cur_batch, sentence_length)
             # if the current item makes the batch exceed max size
             # then we create a new batch
             if oversized:
-
                 # cut-off the current list to fit the multiplier
                 current_size = len(cur_batch)
                 scaled_size = max(
                     self.multiplier * (current_size // self.multiplier),
                     current_size % self.multiplier)
 
-                batch_ =  cur_batch[:scaled_size]
-                self.batches.append(batch_) # add this batch into the batch list
+                batch_ = cur_batch[:scaled_size]
+                self.batches.append(batch_)  # add this batch into the batch list
 
-                cur_batch = cur_batch[scaled_size:] # reset the current batch
-                cur_batch_sizes = cur_batch_sizes[:-scaled_size]
-                cur_batch_size  = sum(cur_batch_sizes)
+                cur_batch = cur_batch[scaled_size:]  # reset the current batch
+                cur_batch_sizes = cur_batch_sizes[scaled_size:]
+                cur_batch_size = sum(cur_batch_sizes)
 
             cur_batch.append(i)
             cur_batch_size += sentence_length
@@ -275,11 +277,12 @@ class Dataset(object):
     # return the next batch according to the iterator
     def next(self, curriculum=False, reset=True, split_sizes=1):
 
-         # reset iterator if reach data size limit
+        # reset iterator if reach data size limit
         if self.cur_index >= self.num_batches:
             if reset:
                 self.cur_index = 0
-            else: return None
+            else:
+                return None
 
         if curriculum or self.batchOrder is None:
             batch_index = self.cur_index

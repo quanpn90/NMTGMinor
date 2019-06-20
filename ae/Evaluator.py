@@ -247,9 +247,10 @@ class Evaluator(object):
         torch.set_grad_enabled(False)
         # Batch size is in different location depending on data.
 
-
-        state, prediction = self.autoencoder(batch)
-
+        if(self.autoencoder.representation == "EncoderDecoderHiddenState"):
+            state,prediction = self.autoencoder.calcAlignment(batch)
+        else:
+            state, prediction = self.autoencoder(batch)
         return state,prediction
 
     def eval(self, srcBatch, goldBatch):
@@ -283,7 +284,14 @@ class Evaluator(object):
 
     def calcDistance(self,state,prediction):
 
-        loss = state - prediction
-        loss = loss.mul(loss)
-        loss = loss.sum(1)
+        if(self.autoencoder.representation == "EncoderDecoderHiddenState"):
+            state = state.unsqueeze(0).expand(prediction.size(0),-1,-1,-1)
+            prediction = prediction.unsqueeze(1).expand(-1,state.size(1),-1,-1)
+            loss = state - prediction
+            loss = loss.mul(loss)
+            loss = loss.sum(-1)
+        else:
+            loss = state - prediction
+            loss = loss.mul(loss)
+            loss = loss.sum(1)
         return loss
