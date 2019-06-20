@@ -11,12 +11,10 @@ import numpy
 class CrossEntropyLossBase(_Loss):
 
     """
-    Class for managing efficient loss computation. Handles
-    sharding next step predictions and accumulating mutiple
+    Class for managing efficient loss computation.
     loss computations
     Users can implement their own loss computation strategy by making
-    subclass of this one.  Users need to implement the _compute_loss()
-    and make_shard_state() methods.
+    subclass of this one.
     Args:
         output_size: number of words in vocabulary()
     """
@@ -73,37 +71,40 @@ class NMTLossFunc(CrossEntropyLossBase):
         """
 
         outputs = model_outputs['hidden']
+        logprobs = model_outputs['logprobs']
         # original_outputs = hiddens
         # batch_size = outputs.size(1)
         # h_size = outputs.size(-1)
         
         # flatten the output
-        outputs = outputs.contiguous().view(-1, outputs.size(-1))
+        # outputs = outputs.contiguous().view(-1, outputs.size(-1))
         targets = targets.view(-1)
+        logprobs = logprobs.contiguous().view(-1, logprobs.size(-1))
 
         mask = model_outputs['tgt_mask']
 
-        if mask is not None:
-            """ We remove all positions with PAD """
-            flattened_mask = mask.view(-1)
+        #
+        # if mask is not None:
+        #     """ We remove all positions with PAD """
+        #     flattened_mask = mask.view(-1)
+        #
+        #     non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
+        #
+        #     clean_input = outputs.index_select(0, non_pad_indices)
+        #
+        #     clean_targets = targets.index_select(0, non_pad_indices)
+        #
+        # else:
+        #     clean_input = outputs
+        #     clean_targets = targets
 
-            non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
+        # if model is not None:
+        #     # the 'first' generator is the decoder softmax one
+        #     dists = model.generator[0](clean_input)
+        # else:
+        #     dists = clean_input
 
-            clean_input = outputs.index_select(0, non_pad_indices)
-
-            clean_targets = targets.index_select(0, non_pad_indices)
-
-        else:
-            clean_input = outputs
-            clean_targets = targets
-
-        if model is not None:
-            # the 'first' generator is the decoder softmax one
-            dists = model.generator[0](clean_input)
-        else:
-            dists = clean_input
-
-        loss, loss_data = self._compute_loss(dists, clean_targets)
+        loss, loss_data = self._compute_loss(logprobs, targets)
 
         if backward:
             loss.div(normalizer).backward()
@@ -119,11 +120,9 @@ class CTCLossFunc(_Loss):
     Standard NMT Loss Computation.
     """
 
-    def __init__(self, output_size, label_smoothing=0.0, shard_size=1):
+    def __init__(self, output_size, label_smoothing=0.0):
         super(CTCLossFunc, self).__init__(output_size)
-        self.shard_split = shard_size
         self.ctc = nn.CTCLoss(output_size-1, reduction='sum')
-
 
     def forward(self, model_outputs, targets, model=None, backward=False, normalizer=1, **kwargs):
         """

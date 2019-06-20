@@ -11,7 +11,9 @@ def make_parser(parser):
     parser.add_argument('-sort_by_target', action='store_true',
                         help='Training data sorted by target')                    
     parser.add_argument('-pad_count', action='store_true',
-                        help='Training data sorted by target')                    
+                        help='Batch size counting pads or not')
+    parser.add_argument('-patch_vocab_multiplier', type=int, default=1,
+                        help='Pad vocab so that the size divides by this multiplier')
     parser.add_argument('-save_model', default='model',
                         help="""Model filename (the model will be saved as
                         <save_model>_epochN_PPL.pt where PPL is the

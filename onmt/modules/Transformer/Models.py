@@ -373,6 +373,9 @@ class Transformer(NMTModel):
         output_dict['encoder'] = context
         output_dict['src_mask'] = encoder_output['src_mask']
 
+        logprobs = self.generator[0](output)
+        output_dict['logprobs'] = logprobs
+
         return output_dict
 
     def decode(self, batch):

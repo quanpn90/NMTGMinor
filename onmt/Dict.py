@@ -1,6 +1,6 @@
 import torch
-import re
-
+import math
+import random, string
 
 class Dict(object):
     def __init__(self, data=None, lower=False):
@@ -153,3 +153,33 @@ class Dict(object):
                 break
 
         return labels
+
+    # Adding crap stuff so that the vocab size divides by the multiplier
+    # Help computation with tensor cores
+    # This may create bad effect with label smoothing
+    # But who knows?
+    def patch(self, multiplier=8):
+
+        # self.idxToLabel = {}
+        # self.labelToIdx = {}
+        # self.frequencies = {}
+        size = self.size()
+
+        # number of words to be patched
+        n_words = (math.ceil(size / multiplier) * multiplier) - size
+
+        for i in range(n_words):
+
+            while True:
+                l_ = 6
+                random_string = ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(l_))
+
+                if random_string in self.labelToIdx:
+                    continue
+                else:
+                    self.add(random_string)
+                    self.frequencies[random_string] = 0
+                    break
+
+        print("Vocabulary size after patching: %d" % self.size())
+
