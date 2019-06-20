@@ -315,7 +315,6 @@ class TransformerDecoder(nn.Module):
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
-        print(mask_tgt)
 
         output = emb.contiguous()
 
@@ -410,7 +409,7 @@ class Transformer(NMTModel):
             output = self.autoencoder.autocode(output)
 
         for dec_t, tgt_t in zip(output, tgt_output):
-            gen_t = self.generator(dec_t)
+            gen_t = self.generator[0](dec_t)
             tgt_t = tgt_t.unsqueeze(1)
             scores = gen_t.gather(1, tgt_t)
             scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
