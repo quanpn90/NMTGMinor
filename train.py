@@ -105,6 +105,8 @@ def main():
     else:
         raise NotImplementedError
 
+    dicts['tgt'].patch(opt.patch_vocab_multiplier)
+
     print('Building model...')
 
     if not opt.fusion:
@@ -132,10 +134,10 @@ def main():
     if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
         raise NotImplementedError("Warning! Multi-GPU training is not fully tested and potential bugs can happen.")
     else:
-        if opt.fp16:
-            trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
-        else:
-            trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
+        # if opt.fp16:
+        #     trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
+        # else:
+        trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
 
     trainer.run(save_file=opt.load_from)
 

@@ -170,7 +170,6 @@ class Dataset(object):
         self.batches = []
         self.allocate_batch()
 
-
         self.cur_index = 0
         self.batchOrder = None
 
@@ -189,7 +188,6 @@ class Dataset(object):
 
     # This function allocates the mini-batches (grouping sentences with the same size)
     def allocate_batch(self):
-            
 
         cur_batch = []
         cur_batch_size = 0
@@ -210,7 +208,6 @@ class Dataset(object):
                 if (max(max(cur_batch_sizes), sent_size)) * (len(cur_batch)+1) > self.batch_size_words:
                     return True
             return False
-
 
         i = 0
         while i < self.fullSize:
@@ -345,7 +342,6 @@ class LanguageModelDataset(Dataset):
     def __init__(self, data, batch_size_sents=128, seq_length=128):
 
         self.data = data
-
 
         self.batch_size_sents = batch_size_sents
 

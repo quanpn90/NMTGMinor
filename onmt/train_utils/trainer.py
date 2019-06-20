@@ -10,6 +10,7 @@ import time, datetime
 import os
 from onmt.ModelConstructor import init_model_parameters
 from onmt.utils import checkpoint_paths
+import apex
 
 
 class BaseTrainer(object):
@@ -25,7 +26,7 @@ class BaseTrainer(object):
         
         self.loss_function = loss_function
         self.start_time = 0
-        
+
     def run(self, *args,**kwargs):
         
         raise NotImplementedError    
@@ -82,8 +83,18 @@ class XETrainer(BaseTrainer):
             self.model = self.model.cuda()
 
         if setup_optimizer:
+
             self.optim = onmt.Optim(opt)
             self.optim.set_parameters(self.model.parameters())
+
+            opt_level = "O0" if not self.opt.fp16 else "O2"
+            print("Optimization level: %s" % opt_level)
+            self.model, self.optim.optimizer = apex.amp.initialize(self.model, self.optim.optimizer, opt_level=opt_level,
+                                                                   keep_batchnorm_fp32=False, loss_scale="dynamic")
+            # if self.opt.fp16:
+            #     self.model, self.optim.optimizer = apex.amp.initialize(self.model, self.optim.optimizer, opt_level="O1")
+            # else:
+            #     self.optim.set_parameters(self.model.parameters())
 
     def save(self, epoch, valid_ppl, batch_order=None, iteration=-1):
         
@@ -130,7 +141,7 @@ class XETrainer(BaseTrainer):
                 batch = data.next()[0]
 
                 if self.cuda:
-                    batch.cuda()
+                    batch.cuda(fp16=self.opt.fp16)
                 
                 """ outputs can be either 
                         hidden states from decoder or
@@ -142,8 +153,8 @@ class XETrainer(BaseTrainer):
                 tgt_mask = targets.ne(onmt.Constants.PAD)
                 outputs['tgt_mask'] = tgt_mask
 
-                loss_dict = self.loss_function(outputs, targets, model=self.model,
-                                               backward=False)
+                loss_dict = self.loss_function(outputs, targets, model=self.model)
+
                 loss_data = loss_dict['data']
 
                 total_loss += loss_data
@@ -191,11 +202,10 @@ class XETrainer(BaseTrainer):
 
             batch = train_data.next(curriculum=curriculum)[0]
             if self.cuda:
-                batch.cuda()
+                batch.cuda(fp16=self.opt.fp16)
             
             oom = False
             try:
-
                 # outputs is a dictionary containing keys/values necessary for loss function
                 # can be flexibly controlled within models for easier extensibility
                 outputs = self.model(batch)
@@ -207,12 +217,15 @@ class XETrainer(BaseTrainer):
 
                 tgt_mask = targets.data.ne(onmt.Constants.PAD)
                 outputs['tgt_mask'] = tgt_mask
-                
-                normalizer = 1
 
-                loss_dict = self.loss_function(outputs, targets, model=self.model,
-                                               backward=True, normalizer=normalizer)
+                normalizer=1
+                loss_dict = self.loss_function(outputs, targets, model=self.model)
                 loss_data = loss_dict['data']
+                loss = loss_dict['loss']
+
+                optimizer = self.optim.optimizer
+                with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
