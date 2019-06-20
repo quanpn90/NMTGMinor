@@ -125,6 +125,7 @@ class EnsembleTranslator(object):
                 self.autoencoder = self.autoencoder.half()
                 self.models[0] = self.models[0].half()
 
+            self.models[0].autoencoder = self.autoencoder
         if opt.verbose:
             print('Done')
 
@@ -296,6 +297,7 @@ class EnsembleTranslator(object):
             outs = dict()
             attns = dict()
 
+
             for k in range(self.n_models):
                 # decoder_hidden, coverage = self.models[k].decoder.step(decoder_input.clone(), decoder_states[k])
 
@@ -325,6 +327,7 @@ class EnsembleTranslator(object):
                 .transpose(0, 1).contiguous()
 
             active = []
+            
 
             for b in range(batch_size):
                 if beam[b].done:
@@ -355,6 +358,7 @@ class EnsembleTranslator(object):
                 lm_decoder_states.prune_complete_beam(active_idx, remaining_sents)
 
             remaining_sents = len(active)
+
 
         #  (4) package everything up
         all_hyp, all_scores, all_attn = [], [], []
