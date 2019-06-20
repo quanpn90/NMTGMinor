@@ -292,7 +292,6 @@ class EnsembleTranslator(object):
                                  if not b.done]).t().contiguous().view(1, -1)
 
             decoder_input = input
-            print(input)
 
             # require batch first for everything
             outs = dict()
