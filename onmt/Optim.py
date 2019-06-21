@@ -133,7 +133,7 @@ class Optim(object):
         
         return grad_norm
         
-        """Reset the denom for normalization"""
+    """Reset the denom for normalization"""
     def normalize_grad(self, denom=None):
         
         if denom is None:
