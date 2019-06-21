@@ -87,14 +87,13 @@ class XETrainer(BaseTrainer):
             self.optim = onmt.Optim(opt)
             self.optim.set_parameters(self.model.parameters())
 
-            opt_level = "O0" if not self.opt.fp16 else "O2"
-            print("Optimization level: %s" % opt_level)
-            self.model, self.optim.optimizer = apex.amp.initialize(self.model, self.optim.optimizer, opt_level=opt_level,
-                                                                   keep_batchnorm_fp32=False, loss_scale="dynamic")
-            # if self.opt.fp16:
-            #     self.model, self.optim.optimizer = apex.amp.initialize(self.model, self.optim.optimizer, opt_level="O1")
-            # else:
-            #     self.optim.set_parameters(self.model.parameters())
+            if opt.fp16:
+                opt_level = "O0" if not self.opt.fp16 else "O2"
+                print("Optimization level: %s" % opt_level)
+                self.model, self.optim.optimizer = apex.amp.initialize(self.model, self.optim.optimizer,
+                                                                       opt_level=opt_level,
+                                                                       keep_batchnorm_fp32=False, loss_scale="dynamic",
+                                                                       verbosity=0)
 
     def save(self, epoch, valid_ppl, batch_order=None, iteration=-1):
         
@@ -293,19 +292,19 @@ class XETrainer(BaseTrainer):
 
         return total_loss / total_words
 
-    def run(self, save_file=None):
-        
+    # def run(self, save_file=None):
+    def run(self, checkpoint=None):
+
         opt = self.opt
         model = self.model
         optim = self.optim
         
         # Try to load the save_file
-        checkpoint = None
-        if save_file:
-            checkpoint = torch.load(save_file, map_location=lambda storage, loc: storage)
+        # checkpoint = None
+        # if save_file:
+        #     checkpoint = torch.load(save_file, map_location=lambda storage, loc: storage)
         
         if checkpoint is not None:
-            print('Loading model and optim from checkpoint at %s' % save_file)
             self.model.load_state_dict(checkpoint['model'])
             
             if not opt.reset_optim:

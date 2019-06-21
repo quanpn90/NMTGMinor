@@ -66,12 +66,7 @@ def main():
                                   reshape_speech=opt.reshape_speech)
 
         dicts = dataset['dicts']
-        if "src" in dicts:
-            print(' * vocabulary size. source = %d; target = %d' %
-            (dicts['src'].size(), dicts['tgt'].size()))
-        else:
-            print(' * vocabulary size. target = %d' %
-            (dicts['tgt'].size()))
+
 
         print(' * number of training sentences. %d' % len(dataset['train']['src']))
         print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
@@ -105,7 +100,21 @@ def main():
     else:
         raise NotImplementedError
 
-    dicts['tgt'].patch(opt.patch_vocab_multiplier)
+    if opt.load_from is not None:
+        checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
+        print("* Loading dictionaries from the checkpoint")
+        dicts = checkpoint['dicts']
+    else:
+        dicts['tgt'].patch(opt.patch_vocab_multiplier)
+        checkpoint = None
+
+    if "src" in dicts:
+        print(' * vocabulary size. source = %d; target = %d' %
+              (dicts['src'].size(), dicts['tgt'].size()))
+    else:
+        print(' * vocabulary size. target = %d' %
+              (dicts['tgt'].size()))
+
 
     print('Building model...')
 
@@ -139,7 +148,7 @@ def main():
         # else:
         trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
 
-    trainer.run(save_file=opt.load_from)
+    trainer.run(checkpoint=checkpoint)
 
 
 if __name__ == "__main__":
