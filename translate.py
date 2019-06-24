@@ -31,6 +31,8 @@ parser.add_argument('-stride', type=int, default=1,
                     help="Stride on input features")
 parser.add_argument('-concat', type=int, default=1,
                     help="Concate sequential audio features to decrease sequence length")
+parser.add_argument('-asr_format', default="h5", required=False,
+                    help="Format of asr data h5 or scp")
 parser.add_argument('-encoder_type', default='text',
                     help="Type of encoder to use. Options are [text|img|audio].")
 parser.add_argument('-previous_context', type=int, default=0,
@@ -143,8 +145,12 @@ def main():
     if opt.src == "stdin":
             inFile = sys.stdin
             opt.batch_size = 1
-    elif opt.encoder_type == "audio":
+    elif opt.encoder_type == "audio" and opt.asr_format == "h5":
         inFile = h5.File(opt.src,'r')
+    elif opt.encoder_type == "audio" and opt.asr_format == "scp":
+        import kaldiio
+        from kaldiio import ReadHelper
+        audio_data =  iter(ReadHelper('scp:'+opt.src))
     else:
       inFile = open(opt.src)
 
@@ -153,12 +159,22 @@ def main():
         s_prev_context = []
         t_prev_context = []
 
+        i=0;
+        while True:
+            if opt.asr_format == "h5":
+                if(i == len(inFile)):
+                    break;
+                line = np.array(inFile[str(i)])
+                i += 1
+            elif opt.asr_format == "scp":
+                try:
+                    _,line = next(audio_data)
+                except StopIteration:
+                    break;
 
-        for i in range(len(inFile)):
-            if opt.stride == 1:
-                line = torch.from_numpy(np.array(inFile[str(i)]))
-            else:
-                line = torch.from_numpy(np.array(inFile[str(i)])[0::opt.stride])
+            if opt.stride != 1:
+                line = line[0::opt.stride]
+            line = torch.from_numpy(line)
             if opt.concat != 1:
                 add = (opt.concat-line.size()[0]%opt.concat)%opt.concat
                 z= torch.FloatTensor(add, line.size()[1]).zero_()
