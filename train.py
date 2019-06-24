@@ -102,7 +102,7 @@ def main():
 
     # if opt.load_from is not None:
     if not opt.load_from:
-        checkpoint = torch.load(opt#.load_from, map_location=lambda storage, loc: storage)
+        checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
         print("* Loading dictionaries from the checkpoint")
         dicts = checkpoint['dicts']
     else:
