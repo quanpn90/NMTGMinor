@@ -101,7 +101,7 @@ def main():
         raise NotImplementedError
 
     additional_data = []
-    if(opt.addition_data != "none"):
+    if(opt.additional_data != "none"):
         add_data = opt.additional_data.split(";")
         add_format = opt.additional_data_format.split(";")
         assert(len(add_data) == len(add_format))
@@ -138,8 +138,7 @@ def main():
 
 
 
-
-    if opt.load_from is not None:
+    if opt.load_from is not "":
         checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
         print("* Loading dictionaries from the checkpoint")
         dicts = checkpoint['dicts']
@@ -187,7 +186,7 @@ def main():
         # else:
         trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
         if (len(additional_data) > 0):
-            trainer.add_additional_data(additional_data,opt.additional_data_ratio);
+            trainer.add_additional_data(additional_data,opt.data_ratio);
 
     trainer.run(checkpoint=checkpoint)
 
