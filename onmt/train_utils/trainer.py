@@ -97,13 +97,12 @@ class XETrainer(BaseTrainer):
             self.optim = onmt.Optim(opt)
             self.optim.set_parameters(self.model.parameters())
 
-            if opt.fp16:
-                opt_level = "O0" if not self.opt.fp16 else "O2"
-                print("Optimization level: %s" % opt_level)
-                self.model, self.optim.optimizer = apex.amp.initialize(self.model, self.optim.optimizer,
-                                                                       opt_level=opt_level,
-                                                                       keep_batchnorm_fp32=False, loss_scale="dynamic",
-                                                                       verbosity=0)
+            opt_level = "O0" if not self.opt.fp16 else "O2"
+            print("Optimization level: %s" % opt_level)
+            self.model, self.optim.optimizer = apex.amp.initialize(self.model, self.optim.optimizer,
+                                                                   opt_level=opt_level,
+                                                                   keep_batchnorm_fp32=False, loss_scale="dynamic",
+                                                                   verbosity=0)
 
     def save(self, epoch, valid_ppl, batch_order=None, iteration=-1):
         
