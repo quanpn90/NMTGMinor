@@ -10,6 +10,7 @@ import time, datetime
 import os
 from onmt.ModelConstructor import init_model_parameters
 from onmt.utils import checkpoint_paths
+import apex
 
 
 class BaseTrainer(object):
@@ -25,7 +26,7 @@ class BaseTrainer(object):
         
         self.loss_function = loss_function
         self.start_time = 0
-        
+
     def run(self, *args,**kwargs):
         
         raise NotImplementedError    
@@ -82,8 +83,17 @@ class XETrainer(BaseTrainer):
             self.model = self.model.cuda()
 
         if setup_optimizer:
+
             self.optim = onmt.Optim(opt)
             self.optim.set_parameters(self.model.parameters())
+
+            if opt.fp16:
+                opt_level = "O0" if not self.opt.fp16 else "O2"
+                print("Optimization level: %s" % opt_level)
+                self.model, self.optim.optimizer = apex.amp.initialize(self.model, self.optim.optimizer,
+                                                                       opt_level=opt_level,
+                                                                       keep_batchnorm_fp32=False, loss_scale="dynamic",
+                                                                       verbosity=0)
 
     def save(self, epoch, valid_ppl, batch_order=None, iteration=-1):
         
@@ -122,14 +132,15 @@ class XETrainer(BaseTrainer):
                 
         batch_order = data.create_order(random=False)
         self.model.eval()
+        self.model.reset_states()
         """ PyTorch semantics: save space by not creating gradients """
         with torch.no_grad():
             for i in range(len(data)):
 
                 batch = data.next()[0]
 
-                if(self.cuda):
-                    batch.cuda()
+                if self.cuda:
+                    batch.cuda(fp16=self.opt.fp16)
                 
                 """ outputs can be either 
                         hidden states from decoder or
@@ -141,8 +152,8 @@ class XETrainer(BaseTrainer):
                 tgt_mask = targets.ne(onmt.Constants.PAD)
                 outputs['tgt_mask'] = tgt_mask
 
-                loss_dict = self.loss_function(outputs, targets, model=self.model,
-                                               backward=False)
+                loss_dict = self.loss_function(outputs, targets, model=self.model)
+
                 loss_data = loss_dict['data']
 
                 total_loss += loss_data
@@ -159,6 +170,7 @@ class XETrainer(BaseTrainer):
         # Clear the gradients of the model
         # self.runner.zero_grad()
         self.model.zero_grad()
+        self.model.reset_states()
 
         if opt.extra_shuffle and epoch > opt.curriculum:
             train_data.shuffle()
@@ -188,12 +200,11 @@ class XETrainer(BaseTrainer):
             curriculum = (epoch < opt.curriculum)
 
             batch = train_data.next(curriculum=curriculum)[0]
-            if(self.cuda):
-                batch.cuda()
+            if self.cuda:
+                batch.cuda(fp16=self.opt.fp16)
             
             oom = False
             try:
-
                 # outputs is a dictionary containing keys/values necessary for loss function
                 # can be flexibly controlled within models for easier extensibility
                 outputs = self.model(batch)
@@ -205,12 +216,15 @@ class XETrainer(BaseTrainer):
 
                 tgt_mask = targets.data.ne(onmt.Constants.PAD)
                 outputs['tgt_mask'] = tgt_mask
-                
-                normalizer = 1
 
-                loss_dict = self.loss_function(outputs, targets, model=self.model,
-                                               backward=True, normalizer=normalizer)
+                normalizer=1
+                loss_dict = self.loss_function(outputs, targets, model=self.model)
                 loss_data = loss_dict['data']
+                loss = loss_dict['loss']
+
+                optimizer = self.optim.optimizer
+                with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
@@ -278,19 +292,19 @@ class XETrainer(BaseTrainer):
 
         return total_loss / total_words
 
-    def run(self, save_file=None):
-        
+    # def run(self, save_file=None):
+    def run(self, checkpoint=None):
+
         opt = self.opt
         model = self.model
         optim = self.optim
         
         # Try to load the save_file
-        checkpoint = None
-        if save_file:
-            checkpoint = torch.load(save_file, map_location=lambda storage, loc: storage)
+        # checkpoint = None
+        # if save_file:
+        #     checkpoint = torch.load(save_file, map_location=lambda storage, loc: storage)
         
         if checkpoint is not None:
-            print('Loading model and optim from checkpoint at %s' % save_file)
             self.model.load_state_dict(checkpoint['model'])
             
             if not opt.reset_optim:

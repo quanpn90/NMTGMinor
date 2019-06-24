@@ -134,6 +134,7 @@ class Batch(object):
 
 
 class Dataset(object):
+
     def __init__(self, src_data, tgt_data, batch_size_words,
                  data_type="text", batch_size_sents=128,
                  multiplier=1, sort_by_target=False,
@@ -149,15 +150,26 @@ class Dataset(object):
         else:
             self.tgt = None
         self.fullSize = len(self.src) if self.src is not None else len(self.tgt)
+
+        # maximum number of tokens in a mb
         self.batch_size_words = batch_size_words
 
+        # maximum sequences in a mb
         self.batch_size_sents = batch_size_sents
-        
+
+        # the actual batch size must divide by this multiplier (for fp16 it has to be 4 or 8)
         self.multiplier = multiplier
+
+        # by default the minibatch length is sort by target
         self.sort_by_target = sort_by_target
 
+        # by default: count the amount of padding when we group mini-batches
         self.pad_count = True
+
+        # group samples into mini-batches
+        self.batches = []
         self.allocate_batch()
+
         self.cur_index = 0
         self.batchOrder = None
 
@@ -176,8 +188,7 @@ class Dataset(object):
 
     # This function allocates the mini-batches (grouping sentences with the same size)
     def allocate_batch(self):
-            
-        self.batches = []
+
         cur_batch = []
         cur_batch_size = 0
         cur_batch_sizes = []
@@ -197,7 +208,6 @@ class Dataset(object):
                 if (max(max(cur_batch_sizes), sent_size)) * (len(cur_batch)+1) > self.batch_size_words:
                     return True
             return False
-
 
         i = 0
         while i < self.fullSize:
@@ -304,3 +314,94 @@ class Dataset(object):
         
         assert(iteration >= 0 and iteration < self.num_batches)
         self.cur_index = iteration
+
+# LANGUAGE MODEL DATASET AND DATAHOLDER
+class LMBatch(Batch):
+
+    def __init__(self, input, target=None):
+
+        self.tensors = defaultdict(lambda: None)
+
+        self.tensors['target_input'] = input  # T x B
+        self.tensors['target_output'] = target # T x B or None
+
+        # batch size
+        self.size = input.size(1)
+        self.length = input.size(0)
+
+        self.tgt_size = self.size * self.length
+        self.src_size = 0
+
+    def collate(self, **kwargs):
+
+        raise NotImplementedError
+
+
+class LanguageModelDataset(Dataset):
+
+    def __init__(self, data, batch_size_sents=128, seq_length=128):
+
+        self.data = data
+
+        self.batch_size_sents = batch_size_sents
+
+        self.seq_length = seq_length
+
+        # group samples into mini batches
+        self.num_batches = 0
+        self.allocate_batch()
+
+        self.fullSize = self.num_batches
+        # self.cur_index = 0
+        # self.batchOrder = None
+
+    def allocate_batch(self):
+
+        nsequence = self.data.size(0) // self.batch_size_sents
+
+        self.data = self.data.narrow(0, 0, nsequence * self.batch_size_sents)
+
+        # Evenly divide the data across the bsz batches.
+        self.data = self.data.view(self.batch_size_sents, -1).t().contiguous()
+
+        # self.num_steps = nbatch - 1
+
+        self.num_batches = math.ceil( ( self.data.size(0) - 1 ) / self.seq_length )
+
+    # genereate a new batch - order (static)
+    def create_order(self, random=False):
+
+        # For language model order shouldn't be random
+        if random:
+            self.batchOrder = torch.randperm(self.num_batches)
+        else:
+            self.batchOrder = torch.arange(self.num_batches).long()
+
+        self.cur_index = 0
+
+        return self.batchOrder
+
+    # return the next batch according to the iterator
+    # for language model
+    def next(self, curriculum=True, reset=True, split_sizes=1):
+
+        # reset iterator if reach data size limit
+        if self.cur_index >= self.num_batches:
+            if reset:
+                self.cur_index = 0
+            else:
+                return None
+
+        batch_index = self.cur_index
+
+        seq_len = self.seq_length
+
+        top_index = min(batch_index + seq_len, self.data.size(0)-1)
+
+        batch = LMBatch(self.data[batch_index:top_index], target=self.data[batch_index+1:top_index+1])
+
+        # move the iterator one step
+        self.cur_index += seq_len
+
+        return [batch]
+

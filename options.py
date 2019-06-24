@@ -11,7 +11,9 @@ def make_parser(parser):
     parser.add_argument('-sort_by_target', action='store_true',
                         help='Training data sorted by target')                    
     parser.add_argument('-pad_count', action='store_true',
-                        help='Training data sorted by target')                    
+                        help='Batch size counting pads or not')
+    parser.add_argument('-patch_vocab_multiplier', type=int, default=1,
+                        help='Pad vocab so that the size divides by this multiplier')
     parser.add_argument('-save_model', default='model',
                         help="""Model filename (the model will be saved as
                         <save_model>_epochN_PPL.pt where PPL is the
@@ -191,11 +193,14 @@ def make_parser(parser):
                             path to the pretrained model.""")
     parser.add_argument('-fusion', action='store_true',
                         help='Use fusion training with language model')
+    parser.add_argument('-lm_seq_length', type=int, default=128,
+                        help='Sequence length for the language model')
 
     # for Speech
     parser.add_argument('-reshape_speech', type=int, default=0,
                         help="Reshaping the speech data (0 is ignored, done at preprocessing).")
     parser.add_argument('-augment_speech', action='store_true',
                         help='Use f/t augmentation for speech')
+
 
     return parser
