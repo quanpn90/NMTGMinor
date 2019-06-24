@@ -27,6 +27,16 @@ class BaseTrainer(object):
         self.loss_function = loss_function
         self.start_time = 0
 
+        self.additional_data = []
+
+    def add_additional_data(self,d,ratio):
+        self.additional_data = d
+        if(ratio == "-1"):
+            self.additional_data_ratio = [1]*(len(self.additional_data + 1))
+        else:
+            self.additional_data_ratio = ratio.split(";")
+            assert(len(self.additional_data_ratio) + 1 == len(self.additional_data))
+
     def run(self, *args,**kwargs):
         
         raise NotImplementedError    
@@ -112,7 +122,9 @@ class XETrainer(BaseTrainer):
                 'epoch': epoch,
                 'iteration' : iteration,
                 'batch_order' : batch_order,
-                'optim': optim_state_dict
+                'optim': optim_state_dict,
+                'additional_batch_oder' : self.additional_batch_order,
+                'additional_data_iteration' : self.additional_data_iteration
         }
         
         file_name = '%s_ppl_%.6f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
@@ -199,84 +211,101 @@ class XETrainer(BaseTrainer):
 
             curriculum = (epoch < opt.curriculum)
 
-            batch = train_data.next(curriculum=curriculum)[0]
-            if self.cuda:
-                batch.cuda(fp16=self.opt.fp16)
+            batches = [train_data.next(curriculum=curriculum)[0]]
+
+            if(len(self.additional_data) > 0 and
+                i % self.additional_data_ratio == 0):
+                print ("Use additional data in batch",i)
+                for j in range(len(self.additional_data)):
+                    for k in range(self.additional_data_ratio[j+1]):
+                        print("Add batch from data source",j)
+                        if self.additional_data_iteration[j] == len(self.additional_data[j]):
+                            self.additional_data_iteration[j] = 0
+                            self.additional_data[j].shuffle()
+                            self.add_batch_order[j] = self.additional_data[j].create_order()
+                            print("Reshuffle data source",j)
+
+                        batches.append(self.additional_data[j]()[0])
+                        self.additional_data_iteration[j] += 1
+
+            for batch in batches:
+                if self.cuda:
+                    batch.cuda(fp16=self.opt.fp16)
             
-            oom = False
-            try:
-                # outputs is a dictionary containing keys/values necessary for loss function
-                # can be flexibly controlled within models for easier extensibility
-                outputs = self.model(batch)
+                oom = False
+                try:
+                    # outputs is a dictionary containing keys/values necessary for loss function
+                    # can be flexibly controlled within models for easier extensibility
+                    outputs = self.model(batch)
 
-                targets = batch.get('target_output')
-                tgt_inputs = batch.get('target_input')
+                    targets = batch.get('target_output')
+                    tgt_inputs = batch.get('target_input')
 
-                batch_size = batch.size
+                    batch_size = batch.size
 
-                tgt_mask = targets.data.ne(onmt.Constants.PAD)
-                outputs['tgt_mask'] = tgt_mask
+                    tgt_mask = targets.data.ne(onmt.Constants.PAD)
+                    outputs['tgt_mask'] = tgt_mask
 
-                normalizer=1
-                loss_dict = self.loss_function(outputs, targets, model=self.model)
-                loss_data = loss_dict['data']
-                loss = loss_dict['loss']
+                    normalizer=1
+                    loss_dict = self.loss_function(outputs, targets, model=self.model)
+                    loss_data = loss_dict['data']
+                    loss = loss_dict['loss']
 
-                optimizer = self.optim.optimizer
-                with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
+                    optimizer = self.optim.optimizer
+                    with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
+                        scaled_loss.backward()
 
-            except RuntimeError as e:
-                if 'out of memory' in str(e):
-                    print('| WARNING: ran out of memory on GPU , skipping batch')
-                    oom = True
-                    torch.cuda.empty_cache()
-                else:
-                    raise e        
+                except RuntimeError as e:
+                    if 'out of memory' in str(e):
+                        print('| WARNING: ran out of memory on GPU , skipping batch')
+                        oom = True
+                        torch.cuda.empty_cache()
+                    else:
+                        raise e
                 
-            if not oom:
-                src_size = batch.src_size
-                tgt_size = batch.tgt_size
+                if not oom:
+                    src_size = batch.src_size
+                    tgt_size = batch.tgt_size
                 
-                counter = counter + 1 
-                num_accumulated_words += tgt_size
-                num_accumulated_sents += batch_size
+                    counter = counter + 1
+                    num_accumulated_words += tgt_size
+                    num_accumulated_sents += batch_size
                 
-                # We only update the parameters after getting gradients from n mini-batches
-                # simulating the multi-gpu situation
-                # if counter == opt.virtual_gpu:
-                # if counter >= opt.batch_size_update:
+                    #   We only update the parameters after getting gradients from n mini-batches
+                    # simulating the multi-gpu situation
+                    # if counter == opt.virtual_gpu:
+                    # if counter >= opt.batch_size_update:
                 
-                if num_accumulated_words >= opt.batch_size_update * 0.95:
-                    grad_denom = 1
-                    if self.opt.normalize_gradient:
-                        grad_denom = num_accumulated_words
-                    # Update the parameters.
-                    self.optim.step(grad_denom=grad_denom)
-                    self.model.zero_grad()
-                    counter = 0
-                    num_accumulated_words = 0
-                    num_accumulated_sents = 0
-                    num_updates = self.optim._step
-                    if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
-                        valid_loss = self.eval(self.valid_data)
-                        valid_ppl = math.exp(min(valid_loss, 100))
-                        print('Validation perplexity: %g' % valid_ppl)
+                    if num_accumulated_words >= opt.batch_size_update * 0.95:
+                        grad_denom = 1
+                        if self.opt.normalize_gradient:
+                            grad_denom = num_accumulated_words
+                        # Update the parameters.
+                        self.optim.step(grad_denom=grad_denom)
+                        self.model.zero_grad()
+                        counter = 0
+                        num_accumulated_words = 0
+                        num_accumulated_sents = 0
+                        num_updates = self.optim._step
+                        if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
+                            valid_loss = self.eval(self.valid_data)
+                            valid_ppl = math.exp(min(valid_loss, 100))
+                            print('Validation perplexity: %g' % valid_ppl)
                         
-                        ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
+                            ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
                         
-                        self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
+                            self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
 
-                num_words = tgt_size
-                report_loss += loss_data
-                report_tgt_words += num_words
-                report_src_words += src_size
-                total_loss += loss_data
-                total_words += num_words
-                optim = self.optim
+                    num_words = tgt_size
+                    report_loss += loss_data
+                    report_tgt_words += num_words
+                    report_src_words += src_size
+                    total_loss += loss_data
+                    total_words += num_words
+                    optim = self.optim
 
-                if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
-                    print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
+                    if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
+                        print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
                            "%5.0f src tok/s; %5.0f tgt tok/s; %s elapsed") %
                           (epoch, i+1, len(train_data),
                            math.exp(report_loss / report_tgt_words),
@@ -286,9 +315,9 @@ class XETrainer(BaseTrainer):
                            report_tgt_words/(time.time()-start),
                            str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
 
-                    report_loss, report_tgt_words = 0, 0
-                    report_src_words = 0
-                    start = time.time()
+                        report_loss, report_tgt_words = 0, 0
+                        report_src_words = 0
+                        start = time.time()
 
         return total_loss / total_words
 
@@ -316,11 +345,18 @@ class XETrainer(BaseTrainer):
                     batch_order = None
                     iteration = 0
                 opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
-                resume=True  
+                resume=True
+                if(len(self.additional_data) > 0):
+                    if 'additional_batch_order' in checkpoint:
+                        self.additional_batch_order = checkpoint['additional_batch_order']
+                        self.additional_data_iteration = checkpoint['additional_data_iteration']
+                    else:
+                        self.init_addition_data()
             else:
                 batch_order = None
                 iteration = 0
                 resume=False
+                self.init_addition_data()
 
             del checkpoint['model']
             del checkpoint['optim']
@@ -331,7 +367,8 @@ class XETrainer(BaseTrainer):
             print('Initializing model parameters')
             init_model_parameters(model, opt)
             resume=False
-        
+            self.init_addition_data()
+
         valid_loss = self.eval(self.valid_data)
         valid_ppl = math.exp(min(valid_loss, 100))
         print('Validation perplexity: %g' % valid_ppl)
@@ -359,6 +396,13 @@ class XETrainer(BaseTrainer):
             resume = False
         
         
-    
+    def init_additional_data(self):
+        self.additional_batch_order = []
+        self.additional_data_iteration = []
+        for i in range(len(self.additional_data)):
+            self.additional_data_iteration = 0
+            self.additional_data[i].shuffle()
+            self.add_batch_order[j] = self.additional_data[j].create_order()
+
     
     
