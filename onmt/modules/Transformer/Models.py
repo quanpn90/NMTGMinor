@@ -315,6 +315,7 @@ class TransformerDecoder(nn.Module):
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
+
         output = emb.contiguous()
 
         for i, layer in enumerate(self.layer_modules):
@@ -414,7 +415,10 @@ class Transformer(NMTModel):
             output = self.autoencoder.autocode(output)
 
         for dec_t, tgt_t in zip(output, tgt_output):
-            gen_t = self.generator(dec_t)
+            if(isinstance(self.generator,nn.ModuleList)):
+                gen_t = self.generator[0](dec_t)
+            else:
+                gen_t = self.generator(dec_t)
             tgt_t = tgt_t.unsqueeze(1)
             scores = gen_t.gather(1, tgt_t)
             scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
@@ -437,6 +441,7 @@ class Transformer(NMTModel):
         :return: a dictionary containing: log-prob output and the attention coverage
         """
 
+
         hidden, coverage = self.decoder.step(input_t, decoder_state)
         # squeeze to remove the time step dimension
         log_prob = self.generator[0](hidden.squeeze(0))
@@ -448,6 +453,7 @@ class Transformer(NMTModel):
         output_dict['log_prob'] = log_prob
         output_dict['coverage'] = last_coverage
 
+        
         return output_dict
 
     def create_decoder_state(self, batch, beam_size=1):

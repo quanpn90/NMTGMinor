@@ -162,6 +162,10 @@ def main():
                 for i in range(len(tgtBatch)):
                     tgtBatch[i].append("EOS");
                 outputResults(tgtBatch,r,outF)
+            elif(opt.representation == "EncoderDecoderHiddenState"):
+                for i in range(len(tgtBatch)):
+                    tgtBatch[i].append("EOS");
+                outputAlignment(srcBatch,tgtBatch,r,outF)
             srcBatch, tgtBatch = [], []
         if len(srcBatch) != 0:
             r = evaluator.evalASR(srcBatch,tgtBatch)
@@ -171,6 +175,10 @@ def main():
                 for i in range(len(tgtBatch)):
                     tgtBatch[i].append("EOS");
                 outputResults(tgtBatch,r,outF)
+            elif(opt.representation == "EncoderDecoderHiddenState"):
+                for i in range(len(tgtBatch)):
+                    tgtBatch[i].append("EOS");
+                outputAlignment(srcBatch,tgtBatch,r,outF)
 
     else:
 
@@ -207,6 +215,10 @@ def main():
                 for i in range(len(tgtBatch)):
                     tgtBatch[i].append("EOS");
                 outputResults(tgtBatch,r,outF)
+            elif(opt.representation == "EncoderDecoderHiddenState"):
+                for i in range(len(tgtBatch)):
+                    tgtBatch[i].append("EOS");
+                outputAlignment(srcBatch,tgtBatch,r,outF)
             srcBatch, tgtBatch = [], []
 
 
@@ -216,15 +228,6 @@ def main():
 
 
 def outputResults(srcBatch,r,outF):
-#    x=0
-#    for i in range(len(srcBatch)):
-#        for j in range(len(srcBatch[i])):
-#            outF.write(str(r[x].item()))
-#            outF.write(' ')
-#            x+=1
-#        outF.write("\n")
-#        outF.flush()
-
 
 
     x=0
@@ -244,6 +247,16 @@ def outputResults(srcBatch,r,outF):
             outF.write(' ')
         outF.write("\n")
         outF.flush()
+
+def outputAlignment(srcBatch,tgtBatch,r,outF):
+
+
+
+    for b in range(len(srcBatch)):
+        for i in range(len(srcBatch[b])):
+            for j in range (len(tgtBatch[b])):
+                outF.write("%i-%i#%f " % (i,j,r[i,j,b]))
+        outF.write("\n")
 
 
 if __name__ == "__main__":

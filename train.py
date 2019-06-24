@@ -100,7 +100,44 @@ def main():
     else:
         raise NotImplementedError
 
-    # if opt.load_from is not None:
+    additional_data = []
+    if(opt.additional_data != "none"):
+        add_data = opt.additional_data.split(";")
+        add_format = opt.additional_data_format.split(";")
+        assert(len(add_data) == len(add_format))
+        for i in range(len(add_data)):
+            if add_format[i] == 'raw':
+                if add_data[i].endswith(".train.pt"):
+                    print("Loading data from '%s'" % opt.data)
+                    add_dataset = torch.load(add_data[i])
+                else:
+                    print("Loading data from %s" % opt.data + ".train.pt")
+                    add_dataset = torch.load(add_data[i] + ".train.pt")
+
+                additional_data.append(onmt.Dataset(add_dataset['train']['src'],
+                                          dataset['train']['tgt'], opt.batch_size_words,
+                                          data_type=dataset.get("type", "text"),
+                                          batch_size_sents=opt.batch_size_sents,
+                                          multiplier=opt.batch_size_multiplier,
+                                          reshape_speech=opt.reshape_speech,
+                                          augment=opt.augment_speech))
+            elif add_format[i] == 'bin':
+
+                from onmt.data_utils.IndexedDataset import IndexedInMemoryDataset
+
+                train_path = add_data[i] + '.train'
+                train_src = IndexedInMemoryDataset(train_path + '.src')
+                train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
+
+                additional_data.append(onmt.Dataset(train_src,
+                                  train_tgt,
+                                  opt.batch_size_words,
+                                  data_type=opt.encoder_type,
+                                  batch_size_sents=opt.batch_size_sents,
+                                  multiplier = opt.batch_size_multiplier))
+
+
+
     if opt.load_from:
         checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
         print("* Loading dictionaries from the checkpoint")
@@ -148,6 +185,8 @@ def main():
         #     trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
         # else:
         trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
+        if (len(additional_data) > 0):
+            trainer.add_additional_data(additional_data,opt.data_ratio);
 
     trainer.run(checkpoint=checkpoint)
 
