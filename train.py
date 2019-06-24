@@ -138,7 +138,7 @@ def main():
 
 
 
-    if opt.load_from is not "":
+    if opt.load_from:
         checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
         print("* Loading dictionaries from the checkpoint")
         dicts = checkpoint['dicts']
