@@ -122,7 +122,7 @@ class XETrainer(BaseTrainer):
                 'iteration' : iteration,
                 'batch_order' : batch_order,
                 'optim': optim_state_dict,
-                'additional_batch_oder' : self.additional_batch_order,
+                'additional_batch_order' : self.additional_batch_order,
                 'additional_data_iteration' : self.additional_data_iteration
         }
         
