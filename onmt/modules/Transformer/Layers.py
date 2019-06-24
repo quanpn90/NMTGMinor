@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from onmt.modules.Bottle import Bottle
 from onmt.modules.StaticDropout import StaticDropout
 
+# different linears for the same input
 def group_linear(linears, input, bias=False):
 
         weights = [linear.weight for linear in linears]

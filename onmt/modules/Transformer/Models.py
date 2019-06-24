@@ -343,6 +343,9 @@ class Transformer(NMTModel):
         super().__init__( encoder, decoder, generator)
         self.model_size = self.decoder.model_size
 
+    def reset_states(self):
+        return
+
     def forward(self, batch):
         """
         Inputs Shapes: 
@@ -370,6 +373,9 @@ class Transformer(NMTModel):
         output_dict['hidden'] = output
         output_dict['encoder'] = context
         output_dict['src_mask'] = encoder_output['src_mask']
+
+        logprobs = self.generator[0](output)
+        output_dict['logprobs'] = logprobs
 
         return output_dict
 
