@@ -27,7 +27,7 @@ class TransformerEncoder(nn.Module):
     
     def __init__(self, opt, dicts, positional_encoder):
     
-        super(TransformerEncoder, self).__init__()
+        super(TransformerEncoder, self).__init__(opt, dicts, positional_encoder)
         
         self.model_size = opt.model_size
         self.n_heads = opt.n_heads
@@ -415,7 +415,7 @@ class Transformer(NMTModel):
             output = self.autoencoder.autocode(output)
 
         for dec_t, tgt_t in zip(output, tgt_output):
-            if(isinstance(self.generator,nn.ModuleList)):
+            if isinstance(self.generator,nn.ModuleList):
                 gen_t = self.generator[0](dec_t)
             else:
                 gen_t = self.generator(dec_t)
