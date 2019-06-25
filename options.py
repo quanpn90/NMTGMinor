@@ -10,11 +10,9 @@ def make_parser(parser):
                         help='Default data format: raw')
     parser.add_argument('-additional_data', required=False,default= 'none',
                         help='Path to the *-train.pt file from preprocess.py for addtional data; sepeated by semi-colon')
-    parser.add_argument('-data_format', required=True, default='bin',
+    parser.add_argument('-additional_data_format', required=False, default='bin',
                         help='Default data format: raw')
-    parser.add_argument('-additional_data_format', required=False, default='bin'
-                        help='Default data format: raw')
-    parser.add_argument('-data_ratio', required=False, default='1'
+    parser.add_argument('-data_ratio', required=False, default='1',
                         help='ratio how to use the data and additiona data  e.g. 1;2;2; default 1;1;1;1;...')
     parser.add_argument('-sort_by_target', action='store_true',
                         help='Training data sorted by target')                    
