@@ -34,8 +34,8 @@ class BaseTrainer(object):
         if(ratio == "-1"):
             self.additional_data_ratio = [1]*(len(self.additional_data + 1))
         else:
-            self.additional_data_ratio = ratio.split(";")
-            assert(len(self.additional_data_ratio) + 1 == len(self.additional_data))
+            self.additional_data_ratio = [int(s) for s in ratio.split(";")]
+            assert(len(self.additional_data_ratio) == len(self.additional_data) + 1)
 
     def run(self, *args,**kwargs):
         
@@ -97,13 +97,12 @@ class XETrainer(BaseTrainer):
             self.optim = onmt.Optim(opt)
             self.optim.set_parameters(self.model.parameters())
 
-            if opt.fp16:
-                opt_level = "O0" if not self.opt.fp16 else "O2"
-                print("Optimization level: %s" % opt_level)
-                self.model, self.optim.optimizer = apex.amp.initialize(self.model, self.optim.optimizer,
-                                                                       opt_level=opt_level,
-                                                                       keep_batchnorm_fp32=False, loss_scale="dynamic",
-                                                                       verbosity=0)
+            opt_level = "O0" if not self.opt.fp16 else "O2"
+            print("Optimization level: %s" % opt_level)
+            self.model, self.optim.optimizer = apex.amp.initialize(self.model, self.optim.optimizer,
+                                                                   opt_level=opt_level,
+                                                                   keep_batchnorm_fp32=False, loss_scale="dynamic",
+                                                                   verbosity=0)
 
     def save(self, epoch, valid_ppl, batch_order=None, iteration=-1):
         
@@ -123,7 +122,7 @@ class XETrainer(BaseTrainer):
                 'iteration' : iteration,
                 'batch_order' : batch_order,
                 'optim': optim_state_dict,
-                'additional_batch_oder' : self.additional_batch_order,
+                'additional_batch_order' : self.additional_batch_order,
                 'additional_data_iteration' : self.additional_data_iteration
         }
         
@@ -214,21 +213,19 @@ class XETrainer(BaseTrainer):
             batches = [train_data.next(curriculum=curriculum)[0]]
 
             if(len(self.additional_data) > 0 and
-                i % self.additional_data_ratio == 0):
-                print ("Use additional data in batch",i)
+                i % self.additional_data_ratio[0] == 0):
                 for j in range(len(self.additional_data)):
                     for k in range(self.additional_data_ratio[j+1]):
-                        print("Add batch from data source",j)
                         if self.additional_data_iteration[j] == len(self.additional_data[j]):
                             self.additional_data_iteration[j] = 0
                             self.additional_data[j].shuffle()
-                            self.add_batch_order[j] = self.additional_data[j].create_order()
-                            print("Reshuffle data source",j)
+                            self.additional_batch_order[j] = self.additional_data[j].create_order()
 
-                        batches.append(self.additional_data[j]()[0])
+                        batches.append(self.additional_data[j].next()[0])
                         self.additional_data_iteration[j] += 1
 
-            for batch in batches:
+            for b in range(len(batches)):
+                batch = batches[b]
                 if self.cuda:
                     batch.cuda(fp16=self.opt.fp16)
             
@@ -304,7 +301,7 @@ class XETrainer(BaseTrainer):
                     total_words += num_words
                     optim = self.optim
 
-                    if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
+                    if b == 0 and (i == 0 or (i % opt.log_interval == -1 % opt.log_interval)):
                         print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
                            "%5.0f src tok/s; %5.0f tgt tok/s; %s elapsed") %
                           (epoch, i+1, len(train_data),
@@ -351,12 +348,12 @@ class XETrainer(BaseTrainer):
                         self.additional_batch_order = checkpoint['additional_batch_order']
                         self.additional_data_iteration = checkpoint['additional_data_iteration']
                     else:
-                        self.init_addition_data()
+                        self.init_additional_data()
             else:
                 batch_order = None
                 iteration = 0
                 resume=False
-                self.init_addition_data()
+                self.init_additional_data()
 
             del checkpoint['model']
             del checkpoint['optim']
@@ -367,7 +364,7 @@ class XETrainer(BaseTrainer):
             print('Initializing model parameters')
             init_model_parameters(model, opt)
             resume=False
-            self.init_addition_data()
+            self.init_additional_data()
 
         valid_loss = self.eval(self.valid_data)
         valid_ppl = math.exp(min(valid_loss, 100))
@@ -400,9 +397,9 @@ class XETrainer(BaseTrainer):
         self.additional_batch_order = []
         self.additional_data_iteration = []
         for i in range(len(self.additional_data)):
-            self.additional_data_iteration = 0
+            self.additional_data_iteration.append(0)
             self.additional_data[i].shuffle()
-            self.add_batch_order[j] = self.additional_data[j].create_order()
+            self.additional_batch_order.append(self.additional_data[i].create_order())
 
     
     
