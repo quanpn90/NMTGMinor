@@ -31,7 +31,7 @@ class BaseTrainer(object):
 
     def add_additional_data(self,d,ratio):
         self.additional_data = d
-        if(ratio == "-1"):
+        if ratio == "-1" :
             self.additional_data_ratio = [1]*(len(self.additional_data + 1))
         else:
             self.additional_data_ratio = [int(s) for s in ratio.split(";")]

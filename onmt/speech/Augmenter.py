@@ -6,7 +6,7 @@ import random
 
 class Augmenter(object):
 
-    def __init__(self, F=13, mf=2, T=70, max_t=0.2, mt=2):
+    def __init__(self, F=15, mf=2, T=70, max_t=0.2, mt=2):
 
         self.F = F
         self.mf = mf
