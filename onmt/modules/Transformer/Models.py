@@ -8,13 +8,11 @@ from onmt.modules.WordDrop import embedded_dropout
 from torch.utils.checkpoint import checkpoint
 from collections import defaultdict
 
-
 def custom_layer(module):
     def custom_forward(*args):
         output = module(*args)
         return output
     return custom_forward
-
 
 
 class MixedEncoder(nn.Module):
@@ -37,12 +35,10 @@ class MixedEncoder(nn.Module):
 
         """ Embedding: batch_size x len_src x d_model """
 
-        if(input.dim() == 2):
+        if input.dim() == 2:
             return self.text_encoder.forward(input)
         else:
             return self.audio_encoder.forward(input)
-
-
 
 
 class TransformerEncoder(nn.Module):
@@ -54,9 +50,9 @@ class TransformerEncoder(nn.Module):
         
     """
     
-    def __init__(self, opt, dicts, positional_encoder,encoder_type):
+    def __init__(self, opt, dicts, positional_encoder, encoder_type='text'):
     
-        super(TransformerEncoder, self).__init__(opt, dicts, positional_encoder)
+        super(TransformerEncoder, self).__init__()
         
         self.model_size = opt.model_size
         self.n_heads = opt.n_heads

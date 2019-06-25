@@ -19,7 +19,7 @@ class DynamicLinearCombination(nn.Module):
     """
     def __init__(self, model_size, n_layers, is_encoder=True, include_sublayer=False):
         super(DynamicLinearCombination, self).__init__()
-        self.normalize_learned_weight = False
+        self.normalize_learned_weight = True
         self.normalized_weight = None
         self.weight_type = 'scalar'
         self.out_dropout = 0.0
