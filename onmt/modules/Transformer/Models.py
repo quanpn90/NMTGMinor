@@ -16,6 +16,35 @@ def custom_layer(module):
     return custom_forward
 
 
+
+class MixedEncoder(nn.Module):
+
+
+    def __init(self,text_encoder,audio_encoder):
+        self.text_encoder = text_encoder
+        self.audio_encoder = audio_encoder
+
+    def forward(self, input, **kwargs):
+        """
+        Inputs Shapes:
+            input: batch_size x len_src (wanna tranpose)
+
+        Outputs Shapes:
+            out: batch_size x len_src x d_model
+            mask_src
+
+        """
+
+        """ Embedding: batch_size x len_src x d_model """
+
+        if(input.dim() == 2):
+            return self.text_encoder.forward(input)
+        else:
+            return self.audio_encoder.forward(input)
+
+
+
+
 class TransformerEncoder(nn.Module):
     """Encoder in 'Attention is all you need'
     
@@ -25,7 +54,7 @@ class TransformerEncoder(nn.Module):
         
     """
     
-    def __init__(self, opt, dicts, positional_encoder):
+    def __init__(self, opt, dicts, positional_encoder,encoder_type):
     
         super(TransformerEncoder, self).__init__(opt, dicts, positional_encoder)
         
@@ -42,9 +71,9 @@ class TransformerEncoder(nn.Module):
         self.emb_dropout = opt.emb_dropout
         self.time = opt.time
         self.version = opt.version
-        self.input_type = opt.encoder_type
+        self.input_type = encoder_type
 
-        if opt.encoder_type != "text":
+        if encoder_type != "text":
             self.audio_trans = nn.Linear(dicts, self.model_size)
         else:
             self.word_lut = nn.Embedding(dicts.size(),
