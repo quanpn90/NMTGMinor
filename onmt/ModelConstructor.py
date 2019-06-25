@@ -2,7 +2,7 @@ import torch, copy
 import torch.nn as nn
 from torch.autograd import Variable
 import onmt
-from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer
+from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer,MixedEncoder
 from onmt.modules.Transformer.Layers import PositionalEncoding
 
 init = torch.nn.init
@@ -77,9 +77,17 @@ def build_tm_model(opt, dicts):
         onmt.Constants.init_value = opt.param_init
 
         if opt.encoder_type == "text":
-            encoder = TransformerEncoder(opt, dicts['src'], positional_encoder)
+            encoder = TransformerEncoder(opt, dicts['src'], positional_encoder,opt.encoder_type)
+        elif opt.encoder_type == "audio":
+            encoder = TransformerEncoder(opt, opt.input_size, positional_encoder,opt.encoder_type)
+        elif opt.encoder_type == "mix":
+            text_encoder = TransformerEncoder(opt, dicts['src'], positional_encoder,"text")
+            audio_encoder = TransformerEncoder(opt, opt.input_size, positional_encoder,"audio")
+            encoder = MixedEncoder(text_encoder,audio_encoder)
         else:
-            encoder = TransformerEncoder(opt, opt.input_size, positional_encoder)
+            print ("Unkown encoder type:",opt.encoder_type)
+            exit(-1)
+
 
         decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder)
 
@@ -93,9 +101,16 @@ def build_tm_model(opt, dicts):
         onmt.Constants.init_value = opt.param_init
         
         if opt.encoder_type == "text":
-            encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder)
+            encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder,opt.encoder_type)
+        elif opt.encoder_type == "audio":
+            encoder = StochasticTransformerEncoder(opt, opt.input_size, positional_encoder,opt.encoder_type)
+        elif opt.encoder_type == "mix":
+            text_encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder,"text")
+            audio_encoder = StochasticTransformerEncoder(opt, opt.input_size, positional_encoder,"audio")
+            encoder = MixedEncoder(text_encoder,audio_encoder)
         else:
-            encoder = StochasticTransformerEncoder(opt, opt.input_size, positional_encoder)
+            print ("Unkown encoder type:",opt.encoder_type)
+            exit(-1)
 
         decoder = StochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
 
