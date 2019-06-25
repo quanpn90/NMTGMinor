@@ -116,19 +116,16 @@ def build_tm_model(opt, dicts):
 
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
 
+    elif opt.model == 'dlcltransformer' :
 
-    elif opt.model in ['universal_transformer', 'utransformer'] :
+        from onmt.modules.DynamicTransformer.Models import DlclTransformerDecoder, DlclTransformerEncoder
 
-        from onmt.modules.UniversalTransformer.Models import UniversalTransformerDecoder, UniversalTransformerEncoder
-        from onmt.modules.UniversalTransformer.Layers import TimeEncoding
+        if opt.encoder_type == "text":
+            encoder = DlclTransformerEncoder(opt, dicts['src'], positional_encoder, opt.encoder_type)
+        elif opt.encoder_type == "audio":
+            encoder = DlclTransformerEncoder(opt, opt.input_size, positional_encoder, opt.encoder_type)
 
-        onmt.Constants.weight_norm = opt.weight_norm
-        onmt.Constants.init_value = opt.param_init
-
-        time_encoder = TimeEncoding(opt.model_size, len_max=32)
-
-        encoder = UniversalTransformerEncoder(opt, dicts['src'], positional_encoder, time_encoder)
-        decoder = UniversalTransformerDecoder(opt, dicts['tgt'], positional_encoder, time_encoder)
+        decoder = DlclTransformerDecoder(opt, dicts['tgt'], positional_encoder)
 
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
 
