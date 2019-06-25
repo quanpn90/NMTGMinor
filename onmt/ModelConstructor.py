@@ -81,8 +81,8 @@ def build_tm_model(opt, dicts):
         elif opt.encoder_type == "audio":
             encoder = TransformerEncoder(opt, opt.input_size, positional_encoder,opt.encoder_type)
         elif opt.encoder_type == "mix":
-            text_encoder = TransformerEncoder(opt, dicts['src'], positional_encoder,"text")
-            audio_encoder = TransformerEncoder(opt, opt.input_size, positional_encoder,"audio")
+            text_encoder = TransformerEncoder(opt, dicts['src'], positional_encoder, "text")
+            audio_encoder = TransformerEncoder(opt, opt.input_size, positional_encoder, "audio")
             encoder = MixedEncoder(text_encoder,audio_encoder)
         else:
             print ("Unkown encoder type:",opt.encoder_type)
@@ -105,11 +105,11 @@ def build_tm_model(opt, dicts):
         elif opt.encoder_type == "audio":
             encoder = StochasticTransformerEncoder(opt, opt.input_size, positional_encoder,opt.encoder_type)
         elif opt.encoder_type == "mix":
-            text_encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder,"text")
-            audio_encoder = StochasticTransformerEncoder(opt, opt.input_size, positional_encoder,"audio")
+            text_encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder, "text")
+            audio_encoder = StochasticTransformerEncoder(opt, opt.input_size, positional_encoder, "audio")
             encoder = MixedEncoder(text_encoder,audio_encoder)
         else:
-            print ("Unkown encoder type:",opt.encoder_type)
+            print ("Unknown encoder type:",opt.encoder_type)
             exit(-1)
 
         decoder = StochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
