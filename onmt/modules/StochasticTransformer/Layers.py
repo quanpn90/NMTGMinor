@@ -15,7 +15,7 @@ class StochasticEncoderLayer(EncoderLayer):
         d_model: dimension of model
         p:       dropout probabolity
         d_ff:    dimension of feed forward
-        
+
     Params:
         multihead:    multi-head attentions layer
         feedforward:  feed forward layer

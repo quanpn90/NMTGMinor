@@ -62,8 +62,6 @@ def make_parser(parser):
                         help='Dropout probability; applied on top of embedding.')    
     parser.add_argument('-weight_norm', action='store_true',
                       help='Apply weight normalization on linear modules')
-    parser.add_argument('-layer_norm', default='fast',
-                      help='Layer normalization type')
     parser.add_argument('-death_rate', type=float, default=0.5,
                         help='Stochastic layer death rate')  
     parser.add_argument('-activation_layer', default='linear_relu_linear', type=str,
@@ -71,9 +69,7 @@ def make_parser(parser):
     parser.add_argument('-time', default='positional_encoding', type=str,
                         help='Type of time representation positional_encoding|gru|lstm')                        
     parser.add_argument('-version', type=float, default=1.0,
-                        help='Transformer version. 1.0 = Google type | 2.0 is different')                    
-    parser.add_argument('-attention_out', default='default',
-                      help='Type of attention out. default|combine')
+                        help='Transformer version. 1.0 = Google type | 2.0 is different')
     parser.add_argument('-residual_type', default='regular',
                       help='Type of residual type. regular|gated')
     # Optimization options
@@ -89,17 +85,12 @@ def make_parser(parser):
                         help='Maximum number of sentences in a batch')
     parser.add_argument('-ctc_loss', type=float, default=0.0,
                         help='CTC Loss as additional loss function with this weight')
-    parser.add_argument('-max_generator_batches', type=int, default=32,
-                        help="""Maximum batches of words in a sequence to run
-                        the generator on in parallel. Higher is faster, but uses
-                        more memory.""")
     parser.add_argument('-batch_size_update', type=int, default=2048,
                         help='Maximum number of words per update')                    
     parser.add_argument('-batch_size_multiplier', type=int, default=1,
                         help='Maximum number of words per update')                    
     parser.add_argument('-max_position_length', type=int, default=1024,
-        help='Maximum length for positional embedding')    
-
+        help='Maximum length for positional embedding')
     parser.add_argument('-epochs', type=int, default=13,
                         help='Number of training epochs')
     parser.add_argument('-start_epoch', type=int, default=1,
@@ -124,9 +115,6 @@ def make_parser(parser):
                         help="""For this many epochs, order the minibatches based
                         on source sequence length. Sometimes setting this to 1 will
                         increase convergence speed.""")
-    parser.add_argument('-extra_shuffle', action="store_true",
-                        help="""By default only shuffle mini-batch order; when true,
-                        shuffle and re-assign mini-batches""")
     parser.add_argument('-normalize_gradient', action="store_true",
                         help="""Normalize the gradients by number of tokens before updates""")
     parser.add_argument('-virtual_gpu', type=int, default=1,
@@ -149,7 +137,6 @@ def make_parser(parser):
                         help="""Number of steps to increase the lr in noam""")
     parser.add_argument('-noam_step_interval', type=int, default=1,
                         help="""How many steps before updating the parameters""")
-
     parser.add_argument('-reset_optim', action='store_true',
                         help='Reset the optimizer running variables')
     parser.add_argument('-beta1', type=float, default=0.9,

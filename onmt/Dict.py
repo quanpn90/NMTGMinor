@@ -51,7 +51,6 @@ class Dict(object):
         try:
             return self.labelToIdx[key]
         except KeyError:
-            print(key)
             return default
 
     def getLabel(self, idx, default=None):
@@ -120,6 +119,24 @@ class Dict(object):
         return newDict
 
     def convertToIdx(self, labels, unkWord, bosWord=None, eosWord=None):
+        """
+        Convert `labels` to indices. Use `unkWord` if not found.
+        Optionally insert `bosWord` at the beginning and `eosWord` at the .
+        """
+        vec = []
+
+        if bosWord is not None:
+            vec += [self.lookup(bosWord)]
+
+        unk = self.lookup(unkWord)
+        vec += [self.lookup(label, default=unk) for label in labels]
+
+        if eosWord is not None:
+            vec += [self.lookup(eosWord)]
+
+        return torch.LongTensor(vec)
+
+    def convertToIdx2(self, labels, unkWord, bosWord=None, eosWord=None):
         """
         Convert `labels` to indices. Use `unkWord` if not found.
         Optionally insert `bosWord` at the beginning and `eosWord` at the .

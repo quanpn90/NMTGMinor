@@ -8,12 +8,6 @@ from onmt.data_utils.IndexedDataset import IndexedDatasetBuilder
 import h5py as h5
 import numpy as np
 
-def loadImageLibs():
-    "Conditional import of torch image libs."
-    global Image, transforms
-    from PIL import Image
-    from torchvision import transforms
-
 
 parser = argparse.ArgumentParser(description='preprocess.py')
 onmt.Markdown.add_md_help_argument(parser)
@@ -23,11 +17,9 @@ onmt.Markdown.add_md_help_argument(parser)
 parser.add_argument('-config',    help="Read options from this file")
 
 parser.add_argument('-src_type', default="text",
-                    help="Type of the source input. Options are [text|img|audio].")
+                    help="Type of the source input. Options are [text|audio].")
 parser.add_argument('-sort_type', default="ascending",
                     help="Type of sorting. Options are [ascending|descending].")
-parser.add_argument('-src_img_dir', default=".",
-                    help="Location of source images")
 parser.add_argument('-stride', type=int, default=1,
                     help="Stride on input features")
 parser.add_argument('-concat', type=int, default=1,
@@ -38,8 +30,6 @@ parser.add_argument('-input_type', default="word",
                     help="Input type: word/char")
 parser.add_argument('-format', default="raw",
                     help="Save data format: binary or raw. Binary should be used to load faster")
-
-
 parser.add_argument('-train_src', required=True,
                     help="Path to the training source data")
 parser.add_argument('-train_tgt', required=True,
@@ -48,6 +38,16 @@ parser.add_argument('-valid_src', required=True,
                     help="Path to the validation source data")
 parser.add_argument('-valid_tgt', required=True,
                     help="Path to the validation target data")
+
+# For sentence-level textual features (target side only)
+parser.add_argument('-train_src_atb', default="",
+                    help="Path to the training source attributes")
+parser.add_argument('-train_tgt_atb', default="",
+                    help="Path to the training target attributes")
+parser.add_argument('-valid_src_atb', default="",
+                    help="Path to the validation source attributes")
+parser.add_argument('-valid_tgt_atb', default="",
+                    help="Path to the validation target attributes  ")
 
 parser.add_argument('-save_data', required=True,
                     help="Output file for the prepared data")
@@ -101,10 +101,6 @@ torch.manual_seed(opt.seed)
 
 
 def split_line_by_char(line, word_list=["<unk>"]):
-
-    #
-    # words = line.strip()
-    # chars = list(words)
 
     # first we split by words
     chars = list()
@@ -225,7 +221,6 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
     tgtf = open(tgt_file)
 
     eos = torch.LongTensor(1).fill_(onmt.Constants.EOS)
-    # print(eos.size())
     tensors = [eos]
 
     # find the number of words in the sentence
@@ -249,7 +244,6 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
                                          onmt.Constants.UNK_WORD,
                                          None,
                                          onmt.Constants.EOS_WORD)
-        # print(tensor.size())
         tensors.append(tensor)
 
         count = count + 1
@@ -264,74 +258,119 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
 
     return tensor
 
-def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_length=64, max_tgt_length=64, sort_by_target=False,
-             input_type='word'):
+def read_text_file(text_file, dicts, input_type='word', max_length=100000):
+
+    tensors = []
+    tensor_sizes = []
+
+    bad_indices = []
+
+    reader = open(text_file)
+    line_idx = -1
+
+    while True:
+        line = reader.readline()
+        line_idx += 1
+
+        if line == "":
+            break  # end of file
+
+        line = line.strip()
+
+        if line == "":
+            # empty line
+            tensors += [dicts.convertToIdx([], onmt.Constants.UNK_WORD)]
+            tensor_sizes += [0]
+            bad_indices.append(line_idx)
+            continue
+
+        if input_type == 'word':
+            words = line.split()
+        elif input_type == 'char':
+            words = split_line_by_char(line)
+
+        if len(words) <= max_length:
+
+            tensors += [dicts.convertToIdx(words, onmt.Constants.UNK_WORD)]
+
+            tensor_sizes += [len(words)]
+
+    reader.close()
+
+    return tensors, tensor_sizes, bad_indices
+
+def read_atb_file(atb_file, atb_dicts):
+
+    all_atbs = dict()
+
+    atb_num = len(atb_dicts)
+
+    for i in range(atb_num):
+        all_atbs[i] = []
+
+    reader = open(atb_file)
+
+    line_idx = -1
+
+    while True:
+
+        line = reader.readline()
+        line_idx += 1
+
+        if line == "":
+            break  # end of file
+
+        line = line.strip()
+
+        atbs = line.split()
+
+        for i, atb in enumerate(atbs):
+
+            tensor = atb_dicts[i].convertToIdx2([atb], None,  eosWord=None)
+            all_atbs[i].append(tensor)
+
+    return all_atbs
+
+def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts,
+                          src_atb_file=None, tgt_atb_file=None, atb_dicts=None,
+                          max_src_length=64, max_tgt_length=64, sort_by_target=False,
+                          input_type='word'):
     src, tgt = [], []
     src_sizes = []
     tgt_sizes = []
     count, ignored = 0, 0
+    output_dict = dict()
 
     print('Processing %s & %s ...' % (src_file, tgt_file))
-    srcf = open(src_file)
-    tgtf = open(tgt_file)
 
-    while True:
-        sline = srcf.readline()
-        tline = tgtf.readline()
+    src, src_sizes, src_bad_indices = read_text_file(src_file, src_dicts, input_type, max_src_length)
+    tgt, tgt_sizes, tgt_bad_indices = read_text_file(tgt_file, tgt_dicts, input_type, max_tgt_length)
 
-        # normal end of file
-        if sline == "" and tline == "":
-            break
 
-        # source or target does not have same number of lines
-        if sline == "" or tline == "":
-            print('WARNING: src and tgt do not have the same # of sentences')
-            break
+    # remove the items from the bad indices
+    bad_indices = list(set(src_bad_indices + tgt_bad_indices))
+    good_indices = list(set(list(range(len(src)))) - set(bad_indices))
 
-        sline = sline.strip()
-        tline = tline.strip()
+    src = [src[i] for i in good_indices]
+    tgt = [tgt[i] for i in good_indices]
+    src_sizes = [src_sizes[i] for i in good_indices]
+    tgt_sizes = [tgt_sizes[i] for i in good_indices]
 
-        # source and/or target are empty
-        if sline == "" or tline == "":
-            print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
-            continue
+    assert len(src) == len(tgt), "Two languages must have the same number of sentences"
 
-        if input_type == 'word':
-            src_words = sline.split()
-            tgt_words = tline.split()
-        elif input_type == 'char':
-            src_words = split_line_by_char(sline)
-            tgt_words = split_line_by_char(tline)
+    if src_atb_file:
+        src_atbs = read_atb_file(src_atb_file, atb_dicts)
+        for i in src_atbs:
+            src_atbs[i] = [src_atbs[i][j] for j in good_indices]
+    else:
+        src_atbs = None
 
-        if len(src_words) <= max_src_length \
-                and len(tgt_words) <= max_tgt_length - 2:
-
-            # Check truncation condition.
-            if opt.src_seq_length_trunc != 0:
-                src_words = src_words[:opt.src_seq_length_trunc]
-            if opt.tgt_seq_length_trunc != 0:
-                tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
-
-            # For src text, we use BOS for possible reconstruction
-            src += [srcDicts.convertToIdx(src_words,
-                                          onmt.Constants.UNK_WORD)]
-
-            tgt += [tgt_dicts.convertToIdx(tgt_words,
-                                          onmt.Constants.UNK_WORD,
-                                          onmt.Constants.BOS_WORD,
-                                          onmt.Constants.EOS_WORD)]
-            src_sizes += [len(src_words)]
-            tgt_sizes += [len(tgt_words)]
-        else:
-            ignored += 1
-
-        count += 1
-
-        if count % opt.report_every == 0:
-            print('... %d sentences prepared' % count)
-
-    srcf.close()
-    tgtf.close()
+    if tgt_atb_file:
+        tgt_atbs = read_atb_file(tgt_atb_file, atb_dicts)
+        for i in tgt_atbs:
+            tgt_atbs[i] = [tgt_atbs[i][j] for j in good_indices]
+    else:
+        tgt_atbs = None
 
     if opt.shuffle == 1:
         print('... shuffling sentences')
@@ -344,41 +383,62 @@ def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_lengt
 
     print('... sorting sentences by size')
 
-    z = zip(src, tgt, src_sizes, tgt_sizes)
+    ids = list(range(len(src)))
+    z = zip(src_sizes, tgt_sizes, ids)
 
     # ultimately sort by target size
-    sorted_z = sorted(sorted(z, key=lambda x: x[2]), key=lambda x: x[3])
+    sorted_z = sorted(sorted(z, key=lambda x: x[0]), key=lambda x: x[1])
 
-    src = [z_[0] for z_ in sorted_z]
-    tgt = [z_[1] for z_ in sorted_z]
+    ids = [z_[-1] for z_ in sorted_z]
+
+    src = [src[id] for id in ids]
+    tgt = [tgt[id] for id in ids]
+
+
+    if src_atbs:
+        for i in src_atbs:
+            src_atbs[i] = [src_atbs[i][j] for j in ids]
+    if tgt_atbs:
+        for i in tgt_atbs:
+            tgt_atbs[i] = [tgt_atbs[i][j] for j in ids]
 
     print(('Prepared %d sentences ' +
            '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
           (len(src), ignored, max_src_length, max_tgt_length))
 
-    return src, tgt
+    output_dict['src'] = src
+    output_dict['tgt'] = tgt
+    output_dict['src_atbs'] = src_atbs
+    output_dict['tgt_atbs'] = tgt_atbs
+
+    return output_dict
 
 
-def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_length=64,
-                  input_type='word', stride=1, concat=1, prev_context = 0, fp16=False, reshape=True,asr_format="h5"):
+def make_asr_data(src_file, tgt_file, tgt_dicts,
+                  src_atb_file=None, tgt_atb_file=None,
+                  max_src_length=64, max_tgt_length=64,
+                  input_type='word',
+                  stride=1, concat=1, prev_context=0,
+                  fp16=False, reshape=True, asr_format="h5"):
     src, tgt = [], []
-    # sizes = []
     src_sizes = []
     tgt_sizes = []
     count, ignored = 0, 0
     n_unk_words = 0
 
+    output_dict = dict()
+
     print('Processing %s & %s ...' % (src_file, tgt_file))
 
-
-    if(asr_format == "h5"):
+    if asr_format == "h5":
         fileIdx = -1;
-        if(src_file[-2:] == "h5"):
+        if src_file[-2:] == "h5":
             srcf = h5.File(src_file,'r')
         else:
             fileIdx = 0
             srcf = h5.File(src_file+"."+str(fileIdx)+".h5",'r')
-    elif(asr_format == "scp"):
+
+    elif asr_format == "scp":
         import kaldiio
         from kaldiio import ReadHelper
         audio_data =  iter(ReadHelper('scp:'+src_file))
@@ -396,10 +456,10 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
         if tline == "":
             break
 
-        if(asr_format == "h5" ):
-            if(str(index) in srcf):
+        if asr_format == "h5" :
+            if str(index) in srcf:
                 featureVectors = np.array(srcf[str(index)])
-            elif(fileIdx != -1):
+            elif fileIdx != -1:
                 srcf.close()
                 fileIdx += 1
                 srcf = h5.File(src_file+"."+str(fileIdx)+".h5",'r')
@@ -407,10 +467,10 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
             else:
                 print("No feature vector for index:",index,file=sys.stderr)
                 exit(-1)
-        elif(asr_format == "scp"):
+        elif asr_format == "scp":
             _,featureVectors = next(audio_data)
 
-        if(stride == 1):
+        if stride == 1:
             sline = torch.from_numpy(featureVectors)
         else:
             sline = torch.from_numpy(featureVectors[0::opt.stride])
@@ -456,6 +516,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
             if opt.tgt_seq_length_trunc != 0:
                 tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
 
+            # convert the line to half precision to save 50% memory
             if fp16:
                 sline = sline.half()
             src += [sline]
@@ -482,7 +543,8 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
 
         if count % opt.report_every == 0:
             print('... %d sentences prepared' % count)
-    if (asr_format == "h5"):
+
+    if asr_format == "h5":
         srcf.close()
     tgtf.close()
 
@@ -514,12 +576,68 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
            '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
           (len(src), ignored, max_src_length, max_tgt_length))
 
-    return src, tgt
+    output_dict['src'] = src
+    output_dict['tgt'] = tgt
 
+    return output_dict
+
+
+def collect_attributes(atb_files):
+
+    # the files can contain multiple attributes
+    # each of them will be stored in one onmt.Dict
+    print("* Reading attributes ...")
+    atb_dicts = dict()
+
+    for file_ in atb_files:
+
+        if not file_:
+            continue
+
+        reader = open(file_)
+
+        while True:
+            line = reader.readline()
+
+            # normal end of file
+            if line == "":
+                break
+
+            # attributes are split by space
+            atbs = line.strip().split()
+
+            for i, atb in enumerate(atbs):
+                if i not in atb_dicts:
+                    atb_dicts[i] = onmt.Dict()
+
+                atb_dicts[i].add(atb)
+
+    return atb_dicts
 
 def main():
 
     dicts = {}
+
+    # READING IN ATTRIBUTES
+    if opt.train_tgt_atb or opt.train_src_atb:
+
+        if opt.train_tgt_atb:
+            assert (len(opt.valid_tgt_atb) > 0)
+
+        if opt.train_src_atb:
+            assert (len(opt.valid_src_atb) > 0)
+
+        # the dicts['atb'] should be a collection of dicts, each element is a onmt.Dict of attributes
+
+        dicts['atb'] = collect_attributes([opt.train_src_atb, opt.train_tgt_atb])
+
+        print("Found %d types of attributes in the dataset" % len(dicts['atb']))
+
+        for i in dicts['atb']:
+            print("Found %d items in attribute type %d " % (dicts['atb'][i].size(), i))
+
+    else:
+        dicts['atb'] = None
 
     # for ASR and LM we only need to build vocab for the 'target' language
     if opt.asr or opt.lm:
@@ -537,7 +655,6 @@ def main():
         dicts['tgt'] = init_vocab('target', opt.train_tgt, opt.tgt_vocab,
                                       opt.tgt_vocab_size, input_type=opt.input_type)
 
-
     if opt.lm:
         print('Preparing training language model ...')
         train = dict()
@@ -553,43 +670,58 @@ def main():
     elif opt.asr:
         print('Preparing training acoustic model ...')
         train = dict()
-        train['src'], train['tgt'] = make_asr_data(opt.train_src, opt.train_tgt,
-                                           dicts['tgt'],
-                                                 max_src_length=opt.src_seq_length,
-                                                 max_tgt_length=opt.tgt_seq_length,
-                                                 input_type=opt.input_type,
-                                                 stride=opt.stride,concat=opt.concat,
-                                                   prev_context=opt.previous_context,
-                                                   fp16=opt.fp16,reshape=(opt.reshape_speech==1),asr_format=opt.asr_format)
+        output = make_asr_data(opt.train_src, opt.train_tgt,
+                               dicts['tgt'],
+                               max_src_length=opt.src_seq_length,
+                               max_tgt_length=opt.tgt_seq_length,
+                               input_type=opt.input_type,
+                               stride=opt.stride,concat=opt.concat,
+                               prev_context=opt.previous_context,
+                               fp16=opt.fp16,
+                               reshape=(opt.reshape_speech==1),
+                               asr_format=opt.asr_format)
+
+        train['src'] = output['src']
+        train['tgt'] = output['tgt']
 
         print('Preparing validation ...')
         valid = dict()
-        valid['src'], valid['tgt'] = make_asr_data(opt.valid_src, opt.valid_tgt,
-                                             dicts['tgt'],
-                                                 max_src_length=max(1024,opt.src_seq_length),
-                                                 max_tgt_length=max(1024,opt.tgt_seq_length),
-                                                 input_type=opt.input_type,
-                                                 stride=opt.stride,concat=opt.concat,
-                                                   prev_context=opt.previous_context,
-                                                   fp16=opt.fp16,reshape=(opt.reshape_speech==1),asr_format=opt.asr_format)
+        output = make_asr_data(opt.valid_src, opt.valid_tgt,
+                               dicts['tgt'],
+                               max_src_length=max(1024,opt.src_seq_length),
+                               max_tgt_length=max(1024,opt.tgt_seq_length),
+                               input_type=opt.input_type,
+                               stride=opt.stride,concat=opt.concat,
+                               prev_context=opt.previous_context,
+                               fp16=opt.fp16,reshape=(opt.reshape_speech==1),asr_format=opt.asr_format)
+
+        valid['src'], valid['tgt'] = output['src'], output['tgt']
 
     else:
         print('Preparing training translation model...')
         train = dict()
-        train['src'], train['tgt'] = make_translation_data(opt.train_src, opt.train_tgt,
-                                          dicts['src'], dicts['tgt'],
-                                          max_src_length=opt.src_seq_length,
-                                          max_tgt_length=opt.tgt_seq_length,
-                                          sort_by_target=opt.sort_by_target,
-                                          input_type=opt.input_type)
+        output = make_translation_data(opt.train_src, opt.train_tgt,
+                                       dicts['src'], dicts['tgt'],
+                                       opt.train_src_atb, opt.train_tgt_atb, dicts['atb'],
+                                       max_src_length=opt.src_seq_length,
+                                       max_tgt_length=opt.tgt_seq_length,
+                                       sort_by_target=opt.sort_by_target,
+                                       input_type=opt.input_type)
+
+        train['src'], train['tgt'] = output['src'], output['tgt']
+        train['src_atbs'], train['tgt_atbs'] = output['src_atbs'], output['tgt_atbs']
 
         print('Preparing validation ...')
         valid = dict()
-        valid['src'], valid['tgt'] = make_translation_data(opt.valid_src, opt.valid_tgt,
-                                          dicts['src'], dicts['tgt'], 
-                                          max_src_length=max(1024,opt.src_seq_length),
-                                          max_tgt_length=max(1024,opt.tgt_seq_length),
-                                          input_type=opt.input_type)
+        output = make_translation_data(opt.valid_src, opt.valid_tgt,
+                                       dicts['src'], dicts['tgt'],
+                                       opt.valid_src_atb, opt.valid_tgt_atb, dicts['atb'],
+                                       max_src_length=max(1024,opt.src_seq_length),
+                                       max_tgt_length=max(1024,opt.tgt_seq_length),
+                                       input_type=opt.input_type)
+
+        valid['src'], valid['tgt'] = output['src'], output['tgt']
+        valid['src_atbs'], valid['tgt_atbs'] = output['src_atbs'], output['tgt_atbs']
 
     if opt.src_vocab is None and opt.asr == False and opt.lm == False:
         save_vocabulary('source', dicts['src'], opt.save_data + '.src.dict')

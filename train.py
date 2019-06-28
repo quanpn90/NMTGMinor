@@ -67,41 +67,40 @@ def main():
 
         dicts = dataset['dicts']
 
-
         print(' * number of training sentences. %d' % len(dataset['train']['src']))
         print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
 
     elif opt.data_format == 'bin':
 
-        from onmt.data_utils.IndexedDataset import IndexedInMemoryDataset
-
-        dicts = torch.load(opt.data + ".dict.pt")
-
-        train_path = opt.data + '.train'
-        train_src = IndexedInMemoryDataset(train_path + '.src')
-        train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
-
-        train_data = onmt.Dataset(train_src,
-                                  train_tgt,
-                                  opt.batch_size_words,
-                                  data_type=opt.encoder_type,
-                                  batch_size_sents=opt.batch_size_sents,
-                                  multiplier = opt.batch_size_multiplier)
-
-        valid_path = opt.data + '.valid'
-        valid_src = IndexedInMemoryDataset(valid_path + '.src')
-        valid_tgt = IndexedInMemoryDataset(valid_path + '.tgt')
-
-        valid_data = onmt.Dataset(valid_src,
-                                  valid_tgt, opt.batch_size_words,
-                                  data_type=opt.encoder_type,
-                                  batch_size_sents=opt.batch_size_sents)
-
-    else:
+    #     from onmt.data_utils.IndexedDataset import IndexedInMemoryDataset
+    #
+    #     dicts = torch.load(opt.data + ".dict.pt")
+    #
+    #     train_path = opt.data + '.train'
+    #     train_src = IndexedInMemoryDataset(train_path + '.src')
+    #     train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
+    #
+    #     train_data = onmt.Dataset(train_src,
+    #                               train_tgt,
+    #                               opt.batch_size_words,
+    #                               data_type=opt.encoder_type,
+    #                               batch_size_sents=opt.batch_size_sents,
+    #                               multiplier = opt.batch_size_multiplier)
+    #
+    #     valid_path = opt.data + '.valid'
+    #     valid_src = IndexedInMemoryDataset(valid_path + '.src')
+    #     valid_tgt = IndexedInMemoryDataset(valid_path + '.tgt')
+    #
+    #     valid_data = onmt.Dataset(valid_src,
+    #                               valid_tgt, opt.batch_size_words,
+    #                               data_type=opt.encoder_type,
+    #                               batch_size_sents=opt.batch_size_sents)
+    #
+    # else:
         raise NotImplementedError
 
     additional_data = []
-    if(opt.additional_data != "none"):
+    if opt.additional_data != "none":
         add_data = opt.additional_data.split(";")
         add_format = opt.additional_data_format.split(";")
         assert(len(add_data) == len(add_format))
@@ -181,11 +180,8 @@ def main():
     if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
         raise NotImplementedError("Warning! Multi-GPU training is not fully tested and potential bugs can happen.")
     else:
-        # if opt.fp16:
-        #     trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
-        # else:
         trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
-        if (len(additional_data) > 0):
+        if len(additional_data) > 0:
             trainer.add_additional_data(additional_data,opt.data_ratio);
 
     trainer.run(checkpoint=checkpoint)
