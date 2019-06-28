@@ -182,11 +182,6 @@ class XETrainer(BaseTrainer):
         # self.runner.zero_grad()
         self.model.zero_grad()
         self.model.reset_states()
-
-        if opt.extra_shuffle and epoch > opt.curriculum:
-            train_data.shuffle()
-
-        # Shuffle mini batch order.
         
         if resume:
             train_data.batch_order = batch_order

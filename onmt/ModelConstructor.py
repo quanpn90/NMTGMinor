@@ -77,9 +77,9 @@ def build_tm_model(opt, dicts):
         onmt.Constants.init_value = opt.param_init
 
         if opt.encoder_type == "text":
-            encoder = TransformerEncoder(opt, dicts['src'], positional_encoder,opt.encoder_type)
+            encoder = TransformerEncoder(opt, dicts['src'], positional_encoder, opt.encoder_type)
         elif opt.encoder_type == "audio":
-            encoder = TransformerEncoder(opt, opt.input_size, positional_encoder,opt.encoder_type)
+            encoder = TransformerEncoder(opt, opt.input_size, positional_encoder, opt.encoder_type)
         elif opt.encoder_type == "mix":
             text_encoder = TransformerEncoder(opt, dicts['src'], positional_encoder, "text")
             audio_encoder = TransformerEncoder(opt, opt.input_size, positional_encoder, "audio")
@@ -101,9 +101,9 @@ def build_tm_model(opt, dicts):
         onmt.Constants.init_value = opt.param_init
         
         if opt.encoder_type == "text":
-            encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder,opt.encoder_type)
+            encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder, opt.encoder_type)
         elif opt.encoder_type == "audio":
-            encoder = StochasticTransformerEncoder(opt, opt.input_size, positional_encoder,opt.encoder_type)
+            encoder = StochasticTransformerEncoder(opt, opt.input_size, positional_encoder, opt.encoder_type)
         elif opt.encoder_type == "mix":
             text_encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder, "text")
             audio_encoder = StochasticTransformerEncoder(opt, opt.input_size, positional_encoder, "audio")
