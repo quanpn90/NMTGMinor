@@ -25,3 +25,35 @@ class 3DBottle(nn.Module):
             
             return resizedOut
 
+
+class AttributeEmbeddings(nn.Module):
+
+    def __init__(self, atb_dicts, n_attributes, atb_size):
+
+        self.n_attributes = n_attributes
+        self.atb_sizes = atb_size
+        super().__init__(self)
+
+        self.atb_embeddings = nn.ModuleDict()
+
+        for i in atb_dicts:
+
+            self.atb_embeddings[i] = nn.Embeddings(len(atb_dicts[i]), atb_size)
+
+    def forward(self, atbs):
+    """
+    Input: atbs is a dictionary of features
+    """
+
+    embeddings = {}
+
+    for i in atbs:
+
+        embedding = self.atb_embeddings[i](atbs[i])
+
+        embeddings.append(embedding)
+
+    # Concatenation of the features
+    embedding = torch.cat(embeddings, dim=-1)
+
+    return embedding

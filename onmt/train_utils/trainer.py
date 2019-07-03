@@ -95,13 +95,13 @@ class XETrainer(BaseTrainer):
         if setup_optimizer:
 
             self.optim = onmt.Optim(opt)
-            self.optim.set_parameters(self.model.parameters())
+            self.optim.set_parameters(self.model.parameters())  `
 
             opt_level = "O0" if not self.opt.fp16 else "O2"
             print("Optimization level: %s" % opt_level)
             self.model, self.optim.optimizer = apex.amp.initialize(self.model, self.optim.optimizer,
                                                                    opt_level=opt_level,
-                                                                   keep_batchnorm_fp32=False, loss_scale="dynamic",
+                                                                   keep_batchnorm_fp32=True, loss_scale="dynamic",
                                                                    verbosity=0)
 
     def save(self, epoch, valid_ppl, batch_order=None, iteration=-1):
@@ -122,8 +122,8 @@ class XETrainer(BaseTrainer):
                 'iteration' : iteration,
                 'batch_order' : batch_order,
                 'optim': optim_state_dict,
-                'additional_batch_order' : self.additional_batch_order,
-                'additional_data_iteration' : self.additional_data_iteration
+                'additional_batch_order' : getattr(self, 'additional_batch_order', None)
+                'additional_data_iteration' : getattr(self, 'additional_data_iteration', None)
         }
         
         file_name = '%s_ppl_%.6f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
@@ -182,7 +182,7 @@ class XETrainer(BaseTrainer):
         # self.runner.zero_grad()
         self.model.zero_grad()
         self.model.reset_states()
-        
+
         if resume:
             train_data.batch_order = batch_order
             train_data.set_index(iteration)
