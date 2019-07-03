@@ -347,12 +347,29 @@ class TransformerDecoder(nn.Module):
         input = decoder_state.input_seq.transpose(0, 1)
         input_ = input[:,-1].unsqueeze(1)
 
-        emb = self.process_embedding(input_, atbs)
+        """ Embedding: batch_size x 1 x d_model """
+        emb = self.word_lut(input_)
+
+        """ Adding positional encoding """
+        if self.time == 'positional_encoding':
+            emb = emb * math.sqrt(self.model_size)
+            emb = self.time_transformer(emb, t=input.size(1))
+        else:
+            # prev_h = buffer[0] if buffer is None else None
+            # emb = self.time_transformer(emb, prev_h)
+            # buffer[0] = emb[1]
+            raise NotImplementedError
+
+        if isinstance(emb, tuple):
+            emb = emb[0]
+        # emb should be batch_size x 1 x dim
+
+        # Preprocess layer: adding dropout
+        emb = self.preprocess_layer(emb)
 
         emb = emb.transpose(0, 1)
 
         # batch_size x 1 x len_src
-
         if context is not None:
             if self.encoder_type == "audio" and src.data.dim() == 3:
                 mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
