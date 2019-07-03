@@ -95,7 +95,7 @@ class XETrainer(BaseTrainer):
         if setup_optimizer:
 
             self.optim = onmt.Optim(opt)
-            self.optim.set_parameters(self.model.parameters())  `
+            self.optim.set_parameters(self.model.parameters())
 
             opt_level = "O0" if not self.opt.fp16 else "O2"
             print("Optimization level: %s" % opt_level)
@@ -122,7 +122,7 @@ class XETrainer(BaseTrainer):
                 'iteration' : iteration,
                 'batch_order' : batch_order,
                 'optim': optim_state_dict,
-                'additional_batch_order' : getattr(self, 'additional_batch_order', None)
+                'additional_batch_order' : getattr(self, 'additional_batch_order', None),
                 'additional_data_iteration' : getattr(self, 'additional_data_iteration', None)
         }
         

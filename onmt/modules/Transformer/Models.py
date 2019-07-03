@@ -50,7 +50,7 @@ class TransformerEncoder(nn.Module):
         
     """
     
-    def __init__(self, opt, feature_size, positional_encoder, encoder_type='text'):
+    def __init__(self, opt, dicts, positional_encoder, encoder_type='text'):
     
         super(TransformerEncoder, self).__init__()
         
@@ -144,7 +144,7 @@ class TransformerEncoder(nn.Module):
 
                 mask_src = long_mask[:, 0:input.size(1)*4:4].unsqueeze(1)
                 emb = input
-                # print(emb.size())
+                print(emb.size())
                 # print(mask_src.size())
 
         """ Scale the emb by sqrt(d_model) """

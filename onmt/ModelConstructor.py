@@ -60,13 +60,11 @@ def build_model(opt, dicts):
 
 def build_tm_model(opt, dicts):
 
-
     # BUILD POSITIONAL ENCODING
     if opt.time == 'positional_encoding':
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
     else:
         raise NotImplementedError
-
 
     # BUILD GENERATOR
     generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
@@ -80,6 +78,7 @@ def build_tm_model(opt, dicts):
         onmt.Constants.init_value = opt.param_init
 
         if opt.encoder_type == "text":
+            print(dicts['src'])
             encoder = TransformerEncoder(opt, dicts['src'], positional_encoder, opt.encoder_type)
         elif opt.encoder_type == "audio":
             encoder = TransformerEncoder(opt, opt.input_size, positional_encoder, opt.encoder_type)
@@ -90,7 +89,6 @@ def build_tm_model(opt, dicts):
         else:
             print ("Unkown encoder type:",opt.encoder_type)
             exit(-1)
-
 
         decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder)
 
