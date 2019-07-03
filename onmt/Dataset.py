@@ -6,14 +6,11 @@ from collections import defaultdict
 import onmt
 from onmt.speech.Augmenter import Augmenter
 
-def split_dictionary():
-
-    return
-
 
 class Batch(object):
     # An object to manage the data within a minibatch
     def __init__(self, src_data, tgt_data=None,
+                 src_atb_data=None, tgt_atb_data=None,
                  src_type='text',
                  src_align_right=False, tgt_align_right=False,
                  reshape_speech=0, augmenter=None):
@@ -51,6 +48,22 @@ class Batch(object):
             self.tgt_size = 0
 
         self.size = len(src_data) if src_data is not None else len(tgt_data)
+
+        if src_atb_data is not None:
+            self.src_atb_data = dict()
+
+            for i in src_atb_data:
+                self.src_atb_data[i] = torch.cat(src_atb_data[i])
+
+            self.tensors['src_atb'] = self.src_atb_data
+
+        if tgt_atb_data is not None:
+            self.tgt_atb_data = dict()
+
+            for i in tgt_atb_data:
+                self.tgt_atb_data[i] = torch.cat(tgt_atb_data[i])
+
+            self.tensors['tgt_atb'] = self.tgt_atb_data
 
     # down sampling the speech signal by simply concatenating n features (reshaping)
     def downsample(self, data):
@@ -132,15 +145,19 @@ class Batch(object):
 
     def cuda(self, fp16=False):
         for key, tensor in self.tensors.items():
-            if tensor.type() == "torch.FloatTensor" and fp16:
-                self.tensors[key] = tensor.half()
-            self.tensors[key] = self.tensors[key].cuda()
+            if isinstance(tensor, dict):
+                for k in tensor:
+                    tensor[k].cuda()
+            else:
+                if tensor.type() == "torch.FloatTensor" and fp16:
+                    self.tensors[key] = tensor.half()
+                self.tensors[key] = self.tensors[key].cuda()
 
 
 class Dataset(object):
 
-    def __init__(self, src_data, tgt_data, ,
-                 src_atbs=None, tgt_atb=None,
+    def __init__(self, src_data, tgt_data,
+                 src_atbs=None, tgt_atbs=None,
                  batch_size_words=2048,
                  data_type="text", batch_size_sents=128,
                  multiplier=1, sort_by_target=False,
@@ -274,20 +291,21 @@ class Dataset(object):
             tgt_data = None
 
         src_atb_data = None
-        if self.src_atbs:
+        if self.src_atbs is not None:
             src_atb_data = dict()
 
             for i in self.src_atbs:
                 src_atb_data[i] = [self.src_atbs[i][j] for j in batch_ids]
 
         tgt_atb_data = None
-        if self.tgt_atbs:
+        if self.tgt_atbs is not None:
             tgt_atb_data = dict()
 
             for i in self.tgt_atbs:
                 tgt_atb_data[i] = [self.tgt_atbs[i][j] for j in batch_ids]
 
         batch = Batch(src_data, tgt_data=tgt_data,
+                      src_atb_data=src_atb_data, tgt_atb_data=tgt_atb_data,
                       src_align_right=False, tgt_align_right=False,
                       src_type=self._type, reshape_speech=self.reshape_speech,
                       augmenter=self.augmenter)
@@ -339,6 +357,7 @@ class Dataset(object):
         
         assert(iteration >= 0 and iteration < self.num_batches)
         self.cur_index = iteration
+
 
 # LANGUAGE MODEL DATASET AND DATAHOLDER
 class LMBatch(Batch):

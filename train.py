@@ -53,14 +53,16 @@ def main():
         print("Done after %s" % elapse )
 
         train_data = onmt.Dataset(dataset['train']['src'],
-                                  dataset['train']['tgt'], opt.batch_size_words,
+                                  dataset['train']['tgt'],
+                                  batch_size_words=opt.batch_size_words,
                                   data_type=dataset.get("type", "text"),
                                   batch_size_sents=opt.batch_size_sents,
                                   multiplier=opt.batch_size_multiplier,
                                   reshape_speech=opt.reshape_speech,
                                   augment=opt.augment_speech)
         valid_data = onmt.Dataset(dataset['valid']['src'],
-                                  dataset['valid']['tgt'], opt.batch_size_words,
+                                  dataset['valid']['tgt'],
+                                  batch_size_words=opt.batch_size_words,
                                   data_type=dataset.get("type", "text"),
                                   batch_size_sents=opt.batch_size_sents,
                                   reshape_speech=opt.reshape_speech)
@@ -114,7 +116,7 @@ def main():
                     add_dataset = torch.load(add_data[i] + ".train.pt")
 
                 additional_data.append(onmt.Dataset(add_dataset['train']['src'],
-                                          dataset['train']['tgt'], opt.batch_size_words,
+                                          dataset['train']['tgt'], batch_size_words=opt.batch_size_words,
                                           data_type=dataset.get("type", "text"),
                                           batch_size_sents=opt.batch_size_sents,
                                           multiplier=opt.batch_size_multiplier,
@@ -129,13 +131,11 @@ def main():
                 train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
 
                 additional_data.append(onmt.Dataset(train_src,
-                                  train_tgt,
-                                  opt.batch_size_words,
-                                  data_type=opt.encoder_type,
-                                  batch_size_sents=opt.batch_size_sents,
-                                  multiplier = opt.batch_size_multiplier))
-
-
+                                       train_tgt,
+                                       batch_size_words=opt.batch_size_words,
+                                       data_type=opt.encoder_type,
+                                       batch_size_sents=opt.batch_size_sents,
+                                       multiplier = opt.batch_size_multiplier))
 
     if opt.load_from:
         checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
@@ -151,7 +151,6 @@ def main():
     else:
         print(' * vocabulary size. target = %d' %
               (dicts['tgt'].size()))
-
 
     print('Building model...')
 
