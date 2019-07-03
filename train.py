@@ -11,6 +11,8 @@ from onmt.train_utils.fp16_trainer import FP16XETrainer
 from onmt.modules.Loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.ModelConstructor import build_model
 from options import make_parser
+from collections import defaultdict
+
 
 parser = argparse.ArgumentParser(description='train.py')
 onmt.Markdown.add_md_help_argument(parser)
@@ -52,16 +54,19 @@ def main():
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
         print("Done after %s" % elapse )
 
-        train_data = onmt.Dataset(dataset['train']['src'],
-                                  dataset['train']['tgt'],
+        train_dict = defaultdict(lambda: None, dataset['train'])
+        valid_dict = defaultdict(lambda: None, dataset['valid'])
+
+        train_data = onmt.Dataset(train_dict['src'], train_dict['tgt'],
+                                  train_dict['src_atbs'], train_dict['tgt_atbs'],
                                   batch_size_words=opt.batch_size_words,
                                   data_type=dataset.get("type", "text"),
                                   batch_size_sents=opt.batch_size_sents,
                                   multiplier=opt.batch_size_multiplier,
                                   reshape_speech=opt.reshape_speech,
                                   augment=opt.augment_speech)
-        valid_data = onmt.Dataset(dataset['valid']['src'],
-                                  dataset['valid']['tgt'],
+        valid_data = onmt.Dataset(valid_dict['src'], valid_dict['tgt'],
+                                  valid_dict['src_atbs'], valid_dict['tgt_atbs'],
                                   batch_size_words=opt.batch_size_words,
                                   data_type=dataset.get("type", "text"),
                                   batch_size_sents=opt.batch_size_sents,

@@ -20,6 +20,10 @@ class EnsembleTranslator(object):
         self.alpha = opt.alpha
         self.start_with_bos = opt.start_with_bos
         self.fp16 = opt.fp16
+        self.attributes = opt.attributes  # attributes split by |. for example: de|domain1
+
+        if self.attributes:
+            self.attributes = self.attributes.split("|")
 
         self.models = list()
         self.model_types = list()
@@ -45,6 +49,13 @@ class EnsembleTranslator(object):
                 else:
                     self._type = "audio"
                 self.tgt_dict = checkpoint['dicts']['tgt']
+
+                if "atb" in checkpoint["dicts"]:
+                    self.atb_dict = checkpoint['dicts']['atb']
+
+                    assert len(self.atb_dict) == len(self.attributes)
+                else:
+                    self.atb_dict = None
 
             # Build model from the saved option
             # if hasattr(model_opt, 'fusion') and model_opt.fusion == True:
@@ -175,7 +186,6 @@ class EnsembleTranslator(object):
             for i in range(1, len(outputs)):
                 output = torch.min(output,outputs[i])
 
-
         elif self.ensemble_op == 'gmean':
             output = torch.exp(outputs[0])
 
@@ -226,8 +236,24 @@ class EnsembleTranslator(object):
                                                    onmt.Constants.BOS_WORD,
                                                    onmt.Constants.EOS_WORD) for b in tgt_sents]
 
-        return onmt.Dataset(src_data, tgt_data, sys.maxsize
-                            , data_type=self._type,
+        src_atbs = None
+
+        if self.attributes:
+            tgt_atbs = dict()
+
+            idx = 0
+            for i in self.atb_dict:
+
+                tgt_atbs[i] = [self.atb_dict[i].convertToIdx([self.attributes[idx]], onmt.Constants.UNK_WORD)
+                               for _ in src_batch]
+                idx = idx + 1
+        else:
+            tgt_atbs = None
+
+        return onmt.Dataset(src_data, tgt_data,
+                            src_atbs=src_atbs, tgt_atbs=tgt_atbs,
+                            batch_size_words=sys.maxsize,
+                            data_type=self._type,
                             batch_size_sents=self.opt.batch_size)
 
     def build_asr_data(self, src_data, tgt_sents):
@@ -240,7 +266,8 @@ class EnsembleTranslator(object):
                                                    onmt.Constants.BOS_WORD,
                                                    onmt.Constants.EOS_WORD) for b in tgt_sents]
 
-        return onmt.Dataset(src_data, tgt_data, sys.maxsize,
+        return onmt.Dataset(src_data, tgt_data,
+                            batch_size_words=sys.maxsize,
                             data_type=self._type, batch_size_sents=self.opt.batch_size)
 
     def build_target_tokens(self, pred, src, attn):
@@ -298,7 +325,6 @@ class EnsembleTranslator(object):
             outs = dict()
             attns = dict()
 
-
             for k in range(self.n_models):
                 # decoder_hidden, coverage = self.models[k].decoder.step(decoder_input.clone(), decoder_states[k])
 
@@ -328,7 +354,6 @@ class EnsembleTranslator(object):
                 .transpose(0, 1).contiguous()
 
             active = []
-            
 
             for b in range(batch_size):
                 if beam[b].done:
@@ -359,7 +384,6 @@ class EnsembleTranslator(object):
                 lm_decoder_states.prune_complete_beam(active_idx, remaining_sents)
 
             remaining_sents = len(active)
-
 
         #  (4) package everything up
         all_hyp, all_scores, all_attn = [], [], []
