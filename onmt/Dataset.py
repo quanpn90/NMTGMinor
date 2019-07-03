@@ -6,6 +6,10 @@ from collections import defaultdict
 import onmt
 from onmt.speech.Augmenter import Augmenter
 
+def split_dictionary():
+
+    return
+
 
 class Batch(object):
     # An object to manage the data within a minibatch
@@ -135,7 +139,9 @@ class Batch(object):
 
 class Dataset(object):
 
-    def __init__(self, src_data, tgt_data, batch_size_words,
+    def __init__(self, src_data, tgt_data, ,
+                 src_atbs=None, tgt_atb=None,
+                 batch_size_words=2048,
                  data_type="text", batch_size_sents=128,
                  multiplier=1, sort_by_target=False,
                  reshape_speech=0, augment=False):
@@ -149,6 +155,10 @@ class Dataset(object):
                 assert(len(self.src) == len(self.tgt))
         else:
             self.tgt = None
+
+        self.src_atbs=src_atbs
+        self.tgt_atbs=tgt_atbs
+
         self.fullSize = len(self.src) if self.src is not None else len(self.tgt)
 
         # maximum number of tokens in a mb
@@ -214,6 +224,7 @@ class Dataset(object):
 
             if self.tgt is not None and self.src is not None:
                 sentence_length = max(self.tgt[i].size(0) - 1, self.src[i].size(0))
+                # print(sentence_length)
             elif self.tgt is not None:
                 sentence_length = self.tgt[i].size(0) - 1
             else:
@@ -261,6 +272,20 @@ class Dataset(object):
             tgt_data = [self.tgt[i] for i in batch_ids]
         else:
             tgt_data = None
+
+        src_atb_data = None
+        if self.src_atbs:
+            src_atb_data = dict()
+
+            for i in self.src_atbs:
+                src_atb_data[i] = [self.src_atbs[i][j] for j in batch_ids]
+
+        tgt_atb_data = None
+        if self.tgt_atbs:
+            tgt_atb_data = dict()
+
+            for i in self.tgt_atbs:
+                tgt_atb_data[i] = [self.tgt_atbs[i][j] for j in batch_ids]
 
         batch = Batch(src_data, tgt_data=tgt_data,
                       src_align_right=False, tgt_align_right=False,

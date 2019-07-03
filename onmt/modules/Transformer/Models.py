@@ -50,7 +50,7 @@ class TransformerEncoder(nn.Module):
         
     """
     
-    def __init__(self, opt, dicts, positional_encoder, encoder_type='text'):
+    def __init__(self, opt, feature_size, positional_encoder, encoder_type='text'):
     
         super(TransformerEncoder, self).__init__()
         
@@ -68,9 +68,22 @@ class TransformerEncoder(nn.Module):
         self.time = opt.time
         self.version = opt.version
         self.input_type = encoder_type
+        self.cnn_downsampling = opt.cnn_downsampling
+        self.channels = 1
 
         if encoder_type != "text":
-            self.audio_trans = nn.Linear(dicts, self.model_size)
+            if not self.cnn_downsampling:
+                self.audio_trans = nn.Linear(feature_size, self.model_size)
+                torch.nn.init.xavier_uniform_(model.encoder.audio_trans.weight.data)
+            else:
+                channels = self.channels
+                cnn = [nn.Conv2d(channels, 64, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(64),
+                       nn.Conv2d(64, 64, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(64)]
+                self.audio_trans = nn.Sequential(*cnn)
+
+                # self.model_size =
+                feat_size = (((feature_size // channels) - 3) // 4) * 64
+                assert self.model_size == feat_size, "The model dimension doesn't match with the feature dim, expecting %d " % feat_size
         else:
             self.word_lut = nn.Embedding(dicts.size(),
                                          self.model_size,
@@ -111,11 +124,28 @@ class TransformerEncoder(nn.Module):
             mask_src = input.data.eq(onmt.Constants.PAD).unsqueeze(1)  # batch_size x len_src x 1 for broadcasting
             emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         else:
+            if not self.cnn_downsampling:
+                mask_src = input.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+                input = input.narrow(2, 1, input.size(2) - 1)
+                emb = self.audio_trans(input.contiguous().view(-1, input.size(2))).view(input.size(0),
+                                                                                        input.size(1), -1)
+            else:
+                long_mask =  input.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD)
+                input = input.narrow(2, 1, input.size(2) - 1)
 
-            mask_src = input.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
-            input = input.narrow(2, 1, input.size(2) - 1)
-            emb = self.audio_trans(input.contiguous().view(-1, input.size(2))).view(input.size(0),
-                                                                                    input.size(1), -1)
+                # first resizing to fit the CNN format
+                input = input.view(input.size(0), input.size(1), -1, self.channels)
+                input = input.permute(0, 3, 1, 2)
+
+                input = self.audio_trans(input)
+                input = input.permute(0, 2, 1, 3).contiguous()
+                input = input.view(input.size(0), input.size(1), -1)
+
+
+                mask_src = long_mask[:, 0:input.size(1)*4:4].unsqueeze(1)
+                emb = input
+                # print(emb.size())
+                # print(mask_src.size())
 
         """ Scale the emb by sqrt(d_model) """
         
@@ -125,7 +155,8 @@ class TransformerEncoder(nn.Module):
         emb = self.time_transformer(emb)
 
         emb = self.preprocess_layer(emb)
-        
+
+        # B x T x H -> T x B x H
         context = emb.transpose(0, 1).contiguous()
         
         for i, layer in enumerate(self.layer_modules):
@@ -174,6 +205,7 @@ class TransformerDecoder(nn.Module):
         self.version = opt.version
         self.encoder_type = opt.encoder_type
         self.ignore_source = ignore_source
+        self.encoder_cnn_downsampling = opt.cnn_downsampling
 
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
@@ -239,8 +271,13 @@ class TransformerDecoder(nn.Module):
 
         if context is not None:
             if self.encoder_type == "audio":
-                mask_src = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
-                pad_mask_src = src.data.narrow(2, 0, 1).squeeze(2).ne(onmt.Constants.PAD)  # batch_size x len_src
+                if not self.encoder_cnn_downsampling:
+                    mask_src = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+                    pad_mask_src = src.data.narrow(2, 0, 1).squeeze(2).ne(onmt.Constants.PAD)  # batch_size x len_src
+                else:
+                    long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD)
+                    mask_src = long_mask[:, 0:context.size(0)*4:4].unsqueeze(1)
+                    pad_mask_src = None
             else:
 
                 mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)

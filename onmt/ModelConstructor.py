@@ -40,6 +40,9 @@ def build_model(opt, dicts):
     if not hasattr(opt, 'fusion'):
         opt.fusion = False
 
+    if not hasattr(opt, 'cnn_downsampling'):
+        opt.cnn_downsampling = False
+
     onmt.Constants.layer_norm = opt.layer_norm
     onmt.Constants.weight_norm = opt.weight_norm
     onmt.Constants.activation_layer = opt.activation_layer
@@ -144,7 +147,7 @@ def build_tm_model(opt, dicts):
         init.xavier_uniform_(g.linear.weight)
 
     if opt.encoder_type == "audio":
-        init.xavier_uniform_(model.encoder.audio_trans.weight.data)
+
         if opt.init_embedding == 'xavier':
             init.xavier_uniform_(model.decoder.word_lut.weight)
         elif opt.init_embedding == 'normal':
