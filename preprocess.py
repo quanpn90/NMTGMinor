@@ -394,7 +394,6 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts,
     src = [src[id] for id in ids]
     tgt = [tgt[id] for id in ids]
 
-
     if src_atbs:
         for i in src_atbs:
             src_atbs[i] = [src_atbs[i][j] for j in ids]

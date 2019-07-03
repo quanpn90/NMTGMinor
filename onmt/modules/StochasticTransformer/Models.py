@@ -76,17 +76,19 @@ class StochasticTransformerDecoder(TransformerDecoder):
         
     """
     
-    def __init__(self, opt, dicts, positional_encoder):
+    def __init__(self, opt, dicts, positional_encoder, attribute_embeddings=None, ignore_source=False):
 
         self.death_rate = opt.death_rate
         
         # build_modules will be called from the inherited constructor
-        super(StochasticTransformerDecoder, self).__init__(opt, dicts, positional_encoder)
+        super(StochasticTransformerDecoder, self).__init__(opt, dicts,
+                                                           positional_encoder,
+                                                           attribute_embeddings,
+                                                           ignore_source)
         
         e_length = expected_length(self.layers, self.death_rate)
         
         print("Stochastic Decoder with %.2f expected layers" % e_length)
-        
 
     def build_modules(self):
         

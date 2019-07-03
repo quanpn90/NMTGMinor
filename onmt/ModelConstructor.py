@@ -69,28 +69,51 @@ def build_tm_model(opt, dicts):
     # BUILD GENERATOR
     generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
 
+    # BUILD EMBEDDING
+    if 'src' in dicts:
+        embedding_src = nn.Embedding(dicts['src'].size(),
+                                     opt.model_size,
+                                     padding_idx=onmt.Constants.PAD)
+    else:
+        embedding_src = None
+
+    if opt.join_embedding and embedding_src is not None:
+        embedding_tgt = embedding_src
+        print("* Joining the weights of encoder and decoder word embeddings")
+    else:
+        embedding_tgt = nn.Embedding(dicts['tgt'].size(),
+                                     opt.model_size,
+                                     padding_idx=onmt.Constants.PAD)
+
+    if 'atb' in dicts and dicts['atb'] is not None:
+        from onmt.modules.Utilities import AttributeEmbeddings
+
+        attribute_embeddings = AttributeEmbeddings(dicts['atb'], opt.model_size)
+
+    else:
+        attribute_embeddings = None
+
     if opt.ctc_loss != 0:
         generators.append(onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size() + 1))
-    
+
     if opt.model == 'transformer':
         # raise NotImplementedError
 
         onmt.Constants.init_value = opt.param_init
 
         if opt.encoder_type == "text":
-            print(dicts['src'])
-            encoder = TransformerEncoder(opt, dicts['src'], positional_encoder, opt.encoder_type)
+            encoder = TransformerEncoder(opt, embedding_src, positional_encoder, opt.encoder_type)
         elif opt.encoder_type == "audio":
-            encoder = TransformerEncoder(opt, opt.input_size, positional_encoder, opt.encoder_type)
+            encoder = TransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
         elif opt.encoder_type == "mix":
-            text_encoder = TransformerEncoder(opt, dicts['src'], positional_encoder, "text")
-            audio_encoder = TransformerEncoder(opt, opt.input_size, positional_encoder, "audio")
+            text_encoder = TransformerEncoder(opt, embedding_src, positional_encoder, "text")
+            audio_encoder = TransformerEncoder(opt, None, positional_encoder, "audio")
             encoder = MixedEncoder(text_encoder,audio_encoder)
         else:
-            print ("Unkown encoder type:",opt.encoder_type)
+            print ("Unknown encoder type:", opt.encoder_type)
             exit(-1)
 
-        decoder = TransformerDecoder(opt, dicts['tgt'], positional_encoder)
+        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, attribute_embeddings=attribute_embeddings)
 
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
 
@@ -102,18 +125,18 @@ def build_tm_model(opt, dicts):
         onmt.Constants.init_value = opt.param_init
         
         if opt.encoder_type == "text":
-            encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder, opt.encoder_type)
+            encoder = StochasticTransformerEncoder(opt, embedding_src, positional_encoder, opt.encoder_type)
         elif opt.encoder_type == "audio":
-            encoder = StochasticTransformerEncoder(opt, opt.input_size, positional_encoder, opt.encoder_type)
+            encoder = StochasticTransformerEncoder(opt, 0, positional_encoder, opt.encoder_type)
         elif opt.encoder_type == "mix":
-            text_encoder = StochasticTransformerEncoder(opt, dicts['src'], positional_encoder, "text")
-            audio_encoder = StochasticTransformerEncoder(opt, opt.input_size, positional_encoder, "audio")
-            encoder = MixedEncoder(text_encoder,audio_encoder)
+            text_encoder = StochasticTransformerEncoder(opt, embedding_src, positional_encoder, "text")
+            audio_encoder = StochasticTransformerEncoder(opt, None, positional_encoder, "audio")
+            encoder = MixedEncoder(text_encoder, audio_encoder)
         else:
-            print ("Unknown encoder type:",opt.encoder_type)
+            print ("Unknown encoder type:", opt.encoder_type)
             exit(-1)
 
-        decoder = StochasticTransformerDecoder(opt, dicts['tgt'], positional_encoder)
+        decoder = StochasticTransformerDecoder(opt, embedding_tgt, positional_encoder, attribute_embeddings=attribute_embeddings)
 
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
 
@@ -122,11 +145,11 @@ def build_tm_model(opt, dicts):
         from onmt.modules.DynamicTransformer.Models import DlclTransformerDecoder, DlclTransformerEncoder
 
         if opt.encoder_type == "text":
-            encoder = DlclTransformerEncoder(opt, dicts['src'], positional_encoder, opt.encoder_type)
+            encoder = DlclTransformerEncoder(opt, embedding_src, positional_encoder, opt.encoder_type)
         elif opt.encoder_type == "audio":
-            encoder = DlclTransformerEncoder(opt, opt.input_size, positional_encoder, opt.encoder_type)
+            encoder = DlclTransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
 
-        decoder = DlclTransformerDecoder(opt, dicts['tgt'], positional_encoder)
+        decoder = DlclTransformerDecoder(opt, embedding_tgt, positional_encoder)
 
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
 
@@ -136,10 +159,6 @@ def build_tm_model(opt, dicts):
     if opt.tie_weights:  
         print("Joining the weights of decoder input and output embeddings")
         model.tie_weights()
-       
-    if opt.join_embedding:
-        print("Joining the weights of encoder and decoder word embeddings")
-        model.share_enc_dec_embedding()
 
     for g in model.generator:
         init.xavier_uniform_(g.linear.weight)
@@ -176,16 +195,6 @@ def build_language_model(opt, dicts):
     onmt.Constants.version = 1.0
     onmt.Constants.attention_out = opt.attention_out
     onmt.Constants.residual_type = opt.residual_type
-
-    # from onmt.modules.TransformerLM.Models import TransformerLM, TransformerLMDecoder
-    #
-    # positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
-    #
-    # decoder = TransformerLMDecoder(opt, dicts['tgt'], positional_encoder)
-    #
-    #
-    #
-    # model = TransformerLM(None, decoder, )
 
     from onmt.modules.LSTMLM.Models import LSTMLMDecoder, LSTMLM
 

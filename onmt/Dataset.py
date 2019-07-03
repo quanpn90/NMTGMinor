@@ -55,7 +55,7 @@ class Batch(object):
             for i in src_atb_data:
                 self.src_atb_data[i] = torch.cat(src_atb_data[i])
 
-            self.tensors['src_atb'] = self.src_atb_data
+            self.tensors['source_atb'] = self.src_atb_data
 
         if tgt_atb_data is not None:
             self.tgt_atb_data = dict()
@@ -63,7 +63,7 @@ class Batch(object):
             for i in tgt_atb_data:
                 self.tgt_atb_data[i] = torch.cat(tgt_atb_data[i])
 
-            self.tensors['tgt_atb'] = self.tgt_atb_data
+            self.tensors['target_atb'] = self.tgt_atb_data
 
     # down sampling the speech signal by simply concatenating n features (reshaping)
     def downsample(self, data):
@@ -147,7 +147,8 @@ class Batch(object):
         for key, tensor in self.tensors.items():
             if isinstance(tensor, dict):
                 for k in tensor:
-                    tensor[k].cuda()
+                    v = tensor[k]
+                    tensor[k] = v.cuda()
             else:
                 if tensor.type() == "torch.FloatTensor" and fp16:
                     self.tensors[key] = tensor.half()
