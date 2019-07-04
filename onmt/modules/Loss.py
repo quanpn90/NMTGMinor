@@ -71,40 +71,38 @@ class NMTLossFunc(CrossEntropyLossBase):
         """
 
         outputs = model_outputs['hidden']
-        logprobs = model_outputs['logprobs']
+        # logprobs = model_outputs['logprobs']
         # original_outputs = hiddens
         # batch_size = outputs.size(1)
         # h_size = outputs.size(-1)
-        
+
         # flatten the output
-        # outputs = outputs.contiguous().view(-1, outputs.size(-1))
+        outputs = outputs.contiguous().view(-1, outputs.size(-1))
         targets = targets.view(-1)
-        logprobs = logprobs.contiguous().view(-1, logprobs.size(-1))
 
         mask = model_outputs['tgt_mask']
 
-        #
-        # if mask is not None:
-        #     """ We remove all positions with PAD """
-        #     flattened_mask = mask.view(-1)
-        #
-        #     non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
-        #
-        #     clean_input = outputs.index_select(0, non_pad_indices)
-        #
-        #     clean_targets = targets.index_select(0, non_pad_indices)
-        #
-        # else:
-        #     clean_input = outputs
-        #     clean_targets = targets
+        if mask is not None:
+            """ We remove all positions with PAD """
+            flattened_mask = mask.view(-1)
 
-        # if model is not None:
-        #     # the 'first' generator is the decoder softmax one
-        #     dists = model.generator[0](clean_input)
-        # else:
-        #     dists = clean_input
+            non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
 
-        loss, loss_data = self._compute_loss(logprobs, targets)
+            clean_input = outputs.index_select(0, non_pad_indices)
+
+            clean_targets = targets.index_select(0, non_pad_indices)
+
+        else:
+            clean_input = outputs
+            clean_targets = targets
+
+        if model is not None:
+            # the 'first' generator is the decoder softmax one
+            logprobs = model.generator[0](clean_input)
+        else:
+            logprobs = clean_input
+
+        loss, loss_data = self._compute_loss(logprobs, clean_targets)
 
         if backward:
             loss.div(normalizer).backward()
@@ -301,7 +299,6 @@ class FusionLoss(CrossEntropyLossBase):
                 log_lm = model.lm_model.generator[0](clean_lm_input, log_softmax=True)
 
             dists = F.log_softmax(tm_logits + log_lm, dim=-1)
-
 
             # # POSTNORM algorithm
             # tm_logits =  model.tm_model.generator[0](clean_tm_input, log_softmax=False)

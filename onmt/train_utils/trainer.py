@@ -99,9 +99,10 @@ class XETrainer(BaseTrainer):
 
             opt_level = "O0" if not self.opt.fp16 else "O2"
             print("Optimization level: %s" % opt_level)
-            self.model, self.optim.optimizer = apex.amp.initialize(self.model, self.optim.optimizer,
+            [self.model, self.loss_function], self.optim.optimizer = apex.amp.initialize([self.model, self.loss_function],
+                                                                   self.optim.optimizer,
                                                                    opt_level=opt_level,
-                                                                   keep_batchnorm_fp32=True, loss_scale="dynamic",
+                                                                   keep_batchnorm_fp32=False, loss_scale="dynamic",
                                                                    verbosity=0)
 
     def save(self, epoch, valid_ppl, batch_order=None, iteration=-1):

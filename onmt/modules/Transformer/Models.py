@@ -143,7 +143,6 @@ class TransformerEncoder(nn.Module):
 
                 mask_src = long_mask[:, 0:input.size(1)*4:4].unsqueeze(1)
                 emb = input
-                print(emb.size())
 
         """ Scale the emb by sqrt(d_model) """
         
@@ -371,8 +370,18 @@ class TransformerDecoder(nn.Module):
 
         # batch_size x 1 x len_src
         if context is not None:
-            if self.encoder_type == "audio" and src.data.dim() == 3:
-                mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+            if self.encoder_type == "audio":
+                if src.data.dim() == 3:
+                    if self.encoder_cnn_downsampling:
+                        long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD)
+                        mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
+                    else:
+                        mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+                elif self.encoder_cnn_downsampling:
+                    long_mask =  src.eq(onmt.Constants.PAD)
+                    mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
+                else:
+                    mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
             else:
                 mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
         else:
@@ -443,7 +452,7 @@ class Transformer(NMTModel):
         output_dict['src_mask'] = encoder_output['src_mask']
 
         logprobs = self.generator[0](output)
-        output_dict['logprobs'] = logprobs
+        # output_dict['logprobs'] = logprobs
 
         return output_dict
 
@@ -547,10 +556,13 @@ class TransformerDecodingState(DecoderState):
     def __init__(self, src, tgt_atb, context, beam_size=1, model_size=512):
 
         # if audio only take one dimension since only used for mask
-        self.original_src = src
+        self.original_src = src  # TxBxC
+
         if src is not None:
             if src.dim() == 3:
                 self.src = src.narrow(2, 0, 1).squeeze(2).repeat(1, beam_size)
+                print(self.src.size())
+                # self.src = src.repeat(1, beam_size, 1) # T x Bb x c
             else:
                 self.src = src.repeat(1, beam_size)
         else:
@@ -611,8 +623,9 @@ class TransformerDecodingState(DecoderState):
         def update_active_with_hidden(t):
             if t is None:
                 return t
+            dim = t.size(-1)
             # select only the remaining active sentences
-            view = t.data.view(-1, remaining_sents, model_size)
+            view = t.data.view(-1, remaining_sents, dim)
             new_size = list(t.size())
             new_size[-2] = new_size[-2] * len(active_idx) // remaining_sents
             return view.index_select(1, active_idx).view(*new_size)
@@ -630,7 +643,16 @@ class TransformerDecodingState(DecoderState):
 
         self.input_seq = update_active_without_hidden(self.input_seq)
 
-        self.src = update_active_without_hidden(self.src)
+        if self.src.dim() == 2:
+            self.src = update_active_without_hidden(self.src)
+        elif self.src.dim() == 3:
+            t = self.src
+            dim = t.size(-1)
+            view = t.view(-1, remaining_sents, dim)
+            new_size = list(t.size())
+            new_size[-2] = new_size[-2] * len(active_idx) // remaining_sents
+            new_t = view.index_select(1, active_idx).view(*new_size)
+            self.src = new_t
 
         self.tgt_atb = update_active_without_hidden(self.tgt_atb)
 
