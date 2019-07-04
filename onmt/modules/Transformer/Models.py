@@ -422,7 +422,7 @@ class Transformer(NMTModel):
     def reset_states(self):
         return
 
-    def forward(self, batch):
+    def forward(self, batch, target_masking=None):
         """
         Inputs Shapes: 
             src: len_src x batch_size
@@ -451,8 +451,22 @@ class Transformer(NMTModel):
         output_dict['encoder'] = context
         output_dict['src_mask'] = encoder_output['src_mask']
 
+        # This step removes the padding to reduce the load for the final layer
+        if target_masking is not None:
+            output = output.contiguous().view(-1, output.size(-1))
+
+            mask = target_masking
+            """ We remove all positions with PAD """
+            flattened_mask = mask.view(-1)
+
+            non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
+
+            output = output.index_select(0, non_pad_indices)
+
+        # final layer: computing softmax
         logprobs = self.generator[0](output)
-        # output_dict['logprobs'] = logprobs
+
+        output_dict['logprobs'] = logprobs
 
         return output_dict
 

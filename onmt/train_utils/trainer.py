@@ -99,7 +99,7 @@ class XETrainer(BaseTrainer):
 
             opt_level = "O0" if not self.opt.fp16 else "O2"
             print("Optimization level: %s" % opt_level)
-            [self.model, self.loss_function], self.optim.optimizer = apex.amp.initialize([self.model, self.loss_function],
+            self.model, self.optim.optimizer = apex.amp.initialize(self.model,
                                                                    self.optim.optimizer,
                                                                    opt_level=opt_level,
                                                                    keep_batchnorm_fp32=False, loss_scale="dynamic",
@@ -158,10 +158,10 @@ class XETrainer(BaseTrainer):
                         hidden states from decoder or
                         prob distribution from decoder generator
                 """
-
-                outputs = self.model(batch)
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.Constants.PAD)
+                outputs = self.model(batch, target_masking=tgt_mask)
+
                 outputs['tgt_mask'] = tgt_mask
 
                 loss_dict = self.loss_function(outputs, targets, model=self.model)
@@ -229,17 +229,14 @@ class XETrainer(BaseTrainer):
                 try:
                     # outputs is a dictionary containing keys/values necessary for loss function
                     # can be flexibly controlled within models for easier extensibility
-                    outputs = self.model(batch)
-
                     targets = batch.get('target_output')
-                    tgt_inputs = batch.get('target_input')
+                    tgt_mask = targets.data.ne(onmt.Constants.PAD)
+                    outputs = self.model(batch, target_masking=tgt_mask)
 
                     batch_size = batch.size
 
-                    tgt_mask = targets.data.ne(onmt.Constants.PAD)
                     outputs['tgt_mask'] = tgt_mask
 
-                    normalizer=1
                     loss_dict = self.loss_function(outputs, targets, model=self.model)
                     loss_data = loss_dict['data']
                     loss = loss_dict['loss']
