@@ -71,13 +71,9 @@ class NMTLossFunc(CrossEntropyLossBase):
         """
 
         outputs = model_outputs['hidden']
-        # logprobs = model_outputs['logprobs']
-        # original_outputs = hiddens
-        # batch_size = outputs.size(1)
-        # h_size = outputs.size(-1)
+        logprobs = model_outputs['logprobs']
 
         # flatten the output
-        outputs = outputs.contiguous().view(-1, outputs.size(-1))
         targets = targets.view(-1)
 
         mask = model_outputs['tgt_mask']
@@ -88,19 +84,10 @@ class NMTLossFunc(CrossEntropyLossBase):
 
             non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
 
-            clean_input = outputs.index_select(0, non_pad_indices)
-
             clean_targets = targets.index_select(0, non_pad_indices)
 
         else:
-            clean_input = outputs
             clean_targets = targets
-
-        if model is not None:
-            # the 'first' generator is the decoder softmax one
-            logprobs = model.generator[0](clean_input)
-        else:
-            logprobs = clean_input
 
         loss, loss_data = self._compute_loss(logprobs, clean_targets)
 
@@ -135,61 +122,62 @@ class CTCLossFunc(_Loss):
             normalizer: the denominator of the loss before backward
             **kwargs(optional): additional info for computing loss.
         """
+        raise NotImplementedError
 
-        outputs = model_outputs['encoder']
-        original_outputs = outputs
-        batch_size = outputs.size(1)
-        h_size = outputs.size(-1)
-
-        source_mask = model_outputs['src_mask']
-        target_mask = model_outputs['tgt_mask']
-
-        target_length = target_mask.sum(0)
-        if source_mask.dim() == 3:
-            input_length = (1-source_mask).squeeze(1).sum(1)
-        else:
-            input_length = (1-source_mask).sum(1)
-
-        # remove elements with more targets than input
-        comp = torch.lt(target_length,input_length)
-        target_length = target_length.index_select(0,comp.nonzero().squeeze())
-        input_length = input_length.index_select(0,comp.nonzero().squeeze())
-        outputs = outputs.index_select(1,comp.nonzero().squeeze())
-        targets = targets.index_select(1,comp.nonzero().squeeze())
-
-        # flatten the output
-        size = outputs.size()
-        outputs = outputs.contiguous().view(-1, outputs.size(-1))
-
-        clean_input = outputs
-
-        # dists = generator(outputs)
-        if model is not None:
-            # the 'second' generator is the encoder softmax one
-            dists = model.generator[1](clean_input)
-        else:
-            dists = clean_input
-
-        # reshape back to 3D for CTC
-        dists = dists.view(size[0], size[1], -1)
-
-        loss = self.ctc(dists,targets.transpose(0,1), input_length, target_length)
-
-        loss_data = loss.data.item()
-
-        # if not numpy.isfinite(loss_data):
-        #     print("Input:", input_length)
-        #     print("Target:", target_length)
-        #     print("Compare:", comp)
-        #     print("Selected:", comp.nonzero().squeeze().size())
-        #     loss = torch.zeros_like(loss)
-        #     loss_data = loss.data.item()
-
-        if backward:
-            loss.div(normalizer).backward()
-
-        output_dict = {"loss": loss, "data": loss_data}
-        return output_dict
+        # outputs = model_outputs['encoder']
+        # original_outputs = outputs
+        # batch_size = outputs.size(1)
+        # h_size = outputs.size(-1)
+        #
+        # source_mask = model_outputs['src_mask']
+        # target_mask = model_outputs['tgt_mask']
+        #
+        # target_length = target_mask.sum(0)
+        # if source_mask.dim() == 3:
+        #     input_length = (1-source_mask).squeeze(1).sum(1)
+        # else:
+        #     input_length = (1-source_mask).sum(1)
+        #
+        # # remove elements with more targets than input
+        # comp = torch.lt(target_length,input_length)
+        # target_length = target_length.index_select(0,comp.nonzero().squeeze())
+        # input_length = input_length.index_select(0,comp.nonzero().squeeze())
+        # outputs = outputs.index_select(1,comp.nonzero().squeeze())
+        # targets = targets.index_select(1,comp.nonzero().squeeze())
+        #
+        # # flatten the output
+        # size = outputs.size()
+        # outputs = outputs.contiguous().view(-1, outputs.size(-1))
+        #
+        # clean_input = outputs
+        #
+        # # dists = generator(outputs)
+        # if model is not None:
+        #     # the 'second' generator is the encoder softmax one
+        #     dists = model.generator[1](clean_input)
+        # else:
+        #     dists = clean_input
+        #
+        # # reshape back to 3D for CTC
+        # dists = dists.view(size[0], size[1], -1)
+        #
+        # loss = self.ctc(dists,targets.transpose(0,1), input_length, target_length)
+        #
+        # loss_data = loss.data.item()
+        #
+        # # if not numpy.isfinite(loss_data):
+        # #     print("Input:", input_length)
+        # #     print("Target:", target_length)
+        # #     print("Compare:", comp)
+        # #     print("Selected:", comp.nonzero().squeeze().size())
+        # #     loss = torch.zeros_like(loss)
+        # #     loss_data = loss.data.item()
+        #
+        # if backward:
+        #     loss.div(normalizer).backward()
+        #
+        # output_dict = {"loss": loss, "data": loss_data}
+        # return output_dict
         # return loss,loss_data, None
 
 
