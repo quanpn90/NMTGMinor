@@ -403,8 +403,7 @@ class EncoderLayer(nn.Module):
             feedforward = MaxOut(d_model, d_model, k)
         self.feedforward = Bottle(feedforward)
             
-    def forward(self, input, attn_mask, pad_mask=None):
-        pad_mask = None
+    def forward(self, input, attn_mask, ):
         query = self.preprocess_attn(input)
         out, _ = self.multihead(query, query, query, attn_mask)
         input = self.postprocess_attn(out, input)
@@ -412,8 +411,7 @@ class EncoderLayer(nn.Module):
         """ Feed forward layer 
             layernorm > ffn > dropout > residual
         """
-        out = self.feedforward(self.preprocess_ffn(input), 
-                               mask=pad_mask)
+        out = self.feedforward(self.preprocess_ffn(input))
         input = self.postprocess_ffn(out, input)
         
         return input
@@ -479,7 +477,7 @@ class DecoderLayer(nn.Module):
             feedforward = FeedForwardSwish(d_model, d_ff, ff_p,static=onmt.Constants.static)
         self.feedforward = Bottle(feedforward)
     
-    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, residual_dropout=0.0):
+    def forward(self, input, context, mask_tgt, mask_src):
         
         """ Self attention layer 
             layernorm > attn > dropout > residual
@@ -493,11 +491,8 @@ class DecoderLayer(nn.Module):
         
         out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt)
         
-        if residual_dropout > 0:
-            input_ = F.dropout(input, residual_dropout, self.training, False)
-            input = self.postprocess_attn(out, input_)
-        else:
-            input = self.postprocess_attn(out, input)
+
+        input = self.postprocess_attn(out, input)
 
         """ Context Attention layer 
             layernorm > attn > dropout > residual
@@ -517,7 +512,7 @@ class DecoderLayer(nn.Module):
     
         return input, coverage
         
-    def step(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, buffer=None):
+    def step(self, input, context, mask_tgt, mask_src, buffer=None):
         """ Self attention layer 
             layernorm > attn > dropout > residual
         """

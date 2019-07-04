@@ -53,7 +53,8 @@ class EnsembleTranslator(object):
                 if "atb" in checkpoint["dicts"]:
                     self.atb_dict = checkpoint['dicts']['atb']
 
-                    assert len(self.atb_dict) == len(self.attributes)
+                    if self.atb_dict:
+                        assert len(self.atb_dict) == len(self.attributes)
                 else:
                     self.atb_dict = None
 

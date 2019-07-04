@@ -36,7 +36,7 @@ class StochasticEncoderLayer(EncoderLayer):
         self.death_rate = death_rate
 
 
-    def forward(self, input, attn_mask, pad_mask=None):
+    def forward(self, input, attn_mask):
 
         coin = True
         if self.training:
@@ -54,8 +54,7 @@ class StochasticEncoderLayer(EncoderLayer):
             """ Feed forward layer 
                 layernorm > ffn > dropout > residual
             """
-            out = self.feedforward(self.preprocess_ffn(input),
-                                   mask=pad_mask)
+            out = self.feedforward(self.preprocess_ffn(input),)
 
             if self.training:
                 out = out / ( 1 - self.death_rate)
@@ -98,7 +97,7 @@ class StochasticDecoderLayer(DecoderLayer):
         self.death_rate = death_rate
 
 
-    def forward(self, input, context, mask_tgt, mask_src, pad_mask_tgt=None, pad_mask_src=None, residual_dropout=0.0):
+    def forward(self, input, context, mask_tgt, mask_src):
 
         """ Self attention layer
             layernorm > attn > dropout > residual
@@ -123,8 +122,7 @@ class StochasticDecoderLayer(DecoderLayer):
 
             self_context = query
 
-            out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt,
-                                        query_mask=pad_mask_tgt, value_mask=pad_mask_tgt)
+            out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt)
 
             if self.training:
                 out = out / ( 1 - self.death_rate)
@@ -135,9 +133,8 @@ class StochasticDecoderLayer(DecoderLayer):
             """ Context Attention layer 
                 layernorm > attn > dropout > residual
             """
-            query = self.preprocess_src_attn(input, mask=pad_mask_tgt)
-            out, coverage = self.multihead_src(query, context, context, mask_src,
-                                               query_mask=pad_mask_tgt, value_mask=pad_mask_src)
+            query = self.preprocess_src_attn(input)
+            out, coverage = self.multihead_src(query, context, context, mask_src)
 
             if self.training:
                 out = out / ( 1 - self.death_rate)
@@ -147,8 +144,7 @@ class StochasticDecoderLayer(DecoderLayer):
             """ Feed forward layer 
                 layernorm > ffn > dropout > residual
             """
-            out = self.feedforward(self.preprocess_ffn(input, mask=pad_mask_tgt),
-                                               mask=pad_mask_tgt)
+            out = self.feedforward(self.preprocess_ffn(input))
             # During testing we scale the output to match its participation during training
             if self.training:
                 out = out / ( 1 - self.death_rate)
