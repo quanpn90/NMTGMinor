@@ -261,7 +261,6 @@ class TransformerDecoder(nn.Module):
             atb_emb = self.attribute_embeddings(atbs).unsqueeze(1).expand_as(emb) #  B x H to 1 x B x H
             emb = torch.cat([emb, atb_emb], dim=-1)
             emb = torch.relu(self.feature_projector(emb))
-            emb = emb * math.sqrt(self.model_size)
 
         return emb
 
@@ -363,8 +362,10 @@ class TransformerDecoder(nn.Module):
             emb = emb[0]
         # emb should be batch_size x 1 x dim
 
-        # Preprocess layer: adding dropout
-        emb = self.preprocess_layer(emb)
+        if self.use_feature:
+            atb_emb = self.attribute_embeddings(atbs).unsqueeze(1).expand_as(emb) #  B x H to 1 x B x H
+            emb = torch.cat([emb, atb_emb], dim=-1)
+            emb = torch.relu(self.feature_projector(emb))
 
         emb = emb.transpose(0, 1)
 
@@ -481,6 +482,7 @@ class Transformer(NMTModel):
         src = batch.get('source')
         tgt_input = batch.get('target_input')
         tgt_output = batch.get('target_output')
+        tgt_atb = batch.get('target_atb')  # a dictionary of attributes
 
         # transpose to have batch first
         src = src.transpose(0, 1)
@@ -497,7 +499,7 @@ class Transformer(NMTModel):
         gold_words = 0
         allgold_scores = list()
 
-        decoder_output = self.decoder(tgt_input, context, src)['hidden']
+        decoder_output = self.decoder(tgt_input, context, src, atbs=tgt_atb)['hidden']
 
         output = decoder_output
 
@@ -594,7 +596,10 @@ class TransformerDecodingState(DecoderState):
 
         if tgt_atb is not None:
             self.use_attribute = True
-            self.tgt_atb = tgt_atb.repeat(beam_size)  # size: Bxb
+            self.tgt_atb = tgt_atb
+            # self.tgt_atb = tgt_atb.repeat(beam_size)  # size: Bxb
+            for i in self.tgt_atb:
+                self.tgt_atb[i] = self.tgt_atb[i].repeat(beam_size)
         else:
             self.tgt_atb = None
 
@@ -614,6 +619,17 @@ class TransformerDecodingState(DecoderState):
 
             sent_states.copy_(sent_states.index_select(
                 1, beam[b].getCurrentOrigin()))
+
+        if self.tgt_atb is not None:
+            for i in self.tgt_atb:
+
+                tensor = self.tgt_atb[i]
+
+                state_ = tensor.view(self.beam_size, remaining_sents)[:, idx]
+
+                state_.copy_(state_.index_select(0, beam[b].getCurrentOrigin()))
+
+                self.tgt_atb[i] = tensor
 
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]
@@ -668,7 +684,9 @@ class TransformerDecodingState(DecoderState):
             new_t = view.index_select(1, active_idx).view(*new_size)
             self.src = new_t
 
-        self.tgt_atb = update_active_without_hidden(self.tgt_atb)
+        if self.tgt_atb is not None:
+            for i in self.tgt_atb:
+                self.tgt_atb[i] = update_active_without_hidden(self.tgt_atb[i])
 
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]

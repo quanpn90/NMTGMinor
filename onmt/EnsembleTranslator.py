@@ -246,8 +246,9 @@ class EnsembleTranslator(object):
             for i in self.atb_dict:
 
                 tgt_atbs[i] = [self.atb_dict[i].convertToIdx([self.attributes[idx]], onmt.Constants.UNK_WORD)
-                               for _ in src_batch]
+                               for _ in src_sents]
                 idx = idx + 1
+
         else:
             tgt_atbs = None
 
