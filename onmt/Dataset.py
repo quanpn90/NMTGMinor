@@ -58,7 +58,6 @@ class Batch(object):
             self.tensors['source_atb'] = self.src_atb_data
 
         if tgt_atb_data is not None:
-
             self.tgt_atb_data = dict()
 
             for i in tgt_atb_data:
@@ -177,7 +176,6 @@ class Dataset(object):
 
         self.src_atbs = src_atbs
         self.tgt_atbs = tgt_atbs
-
         self.fullSize = len(self.src) if self.src is not None else len(self.tgt)
 
         # maximum number of tokens in a mb

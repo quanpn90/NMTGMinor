@@ -85,6 +85,7 @@ class DlclTransformerEncoder(TransformerEncoder):
 
 class DlclTransformerDecoder(TransformerDecoder):
 
+<<<<<<< HEAD
     def __init__(self, opt, dicts, positional_encoder, attribute_embeddings=None, ignore_source=False):
 
         super().__init__(opt, dicts, positional_encoder,
@@ -93,6 +94,15 @@ class DlclTransformerDecoder(TransformerDecoder):
         self.history =  DynamicLinearCombination(self.model_size, self.layers, is_encoder=False)
 
     def forward(self, input, context, src, atbs=None,  **kwargs):
+=======
+    def __init__(self, opt, dicts, positional_encoder, ignore_source=False):
+
+        super().__init__(opt, dicts, positional_encoder, ignore_source=ignore_source)
+
+        self.history =  DynamicLinearCombination(self.model_size, self.layers, is_encoder=False)
+
+    def forward(self, input, context, src, **kwargs):
+>>>>>>> b25586703414b1ed3e61bbd829a9d37fd0e450bb
         """
         Inputs Shapes:
             input: (Variable) batch_size x len_tgt (wanna tranpose)
@@ -116,6 +126,7 @@ class DlclTransformerDecoder(TransformerDecoder):
             emb = emb[0]
         emb = self.preprocess_layer(emb)
 
+<<<<<<< HEAD
         if self.use_feature:
             atb_emb = self.attribute_embeddings(atbs).unsqueeze(1).expand_as(emb) #  B x H to 1 x B x H
             emb = torch.cat([emb, atb_emb], dim=-1)
@@ -129,6 +140,19 @@ class DlclTransformerDecoder(TransformerDecoder):
                 mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
         else:
             mask_src = None
+=======
+        if context is not None:
+            if self.encoder_type == "audio":
+                mask_src = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+                pad_mask_src = src.data.narrow(2, 0, 1).squeeze(2).ne(onmt.Constants.PAD)  # batch_size x len_src
+            else:
+
+                mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
+                pad_mask_src = src.data.ne(onmt.Constants.PAD)
+        else:
+            mask_src = None
+            pad_mask_src = None
+>>>>>>> b25586703414b1ed3e61bbd829a9d37fd0e450bb
 
         len_tgt = input.size(1)
         mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
@@ -181,7 +205,10 @@ class DlclTransformerDecoder(TransformerDecoder):
         context = decoder_state.context
         buffers = decoder_state.attention_buffers
         src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
+<<<<<<< HEAD
         atbs = decoder_state.tgt_atb
+=======
+>>>>>>> b25586703414b1ed3e61bbd829a9d37fd0e450bb
 
         if decoder_state.input_seq is None:
             decoder_state.input_seq = input
@@ -191,6 +218,13 @@ class DlclTransformerDecoder(TransformerDecoder):
         input = decoder_state.input_seq.transpose(0, 1)
         input_ = input[:,-1].unsqueeze(1)
 
+<<<<<<< HEAD
+=======
+        # output_buffer = list()
+
+        # batch_size = input_.size(0)
+
+>>>>>>> b25586703414b1ed3e61bbd829a9d37fd0e450bb
         """ Embedding: batch_size x 1 x d_model """
         emb = self.word_lut(input_)
 
@@ -208,10 +242,15 @@ class DlclTransformerDecoder(TransformerDecoder):
             emb = emb[0]
         # emb should be batch_size x 1 x dim
 
+<<<<<<< HEAD
         if self.use_feature:
             atb_emb = self.attribute_embeddings(atbs).unsqueeze(1).expand_as(emb)  # B x H to 1 x B x H
             emb = torch.cat([emb, atb_emb], dim=-1)
             emb = torch.relu(self.feature_projector(emb))
+=======
+        # Preprocess layer: adding dropout
+        emb = self.preprocess_layer(emb)
+>>>>>>> b25586703414b1ed3e61bbd829a9d37fd0e450bb
 
         emb = emb.transpose(0, 1)
 
