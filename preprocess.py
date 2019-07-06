@@ -119,6 +119,7 @@ def split_line_by_char(line, word_list=["<unk>"]):
 
     return chars
 
+
 def make_join_vocab(filenames, size, input_type="word"):
     
     vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
@@ -139,7 +140,6 @@ def make_join_vocab(filenames, size, input_type="word"):
                         vocab.add(char)
                 else:
                     raise NotImplementedError("Input type not implemented")
-
 
     original_size = vocab.size()
     vocab = vocab.prune(size)
@@ -258,6 +258,7 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
 
     return tensor
 
+
 def read_text_file(text_file, dicts, input_type='word', max_length=100000):
 
     tensors = []
@@ -299,6 +300,7 @@ def read_text_file(text_file, dicts, input_type='word', max_length=100000):
 
     return tensors, tensor_sizes, bad_indices
 
+
 def read_atb_file(atb_file, atb_dicts):
 
     all_atbs = dict()
@@ -331,6 +333,7 @@ def read_atb_file(atb_file, atb_dicts):
 
     return all_atbs
 
+
 def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts,
                           src_atb_file=None, tgt_atb_file=None, atb_dicts=None,
                           max_src_length=64, max_tgt_length=64, sort_by_target=False,
@@ -345,7 +348,6 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts,
 
     src, src_sizes, src_bad_indices = read_text_file(src_file, src_dicts, input_type, max_src_length)
     tgt, tgt_sizes, tgt_bad_indices = read_text_file(tgt_file, tgt_dicts, input_type, max_tgt_length)
-
 
     # remove the items from the bad indices
     bad_indices = list(set(src_bad_indices + tgt_bad_indices))
@@ -467,7 +469,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts,
                 print("No feature vector for index:",index,file=sys.stderr)
                 exit(-1)
         elif asr_format == "scp":
-            _,featureVectors = next(audio_data)
+            _, featureVectors = next(audio_data)
 
         if stride == 1:
             sline = torch.from_numpy(featureVectors)
@@ -559,7 +561,6 @@ def make_asr_data(src_file, tgt_file, tgt_dicts,
 
     print('... sorting sentences by size')
 
-
     # _, perm = torch.sort(torch.Tensor(sizes), descending=(opt.sort_type == 'descending'))
     # src = [src[idx] for idx in perm]
     # tgt = [tgt[idx] for idx in perm]
@@ -612,6 +613,7 @@ def collect_attributes(atb_files):
                 atb_dicts[i].add(atb)
 
     return atb_dicts
+
 
 def main():
 
@@ -726,7 +728,6 @@ def main():
         save_vocabulary('source', dicts['src'], opt.save_data + '.src.dict')
     if opt.tgt_vocab is None:
         save_vocabulary('target', dicts['tgt'], opt.save_data + '.tgt.dict')
-
 
     if opt.format == 'raw':
 

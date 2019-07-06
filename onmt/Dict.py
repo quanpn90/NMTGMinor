@@ -2,6 +2,7 @@ import torch
 import math
 import random, string
 
+
 class Dict(object):
     def __init__(self, data=None, lower=False):
         self.idxToLabel = {}

@@ -7,7 +7,6 @@ import argparse
 import torch
 import time, datetime
 from onmt.train_utils.trainer import XETrainer
-from onmt.train_utils.fp16_trainer import FP16XETrainer
 from onmt.modules.Loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.ModelConstructor import build_model
 from options import make_parser
@@ -54,6 +53,7 @@ def main():
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
         print("Done after %s" % elapse )
 
+        # For backward compatibility
         train_dict = defaultdict(lambda: None, dataset['train'])
         valid_dict = defaultdict(lambda: None, dataset['valid'])
 
@@ -186,7 +186,7 @@ def main():
     else:
         trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
         if len(additional_data) > 0:
-            trainer.add_additional_data(additional_data,opt.data_ratio);
+            trainer.add_additional_data(additional_data, opt.data_ratio);
 
     trainer.run(checkpoint=checkpoint)
 

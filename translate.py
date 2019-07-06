@@ -293,6 +293,7 @@ def main():
     if opt.dump_beam:
         json.dump(translator.beam_accum, open(opt.dump_beam, 'w'))
 
+
 def translateBatch(opt,tgtF,count,outF,translator,srcBatch,tgtBatch,predBatch, predScore, predLength, goldScore, numGoldWords,allGoldScores,input_type):
     if opt.normalize:
         predBatch_ = []

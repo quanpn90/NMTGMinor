@@ -1,13 +1,13 @@
-import torch, copy
+import torch
 import torch.nn as nn
-from torch.autograd import Variable
 import onmt
-from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer,MixedEncoder
+from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer, MixedEncoder
 from onmt.modules.Transformer.Layers import PositionalEncoding
 
 init = torch.nn.init
 
 MAX_LEN = onmt.Constants.max_position_length  # This should be the longest sentence from the dataset
+
 
 def build_model(opt, dicts):
 

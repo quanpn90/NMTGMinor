@@ -1,10 +1,6 @@
-import math
 import torch
-import torch.nn as nn
-import onmt
 
-from onmt.modules.Transformer.Layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing, EncoderLayer, DecoderLayer
-from onmt.modules.Bottle import Bottle
+from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer
 
 
 class StochasticEncoderLayer(EncoderLayer):
@@ -32,9 +28,8 @@ class StochasticEncoderLayer(EncoderLayer):
 
     def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0, death_rate=0.0):
         super().__init__(h, d_model, p, d_ff, attn_p, version)
-        #~ super(StochasticEncoderLayer, self).__init__()
+        # super(StochasticEncoderLayer, self).__init__()
         self.death_rate = death_rate
-
 
     def forward(self, input, attn_mask):
 
@@ -96,7 +91,6 @@ class StochasticDecoderLayer(DecoderLayer):
         super().__init__(h, d_model, p, d_ff, attn_p, version)
         self.death_rate = death_rate
 
-
     def forward(self, input, context, mask_tgt, mask_src):
 
         """ Self attention layer
@@ -129,7 +123,6 @@ class StochasticDecoderLayer(DecoderLayer):
 
             input = self.postprocess_attn(out, input)
 
-
             """ Context Attention layer 
                 layernorm > attn > dropout > residual
             """
@@ -150,7 +143,5 @@ class StochasticDecoderLayer(DecoderLayer):
                 out = out / ( 1 - self.death_rate)
 
             input = self.postprocess_ffn(out, input)
-
-
 
         return input, coverage

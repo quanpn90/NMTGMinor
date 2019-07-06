@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from onmt.modules.Bottle import Bottle
 from onmt.modules.StaticDropout import StaticDropout
 
+
 # different linears for the same input
 def group_linear(linears, input, bias=False):
 
@@ -44,7 +45,6 @@ class XavierLinear(nn.Module):
         
         if bias:
             self.linear.bias.data.zero_()
-    
 
     def forward(self, x):
         return self.linear(x)
@@ -58,6 +58,7 @@ class XavierLinear(nn.Module):
         
 
 Linear = XavierLinear
+
 
 def variational_dropout(input, p, training=False):
     """Applies Variational Dropout (query, key, value)
@@ -77,7 +78,8 @@ def variational_dropout(input, p, training=False):
         return output
     # if eval then return the input
     return input
-    
+
+
 class MaxOut(nn.Module):
     def __init__(self, d, m, k):
         super(MaxOut, self).__init__()
@@ -100,6 +102,7 @@ class MaxOut(nn.Module):
         m = m.view(*original_size[:-1], m.size(-1))
         
         return m
+
 
 class PrePostProcessing(nn.Module):
     
@@ -136,7 +139,7 @@ class PrePostProcessing(nn.Module):
                 self.dropout = nn.Dropout(self.dropout_p, inplace=False)
     
     def forward(self, tensor, input_tensor=None, mask=None):
-        #~ mask = None
+
         output = tensor
         for step in self.steps:
             if step == 'n':
@@ -151,7 +154,8 @@ class PrePostProcessing(nn.Module):
                     else:
                         output = F.relu(self.k) * output + input_tensor
         return output
-        
+
+
 class MultiHeadAttention(nn.Module):
     """Applies multi-head attentions to inputs (query, key, value)
     Args:
@@ -198,18 +202,14 @@ class MultiHeadAttention(nn.Module):
         else:
             self.attn_dropout = nn.Dropout(attn_p)
 
-
-
     def forward(self, query, key, value, mask, query_mask=None, value_mask=None):
 
-
-        
         len_query, b = query.size(0), query.size(1)
         len_key,  b_ = key.size(0), key.size(1)
         
         key_mask = value_mask
         
-         # batch_size*h x len_query x d_head
+        # batch_size*h x len_query x d_head
         # project inputs to multi-heads
         if self.share == 1:
             shared_qkv = group_linear([self.fc_query.function.linear, self.fc_key.function.linear, self.fc_value.function.linear], query)
@@ -322,7 +322,8 @@ class MultiHeadAttention(nn.Module):
         out = self.fc_concat(out)
        
         return out, coverage, buffer
-    
+
+
 class FeedForward(nn.Module):
     """Applies position-wise feed forward to inputs
     
@@ -416,8 +417,7 @@ class EncoderLayer(nn.Module):
         
         return input
     
-    
-    
+
 class DecoderLayer(nn.Module):
     """Wraps multi-head attentions and position-wise feed forward into one layer of decoder
     
@@ -461,11 +461,9 @@ class DecoderLayer(nn.Module):
         
         self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
         self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
-        
-        
+
         self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=1)
 
-        
         if onmt.Constants.activation_layer == 'linear_relu_linear':
             ff_p = p
             feedforward = FeedForward(d_model, d_ff, ff_p, static=onmt.Constants.static)
@@ -490,7 +488,6 @@ class DecoderLayer(nn.Module):
         self_context = query
         
         out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt)
-        
 
         input = self.postprocess_attn(out, input)
 
@@ -571,15 +568,13 @@ class PositionalEncoding(nn.Module):
         
         self.p = p
 
-
     def renew(self, new_max_len):
-        ## detele the old variable to avoid Pytorch's error when register new buffer
+        # detele the old variable to avoid Pytorch's error when register new buffer
         cuda = False
         if hasattr(self, 'pos_emb'):
             cuda = self.pos_emb.is_cuda
             del self.pos_emb
         position = torch.arange(0,new_max_len).float()
-
 
         num_timescales = self.d_model // 2
         log_timescale_increment = math.log(10000) / (num_timescales-1)
@@ -597,7 +592,6 @@ class PositionalEncoding(nn.Module):
         self.data_type = self.pos_emb.type()
         self.len_max = new_max_len
 
-        
     def forward(self, word_emb, t=None):
 
         len_seq = t if t else word_emb.size(1)
