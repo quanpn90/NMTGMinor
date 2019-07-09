@@ -119,39 +119,39 @@ class Dict(object):
 
         return newDict
 
-    def convertToIdx(self, labels, unkWord, bosWord=None, eosWord=None):
+    def convertToIdx(self, labels, unkWord, bos_word=None, eos_word=None):
         """
         Convert `labels` to indices. Use `unkWord` if not found.
-        Optionally insert `bosWord` at the beginning and `eosWord` at the .
+        Optionally insert `bos_word` at the beginning and `eos_word` at the .
         """
         vec = []
 
-        if bosWord is not None:
-            vec += [self.lookup(bosWord)]
+        if bos_word is not None:
+            vec += [self.lookup(bos_word)]
 
         unk = self.lookup(unkWord)
         vec += [self.lookup(label, default=unk) for label in labels]
 
-        if eosWord is not None:
-            vec += [self.lookup(eosWord)]
+        if eos_word is not None:
+            vec += [self.lookup(eos_word)]
 
         return torch.LongTensor(vec)
 
-    def convertToIdx2(self, labels, unkWord, bosWord=None, eosWord=None):
+    def convertToIdx2(self, labels, unkWord, bos_word=None, eos_word=None):
         """
         Convert `labels` to indices. Use `unkWord` if not found.
-        Optionally insert `bosWord` at the beginning and `eosWord` at the .
+        Optionally insert `bos_word` at the beginning and `eos_word` at the .
         """
         vec = []
 
-        if bosWord is not None:
-            vec += [self.lookup(bosWord)]
+        if bos_word is not None:
+            vec += [self.lookup(bos_word)]
 
         unk = self.lookup(unkWord)
         vec += [self.lookup(label, default=unk) for label in labels]
 
-        if eosWord is not None:
-            vec += [self.lookup(eosWord)]
+        if eos_word is not None:
+            vec += [self.lookup(eos_word)]
 
         return torch.LongTensor(vec)
 

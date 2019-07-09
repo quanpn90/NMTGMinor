@@ -25,3 +25,15 @@ def checkpoint_paths(path, pattern=r'model_ppl_(\d+).(\d+)\_e(\d+).(\d+).pt'):
             entries.append((idx, m.group(0)))
     # return [os.path.join(path, x[1]) for x in sorted(entries, reverse=True)]
     return [os.path.join(path, x[1]) for x in entries]
+
+
+def normalize_gradients(parameters, denom=1.0):
+    if isinstance(parameters, torch.Tensor):
+        parameters = [parameters]
+    parameters = list(filter(lambda p: p.grad is not None, parameters))
+
+    for p in parameters:
+        p.grad.data.div_(denom)
+
+    return
+

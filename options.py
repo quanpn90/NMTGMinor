@@ -51,7 +51,9 @@ def make_parser(parser):
     parser.add_argument('-model_size', type=int, default=512,
         help='Size of embedding / transformer hidden')      
     parser.add_argument('-inner_size', type=int, default=2048,
-        help='Size of inner feed forward layer')  
+        help='Size of inner feed forward layer')
+    parser.add_argument('-attribute_size', type=int, default=1,
+                        help='Number of attributes')
     parser.add_argument('-n_heads', type=int, default=8,
         help='Number of heads for multi-head attention') 
     parser.add_argument('-checkpointing', type=int, default=0,

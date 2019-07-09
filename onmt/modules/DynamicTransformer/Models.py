@@ -187,7 +187,6 @@ class DlclTransformerDecoder(TransformerDecoder):
         src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
         atbs = decoder_state.tgt_atb
 
-
         if decoder_state.input_seq is None:
             decoder_state.input_seq = input
         else:

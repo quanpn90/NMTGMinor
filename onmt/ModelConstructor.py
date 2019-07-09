@@ -87,8 +87,9 @@ def build_tm_model(opt, dicts):
 
     if 'atb' in dicts and dicts['atb'] is not None:
         from onmt.modules.Utilities import AttributeEmbeddings
-
+        #
         attribute_embeddings = AttributeEmbeddings(dicts['atb'], opt.model_size)
+        # attribute_embeddings = nn.Embedding(dicts['atb'].size(), opt.model_size)
 
     else:
         attribute_embeddings = None

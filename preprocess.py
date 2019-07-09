@@ -8,13 +8,12 @@ from onmt.data_utils.IndexedDataset import IndexedDatasetBuilder
 import h5py as h5
 import numpy as np
 
-
 parser = argparse.ArgumentParser(description='preprocess.py')
 onmt.Markdown.add_md_help_argument(parser)
 
 # **Preprocess Options**
 
-parser.add_argument('-config',    help="Read options from this file")
+parser.add_argument('-config', help="Read options from this file")
 
 parser.add_argument('-src_type', default="text",
                     help="Type of the source input. Options are [text|audio].")
@@ -70,25 +69,24 @@ parser.add_argument('-tgt_seq_length', type=int, default=66,
 parser.add_argument('-tgt_seq_length_trunc', type=int, default=0,
                     help="Truncate target sequence length.")
 
-parser.add_argument('-shuffle',    type=int, default=1,
+parser.add_argument('-shuffle', type=int, default=1,
                     help="Shuffle data")
-                    
-parser.add_argument('-asr',    action='store_true',
+
+parser.add_argument('-asr', action='store_true',
                     help="prepare data for asr task")
 parser.add_argument('-asr_format', default="h5",
                     help="Format of asr data h5 or scp")
-parser.add_argument('-lm',    action='store_true',
+parser.add_argument('-lm', action='store_true',
                     help="prepare data for LM task")
-parser.add_argument('-fp16',    action='store_true',
+parser.add_argument('-fp16', action='store_true',
                     help="store ASR data in fp16")
 
-parser.add_argument('-seed',       type=int, default=3435,
+parser.add_argument('-seed', type=int, default=3435,
                     help="Random seed")
 
 parser.add_argument('-lower', action='store_true', help='lowercase data')
 parser.add_argument('-sort_by_target', action='store_true', help='lowercase data')
 parser.add_argument('-join_vocab', action='store_true', help='Using one dictionary for both source and target')
-
 
 parser.add_argument('-report_every', type=int, default=100000,
                     help="Report status every this many sentences")
@@ -101,7 +99,6 @@ torch.manual_seed(opt.seed)
 
 
 def split_line_by_char(line, word_list=["<unk>"]):
-
     # first we split by words
     chars = list()
 
@@ -121,11 +118,10 @@ def split_line_by_char(line, word_list=["<unk>"]):
 
 
 def make_join_vocab(filenames, size, input_type="word"):
-    
     vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
                       lower=opt.lower)
-    
+
     for filename in filenames:
         print("Reading file %s ... " % filename)
         with open(filename) as f:
@@ -180,7 +176,6 @@ def make_vocab(filename, size, input_type='word'):
 
 
 def init_vocab(name, dataFile, vocabFile, vocabSize, join=False, input_type='word'):
-
     vocab = None
     if vocabFile is not None:
         # If given, load existing word dictionary.
@@ -190,10 +185,10 @@ def init_vocab(name, dataFile, vocabFile, vocabSize, join=False, input_type='wor
         print('Loaded ' + str(vocab.size()) + ' ' + name + ' words')
 
     if vocab is None:
-        
+
         # If a dictionary is still missing, generate it.
         if join:
-            
+
             print('Building ' + 'shared' + ' vocabulary...')
             gen_word_vocab = make_join_vocab(dataFile, vocabSize, input_type=input_type)
         else:
@@ -212,7 +207,6 @@ def save_vocabulary(name, vocab, file):
 
 
 def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
-
     tgt = []
     sizes = []
     count, ignored = 0, 0
@@ -241,9 +235,9 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
             tgt_words = split_line_by_char(tline)
 
         tensor = tgt_dicts.convertToIdx(tgt_words,
-                                         onmt.Constants.UNK_WORD,
-                                         None,
-                                         onmt.Constants.EOS_WORD)
+                                        onmt.Constants.UNK_WORD,
+                                        None,
+                                        onmt.Constants.EOS_WORD)
         tensors.append(tensor)
 
         count = count + 1
@@ -259,8 +253,8 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
     return tensor
 
 
-def read_text_file(text_file, dicts, input_type='word', max_length=100000):
-
+def read_text_file(text_file, dicts, input_type='word', max_length=100000,
+                   bos_word=None, eos_word=None):
     tensors = []
     tensor_sizes = []
 
@@ -291,10 +285,16 @@ def read_text_file(text_file, dicts, input_type='word', max_length=100000):
             words = split_line_by_char(line)
 
         if len(words) <= max_length:
-
-            tensors += [dicts.convertToIdx(words, onmt.Constants.UNK_WORD)]
+            tensors += [dicts.convertToIdx(words, onmt.Constants.UNK_WORD,
+                                           bos_word=bos_word, eos_word=eos_word)]
 
             tensor_sizes += [len(words)]
+        else:
+            # too long line
+            tensors += [dicts.convertToIdx([], onmt.Constants.UNK_WORD)]
+            tensor_sizes += [0]
+            bad_indices.append(line_idx)
+            continue
 
     reader.close()
 
@@ -302,7 +302,6 @@ def read_text_file(text_file, dicts, input_type='word', max_length=100000):
 
 
 def read_atb_file(atb_file, atb_dicts):
-
     all_atbs = dict()
 
     atb_num = len(atb_dicts)
@@ -327,8 +326,7 @@ def read_atb_file(atb_file, atb_dicts):
         atbs = line.split()
 
         for i, atb in enumerate(atbs):
-
-            tensor = atb_dicts[i].convertToIdx2([atb], None,  eosWord=None)
+            tensor = atb_dicts[i].convertToIdx2([atb], None, eos_word=None)
             all_atbs[i].append(tensor)
 
     return all_atbs
@@ -347,7 +345,9 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts,
     print('Processing %s & %s ...' % (src_file, tgt_file))
 
     src, src_sizes, src_bad_indices = read_text_file(src_file, src_dicts, input_type, max_src_length)
-    tgt, tgt_sizes, tgt_bad_indices = read_text_file(tgt_file, tgt_dicts, input_type, max_tgt_length)
+    tgt, tgt_sizes, tgt_bad_indices = read_text_file(tgt_file, tgt_dicts, input_type, max_tgt_length,
+                                                     bos_word=onmt.Constants.BOS_WORD,
+                                                     eos_word=onmt.Constants.EOS_WORD)
 
     # remove the items from the bad indices
     bad_indices = list(set(src_bad_indices + tgt_bad_indices))
@@ -381,7 +381,6 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts,
         tgt = [tgt[idx] for idx in perm]
         src_sizes = [src_sizes[idx] for idx in perm]
         tgt_sizes = [tgt_sizes[idx] for idx in perm]
-
 
     print('... sorting sentences by size')
 
@@ -434,16 +433,16 @@ def make_asr_data(src_file, tgt_file, tgt_dicts,
     if asr_format == "h5":
         fileIdx = -1;
         if src_file[-2:] == "h5":
-            srcf = h5.File(src_file,'r')
+            srcf = h5.File(src_file, 'r')
         else:
             fileIdx = 0
-            srcf = h5.File(src_file+"."+str(fileIdx)+".h5",'r')
+            srcf = h5.File(src_file + "." + str(fileIdx) + ".h5", 'r')
 
     elif asr_format == "scp":
         import kaldiio
         from kaldiio import ReadHelper
-        audio_data =  iter(ReadHelper('scp:'+src_file))
-    
+        audio_data = iter(ReadHelper('scp:' + src_file))
+
     tgtf = open(tgt_file)
 
     index = 0
@@ -457,16 +456,16 @@ def make_asr_data(src_file, tgt_file, tgt_dicts,
         if tline == "":
             break
 
-        if asr_format == "h5" :
+        if asr_format == "h5":
             if str(index) in srcf:
                 featureVectors = np.array(srcf[str(index)])
             elif fileIdx != -1:
                 srcf.close()
                 fileIdx += 1
-                srcf = h5.File(src_file+"."+str(fileIdx)+".h5",'r')
+                srcf = h5.File(src_file + "." + str(fileIdx) + ".h5", 'r')
                 featureVectors = np.array(srcf[str(index)])
             else:
-                print("No feature vector for index:",index,file=sys.stderr)
+                print("No feature vector for index:", index, file=sys.stderr)
                 exit(-1)
         elif asr_format == "scp":
             _, featureVectors = next(audio_data)
@@ -478,16 +477,15 @@ def make_asr_data(src_file, tgt_file, tgt_dicts,
 
         if reshape:
             if concat != 1:
-                add = (concat-sline.size()[0]%concat)%concat
-                z= torch.FloatTensor(add, sline.size()[1]).zero_()
-                sline = torch.cat((sline,z),0)
-                sline = sline.reshape((int(sline.size()[0]/concat), sline.size()[1]*concat))
+                add = (concat - sline.size()[0] % concat) % concat
+                z = torch.FloatTensor(add, sline.size()[1]).zero_()
+                sline = torch.cat((sline, z), 0)
+                sline = sline.reshape((int(sline.size()[0] / concat), sline.size()[1] * concat))
         index += 1;
 
         tline = tline.strip()
 
         if prev_context > 0:
-
             print("Multiple ASR context isn't supported at the moment   ")
             raise NotImplementedError
 
@@ -523,14 +521,14 @@ def make_asr_data(src_file, tgt_file, tgt_dicts,
             src += [sline]
 
             tgt_tensor = tgt_dicts.convertToIdx(tgt_words,
-                                          onmt.Constants.UNK_WORD,
-                                          onmt.Constants.BOS_WORD,
-                                          onmt.Constants.EOS_WORD)
+                                                onmt.Constants.UNK_WORD,
+                                                onmt.Constants.BOS_WORD,
+                                                onmt.Constants.EOS_WORD)
             tgt += [tgt_tensor]
             src_sizes += [len(sline)]
             tgt_sizes += [len(tgt_words)]
 
-            unks =  tgt_tensor.eq(onmt.Constants.UNK).sum().item()
+            unks = tgt_tensor.eq(onmt.Constants.UNK).sum().item()
             n_unk_words += unks
 
             if unks > 0:
@@ -583,7 +581,6 @@ def make_asr_data(src_file, tgt_file, tgt_dicts,
 
 
 def collect_attributes(atb_files):
-
     # the files can contain multiple attributes
     # each of them will be stored in one onmt.Dict
     print("* Reading attributes ...")
@@ -616,7 +613,6 @@ def collect_attributes(atb_files):
 
 
 def main():
-
     dicts = {}
 
     # READING IN ATTRIBUTES
@@ -643,29 +639,29 @@ def main():
     # for ASR and LM we only need to build vocab for the 'target' language
     if opt.asr or opt.lm:
         dicts['tgt'] = init_vocab('target', opt.train_tgt, opt.tgt_vocab,
-                                      opt.tgt_vocab_size, input_type=opt.input_type)
+                                  opt.tgt_vocab_size, input_type=opt.input_type)
     elif opt.join_vocab:
         dicts['src'] = init_vocab('source', [opt.train_src, opt.train_tgt], opt.src_vocab,
-                                      opt.tgt_vocab_size, join=True, input_type=opt.input_type)
+                                  opt.tgt_vocab_size, join=True, input_type=opt.input_type)
         dicts['tgt'] = dicts['src']
 
     else:
         dicts['src'] = init_vocab('source', opt.train_src, opt.src_vocab,
-                                      opt.src_vocab_size, input_type=opt.input_type)
+                                  opt.src_vocab_size, input_type=opt.input_type)
 
         dicts['tgt'] = init_vocab('target', opt.train_tgt, opt.tgt_vocab,
-                                      opt.tgt_vocab_size, input_type=opt.input_type)
+                                  opt.tgt_vocab_size, input_type=opt.input_type)
 
     if opt.lm:
         print('Preparing training language model ...')
         train = dict()
-        train['tgt'] = make_lm_data( opt.train_tgt,
-                                     dicts['tgt'])
+        train['tgt'] = make_lm_data(opt.train_tgt,
+                                    dicts['tgt'])
         train['src'] = None
 
         valid = dict()
         valid['tgt'] = make_lm_data(opt.valid_tgt,
-                                   dicts['tgt'])
+                                    dicts['tgt'])
         valid['src'] = None
 
     elif opt.asr:
@@ -676,10 +672,10 @@ def main():
                                max_src_length=opt.src_seq_length,
                                max_tgt_length=opt.tgt_seq_length,
                                input_type=opt.input_type,
-                               stride=opt.stride,concat=opt.concat,
+                               stride=opt.stride, concat=opt.concat,
                                prev_context=opt.previous_context,
                                fp16=opt.fp16,
-                               reshape=(opt.reshape_speech==1),
+                               reshape=(opt.reshape_speech == 1),
                                asr_format=opt.asr_format)
 
         train['src'] = output['src']
@@ -689,12 +685,12 @@ def main():
         valid = dict()
         output = make_asr_data(opt.valid_src, opt.valid_tgt,
                                dicts['tgt'],
-                               max_src_length=max(1024,opt.src_seq_length),
-                               max_tgt_length=max(1024,opt.tgt_seq_length),
+                               max_src_length=max(1024, opt.src_seq_length),
+                               max_tgt_length=max(1024, opt.tgt_seq_length),
                                input_type=opt.input_type,
-                               stride=opt.stride,concat=opt.concat,
+                               stride=opt.stride, concat=opt.concat,
                                prev_context=opt.previous_context,
-                               fp16=opt.fp16,reshape=(opt.reshape_speech==1),asr_format=opt.asr_format)
+                               fp16=opt.fp16, reshape=(opt.reshape_speech == 1), asr_format=opt.asr_format)
 
         valid['src'], valid['tgt'] = output['src'], output['tgt']
 
@@ -717,8 +713,8 @@ def main():
         output = make_translation_data(opt.valid_src, opt.valid_tgt,
                                        dicts['src'], dicts['tgt'],
                                        opt.valid_src_atb, opt.valid_tgt_atb, dicts['atb'],
-                                       max_src_length=max(1024,opt.src_seq_length),
-                                       max_tgt_length=max(1024,opt.tgt_seq_length),
+                                       max_src_length=max(1024, opt.src_seq_length),
+                                       max_tgt_length=max(1024, opt.tgt_seq_length),
                                        input_type=opt.input_type)
 
         valid['src'], valid['tgt'] = output['src'], output['tgt']
@@ -733,7 +729,7 @@ def main():
 
         print('Saving data to \'' + opt.save_data + '.train.pt\'...')
         save_data = {'dicts': dicts,
-                     'type':  opt.src_type,
+                     'type': opt.src_type,
                      'train': train,
                      'valid': valid}
         torch.save(save_data, opt.save_data + '.train.pt')
@@ -753,10 +749,10 @@ def main():
 
             if train[set] is None:
                 continue
-            dtype=np.int32
+            dtype = np.int32
 
             if set == 'src' and opt.asr:
-                dtype=np.double
+                dtype = np.double
 
             data = IndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set, dtype=dtype)
 
@@ -787,9 +783,9 @@ def main():
 
         print("Done")
 
-    else: raise NotImplementedError
+    else:
+        raise NotImplementedError
 
 
 if __name__ == "__main__":
     main()
-

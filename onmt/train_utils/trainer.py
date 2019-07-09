@@ -9,7 +9,7 @@ import math
 import time, datetime
 import os
 from onmt.ModelConstructor import init_model_parameters
-from onmt.utils import checkpoint_paths
+from onmt.utils import checkpoint_paths, normalize_gradients
 import apex
 
 
@@ -270,6 +270,7 @@ class XETrainer(BaseTrainer):
                         grad_denom = 1
                         if self.opt.normalize_gradient:
                             grad_denom = num_accumulated_words
+                            normalize_gradients(apex.amp.master_params(optimizer), grad_denom)
                         # Update the parameters.
                         self.optim.step(grad_denom=grad_denom)
                         self.model.zero_grad()
