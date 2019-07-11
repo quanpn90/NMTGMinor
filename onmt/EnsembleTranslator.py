@@ -238,8 +238,13 @@ class EnsembleTranslator(object):
         src_atbs = None
 
         if self.attributes:
-            tgt_atbs = [self.atb_dict.convertToIdx(self.attributes, onmt.Constants.UNK_WORD)
-                        for _ in src_sents]
+            tgt_atbs = dict()
+
+            idx = 0
+            for i in self.atb_dict:
+                tgt_atbs[i] = [self.atb_dict[i].convertToIdx([self.attributes[idx]], onmt.Constants.UNK_WORD)
+                               for _ in src_sents]
+                idx = idx + 1
 
         else:
             tgt_atbs = None
