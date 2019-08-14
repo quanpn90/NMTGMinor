@@ -201,6 +201,7 @@ class XETrainer(BaseTrainer):
         counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
+        denom = 32568
         
         for i in range(iteration, n_samples):
 
@@ -231,7 +232,7 @@ class XETrainer(BaseTrainer):
                     # can be flexibly controlled within models for easier extensibility
                     targets = batch.get('target_output')
                     tgt_mask = targets.data.ne(onmt.Constants.PAD)
-                    outputs = self.model(batch, target_masking=tgt_mask)
+                    outputs = self.model(batch, target_masking=tgt_mask, zero_encoder=opt.zero_encoder)
 
                     batch_size = batch.size
 
@@ -239,7 +240,7 @@ class XETrainer(BaseTrainer):
 
                     loss_dict = self.loss_function(outputs, targets, model=self.model)
                     loss_data = loss_dict['data']
-                    loss = loss_dict['loss']
+                    loss = loss_dict['loss'].div(denom)  # a little trick to avoid gradient overflow with fp16
 
                     optimizer = self.optim.optimizer
                     with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -267,10 +268,10 @@ class XETrainer(BaseTrainer):
                     # if counter >= opt.batch_size_update:
                 
                     if num_accumulated_words >= opt.batch_size_update * 0.95:
-                        grad_denom = 1
+                        grad_denom = 1 / denom
                         if self.opt.normalize_gradient:
-                            grad_denom = num_accumulated_words
-                            normalize_gradients(apex.amp.master_params(optimizer), grad_denom)
+                            grad_denom = num_accumulated_words / denom
+                        normalize_gradients(apex.amp.master_params(optimizer), grad_denom)
                         # Update the parameters.
                         self.optim.step(grad_denom=grad_denom)
                         self.model.zero_grad()

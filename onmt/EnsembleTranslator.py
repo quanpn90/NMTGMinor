@@ -21,6 +21,7 @@ class EnsembleTranslator(object):
         self.start_with_bos = opt.start_with_bos
         self.fp16 = opt.fp16
         self.attributes = opt.attributes  # attributes split by |. for example: de|domain1
+        self.bos_token = opt.bos_token
 
         if self.attributes:
             self.attributes = self.attributes.split("|")
@@ -55,6 +56,8 @@ class EnsembleTranslator(object):
 
                 else:
                     self.atb_dict = None
+
+                self.bos_id = self.tgt_dict.labelToIdx[self.bos_token]
 
             # Build model from the saved option
             # if hasattr(model_opt, 'fusion') and model_opt.fusion == True:
@@ -298,7 +301,7 @@ class EnsembleTranslator(object):
         # time x batch * beam
 
         # initialize the beam
-        beam = [onmt.Beam(beam_size, self.opt.cuda) for k in range(batch_size)]
+        beam = [onmt.Beam(beam_size, self.bos_id, self.opt.cuda) for k in range(batch_size)]
 
         batch_idx = list(range(batch_size))
         remaining_sents = batch_size

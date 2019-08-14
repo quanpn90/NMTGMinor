@@ -198,5 +198,7 @@ def make_parser(parser):
                         help='Use f/t augmentation for speech')
     parser.add_argument('-cnn_downsampling', action='store_true',
                         help='Use CNN for downsampling instead of reshaping')
+    parser.add_argument('-zero_encoder', action='store_true',
+                        help='Zero-out encoders during training')
 
     return parser

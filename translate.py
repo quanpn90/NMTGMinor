@@ -65,7 +65,8 @@ parser.add_argument('-verbose', action="store_true",
                     help='Print scores and predictions for each sentence')
 parser.add_argument('-dump_beam', type=str, default="",
                     help='File to dump beam information to.')
-
+parser.add_argument('-bos_token', type=str, default="<s>",
+                    help='BOS Token (used in multilingual model). Default is <s>.')
 parser.add_argument('-n_best', type=int, default=1,
                     help="""If verbose is set, will output the n_best
                     decoded sentences""")

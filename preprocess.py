@@ -78,6 +78,7 @@ parser.add_argument('-seed', type=int, default=3435,
                     help="Random seed")
 
 parser.add_argument('-lower', action='store_true', help='lowercase data')
+parser.add_argument('-no_bos', action='store_true', help='not adding bos word (this is done manually in the data)')
 parser.add_argument('-sort_by_target', action='store_true', help='lowercase data')
 parser.add_argument('-join_vocab', action='store_true', help='Using one dictionary for both source and target')
 
@@ -253,7 +254,7 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
 
 
 def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_length=64, max_tgt_length=64,
-                          sort_by_target=False,
+                          sort_by_target=False, add_bos=True,
                           input_type='word'):
     src, tgt = [], []
     src_sizes = []
@@ -305,10 +306,16 @@ def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_lengt
             src += [srcDicts.convertToIdx(src_words,
                                           onmt.Constants.UNK_WORD)]
 
-            tgt += [tgt_dicts.convertToIdx(tgt_words,
-                                           onmt.Constants.UNK_WORD,
-                                           onmt.Constants.BOS_WORD,
-                                           onmt.Constants.EOS_WORD)]
+            if add_bos:
+                tgt += [tgt_dicts.convertToIdx(tgt_words,
+                                               onmt.Constants.UNK_WORD,
+                                               onmt.Constants.BOS_WORD,
+                                               onmt.Constants.EOS_WORD)]
+            else:
+                tgt += [tgt_dicts.convertToIdx(tgt_words,
+                                               onmt.Constants.UNK_WORD,
+                                               None,
+                                               onmt.Constants.EOS_WORD)]
             src_sizes += [len(src_words)]
             tgt_sizes += [len(tgt_words)]
         else:
@@ -566,7 +573,8 @@ def main():
                                                            max_src_length=opt.src_seq_length,
                                                            max_tgt_length=opt.tgt_seq_length,
                                                            sort_by_target=opt.sort_by_target,
-                                                           input_type=opt.input_type)
+                                                           input_type=opt.input_type,
+                                                           add_bos=(not opt.no_bos))
 
         print('Preparing validation ...')
         valid = dict()
@@ -574,7 +582,8 @@ def main():
                                                            dicts['src'], dicts['tgt'],
                                                            max_src_length=max(1024, opt.src_seq_length),
                                                            max_tgt_length=max(1024, opt.tgt_seq_length),
-                                                           input_type=opt.input_type)
+                                                           input_type=opt.input_type,
+                                                           add_bos=(not opt.no_bos))
 
     if opt.src_vocab is None and opt.asr == False and opt.lm == False:
         save_vocabulary('source', dicts['src'], opt.save_data + '.src.dict')

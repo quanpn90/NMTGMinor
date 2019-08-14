@@ -424,7 +424,7 @@ class Transformer(NMTModel):
     def reset_states(self):
         return
 
-    def forward(self, batch, target_masking=None):
+    def forward(self, batch, target_masking=None, zero_encoder=False):
         """
         Inputs Shapes:
             src: len_src x batch_size
@@ -444,6 +444,10 @@ class Transformer(NMTModel):
 
         encoder_output = self.encoder(src)
         context = encoder_output['context']
+
+        # zero out the encoder part for pre-training
+        if zero_encoder:
+            context.zero_()
 
         decoder_output = self.decoder(tgt, context, src, atbs=tgt_atb)
         output = decoder_output['hidden']

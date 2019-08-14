@@ -18,7 +18,7 @@ import onmt
 
 
 class Beam(object):
-    def __init__(self, size, cuda=False):
+    def __init__(self, size, bos_id, cuda=False):
 
         self.size = size
         self.done = False
@@ -34,7 +34,8 @@ class Beam(object):
 
         # The outputs at each time-step.
         self.nextYs = [self.tt.LongTensor(size).fill_(onmt.Constants.PAD)]
-        self.nextYs[0][0] = onmt.Constants.BOS
+        # self.nextYs[0][0] = onmt.Constants.BOS
+        self.nextYs[0][0] = bos_id
 
         # The attentions (matrix) for each time.
         self.attn = []
