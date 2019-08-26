@@ -11,7 +11,6 @@ import struct
 import numpy as np
 import torch
 import torch.utils.data
-#~ from fairseq.tokenizer import Tokenizer
 
 
 def read_longs(f, n):
@@ -115,50 +114,6 @@ class IndexedInMemoryDataset(IndexedDataset):
         a = np.empty(tensor_size, dtype=self.dtype)
         np.copyto(a, self.buffer[self.data_offsets[i]:self.data_offsets[i + 1]])
         return torch.from_numpy(a).long()
-#~ 
-#~ 
-#~ class IndexedRawTextDataset(IndexedDataset):
-    #~ """Takes a text file as input and binarizes it in memory at instantiation.
-    #~ Original lines are also kept in memory"""
-#~ 
-    #~ def __init__(self, path, dictionary, append_eos=True, reverse_order=False):
-        #~ self.tokens_list = []
-        #~ self.lines = []
-        #~ self.sizes = []
-        #~ self.append_eos = append_eos
-        #~ self.reverse_order = reverse_order
-        #~ self.read_data(path, dictionary)
-        #~ self.size = len(self.tokens_list)
-#~ 
-    #~ def read_data(self, path, dictionary):
-        #~ with open(path, 'r') as f:
-            #~ for line in f:
-                #~ self.lines.append(line.strip('\n'))
-                #~ tokens = Tokenizer.tokenize(
-                    #~ line, dictionary, add_if_not_exist=False,
-                    #~ append_eos=self.append_eos, reverse_order=self.reverse_order,
-                #~ ).long()
-                #~ self.tokens_list.append(tokens)
-                #~ self.sizes.append(len(tokens))
-        #~ self.sizes = np.array(self.sizes)
-#~ 
-    #~ def __getitem__(self, i):
-        #~ self.check_index(i)
-        #~ return self.tokens_list[i]
-#~ 
-    #~ def get_original_text(self, i):
-        #~ self.check_index(i)
-        #~ return self.lines[i]
-#~ 
-    #~ def __del__(self):
-        #~ pass
-#~ 
-    #~ def __len__(self):
-        #~ return self.size
-#~ 
-    #~ @staticmethod
-    #~ def exists(path):
-        #~ return os.path.exists(path)
 
 
 class IndexedDatasetBuilder(object):

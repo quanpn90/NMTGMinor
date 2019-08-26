@@ -22,6 +22,7 @@ class EnsembleTranslator(object):
         self.fp16 = opt.fp16
         self.attributes = opt.attributes  # attributes split by |. for example: de|domain1
         self.bos_token = opt.bos_token
+        self.sampling = opt.sampling
 
         if self.attributes:
             self.attributes = self.attributes.split("|")
@@ -133,10 +134,6 @@ class EnsembleTranslator(object):
             else:
                 self.autoencoder = self.autoencoder.cpu()
                 self.models[0] = self.models[0].cpu()
-
-            if opt.fp16:
-                self.autoencoder = self.autoencoder.half()
-                self.models[0] = self.models[0].half()
 
             self.models[0].autoencoder = self.autoencoder
         if opt.verbose:
@@ -301,7 +298,7 @@ class EnsembleTranslator(object):
         # time x batch * beam
 
         # initialize the beam
-        beam = [onmt.Beam(beam_size, self.bos_id, self.opt.cuda) for k in range(batch_size)]
+        beam = [onmt.Beam(beam_size, self.bos_id, self.opt.cuda, self.opt.sampling) for k in range(batch_size)]
 
         batch_idx = list(range(batch_size))
         remaining_sents = batch_size

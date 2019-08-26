@@ -613,6 +613,9 @@ class TransformerDecodingState(DecoderState):
 
     def update_beam(self, beam, b, remaining_sents, idx):
 
+        if self.beam_size == 1:
+            return
+
         for tensor in [self.src, self.input_seq]:
 
             if tensor is None:

@@ -87,9 +87,7 @@ class CopyGenerator(nn.Module):
         batch_by_tlen, _ = input.size()
         batch_by_tlen_, src_len = attn.size()
         src_len_, batch, vocab_size = src_map.size()
-        
-        
-        
+
         """ Probability of copying p(z=1) batch. """
         copy_prob = F.sigmoid(self.linear_copy(input))
         

@@ -119,7 +119,7 @@ class Dict(object):
 
         return newDict
 
-    def convertToIdx(self, labels, unkWord, bos_word=None, eos_word=None):
+    def convertToIdx(self, labels, unkWord, bos_word=None, eos_word=None, type='int64'):
         """
         Convert `labels` to indices. Use `unkWord` if not found.
         Optionally insert `bos_word` at the beginning and `eos_word` at the .
@@ -135,7 +135,14 @@ class Dict(object):
         if eos_word is not None:
             vec += [self.lookup(eos_word)]
 
-        return torch.LongTensor(vec)
+        if type == 'int64':
+            return torch.LongTensor(vec)
+        elif type == 'int32' or type == 'int':
+            return torch.IntTensor(vec)
+        elif type == 'int16':
+            return torch.ShortTensor(vec)
+        else:
+            raise NotImplementedError
 
     def convertToIdx2(self, labels, unkWord, bos_word=None, eos_word=None):
         """

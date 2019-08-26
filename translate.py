@@ -63,6 +63,8 @@ parser.add_argument('-start_with_bos', action="store_true",
 #                     tokens. See README.md for the format of this file.""")
 parser.add_argument('-verbose', action="store_true",
                     help='Print scores and predictions for each sentence')
+parser.add_argument('-sampling', action="store_true",
+                    help='Using multinomial sampling instead of beam search')
 parser.add_argument('-dump_beam', type=str, default="",
                     help='File to dump beam information to.')
 parser.add_argument('-bos_token', type=str, default="<s>",

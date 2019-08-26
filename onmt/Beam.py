@@ -18,10 +18,15 @@ import onmt
 
 
 class Beam(object):
-    def __init__(self, size, bos_id, cuda=False):
+    def __init__(self, size, bos_id, cuda=False, sampling=False):
 
         self.size = size
         self.done = False
+
+        if sampling:
+            self.size = 1
+
+        self.sampling = sampling
 
         self.tt = torch.cuda if cuda else torch
 
@@ -70,7 +75,19 @@ class Beam(object):
 
         flatBeamLk = beamLk.view(-1)
 
-        bestScores, bestScoresId = flatBeamLk.topk(self.size, 0, True, True)
+        # print(flatBeamLk.size())
+        # print(wordLk.size())
+
+        if not self.sampling:
+            bestScores, bestScoresId = flatBeamLk.topk(self.size, 0, True, True)
+        else:
+            # because wordLk is log prob, exp to get distribution
+            probs = torch.exp(wordLk)
+            # print(probs.size())
+            bestScoresId = torch.multinomial(probs, 1).squeeze(1)  # K x 1 to K
+            # print(bestScoresId, bestScoresId.size())
+            bestScores = flatBeamLk[bestScoresId]
+            # multinomial sampling
         self.allScores.append(self.scores)
         self.scores = bestScores
 

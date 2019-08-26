@@ -29,6 +29,8 @@ parser.add_argument('-previous_context', type=int, default=0,
                     help="Number of previous sentence for context")
 parser.add_argument('-input_type', default="word",
                     help="Input type: word/char")
+parser.add_argument('-data_type', default="int64",
+                    help="Input type for storing text (int64|int32|int|int16) to reduce memory load")
 parser.add_argument('-format', default="raw",
                     help="Save data format: binary or raw. Binary should be used to load faster")
 
@@ -44,9 +46,9 @@ parser.add_argument('-valid_tgt', required=True,
 parser.add_argument('-save_data', required=True,
                     help="Output file for the prepared data")
 
-parser.add_argument('-src_vocab_size', type=int, default=50000,
+parser.add_argument('-src_vocab_size', type=int, default=9999999,
                     help="Size of the source vocabulary")
-parser.add_argument('-tgt_vocab_size', type=int, default=50000,
+parser.add_argument('-tgt_vocab_size', type=int, default=9999999,
                     help="Size of the target vocabulary")
 parser.add_argument('-src_vocab',
                     help="Path to an existing source vocabulary")
@@ -204,7 +206,7 @@ def save_vocabulary(name, vocab, file):
     vocab.writeFile(file)
 
 
-def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
+def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', data_type='int32'):
     tgt = []
     sizes = []
     count, ignored = 0, 0
@@ -236,7 +238,8 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
         tensor = tgt_dicts.convertToIdx(tgt_words,
                                         onmt.Constants.UNK_WORD,
                                         None,
-                                        onmt.Constants.EOS_WORD)
+                                        onmt.Constants.EOS_WORD,
+                                        type=data_type)
         # print(tensor.size())
         tensors.append(tensor)
 
@@ -255,7 +258,7 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
 
 def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_length=64, max_tgt_length=64,
                           sort_by_target=False, add_bos=True,
-                          input_type='word'):
+                          input_type='word', data_type='int64'):
     src, tgt = [], []
     src_sizes = []
     tgt_sizes = []
@@ -310,12 +313,12 @@ def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_lengt
                 tgt += [tgt_dicts.convertToIdx(tgt_words,
                                                onmt.Constants.UNK_WORD,
                                                onmt.Constants.BOS_WORD,
-                                               onmt.Constants.EOS_WORD)]
+                                               onmt.Constants.EOS_WORD, type=data_type)]
             else:
                 tgt += [tgt_dicts.convertToIdx(tgt_words,
                                                onmt.Constants.UNK_WORD,
                                                None,
-                                               onmt.Constants.EOS_WORD)]
+                                               onmt.Constants.EOS_WORD, type=data_type)]
             src_sizes += [len(src_words)]
             tgt_sizes += [len(tgt_words)]
         else:
@@ -574,7 +577,8 @@ def main():
                                                            max_tgt_length=opt.tgt_seq_length,
                                                            sort_by_target=opt.sort_by_target,
                                                            input_type=opt.input_type,
-                                                           add_bos=(not opt.no_bos))
+                                                           add_bos=(not opt.no_bos),
+                                                           data_type=opt.data_type)
 
         print('Preparing validation ...')
         valid = dict()
@@ -583,7 +587,8 @@ def main():
                                                            max_src_length=max(1024, opt.src_seq_length),
                                                            max_tgt_length=max(1024, opt.tgt_seq_length),
                                                            input_type=opt.input_type,
-                                                           add_bos=(not opt.no_bos))
+                                                           add_bos=(not opt.no_bos),
+                                                           data_type=opt.data_type)
 
     if opt.src_vocab is None and opt.asr == False and opt.lm == False:
         save_vocabulary('source', dicts['src'], opt.save_data + '.src.dict')
@@ -633,7 +638,10 @@ def main():
             if valid[set] is None:
                 continue
 
-            dtype = np.int32
+            if opt.data_type == 'int64':
+                dtype = np.int64
+            else:
+                dtype = np.int32
 
             if set == 'src' and opt.asr:
                 dtype = np.double
@@ -647,6 +655,55 @@ def main():
             data.finalize(opt.save_data + ".valid.%s.idx" % set)
 
         print("Done")
+    elif opt.format == 'mmap':
+        print('Saving data to memory indexed data files')
+        from onmt.data_utils.MMapIndexedDataset import MMapIndexedDatasetBuilder
+
+        if opt.asr:
+            print("ASR data format isn't compatible with memory indexed format")
+            raise AssertionError
+
+        # save dicts in this format
+        torch.save(dicts, opt.save_data + '.dict.pt')
+
+        # binarize the training set first
+        for set in ['src', 'tgt']:
+            if train[set] is None:
+                continue
+
+            if opt.data_type == 'int64':
+                dtype = np.int64
+            else:
+                dtype = np.int32
+
+            if set == 'src' and opt.asr:
+                dtype = np.double
+
+            train_data = MMapIndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set, dtype=dtype)
+
+            # add item from training data to the indexed data
+            for tensor in train[set]:
+                train_data.add_item(tensor)
+
+            train_data.finalize(opt.save_data + ".train.%s.idx" % set)
+
+            del train_data
+
+            if valid[set] is None:
+                continue
+
+            if set == 'src' and opt.asr:
+                dtype = np.double
+
+            valid_data = MMapIndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set, dtype=dtype)
+
+            # add item from training data to the indexed data
+            for tensor in valid[set]:
+                valid_data.add_item(tensor)
+
+            valid_data.finalize(opt.save_data + ".valid.%s.idx" % set)
+
+            del valid_data
 
     else:
         raise NotImplementedError

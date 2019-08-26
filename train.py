@@ -43,6 +43,7 @@ def main():
 
     if opt.data_format == 'raw':
         start = time.time()
+
         if opt.data.endswith(".train.pt"):
             print("Loading data from '%s'" % opt.data)
             dataset = torch.load(opt.data)
@@ -78,32 +79,68 @@ def main():
         print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
 
     elif opt.data_format == 'bin':
+        print("Loading memory binned data files ....")
+        start = time.time()
+        from onmt.data_utils.IndexedDataset import IndexedInMemoryDataset
 
-    #     from onmt.data_utils.IndexedDataset import IndexedInMemoryDataset
-    #
-    #     dicts = torch.load(opt.data + ".dict.pt")
-    #
-    #     train_path = opt.data + '.train'
-    #     train_src = IndexedInMemoryDataset(train_path + '.src')
-    #     train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
-    #
-    #     train_data = onmt.Dataset(train_src,
-    #                               train_tgt,
-    #                               opt.batch_size_words,
-    #                               data_type=opt.encoder_type,
-    #                               batch_size_sents=opt.batch_size_sents,
-    #                               multiplier = opt.batch_size_multiplier)
-    #
-    #     valid_path = opt.data + '.valid'
-    #     valid_src = IndexedInMemoryDataset(valid_path + '.src')
-    #     valid_tgt = IndexedInMemoryDataset(valid_path + '.tgt')
-    #
-    #     valid_data = onmt.Dataset(valid_src,
-    #                               valid_tgt, opt.batch_size_words,
-    #                               data_type=opt.encoder_type,
-    #                               batch_size_sents=opt.batch_size_sents)
-    #
-    # else:
+        dicts = torch.load(opt.data + ".dict.pt")
+
+        train_path = opt.data + '.train'
+        train_src = IndexedInMemoryDataset(train_path + '.src')
+        train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
+
+        train_data = onmt.Dataset(train_src,
+                                  train_tgt,
+                                  opt.batch_size_words,
+                                  batch_size_words=opt.batch_size_words,
+                                  data_type="text",
+                                  batch_size_sents=opt.batch_size_sents,
+                                  multiplier=opt.batch_size_multiplier)
+
+        valid_path = opt.data + '.valid'
+        valid_src = IndexedInMemoryDataset(valid_path + '.src')
+        valid_tgt = IndexedInMemoryDataset(valid_path + '.tgt')
+
+        valid_data = onmt.Dataset(valid_src,
+                                  valid_tgt, opt.batch_size_words,
+                                  batch_size_words=opt.batch_size_words,
+                                  data_type="text",
+                                  batch_size_sents=opt.batch_size_sents)
+        elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
+        print("Done after %s" % elapse)
+    elif opt.data_format == 'mmem':
+        print("Loading memory mapped data files ....")
+        start = time.time()
+        from onmt.data_utils.MMapIndexedDataset import MMapIndexedDataset
+
+        dicts = torch.load(opt.data + ".dict.pt")
+
+        train_path = opt.data + '.train'
+        train_src = MMapIndexedDataset(train_path + '.src')
+        # train_tgt = None
+        train_tgt = MMapIndexedDataset(train_path + '.tgt')
+
+        train_data = onmt.Dataset(train_src,
+                                  train_tgt,
+                                  opt.batch_size_words,
+                                  batch_size_words=opt.batch_size_words,
+                                  data_type="text",
+                                  batch_size_sents=opt.batch_size_sents,
+                                  multiplier=opt.batch_size_multiplier)
+
+        valid_path = opt.data + '.valid'
+        valid_src = MMapIndexedDataset(valid_path + '.src')
+        valid_tgt = MMapIndexedDataset(valid_path + '.tgt')
+
+        valid_data = onmt.Dataset(valid_src,
+                                  valid_tgt, opt.batch_size_words,
+                                  batch_size_words=opt.batch_size_words,
+                                  data_type="text",
+                                  batch_size_sents=opt.batch_size_sents)
+        elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
+        print("Done after %s" % elapse)
+
+    else:
         raise NotImplementedError
 
     additional_data = []
