@@ -155,14 +155,14 @@ def build_tm_model(opt, dicts):
 
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
     elif opt.model == 'relative_transformer':
-        from onmt.modules.RelativeTransformer.Models import RelativeTransformerDecoder
-
-        if opt.encoder_type == "text":
-            encoder = TransformerEncoder(opt, embedding_src, positional_encoder, opt.encoder_type)
-        elif opt.encoder_type == "audio":
-            encoder = TransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
-
+        from onmt.modules.RelativeTransformer.Models import RelativeTransformerEncoder, RelativeTransformerDecoder
         relative_positional_encoder = PositionalEmbedding(opt.model_size)
+        if opt.encoder_type == "text":
+            # encoder = TransformerEncoder(opt, embedding_src, positional_encoder, opt.encoder_type)
+                encoder = RelativeTransformerEncoder(opt, embedding_src, relative_positional_encoder, opt.encoder_type)
+        elif opt.encoder_type == "audio":
+            raise NotImplementedError
+            # encoder = TransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
         decoder = RelativeTransformerDecoder(opt, embedding_tgt, relative_positional_encoder)
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
 

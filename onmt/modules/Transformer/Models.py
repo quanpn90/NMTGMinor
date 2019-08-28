@@ -8,6 +8,7 @@ import onmt
 from onmt.modules.WordDrop import embedded_dropout
 from torch.utils.checkpoint import checkpoint
 from collections import defaultdict
+from onmt.utils import flip
 
 
 def custom_layer(module):
@@ -86,7 +87,8 @@ class TransformerEncoder(nn.Module):
 
                 # self.model_size =
                 feat_size = (((feature_size // channels) - 3) // 4) * 64
-                assert self.model_size == feat_size, "The model dimension doesn't match with the feature dim, expecting %d " % feat_size
+                assert self.model_size == feat_size, \
+                    "The model dimension doesn't match with the feature dim, expecting %d " % feat_size
         else:
             self.word_lut = embedding
 
@@ -148,7 +150,6 @@ class TransformerEncoder(nn.Module):
                 emb = input
 
         """ Scale the emb by sqrt(d_model) """
-
         emb = emb * math.sqrt(self.model_size)
 
         """ Adding positional encoding """
@@ -297,8 +298,9 @@ class TransformerDecoder(nn.Module):
             mask_src = None
 
         len_tgt = input.size(1)
-        mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
+        mask_tgt = input.eq(onmt.Constants.PAD).byte().unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
+        mask_tgt = mask_tgt.bool()
 
         output = emb.transpose(0, 1).contiguous()
 
@@ -392,9 +394,10 @@ class TransformerDecoder(nn.Module):
             mask_src = None
 
         len_tgt = input.size(1)
-        mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
+        mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1).byte() + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
+        mask_tgt = mask_tgt.bool()
 
         output = emb.contiguous()
 
@@ -439,6 +442,10 @@ class Transformer(NMTModel):
         src = batch.get('source')
         tgt = batch.get('target_input')
         tgt_atb = batch.get('target_atb')  # a dictionary of attributes
+
+        # src = flip(src, 0)
+        # inv_idx = torch.arange(src.size(0) - 1, -1, -1, device=src.device, dtype=src.dtype).long()
+        # src = src.index_select(0, inv_idx)
 
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)

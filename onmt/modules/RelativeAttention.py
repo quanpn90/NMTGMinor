@@ -1,23 +1,26 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-
+from onmt.modules.Transformer.Layers import XavierLinear as Linear
 # Relative Multihead Attention
 # Only for self-attention
 class RelMultiHeadAttn(nn.Module):
     def __init__(self, n_head, d_model, d_head, dropatt=0,
-                 tgt_len=None, ext_len=None, mem_len=None, pre_lnorm=False):
+                 tgt_len=None, ext_len=None, mem_len=None, pre_lnorm=False, proj_out=True):
         super(RelMultiHeadAttn, self).__init__()
 
         self.n_head = n_head
         self.d_model = d_model
         self.d_head = d_head
 
-        self.qkv_net = nn.Linear(d_model, 3 * n_head * d_head, bias=False)
+        self.qkv_net = Linear(d_model, 3 * n_head * d_head, bias=False)
 
         self.dropatt = nn.Dropout(dropatt)
-        self.o_net = nn.Linear(n_head * d_head, d_model, bias=False)
+
+        if proj_out:
+            self.o_net = Linear(n_head * d_head, n_head * d_head, bias=False)
+        else:
+            self.o_net = None
 
         # self.layer_norm = nn.LayerNorm(d_model)
 
@@ -88,11 +91,11 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         self.r_r_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
 
         self.r_net = nn.Linear(self.d_model, self.n_head * self.d_head, bias=False)
-        self.attn_type = 1
+        self.attn_type = 2
 
         print("* Attention type: ", self.attn_type)
 
-    def forward(self, input, pos_enc, attn_mask=None, mems=None):
+    def forward(self, input, pos_enc, attn_mask=None, mems=None, debug=False):
         """
         :param w: input embeddings (E) T x B x H
         :param r: relative encodings (R)
@@ -118,6 +121,11 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         w_head_k = w_head_k.view(klen, bsz, self.n_head, self.d_head)  # qlen x bsz x n_head x d_head
         w_head_v = w_head_v.view(klen, bsz, self.n_head, self.d_head)  # qlen x bsz x n_head x d_head
 
+        if debug:
+            print("Q nan", torch.isnan(w_head_q).sum() > 0)
+            print("K nan", torch.isnan(w_head_k).sum() > 0)
+            print("V nan", torch.isnan(w_head_v).sum() > 0)
+
         if self.attn_type == 2:
             attn_score = torch.einsum('ibnd,jbnd->ijbn', (w_head_q, w_head_k))
         elif self.attn_type == 1:
@@ -125,8 +133,10 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
             #### compute attention score
             rw_head_q = w_head_q + self.r_w_bias  # qlen x bsz x n_head x d_head
             AC = torch.einsum('ibnd,jbnd->ijbn', (rw_head_q, w_head_k))  # qlen x klen x bsz x n_head
+
             rr_head_q = w_head_q + self.r_r_bias
             BD = torch.einsum('ibnd,jnd->ijbn', (rr_head_q, r_head_k))  # qlen x klen x bsz x
+
             # what is relative shift?
             # here the B and D are actually B~ and D~ in the paper
             # then shift them to efficiently get B and D
@@ -134,21 +144,44 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
 
             attn_score = AC + BD
 
+            if debug:
+                print("AC nan", torch.isnan(AC).sum() > 0)
+                print("B~D~ nan", torch.isnan(BD).sum() > 0)
+                print("BD nan", torch.isnan(BD).sum() > 0)
+                print("AC + BD nan", torch.isnan(attn_score).sum() > 0)
+
+
         # scale the attention score
-        attn_score.mul_(self.scale)
+        attn_score = attn_score * (self.scale)
+        attn_score = attn_score.transpose(0, 2).transpose(1, 3).contiguous()
+        # if debug:
+        #     print("mask nan", torch.isnan(attn_mask).sum() > 0)
+        #     print("attn score before mask nan", torch.isnan(attn_score).sum() > 0)
+        if debug:
+            attn_score = torch.clamp(attn_score, -0.5, 0.5)
+            print(attn_score)
+        attn_score = attn_score.float().masked_fill_(attn_mask.unsqueeze(-3), -float('inf')).type_as(attn_score)
+        if debug:
+            print("attn score after mask nan", torch.isnan(attn_score).sum() > 0)
 
         #### compute attention probability
         # print(attn_mask).size()
-        if attn_mask is not None and attn_mask.any().item():
-            if attn_mask.dim() == 2:
-                attn_score = attn_score.float().masked_fill(
-                    attn_mask[None, :, :, None], -float('inf')).type_as(attn_score)
-            elif attn_mask.dim() == 3:
-                attn_score = attn_score.float().masked_fill(
-                    attn_mask[:, :, :, None], -float('inf')).type_as(attn_score)
+        # if attn_mask is not None and attn_mask.any().item():
+        #     if attn_mask.dim() == 2:
+        #         attn_score = attn_score.float().masked_fill(
+        #             attn_mask[None, :, :, None], -float('inf')).type_as(attn_score)
+        #     elif attn_mask.dim() == 3:
+        #         attn_score = attn_score.float().masked_fill(
+        #             attn_mask[:, :, :, None], -float('inf')).type_as(attn_score)
 
         # [qlen x klen x bsz x n_head]
-        attn_prob = F.softmax(attn_score, dim=1)
+        # attn_score = attn_score.transpose(0, 2).transpose(1, 3)
+
+        attn_prob = F.softmax(attn_score.float(), dim=-1)
+        if debug:
+            print(attn_score.size())
+            print("attn prob nan", torch.isnan(attn_prob).sum() > 0)
+        attn_prob = attn_prob.transpose(0, 2).transpose(1, 3)
         coverage = torch.mean(attn_prob, dim=-1).transpose(0, 2)
         attn_prob = self.dropatt(attn_prob)
 
@@ -161,9 +194,10 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
             attn_vec.size(0), attn_vec.size(1), self.n_head * self.d_head)
 
         ##### linear projection
-        attn_out = self.o_net(attn_vec)
-        # attn_out = self.drop(attn_out)
-
+        if self.o_net:
+            attn_out = self.o_net(attn_vec)
+        else:
+            attn_out = attn_vec
         output = attn_out
 
         # if self.pre_lnorm:
@@ -239,16 +273,20 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         attn_score.mul_(self.scale)
 
         #### compute attention probability
-        # print(attn_mask).size()
-        if attn_mask is not None and attn_mask.any().item():
-            if attn_mask.dim() == 2:
-                attn_score = attn_score.float().masked_fill(
-                    attn_mask[None, :, :, None], -float('inf')).type_as(attn_score)
-            elif attn_mask.dim() == 3:
-                attn_score = attn_score.float().masked_fill(
-                    attn_mask[:, :, :, None], -float('inf')).type_as(attn_score)
+
+        # attns = attns.view(b, self.h, len_query, len_key)
+        attn_score = attn_score.transpose(0, 2).transpose(1, 3)
+        attn_score = attn_score.float().masked_fill_(attn_mask.unsqueeze(-3), -float('inf')).type_as(attn_score)
+        # if attn_mask is not None and attn_mask.any().item():
+        #     if attn_mask.dim() == 2:
+        #         attn_score = attn_score.float().masked_fill(
+        #             attn_mask[None, :, :, None], -float('inf')).type_as(attn_score)
+        #     elif attn_mask.dim() == 3:
+        #         attn_score = attn_score.float().masked_fill(
+        #             attn_mask[:, :, :, None], -float('inf')).type_as(attn_score)
 
         # [qlen x klen x bsz x n_head]
+        attn_score = attn_score.transpose(0, 2).transpose(1, 3)
         attn_prob = F.softmax(attn_score.float(), dim=1).type_as(attn_score)
         coverage = torch.mean(attn_prob, dim=-1).transpose(0, 2)
 
@@ -262,12 +300,16 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         # take the final time step and then unsqueeze
         attn_vec = attn_vec[-1, :, :].unsqueeze(0)
 
-        ##### linear projection
-        attn_out = self.o_net(attn_vec)
+        # linear projection
+        if self.o_net:
+            attn_out = self.o_net(attn_vec)
+        else:
+            attn_out = attn_vec
 
         output = attn_out
 
         return output, coverage, buffer
+
 
 # From Shaw et al 2019
 # Not easy to do because there is a max_klen hyperparameter (which is difficult)

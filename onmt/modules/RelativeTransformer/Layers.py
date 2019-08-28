@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 import onmt
 
-from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, PrePostProcessing, MultiHeadAttention, FeedForward
+from onmt.modules.Transformer.Layers import PrePostProcessing, MultiHeadAttention, FeedForward, Linear
 from onmt.modules.RelativeAttention import RelPartialLearnableMultiHeadAttn
+from onmt.utils import flip
 
 
 #   Positional Embedding with discrete inputs
@@ -24,6 +25,68 @@ class PositionalEmbedding(nn.Module):
             return pos_emb[:, None, :].expand(-1, bsz, -1)
         else:
             return pos_emb[:, None, :]
+
+
+class RelativeTransformerEncoderLayer(nn.Module):
+    def __init__(self, h, d_model, p, d_ff, attn_p=0.1):
+        super(RelativeTransformerEncoderLayer, self).__init__()
+
+        self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
+        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
+        self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
+        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
+
+        self.d_head = d_head = d_model // h
+        self.multihead_fwd = RelPartialLearnableMultiHeadAttn(h, d_model, d_head, dropatt=attn_p)
+        self.multihead_bwd = RelPartialLearnableMultiHeadAttn(h//2, d_model, d_head, dropatt=attn_p)
+        self.attn_out = Linear(h * self.d_head , d_model)
+
+        if onmt.Constants.activation_layer == 'linear_relu_linear':
+            ff_p = p
+            feedforward = FeedForward(d_model, d_ff, ff_p, static=onmt.Constants.static)
+        elif onmt.Constants.activation_layer == 'maxout':
+            k = int(math.ceil(d_ff / d_model))
+            feedforward = MaxOut(d_model, d_model, k)
+        elif onmt.Constants.activation_layer == 'linear_swish_linear':
+            ff_p = p
+            feedforward = FeedForwardSwish(d_model, d_ff, ff_p, static=onmt.Constants.static)
+        self.feedforward = feedforward
+
+    def forward(self, input, pos, mask_fwd, mask_bwd):
+        """
+        :param input:
+        :param pos:
+        :param mask_fwd:
+        :param mask_bwd:
+        :return:
+        """
+        query_fwd = self.preprocess_attn(input)
+
+        # reverse the tensor at time dimension
+        query_bwd = flip(query_fwd, 0)
+        out_fwd, _ = self.multihead_fwd(query_fwd, pos, mask_fwd)  # T x B x d_head * h/2
+        # print("OUTPUT FORWARD NAN", torch.isnan(out_fwd).sum() > 0)
+        # print(torch.isnan(out_fwd).sum() > 0 )
+        # out_bwd, _ = self.multihead_bwd(query_bwd, pos, mask_bwd)  # T x B x d_head * h/2
+        # print("OUTPUT BACKWARD NAN", torch.isnan(out_bwd).sum() > 0)
+
+        # Flip the bwd states and the concatenate to the input before a final linear transformation
+        # out = self.attn_out(torch.cat([out_fwd, torch.flip(out_bwd, [0])], dim=-1))
+        # out = torch.cat([out_fwd, out_bwd], dim=-1)
+        # out = self.attn_out(out)
+        # out = torch.cat([out_fwd, out_fwd], dim=-1)
+        # out = self.attn_out(out)
+        out = out_fwd
+        input = self.postprocess_attn(out, input)
+        # print(torch.isnan(input).sum() > 0)
+
+        """ Feed forward layer 
+            layernorm > ffn > dropout > residual
+        """
+        out = self.feedforward(self.preprocess_ffn(input))
+        input = self.postprocess_ffn(out, input)
+
+        return input
 
 
 class RelativeTransformerDecoderLayer(nn.Module):

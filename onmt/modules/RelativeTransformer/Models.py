@@ -1,16 +1,119 @@
-import numpy as np
 import torch, math
 import torch.nn as nn
 from onmt.modules.Transformer.Layers import PositionalEncoding, PrePostProcessing
 from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer
-from onmt.modules.RelativeTransformer.Layers import RelativeTransformerDecoderLayer
+from onmt.modules.RelativeTransformer.Layers import RelativeTransformerDecoderLayer, RelativeTransformerEncoderLayer
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder
-from onmt.modules.BaseModel import NMTModel, Reconstructor
 import onmt
 from onmt.modules.WordDrop import embedded_dropout
-from onmt.modules.Checkpoint import checkpoint
-
 from onmt.modules.Transformer.Layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
+from onmt.utils import flip
+
+
+class RelativeTransformerEncoder(TransformerEncoder):
+
+    def __init__(self, opt, embedding, positional_encoder, encoder_type='text'):
+        """
+        :param opt:
+        :param embedding:
+        :param positional_encoder:
+        :param encoder_type:
+        """
+        self.death_rate = opt.death_rate
+        self.layer_modules = None
+
+        # build_modules will be called from the inherited constructor
+        super(RelativeTransformerEncoder, self).__init__(opt, embedding, positional_encoder, encoder_type=encoder_type)
+
+        self.positional_encoder = positional_encoder
+
+    def build_modules(self):
+        self.layer_modules = nn.ModuleList(
+            [RelativeTransformerEncoderLayer(self.n_heads, self.model_size,
+                                             self.dropout, self.inner_size,
+                                             self.attn_dropout) for _ in
+             range(self.layers)])
+
+    def forward(self, input, **kwargs):
+        """
+        Inputs Shapes:
+            input: batch_size x len_src
+
+        Outputs Shapes:
+            out: batch_size x len_src x d_model
+            mask_src
+
+        """
+
+        """ Embedding: batch_size x len_src x d_model """
+        # if self.input_type == "text":
+        #     mask_src = input.eq(onmt.Constants.PAD).byte()  # batch_size x len_src x 1 for broadcasting
+        #     emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        # else:
+        #     raise NotImplementedError
+        # if not self.cnn_downsampling:
+        #     mask_src = input.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD)
+        #     input = input.narrow(2, 1, input.size(2) - 1)
+        #     emb = self.audio_trans(input.contiguous().view(-1, input.size(2))).view(input.size(0),
+        #                                                                             input.size(1), -1)
+        # else:
+        #     long_mask = input.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD)
+        #     input = input.narrow(2, 1, input.size(2) - 1)
+        #
+        #     # first resizing to fit the CNN format
+        #     input = input.view(input.size(0), input.size(1), -1, self.channels)
+        #     input = input.permute(0, 3, 1, 2)
+        #
+        #     input = self.audio_trans(input)
+        #     input = input.permute(0, 2, 1, 3).contiguous()
+        #     input = input.view(input.size(0), input.size(1), -1)
+        #
+        #     mask_src = long_mask[:, 0:input.size(1) * 4:4]
+        #     emb = input
+
+        input = input.transpose(0, 1)  # B x T to T x B
+        # input = flip(input, 0)
+        klen, batch_size = input.size()
+
+        """ Scale the emb by sqrt(d_model) """
+        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        emb = emb * (math.sqrt(self.model_size))
+
+        # Adding dropout
+        emb = self.preprocess_layer(emb)
+
+        # Prepare positional encoding:
+        pos_seq = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+        pos_emb = self.preprocess_layer(self.positional_encoder(pos_seq))
+
+        # attention masking
+        qlen = klen
+        mask = torch.triu(emb.new_ones(qlen, klen), diagonal=1).byte()
+        mask_fwd = input.t().eq(onmt.Constants.PAD).byte().unsqueeze(1) + mask
+        mask_fwd = torch.gt(mask_fwd, 0)
+        mask_fwd = mask_fwd.bool()
+
+        input_flip = flip(input, 0)
+        # mask_bwd = mask + input_flip.eq(onmt.Constants.PAD).unsqueeze(0).byte()
+        mask_bwd = input_flip.t().eq(onmt.Constants.PAD).byte().unsqueeze(1) + \
+            torch.triu(emb.new_ones(qlen, klen), diagonal=1).byte()
+        mask_bwd = torch.gt(mask_bwd, 0)  # convert all 2s to 1
+        mask_bwd = mask_bwd.bool()
+
+        context = emb
+        for i, layer in enumerate(self.layer_modules):
+            context = layer(context, pos_emb, mask_fwd, mask_bwd)  # batch_size x len_src x d_model
+
+        # From Google T2T
+        # if normalization is done in layer_preprocess, then it should also be done
+        # on the output, since the output can grow very large, being the sum of
+        # a whole stack of unnormalized layer outputs.
+        context = self.postprocess_layer(context)
+
+        output_dict = {'context': context, 'src_mask': None}
+
+        # return context, mask_src
+        return output_dict
 
 
 class RelativeTransformerDecoder(TransformerDecoder):
@@ -75,21 +178,26 @@ class RelativeTransformerDecoder(TransformerDecoder):
         if context is not None:
             if self.encoder_type == "audio":
                 if not self.encoder_cnn_downsampling:
-                    mask_src = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+                    mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).byte().unsqueeze(1)
                 else:
-                    long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD)
+                    long_mask = src.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).byte()
                     mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
             else:
-
-                mask_src = src.data.eq(onmt.Constants.PAD).unsqueeze(1)
+                mask_src = src.eq(onmt.Constants.PAD).byte().unsqueeze(1)
         else:
             mask_src = None
 
+        mask_src = mask_src.bool()
+
         # attention masking
         qlen = klen
-        mask_tgt = torch.triu(emb.new_ones(qlen, klen), diagonal=1).unsqueeze(-1).byte()
-        mask_tgt = mask_tgt + input.eq(onmt.Constants.PAD).byte().unsqueeze(0)
-        mask_tgt = torch.gt(mask_tgt, 0)  # convert all 2s to 1
+        # mask_tgt = torch.triu(emb.new_ones(qlen, klen), diagonal=1).unsqueeze(-1).byte()
+        # mask_tgt = mask_tgt + input.eq(onmt.Constants.PAD).byte().unsqueeze(0)
+        # mask_tgt = torch.gt(mask_tgt, 0)  # convert all 2s to 1
+        # mask_tgt = mask_tgt.bool()
+        mask_tgt = input.t().eq(onmt.Constants.PAD).byte().unsqueeze(1) + \
+                   torch.triu(emb.new_ones(qlen, klen), diagonal=1).byte()
+        mask_tgt = torch.gt(mask_tgt, 0)
         mask_tgt = mask_tgt.bool()
 
         output = emb
@@ -178,10 +286,15 @@ class RelativeTransformerDecoder(TransformerDecoder):
         # attention masking
         klen, batch_size = input.size()
         qlen = klen
-        mask_tgt = torch.triu(emb.new_ones(qlen, klen), diagonal=1).unsqueeze(-1).byte()
-        mask_tgt = mask_tgt + input.eq(onmt.Constants.PAD).byte().unsqueeze(0)
-        mask_tgt = torch.gt(mask_tgt, 0)  # convert all 2s to 1
+
+        mask_tgt = input.t().eq(onmt.Constants.PAD).byte().unsqueeze(1) + \
+            torch.triu(emb.new_ones(qlen, klen), diagonal=1).byte()
+        mask_tgt = torch.gt(mask_tgt, 0)
         mask_tgt = mask_tgt.bool()
+        # mask_tgt = torch.triu(emb.new_ones(qlen, klen), diagonal=1).unsqueeze(-1).byte()
+        # mask_tgt = mask_tgt + input.eq(onmt.Constants.PAD).byte().unsqueeze(0)
+        # mask_tgt = torch.gt(mask_tgt, 0)  # convert all 2s to 1
+        # mask_tgt = mask_tgt.bool()
 
         output = emb.contiguous()
 
