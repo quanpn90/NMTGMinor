@@ -229,9 +229,10 @@ class TransformerDecoder(nn.Module):
 
         self.positional_encoder = positional_encoder
 
-        len_max = self.positional_encoder.len_max
-        mask = torch.ByteTensor(np.triu(np.ones((len_max, len_max)), k=1).astype('uint8'))
-        self.register_buffer('mask', mask)
+        if hasattr(self.positional_encoder, 'len_max'):
+            len_max = self.positional_encoder.len_max
+            mask = torch.ByteTensor(np.triu(np.ones((len_max, len_max)), k=1).astype('uint8'))
+            self.register_buffer('mask', mask)
 
         self.build_modules()
 

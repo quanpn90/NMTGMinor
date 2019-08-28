@@ -3,6 +3,7 @@ import torch.nn as nn
 import onmt
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer, MixedEncoder
 from onmt.modules.Transformer.Layers import PositionalEncoding
+from onmt.modules.RelativeTransformer.Layers import PositionalEmbedding
 
 init = torch.nn.init
 
@@ -152,6 +153,17 @@ def build_tm_model(opt, dicts):
 
         decoder = DlclTransformerDecoder(opt, embedding_tgt, positional_encoder)
 
+        model = Transformer(encoder, decoder, nn.ModuleList(generators))
+    elif opt.model == 'relative_transformer':
+        from onmt.modules.RelativeTransformer.Models import RelativeTransformerDecoder
+
+        if opt.encoder_type == "text":
+            encoder = TransformerEncoder(opt, embedding_src, positional_encoder, opt.encoder_type)
+        elif opt.encoder_type == "audio":
+            encoder = TransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
+
+        relative_positional_encoder = PositionalEmbedding(opt.model_size)
+        decoder = RelativeTransformerDecoder(opt, embedding_tgt, relative_positional_encoder)
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
 
     else:

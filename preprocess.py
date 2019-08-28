@@ -655,7 +655,7 @@ def main():
             data.finalize(opt.save_data + ".valid.%s.idx" % set)
 
         print("Done")
-    elif opt.format == 'mmap':
+    elif opt.format in ['mmap', 'mmem']:
         print('Saving data to memory indexed data files')
         from onmt.data_utils.MMapIndexedDataset import MMapIndexedDatasetBuilder
 

@@ -124,7 +124,8 @@ class XETrainer(BaseTrainer):
                 'batch_order' : batch_order,
                 'optim': optim_state_dict,
                 'additional_batch_order' : getattr(self, 'additional_batch_order', None),
-                'additional_data_iteration' : getattr(self, 'additional_data_iteration', None)
+                'additional_data_iteration' : getattr(self, 'additional_data_iteration', None),
+                'amp': apex.amp.state_dict()
         }
         
         file_name = '%s_ppl_%.6f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
@@ -330,6 +331,8 @@ class XETrainer(BaseTrainer):
             
             if not opt.reset_optim:
                 self.optim.load_state_dict(checkpoint['optim'])
+                if 'amp' in checkpoint:
+                    apex.amp.load_state_dict(checkpoint['amp'])
                 if 'batch_order' in checkpoint:
                     batch_order = checkpoint['batch_order']
                     iteration = checkpoint['iteration'] + 1
@@ -337,6 +340,7 @@ class XETrainer(BaseTrainer):
                     batch_order = None
                     iteration = 0
                 opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
+
                 resume=True
                 if len(self.additional_data) > 0:
                     if 'additional_batch_order' in checkpoint:
