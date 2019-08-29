@@ -90,8 +90,8 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         self.r_w_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
         self.r_r_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
 
-        self.r_net = nn.Linear(self.d_model, self.n_head * self.d_head, bias=False)
-        self.attn_type = 2
+        self.r_net = Linear(self.d_model, self.n_head * self.d_head, bias=False)
+        self.attn_type = 1
 
         print("* Attention type: ", self.attn_type)
 
