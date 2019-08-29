@@ -440,6 +440,7 @@ class Transformer(NMTModel):
 
         """
         src = batch.get('source')
+        #  src = batch.get('source_rev')
         tgt = batch.get('target_input')
         tgt_atb = batch.get('target_atb')  # a dictionary of attributes
 

@@ -64,7 +64,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
         # reverse the tensor at time dimension
         query_bwd = flip(query_fwd, 0)
-        out_fwd, _ = self.multihead_fwd(query_fwd, pos, mask_fwd)  # T x B x d_head * h/2
+        out_fwd, _ = self.multihead_fwd(query_fwd, pos, mask_fwd, debug=False)  # T x B x d_head * h/2
         # print("OUTPUT FORWARD NAN", torch.isnan(out_fwd).sum() > 0)
         # print(torch.isnan(out_fwd).sum() > 0 )
         # out_bwd, _ = self.multihead_bwd(query_bwd, pos, mask_bwd)  # T x B x d_head * h/2

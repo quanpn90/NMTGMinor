@@ -10,7 +10,7 @@ import time, datetime
 import os
 from onmt.ModelConstructor import init_model_parameters
 from onmt.utils import checkpoint_paths, normalize_gradients
-import apex
+from apex import amp
 
 
 class BaseTrainer(object):
@@ -99,7 +99,7 @@ class XETrainer(BaseTrainer):
 
             opt_level = "O0" if not self.opt.fp16 else "O2"
             print("Optimization level: %s" % opt_level)
-            self.model, self.optim.optimizer = apex.amp.initialize(self.model,
+            self.model, self.optim.optimizer = amp.initialize(self.model,
                                                                    self.optim.optimizer,
                                                                    opt_level=opt_level,
                                                                    keep_batchnorm_fp32=False, loss_scale="dynamic",
@@ -125,7 +125,7 @@ class XETrainer(BaseTrainer):
                 'optim': optim_state_dict,
                 'additional_batch_order' : getattr(self, 'additional_batch_order', None),
                 'additional_data_iteration' : getattr(self, 'additional_data_iteration', None),
-                'amp': apex.amp.state_dict()
+                'amp': amp.state_dict()
         }
         
         file_name = '%s_ppl_%.6f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
@@ -244,7 +244,7 @@ class XETrainer(BaseTrainer):
                     loss = loss_dict['loss'].div(denom)  # a little trick to avoid gradient overflow with fp16
 
                     optimizer = self.optim.optimizer
-                    with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
+                    with amp.scale_loss(loss, optimizer) as scaled_loss:
                         scaled_loss.backward()
 
                 except RuntimeError as e:
@@ -272,7 +272,7 @@ class XETrainer(BaseTrainer):
                         grad_denom = 1 / denom
                         if self.opt.normalize_gradient:
                             grad_denom = num_accumulated_words / denom
-                        normalize_gradients(apex.amp.master_params(optimizer), grad_denom)
+                        normalize_gradients(amp.master_params(optimizer), grad_denom)
                         # Update the parameters.
                         self.optim.step(grad_denom=grad_denom)
                         self.model.zero_grad()
@@ -332,7 +332,7 @@ class XETrainer(BaseTrainer):
             if not opt.reset_optim:
                 self.optim.load_state_dict(checkpoint['optim'])
                 if 'amp' in checkpoint:
-                    apex.amp.load_state_dict(checkpoint['amp'])
+                    amp.load_state_dict(checkpoint['amp'])
                 if 'batch_order' in checkpoint:
                     batch_order = checkpoint['batch_order']
                     iteration = checkpoint['iteration'] + 1

@@ -159,7 +159,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
         """ Embedding: batch_size x len_tgt x d_model """
 
         input = input.transpose(0, 1)  # B x T to T x B
-        klen, batch_size = input.size()
+        print(input[:, -1])
+        klen, batch_size  = input.size()
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
 
         # Adding dropout
