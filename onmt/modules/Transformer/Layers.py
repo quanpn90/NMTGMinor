@@ -116,7 +116,7 @@ class PrePostProcessing(nn.Module):
             a = adding previous input to output (residual)
     """
     
-    def __init__(self, d_model, dropout_p, sequence='nda', static=True, elementwise_affine=True):
+    def __init__(self, d_model, dropout_p, sequence='nda', static=False, elementwise_affine=True):
         super(PrePostProcessing, self).__init__() 
         self.d_model = d_model
         self.dropout_p = dropout_p     
@@ -343,7 +343,7 @@ class FeedForward(nn.Module):
         out: batch_size x len x d_model
     """
     
-    def __init__(self, d_model, d_ff, p, static=True):
+    def __init__(self, d_model, d_ff, p, static=False):
         super(FeedForward, self).__init__()
         self.d_model = d_model
         self.d_ff = d_ff
@@ -398,7 +398,7 @@ class EncoderLayer(nn.Module):
         
         if onmt.Constants.activation_layer == 'linear_relu_linear':
             ff_p = p
-            feedforward = FeedForward(d_model, d_ff, ff_p,static=onmt.Constants.static)
+            feedforward = FeedForward(d_model, d_ff, ff_p)
         elif onmt.Constants.activation_layer == 'maxout':
             k = int(math.ceil(d_ff / d_model))
             feedforward = MaxOut(d_model, d_model, k)
@@ -452,27 +452,27 @@ class DecoderLayer(nn.Module):
         self.ignore_source = ignore_source
 
         self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
+        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da')
 
         if not self.ignore_source:
             self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
-            self.postprocess_src_attn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
-            self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
+            self.postprocess_src_attn = PrePostProcessing(d_model, p, sequence='da')
+            self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, share=2)
         
         self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
+        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da')
 
-        self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=1)
+        self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p, share=1)
 
         if onmt.Constants.activation_layer == 'linear_relu_linear':
             ff_p = p
-            feedforward = FeedForward(d_model, d_ff, ff_p, static=onmt.Constants.static)
+            feedforward = FeedForward(d_model, d_ff, ff_p)
         elif onmt.Constants.activation_layer == 'maxout':
             k = int(math.ceil(d_ff / d_model))
             feedforward = MaxOut(d_model, d_model, k)
         elif onmt.Constants.activation_layer == 'linear_swish_linear':
             ff_p = p
-            feedforward = FeedForwardSwish(d_model, d_ff, ff_p,static=onmt.Constants.static)
+            feedforward = FeedForwardSwish(d_model, d_ff, ff_p)
         self.feedforward = Bottle(feedforward)
     
     def forward(self, input, context, mask_tgt, mask_src):

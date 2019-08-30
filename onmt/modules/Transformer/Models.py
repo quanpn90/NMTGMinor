@@ -126,7 +126,7 @@ class TransformerEncoder(nn.Module):
 
         """ Embedding: batch_size x len_src x d_model """
         if self.input_type == "text":
-            mask_src = input.data.eq(onmt.Constants.PAD).unsqueeze(1)  # batch_size x len_src x 1 for broadcasting
+            mask_src = input.eq(onmt.Constants.PAD).unsqueeze(1)  # batch_size x len_src x 1 for broadcasting
             emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         else:
             if not self.cnn_downsampling:
@@ -148,6 +148,8 @@ class TransformerEncoder(nn.Module):
 
                 mask_src = long_mask[:, 0:input.size(1) * 4:4].unsqueeze(1)
                 emb = input
+
+        mask_src = mask_src.bool()
 
         """ Scale the emb by sqrt(d_model) """
         emb = emb * math.sqrt(self.model_size)
@@ -394,7 +396,7 @@ class TransformerDecoder(nn.Module):
             mask_src = None
 
         len_tgt = input.size(1)
-        mask_tgt = input.data.eq(onmt.Constants.PAD).unsqueeze(1).byte() + self.mask[:len_tgt, :len_tgt]
+        mask_tgt = input.data.eq(onmt.Constants.PAD).byte().unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
         mask_tgt = mask_tgt.bool()

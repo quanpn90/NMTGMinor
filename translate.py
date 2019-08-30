@@ -89,8 +89,8 @@ parser.add_argument('-gpu', type=int, default=-1,
 
 def reportScore(name, scoreTotal, wordsTotal):
     print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (
-        name, scoreTotal / wordsTotal,
-        name, math.exp(-scoreTotal/wordsTotal)))
+        name, scoreTotal / (wordsTotal+1e-9),
+        name, math.exp(-scoreTotal/(wordsTotal+1e-9))))
 
 
 def addone(f):

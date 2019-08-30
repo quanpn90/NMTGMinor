@@ -202,7 +202,8 @@ class XETrainer(BaseTrainer):
         counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
-        denom = 32568
+        denom = 3584
+        nan = False
         
         for i in range(iteration, n_samples):
 
@@ -244,6 +245,7 @@ class XETrainer(BaseTrainer):
                     loss = loss_dict['loss'].div(denom)  # a little trick to avoid gradient overflow with fp16
 
                     optimizer = self.optim.optimizer
+
                     with amp.scale_loss(loss, optimizer) as scaled_loss:
                         scaled_loss.backward()
 
@@ -254,6 +256,14 @@ class XETrainer(BaseTrainer):
                         torch.cuda.empty_cache()
                     else:
                         raise e
+
+                if loss != loss:
+                    # catching NAN problem
+                    oom = True
+                    self.model.zero_grad()
+                    self.optim.zero_grad()
+                    num_accumulated_words = 0
+                    num_accumulated_sents = 0
                 
                 if not oom:
                     src_size = batch.src_size
@@ -275,6 +285,7 @@ class XETrainer(BaseTrainer):
                         normalize_gradients(amp.master_params(optimizer), grad_denom)
                         # Update the parameters.
                         self.optim.step(grad_denom=grad_denom)
+                        self.optim.zero_grad()
                         self.model.zero_grad()
                         counter = 0
                         num_accumulated_words = 0

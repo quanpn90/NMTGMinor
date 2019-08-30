@@ -32,12 +32,13 @@ class RelativeTransformerEncoderLayer(nn.Module):
         super(RelativeTransformerEncoderLayer, self).__init__()
 
         self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
+        self.preprocess_attn_rev = PrePostProcessing(d_model, p, sequence='n')
         self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
         self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
         self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
 
         self.d_head = d_head = d_model // h
-        self.multihead_fwd = RelPartialLearnableMultiHeadAttn(h, d_model, d_head, dropatt=attn_p)
+        self.multihead_fwd = RelPartialLearnableMultiHeadAttn(h//2, d_model, d_head, dropatt=attn_p)
         self.multihead_bwd = RelPartialLearnableMultiHeadAttn(h//2, d_model, d_head, dropatt=attn_p)
         self.attn_out = Linear(h * self.d_head , d_model)
 
@@ -61,22 +62,24 @@ class RelativeTransformerEncoderLayer(nn.Module):
         :return:
         """
         query_fwd = self.preprocess_attn(input)
+        pos_rev = torch.clone(pos)
 
         # reverse the tensor at time dimension
-        query_bwd = flip(query_fwd, 0)
+        query_bwd = flip(input, 0)
+        query_bwd = self.preprocess_attn_rev(query_bwd)
         out_fwd, _ = self.multihead_fwd(query_fwd, pos, mask_fwd, debug=False)  # T x B x d_head * h/2
         # print("OUTPUT FORWARD NAN", torch.isnan(out_fwd).sum() > 0)
         # print(torch.isnan(out_fwd).sum() > 0 )
-        # out_bwd, _ = self.multihead_bwd(query_bwd, pos, mask_bwd)  # T x B x d_head * h/2
+        out_bwd, _ = self.multihead_bwd(query_bwd, pos_rev, mask_bwd, debug=True)  # T x B x d_head * h/2
         # print("OUTPUT BACKWARD NAN", torch.isnan(out_bwd).sum() > 0)
 
         # Flip the bwd states and the concatenate to the input before a final linear transformation
-        # out = self.attn_out(torch.cat([out_fwd, torch.flip(out_bwd, [0])], dim=-1))
+        out = torch.cat([out_fwd, torch.flip(out_bwd, [0])], dim=-1)
         # out = torch.cat([out_fwd, out_bwd], dim=-1)
         # out = self.attn_out(out)
         # out = torch.cat([out_fwd, out_fwd], dim=-1)
-        # out = self.attn_out(out)
-        out = out_fwd
+        out = self.attn_out(out)
+        # out = out_fwd
         input = self.postprocess_attn(out, input)
         # print(torch.isnan(input).sum() > 0)
 

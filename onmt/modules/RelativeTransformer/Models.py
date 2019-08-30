@@ -88,16 +88,16 @@ class RelativeTransformerEncoder(TransformerEncoder):
         # attention masking
         qlen = klen
         mask = torch.triu(emb.new_ones(qlen, klen), diagonal=1).byte()
-        mask_fwd = input.t().eq(onmt.Constants.PAD).byte().unsqueeze(1) + mask
+        mask_fwd = input.t().eq(onmt.Constants.PAD).unsqueeze(1).byte() + mask
         mask_fwd = torch.gt(mask_fwd, 0)
-        mask_fwd = mask_fwd.bool()
+        # mask_fwd = mask_fwd.bool()
 
         input_flip = flip(input, 0)
         # mask_bwd = mask + input_flip.eq(onmt.Constants.PAD).unsqueeze(0).byte()
-        mask_bwd = input_flip.t().eq(onmt.Constants.PAD).byte().unsqueeze(1) + \
+        mask_bwd = input_flip.t().eq(onmt.Constants.PAD).unsqueeze(1).byte() + \
             torch.triu(emb.new_ones(qlen, klen), diagonal=1).byte()
         mask_bwd = torch.gt(mask_bwd, 0)  # convert all 2s to 1
-        mask_bwd = mask_bwd.bool()
+        # mask_bwd = mask_bwd.bool()
 
         context = emb
         for i, layer in enumerate(self.layer_modules):
@@ -177,16 +177,16 @@ class RelativeTransformerDecoder(TransformerDecoder):
         if context is not None:
             if self.encoder_type == "audio":
                 if not self.encoder_cnn_downsampling:
-                    mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).byte().unsqueeze(1)
+                    mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
                 else:
-                    long_mask = src.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).byte()
+                    long_mask = src.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD)
                     mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
             else:
-                mask_src = src.eq(onmt.Constants.PAD).byte().unsqueeze(1)
+                mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
         else:
             mask_src = None
 
-        mask_src = mask_src.bool()
+        # mask_src = mask_src.bool()
 
         # attention masking
         qlen = klen
@@ -194,10 +194,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
         # mask_tgt = mask_tgt + input.eq(onmt.Constants.PAD).byte().unsqueeze(0)
         # mask_tgt = torch.gt(mask_tgt, 0)  # convert all 2s to 1
         # mask_tgt = mask_tgt.bool()
-        mask_tgt = input.t().eq(onmt.Constants.PAD).byte().unsqueeze(1) + \
+        mask_tgt = input.t().eq(onmt.Constants.PAD).unsqueeze(1) + \
                    torch.triu(emb.new_ones(qlen, klen), diagonal=1).byte()
         mask_tgt = torch.gt(mask_tgt, 0)
-        mask_tgt = mask_tgt.bool()
+        # mask_tgt = mask_tgt.bool()
 
         output = emb
 
@@ -286,10 +286,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
         klen, batch_size = input.size()
         qlen = klen
 
-        mask_tgt = input.t().eq(onmt.Constants.PAD).byte().unsqueeze(1) + \
-            torch.triu(emb.new_ones(qlen, klen), diagonal=1).byte()
+        mask_tgt = input.t().eq(onmt.Constants.PAD).unsqueeze(1) + \
+            torch.triu(emb.new_ones(qlen, klen), diagonal=1)
         mask_tgt = torch.gt(mask_tgt, 0)
-        mask_tgt = mask_tgt.bool()
+        # mask_tgt = mask_tgt.bool()
         # mask_tgt = torch.triu(emb.new_ones(qlen, klen), diagonal=1).unsqueeze(-1).byte()
         # mask_tgt = mask_tgt + input.eq(onmt.Constants.PAD).byte().unsqueeze(0)
         # mask_tgt = torch.gt(mask_tgt, 0)  # convert all 2s to 1

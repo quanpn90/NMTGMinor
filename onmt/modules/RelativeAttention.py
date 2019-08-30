@@ -157,11 +157,12 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         # if debug:
         #     print("mask nan", torch.isnan(attn_mask).sum() > 0)
         #     print("attn score before mask nan", torch.isnan(attn_score).sum() > 0)
-        if debug:
-            attn_score = torch.clamp(attn_score, -0.5, 0.5)
-            print(attn_score)
+        # if debug:
+            # attn_score = torch.clamp(attn_score, -0.5, 0.5)
+            # print(attn_score)
         attn_score = attn_score.float().masked_fill_(attn_mask.unsqueeze(-3), -float('inf')).type_as(attn_score)
         if debug:
+
             print("attn score after mask nan", torch.isnan(attn_score).sum() > 0)
 
         #### compute attention probability
@@ -179,7 +180,7 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
 
         attn_prob = F.softmax(attn_score.float(), dim=-1)
         if debug:
-            print(attn_score.size())
+            print(attn_score)
             print("attn prob nan", torch.isnan(attn_prob).sum() > 0)
         attn_prob = attn_prob.transpose(0, 2).transpose(1, 3)
         coverage = torch.mean(attn_prob, dim=-1).transpose(0, 2)
@@ -397,3 +398,8 @@ class RelLearnableMultiHeadAttn(RelMultiHeadAttn):
             output = self.layer_norm(w + attn_out)
 
         return output
+
+if __name__ == '__main__':
+
+    # unit test
+    module = RelPartialLearnableMultiHeadAttn(4, 512, 64)
