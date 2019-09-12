@@ -228,11 +228,12 @@ class EnsembleTranslator(object):
                                                    onmt.Constants.UNK_WORD)
                         for b in src_sents]
 
+        tgt_bos_word = self.opt.bos_token
         tgt_data = None
         if tgt_sents:
             tgt_data = [self.tgt_dict.convertToIdx(b,
                                                    onmt.Constants.UNK_WORD,
-                                                   onmt.Constants.BOS_WORD,
+                                                   tgt_bos_word,
                                                    onmt.Constants.EOS_WORD) for b in tgt_sents]
 
         src_atbs = None
