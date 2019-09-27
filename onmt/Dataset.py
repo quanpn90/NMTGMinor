@@ -20,19 +20,18 @@ class Batch(object):
         self.src_type = src_type
         self.reshape_speech = reshape_speech
         if src_data is not None:
-            self.tensors['source'], self.tensors['source_rev'], self.src_lengths = self.collate(src_data,
-                                                                                    align_right=src_align_right,
-                                                                                    type=self.src_type,
-                                                                                    augmenter=augmenter)
+            self.tensors['source'], self.src_lengths = self.collate(src_data,
+                                                                    align_right=src_align_right,
+                                                                    type=self.src_type,
+                                                                    augmenter=augmenter)
             self.tensors['source'] = self.tensors['source'].transpose(0, 1).contiguous()
-            self.tensors['source_rev'] = self.tensors['source_rev'].transpose(0, 1).contiguous()
             self.tensors['src_length'] = torch.LongTensor(self.src_lengths)
             self.src_size = sum(self.src_lengths)
         else:
             self.src_size = 0
 
         if tgt_data is not None:
-            target_full, target_rev, self.tgt_lengths = self.collate(tgt_data, align_right=tgt_align_right)
+            target_full, self.tgt_lengths = self.collate(tgt_data, align_right=tgt_align_right)
             target_full = target_full.t().contiguous()
             self.tensors['target_input'] = target_full[:-1]
             self.tensors['target_output'] = target_full[1:]
@@ -89,16 +88,14 @@ class Batch(object):
         # initialize with batch_size * length first
         if type == "text":
             tensor = data[0].new(len(data), max_length).fill_(onmt.Constants.PAD)
-            tensor_rev = data[0].new(len(data), max_length).fill_(onmt.Constants.PAD)
             for i in range(len(data)):
                 data_length = data[i].size(0)
                 offset = max_length - data_length if align_right else 0
                 tensor[i].narrow(0, offset, data_length).copy_(data[i])
 
                 offset = 0 if align_right else max_length - data_length
-                tensor_rev[i].narrow(0, offset, data_length).copy_(torch.flip(data[i], [0]))
 
-            return tensor, tensor_rev, lengths
+            return tensor, lengths
 
         elif type == "audio":
             # the last feature dimension is for padding or not, hence + 1

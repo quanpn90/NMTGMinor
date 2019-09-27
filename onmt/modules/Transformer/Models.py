@@ -1,14 +1,16 @@
 import numpy as np
 import torch, math
 import torch.nn as nn
-from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, PositionalEncoding, variational_dropout, \
+from onmt.modules.Transformer.Layers import EncoderLayer, DecoderLayer, PositionalEncoding, \
     PrePostProcessing
 from onmt.modules.BaseModel import NMTModel, Reconstructor, DecoderState
 import onmt
-from onmt.modules.WordDrop import embedded_dropout
+from onmt.modules.WordDrop import embedded_dropout, switchout
 from torch.utils.checkpoint import checkpoint
 from collections import defaultdict
 from onmt.utils import flip
+
+torch_version = float(torch.__version__[:3])
 
 
 def custom_layer(module):
@@ -73,6 +75,13 @@ class TransformerEncoder(nn.Module):
         self.input_type = encoder_type
         self.cnn_downsampling = opt.cnn_downsampling
         self.channels = 1
+        self.switchout = opt.switchout
+        self.varitional_dropout = opt.variational_dropout
+
+        # disable word dropout when switch out is in action
+        if self.switchout > 0.0:
+            self.word_dropout = 0.0
+
         feature_size = opt.input_size
 
         if encoder_type != "text":
@@ -99,7 +108,8 @@ class TransformerEncoder(nn.Module):
         elif opt.time == 'lstm':
             self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
 
-        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
+        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d',
+                                                  variational=self.varitional_dropout)
 
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
 
@@ -110,7 +120,8 @@ class TransformerEncoder(nn.Module):
     def build_modules(self):
 
         self.layer_modules = nn.ModuleList(
-            [EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size, self.attn_dropout) for _ in
+            [EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size,
+                          self.attn_dropout, variational=self.varitional_dropout) for _ in
              range(self.layers)])
 
     def forward(self, input, **kwargs):
@@ -127,6 +138,12 @@ class TransformerEncoder(nn.Module):
         """ Embedding: batch_size x len_src x d_model """
         if self.input_type == "text":
             mask_src = input.eq(onmt.Constants.PAD).unsqueeze(1)  # batch_size x len_src x 1 for broadcasting
+
+            # apply switchout
+            if self.switchout > 0 and self.training:
+                vocab_size = self.word_lut.weight.size(0)
+                input = switchout(input, vocab_size, self.switchout)
+
             emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         else:
             if not self.cnn_downsampling:
@@ -149,7 +166,8 @@ class TransformerEncoder(nn.Module):
                 mask_src = long_mask[:, 0:input.size(1) * 4:4].unsqueeze(1)
                 emb = input
 
-        mask_src = mask_src.bool()
+        if torch_version >= 1.2:
+            mask_src = mask_src.bool()
 
         """ Scale the emb by sqrt(d_model) """
         emb = emb * math.sqrt(self.model_size)
@@ -157,10 +175,10 @@ class TransformerEncoder(nn.Module):
         """ Adding positional encoding """
         emb = self.time_transformer(emb)
 
-        emb = self.preprocess_layer(emb)
-
         # B x T x H -> T x B x H
-        context = emb.transpose(0, 1).contiguous()
+        context = emb.transpose(0, 1)
+
+        context = self.preprocess_layer(context)
 
         for i, layer in enumerate(self.layer_modules):
 
@@ -209,13 +227,15 @@ class TransformerDecoder(nn.Module):
         self.encoder_type = opt.encoder_type
         self.ignore_source = ignore_source
         self.encoder_cnn_downsampling = opt.cnn_downsampling
+        self.variational_dropout = opt.variational_dropout
 
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
         else:
             raise NotImplementedError
 
-        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d', static=False)
+        self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d',
+                                                  variational=self.variational_dropout)
 
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
 
@@ -242,7 +262,7 @@ class TransformerDecoder(nn.Module):
     def build_modules(self):
         self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size,
                                                          self.dropout, self.inner_size,
-                                                         self.attn_dropout,
+                                                         self.attn_dropout, variational=self.variational_dropout,
                                                          ignore_source=self.ignore_source) for _ in range(self.layers)])
 
     def renew_buffer(self, new_len):
@@ -259,9 +279,6 @@ class TransformerDecoder(nn.Module):
             emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
         emb = self.time_transformer(emb)
-
-        # Adding dropout
-        emb = self.preprocess_layer(emb)
 
         if self.use_feature:
             len_tgt = emb.size(1)
@@ -302,9 +319,12 @@ class TransformerDecoder(nn.Module):
         len_tgt = input.size(1)
         mask_tgt = input.eq(onmt.Constants.PAD).byte().unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
-        mask_tgt = mask_tgt.bool()
 
-        output = emb.transpose(0, 1).contiguous()
+        # an ugly hack to bypass torch 1.2 breaking changes
+        if torch_version >= 1.2:
+            mask_tgt = mask_tgt.bool()
+
+        output = self.preprocess_layer(emb.transpose(0, 1).contiguous())
 
         for i, layer in enumerate(self.layer_modules):
 
@@ -399,7 +419,9 @@ class TransformerDecoder(nn.Module):
         mask_tgt = input.data.eq(onmt.Constants.PAD).byte().unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
         mask_tgt = torch.gt(mask_tgt, 0)
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
-        mask_tgt = mask_tgt.bool()
+
+        if torch_version >= 1.2:
+            mask_tgt = mask_tgt.bool()
 
         output = emb.contiguous()
 

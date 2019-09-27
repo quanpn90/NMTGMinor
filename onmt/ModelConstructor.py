@@ -44,6 +44,9 @@ def build_model(opt, dicts):
     if not hasattr(opt, 'cnn_downsampling'):
         opt.cnn_downsampling = False
 
+    if not hasattr(opt, 'switchout'):
+        opt.switchout = 0.0
+
     onmt.Constants.layer_norm = opt.layer_norm
     onmt.Constants.weight_norm = opt.weight_norm
     onmt.Constants.activation_layer = opt.activation_layer

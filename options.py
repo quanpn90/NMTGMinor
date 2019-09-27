@@ -61,7 +61,9 @@ def make_parser(parser):
     parser.add_argument('-attn_dropout', type=float, default=0.1,
                         help='Dropout probability; applied on multi-head attention.')   
     parser.add_argument('-emb_dropout', type=float, default=0.1,
-                        help='Dropout probability; applied on top of embedding.')    
+                        help='Dropout probability; applied on top of embedding.')
+    parser.add_argument('-variational_dropout', action='store_true',
+                        help='Apply variational dropout (same network per timestep)')
     parser.add_argument('-weight_norm', action='store_true',
                       help='Apply weight normalization on linear modules')
     parser.add_argument('-death_rate', type=float, default=0.5,
@@ -109,6 +111,8 @@ def make_parser(parser):
                         help='Dropout probability; applied between LSTM stacks.')
     parser.add_argument('-word_dropout', type=float, default=0.0,
                         help='Dropout probability; applied on embedding indices.')
+    parser.add_argument('-switchout', type=float, default=0.0,
+                        help='Switchout algorithm')
     parser.add_argument('-label_smoothing', type=float, default=0.0,
                         help='Label smoothing value for loss functions.')
     parser.add_argument('-scheduled_sampling_rate', type=float, default=0.0,

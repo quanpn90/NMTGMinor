@@ -11,7 +11,7 @@ import sys
 model_list = ['transformer', 'stochastic_transformer', 'fusion_network']
 
 
-class EnsembleTranslator(object):
+class Translator(object):
     def __init__(self, opt):
         self.opt = opt
         self.tt = torch.cuda if opt.cuda else torch
@@ -229,6 +229,8 @@ class EnsembleTranslator(object):
                         for b in src_sents]
 
         tgt_bos_word = self.opt.bos_token
+        if self.opt.no_bos_gold:
+            tgt_bos_word = None
         tgt_data = None
         if tgt_sents:
             tgt_data = [self.tgt_dict.convertToIdx(b,

@@ -8,100 +8,11 @@ import onmt
 import torch.nn.functional as F
 from onmt.modules.Bottle import Bottle
 from onmt.modules.StaticDropout import StaticDropout
-
-
-# different linears for the same input
-def group_linear(linears, input, bias=False):
-
-        weights = [linear.weight for linear in linears]
-
-        weight = torch.cat(weights, dim=0)
-
-        if bias:
-            biases = [linear.bias for linear in linears]
-            bias_ = torch.cat(biases)
-        else:
-            bias_ = None
-
-        return F.linear(input, weight, bias_)
-
-
-class XavierLinear(nn.Module):
-    
-    ''' Simple Linear layer with xavier init '''
-    def __init__(self, d_in, d_out, bias=True, nonlinearity='linear'):
-        super(XavierLinear, self).__init__()
-        linear = nn.Linear(d_in, d_out, bias=bias)
-        
-        weight_norm = onmt.Constants.weight_norm
-        self.weight_norm = weight_norm
-        
-        if weight_norm:
-            self.linear = WeightNorm(linear, name='weight')
-        else:
-            self.linear = linear
-
-        init.xavier_uniform_(self.linear.weight)
-        
-        if bias:
-            self.linear.bias.data.zero_()
-
-    def forward(self, x):
-        return self.linear(x)
-        
-    def __repr__(self):
-        return self.__class__.__name__ + '(' \
-            + 'in_features=' + str(self.linear.in_features) \
-            + ', out_features=' + str(self.linear.out_features) \
-            + ', bias=' + str(self.linear.bias is not None) \
-            + ', weight_norm=' + str(self.weight_norm) + ')'
-        
-
-Linear = XavierLinear
-
-
-def variational_dropout(input, p, training=False):
-    """Applies Variational Dropout (query, key, value)
-    Inputs:
-        input: Variable - batch_size * time_steps * hidden
-    """
-    if training:
-        bsize = input.size(0)
-        hsize = input.size(2)
-        
-        # create a mask for one time step
-        mask = Variable(input.data.new(bsize, hsize).bernoulli_(1 - p).div_(1 - p), requires_grad=False)
-        
-        # then expand it to all time steps 
-        mask = mask.unsqueeze(1).expand_as(input)
-        output = input * mask
-        return output
-    # if eval then return the input
-    return input
-
-
-class MaxOut(nn.Module):
-    def __init__(self, d, m, k):
-        super(MaxOut, self).__init__()
-        self.d_in, self.d_out, self.pool_size = d, m, k
-        self.lin = Linear(d, m * k)
-
-    def forward(self, inputs):
-        
-        original_size = inputs.size()
-        
-        inputs = inputs.view(-1, inputs.size(-1))
-        
-        shape = list(inputs.size())
-        shape[-1] = self.d_out
-        shape.append(self.pool_size)
-        max_dim = len(shape) - 1
-        out = self.lin(inputs)
-        m, i = out.view(*shape).max(dim=max_dim)
-        
-        m = m.view(*original_size[:-1], m.size(-1))
-        
-        return m
+from onmt.modules.Linear import XavierLinear as Linear
+from onmt.modules.Linear import XavierLinear
+from onmt.modules.Linear import group_linear
+from onmt.modules.GlobalAttention import MultiHeadAttention
+from onmt.modules.WordDrop import VariationalDropout
 
 
 class PrePostProcessing(nn.Module):
@@ -116,7 +27,7 @@ class PrePostProcessing(nn.Module):
             a = adding previous input to output (residual)
     """
     
-    def __init__(self, d_model, dropout_p, sequence='nda', static=False, elementwise_affine=True):
+    def __init__(self, d_model, dropout_p, sequence='nda', variational=False, elementwise_affine=True):
         super(PrePostProcessing, self).__init__() 
         self.d_model = d_model
         self.dropout_p = dropout_p     
@@ -133,10 +44,10 @@ class PrePostProcessing(nn.Module):
             ln = nn.LayerNorm((self.d_model,),elementwise_affine=elementwise_affine)
             self.layer_norm = Bottle(ln)
         if 'd' in self.steps:
-            if static:
-                self.dropout = StaticDropout(self.dropout_p)
+            if variational:
+                self.dropout = VariationalDropout(self.dropout_p, batch_first=False)
             else:
-                self.dropout = nn.Dropout(self.dropout_p, inplace=False)
+                self.dropout = nn.Dropout(self.dropout_p)
     
     def forward(self, tensor, input_tensor=None, mask=None):
 
@@ -156,174 +67,6 @@ class PrePostProcessing(nn.Module):
         return output
 
 
-class MultiHeadAttention(nn.Module):
-    """Applies multi-head attentions to inputs (query, key, value)
-    Args:
-        h:       number of heads
-        d_model: dimension of model
-        p:       dropout probabolity  
-        
-    Params:
-        fc_query:  FC layer to project query, d_model x (h x d_head)
-        fc_key:    FC layer to project key,   d_model x (h x d_head)
-        fc_value:  FC layer to project value, d_model x (h x d_head)
-        fc_concat: FC layer to concat and project multiheads, d_model x (h x d_head)
-        
-    Inputs Shapes: 
-        query: batch_size x len_query x d_model 
-        key:   batch_size x len_key x d_model   
-        value: batch_size x len_key x d_model
-        mask:  batch_size x len_query x len_key or broadcastable 
-        
-    Outputs Shapes:
-        out:      batch_size x len_query x d_model
-        coverage: batch_size x len_query x len_key
-        
-    """
-    
-    def __init__(self, h, d_model, attn_p=0.1, static=True, share=3):
-        super(MultiHeadAttention, self).__init__()      
-        self.h = h
-        self.d = d_model
-        self.share = share
-
-        assert d_model % h == 0
-        
-        self.d_head = d_model//h
-        self.fc_query = Bottle(Linear(d_model, h*self.d_head, bias=False))
-        self.fc_key = Bottle(Linear(d_model, h*self.d_head, bias=False))
-        self.fc_value = Bottle(Linear(d_model, h*self.d_head, bias=False))
-        self.fc_concat = Bottle(Linear(h*self.d_head, d_model, bias=False))
-
-        self.sm = nn.Softmax(dim=-1)
-        
-        if static:
-            self.attn_dropout = StaticDropout(attn_p)
-        else:
-            self.attn_dropout = nn.Dropout(attn_p)
-
-    def forward(self, query, key, value, mask, query_mask=None, value_mask=None):
-
-        len_query, b = query.size(0), query.size(1)
-        len_key,  b_ = key.size(0), key.size(1)
-        
-        key_mask = value_mask
-        
-        # batch_size*h x len_query x d_head
-        # project inputs to multi-heads
-        if self.share == 1:
-            shared_qkv = group_linear([self.fc_query.function.linear, self.fc_key.function.linear, self.fc_value.function.linear], query)
-            proj_query, proj_key, proj_value = shared_qkv.chunk(3, dim=-1)
-        elif self.share == 2:
-            proj_query = self.fc_query(query) # batch_size x len_query x h*d_head
-            shared_kv = group_linear([self.fc_key.function.linear, self.fc_value.function.linear], key)
-            proj_key, proj_value = shared_kv.chunk(2, dim=-1)
-        else:
-            proj_query = self.fc_query(query, mask=query_mask)
-            proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
-            proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
-        
-        q, k, v = proj_query, proj_key, proj_value
-        # prepare the shape for applying softmax
-        q = q.contiguous().view(len_query, b*self.h, self.d_head).transpose(0, 1)
-        k = k.contiguous().view(len_key,   b*self.h, self.d_head).transpose(0, 1)
-        v = v.contiguous().view(len_key,   b*self.h, self.d_head).transpose(0, 1)
-        
-        q = q * (self.d_head**-0.5)
-        
-        # get dotproduct softmax attns for each head
-        attns = torch.bmm(q, k.transpose(1,2))  # batch_size*h x len_query x len_key
-
-        attns = attns.view(b, self.h, len_query, len_key)
-        mask_ = mask.unsqueeze(-3)
-        # FP16 support: cast to float and back
-        attns = attns.float().masked_fill_(mask_, -float('inf')).type_as(attns)
-        attns = F.softmax(attns.float(), dim=-1).type_as(attns)
-        # return mean attention from all heads as coverage 
-        coverage = torch.mean(attns, dim=1) 
-        attns = self.attn_dropout(attns)
-        attns = attns.view(b*self.h, len_query, len_key)
-
-        # apply attns on value
-        out = torch.bmm(attns, v)      # batch_size*h x len_query x d_head
-        out = out.transpose(0, 1).contiguous().view(len_query, b, self.d)
-            
-        out = self.fc_concat(out)
-
-        return out, coverage
-
-    def step(self, query, key, value, mask, query_mask=None, value_mask=None, buffer=None):
-
-        len_query, b = query.size(0), query.size(1)
-        len_key,  b_ = key.size(0), key.size(1)
-        
-        key_mask = value_mask
-        
-        # project inputs to multi-heads
-
-        if self.share == 1:
-            # proj_query = self.fc_query(query, mask=query_mask)   # batch_size*h x len_query x d_head
-            # proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
-            # proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
-            shared_qkv = group_linear([self.fc_query.function.linear, self.fc_key.function.linear, self.fc_value.function.linear], query)
-            proj_query, proj_key, proj_value = shared_qkv.chunk(3, dim=-1)
-            if buffer is not None and 'k' in buffer and 'v' in buffer:
-                proj_key = torch.cat([buffer['k'], proj_key], dim=0) # time first
-                buffer['k'] = proj_key
-                proj_value = torch.cat([buffer['v'], proj_value], dim=0) # time first
-                buffer['v'] = proj_value
-                len_key,  b_ = proj_key.size(0), proj_key.size(1)
-            else:
-                if buffer is None:
-                    buffer = dict()
-                buffer['k'] = proj_key
-                buffer['v'] = proj_value
-        elif self.share == 2:
-            proj_query = self.fc_query(query) # batch_size x len_query x h*d_head
-            if buffer is not None and 'c_k' in buffer and 'c_v' in buffer:
-                proj_key = buffer['c_k']
-                proj_value = buffer['c_v']
-            else:
-                if buffer is None:
-                    buffer = dict()
-                shared_kv = group_linear([self.fc_key.function.linear, self.fc_value.function.linear], key)
-                proj_key, proj_value = shared_kv.chunk(2, dim=-1)
-                buffer['c_k'] = proj_key
-                buffer['c_v'] = proj_value
-        else:
-            raise NotImplementedError
-
-        q, k, v = proj_query, proj_key, proj_value
-        
-        # prepare the shape for applying softmax
-        q = q.contiguous().view(len_query, b*self.h, self.d_head).transpose(0, 1)
-        k = k.contiguous().view(len_key,   b*self.h, self.d_head).transpose(0, 1)
-        v = v.contiguous().view(len_key,   b*self.h, self.d_head).transpose(0, 1)
-        
-        q = q * (self.d_head**-0.5)
-        
-        # get dotproduct softmax attns for each head
-        attns = torch.bmm(q, k.transpose(1,2))  # batch_size*h x len_query x len_key
-        
-        attns = attns.view(b, self.h, len_query, len_key) 
-        mask_ = mask.unsqueeze(-3)
-        # FP16 support: cast to float and back
-        attns = attns.float().masked_fill_(mask_, -float('inf')).type_as(attns)
-        attns = F.softmax(attns.float(), dim=-1).type_as(attns)
-        # return mean attention from all heads as coverage 
-        coverage = torch.mean(attns, dim=1) 
-        attns = self.attn_dropout(attns)
-        attns = attns.view(b*self.h, len_query, len_key)
-        
-        # apply attns on value
-        out = torch.bmm(attns, v)      # batch_size*h x len_query x d_head
-        out = out.transpose(0, 1).contiguous().view(len_query, b, self.d)
-            
-        out = self.fc_concat(out)
-       
-        return out, coverage, buffer
-
-
 class FeedForward(nn.Module):
     """Applies position-wise feed forward to inputs
     
@@ -337,21 +80,21 @@ class FeedForward(nn.Module):
         fc_2: FC layer from d_ff to d_model
         
     Input Shapes:
-        input: batch_size x len x d_model
+        input: batch_size x len x d_model or len x batch_size x d_model
         
     Output Shapes:
-        out: batch_size x len x d_model
+        out: batch_size x len x d_model or len x batch_size x d_model
     """
     
-    def __init__(self, d_model, d_ff, p, static=False):
+    def __init__(self, d_model, d_ff, p, variational=False):
         super(FeedForward, self).__init__()
         self.d_model = d_model
         self.d_ff = d_ff
         self.fc_1 = Linear(d_model, d_ff, nonlinearity="relu")
         self.fc_2 = Linear(d_ff, d_model)
 
-        if static:
-            self.dropout = StaticDropout(p)
+        if variational:
+            self.dropout = VariationalDropout(p)
         else:
             self.dropout = nn.Dropout(p)
         
@@ -386,19 +129,19 @@ class EncoderLayer(nn.Module):
         out: batch_size x len_query x d_model
     """
     
-    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0):
+    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, variational=False, **kwargs):
         super(EncoderLayer, self).__init__()
-        self.version = version
+        self.variational = variational
         
         self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
+        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', variational=self.variational)
         self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
-        self.multihead = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
+        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', variational=self.variational)
+        self.multihead = MultiHeadAttention(h, d_model, attn_p=attn_p, share=2)
         
         if onmt.Constants.activation_layer == 'linear_relu_linear':
             ff_p = p
-            feedforward = FeedForward(d_model, d_ff, ff_p)
+            feedforward = FeedForward(d_model, d_ff, ff_p, variational=self.variational)
         elif onmt.Constants.activation_layer == 'maxout':
             k = int(math.ceil(d_ff / d_model))
             feedforward = MaxOut(d_model, d_model, k)
@@ -446,27 +189,28 @@ class DecoderLayer(nn.Module):
         
     """    
     
-    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0, ignore_source=False):
+    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0, ignore_source=False, variational=False):
         super(DecoderLayer, self).__init__()
         self.version = version
         self.ignore_source = ignore_source
+        self.variational = variational
 
         self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da')
+        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', variational=self.variational)
 
         if not self.ignore_source:
             self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
-            self.postprocess_src_attn = PrePostProcessing(d_model, p, sequence='da')
+            self.postprocess_src_attn = PrePostProcessing(d_model, p, sequence='da', variational=self.variational)
             self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, share=2)
         
         self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da')
+        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', variational=self.variational)
 
         self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p, share=1)
 
         if onmt.Constants.activation_layer == 'linear_relu_linear':
             ff_p = p
-            feedforward = FeedForward(d_model, d_ff, ff_p)
+            feedforward = FeedForward(d_model, d_ff, ff_p, variational=self.variational)
         elif onmt.Constants.activation_layer == 'maxout':
             k = int(math.ceil(d_ff / d_model))
             feedforward = MaxOut(d_model, d_model, k)
