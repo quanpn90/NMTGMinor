@@ -5,6 +5,7 @@ import torch
 from collections import defaultdict
 import onmt
 from onmt.speech.Augmenter import Augmenter
+from onmt.modules.WordDrop import switchout
 
 
 class Batch(object):
@@ -32,7 +33,8 @@ class Batch(object):
 
         if tgt_data is not None:
             target_full, self.tgt_lengths = self.collate(tgt_data, align_right=tgt_align_right)
-            target_full = target_full.t().contiguous()
+            target_full = target_full.t().contiguous()  # transpose BxT to TxB
+            self.tensors['target'] = target_full
             self.tensors['target_input'] = target_full[:-1]
             self.tensors['target_output'] = target_full[1:]
             self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.Constants.PAD)
@@ -58,6 +60,18 @@ class Batch(object):
                 self.tgt_atb_data[i] = torch.cat(tgt_atb_data[i])
 
             self.tensors['target_atb'] = self.tgt_atb_data
+
+    def switchout(self, swrate, src_vocab_size, tgt_vocab_size):
+
+        self.tensors['source'] = switchout(self.tensors['source'], src_vocab_size, swrate, transpose=True)
+
+        # don't touch the first part
+        if self.has_target:
+            self.tensors['target'] = switchout(self.tensors['target'], tgt_vocab_size, swrate, transpose=True, offset=1)
+            target_full = self.tensors['target']
+            self.tensors['target_input'] = target_full[:-1]
+            self.tensors['target_output'] = target_full[1:]
+            self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.Constants.PAD)
 
     # down sampling the speech signal by simply concatenating n features (reshaping)
     def downsample(self, data):

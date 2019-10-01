@@ -140,9 +140,9 @@ class TransformerEncoder(nn.Module):
             mask_src = input.eq(onmt.Constants.PAD).unsqueeze(1)  # batch_size x len_src x 1 for broadcasting
 
             # apply switchout
-            if self.switchout > 0 and self.training:
-                vocab_size = self.word_lut.weight.size(0)
-                input = switchout(input, vocab_size, self.switchout)
+            # if self.switchout > 0 and self.training:
+            #     vocab_size = self.word_lut.weight.size(0)
+            #     input = switchout(input, vocab_size, self.switchout)
 
             emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         else:
@@ -228,6 +228,10 @@ class TransformerDecoder(nn.Module):
         self.ignore_source = ignore_source
         self.encoder_cnn_downsampling = opt.cnn_downsampling
         self.variational_dropout = opt.variational_dropout
+        self.switchout = opt.switchout
+
+        if self.switchout > 0:
+            self.word_dropout = 0
 
         if opt.time == 'positional_encoding':
             self.time_transformer = positional_encoder
@@ -274,7 +278,15 @@ class TransformerDecoder(nn.Module):
 
     def process_embedding(self, input, atbs=None):
 
-        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        # if self.switchout == 0:
+        #     input_ = input
+        # if self.switchout > 0 and self.training:
+        #     vocab_size = self.word_lut.weight.size(0)
+        #     input_ = switchout(input, vocab_size, self.switchout)
+        # else:
+        input_ = input
+
+        emb = embedded_dropout(self.word_lut, input_, dropout=self.word_dropout if self.training else 0)
         if self.time == 'positional_encoding':
             emb = emb * math.sqrt(self.model_size)
         """ Adding positional encoding """
@@ -448,6 +460,7 @@ class Transformer(NMTModel):
     def __init__(self, encoder, decoder, generator=None):
         super().__init__(encoder, decoder, generator)
         self.model_size = self.decoder.model_size
+        self.switchout = self.decoder.switchout
 
     def reset_states(self):
         return
@@ -463,6 +476,9 @@ class Transformer(NMTModel):
 
 
         """
+        if self.switchout > 0 and self.training:
+            batch.switchout(self.switchout, self.encoder.word_lut.weight.size(0), self.decoder.word_lut.weight.size(0))
+
         src = batch.get('source')
         #  src = batch.get('source_rev')
         tgt = batch.get('target_input')

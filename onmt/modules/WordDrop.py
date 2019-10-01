@@ -50,14 +50,24 @@ def embedded_dropout(embed, words, dropout=0.1, scale=None):
     return x
 
 
-def switchout(words,  vocab_size, tau=1.0):
+def switchout(words, vocab_size, tau=1.0, transpose=False, offset=0):
     """
+    :param offset: number of initial tokens to be left "untouched"
+    :param transpose: if the tensor has initial size of l x b
     :param words: torch.Tensor(b x l)
     :param vocab_size: vocabulary size
     :param tau: temperature control
     :return:
     sampled_words torch.LongTensor(b x l)
     """
+
+    if transpose:
+        words = words.t()
+
+    if offset > 0:
+        offset_words = words[:, :offset]
+        words = words[:, offset:]
+
     mask = torch.eq(words, onmt.Constants.BOS) | \
         torch.eq(words, onmt.Constants.EOS) | torch.eq(words, onmt.Constants.PAD)
     lengths = (1 - mask.byte()).float().sum(dim=1)
@@ -92,5 +102,11 @@ def switchout(words,  vocab_size, tau=1.0):
     corrupts = corrupts.masked_scatter_(corrupt_pos.type_as(mask), corrupt_val)
     # to add the corruption and then take the remainder w.r.t the vocab size
     sampled_words = words.add(corrupts).remainder_(vocab_size)
+
+    if offset > 0:
+        sampled_words = torch.cat([offset_words, sampled_words], dim=1)
+
+    if transpose:
+        sampled_words = sampled_words.t()
 
     return sampled_words

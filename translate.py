@@ -149,7 +149,7 @@ def main():
     if opt.src == "stdin":
         inFile = sys.stdin
         opt.batch_size = 1
-    elif opt.encoder_type == "audio" and opt.asr_format == "h5":
+    elif opt.encoder_type == "audio" and opt.asr_format  == "h5":
         inFile = h5.File(opt.src, 'r')
     elif opt.encoder_type == "audio" and opt.asr_format == "scp":
         import kaldiio
