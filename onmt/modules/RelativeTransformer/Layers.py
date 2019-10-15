@@ -97,16 +97,16 @@ class RelativeTransformerDecoderLayer(nn.Module):
     def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0, ignore_source=False):
         super(RelativeTransformerDecoderLayer, self).__init__()
         self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
+        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da')
         self.ignore_source = ignore_source
 
         if not self.ignore_source:
             self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
-            self.postprocess_src_attn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
-            self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=2)
+            self.postprocess_src_attn = PrePostProcessing(d_model, p, sequence='da')
+            self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, share=2)
 
         self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', static=onmt.Constants.static)
+        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da')
 
         # self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p, static=onmt.Constants.static, share=1)
         d_head = d_model // h
@@ -114,13 +114,13 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
         if onmt.Constants.activation_layer == 'linear_relu_linear':
             ff_p = p
-            feedforward = FeedForward(d_model, d_ff, ff_p, static=onmt.Constants.static)
+            feedforward = FeedForward(d_model, d_ff, ff_p)
         elif onmt.Constants.activation_layer == 'maxout':
             k = int(math.ceil(d_ff / d_model))
             feedforward = MaxOut(d_model, d_model, k)
         elif onmt.Constants.activation_layer == 'linear_swish_linear':
             ff_p = p
-            feedforward = FeedForwardSwish(d_model, d_ff, ff_p, static=onmt.Constants.static)
+            feedforward = FeedForwardSwish(d_model, d_ff, ff_p)
         self.feedforward = feedforward
 
     def forward(self, input, pos, context, mask_tgt, mask_src):

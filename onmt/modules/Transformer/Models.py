@@ -92,12 +92,14 @@ class TransformerEncoder(nn.Module):
                 channels = self.channels
                 cnn = [nn.Conv2d(channels, 64, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(64),
                        nn.Conv2d(64, 64, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(64)]
-                self.audio_trans = nn.Sequential(*cnn)
+
 
                 # self.model_size =
                 feat_size = (((feature_size // channels) - 3) // 4) * 64
-                assert self.model_size == feat_size, \
-                    "The model dimension doesn't match with the feature dim, expecting %d " % feat_size
+                cnn.append(nn.Linear(feat_size, self.model_size))
+                self.audio_trans = nn.Sequential(*cnn)
+                # assert self.model_size == feat_size, \
+                #     "The model dimension doesn't match with the feature dim, expecting %d " % feat_size
         else:
             self.word_lut = embedding
 
@@ -373,22 +375,37 @@ class TransformerDecoder(nn.Module):
         """
         context = decoder_state.context
         buffers = decoder_state.attention_buffers
-        src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
         atbs = decoder_state.tgt_atb
+        mask_src = decoder_state.src_mask
 
-        if decoder_state.input_seq is None:
-            decoder_state.input_seq = input
+        if decoder_state.concat_input_seq == True:
+            # if decoder_state.input_seq is None:
+            #     decoder_state.input_seq = input
+            # else:
+            #     # concatenate the last input to the previous input sequence
+            #     decoder_state.input_seq = torch.cat([decoder_state.input_seq, input], 0)
+            # input = decoder_state.input_seq.transpose(0, 1)
+            # src = decoder_state.src.transpose(0, 1)
+            if decoder_state.input_seq is None:
+                decoder_state.input_seq = input
+            else:
+                # concatenate the last input to the previous input sequence
+                decoder_state.input_seq = torch.cat([decoder_state.input_seq, input], 0)
+            input = decoder_state.input_seq.transpose(0, 1)
+
+            src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
+
+        if input.size(1) > 1:
+            input_ = input[:, -1].unsqueeze(1)
         else:
-            # concatenate the last input to the previous input sequence
-            decoder_state.input_seq = torch.cat([decoder_state.input_seq, input], 0)
-        input = decoder_state.input_seq.transpose(0, 1)
-        input_ = input[:, -1].unsqueeze(1)
-
+            input_ = input
         """ Embedding: batch_size x 1 x d_model """
+        check = input_.gt(self.word_lut.num_embeddings)
         emb = self.word_lut(input_)
 
         """ Adding positional encoding """
         if self.time == 'positional_encoding':
+            # print(emb.size())
             emb = emb * math.sqrt(self.model_size)
             emb = self.time_transformer(emb, t=input.size(1))
         else:
@@ -410,20 +427,21 @@ class TransformerDecoder(nn.Module):
 
         # batch_size x 1 x len_src
         if context is not None:
-            if self.encoder_type == "audio":
-                if src.data.dim() == 3:
-                    if self.encoder_cnn_downsampling:
-                        long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD)
+            if mask_src is None:
+                if self.encoder_type == "audio":
+                    if src.data.dim() == 3:
+                        if self.encoder_cnn_downsampling:
+                            long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD)
+                            mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
+                        else:
+                            mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
+                    elif self.encoder_cnn_downsampling:
+                        long_mask = src.eq(onmt.Constants.PAD)
                         mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
                     else:
-                        mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.Constants.PAD).unsqueeze(1)
-                elif self.encoder_cnn_downsampling:
-                    long_mask = src.eq(onmt.Constants.PAD)
-                    mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
+                        mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
                 else:
                     mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
-            else:
-                mask_src = src.eq(onmt.Constants.PAD).unsqueeze(1)
         else:
             mask_src = None
 
@@ -461,6 +479,12 @@ class Transformer(NMTModel):
         super().__init__(encoder, decoder, generator)
         self.model_size = self.decoder.model_size
         self.switchout = self.decoder.switchout
+        self.tgt_vocab_size = self.decoder.word_lut.weight.size(0)
+
+        if self.encoder.input_type == 'text':
+            self.src_vocab_size = self.encoder.word_lut.weight.size(0)
+        else:
+            self.src_vocab_size = 0
 
     def reset_states(self):
         return
@@ -477,7 +501,7 @@ class Transformer(NMTModel):
 
         """
         if self.switchout > 0 and self.training:
-            batch.switchout(self.switchout, self.encoder.word_lut.weight.size(0), self.decoder.word_lut.weight.size(0))
+            batch.switchout(self.switchout, self.src_vocab_size, self.tgt_vocab_size)
 
         src = batch.get('source')
         #  src = batch.get('source_rev')
@@ -600,7 +624,7 @@ class Transformer(NMTModel):
 
         return output_dict
 
-    def create_decoder_state(self, batch, beam_size=1):
+    def create_decoder_state(self, batch, beam_size=1, type=1):
         """
         Generate a new decoder state based on the batch input
         :param batch: Batch object (may not contain target during decoding)
@@ -608,53 +632,78 @@ class Transformer(NMTModel):
         :return:
         """
         src = batch.get('source')
-
         tgt_atb = batch.get('target_atb')
 
         src_transposed = src.transpose(0, 1)
         encoder_output = self.encoder(src_transposed)
 
-        decoder_state = TransformerDecodingState(src, tgt_atb, encoder_output['context'],
-                                                 beam_size=beam_size, model_size=self.model_size)
+        decoder_state = TransformerDecodingState(src, tgt_atb, encoder_output['context'], encoder_output['src_mask'],
+                                                 beam_size=beam_size, model_size=self.model_size, type=type)
 
         return decoder_state
 
 
 class TransformerDecodingState(DecoderState):
 
-    def __init__(self, src, tgt_atb, context, beam_size=1, model_size=512):
+    def __init__(self, src, tgt_atb, context, src_mask, beam_size=1, model_size=512, type=1):
 
-        # if audio only take one dimension since only used for mask
-        self.original_src = src  # TxBxC
-
-        if src is not None:
-            if src.dim() == 3:
-                self.src = src.narrow(2, 0, 1).squeeze(2).repeat(1, beam_size)
-                print(self.src.size())
-                # self.src = src.repeat(1, beam_size, 1) # T x Bb x c
-            else:
-                self.src = src.repeat(1, beam_size)
-        else:
-            self.src = None
-
-        if context is not None:
-            self.context = context.repeat(1, beam_size, 1)
-        else:
-            self.context = None
         self.beam_size = beam_size
-
-        self.input_seq = None
-        self.attention_buffers = dict()
         self.model_size = model_size
+        self.attention_buffers = dict()
 
-        if tgt_atb is not None:
-            self.use_attribute = True
-            self.tgt_atb = tgt_atb
-            # self.tgt_atb = tgt_atb.repeat(beam_size)  # size: Bxb
-            for i in self.tgt_atb:
-                self.tgt_atb[i] = self.tgt_atb[i].repeat(beam_size)
+        if type == 1:
+            # if audio only take one dimension since only used for mask
+            self.original_src = src  # TxBxC
+            self.concat_input_seq = True
+
+            if src is not None:
+                if src.dim() == 3:
+                    self.src = src.narrow(2, 0, 1).squeeze(2).repeat(1, beam_size)
+                    print(self.src.size())
+                    # self.src = src.repeat(1, beam_size, 1) # T x Bb x c
+                else:
+                    self.src = src.repeat(1, beam_size)
+            else:
+                self.src = None
+
+            if context is not None:
+                self.context = context.repeat(1, beam_size, 1)
+            else:
+                self.context = None
+
+            self.input_seq = None
+            self.src_mask = None
+
+            if tgt_atb is not None:
+                self.use_attribute = True
+                self.tgt_atb = tgt_atb
+                # self.tgt_atb = tgt_atb.repeat(beam_size)  # size: Bxb
+                for i in self.tgt_atb:
+                    self.tgt_atb[i] = self.tgt_atb[i].repeat(beam_size)
+            else:
+                self.tgt_atb = None
+
+        elif type == 2:
+            bsz = context.size(1)
+            new_order = torch.arange(bsz).view(-1, 1).repeat(1, self.beam_size).view(-1)
+            new_order = new_order.to(context.device)
+            self.context = context.index_select(1, new_order)
+            self.src = src.index_select(1, new_order)  # because src is batch first
+            self.src_mask = src_mask.index_select(0, new_order)
+            self.concat_input_seq = False
+
+            if tgt_atb is not None:
+                self.use_attribute = True
+                self.tgt_atb = tgt_atb
+                # self.tgt_atb = tgt_atb.repeat(beam_size)  # size: Bxb
+                for i in self.tgt_atb:
+                    self.tgt_atb[i] = self.tgt_atb[i].repeat(beam_size)
+            else:
+                self.tgt_atb = None
+
         else:
-            self.tgt_atb = None
+            raise NotImplementedError
+
 
     def update_attention_buffer(self, buffer, layer):
 
@@ -748,3 +797,16 @@ class TransformerDecodingState(DecoderState):
 
             for k in buffer_:
                 buffer_[k] = update_active_with_hidden(buffer_[k])
+
+    # For the new decoder version only
+    def _reorder_incremental_state(self, reorder_state):
+        self.context = self.context.index_select(1, reorder_state)
+
+        self.src_mask = self.src_mask.index_select(0, reorder_state)
+
+        for l in self.attention_buffers:
+            buffer_ = self.attention_buffers[l]
+            if buffer_ is not None:
+                for k in buffer_.keys():
+                    t_, br_, d_ = buffer_[k].size()
+                    buffer_[k] = buffer_[k].index_select(1, reorder_state)  # 1 for time first

@@ -104,31 +104,27 @@ class Optim(object):
         self._step = 0 
         if self.update_method == 'noam2':
             self._step = opt.warmup_steps
+        if self.update_method == 'cosine':
+            self.min_lr = 0.00001
         self.warmup_steps=opt.warmup_steps
         self.beta1 = opt.beta1
         self.beta2 = opt.beta2
         self.weight_decay = opt.weight_decay
-        self.amsgrad = opt.amsgrad 
+        self.amsgrad = opt.amsgrad
+        self.max_steps = opt.max_steps
 
     def step(self, grad_denom=None):
-        
-        #~ if detech_nan(self.params):
-            #~ self.zero_grad()
-            #~ return 0
-        
+
         "Normalize gradients by batch size"
         self.normalize_grad(denom=grad_denom)
         
         "Compute gradients norm."
         grad_norm = clip_grad_norm(self.params, self.max_grad_norm).item()
-        #~ print(grad_norm)
-            
+
         "Automatically scale learning rate over learning period"
         self._step += 1
-        if 'noam' in self.update_method:
+        if 'noam' in self.update_method or 'cosine' in self.update_method:
             self.updateLearningRate()
-
-        #~ print("UDPATE PARAMETERS")
         self.optimizer.step()
         
         return grad_norm
@@ -146,11 +142,16 @@ class Optim(object):
         Decay learning rate if val perf does not improve
         or we hit the start_decay_at limit.
         """
-        if self._step <= self.warmup_steps:
-            self.lr = self.init_lr*self._step*self.warmup_steps**(-1.5)
-        else:
-            self.lr = self.init_lr*self._step**(-0.5)
-        
+
+        if self.update_method in ['noam', 'noam2']:
+            if self._step <= self.warmup_steps:
+                self.lr = self.init_lr*self._step*self.warmup_steps**(-1.5)
+            else:
+                self.lr = self.init_lr*self._step**(-0.5)
+        elif self.update_method in ['cosine']:
+            self.lr = self.min_lr + (self.init_lr - self.min_lr) * \
+                      (1 + math.cos(math.pi * self._step / self.max_steps)) / 2
+
         self.optimizer.param_groups[0]['lr'] = self.lr
 
     def setLearningRate(self, lr):

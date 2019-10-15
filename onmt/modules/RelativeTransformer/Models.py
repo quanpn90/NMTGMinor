@@ -194,10 +194,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
         # mask_tgt = mask_tgt + input.eq(onmt.Constants.PAD).byte().unsqueeze(0)
         # mask_tgt = torch.gt(mask_tgt, 0)  # convert all 2s to 1
         # mask_tgt = mask_tgt.bool()
-        mask_tgt = input.t().eq(onmt.Constants.PAD).unsqueeze(1) + \
+        mask_tgt = input.t().eq(onmt.Constants.PAD).unsqueeze(1).byte() + \
                    torch.triu(emb.new_ones(qlen, klen), diagonal=1).byte()
         mask_tgt = torch.gt(mask_tgt, 0)
-        # mask_tgt = mask_tgt.bool()
+        mask_tgt = mask_tgt.bool()
 
         output = emb
 

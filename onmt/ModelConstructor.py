@@ -47,6 +47,9 @@ def build_model(opt, dicts):
     if not hasattr(opt, 'switchout'):
         opt.switchout = 0.0
 
+    if not hasattr(opt, 'variational_dropout'):
+        opt.variational_dropout = False
+
     onmt.Constants.layer_norm = opt.layer_norm
     onmt.Constants.weight_norm = opt.weight_norm
     onmt.Constants.activation_layer = opt.activation_layer
@@ -161,9 +164,9 @@ def build_tm_model(opt, dicts):
         from onmt.modules.RelativeTransformer.Models import RelativeTransformerEncoder, RelativeTransformerDecoder
         relative_positional_encoder = PositionalEmbedding(opt.model_size)
         if opt.encoder_type == "text":
-            # encoder = TransformerEncoder(opt, embedding_src, positional_encoder, opt.encoder_type)
-            print("HELLO")
-            encoder = RelativeTransformerEncoder(opt, embedding_src, relative_positional_encoder, opt.encoder_type)
+            encoder = TransformerEncoder(opt, embedding_src, positional_encoder, opt.encoder_type)
+            # print("HELLO")
+            # encoder = RelativeTransformerEncoder(opt, embedding_src, relative_positional_encoder, opt.encoder_type)
         elif opt.encoder_type == "audio":
             raise NotImplementedError
             # encoder = TransformerEncoder(opt, None, positional_encoder, opt.encoder_type)

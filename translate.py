@@ -88,7 +88,8 @@ parser.add_argument('-fp16', action='store_true',
                     help='To use floating point 16 in decoding')
 parser.add_argument('-gpu', type=int, default=-1,
                     help="Device to run on")
-
+parser.add_argument('-fast_translate', action='store_true',
+                    help='Using the fast decoder')
 
 def reportScore(name, scoreTotal, wordsTotal):
     print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (
@@ -138,12 +139,11 @@ def main():
     count = 0
 
     tgtF = open(opt.tgt) if opt.tgt else None
+    #
+    # if opt.dump_beam != "":
+    #     import json
+    #     translator.initBeamAccum()
 
-    if opt.dump_beam != "":
-        import json
-        translator.initBeamAccum()
-
-        # here we are trying to 
     inFile = None
 
     if opt.src == "stdin":
@@ -158,7 +158,11 @@ def main():
     else:
         inFile = open(opt.src)
 
-    translator = onmt.Translator(opt)
+    if not opt.fast_translate:
+        translator = onmt.Translator(opt)
+    else:
+        from onmt.inference.FastTranslator import FastTranslator
+        translator = FastTranslator(opt)
 
     if opt.encoder_type == "audio":
 
@@ -314,7 +318,7 @@ def translateBatch(opt, tgtF, count, outF, translator, srcBatch, tgtBatch, predB
     if opt.print_nbest:
         opt.normalize = False
 
-    if opt.normalize:
+    if opt.normalize and not opt.fast_translate:
         predBatch_ = []
         predScore_ = []
         for bb, ss, ll in zip(predBatch, predScore, predLength):

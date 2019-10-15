@@ -14,15 +14,35 @@ class Batch(object):
                  src_atb_data=None, tgt_atb_data=None,
                  src_type='text',
                  src_align_right=True, tgt_align_right=False,
-                 reshape_speech=0, augmenter=None):
+                 reshape_speech=0, augmenter=None,
+                 merge=False):
+        """
+        :param src_data: list of source tensors
+        :param tgt_data: list of target tensors
+        :param src_atb_data: list of attributes/features for the source (TB finished)
+        :param tgt_atb_data: list of attributes/features for the target (TB finished)
+        :param src_type: text or audio
+        :param src_align_right: if the source sequences are aligned to the right
+        :param tgt_align_right: if the target sequences are aligned to the right
+        (default False and maybe never changed unless new models need)
+        :param reshape_speech: the number of frames to be reshaped
+        :param augmenter: using augmentation for speech
+        :param merge: if the two sequences are going to be merged for Relative Transformer
+        """
 
         self.tensors = defaultdict(lambda: None)
         self.has_target = False
         self.src_type = src_type
         self.reshape_speech = reshape_speech
+        self.src_align_right = src_align_right
+        if merge:
+            self.src_align_right = True
+
+        self.tgt_align_right = tgt_align_right
+
         if src_data is not None:
             self.tensors['source'], self.src_lengths = self.collate(src_data,
-                                                                    align_right=src_align_right,
+                                                                    align_right=self.src_align_right,
                                                                     type=self.src_type,
                                                                     augmenter=augmenter)
             self.tensors['source'] = self.tensors['source'].transpose(0, 1).contiguous()
@@ -32,7 +52,7 @@ class Batch(object):
             self.src_size = 0
 
         if tgt_data is not None:
-            target_full, self.tgt_lengths = self.collate(tgt_data, align_right=tgt_align_right)
+            target_full, self.tgt_lengths = self.collate(tgt_data, align_right=self.tgt_align_right)
             target_full = target_full.t().contiguous()  # transpose BxT to TxB
             self.tensors['target'] = target_full
             self.tensors['target_input'] = target_full[:-1]
@@ -66,12 +86,12 @@ class Batch(object):
         self.tensors['source'] = switchout(self.tensors['source'], src_vocab_size, swrate, transpose=True)
 
         # don't touch the first part
-        if self.has_target:
-            self.tensors['target'] = switchout(self.tensors['target'], tgt_vocab_size, swrate, transpose=True, offset=1)
-            target_full = self.tensors['target']
-            self.tensors['target_input'] = target_full[:-1]
-            self.tensors['target_output'] = target_full[1:]
-            self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.Constants.PAD)
+        # if self.has_target:
+        #     self.tensors['target'] = switchout(self.tensors['target'], tgt_vocab_size, swrate, transpose=True, offset=1)
+        #     target_full = self.tensors['target']
+        #     self.tensors['target_input'] = target_full[:  -1]
+        #     self.tensors['target_output'] = target_full[1:]
+        #     self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.Constants.PAD)
 
     # down sampling the speech signal by simply concatenating n features (reshaping)
     def downsample(self, data):
@@ -106,8 +126,6 @@ class Batch(object):
                 data_length = data[i].size(0)
                 offset = max_length - data_length if align_right else 0
                 tensor[i].narrow(0, offset, data_length).copy_(data[i])
-
-                offset = 0 if align_right else max_length - data_length
 
             return tensor, lengths
 
@@ -287,7 +305,13 @@ class Dataset(object):
         
         self.num_batches = len(self.batches)
                 
-    def __getitem__(self, index):
+    def __getitem__(self, index, src_align_right=False, tgt_align_right=False):
+        """
+        :param index: the index of the mini-batch in the list
+        :param src_align_right: source sequences are aligned to the right (default False)
+        :param tgt_align_right: target sequences are aligned to the right (default False)
+        :return:
+        """
         assert index < self.num_batches, "%d > %d" % (index, self.num_batches)
         
         batch_ids = self.batches[index]
@@ -317,7 +341,7 @@ class Dataset(object):
 
         batch = Batch(src_data, tgt_data=tgt_data,
                       src_atb_data=src_atb_data, tgt_atb_data=tgt_atb_data,
-                      src_align_right=False, tgt_align_right=False,
+                      src_align_right=src_align_right, tgt_align_right=tgt_align_right,
                       src_type=self._type, reshape_speech=self.reshape_speech,
                       augmenter=self.augmenter)
 

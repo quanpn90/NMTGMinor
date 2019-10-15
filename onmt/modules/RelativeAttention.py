@@ -178,7 +178,7 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         # [qlen x klen x bsz x n_head]
         # attn_score = attn_score.transpose(0, 2).transpose(1, 3)
 
-        attn_prob = F.softmax(attn_score.float(), dim=-1)
+        attn_prob = F.softmax(attn_score.float(), dim=-1).type_as(attn_score)
         if debug:
             print(attn_score)
             print("attn prob nan", torch.isnan(attn_prob).sum() > 0)
