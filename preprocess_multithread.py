@@ -2,6 +2,7 @@ import onmt
 import onmt.Markdown
 import argparse
 import torch
+import subprocess
 
 from onmt.data_utils.IndexedDataset import IndexedDatasetBuilder
 
@@ -10,6 +11,7 @@ import numpy as np
 
 parser = argparse.ArgumentParser(description='preprocess.py')
 onmt.Markdown.add_md_help_argument(parser)
+
 
 # **Preprocess Options**
 
@@ -201,7 +203,7 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
 
 
 def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_length=64, max_tgt_length=64,
-                          add_bos=True,
+                          sort_by_target=False, add_bos=True,
                           input_type='word', data_type='int64'):
     src, tgt = [], []
     src_sizes = []
@@ -312,14 +314,14 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
 
     print('Processing %s & %s ...' % (src_file, tgt_file))
 
-    if asr_format == "h5":
-        file_idx = -1;
-        if src_file[-2:] == "h5":
+    if (asr_format == "h5"):
+        fileIdx = -1;
+        if (src_file[-2:] == "h5"):
             srcf = h5.File(src_file, 'r')
         else:
-            file_idx = 0
-            srcf = h5.File(src_file + "." + str(file_idx) + ".h5", 'r')
-    elif asr_format in ["scp", "kaldi"]:
+            fileIdx = 0
+            srcf = h5.File(src_file + "." + str(fileIdx) + ".h5", 'r')
+    elif (asr_format == "scp"):
         import kaldiio
         from kaldiio import ReadHelper
         audio_data = iter(ReadHelper('scp:' + src_file))
@@ -337,26 +339,24 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
         if tline == "":
             break
 
-        if asr_format == "h5":
-            if str(index) in srcf:
-                feature_vectors = np.array(srcf[str(index)])
-            elif file_idx != -1:
+        if (asr_format == "h5"):
+            if (str(index) in srcf):
+                featureVectors = np.array(srcf[str(index)])
+            elif (fileIdx != -1):
                 srcf.close()
-                file_idx += 1
-                srcf = h5.File(src_file + "." + str(file_idx) + ".h5", 'r')
-                feature_vectors = np.array(srcf[str(index)])
+                fileIdx += 1
+                srcf = h5.File(src_file + "." + str(fileIdx) + ".h5", 'r')
+                featureVectors = np.array(srcf[str(index)])
             else:
                 print("No feature vector for index:", index, file=sys.stderr)
                 exit(-1)
-        elif asr_format in ["scp", "kaldi"]:
-            _, feature_vectors = next(audio_data)
-        else:
-            raise NotImplementedError
+        elif (asr_format == "scp"):
+            _, featureVectors = next(audio_data)
 
-        if stride == 1:
-            sline = torch.from_numpy(feature_vectors)
+        if (stride == 1):
+            sline = torch.from_numpy(featureVectors)
         else:
-            sline = torch.from_numpy(feature_vectors[0::opt.stride])
+            sline = torch.from_numpy(featureVectors[0::opt.stride])
 
         if reshape:
             if concat != 1:
@@ -474,10 +474,10 @@ def main():
 
     else:
         dicts['src'] = init_vocab('source', [opt.train_src], opt.src_vocab,
-                                  opt.src_vocab_size, tokenizer, join=opt.join_vocab)
+                                  opt.src_vocab_size, input_type=opt.input_type)
 
         dicts['tgt'] = init_vocab('target', [opt.train_tgt], opt.tgt_vocab,
-                                  opt.tgt_vocab_size, tokenizer, join=opt.join_vocab)
+                                  opt.tgt_vocab_size, input_type=opt.input_type)
 
     if opt.lm:
         print('Preparing training language model ...')
@@ -523,6 +523,7 @@ def main():
                                                            dicts['src'], dicts['tgt'],
                                                            max_src_length=opt.src_seq_length,
                                                            max_tgt_length=opt.tgt_seq_length,
+                                                           sort_by_target=opt.sort_by_target,
                                                            input_type=opt.input_type,
                                                            add_bos=(not opt.no_bos),
                                                            data_type=opt.data_type)
@@ -658,3 +659,70 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def safe_readline(f):
+    pos = f.tell()
+    while True:
+        try:
+            return f.readline()
+        except UnicodeDecodeError:
+            pos -= 1
+            f.seek(pos)  # search where this character begins
+
+def read_from_thread(filename, tokenizer, worker_id=0, num_workers=1):
+
+    counter = Counter()
+    with open(filename, 'r', encoding='utf-8') as f:
+
+        # read the size of the file
+        size = os.fstat(f.fileno()).st_size
+
+        # split and find the byte offset
+        chunk_size = size // num_workers
+        offset = worker_id * chunk_size
+        end = offset + chunk_size
+
+        # jump into the offset
+        f.seek(offset)
+
+        if offset > 0:
+            safe_readline(f)
+        line = f.readline()
+        while line:
+            for word in tokenizer.tokenize(line):
+                counter.update([word])
+            counter.update([onmt.Constants.EOS_WORD])
+            if f.tell() > end:
+                break
+            line = f.readline()
+
+    return counter
+
+def read_from_file(filename, dict, tokenizer, num_workers=1):
+
+    assert num_workers >= 1
+
+    def read_to_dict(counter):
+        for w, c in sorted(counter.items()):
+            dict.add_symbol(w, c)
+
+    if num_workers > 1:
+        pool = Pool(processes= num_workers)
+
+        results = []
+
+        for worker_id in range(num_workers):
+            pool_output = pool.apply_async(read_from_thread(filename, tokenizer, worker_id, num_workers))
+            results.append(pool_output)
+
+        pool.close()
+        pool.join()
+
+        for r in results:
+            read_to_dict(r.get())
+
+    else:
+        read_to_dict(read_from_thread(filename))
+
+    return dict

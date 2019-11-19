@@ -1,12 +1,11 @@
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 import torch.nn.init as init
 import torch.nn.utils.weight_norm as WeightNorm
 import onmt
 import torch.nn.functional as F
-from onmt.modules.Bottle import Bottle
-from onmt.modules.StaticDropout import StaticDropout
+from onmt.modules.Swish import Swish
+from onmt.modules.WordDrop import VariationalDropout
 
 
 # different linears for the same input
@@ -76,3 +75,43 @@ class MaxOut(nn.Module):
         m = m.view(*original_size[:-1], m.size(-1))
 
         return m
+
+
+class FeedForwardSwish(nn.Module):
+    """Applies position-wise feed forward to inputs
+
+    Args:
+        d_model: dimension of model
+        d_ff:    dimension of feed forward
+        p:       dropout probability
+
+    Params:
+        fc_1: FC layer from d_model to d_ff
+        fc_2: FC layer from d_ff to d_model
+
+    Input Shapes:
+        input: batch_size x len x d_model or len x batch_size x d_model
+
+    Output Shapes:
+        out: batch_size x len x d_model or len x batch_size x d_model
+    """
+
+    def __init__(self, d_model, d_ff, p, variational=False):
+        super(FeedForwardSwish, self).__init__()
+        self.d_model = d_model
+        self.d_ff = d_ff
+        self.fc_1 = XavierLinear(d_model, d_ff)
+        self.fc_2 = XavierLinear(d_ff, d_model)
+        self.swish = Swish()
+
+        if variational:
+            self.dropout = VariationalDropout(p)
+        else:
+            self.dropout = nn.Dropout(p)
+
+    def forward(self, input):
+
+        out = self.swish(self.fc_1(input))
+        out = self.dropout(out)
+        out = self.fc_2(out)
+        return out

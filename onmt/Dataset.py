@@ -7,6 +7,13 @@ import onmt
 from onmt.speech.Augmenter import Augmenter
 from onmt.modules.WordDrop import switchout
 
+"""
+Data management for sequence-to-sequence models
+Two basic classes: 
+- Batch stores the input / output sequences, grouped into tensors with the same length (by padding)
+- Dataset stores all of the data and 
+"""
+
 
 class Batch(object):
     # An object to manage the data within a minibatch
@@ -190,7 +197,7 @@ class Dataset(object):
                  src_atbs=None, tgt_atbs=None,
                  batch_size_words=2048,
                  data_type="text", batch_size_sents=128,
-                 multiplier=1, sort_by_target=False,
+                 multiplier=1,
                  reshape_speech=0, augment=False):
         self.src = src_data
         self._type = data_type
@@ -215,9 +222,6 @@ class Dataset(object):
 
         # the actual batch size must divide by this multiplier (for fp16 it has to be 4 or 8)
         self.multiplier = multiplier
-
-        # by default the minibatch length is sort by target
-        self.sort_by_target = sort_by_target
 
         # by default: count the amount of padding when we group mini-batches
         self.pad_count = True

@@ -91,7 +91,6 @@ def main():
 
         train_data = onmt.Dataset(train_src,
                                   train_tgt,
-                                  opt.batch_size_words,
                                   batch_size_words=opt.batch_size_words,
                                   data_type="text",
                                   batch_size_sents=opt.batch_size_sents,
@@ -102,7 +101,7 @@ def main():
         valid_tgt = IndexedInMemoryDataset(valid_path + '.tgt')
 
         valid_data = onmt.Dataset(valid_src,
-                                  valid_tgt, opt.batch_size_words,
+                                  valid_tgt,
                                   batch_size_words=opt.batch_size_words,
                                   data_type="text",
                                   batch_size_sents=opt.batch_size_sents)
@@ -117,7 +116,6 @@ def main():
 
         train_path = opt.data + '.train'
         train_src = MMapIndexedDataset(train_path + '.src')
-        # train_tgt = None
         train_tgt = MMapIndexedDataset(train_path + '.tgt')
 
         train_data = onmt.Dataset(train_src,

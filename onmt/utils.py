@@ -14,6 +14,14 @@ def checkpoint_paths(path, pattern=r'model_ppl_(\d+).(\d+)\_e(\d+).(\d+).pt'):
     pt_regexp = re.compile(pattern)
     files = os.listdir(path)
 
+    # remove directories or files that don't contain "ppl"
+    for fname in os.listdir(path):
+        cur_path = os.path.join(path, fname)
+        if os.path.isdir(cur_path):
+            continue
+        elif "ppl" in fname:
+            files.append(fname)
+
     # sort py perplexity (ascending)
     files = sorted(files, key=lambda s: float(s.split("_")[2]))
 

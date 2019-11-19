@@ -10,7 +10,7 @@ from onmt.modules.Bottle import Bottle
 from onmt.modules.StaticDropout import StaticDropout
 from onmt.modules.Linear import XavierLinear as Linear
 from onmt.modules.Linear import XavierLinear
-from onmt.modules.Linear import group_linear
+from onmt.modules.Linear import group_linear, FeedForwardSwish
 from onmt.modules.GlobalAttention import MultiHeadAttention
 from onmt.modules.WordDrop import VariationalDropout
 
@@ -105,7 +105,7 @@ class FeedForward(nn.Module):
         out = self.fc_2(out)
         return out
 
-    
+
 class EncoderLayer(nn.Module):
     """Wraps multi-head attentions and position-wise feed forward into one encoder layer
     
@@ -145,9 +145,14 @@ class EncoderLayer(nn.Module):
         elif onmt.Constants.activation_layer == 'maxout':
             k = int(math.ceil(d_ff / d_model))
             feedforward = MaxOut(d_model, d_model, k)
+        elif onmt.Constants.activation_layer == 'linear_swish_linear':
+            ff_p = p
+            feedforward = FeedForwardSwish(d_model, d_ff, ff_p, variational=self.variational)
+        else:
+            raise NotImplementedError
         self.feedforward = Bottle(feedforward)
             
-    def forward(self, input, attn_mask, ):
+    def forward(self, input, attn_mask):
         query = self.preprocess_attn(input)
         out, _ = self.multihead(query, query, query, attn_mask)
         input = self.postprocess_attn(out, input)
@@ -217,6 +222,8 @@ class DecoderLayer(nn.Module):
         elif onmt.Constants.activation_layer == 'linear_swish_linear':
             ff_p = p
             feedforward = FeedForwardSwish(d_model, d_ff, ff_p)
+        else:
+            raise NotImplementedError
         self.feedforward = Bottle(feedforward)
     
     def forward(self, input, context, mask_tgt, mask_src):
@@ -317,7 +324,9 @@ class PositionalEncoding(nn.Module):
         cuda = False
         if hasattr(self, 'pos_emb'):
             cuda = self.pos_emb.is_cuda
+            # self.data_type = torch.type(self.pos_emb)
             del self.pos_emb
+
         position = torch.arange(0,new_max_len).float()
 
         num_timescales = self.d_model // 2
@@ -333,21 +342,23 @@ class PositionalEncoding(nn.Module):
             pos_emb.type(self.data_type)
         # wrap in a buffer so that model can be moved to GPU
         self.register_buffer('pos_emb', pos_emb)
-        self.data_type = self.pos_emb.type()
+        # self.data_type = self.pos_emb.type()
         self.len_max = new_max_len
 
     def forward(self, word_emb, t=None):
 
         len_seq = t if t else word_emb.size(1)
 
+        self.data_type = word_emb.type()
+
         if len_seq > self.len_max:
             self.renew(len_seq)
 
         if word_emb.size(1) == len_seq:
-            out = word_emb + Variable(self.pos_emb[:len_seq, :], requires_grad=False)
+            out = word_emb + self.pos_emb[:len_seq, :].type_as(word_emb)
         else:
             # out = word_emb + Variable(self.pos_emb[:len_seq, :][-1, :], requires_grad=False)
-            time_emb = Variable(self.pos_emb[len_seq-1, :], requires_grad=False) # 1 x dim
+            time_emb = self.pos_emb[len_seq-1, :] # 1 x dim
             # out should have size bs x 1 x dim
-            out = word_emb + time_emb.unsqueeze(0).repeat(word_emb.size(0), 1, 1)
+            out = word_emb + time_emb.unsqueeze(0).repeat(word_emb.size(0), 1, 1).type_as(word_emb)
         return out

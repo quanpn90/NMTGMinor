@@ -5,6 +5,7 @@ import torch.cuda
 
 import onmt
 
+
 class CopyGenerator(nn.Module):
     """Generator module that additionally considers copying
     words directly from the source.
@@ -45,23 +46,25 @@ class CopyGenerator(nn.Module):
        tgt_dict (Vocab): output target dictionary
     """
         
-    def __init__(self, opt, dicts):
+    def __init__(self, hidden size, output_size):
         
         super(CopyGenerator, self).__init__()
+
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+
+        # gate for linear
+        self.linear_gate = nn.Linear(hidden_size, 1)
         
-        inputSize = opt.rnn_size
-        self.inputSizes = [] 
-        self.outputSizes = []
-        
-        for i in dicts:
-            vocabSize = dicts[i].size()
-            self.outputSizes.append(vocabSize)
-            self.inputSizes.append(inputSize)
-            
-        self.linear = onmt.modules.MultiLinear(self.inputSizes, self.outputSizes)
-        self.linear_copy = onmt.modules.MultiLinear(self.inputSizes, 1)
-        
-        self.dicts = dicts
+        # for i in dicts:
+        #     vocabSize = dicts[i].size()
+        #     self.outputSizes.append(vocabSize)
+        #     self.inputSizes.append(inputSize)
+        #
+        # self.linear = onmt.modules.MultiLinear(self.inputSizes, self.outputSizes)
+        # self.linear_copy = onmt.modules.MultiLinear(self.inputSizes, 1)
+        #
+        # self.dicts = dicts
         
     def switchID(self, tgtID):
         

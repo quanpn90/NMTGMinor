@@ -90,14 +90,15 @@ class TransformerEncoder(nn.Module):
                 torch.nn.init.xavier_uniform_(self.audio_trans.weight)
             else:
                 channels = self.channels
-                cnn = [nn.Conv2d(channels, 64, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(64),
-                       nn.Conv2d(64, 64, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(64)]
+                cnn = [nn.Conv2d(channels, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(32),
+                       nn.Conv2d(32, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(32)]
 
 
                 # self.model_size =
-                feat_size = (((feature_size // channels) - 3) // 4) * 64
-                cnn.append(nn.Linear(feat_size, self.model_size))
+                feat_size = (((feature_size // channels) - 3) // 4) * 32
+                # cnn.append()
                 self.audio_trans = nn.Sequential(*cnn)
+                self.linear_trans = nn.Linear(feat_size, self.model_size)
                 # assert self.model_size == feat_size, \
                 #     "The model dimension doesn't match with the feature dim, expecting %d " % feat_size
         else:
@@ -164,8 +165,11 @@ class TransformerEncoder(nn.Module):
                 input = self.audio_trans(input)
                 input = input.permute(0, 2, 1, 3).contiguous()
                 input = input.view(input.size(0), input.size(1), -1)
+                # print(input.size())
+                input = self.linear_trans(input)
 
                 mask_src = long_mask[:, 0:input.size(1) * 4:4].unsqueeze(1)
+                # the size seems to be B x T ?
                 emb = input
 
         if torch_version >= 1.2:
@@ -446,8 +450,10 @@ class TransformerDecoder(nn.Module):
             mask_src = None
 
         len_tgt = input.size(1)
-        mask_tgt = input.data.eq(onmt.Constants.PAD).byte().unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
+        mask_tgt = input.eq(onmt.Constants.PAD).byte().unsqueeze(1)
+        mask_tgt = mask_tgt + self.mask[:len_tgt, :len_tgt].type_as(mask_tgt)
         mask_tgt = torch.gt(mask_tgt, 0)
+        # only get the final step of the mask during decoding (because the input of the network is only the last step)
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
 
         if torch_version >= 1.2:
@@ -697,7 +703,7 @@ class TransformerDecodingState(DecoderState):
                 self.tgt_atb = tgt_atb
                 # self.tgt_atb = tgt_atb.repeat(beam_size)  # size: Bxb
                 for i in self.tgt_atb:
-                    self.tgt_atb[i] = self.tgt_atb[i].repeat(beam_size)
+                    self.tgt_atb[i] = self.tgt_atb[i].index_select(0, new_order)
             else:
                 self.tgt_atb = None
 
@@ -803,6 +809,10 @@ class TransformerDecodingState(DecoderState):
         self.context = self.context.index_select(1, reorder_state)
 
         self.src_mask = self.src_mask.index_select(0, reorder_state)
+
+        if self.tgt_atb is not None:
+            for i in self.tgt_atb:
+                self.tgt_atb[i] = self.tgt_atb[i].index_select(0, reorder_state)
 
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]

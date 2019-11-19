@@ -70,7 +70,7 @@ class Dict(object):
         for label in labels:
             self.addSpecial(label)
 
-    def add(self, label, idx=None):
+    def add(self, label, idx=None, num=1):
         "Add `label` in the dictionary. Use `idx` as its index if given."
         label = label.lower() if self.lower else label
         if idx is not None:
@@ -85,9 +85,9 @@ class Dict(object):
                 self.labelToIdx[label] = idx
 
         if idx not in self.frequencies:
-            self.frequencies[idx] = 1
+            self.frequencies[idx] = num
         else:
-            self.frequencies[idx] += 1
+            self.frequencies[idx] += num
 
         return idx
 
@@ -207,4 +207,12 @@ class Dict(object):
                     break
 
         print("Vocabulary size after patching: %d" % self.size())
+
+    # @staticmethod
+    # def __read_from_single_thread():
+    #
+    # @staticmethod
+    # def __read_from_text_file(self):
+
+
 

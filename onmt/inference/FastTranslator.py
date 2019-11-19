@@ -27,6 +27,7 @@ class FastTranslator(Translator):
         self.min_len = 1
         self.normalize_scores = opt.normalize
         self.len_penalty = opt.alpha
+        self.no_repeat_ngram_size = 0
 
         if opt.verbose:
             print('* Current bos id: %d' % self.bos_id, onmt.Constants.BOS )
@@ -35,7 +36,7 @@ class FastTranslator(Translator):
     def translateBatch(self, batch):
 
         with torch.no_grad():
-            return self.    _translateBatch(batch)
+            return self._translateBatch(batch)
 
     def _translateBatch(self, batch):
 
@@ -62,23 +63,19 @@ class FastTranslator(Translator):
         src = batch.get('source')
         scores = src.new(bsz * beam_size, max_len + 1).float().fill_(0)
         scores_buf = scores.clone()
-        tokens = src.new(bsz * beam_size, max_len + 2).fill_(self.pad)
+        tokens = src.new(bsz * beam_size, max_len + 2).long().fill_(self.pad)
         tokens_buf = tokens.clone()
         tokens[:, 0].fill_(self.bos)  # first token is bos
         attn, attn_buf = None, None
         nonpad_idxs = None
-        src_tokens = src.t()  # batch x time
+        src_tokens = src.transpose(0, 1)  # batch x time
         src_lengths = (src_tokens.ne(self.eos) & src_tokens.ne(self.pad)).long().sum(dim=1)
-        input_size = src_tokens.size()
-        # bsz = input_size[1]
-        # src_len = input_size[0]
         blacklist = src_tokens.new_zeros(bsz, beam_size).eq(-1)  # forward and backward-compatible False mask
         prefix_tokens = None
 
         # list of completed sentences
         finalized = [[] for i in range(bsz)]
         finished = [False for i in range(bsz)]
-        worst_finalized = [{'idx': None, 'score': -math.inf} for i in range(bsz)]
         num_remaining_sent = bsz
 
         # number of candidate hypos per step
@@ -248,14 +245,14 @@ class FastTranslator(Translator):
             #         scores = replicate_first_beam(scores, eos_mask_batch_dim)
             #         lprobs = replicate_first_beam(lprobs, eos_mask_batch_dim)
 
-            # if self.no_repeat_ngram_size > 0:
-            #     # for each beam and batch sentence, generate a list of previous ngrams
-            #     gen_ngrams = [{} for bbsz_idx in range(bsz * beam_size)]
-            #     for bbsz_idx in range(bsz * beam_size):
-            #         gen_tokens = tokens[bbsz_idx].tolist()
-            #         for ngram in zip(*[gen_tokens[i:] for i in range(self.no_repeat_ngram_size)]):
-            #             gen_ngrams[bbsz_idx][tuple(ngram[:-1])] = \
-            #                 gen_ngrams[bbsz_idx].get(tuple(ngram[:-1]), []) + [ngram[-1]]
+            if self.no_repeat_ngram_size > 0:
+                # for each beam and batch sentence, generate a list of previous ngrams
+                gen_ngrams = [{} for bbsz_idx in range(bsz * beam_size)]
+                for bbsz_idx in range(bsz * beam_size):
+                    gen_tokens = tokens[bbsz_idx].tolist()
+                    for ngram in zip(*[gen_tokens[i:] for i in range(self.no_repeat_ngram_size)]):
+                        gen_ngrams[bbsz_idx][tuple(ngram[:-1])] = \
+                            gen_ngrams[bbsz_idx].get(tuple(ngram[:-1]), []) + [ngram[-1]]
 
             # Record attention scores
             if avg_attn_scores is not None:
@@ -269,20 +266,20 @@ class FastTranslator(Translator):
             eos_bbsz_idx = buffer('eos_bbsz_idx')
             eos_scores = buffer('eos_scores', type_of=scores)
 
-            # if self.no_repeat_ngram_size > 0:
-            #     def calculate_banned_tokens(bbsz_idx):
-            #         # before decoding the next token, prevent decoding of ngrams that have already appeared
-            #         ngram_index = tuple(tokens[bbsz_idx, step + 2 - self.no_repeat_ngram_size:step + 1].tolist())
-            #         return gen_ngrams[bbsz_idx].get(ngram_index, [])
-            #
-            #     if step + 2 - self.no_repeat_ngram_size >= 0:
-            #         # no banned tokens if we haven't generated no_repeat_ngram_size tokens yet
-            #         banned_tokens = [calculate_banned_tokens(bbsz_idx) for bbsz_idx in range(bsz * beam_size)]
-            #     else:
-            #         banned_tokens = [[] for bbsz_idx in range(bsz * beam_size)]
-            #
-            #     for bbsz_idx in range(bsz * beam_size):
-            #         lprobs[bbsz_idx, banned_tokens[bbsz_idx]] = -math.inf
+            if self.no_repeat_ngram_size > 0:
+                def calculate_banned_tokens(bbsz_idx):
+                    # before decoding the next token, prevent decoding of ngrams that have already appeared
+                    ngram_index = tuple(tokens[bbsz_idx, step + 2 - self.no_repeat_ngram_size:step + 1].tolist())
+                    return gen_ngrams[bbsz_idx].get(ngram_index, [])
+
+                if step + 2 - self.no_repeat_ngram_size >= 0:
+                    # no banned tokens if we haven't generated no_repeat_ngram_size tokens yet
+                    banned_tokens = [calculate_banned_tokens(bbsz_idx) for bbsz_idx in range(bsz * beam_size)]
+                else:
+                    banned_tokens = [[] for bbsz_idx in range(bsz * beam_size)]
+
+                for bbsz_idx in range(bsz * beam_size):
+                    lprobs[bbsz_idx, banned_tokens[bbsz_idx]] = -math.inf
 
             cand_scores, cand_indices, cand_beams = self.search.step(
                 step,
@@ -437,7 +434,6 @@ class FastTranslator(Translator):
 
         for i in range(self.n_models):
             decoder_output = self.models[i].step(tokens, decoder_states[i])
-            # decoder_hidden, coverage = self.models[i].decoder.step(tokens, decoder_states[i])
 
             # take the last decoder state
             # decoder_hidden = decoder_hidden.squeeze(1)
@@ -455,39 +451,32 @@ class FastTranslator(Translator):
 
         return out, attn
 
-    def translate(self, src_data, tgt_data):
+    def translate(self, src_data, tgt_data, type='mt'):
         #  (1) convert words to indexes
-        dataset = self.build_data(src_data, tgt_data)
+        dataset = self.build_data(src_data, tgt_data, type=type)
         batch = dataset.next()[0]
         if self.cuda:
             batch.cuda(fp16=self.fp16)
         # ~ batch = self.to_variable(dataset.next()[0])
-        batchSize = batch.size
+        batch_size = batch.size
 
         #  (2) translate
-        # ~ pred, pred_score, attn, pred_length, gold_score, gold_words = self.translateBatch(src, tgt)
         finalized, gold_score, gold_words, allgold_words = self.translateBatch(batch)
         pred_length = []
 
-        # print(len(finalized))
-        # for k in finalized:
-        #     print(k)
-        # print(len(finalized[0]))
-
         #  (3) convert indexes to words
         pred_batch = []
-        for b in range(batchSize):
+        for b in range(batch_size):
             pred_batch.append(
                 [self.build_target_tokens(finalized[b][n]['tokens'], src_data[b], None)
                  for n in range(self.opt.n_best)]
             )
         pred_score = []
-        for b in range(batchSize):
+        for b in range(batch_size):
             pred_score.append(
                 [torch.FloatTensor([finalized[b][n]['score']])
                  for n in range(self.opt.n_best)]
             )
-
 
         return pred_batch, pred_score, pred_length, gold_score, gold_words, allgold_words
 

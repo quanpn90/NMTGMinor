@@ -215,18 +215,24 @@ class Translator(object):
 
         return attn
 
-    def build_data(self, src_sents, tgt_sents):
+    def build_data(self, src_sents, tgt_sents, type='mt'):
         # This needs to be the same as preprocess.py.
 
-        if self.start_with_bos:
-            src_data = [self.src_dict.convertToIdx(b,
-                                                   onmt.Constants.UNK_WORD,
-                                                   onmt.Constants.BOS_WORD)
-                        for b in src_sents]
+        if type == 'mt':
+            if self.start_with_bos:
+                src_data = [self.src_dict.convertToIdx(b,
+                                                       onmt.Constants.UNK_WORD,
+                                                       onmt.Constants.BOS_WORD)
+                            for b in src_sents]
+            else:
+                src_data = [self.src_dict.convertToIdx(b,
+                                                       onmt.Constants.UNK_WORD)
+                            for b in src_sents]
+        elif type == 'asr':
+            # no need to deal with this
+            src_data = src_sents
         else:
-            src_data = [self.src_dict.convertToIdx(b,
-                                                   onmt.Constants.UNK_WORD)
-                        for b in src_sents]
+            raise NotImplementedError
 
         tgt_bos_word = self.opt.bos_token
         if self.opt.no_bos_gold:

@@ -148,6 +148,7 @@ class Optim(object):
                 self.lr = self.init_lr*self._step*self.warmup_steps**(-1.5)
             else:
                 self.lr = self.init_lr*self._step**(-0.5)
+
         elif self.update_method in ['cosine']:
             self.lr = self.min_lr + (self.init_lr - self.min_lr) * \
                       (1 + math.cos(math.pi * self._step / self.max_steps)) / 2
