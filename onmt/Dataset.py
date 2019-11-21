@@ -20,7 +20,7 @@ class Batch(object):
     def __init__(self, src_data, tgt_data=None,
                  src_atb_data=None, tgt_atb_data=None,
                  src_type='text',
-                 src_align_right=True, tgt_align_right=False,
+                 src_align_right=False, tgt_align_right=False,
                  reshape_speech=0, augmenter=None,
                  merge=False):
         """
@@ -89,10 +89,10 @@ class Batch(object):
             self.tensors['target_atb'] = self.tgt_atb_data
 
     def switchout(self, swrate, src_vocab_size, tgt_vocab_size):
-
+        # Switch out function ... currently works with only source text data
         self.tensors['source'] = switchout(self.tensors['source'], src_vocab_size, swrate, transpose=True)
 
-        # don't touch the first part
+        # don't touch the target at the moment...
         # if self.has_target:
         #     self.tensors['target'] = switchout(self.tensors['target'], tgt_vocab_size, swrate, transpose=True, offset=1)
         #     target_full = self.tensors['target']
@@ -123,10 +123,18 @@ class Batch(object):
         return
 
     def collate(self, data, align_right=False, type="text", augmenter=None):
+        """
+        Assembling the individual sequences into one single tensor, included padding
+        :param data: the list of sequences
+        :param align_right: aligning the sequences w.r.t padding
+        :param type: text or audio
+        :param augmenter: for augmentation in audio models
+        :return:
+        """
 
         lengths = [x.size(0) for x in data]
         max_length = max(lengths)
-        # initialize with batch_size * length first
+        # initialize with batch_size * length
         if type == "text":
             tensor = data[0].new(len(data), max_length).fill_(onmt.Constants.PAD)
             for i in range(len(data)):
@@ -166,7 +174,7 @@ class Batch(object):
                 offset = max_length - data_length if align_right else 0
 
                 tensor[i].narrow(0, offset, data_length).narrow(1, 1, feature.size(1)).copy_(feature)
-                # padding dimension: 1 is not padded, 1 is padded
+                # in padding dimension: 0 is not padded, 1 is padded
                 tensor[i].narrow(0, offset, data_length).narrow(1, 0, 1).fill_(1)
 
             return tensor, lengths
@@ -180,6 +188,11 @@ class Batch(object):
             return None
 
     def cuda(self, fp16=False):
+        """
+        Send the minibatch data into GPU. Old-fashioned without the 'device' control
+        :param fp16:
+        :return: None
+        """
         for key, tensor in self.tensors.items():
             if isinstance(tensor, dict):
                 for k in tensor:
@@ -198,9 +211,35 @@ class Dataset(object):
                  batch_size_words=2048,
                  data_type="text", batch_size_sents=128,
                  multiplier=1,
-                 reshape_speech=0, augment=False):
+                 reshape_speech=0, augment=False,
+                 src_align_right=False, tgt_align_right=False):
+        """
+        :param src_data: List of tensors for the source side (1D for text, 2 or 3Ds for other modalities)
+        :param tgt_data: List of tensors (1D text) for the target side (already padded with <s> and </s>
+        :param src_atbs: TB Implemented for source attributes
+        :param tgt_atbs: TB Implemented for target attributes (like languages in multilingual models)
+        :param batch_size_words: Maximum number of words in the minibatch (MB can't have more than this)
+        :param data_type: Text or Audio
+        :param batch_size_sents: Maximum number of sequences in the minibatch (MB can't have more than this)
+        :param multiplier: The number of sequences must divide by this number (for fp16 when multiplier=8)
+        :param reshape_speech: Put N frames together to reduce the length (this might be done already in preprocessing)
+        :param augment: Speech Augmentation (currently only spec augmentation is implemented)
+        """
+
+        """
+        For alignment, the right-aligned data looks like:
+        P P P P D D D D
+        P P D D D D D D
+        P P P P P D D D
+        P P P D D D D D
+        This can affect positional encoding (whose implementation is not consistent w.r.t padding)
+        For models with absolute positional encoding, src and tgt should be aligned left (This is default)
+        For models with relative positional encoding, src should be right and tgt should be left
+        """
         self.src = src_data
         self._type = data_type
+        self.src_align_right = src_align_right
+        self.tgt_align_right = tgt_align_right
         self.reshape_speech = reshape_speech
         if tgt_data:
             self.tgt = tgt_data
@@ -309,12 +348,10 @@ class Dataset(object):
         
         self.num_batches = len(self.batches)
                 
-    def __getitem__(self, index, src_align_right=False, tgt_align_right=False):
+    def __getitem__(self, index):
         """
         :param index: the index of the mini-batch in the list
-        :param src_align_right: source sequences are aligned to the right (default False)
-        :param tgt_align_right: target sequences are aligned to the right (default False)
-        :return:
+        :return: Batch
         """
         assert index < self.num_batches, "%d > %d" % (index, self.num_batches)
         
@@ -345,7 +382,7 @@ class Dataset(object):
 
         batch = Batch(src_data, tgt_data=tgt_data,
                       src_atb_data=src_atb_data, tgt_atb_data=tgt_atb_data,
-                      src_align_right=src_align_right, tgt_align_right=tgt_align_right,
+                      src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
                       src_type=self._type, reshape_speech=self.reshape_speech,
                       augmenter=self.augmenter)
 

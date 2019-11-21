@@ -12,7 +12,6 @@ from onmt.ModelConstructor import build_model
 from options import make_parser
 from collections import defaultdict
 
-
 parser = argparse.ArgumentParser(description='train.py')
 onmt.Markdown.add_md_help_argument(parser)
 
@@ -34,7 +33,6 @@ if opt.checkpointing > 0:
 
 if torch.cuda.is_available() and not opt.gpus:
     print("WARNING: You have a CUDA device, should run with -gpus 0")
-
 
 torch.manual_seed(opt.seed)
 
@@ -105,6 +103,7 @@ def main():
                                   batch_size_words=opt.batch_size_words,
                                   data_type="text",
                                   batch_size_sents=opt.batch_size_sents)
+
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
         print("Done after %s" % elapse)
     elif opt.data_format == 'mmem':

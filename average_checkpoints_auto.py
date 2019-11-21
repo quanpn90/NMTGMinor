@@ -9,6 +9,7 @@ import numpy
 import os, sys
 from onmt.ModelConstructor import build_model, build_language_model
 from copy import deepcopy
+from onmt.utils import checkpoint_paths, normalize_gradients
 
 
 parser = argparse.ArgumentParser(description='translate.py')
@@ -22,17 +23,18 @@ parser.add_argument('-output', default='model.averaged',
                     help="""Path to output averaged model""")
 parser.add_argument('-gpu', type=int, default=-1,
                     help="Device to run on")
-parser.add_argument('-top', type=int, default=5,
+parser.add_argument('-top', type=int, default=10,
                     help="Device to run on")
 parser.add_argument('-method', default='mean',
                     help="method to average: mean|gmean")
+
 
 def custom_build_model(opt, dict, lm=False):
 
     if not lm:
         model = build_model(opt, dict)
     else:
-        model = build_language_model(opt,   dict)
+        model = build_language_model(opt, dict)
 
     return model
 
@@ -44,23 +46,24 @@ def main():
 
     if opt.cuda:
         torch.cuda.set_device(opt.gpu)
-    
-    # opt.model should be a string of models, split by |
 
-    models = list()
+    path = opt.models
 
-    for line in sys.stdin:
-        # print(line)
-        filename = os.path.basename(line.strip().split()[5])
-        models.append(opt.models + "/" + filename)
+    existed_save_files = checkpoint_paths(path)
+
+    # print(existed_save_files)
+    models = existed_save_files
+    # # opt.model should be a string of models, split by |
+    # models = list()
+    #
 
     # take the top
-    # models = models[:opt.top]
+    models = models[:opt.top]
 
-    print(models)
-
+    # print(models)
+    #
     n_models = len(models)
-
+    #
     print("Loading main model from %s ..." % models[0])
     checkpoint = torch.load(models[0], map_location=lambda storage, loc: storage)
 
@@ -80,9 +83,9 @@ def main():
     # }
     best_checkpoint = main_checkpoint
 
-    print("Saving best model to %s" % opt.output + ".top")
+    # print("Saving best model to %s" % opt.output + ".top")
 
-    torch.save(best_checkpoint, opt.output + ".top")
+    # torch.save(best_checkpoint, opt.output + ".top")
 
     model_opt = checkpoint['opt']
     dicts = checkpoint['dicts']

@@ -3,7 +3,7 @@ import torch.nn as nn
 import onmt
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer, MixedEncoder
 from onmt.modules.Transformer.Layers import PositionalEncoding
-from onmt.modules.RelativeTransformer.Layers import PositionalEmbedding
+from onmt.modules.RelativeTransformer.Layers import SinusoidalPositionalEmbedding
 
 init = torch.nn.init
 
@@ -161,17 +161,17 @@ def build_tm_model(opt, dicts):
 
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
     elif opt.model == 'relative_transformer':
-        from onmt.modules.RelativeTransformer.Models import RelativeTransformerEncoder, RelativeTransformerDecoder
-        relative_positional_encoder = PositionalEmbedding(opt.model_size)
-        if opt.encoder_type == "text":
-            encoder = TransformerEncoder(opt, embedding_src, positional_encoder, opt.encoder_type)
-            # print("HELLO")
-            # encoder = RelativeTransformerEncoder(opt, embedding_src, relative_positional_encoder, opt.encoder_type)
-        elif opt.encoder_type == "audio":
+        from onmt.modules.RelativeTransformer.Models import RelativeTransformer
+        positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
+        # if opt.encoder_type == "text":
+        # encoder = TransformerEncoder(opt, embedding_src, positional_encoder, opt.encoder_ty   pe)
+        # encoder = RelativeTransformerEncoder(opt, embedding_src, relative_positional_encoder, opt.encoder_type)
+        if opt.encoder_type == "audio":
             raise NotImplementedError
             # encoder = TransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
-        decoder = RelativeTransformerDecoder(opt, embedding_tgt, relative_positional_encoder)
-        model = Transformer(encoder, decoder, nn.ModuleList(generators))
+        generator = nn.ModuleList(generators)
+        model = RelativeTransformer(opt, [embedding_src, embedding_tgt], positional_encoder, generator=generator)
+        # model = Transformer(encoder, decoder, )
 
     else:
         raise NotImplementedError

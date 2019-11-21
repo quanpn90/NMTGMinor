@@ -12,7 +12,7 @@ def checkpoint_paths(path, pattern=r'model_ppl_(\d+).(\d+)\_e(\d+).(\d+).pt'):
     descending order.
     """
     pt_regexp = re.compile(pattern)
-    files = os.listdir(path)
+    files = []  
 
     # remove directories or files that don't contain "ppl"
     for fname in os.listdir(path):

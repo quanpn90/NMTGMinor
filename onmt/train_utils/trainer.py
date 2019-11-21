@@ -104,6 +104,13 @@ class XETrainer(BaseTrainer):
                                                                    opt_level=opt_level,
                                                                    keep_batchnorm_fp32=False, loss_scale="dynamic",
                                                                    verbosity=0)
+        # An ugly hack to switch between align right and align left
+        if hasattr(self.model, 'relative'):
+            if self.model.relative:
+                self.train_data.src_align_right = True
+                self.train_data.tgt_align_right = False
+                self.valid_data.src_align_right = True
+                self.valid_data.tgt_align_right = False
 
     def save(self, epoch, valid_ppl, batch_order=None, iteration=-1):
         
@@ -132,7 +139,7 @@ class XETrainer(BaseTrainer):
         print('Writing to %s' % file_name)
         torch.save(checkpoint, file_name)
         
-        # check te save directory here
+        # check the save directory here
         checkpoint_dir = os.path.dirname(opt.save_model)
         existed_save_files = checkpoint_paths(checkpoint_dir)
         for save_file in existed_save_files[opt.keep_save_files:]:

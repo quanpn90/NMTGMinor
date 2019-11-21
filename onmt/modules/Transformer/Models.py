@@ -207,17 +207,17 @@ class TransformerEncoder(nn.Module):
 
 
 class TransformerDecoder(nn.Module):
-    """Encoder in 'Attention is all you need'
+    """Decoder in 'Attention is all you need'"""
 
-    Args:
-        opt
-        dicts
-
-
-    """
 
     def __init__(self, opt, embedding, positional_encoder, attribute_embeddings=None, ignore_source=False):
-
+        """
+        :param opt:
+        :param embedding:
+        :param positional_encoder:
+        :param attribute_embeddings:
+        :param ignore_source:
+        """
         super(TransformerDecoder, self).__init__()
 
         self.model_size = opt.model_size
@@ -360,7 +360,7 @@ class TransformerDecoder(nn.Module):
         # a whole stack of unnormalized layer outputs.
         output = self.postprocess_layer(output)
 
-        output_dict = {'hidden': output, 'coverage': coverage}
+        output_dict = {'hidden': output, 'coverage': coverage, 'context': context}
 
         # return output, None
         return output_dict
@@ -383,13 +383,6 @@ class TransformerDecoder(nn.Module):
         mask_src = decoder_state.src_mask
 
         if decoder_state.concat_input_seq == True:
-            # if decoder_state.input_seq is None:
-            #     decoder_state.input_seq = input
-            # else:
-            #     # concatenate the last input to the previous input sequence
-            #     decoder_state.input_seq = torch.cat([decoder_state.input_seq, input], 0)
-            # input = decoder_state.input_seq.transpose(0, 1)
-            # src = decoder_state.src.transpose(0, 1)
             if decoder_state.input_seq is None:
                 decoder_state.input_seq = input
             else:
