@@ -197,6 +197,8 @@ def make_parser(parser):
                         help="Reshaping the speech data (0 is ignored, done at preprocessing).")
     parser.add_argument('-augment_speech', action='store_true',
                         help='Use f/t augmentation for speech')
+    parser.add_argument('-upsampling', action='store_true',
+                        help='In case the data is downsampled during preprocess. This option will upsample the samples again')
     parser.add_argument('-cnn_downsampling', action='store_true',
                         help='Use CNN for downsampling instead of reshaping')
     parser.add_argument('-zero_encoder', action='store_true',

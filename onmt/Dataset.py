@@ -21,8 +21,8 @@ class Batch(object):
                  src_atb_data=None, tgt_atb_data=None,
                  src_type='text',
                  src_align_right=False, tgt_align_right=False,
-                 reshape_speech=0, augmenter=None,
-                 merge=False):
+                 augmenter=None, upsampling=False,
+                 merge=False, **kwargs):
         """
         :param src_data: list of source tensors
         :param tgt_data: list of target tensors
@@ -40,7 +40,10 @@ class Batch(object):
         self.tensors = defaultdict(lambda: None)
         self.has_target = False
         self.src_type = src_type
-        self.reshape_speech = reshape_speech
+        # self.upsampling = kwargs.get('upsampling', False)
+        self.upsampling = upsampling
+        self.feature_size = kwargs.get('feature_size', 40)
+        # self.reshape_speech = reshape_speech
         self.src_align_right = src_align_right
         if merge:
             self.src_align_right = True
@@ -131,11 +134,10 @@ class Batch(object):
         :param augmenter: for augmentation in audio models
         :return:
         """
-
-        lengths = [x.size(0) for x in data]
-        max_length = max(lengths)
         # initialize with batch_size * length
         if type == "text":
+            lengths = [x.size(0) for x in data]
+            max_length = max(lengths)
             tensor = data[0].new(len(data), max_length).fill_(onmt.Constants.PAD)
             for i in range(len(data)):
                 data_length = data[i].size(0)
@@ -145,35 +147,42 @@ class Batch(object):
             return tensor, lengths
 
         elif type == "audio":
-            # the last feature dimension is for padding or not, hence + 1
 
-            def find_length(x, concat):
-
-                add = (concat - x.size(0) % concat) % concat
-
-                return int((x.size(0) + add) / concat)
-
-            if self.reshape_speech >= 1:
-                lengths = [find_length(x, self.reshape_speech) for x in data]
-
-            # allocate data for the batch speech
-            feature_size = data[0].size(1) * self.reshape_speech if self.reshape_speech >= 1 else data[0].size(1)
-            batch_size = len(data)
-            tensor = data[0].float().new(batch_size, max_length, feature_size + 1).fill_(onmt.Constants.PAD)
+            # First step: on-the-fly processing for the samples
+            # Reshaping: either downsampling or upsampling
+            # On the fly augmentation
+            samples = []
 
             for i in range(len(data)):
-
                 sample = data[i]
 
                 if augmenter is not None:
                     sample = augmenter.augment(sample)
 
-                feature = self.downsample(sample)
+                if self.upsampling:
+                    sample = sample.view(-1, self.feature_size)
 
-                data_length = feature.size(0)
+                samples.append(sample)
+
+            # compute the lengths afte on-the-fly processing
+            lengths = [x.size(0) for x in samples]
+            max_length = max(lengths)
+
+            # allocate data for the batch speech
+            feature_size = samples[0].size(1)
+            batch_size = len(data)
+
+            # feature size + 1 because the last dimension is created for padding
+            tensor = data[0].float().new(batch_size, max_length, feature_size + 1).fill_(onmt.Constants.PAD)
+
+            for i in range(len(samples)):
+
+                sample = samples[i]
+
+                data_length = sample.size(0)
                 offset = max_length - data_length if align_right else 0
 
-                tensor[i].narrow(0, offset, data_length).narrow(1, 1, feature.size(1)).copy_(feature)
+                tensor[i].narrow(0, offset, data_length).narrow(1, 1, sample.size(1)).copy_(sample)
                 # in padding dimension: 0 is not padded, 1 is padded
                 tensor[i].narrow(0, offset, data_length).narrow(1, 0, 1).fill_(1)
 
@@ -211,8 +220,8 @@ class Dataset(object):
                  batch_size_words=2048,
                  data_type="text", batch_size_sents=128,
                  multiplier=1,
-                 reshape_speech=0, augment=False,
-                 src_align_right=False, tgt_align_right=False):
+                 augment=False,
+                 src_align_right=False, tgt_align_right=False, **kwargs):
         """
         :param src_data: List of tensors for the source side (1D for text, 2 or 3Ds for other modalities)
         :param tgt_data: List of tensors (1D text) for the target side (already padded with <s> and </s>
@@ -240,12 +249,13 @@ class Dataset(object):
         self._type = data_type
         self.src_align_right = src_align_right
         self.tgt_align_right = tgt_align_right
-        self.reshape_speech = reshape_speech
+        self.upsampling = kwargs.get('upsampling', False)
+        # self.reshape_speech = reshape_speech
         if tgt_data:
             self.tgt = tgt_data
 
             if src_data:
-                assert(len(self.src) == len(self.tgt))
+                assert (len(self.src) == len(self.tgt))
         else:
             self.tgt = None
 
@@ -267,6 +277,7 @@ class Dataset(object):
 
         # group samples into mini-batches
         self.batches = []
+        self.num_batches = 0
         self.allocate_batch()
 
         self.cur_index = 0
@@ -291,7 +302,7 @@ class Dataset(object):
         cur_batch = []
         cur_batch_size = 0
         cur_batch_sizes = []
-        
+
         def oversize_(cur_batch, sent_size):
 
             if len(cur_batch) >= self.batch_size_sents:
@@ -304,7 +315,7 @@ class Dataset(object):
                 if len(cur_batch_sizes) == 0:
                     return False
 
-                if (max(max(cur_batch_sizes), sent_size)) * (len(cur_batch)+1) > self.batch_size_words:
+                if (max(max(cur_batch_sizes), sent_size)) * (len(cur_batch) + 1) > self.batch_size_words:
                     return True
             return False
 
@@ -341,20 +352,20 @@ class Dataset(object):
             cur_batch_sizes.append(sentence_length)
 
             i = i + 1
-            
+
         # catch the last batch
         if len(cur_batch) > 0:
             self.batches.append(cur_batch)
-        
+
         self.num_batches = len(self.batches)
-                
+
     def __getitem__(self, index):
         """
         :param index: the index of the mini-batch in the list
         :return: Batch
         """
         assert index < self.num_batches, "%d > %d" % (index, self.num_batches)
-        
+
         batch_ids = self.batches[index]
         if self.src:
             src_data = [self.src[i] for i in batch_ids]
@@ -383,8 +394,8 @@ class Dataset(object):
         batch = Batch(src_data, tgt_data=tgt_data,
                       src_atb_data=src_atb_data, tgt_atb_data=tgt_atb_data,
                       src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
-                      src_type=self._type, reshape_speech=self.reshape_speech,
-                      augmenter=self.augmenter)
+                      src_type=self._type,
+                      augmenter=self.augmenter, upsampling=self.upsampling)
 
         return batch
 
@@ -393,14 +404,14 @@ class Dataset(object):
 
     # genereate a new batch - order (static)
     def create_order(self, random=True):
-        
+
         if random:
             self.batchOrder = torch.randperm(self.num_batches)
         else:
             self.batchOrder = torch.arange(self.num_batches).long()
 
         self.cur_index = 0
-        
+
         return self.batchOrder
 
     # return the next batch according to the iterator
@@ -428,10 +439,10 @@ class Dataset(object):
     def shuffle(self):
         data = list(zip(self.src, self.tgt))
         self.src, self.tgt = zip(*[data[i] for i in torch.randperm(len(data))])
-        
+
     def set_index(self, iteration):
-        
-        assert(iteration >= 0 and iteration < self.num_batches)
+
+        assert (0 <= iteration < self.num_batches)
         self.cur_index = iteration
 
 
@@ -439,11 +450,10 @@ class Dataset(object):
 class LMBatch(Batch):
 
     def __init__(self, input, target=None):
-
         self.tensors = defaultdict(lambda: None)
 
         self.tensors['target_input'] = input  # T x B
-        self.tensors['target_output'] = target # T x B or None
+        self.tensors['target_output'] = target  # T x B or None
 
         # batch size
         self.size = input.size(1)
@@ -453,7 +463,6 @@ class LMBatch(Batch):
         self.src_size = 0
 
     def collate(self, **kwargs):
-
         raise NotImplementedError
 
 
@@ -486,7 +495,7 @@ class LanguageModelDataset(Dataset):
 
         # self.num_steps = nbatch - 1
 
-        self.num_batches = math.ceil( ( self.data.size(0) - 1 ) / self.seq_length )
+        self.num_batches = math.ceil((self.data.size(0) - 1) / self.seq_length)
 
     # genereate a new batch - order (static)
     def create_order(self, random=False):
@@ -516,12 +525,11 @@ class LanguageModelDataset(Dataset):
 
         seq_len = self.seq_length
 
-        top_index = min(batch_index + seq_len, self.data.size(0)-1)
+        top_index = min(batch_index + seq_len, self.data.size(0) - 1)
 
-        batch = LMBatch(self.data[batch_index:top_index], target=self.data[batch_index+1:top_index+1])
+        batch = LMBatch(self.data[batch_index:top_index], target=self.data[batch_index + 1:top_index + 1])
 
         # move the iterator one step
         self.cur_index += seq_len
 
         return [batch]
-

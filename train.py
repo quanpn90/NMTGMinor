@@ -62,14 +62,14 @@ def main():
                                   data_type=dataset.get("type", "text"),
                                   batch_size_sents=opt.batch_size_sents,
                                   multiplier=opt.batch_size_multiplier,
-                                  reshape_speech=opt.reshape_speech,
-                                  augment=opt.augment_speech)
+                                  augment=opt.augment_speech,
+                                  upsampling=opt.upsampling)
         valid_data = onmt.Dataset(valid_dict['src'], valid_dict['tgt'],
                                   valid_dict['src_atbs'], valid_dict['tgt_atbs'],
                                   batch_size_words=opt.batch_size_words,
                                   data_type=dataset.get("type", "text"),
                                   batch_size_sents=opt.batch_size_sents,
-                                  reshape_speech=opt.reshape_speech)
+                                  upsampling=opt.upsampling)
 
         dicts = dataset['dicts']
 

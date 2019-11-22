@@ -159,7 +159,6 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
     tgtf = open(tgt_file)
 
     eos = torch.LongTensor(1).fill_(onmt.Constants.EOS)
-    # print(eos.size())
     tensors = [eos]
 
     # find the number of words in the sentence
@@ -200,7 +199,7 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
     return tensor
 
 
-def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_length=64, max_tgt_length=64,
+def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, max_src_length=64, max_tgt_length=64,
                           add_bos=True,
                           input_type='word', data_type='int64'):
     src, tgt = [], []
@@ -250,7 +249,7 @@ def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_lengt
                 tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
 
             # For src text, we use BOS for possible reconstruction
-            src += [srcDicts.convertToIdx(src_words,
+            src += [src_dicts.convertToIdx(src_words,
                                           onmt.Constants.UNK_WORD)]
 
             if add_bos:
@@ -360,9 +359,16 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
 
         if reshape:
             if concat != 1:
+                # the number of frames added to make the length divisible by 4
                 add = (concat - sline.size()[0] % concat) % concat
+
+                # create the additional zero frames
                 z = torch.FloatTensor(add, sline.size()[1]).zero_()
+
+                # added to the original tensor (sline)
                 sline = torch.cat((sline, z), 0)
+
+                # reshape: every $concat frames into one
                 sline = sline.reshape((int(sline.size()[0] / concat), sline.size()[1] * concat))
         index += 1;
 
@@ -413,9 +419,9 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
             unks = tgt_tensor.eq(onmt.Constants.UNK).sum().item()
             n_unk_words += unks
 
-            if unks > 0:
-                if "<unk>" not in tline:
-                    print("DEBUGGING: This line contains UNK: %s" % tline)
+            # if unks > 0:
+            #     if "<unk>" not in tline:
+            #         print("DEBUGGING: This line contains UNK: %s" % tline)
 
         else:
             ignored += 1
@@ -424,7 +430,8 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
 
         if count % opt.report_every == 0:
             print('... %d sentences prepared' % count)
-    if (asr_format == "h5"):
+
+    if asr_format == "h5":
         srcf.close()
     tgtf.close()
 
@@ -440,9 +447,6 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
 
     print('... sorting sentences by size')
 
-    # _, perm = torch.sort(torch.Tensor(sizes), descending=(opt.sort_type == 'descending'))
-    # src = [src[idx] for idx in perm]
-    # tgt = [tgt[idx] for idx in perm]
     z = zip(src, tgt, src_sizes, tgt_sizes)
 
     # ultimately sort by source size

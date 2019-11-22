@@ -74,7 +74,7 @@ class TransformerEncoder(nn.Module):
         self.version = opt.version
         self.input_type = encoder_type
         self.cnn_downsampling = opt.cnn_downsampling
-        self.channels = 1
+
         self.switchout = opt.switchout
         self.varitional_dropout = opt.variational_dropout
 
@@ -83,6 +83,10 @@ class TransformerEncoder(nn.Module):
             self.word_dropout = 0.0
 
         feature_size = opt.input_size
+        self.channels = 1  # n. audio channels
+
+        if opt.upsampling:
+            feature_size = feature_size // 4
 
         if encoder_type != "text":
             if not self.cnn_downsampling:
@@ -93,8 +97,6 @@ class TransformerEncoder(nn.Module):
                 cnn = [nn.Conv2d(channels, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(32),
                        nn.Conv2d(32, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(32)]
 
-
-                # self.model_size =
                 feat_size = (((feature_size // channels) - 3) // 4) * 32
                 # cnn.append()
                 self.audio_trans = nn.Sequential(*cnn)
