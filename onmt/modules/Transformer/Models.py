@@ -281,7 +281,7 @@ class TransformerDecoder(nn.Module):
 
         print(new_len)
         self.positional_encoder.renew(new_len)
-        mask = torch.ByteTensor(np.triu(np.ones((new_len, new_len)), k=1).astype('uint8'))
+        mask = torch.ByteTensor(np.triu(np.ones((new_len+1, new_len+1)), k=1).astype('uint8'))
         self.register_buffer('mask', mask)
 
     def process_embedding(self, input, atbs=None):

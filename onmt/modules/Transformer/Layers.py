@@ -100,7 +100,7 @@ class FeedForward(nn.Module):
         
     def forward(self, input):
         
-        out = F.relu(self.fc_1(input), inplace=False)
+        out = F.relu(self.fc_1(input), inplace=True)
         out = self.dropout(out)
         out = self.fc_2(out)
         return out
