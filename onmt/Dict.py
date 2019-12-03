@@ -1,6 +1,10 @@
 import torch
 import math
 import random, string
+from multiprocessing import Pool
+from collections import Counter
+import os
+from onmt.utils import safe_readline
 
 
 class Dict(object):
@@ -130,7 +134,9 @@ class Dict(object):
             vec += [self.lookup(bos_word)]
 
         unk = self.lookup(unkWord)
-        vec += [self.lookup(label, default=unk) for label in labels]
+        for label in labels:
+            vec.append(self.lookup(label, default=unk))
+        # vec += [self.lookup(label, default=unk) for label in labels]
 
         if eos_word is not None:
             vec += [self.lookup(eos_word)]
@@ -208,8 +214,66 @@ class Dict(object):
 
         print("Vocabulary size after patching: %d" % self.size())
 
-    # @staticmethod
-    # def __read_from_single_thread():
+    @staticmethod
+    def count_file(filename, tokenizer, worker_id=0, num_workers=1):
+
+        counter = Counter()
+        with open(filename, 'r', encoding='utf-8') as f:
+            size = os.fstat(f.fileno()).st_size
+            chunk_size = size // num_workers
+            offset = worker_id * chunk_size
+            end = offset + chunk_size
+
+            f.seek(offset)
+
+            if offset > 0:
+                safe_readline(f)  # drop first incomplete line
+            line = f.readline()
+
+            count = 0
+
+            while line:
+                tokenized_words = tokenizer.tokenize(line)
+                for word in tokenized_words:
+                    counter.update([word])
+                if f.tell() > end:
+                    break
+                line = f.readline()
+
+                count += 1
+                if count % 100000 == 0:
+                    print("[INFO] Thread %d processed %d lines." % (worker_id, count))
+
+        return counter
+
+    @staticmethod
+    def gen_dict_from_file(filename, dict, tokenizer, num_workers):
+
+        def merge_result(counter):
+            for w, c in sorted(counter.items()):
+                # dict.add_symbol(w, c)
+                dict.add(w, num=c)
+
+        if num_workers > 1:
+            pool = Pool(processes = num_workers)
+            results = []
+
+            for worker_id in range(num_workers):
+                results.append(pool.apply_async(
+                    Dict.count_file,
+                    (filename, tokenizer, worker_id, num_workers)
+                ))
+            pool.close()
+            pool.join()
+
+            for r in results:
+                merge_result(r.get())
+
+        else:
+            counts = Dict.count_file(filename, tokenizer)
+            merge_result(counts)
+
+
     #
     # @staticmethod
     # def __read_from_text_file(self):

@@ -11,8 +11,6 @@ from torch.autograd import Variable
 import math
 import time, datetime
 from onmt.train_utils.trainer import XETrainer
-from onmt.train_utils.fp16_trainer import FP16XETrainer
-from onmt.train_utils.multiGPUtrainer import MultiGPUXETrainer
 from onmt.modules.Loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.ModelConstructor import build_language_model
 from onmt.Dataset import LanguageModelDataset

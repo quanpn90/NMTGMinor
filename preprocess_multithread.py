@@ -3,6 +3,8 @@ import onmt.Markdown
 import argparse
 import torch
 import subprocess
+import time, datetime
+from onmt.data_utils.binarizer import Binarizer
 
 from onmt.data_utils.IndexedDataset import IndexedDatasetBuilder
 
@@ -90,34 +92,40 @@ parser.add_argument('-report_every', type=int, default=100000,
                     help="Report status every this many sentences")
 parser.add_argument('-reshape_speech', type=int, default=1,
                     help="Reshaping the speech segments here. Mostly for compatibility..")
+parser.add_argument('-num_threads', type=int, default=1,
+                    help="Number of threads for multiprocessing")
+parser.add_argument('-verbose', action='store_true',
+                    help="Print out information during preprocessing")
 
 opt = parser.parse_args()
 
 torch.manual_seed(opt.seed)
 
 # def make_join_vocab(filenames, size, input_type="word"):
-def make_vocab(filenames, size, tokenizer):
+def make_vocab(filenames, size, tokenizer, num_workers=1):
     vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
                       lower=opt.lower)
 
     for filename in filenames:
-        print("Reading file %s ... " % filename)
-        with open(filename) as f:
-            for sent in f.readlines():
-
-                tokens = tokenizer.tokenize(sent)
-                for token in tokens:
-                    vocab.add(token)
-                # if input_type == "word":
-                #     for word in sent.split():
-                #         vocab.add(word)
-                # elif input_type == "char":
-                #     chars = split_line_by_char(sent)
-                #     for char in chars:
-                #         vocab.add(char)
-                # else:
-                #     raise NotImplementedError("Input type not implemented")
+        print("Generating vocabulary from file %s ... " % filename)
+        onmt.Dict.gen_dict_from_file(filename, vocab, tokenizer, num_workers=num_workers)
+        # print("Reading file %s ... " % filename)
+        # with open(filename) as f:
+        #     for sent in f.readlines():
+        #
+        #         tokens = tokenizer.tokenize(sent)
+        #         for token in tokens:
+        #             vocab.add(token)
+        #         # if input_type == "word":
+        #         #     for word in sent.split():
+        #         #         vocab.add(word)
+        #         # elif input_type == "char":
+        #         #     chars = split_line_by_char(sent)
+        #         #     for char in chars:
+        #         #         vocab.add(char)
+        #         # else:
+        #         #     raise NotImplementedError("Input type not implemented")
 
     original_size = vocab.size()
     vocab = vocab.prune(size)
@@ -127,7 +135,7 @@ def make_vocab(filenames, size, tokenizer):
     return vocab
 
 
-def init_vocab(name, dataFiles, vocabFile, vocabSize, tokenizer, join=False):
+def init_vocab(name, dataFiles, vocabFile, vocabSize, tokenizer, num_workers=1, join=False):
     vocab = None
     if vocabFile is not None:
         # If given, load existing word dictionary.
@@ -139,7 +147,7 @@ def init_vocab(name, dataFiles, vocabFile, vocabSize, tokenizer, join=False):
     if vocab is None:
 
         print('Building ' + name + ' vocabulary...')
-        gen_word_vocab = make_vocab(dataFiles, vocabSize, tokenizer)
+        gen_word_vocab = make_vocab(dataFiles, vocabSize, tokenizer, num_workers=num_workers)
 
         vocab = gen_word_vocab
 
@@ -202,92 +210,114 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
     return tensor
 
 
-def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_length=64, max_tgt_length=64,
-                          sort_by_target=False, add_bos=True,
-                          input_type='word', data_type='int64'):
+def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, max_src_length=64, max_tgt_length=64,
+                          add_bos=True, data_type='int64', num_workers=1, verbose=False):
+
     src, tgt = [], []
     src_sizes = []
     tgt_sizes = []
-    count, ignored = 0, 0
 
-    print('Processing %s & %s ...' % (src_file, tgt_file))
-    srcf = open(src_file)
-    tgtf = open(tgt_file)
+    print("[INFO] Binarizing file %s ..." % src_file)
+    binarized_src = Binarizer.binarize_file(src_file, src_dicts, tokenizer,
+                                            bos_word=None, eos_word=None,
+                                            data_type=data_type,
+                                            num_workers=num_workers, verbose=verbose)
 
-    while True:
-        sline = srcf.readline()
-        tline = tgtf.readline()
+    if add_bos:
+        tgt_bos_word = onmt.Constants.BOS_WORD
+    else:
+        tgt_bos_word = None
 
-        # normal end of file
-        if sline == "" and tline == "":
-            break
+    print("[INFO] Binarizing file %s ..." % tgt_file)
+    binarized_tgt = Binarizer.binarize_file(tgt_file, tgt_dicts, tokenizer,
+                                            bos_word=tgt_bos_word, eos_word=onmt.Constants.EOS_WORD,
+                                            data_type=data_type,
+                                            num_workers=num_workers, verbose=verbose)
 
-        # source or target does not have same number of lines
-        if sline == "" or tline == "":
-            print('WARNING: src and tgt do not have the same # of sentences')
-            break
+    src = binarized_src['data']
+    src_sizes = binarized_src['sizes']
 
-        sline = sline.strip()
-        tline = tline.strip()
-
-        # source and/or target are empty
-        if sline == "" or tline == "":
-            print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
-            continue
-
-        if input_type == 'word':
-            src_words = sline.split()
-            tgt_words = tline.split()
-        elif input_type == 'char':
-            src_words = split_line_by_char(sline)
-            tgt_words = split_line_by_char(tline)
-
-        if len(src_words) <= max_src_length \
-                and len(tgt_words) <= max_tgt_length - 2:
-
-            # Check truncation condition.
-            if opt.src_seq_length_trunc != 0:
-                src_words = src_words[:opt.src_seq_length_trunc]
-            if opt.tgt_seq_length_trunc != 0:
-                tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
-
-            # For src text, we use BOS for possible reconstruction
-            src += [srcDicts.convertToIdx(src_words,
-                                          onmt.Constants.UNK_WORD)]
-
-            if add_bos:
-                tgt += [tgt_dicts.convertToIdx(tgt_words,
-                                               onmt.Constants.UNK_WORD,
-                                               onmt.Constants.BOS_WORD,
-                                               onmt.Constants.EOS_WORD, type=data_type)]
-            else:
-                tgt += [tgt_dicts.convertToIdx(tgt_words,
-                                               onmt.Constants.UNK_WORD,
-                                               None,
-                                               onmt.Constants.EOS_WORD, type=data_type)]
-            src_sizes += [len(src_words)]
-            tgt_sizes += [len(tgt_words)]
-        else:
-            ignored += 1
-
-        count += 1
-
-        if count % opt.report_every == 0:
-            print('... %d sentences prepared' % count)
-
-    srcf.close()
-    tgtf.close()
-
-    if opt.shuffle == 1:
-        print('... shuffling sentences')
-        perm = torch.randperm(len(src))
-        src = [src[idx] for idx in perm]
-        tgt = [tgt[idx] for idx in perm]
-        src_sizes = [src_sizes[idx] for idx in perm]
-        tgt_sizes = [tgt_sizes[idx] for idx in perm]
+    tgt = binarized_tgt['data']
+    tgt_sizes = binarized_tgt['sizes']
+    # count, ignored = 0, 0
+    #
+    # print('Processing %s & %s ...' % (src_file, tgt_file))
+    # srcf = open(src_file)
+    # tgtf = open(tgt_file)
+    #
+    # while True:
+    #     sline = srcf.readline()
+    #     tline = tgtf.readline()
+    #
+    #     # normal end of file
+    #     if sline == "" and tline == "":
+    #         break
+    #
+    #     # source or target does not have same number of lines
+    #     if sline == "" or tline == "":
+    #         print('WARNING: src and tgt do not have the same # of sentences')
+    #         break
+    #
+    #     sline = sline.strip()
+    #     tline = tline.strip()
+    #
+    #     # source and/or target are empty
+    #     if sline == "" or tline == "":
+    #         print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
+    #         continue
+    #
+    #     if input_type == 'word':
+    #         src_words = sline.split()
+    #         tgt_words = tline.split()
+    #     elif input_type == 'char':
+    #         src_words = split_line_by_char(sline)
+    #         tgt_words = split_line_by_char(tline)
+    #
+    #     if len(src_words) <= max_src_length \
+    #             and len(tgt_words) <= max_tgt_length - 2:
+    #
+    #         # Check truncation condition.
+    #         if opt.src_seq_length_trunc != 0:
+    #             src_words = src_words[:opt.src_seq_length_trunc]
+    #         if opt.tgt_seq_length_trunc != 0:
+    #             tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
+    #
+    #         # For src text, we use BOS for possible reconstruction
+    #         src += [src_dicts.convertToIdx(src_words,
+    #                                       onmt.Constants.UNK_WORD)]
+    #
+    #         if add_bos:
+    #             tgt += [tgt_dicts.convertToIdx(tgt_words,
+    #                                            onmt.Constants.UNK_WORD,
+    #                                            onmt.Constants.BOS_WORD,
+    #                                            onmt.Constants.EOS_WORD, type=data_type)]
+    #         else:
+    #             tgt += [tgt_dicts.convertToIdx(tgt_words,
+    #                                            onmt.Constants.UNK_WORD,
+    #                                            None,
+    #                                            onmt.Constants.EOS_WORD, type=data_type)]
+    #         src_sizes += [len(src_words)]
+    #         tgt_sizes += [len(tgt_words)]
+    #     else:
+    #         ignored += 1
+    #
+    #     count += 1
+    #
+    #     if count % opt.report_every == 0:
+    #         print('... %d sentences prepared' % count)
+    #
+    # srcf.close()
+    # tgtf.close()
+    #
+    # if opt.shuffle == 1:
+    #     print('... shuffling sentences')
+    #     perm = torch.randperm(len(src))
+    #     src = [src[idx] for idx in perm]
+    #     tgt = [tgt[idx] for idx in perm]
+    #     src_sizes = [src_sizes[idx] for idx in perm]
+    #     tgt_sizes = [tgt_sizes[idx] for idx in perm]
 
     print('... sorting sentences by size')
-
     z = zip(src, tgt, src_sizes, tgt_sizes)
 
     # ultimately sort by target size
@@ -295,6 +325,9 @@ def make_translation_data(src_file, tgt_file, srcDicts, tgt_dicts, max_src_lengt
 
     src = [z_[0] for z_ in sorted_z]
     tgt = [z_[1] for z_ in sorted_z]
+
+    # currently we don't ignore anything :D
+    ignored = 0
 
     print(('Prepared %d sentences ' +
            '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
@@ -463,21 +496,26 @@ def main():
 
     tokenizer = onmt.Tokenizer(opt.input_type, opt.lower)
 
+    start = time.time()
     # for ASR and LM we only need to build vocab for the 'target' language
     if opt.asr or opt.lm:
         dicts['tgt'] = init_vocab('target', [opt.train_tgt], opt.tgt_vocab,
-                                  opt.tgt_vocab_size,tokenizer)
+                                  opt.tgt_vocab_size, tokenizer, num_workers=opt.num_threads)
     elif opt.join_vocab:
         dicts['src'] = init_vocab('source', [opt.train_src, opt.train_tgt], opt.src_vocab,
-                                  opt.tgt_vocab_size, tokenizer, join=True)
+                                  opt.tgt_vocab_size, tokenizer, num_workers=opt.num_threads)
         dicts['tgt'] = dicts['src']
 
     else:
         dicts['src'] = init_vocab('source', [opt.train_src], opt.src_vocab,
-                                  opt.src_vocab_size, input_type=opt.input_type)
+                                  opt.src_vocab_size, tokenizer, num_workers=opt.num_threads)
 
         dicts['tgt'] = init_vocab('target', [opt.train_tgt], opt.tgt_vocab,
-                                  opt.tgt_vocab_size, input_type=opt.input_type)
+                                  opt.tgt_vocab_size, tokenizer, num_workers=opt.num_threads)
+
+    elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
+    print("Vocabulary generated after %s" % elapse)
+
 
     if opt.lm:
         print('Preparing training language model ...')
@@ -517,26 +555,31 @@ def main():
                                                    asr_format=opt.asr_format)
 
     else:
-        print('Preparing training translation model...')
+        start = time.time()
+        print('Binarizing the data to train translation models...')
         train = dict()
         train['src'], train['tgt'] = make_translation_data(opt.train_src, opt.train_tgt,
-                                                           dicts['src'], dicts['tgt'],
+                                                           dicts['src'], dicts['tgt'], tokenizer,
                                                            max_src_length=opt.src_seq_length,
                                                            max_tgt_length=opt.tgt_seq_length,
-                                                           sort_by_target=opt.sort_by_target,
-                                                           input_type=opt.input_type,
                                                            add_bos=(not opt.no_bos),
-                                                           data_type=opt.data_type)
+                                                           data_type=opt.data_type,
+                                                           num_workers=opt.num_threads,
+                                                           verbose=opt.verbose)
 
         print('Preparing validation ...')
         valid = dict()
         valid['src'], valid['tgt'] = make_translation_data(opt.valid_src, opt.valid_tgt,
-                                                           dicts['src'], dicts['tgt'],
+                                                           dicts['src'], dicts['tgt'], tokenizer,
                                                            max_src_length=max(1024, opt.src_seq_length),
                                                            max_tgt_length=max(1024, opt.tgt_seq_length),
-                                                           input_type=opt.input_type,
                                                            add_bos=(not opt.no_bos),
-                                                           data_type=opt.data_type)
+                                                           data_type=opt.data_type,
+                                                           num_workers=opt.num_threads,
+                                                           verbose=opt.verbose)
+
+        elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
+        print("Binarization finished after %s" % elapse)
 
     if opt.src_vocab is None and opt.asr == False and opt.lm == False:
         save_vocabulary('source', dicts['src'], opt.save_data + '.src.dict')
@@ -604,6 +647,7 @@ def main():
 
         print("Done")
     elif opt.format in ['mmap', 'mmem']:
+        start = time.time()
         print('Saving data to memory indexed data files')
         from onmt.data_utils.MMapIndexedDataset import MMapIndexedDatasetBuilder
 
@@ -652,6 +696,8 @@ def main():
             valid_data.finalize(opt.save_data + ".valid.%s.idx" % set)
 
             del valid_data
+        elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
+        print("Saving finished after %s" % elapse)
 
     else:
         raise NotImplementedError
@@ -669,60 +715,3 @@ def safe_readline(f):
         except UnicodeDecodeError:
             pos -= 1
             f.seek(pos)  # search where this character begins
-
-def read_from_thread(filename, tokenizer, worker_id=0, num_workers=1):
-
-    counter = Counter()
-    with open(filename, 'r', encoding='utf-8') as f:
-
-        # read the size of the file
-        size = os.fstat(f.fileno()).st_size
-
-        # split and find the byte offset
-        chunk_size = size // num_workers
-        offset = worker_id * chunk_size
-        end = offset + chunk_size
-
-        # jump into the offset
-        f.seek(offset)
-
-        if offset > 0:
-            safe_readline(f)
-        line = f.readline()
-        while line:
-            for word in tokenizer.tokenize(line):
-                counter.update([word])
-            counter.update([onmt.Constants.EOS_WORD])
-            if f.tell() > end:
-                break
-            line = f.readline()
-
-    return counter
-
-def read_from_file(filename, dict, tokenizer, num_workers=1):
-
-    assert num_workers >= 1
-
-    def read_to_dict(counter):
-        for w, c in sorted(counter.items()):
-            dict.add_symbol(w, c)
-
-    if num_workers > 1:
-        pool = Pool(processes= num_workers)
-
-        results = []
-
-        for worker_id in range(num_workers):
-            pool_output = pool.apply_async(read_from_thread(filename, tokenizer, worker_id, num_workers))
-            results.append(pool_output)
-
-        pool.close()
-        pool.join()
-
-        for r in results:
-            read_to_dict(r.get())
-
-    else:
-        read_to_dict(read_from_thread(filename))
-
-    return dict

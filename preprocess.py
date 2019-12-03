@@ -93,7 +93,6 @@ opt = parser.parse_args()
 
 torch.manual_seed(opt.seed)
 
-# def make_join_vocab(filenames, size, input_type="word"):
 def make_vocab(filenames, size, tokenizer):
     vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
@@ -107,15 +106,6 @@ def make_vocab(filenames, size, tokenizer):
                 tokens = tokenizer.tokenize(sent)
                 for token in tokens:
                     vocab.add(token)
-                # if input_type == "word":
-                #     for word in sent.split():
-                #         vocab.add(word)
-                # elif input_type == "char":
-                #     chars = split_line_by_char(sent)
-                #     for char in chars:
-                #         vocab.add(char)
-                # else:
-                #     raise NotImplementedError("Input type not implemented")
 
     original_size = vocab.size()
     vocab = vocab.prune(size)
@@ -124,20 +114,19 @@ def make_vocab(filenames, size, tokenizer):
 
     return vocab
 
-
-def init_vocab(name, dataFiles, vocabFile, vocabSize, tokenizer, join=False):
+def init_vocab(name, data_files, vocab_file, vocab_size, tokenizer, join=False):
     vocab = None
-    if vocabFile is not None:
+    if vocab_file is not None:
         # If given, load existing word dictionary.
-        print('Reading ' + name + ' vocabulary from \'' + vocabFile + '\'...')
+        print('Reading ' + name + ' vocabulary from \'' + vocab_file + '\'...')
         vocab = onmt.Dict()
-        vocab.loadFile(vocabFile)
+        vocab.loadFile(vocab_file)
         print('Loaded ' + str(vocab.size()) + ' ' + name + ' words')
 
     if vocab is None:
 
         print('Building ' + name + ' vocabulary...')
-        gen_word_vocab = make_vocab(dataFiles, vocabSize, tokenizer)
+        gen_word_vocab = make_vocab(data_files, vocab_size, tokenizer)
 
         vocab = gen_word_vocab
 
@@ -473,15 +462,15 @@ def main():
                                   opt.tgt_vocab_size,tokenizer)
     elif opt.join_vocab:
         dicts['src'] = init_vocab('source', [opt.train_src, opt.train_tgt], opt.src_vocab,
-                                  opt.tgt_vocab_size, tokenizer, join=True)
+                                  opt.tgt_vocab_size, tokenizer)
         dicts['tgt'] = dicts['src']
 
     else:
         dicts['src'] = init_vocab('source', [opt.train_src], opt.src_vocab,
-                                  opt.src_vocab_size, tokenizer, join=opt.join_vocab)
+                                  opt.src_vocab_size, tokenizer)
 
         dicts['tgt'] = init_vocab('target', [opt.train_tgt], opt.tgt_vocab,
-                                  opt.tgt_vocab_size, tokenizer, join=opt.join_vocab)
+                                  opt.tgt_vocab_size, tokenizer)
 
     if opt.lm:
         print('Preparing training language model ...')
