@@ -20,15 +20,19 @@ class Generator(nn.Module):
         self.linear.bias.data.zero_()
 
         
-    def forward(self, input, log_softmax=True):
-        
+    # def forward(self, input, log_softmax=True):
+    def forward(self, output_dicts):
+
+        input = output_dicts['hidden']
+
+        target_mask = output_dicts['target_mask']
+
+        # TODO: only compute the softmax for the masked parts to save computation?
+
         # added float to the end 
         logits = self.linear(input).float()
-        
-        if log_softmax:
-            output = F.log_softmax(logits, dim=-1)
-        else:
-            output = logits
+
+        output = F.log_softmax(logits, dim=-1)
         return output
         
 

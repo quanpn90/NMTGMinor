@@ -98,12 +98,11 @@ class XETrainer(BaseTrainer):
             self.optim.set_parameters(self.model.parameters())
 
             opt_level = "O0" if not self.opt.fp16 else "O2"
-            print("Optimization level: %s" % opt_level)
             self.model, self.optim.optimizer = amp.initialize(self.model,
-                                                                   self.optim.optimizer,
-                                                                   opt_level=opt_level,
-                                                                   keep_batchnorm_fp32=False, loss_scale="dynamic",
-                                                                   verbosity=0)
+                                                              self.optim.optimizer,
+                                                              opt_level=opt_level,
+                                                              keep_batchnorm_fp32=False, loss_scale="dynamic",
+                                                              verbosity=0)
         # An ugly hack to switch between align right and align left
         if hasattr(self.model, 'relative'):
             if self.model.relative:
@@ -168,7 +167,7 @@ class XETrainer(BaseTrainer):
                 """
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.Constants.PAD)
-                outputs = self.model(batch, target_masking=tgt_mask)
+                outputs = self.model(batch, target_mask=tgt_mask)
 
                 outputs['tgt_mask'] = tgt_mask
 
@@ -241,7 +240,7 @@ class XETrainer(BaseTrainer):
                     # can be flexibly controlled within models for easier extensibility
                     targets = batch.get('target_output')
                     tgt_mask = targets.data.ne(onmt.Constants.PAD)
-                    outputs = self.model(batch, target_masking=tgt_mask, zero_encoder=opt.zero_encoder)
+                    outputs = self.model(batch, target_mask=tgt_mask, zero_encoder=opt.zero_encoder)
 
                     batch_size = batch.size
 

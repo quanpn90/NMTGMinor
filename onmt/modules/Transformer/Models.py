@@ -470,7 +470,13 @@ class TransformerDecoder(nn.Module):
         # a whole stack of unnormalized layer outputs.
         output = self.postprocess_layer(output)
 
-        return output, coverage
+        output_dict = defaultdict(lambda: None)
+        output_dict['hidden'] = output
+        output_dict['coverage'] = coverage
+        output_dict['context'] = context
+        # output_dict = {'hidden': output, 'coverage': coverage, 'context': context}
+
+        return output_dict
 
 
 class Transformer(NMTModel):
@@ -490,7 +496,7 @@ class Transformer(NMTModel):
     def reset_states(self):
         return
 
-    def forward(self, batch, target_masking=None, zero_encoder=False):
+    def forward(self, batch, target_mask=None, zero_encoder=False):
         """
         Inputs Shapes:
             src: len_src x batch_size
@@ -528,23 +534,25 @@ class Transformer(NMTModel):
 
         output_dict = defaultdict(lambda: None)
         output_dict['hidden'] = output
-        output_dict['encoder'] = context
+        output_dict['context'] = context
         output_dict['src_mask'] = encoder_output['src_mask']
+        output_dict['src'] = src
+        output_dict['target_mask'] = target_mask
 
-        # This step removes the padding to reduce the load for the final layer
-        if target_masking is not None:
-            output = output.contiguous().view(-1, output.size(-1))
-
-            mask = target_masking
-            """ We remove all positions with PAD """
-            flattened_mask = mask.view(-1)
-
-            non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
-
-            output = output.index_select(0, non_pad_indices)
+        # # This step removes the padding to reduce the load for the final layer
+        # if target_masking is not None:
+        #     output = output.contiguous().view(-1, output.size(-1))
+        #
+        #     mask = target_masking
+        #     """ We remove all positions with PAD """
+        #     flattened_mask = mask.view(-1)
+        #
+        #     non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
+        #
+        #     output = output.index_select(0, non_pad_indices)
 
         # final layer: computing softmax
-        logprobs = self.generator[0](output)
+        logprobs = self.generator[0](output_dict)
 
         output_dict['logprobs'] = logprobs
 
@@ -586,10 +594,16 @@ class Transformer(NMTModel):
             output = self.autoencoder.autocode(output)
 
         for dec_t, tgt_t in zip(output, tgt_output):
+
+            dec_out = defaultdict(lambda: None)
+            dec_out['hidden'] = dec_t
+            dec_out['src'] = src
+            dec_out['context'] = context
+
             if isinstance(self.generator, nn.ModuleList):
-                gen_t = self.generator[0](dec_t)
+                gen_t = self.generator[0](dec_out)
             else:
-                gen_t = self.generator(dec_t)
+                gen_t = self.generator(dec_out)
             tgt_t = tgt_t.unsqueeze(1)
             scores = gen_t.gather(1, tgt_t)
             scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
@@ -612,13 +626,15 @@ class Transformer(NMTModel):
         :return: a dictionary containing: log-prob output and the attention coverage
         """
 
-        hidden, coverage = self.decoder.step(input_t, decoder_state)
-        # squeeze to remove the time step dimension
-        log_prob = self.generator[0](hidden.squeeze(0))
+        output_dict = self.decoder.step(input_t, decoder_state)
 
+        # squeeze to remove the time step dimension
+        log_prob = self.generator[0](output_dict).squeeze(0)
+
+        coverage = output_dict['coverage']
         last_coverage = coverage[:, -1, :].squeeze(1)
 
-        output_dict = defaultdict(lambda: None)
+        # output_dict = defaultdict(lambda: None)
 
         output_dict['log_prob'] = log_prob
         output_dict['coverage'] = last_coverage

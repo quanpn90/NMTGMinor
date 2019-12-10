@@ -27,7 +27,7 @@ class Augmenter(object):
 
         tensor = tensor.float()
         # First we have to upsample the tensor (if it was downsampled during preprocessing)
-        # Copy to a new storage because otherwise it is zeroed permanently
+        # Copy to a new storage because otherwise it is zeroed permanently`
         tensor_ = tensor.view(-1, 40).new(*tensor.size()).copy_(tensor)
 
         for _ in range(self.mf):

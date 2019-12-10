@@ -213,8 +213,9 @@ class Batch(object):
                 self.tensors[key] = self.tensors[key].cuda()
 
 
-class Dataset(object):
+# class Dataset(object):
 
+class Dataset(torch.utils.data.Dataset):
     def __init__(self, src_data, tgt_data,
                  src_atbs=None, tgt_atbs=None,
                  batch_size_words=2048,
@@ -360,6 +361,9 @@ class Dataset(object):
             self.batches.append(cur_batch)
 
         self.num_batches = len(self.batches)
+
+    def __len__(self):
+        return self.num_batches
 
     def __getitem__(self, index):
         """

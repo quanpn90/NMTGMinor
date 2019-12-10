@@ -4,6 +4,7 @@ import onmt
 from onmt.modules.Transformer.Models import TransformerEncoder, TransformerDecoder, Transformer, MixedEncoder
 from onmt.modules.Transformer.Layers import PositionalEncoding
 from onmt.modules.RelativeTransformer.Layers import SinusoidalPositionalEmbedding
+from onmt.modules.CopyGenerator import CopyGenerator
 
 init = torch.nn.init
 
@@ -50,6 +51,9 @@ def build_model(opt, dicts):
     if not hasattr(opt, 'variational_dropout'):
         opt.variational_dropout = False
 
+    if not hasattr(opt, 'copy_generator'):
+        opt.copy_generator = False
+
     onmt.Constants.layer_norm = opt.layer_norm
     onmt.Constants.weight_norm = opt.weight_norm
     onmt.Constants.activation_layer = opt.activation_layer
@@ -74,7 +78,10 @@ def build_tm_model(opt, dicts):
         raise NotImplementedError
 
     # BUILD GENERATOR
-    generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
+    if opt.copy_generator:
+        generators = [CopyGenerator(opt.model_size, dicts['tgt'].size())]
+    else:
+        generators = [onmt.modules.BaseModel.Generator(opt.model_size, dicts['tgt'].size())]
 
     # BUILD EMBEDDING
     if 'src' in dicts:
@@ -194,8 +201,10 @@ def build_tm_model(opt, dicts):
             init.xavier_uniform_(model.encoder.word_lut.weight)
             init.xavier_uniform_(model.decoder.word_lut.weight)
         elif opt.init_embedding == 'normal':
-            init.normal_(model.encoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
-            init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
+            # init.normal_(model.encoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
+            # init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
+            init.normal_(model.encoder.word_lut.weight, mean=0, std=0.01)
+            init.normal_(model.decoder.word_lut.weight, mean=0, std=0.01)
 
     return model
 
@@ -225,7 +234,7 @@ def build_language_model(opt, dicts):
     model = LSTMLM(None, decoder, nn.ModuleList(generators))
 
     if opt.tie_weights:
-        print("Joining the weights of decoder input and output embeddings")
+        print("* Joining the weights of decoder input and output embeddings")
         model.tie_weights()
 
     for g in model.generator:
@@ -257,3 +266,36 @@ def build_fusion(opt, dicts):
     model = FusionNetwork(tm_model, lm_model)
 
     return model
+
+
+def optimize_model(model):
+
+    def replace_layer_norm(m, name):
+
+        replacable = True
+        try:
+            # from apex.normalization.fused_layer_norm import FusedLayerNorm
+            import importlib
+            from apex.normalization.fused_layer_norm import FusedLayerNorm
+            fused_layer_norm_cuda = importlib.import_module("fused_layer_norm_cuda")
+
+        # except ImportError:
+        except ModuleNotFoundError:
+            replacable = False
+
+        if replacable:
+            for attr_str in dir(m):
+                target_attr = getattr(m, attr_str)
+                if type(target_attr) == torch.nn.LayerNorm:
+                    setattr(m, attr_str, FusedLayerNorm(target_attr.normalized_shape,
+                                                        eps=target_attr.eps,
+                                                        elementwise_affine=target_attr.elementwise_affine))
+                    print('replaced: ', name, attr_str)
+
+                    # setattr(m, attr_str,
+                    #         SynchronizedBatchNorm2d(target_attr.num_features, target_attr.eps, target_attr.momentum,
+                    #                                 target_attr.affine))
+            for n, ch in m.named_children():
+                replace_layer_norm(ch, n)
+
+    replace_layer_norm(model, "Transformer")

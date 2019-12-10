@@ -8,7 +8,7 @@ import torch
 import time, datetime
 from onmt.train_utils.trainer import XETrainer
 from onmt.modules.Loss import NMTLossFunc, NMTAndCTCLossFunc
-from onmt.ModelConstructor import build_model
+from onmt.ModelConstructor import build_model, optimize_model
 from options import make_parser
 from collections import defaultdict
 
@@ -190,7 +190,7 @@ def main():
         print(' * vocabulary size. target = %d' %
               (dicts['tgt'].size()))
 
-    print('Building model...')
+    print('* Building model...')
 
     if not opt.fusion:
         model = build_model(opt, dicts)
@@ -203,6 +203,11 @@ def main():
         else:
             loss_function = NMTLossFunc(dicts['tgt'].size(),
                                         label_smoothing=opt.label_smoothing)
+
+        # This function replaces modules with the more optimized counterparts
+        # Currently exp with LayerNorm
+        optimize_model(model)
+
     else:
         from onmt.ModelConstructor import build_fusion
         from onmt.modules.Loss import FusionLoss

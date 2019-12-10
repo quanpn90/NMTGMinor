@@ -7,7 +7,6 @@ from torch.nn.modules.loss import _Loss
 
 import numpy
 
-
 class CrossEntropyLossBase(_Loss):
 
     """
@@ -18,7 +17,7 @@ class CrossEntropyLossBase(_Loss):
     Args:
         output_size: number of words in vocabulary()
     """
-    
+
     def __init__(self, output_size, label_smoothing):
         super(CrossEntropyLossBase, self).__init__()
         self.output_size = output_size
@@ -44,7 +43,7 @@ class CrossEntropyLossBase(_Loss):
         loss_data = nll_loss.data.item()
 
         return loss, loss_data
-    
+
     def forward(self, model_outputs, targets, hiddens, **kwargs):
 
         return NotImplementedError
@@ -59,10 +58,10 @@ class NMTLossFunc(CrossEntropyLossBase):
         """
         Compute the loss. Subclass must define this method.
         Args:
-             
+
             model_outputs: a dictionary containing the predictive output from the model.
                                                       time x batch x vocab_size
-                                                   or time x batch x hidden_size 
+                                                   or time x batch x hidden_size
             targets: the validate target to compare output with. time x batch
             model: passing the model in for necessary components
             backward: to control if we should perform backward pass (to free the graph) or not
@@ -78,7 +77,7 @@ class NMTLossFunc(CrossEntropyLossBase):
 
         mask = model_outputs['tgt_mask']
 
-        if mask is not None:
+        if mask is not None and logprobs.dim() < 3:
             """ We remove all positions with PAD """
             flattened_mask = mask.view(-1)
 

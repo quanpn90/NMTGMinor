@@ -182,6 +182,8 @@ def make_parser(parser):
                         help="Save every this interval.")
     parser.add_argument('-keep_save_files', type=int, default=5,
                         help="Save every this interval.")
+    parser.add_argument('-copy_generator', action='store_true',
+                        help='Use the copy_generator')
 
     # for FUSION
     parser.add_argument('-lm_checkpoint', default='', type=str,

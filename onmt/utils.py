@@ -14,10 +14,9 @@ def safe_readline(f):
             pos -= 1
             f.seek(pos)  # search where this character begins
 
+
 # this function is borrowed from fairseq
 # https://github.com/pytorch/fairseq/blob/master/fairseq/utils.py
-
-
 def checkpoint_paths(path, pattern=r'model_ppl_(\d+).(\d+)\_e(\d+).(\d+).pt'):
     """Retrieves all checkpoints found in `path` directory.
     Checkpoints are identified by matching filename to the specified pattern. If

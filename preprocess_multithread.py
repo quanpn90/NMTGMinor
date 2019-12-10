@@ -101,7 +101,6 @@ opt = parser.parse_args()
 
 torch.manual_seed(opt.seed)
 
-# def make_join_vocab(filenames, size, input_type="word"):
 def make_vocab(filenames, size, tokenizer, num_workers=1):
     vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
                        onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
@@ -110,22 +109,7 @@ def make_vocab(filenames, size, tokenizer, num_workers=1):
     for filename in filenames:
         print("Generating vocabulary from file %s ... " % filename)
         onmt.Dict.gen_dict_from_file(filename, vocab, tokenizer, num_workers=num_workers)
-        # print("Reading file %s ... " % filename)
-        # with open(filename) as f:
-        #     for sent in f.readlines():
-        #
-        #         tokens = tokenizer.tokenize(sent)
-        #         for token in tokens:
-        #             vocab.add(token)
-        #         # if input_type == "word":
-        #         #     for word in sent.split():
-        #         #         vocab.add(word)
-        #         # elif input_type == "char":
-        #         #     chars = split_line_by_char(sent)
-        #         #     for char in chars:
-        #         #         vocab.add(char)
-        #         # else:
-        #         #     raise NotImplementedError("Input type not implemented")
+    
 
     original_size = vocab.size()
     vocab = vocab.prune(size)
@@ -135,19 +119,19 @@ def make_vocab(filenames, size, tokenizer, num_workers=1):
     return vocab
 
 
-def init_vocab(name, dataFiles, vocabFile, vocabSize, tokenizer, num_workers=1, join=False):
+def init_vocab(name, data_files, vocab_file, vocab_size, tokenizer, num_workers=1):
     vocab = None
-    if vocabFile is not None:
+    if vocab_file is not None:
         # If given, load existing word dictionary.
-        print('Reading ' + name + ' vocabulary from \'' + vocabFile + '\'...')
+        print('Reading ' + name + ' vocabulary from \'' + vocab_file + '\'...')
         vocab = onmt.Dict()
-        vocab.loadFile(vocabFile)
+        vocab.loadFile(vocab_file)
         print('Loaded ' + str(vocab.size()) + ' ' + name + ' words')
 
     if vocab is None:
 
         print('Building ' + name + ' vocabulary...')
-        gen_word_vocab = make_vocab(dataFiles, vocabSize, tokenizer, num_workers=num_workers)
+        gen_word_vocab = make_vocab(data_files, vocab_size, tokenizer, num_workers=num_workers)
 
         vocab = gen_word_vocab
 
