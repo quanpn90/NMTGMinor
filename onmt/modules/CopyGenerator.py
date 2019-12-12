@@ -88,7 +88,7 @@ class CopyGenerator(nn.Module):
         """ probabilities from the model output """
         logits = self.linear(input)
         prob = F.softmax(logits.float(), dim=-1)
-        p_g = torch.mul(prob,  1 - copy_prob)  # tlen x B x V
+        p_g = torch.mul(prob,  1 - copy_prob)  # tlen x B x V`
         
         """ probabilities from copy """
         query = input.transpose(0, 1)

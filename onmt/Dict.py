@@ -123,7 +123,7 @@ class Dict(object):
 
         return newDict
 
-    def convertToIdx(self, labels, unkWord, bos_word=None, eos_word=None, type='int`64`'):
+    def convertToIdx(self, labels, unkWord, bos_word=None, eos_word=None, type='int64'):
         """
         Convert `labels` to indices. Use `unkWord` if not found.
         Optionally insert `bos_word` at the beginning and `eos_word` at the .

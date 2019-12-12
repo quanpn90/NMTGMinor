@@ -54,6 +54,9 @@ def build_model(opt, dicts):
     if not hasattr(opt, 'copy_generator'):
         opt.copy_generator = False
 
+    if not hasattr(opt, 'upsampling'):
+        opt.upsampling = False
+
     onmt.Constants.layer_norm = opt.layer_norm
     onmt.Constants.weight_norm = opt.weight_norm
     onmt.Constants.activation_layer = opt.activation_layer
