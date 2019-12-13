@@ -596,7 +596,7 @@ class Transformer(NMTModel):
         for dec_t, tgt_t in zip(output, tgt_output):
 
             dec_out = defaultdict(lambda: None)
-            dec_out['hidden'] = dec_t
+            dec_out['hidden'] = dec_t.unsqueeze(0)
             dec_out['src'] = src
             dec_out['context'] = context
 
@@ -604,6 +604,7 @@ class Transformer(NMTModel):
                 gen_t = self.generator[0](dec_out)
             else:
                 gen_t = self.generator(dec_out)
+            gen_t = gen_t.squeeze(0)
             tgt_t = tgt_t.unsqueeze(1)
             scores = gen_t.gather(1, tgt_t)
             scores.masked_fill_(tgt_t.eq(onmt.Constants.PAD), 0)
@@ -627,6 +628,7 @@ class Transformer(NMTModel):
         """
 
         output_dict = self.decoder.step(input_t, decoder_state)
+        output_dict['src'] = decoder_state.src.transpose(0, 1)
 
         # squeeze to remove the time step dimension
         log_prob = self.generator[0](output_dict).squeeze(0)
@@ -638,6 +640,7 @@ class Transformer(NMTModel):
 
         output_dict['log_prob'] = log_prob
         output_dict['coverage'] = last_coverage
+
 
         return output_dict
 
@@ -820,6 +823,7 @@ class TransformerDecodingState(DecoderState):
         self.context = self.context.index_select(1, reorder_state)
 
         self.src_mask = self.src_mask.index_select(0, reorder_state)
+        self.src = self.src.index_select(1, reorder_state)
 
         if self.tgt_atb is not None:
             for i in self.tgt_atb:

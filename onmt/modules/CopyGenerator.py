@@ -94,8 +94,8 @@ class CopyGenerator(nn.Module):
         query = input.transpose(0, 1)
         keys = context.transpose(0, 1) # B x slen x H
 
-        attn_score = torch.bmm(query, keys.transpose(1, 2)) # B x tlen x slen
-        src_mask = src.eq(onmt.Constants.PAD).unsqueeze(1) # B x s_len
+        attn_score = torch.bmm(query, keys.transpose(1, 2))  # B x tlen x slen
+        src_mask = src.eq(onmt.Constants.PAD).unsqueeze(1)  # B x s_len
 
         attn_score = attn_score.float().masked_fill_(src_mask, -float('inf')).type_as(attn_score)
         attns = F.softmax(attn_score.float(), dim=-1) # B x tlen x slen

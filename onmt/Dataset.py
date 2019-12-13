@@ -285,10 +285,8 @@ class Dataset(torch.utils.data.Dataset):
         self.batchOrder = None
 
         if augment:
-            print("* Using Spec Augmentation for speech inputs")
             self.augmenter = Augmenter()
         else:
-            print("* No Augmentation for speech inputs")
             self.augmenter = None
 
     def size(self):
