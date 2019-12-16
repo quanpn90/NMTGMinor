@@ -3,7 +3,7 @@ import onmt.modules
 import torch.nn as nn
 import torch
 import math
-from onmt.ModelConstructor import build_model, build_language_model
+from onmt.model_factory import build_model, build_language_model
 from ae.Autoencoder import Autoencoder
 import torch.nn.functional as F
 import sys
@@ -220,21 +220,21 @@ class Rescorer(object):
 
         if self.start_with_bos:
             src_data = [self.src_dict.convertToIdx(b,
-                                                   onmt.Constants.UNK_WORD,
-                                                   onmt.Constants.BOS_WORD)
+                                                   onmt.constants.UNK_WORD,
+                                                   onmt.constants.BOS_WORD)
                         for b in src_sents]
         else:
             src_data = [self.src_dict.convertToIdx(b,
-                                                   onmt.Constants.UNK_WORD)
+                                                   onmt.constants.UNK_WORD)
                         for b in src_sents]
 
         tgt_bos_word = self.opt.bos_token
         tgt_data = None
         if tgt_sents:
             tgt_data = [self.tgt_dict.convertToIdx(b,
-                                                   onmt.Constants.UNK_WORD,
+                                                   onmt.constants.UNK_WORD,
                                                    tgt_bos_word,
-                                                   onmt.Constants.EOS_WORD) for b in tgt_sents]
+                                                   onmt.constants.EOS_WORD) for b in tgt_sents]
 
         src_atbs = None
 
@@ -243,7 +243,7 @@ class Rescorer(object):
 
             idx = 0
             for i in self.atb_dict:
-                tgt_atbs[i] = [self.atb_dict[i].convertToIdx([self.attributes[idx]], onmt.Constants.UNK_WORD)
+                tgt_atbs[i] = [self.atb_dict[i].convertToIdx([self.attributes[idx]], onmt.constants.UNK_WORD)
                                for _ in src_sents]
                 idx = idx + 1
 
@@ -262,16 +262,16 @@ class Rescorer(object):
         tgt_data = None
         if tgt_sents:
             tgt_data = [self.tgt_dict.convertToIdx(b,
-                                                   onmt.Constants.UNK_WORD,
-                                                   onmt.Constants.BOS_WORD,
-                                                   onmt.Constants.EOS_WORD) for b in tgt_sents]
+                                                   onmt.constants.UNK_WORD,
+                                                   onmt.constants.BOS_WORD,
+                                                   onmt.constants.EOS_WORD) for b in tgt_sents]
 
         return onmt.Dataset(src_data, tgt_data,
                             batch_size_words=sys.maxsize,
                             data_type=self._type, batch_size_sents=self.opt.batch_size)
 
     def build_target_tokens(self, pred, src, attn):
-        tokens = self.tgt_dict.convertToLabels(pred, onmt.Constants.EOS)
+        tokens = self.tgt_dict.convertToLabels(pred, onmt.constants.EOS)
         tokens = tokens[:-1]  # EOS
 
         return tokens

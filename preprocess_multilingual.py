@@ -1,12 +1,12 @@
 import onmt
-import onmt.Markdown
+import onmt.markdown
 import argparse
 import torch
 
-from onmt.data_utils.IndexedDataset import IndexedDatasetBuilder
+from onmt.data.IndexedDataset import IndexedDatasetBuilder
 
 parser = argparse.ArgumentParser(description='preprocess.py')
-onmt.Markdown.add_md_help_argument(parser)
+onmt.markdown.add_md_help_argument(parser)
 
 # **Preprocess Options**
 
@@ -101,8 +101,8 @@ About the data format used in this project:
 
 
 def make_join_vocabulary(filenames, size, input_type="word", dict_atb=None, use_atb=True):
-    vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
-                       onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
+    vocab = onmt.Dict([onmt.constants.PAD_WORD, onmt.constants.UNK_WORD,
+                       onmt.constants.BOS_WORD, onmt.constants.EOS_WORD],
                       lower=opt.lower)
 
     if dict_atb is None and use_atb:
@@ -149,8 +149,8 @@ def make_join_vocabulary(filenames, size, input_type="word", dict_atb=None, use_
 
 
 def make_vocabulary(filename, size, input_type='word', dict_atb=None, use_atb=True):
-    vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
-                       onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
+    vocab = onmt.Dict([onmt.constants.PAD_WORD, onmt.constants.UNK_WORD,
+                       onmt.constants.BOS_WORD, onmt.constants.EOS_WORD],
                       lower=opt.lower)
 
     if dict_atb is None and use_atb:
@@ -240,7 +240,7 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, use_atb, max_s
     tgtF = open(tgt_file)
 
     if bos_word == "default":
-        bos_word = onmt.Constants.BOS_WORD
+        bos_word = onmt.constants.BOS_WORD
 
     elif bos_word == "none":
         print(" * Warning: no BOS WORD used in data preprocessing!")
@@ -308,7 +308,7 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, use_atb, max_s
                 tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
 
             src_sent = src_dicts.convertToIdx(src_words,
-                                              onmt.Constants.UNK_WORD)
+                                              onmt.constants.UNK_WORD)
 
             src_attb = atb_dict.convertToIdx(src_attb, None)
 
@@ -316,9 +316,9 @@ def make_data(src_file, tgt_file, src_dicts, tgt_dicts, atb_dict, use_atb, max_s
             src_attbs += [src_attb]
 
             tgt_sent = tgt_dicts.convertToIdx(tgt_words,
-                                              onmt.Constants.UNK_WORD,
+                                              onmt.constants.UNK_WORD,
                                               bosWord=bos_word,
-                                              eosWord=onmt.Constants.EOS_WORD)
+                                              eosWord=onmt.constants.EOS_WORD)
 
             # convert the atb into index
             # this should be a vector of 1 or 0 elements

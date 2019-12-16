@@ -90,8 +90,8 @@ class Autoencoder(nn.Module):
                 decoder_output = self.nmt.decoder(tgt, context, src)
                 output = decoder_output['hidden']
 
-                tgt_mask = tgt.data.eq(onmt.Constants.PAD).unsqueeze(1)
-                tgt_mask2 = tgt.data.eq(onmt.Constants.EOS).unsqueeze(1)
+                tgt_mask = tgt.data.eq(onmt.constants.PAD).unsqueeze(1)
+                tgt_mask2 = tgt.data.eq(onmt.constants.EOS).unsqueeze(1)
                 tgt_mask = tgt_mask + tgt_mask2
                 flattened_output = output.contiguous().view(-1, output.size(-1))
                 flattened_mask = tgt_mask.squeeze(1).transpose(0,1).contiguous().view(-1)
@@ -134,8 +134,8 @@ class Autoencoder(nn.Module):
                 output = decoder_output['hidden']
 
 
-                tgt_mask = tgt.data.eq(onmt.Constants.PAD).unsqueeze(1)
-                tgt_mask2 = tgt.data.eq(onmt.Constants.EOS).unsqueeze(1)
+                tgt_mask = tgt.data.eq(onmt.constants.PAD).unsqueeze(1)
+                tgt_mask2 = tgt.data.eq(onmt.constants.EOS).unsqueeze(1)
                 tgt_mask = tgt_mask + tgt_mask2
                 flattened_output = output.contiguous().view(-1, output.size(-1))
                 flattened_mask = tgt_mask.squeeze(1).transpose(0,1).contiguous().view(-1)
@@ -173,8 +173,8 @@ class Autoencoder(nn.Module):
             cos = nn.CosineSimilarity(dim=-1, eps=1e-6)
             sim = cos(expand_result,clean_output)
 
-            tgt_mask = tgt.data.eq(onmt.Constants.PAD).unsqueeze(1)
-            tgt_mask2 = tgt.data.eq(onmt.Constants.EOS).unsqueeze(1)
+            tgt_mask = tgt.data.eq(onmt.constants.PAD).unsqueeze(1)
+            tgt_mask2 = tgt.data.eq(onmt.constants.EOS).unsqueeze(1)
             tgt_mask = (tgt_mask + tgt_mask2).squeeze(1).transpose(0,1).unsqueeze(0).expand(result.size(0),-1,-1)
             src_mask_align = src_mask.transpose(0,2).expand(-1,tgt_mask.size(1),-1)
             mask = torch.max(src_mask_align,tgt_mask)

@@ -228,7 +228,7 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
                 
                 targets = self._sample[1][1:]
                 
-                tgt_mask = targets.data.ne(onmt.Constants.PAD)
+                tgt_mask = targets.data.ne(onmt.constants.PAD)
                 tgt_mask = torch.autograd.Variable(tgt_mask)
                 
                 loss_data, grad_outputs = self.loss_function(outputs, targets, generator=self.model.generator, 
@@ -239,8 +239,8 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
                     #~ 
                 self.loss = loss_data
                 
-                src_size = self._sample[0].data.ne(onmt.Constants.PAD).sum()
-                tgt_size = targets.data.ne(onmt.Constants.PAD).sum()
+                src_size = self._sample[0].data.ne(onmt.constants.PAD).sum()
+                tgt_size = targets.data.ne(onmt.constants.PAD).sum()
                 
                 logging_output['src_size'] = src_size
                 logging_output['tgt_size'] = tgt_size

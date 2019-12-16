@@ -5,5 +5,5 @@ import torch
 from collections import defaultdict
 import onmt
 from onmt.speech.Augmenter import Augmenter
-from onmt.modules.WordDrop import switchout
+from onmt.modules.dropout import switchout
 

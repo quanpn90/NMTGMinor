@@ -1,15 +1,15 @@
 import onmt
-import onmt.Markdown
+import onmt.markdown
 import argparse
 import torch
 
-from onmt.data_utils.IndexedDataset import IndexedDatasetBuilder
+from onmt.data.IndexedDataset import IndexedDatasetBuilder
 
 import h5py as h5
 import numpy as np
 
 parser = argparse.ArgumentParser(description='preprocess.py')
-onmt.Markdown.add_md_help_argument(parser)
+onmt.markdown.add_md_help_argument(parser)
 
 # **Preprocess Options**
 
@@ -94,8 +94,8 @@ opt = parser.parse_args()
 torch.manual_seed(opt.seed)
 
 def make_vocab(filenames, size, tokenizer):
-    vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
-                       onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
+    vocab = onmt.Dict([onmt.constants.PAD_WORD, onmt.constants.UNK_WORD,
+                       onmt.constants.BOS_WORD, onmt.constants.EOS_WORD],
                       lower=opt.lower)
 
     for filename in filenames:
@@ -147,7 +147,7 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
     print('Processing %s ...' % (tgt_file))
     tgtf = open(tgt_file)
 
-    eos = torch.LongTensor(1).fill_(onmt.Constants.EOS)
+    eos = torch.LongTensor(1).fill_(onmt.constants.EOS)
     tensors = [eos]
 
     # find the number of words in the sentence
@@ -168,9 +168,9 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
             tgt_words = split_line_by_char(tline)
 
         tensor = tgt_dicts.convertToIdx(tgt_words,
-                                        onmt.Constants.UNK_WORD,
+                                        onmt.constants.UNK_WORD,
                                         None,
-                                        onmt.Constants.EOS_WORD,
+                                        onmt.constants.EOS_WORD,
                                         type=data_type)
         # print(tensor.size())
         tensors.append(tensor)
@@ -239,18 +239,18 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, max_src_leng
 
             # For src text, we use BOS for possible reconstruction
             src += [src_dicts.convertToIdx(src_words,
-                                          onmt.Constants.UNK_WORD)]
+                                           onmt.constants.UNK_WORD)]
 
             if add_bos:
                 tgt += [tgt_dicts.convertToIdx(tgt_words,
-                                               onmt.Constants.UNK_WORD,
-                                               onmt.Constants.BOS_WORD,
-                                               onmt.Constants.EOS_WORD, type=data_type)]
+                                               onmt.constants.UNK_WORD,
+                                               onmt.constants.BOS_WORD,
+                                               onmt.constants.EOS_WORD, type=data_type)]
             else:
                 tgt += [tgt_dicts.convertToIdx(tgt_words,
-                                               onmt.Constants.UNK_WORD,
+                                               onmt.constants.UNK_WORD,
                                                None,
-                                               onmt.Constants.EOS_WORD, type=data_type)]
+                                               onmt.constants.EOS_WORD, type=data_type)]
             src_sizes += [len(src_words)]
             tgt_sizes += [len(tgt_words)]
         else:
@@ -398,14 +398,14 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
             src += [sline]
 
             tgt_tensor = tgt_dicts.convertToIdx(tgt_words,
-                                                onmt.Constants.UNK_WORD,
-                                                onmt.Constants.BOS_WORD,
-                                                onmt.Constants.EOS_WORD)
+                                                onmt.constants.UNK_WORD,
+                                                onmt.constants.BOS_WORD,
+                                                onmt.constants.EOS_WORD)
             tgt += [tgt_tensor]
             src_sizes += [len(sline)]
             tgt_sizes += [len(tgt_words)]
 
-            unks = tgt_tensor.eq(onmt.Constants.UNK).sum().item()
+            unks = tgt_tensor.eq(onmt.constants.UNK).sum().item()
             n_unk_words += unks
 
             # if unks > 0:
@@ -597,7 +597,7 @@ def main():
         print("Done")
     elif opt.format in ['mmap', 'mmem']:
         print('Saving data to memory indexed data files')
-        from onmt.data_utils.MMapIndexedDataset import MMapIndexedDatasetBuilder
+        from onmt.data.MMapIndexedDataset import MMapIndexedDatasetBuilder
 
         if opt.asr:
             print("ASR data format isn't compatible with memory indexed format")

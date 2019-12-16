@@ -1,16 +1,16 @@
 from __future__ import division
 
 import onmt
-import onmt.Markdown
+import onmt.markdown
 import torch
 import argparse
 import math
 import numpy
-from onmt.ModelConstructor import build_model
+from onmt.model_factory import build_model
 
 
 parser = argparse.ArgumentParser(description='translate.py')
-onmt.Markdown.add_md_help_argument(parser)
+onmt.markdown.add_md_help_argument(parser)
 
 parser.add_argument('-models', required=True,
                     help='Path to model .pt file')

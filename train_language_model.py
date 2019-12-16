@@ -1,7 +1,7 @@
 from __future__ import division
 
 import onmt
-import onmt.Markdown
+import onmt.markdown
 import onmt.modules
 import argparse
 import torch
@@ -11,12 +11,12 @@ from torch.autograd import Variable
 import math
 import time, datetime
 from onmt.train_utils.trainer import XETrainer
-from onmt.modules.Loss import NMTLossFunc, NMTAndCTCLossFunc
-from onmt.ModelConstructor import build_language_model
-from onmt.Dataset import LanguageModelDataset
+from onmt.modules.loss import NMTLossFunc, NMTAndCTCLossFunc
+from onmt.model_factory import build_language_model
+from onmt.data.dataset import LanguageModelDataset
 
 parser = argparse.ArgumentParser(description='train.py')
-onmt.Markdown.add_md_help_argument(parser)
+onmt.markdown.add_md_help_argument(parser)
 
 from options import make_parser
 # Please look at the options file to see the options regarding models and data
@@ -27,13 +27,13 @@ opt = parser.parse_args()
 print(opt)
 
 # An ugly hack to have weight norm on / off
-onmt.Constants.weight_norm = opt.weight_norm
-onmt.Constants.checkpointing = opt.checkpointing
-onmt.Constants.max_position_length = opt.max_position_length
+onmt.constants.weight_norm = opt.weight_norm
+onmt.constants.checkpointing = opt.checkpointing
+onmt.constants.max_position_length = opt.max_position_length
 
 # Use static dropout if checkpointing > 0
 if opt.checkpointing > 0:
-    onmt.Constants.static = True
+    onmt.constants.static = True
 
 if torch.cuda.is_available() and not opt.gpus:
     print("WARNING: You have a CUDA device, should run with -gpus 0")

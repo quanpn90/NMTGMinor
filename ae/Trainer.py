@@ -2,7 +2,7 @@ from __future__ import division
 
 import sys, tempfile
 import onmt
-import onmt.Markdown
+import onmt.markdown
 import onmt.modules
 import argparse
 import torch

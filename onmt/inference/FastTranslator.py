@@ -4,10 +4,10 @@ import torch.nn as nn
 import torch
 import math
 from torch.autograd import Variable
-from onmt.ModelConstructor import build_model
+from onmt.model_factory import build_model
 import torch.nn.functional as F
 from onmt.inference.Search import BeamSearch, DiverseBeamSearch
-import onmt.Translator as Translator
+import onmt.inference.Translator as Translator
 
 model_list = ['transformer', 'stochastic_transformer']
 
@@ -20,8 +20,8 @@ class FastTranslator(Translator):
 
         super().__init__(opt)
         self.search = BeamSearch(self.tgt_dict)
-        self.eos = onmt.Constants.EOS
-        self.pad = onmt.Constants.PAD
+        self.eos = onmt.constants.EOS
+        self.pad = onmt.constants.PAD
         self.bos = self.bos_id
         self.vocab_size = self.tgt_dict.size()
         self.min_len = 1
@@ -30,7 +30,7 @@ class FastTranslator(Translator):
         self.no_repeat_ngram_size = 0
 
         if opt.verbose:
-            print('* Current bos id: %d' % self.bos_id, onmt.Constants.BOS )
+            print('* Current bos id: %d' % self.bos_id, onmt.constants.BOS)
             print('* Using fast beam search implementation')
 
     def translateBatch(self, batch):

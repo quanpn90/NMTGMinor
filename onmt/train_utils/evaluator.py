@@ -58,7 +58,7 @@ class Evaluator(object):
                 # loss, _ = memoryEfficientLoss(
                         # outputs, targets, model.generator, criterion, eval=True)
                 total_loss += loss
-                total_words += targets.data.ne(onmt.Constants.PAD).sum()
+                total_words += targets.data.ne(onmt.constants.PAD).sum()
 
         model.train()
         return total_loss / total_words

@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch
 import math
 from torch.autograd import Variable
-from onmt.ModelConstructor import build_model
+from onmt.model_factory import build_model
 import torch.nn.functional as F
 from ae.Autoencoder import Autoencoder
 import sys
@@ -202,20 +202,20 @@ class Evaluator(object):
 
         if self.start_with_bos:
             srcData = [self.src_dict.convertToIdx(b,
-                                                  onmt.Constants.UNK_WORD,
-                                                  onmt.Constants.BOS_WORD)
+                                                  onmt.constants.UNK_WORD,
+                                                  onmt.constants.BOS_WORD)
                        for b in srcBatch]
         else:
             srcData = [self.src_dict.convertToIdx(b,
-                                                  onmt.Constants.UNK_WORD)
+                                                  onmt.constants.UNK_WORD)
                        for b in srcBatch]
 
         tgtData = None
         if goldBatch:
             tgtData = [self.tgt_dict.convertToIdx(b,
-                                                  onmt.Constants.UNK_WORD,
-                                                  onmt.Constants.BOS_WORD,
-                                                  onmt.Constants.EOS_WORD) for b in goldBatch]
+                                                  onmt.constants.UNK_WORD,
+                                                  onmt.constants.BOS_WORD,
+                                                  onmt.constants.EOS_WORD) for b in goldBatch]
 
 
         return onmt.Dataset(srcData, tgtData, 9999,
@@ -228,16 +228,16 @@ class Evaluator(object):
         tgtData = None
         if goldBatch:
             tgtData = [self.tgt_dict.convertToIdx(b,
-                                                  onmt.Constants.UNK_WORD,
-                                                  onmt.Constants.BOS_WORD,
-                                                  onmt.Constants.EOS_WORD) for b in goldBatch]
+                                                  onmt.constants.UNK_WORD,
+                                                  onmt.constants.BOS_WORD,
+                                                  onmt.constants.EOS_WORD) for b in goldBatch]
 
         return onmt.Dataset(srcData, tgtData, sys.maxsize,
                             [self.opt.gpu],
                             data_type=self._type, max_seq_num=self.opt.batch_size)
 
     def buildTargetTokens(self, pred, src, attn):
-        tokens = self.tgt_dict.convertToLabels(pred, onmt.Constants.EOS)
+        tokens = self.tgt_dict.convertToLabels(pred, onmt.constants.EOS)
         tokens = tokens[:-1]  # EOS
 
         return tokens

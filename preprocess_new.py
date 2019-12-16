@@ -1,15 +1,15 @@
 import onmt
-import onmt.Markdown
+import onmt.markdown
 import argparse
 import torch
 
-from onmt.data_utils.IndexedDataset import IndexedDatasetBuilder
+from onmt.data.IndexedDataset import IndexedDatasetBuilder
 
 import h5py as h5
 import numpy as np
 
 parser = argparse.ArgumentParser(description='preprocess.py')
-onmt.Markdown.add_md_help_argument(parser)
+onmt.markdown.add_md_help_argument(parser)
 
 # **Preprocess Options**
 
@@ -118,8 +118,8 @@ def split_line_by_char(line, word_list=["<unk>"]):
 
 
 def make_join_vocab(filenames, size, input_type="word"):
-    vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
-                       onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
+    vocab = onmt.Dict([onmt.constants.PAD_WORD, onmt.constants.UNK_WORD,
+                       onmt.constants.BOS_WORD, onmt.constants.EOS_WORD],
                       lower=opt.lower)
 
     for filename in filenames:
@@ -146,8 +146,8 @@ def make_join_vocab(filenames, size, input_type="word"):
 
 
 def make_vocab(filename, size, input_type='word'):
-    vocab = onmt.Dict([onmt.Constants.PAD_WORD, onmt.Constants.UNK_WORD,
-                       onmt.Constants.BOS_WORD, onmt.Constants.EOS_WORD],
+    vocab = onmt.Dict([onmt.constants.PAD_WORD, onmt.constants.UNK_WORD,
+                       onmt.constants.BOS_WORD, onmt.constants.EOS_WORD],
                       lower=opt.lower)
 
     unk_count = 0
@@ -214,7 +214,7 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
     print('Processing %s ...' % (tgt_file))
     tgtf = open(tgt_file)
 
-    eos = torch.LongTensor(1).fill_(onmt.Constants.EOS)
+    eos = torch.LongTensor(1).fill_(onmt.constants.EOS)
     tensors = [eos]
 
     # find the number of words in the sentence
@@ -235,9 +235,9 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word'):
             tgt_words = split_line_by_char(tline)
 
         tensor = tgt_dicts.convertToIdx(tgt_words,
-                                        onmt.Constants.UNK_WORD,
+                                        onmt.constants.UNK_WORD,
                                         None,
-                                        onmt.Constants.EOS_WORD)
+                                        onmt.constants.EOS_WORD)
         tensors.append(tensor)
 
         count = count + 1
@@ -274,7 +274,7 @@ def read_text_file(text_file, dicts, input_type='word', max_length=100000,
 
         if line == "":
             # empty line
-            tensors += [dicts.convertToIdx([], onmt.Constants.UNK_WORD)]
+            tensors += [dicts.convertToIdx([], onmt.constants.UNK_WORD)]
             tensor_sizes += [0]
             bad_indices.append(line_idx)
             continue
@@ -285,13 +285,13 @@ def read_text_file(text_file, dicts, input_type='word', max_length=100000,
             words = split_line_by_char(line)
 
         if len(words) <= max_length:
-            tensors += [dicts.convertToIdx(words, onmt.Constants.UNK_WORD,
+            tensors += [dicts.convertToIdx(words, onmt.constants.UNK_WORD,
                                            bos_word=bos_word, eos_word=eos_word)]
 
             tensor_sizes += [len(words)]
         else:
             # too long line
-            tensors += [dicts.convertToIdx([], onmt.Constants.UNK_WORD)]
+            tensors += [dicts.convertToIdx([], onmt.constants.UNK_WORD)]
             tensor_sizes += [0]
             bad_indices.append(line_idx)
             continue
@@ -346,8 +346,8 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts,
 
     src, src_sizes, src_bad_indices = read_text_file(src_file, src_dicts, input_type, max_src_length)
     tgt, tgt_sizes, tgt_bad_indices = read_text_file(tgt_file, tgt_dicts, input_type, max_tgt_length,
-                                                     bos_word=onmt.Constants.BOS_WORD,
-                                                     eos_word=onmt.Constants.EOS_WORD)
+                                                     bos_word=onmt.constants.BOS_WORD,
+                                                     eos_word=onmt.constants.EOS_WORD)
 
     # remove the items from the bad indices
     bad_indices = list(set(src_bad_indices + tgt_bad_indices))
@@ -521,14 +521,14 @@ def make_asr_data(src_file, tgt_file, tgt_dicts,
             src += [sline]
 
             tgt_tensor = tgt_dicts.convertToIdx(tgt_words,
-                                                onmt.Constants.UNK_WORD,
-                                                onmt.Constants.BOS_WORD,
-                                                onmt.Constants.EOS_WORD)
+                                                onmt.constants.UNK_WORD,
+                                                onmt.constants.BOS_WORD,
+                                                onmt.constants.EOS_WORD)
             tgt += [tgt_tensor]
             src_sizes += [len(sline)]
             tgt_sizes += [len(tgt_words)]
 
-            unks = tgt_tensor.eq(onmt.Constants.UNK).sum().item()
+            unks = tgt_tensor.eq(onmt.constants.UNK).sum().item()
             n_unk_words += unks
 
             if unks > 0:

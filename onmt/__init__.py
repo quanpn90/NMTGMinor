@@ -1,14 +1,14 @@
-import onmt.Constants
-from onmt.Translator import Translator
+import onmt.constants
+from onmt.inference.Translator import Translator
 from onmt.Rescorer import Rescorer
-from onmt.OnlineTranslator import OnlineTranslator
-from onmt.Dataset import Dataset
-from onmt.Optim import Optim
-from onmt.Dict import Dict
-from onmt.Beam import Beam
-from onmt.data_utils.Tokenizer import Tokenizer
+from onmt.online_translator import OnlineTranslator
+from onmt.data.dataset import Dataset
+from onmt.optim import Optim
+from onmt.Dict import Dict as Dict
+from onmt.inference.Beam import Beam
+from onmt.data.Tokenizer import Tokenizer
 
 import onmt.multiprocessing
 
 # For flake8 compatibility.
-__all__ = [onmt.Constants, Translator, Rescorer, OnlineTranslator, Dataset, Optim, Dict, Beam, Tokenizer]
+__all__ = [onmt.constants, Translator, Rescorer, OnlineTranslator, Dataset, Optim, Dict, Beam, Tokenizer]

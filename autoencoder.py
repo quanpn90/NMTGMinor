@@ -1,7 +1,7 @@
 from __future__ import division
 
 import onmt
-import onmt.Markdown
+import onmt.markdown
 import onmt.modules
 import argparse
 import torch
@@ -10,13 +10,13 @@ from torch import cuda
 from torch.autograd import Variable
 import math
 import time, datetime
-from onmt.modules.Loss import NMTLossFunc
-from onmt.ModelConstructor import build_model, init_model_parameters
+from onmt.modules.loss import NMTLossFunc
+from onmt.model_factory import build_model, init_model_parameters
 from ae.Autoencoder import Autoencoder
 from ae.Trainer import AETrainer
 
 parser = argparse.ArgumentParser(description='train.py')
-onmt.Markdown.add_md_help_argument(parser)
+onmt.markdown.add_md_help_argument(parser)
 
 from options import make_parser
 
@@ -38,13 +38,13 @@ opt = parser.parse_args()
 print(opt)
 
 # An ugly hack to have weight norm on / off
-onmt.Constants.weight_norm = opt.weight_norm
-onmt.Constants.checkpointing = opt.checkpointing
-onmt.Constants.max_position_length = opt.max_position_length
+onmt.constants.weight_norm = opt.weight_norm
+onmt.constants.checkpointing = opt.checkpointing
+onmt.constants.max_position_length = opt.max_position_length
 
 # Use static dropout if checkpointing > 0
 if opt.checkpointing > 0:
-    onmt.Constants.static = True
+    onmt.constants.static = True
 
 if torch.cuda.is_available() and not opt.gpus:
     print("WARNING: You have a CUDA device, should run with -gpus 0")
@@ -90,7 +90,7 @@ def main():
               len(dataset['train']['src']))
         print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
     elif opt.data_format == 'bin':
-        from onmt.data_utils.IndexedDataset import IndexedInMemoryDataset
+        from onmt.data.IndexedDataset import IndexedInMemoryDataset
 
         dicts = torch.load(opt.data + ".dict.pt")
 

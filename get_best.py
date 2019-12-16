@@ -3,7 +3,7 @@
 from __future__ import division
 
 import onmt
-import onmt.Markdown
+import onmt.markdown
 import torch
 import argparse
 import math
@@ -14,7 +14,7 @@ import numpy as np
 import apex
 
 parser = argparse.ArgumentParser(description='rescore.py')
-onmt.Markdown.add_md_help_argument(parser)
+onmt.markdown.add_md_help_argument(parser)
 #
 parser.add_argument('-input', required=True,
                     help='Path to the nbest file')

@@ -1,14 +1,14 @@
 from __future__ import division
 
 import onmt
-import onmt.Markdown
+import onmt.markdown
 import onmt.modules
 import torch
 from torch.autograd import Variable
 import math
 import time, datetime
 import os
-from onmt.ModelConstructor import init_model_parameters
+from onmt.model_factory import init_model_parameters
 from onmt.utils import checkpoint_paths, normalize_gradients
 from apex import amp
 
@@ -166,7 +166,7 @@ class XETrainer(BaseTrainer):
                         prob distribution from decoder generator
                 """
                 targets = batch.get('target_output')
-                tgt_mask = targets.ne(onmt.Constants.PAD)
+                tgt_mask = targets.ne(onmt.constants.PAD)
                 outputs = self.model(batch, target_mask=tgt_mask)
 
                 outputs['tgt_mask'] = tgt_mask
@@ -239,7 +239,7 @@ class XETrainer(BaseTrainer):
                     # outputs is a dictionary containing keys/values necessary for loss function
                     # can be flexibly controlled within models for easier extensibility
                     targets = batch.get('target_output')
-                    tgt_mask = targets.data.ne(onmt.Constants.PAD)
+                    tgt_mask = targets.data.ne(onmt.constants.PAD)
                     outputs = self.model(batch, target_mask=tgt_mask, zero_encoder=opt.zero_encoder)
 
                     batch_size = batch.size

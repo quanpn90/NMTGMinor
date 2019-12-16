@@ -1,5 +1,5 @@
 import os
-from onmt.OnlineTranslator import TranslatorParameter, OnlineTranslator
+from onmt.online_translator import TranslatorParameter, OnlineTranslator
 import sys
 
 
