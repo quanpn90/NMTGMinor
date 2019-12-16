@@ -162,16 +162,20 @@ def build_tm_model(opt, dicts):
 
     elif opt.model == 'relative_transformer':
 
-        from onmt.models.relative_transformer import RelativeTransformerEncoder
+        from onmt.models.relative_transformer import RelativeTransformerEncoder, RelativeTransformerDecoder
+
         if opt.encoder_type == "text":
             encoder = RelativeTransformerEncoder(opt, embedding_src, None, opt.encoder_type)
         if opt.encoder_type == "audio":
             # raise NotImplementedError
             encoder = RelativeTransformerEncoder(opt, None, None, opt.encoder_type)
+
         generator = nn.ModuleList(generators)
 
-        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, attribute_embeddings=attribute_embeddings)
-        model = Transformer(encoder, decoder, nn.ModuleList(generators))
+        decoder = RelativeTransformerDecoder(opt, embedding_tgt, None, attribute_embeddings=attribute_embeddings)
+        # decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, attribute_embeddings=attribute_embeddings)
+
+        model = Transformer(encoder, decoder, generator)
 
     else:
         raise NotImplementedError
@@ -230,6 +234,15 @@ def init_model_parameters(model, opt):
             if hasattr(m, 'bias') and m.bias is not None:
                 init_bias(m.bias)
         elif classname.find('RelativeTransformerEncoder') != -1:
+            if hasattr(m, 'r_emb'):
+                init_weight(m.r_emb)
+            if hasattr(m, 'r_w_bias'):
+                init_weight(m.r_w_bias)
+            if hasattr(m, 'r_r_bias'):
+                init_weight(m.r_r_bias)
+            if hasattr(m, 'r_bias'):
+                init_bias(m.r_bias)
+        elif classname.find('RelativeTransformerDecoder') != -1:
             if hasattr(m, 'r_emb'):
                 init_weight(m.r_emb)
             if hasattr(m, 'r_w_bias'):

@@ -6,10 +6,12 @@ import math
 from torch.autograd import Variable
 from onmt.model_factory import build_model
 import torch.nn.functional as F
-from onmt.inference.Search import BeamSearch, DiverseBeamSearch
-import onmt.inference.Translator as Translator
+from onmt.inference.search import BeamSearch, DiverseBeamSearch
+# import onmt.inference.Translator as Translator
+from onmt.inference.translator import Translator
 
 model_list = ['transformer', 'stochastic_transformer']
+
 
 class FastTranslator(Translator):
     """

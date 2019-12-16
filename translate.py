@@ -161,7 +161,7 @@ def main():
     if not opt.fast_translate:
         translator = onmt.Translator(opt)
     else:
-        from onmt.inference.FastTranslator import FastTranslator
+        from onmt.inference.fast_translator import FastTranslator
         translator = FastTranslator(opt)
 
     # Audio processing for the source batch

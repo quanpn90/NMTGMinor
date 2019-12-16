@@ -212,8 +212,8 @@ class TransformerEncoder(nn.Module):
 class TransformerDecoder(nn.Module):
     """Decoder in 'Attention is all you need'"""
 
-
-    def __init__(self, opt, embedding, positional_encoder, attribute_embeddings=None, ignore_source=False):
+    def __init__(self, opt, embedding, positional_encoder,
+                 attribute_embeddings=None, ignore_source=False, allocate_positions=True):
         """
         :param opt:
         :param embedding:
@@ -265,10 +265,11 @@ class TransformerDecoder(nn.Module):
 
         self.positional_encoder = positional_encoder
 
-        if hasattr(self.positional_encoder, 'len_max'):
-            len_max = self.positional_encoder.len_max
-            mask = torch.ByteTensor(np.triu(np.ones((len_max, len_max)), k=1).astype('uint8'))
-            self.register_buffer('mask', mask)
+        if allocate_positions:
+            if hasattr(self.positional_encoder, 'len_max'):
+                len_max = self.positional_encoder.len_max
+                mask = torch.ByteTensor(np.triu(np.ones((len_max, len_max)), k=1).astype('uint8'))
+                self.register_buffer('mask', mask)
 
         self.build_modules()
 
@@ -280,7 +281,6 @@ class TransformerDecoder(nn.Module):
 
     def renew_buffer(self, new_len):
 
-        print(new_len)
         self.positional_encoder.renew(new_len)
         mask = torch.ByteTensor(np.triu(np.ones((new_len+1, new_len+1)), k=1).astype('uint8'))
         self.register_buffer('mask', mask)

@@ -1,5 +1,5 @@
 import onmt.constants
-from onmt.inference.Translator import Translator
+from onmt.inference.translator import Translator
 from onmt.Rescorer import Rescorer
 from onmt.online_translator import OnlineTranslator
 from onmt.data.dataset import Dataset
