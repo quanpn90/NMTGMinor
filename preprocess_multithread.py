@@ -6,7 +6,7 @@ import subprocess
 import time, datetime
 from onmt.data.binarizer import Binarizer
 
-from onmt.data.IndexedDataset import IndexedDatasetBuilder
+from onmt.data.indexed_dataset import IndexedDatasetBuilder
 
 import h5py as h5
 import numpy as np
@@ -633,7 +633,7 @@ def main():
     elif opt.format in ['mmap', 'mmem']:
         start = time.time()
         print('Saving data to memory indexed data files')
-        from onmt.data.MMapIndexedDataset import MMapIndexedDatasetBuilder
+        from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
 
         if opt.asr:
             print("ASR data format isn't compatible with memory indexed format")

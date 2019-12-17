@@ -3,7 +3,7 @@ import onmt.markdown
 import argparse
 import torch
 
-from onmt.data.IndexedDataset import IndexedDatasetBuilder
+from onmt.data.indexed_dataset import IndexedDatasetBuilder
 
 import h5py as h5
 import numpy as np

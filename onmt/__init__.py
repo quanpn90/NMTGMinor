@@ -6,7 +6,7 @@ from onmt.data.dataset import Dataset
 from onmt.optim import Optim
 from onmt.Dict import Dict as Dict
 from onmt.inference.Beam import Beam
-from onmt.data.Tokenizer import Tokenizer
+from onmt.data.tokenizer import Tokenizer
 
 import onmt.multiprocessing
 

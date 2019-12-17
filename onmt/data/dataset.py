@@ -94,8 +94,8 @@ class Batch(object):
 
     def switchout(self, swrate, src_vocab_size, tgt_vocab_size):
         # Switch out function ... currently works with only source text data
-        self.tensors['source'] = switchout(self.tensors['source'], src_vocab_size, swrate, transpose=True)
-
+        if self.src_type == 'text':
+            self.tensors['source'] = switchout(self.tensors['source'], src_vocab_size, swrate, transpose=True)
 
         if self.has_target:
             self.tensors['target'] = switchout(self.tensors['target'], tgt_vocab_size, swrate, transpose=True, offset=1)

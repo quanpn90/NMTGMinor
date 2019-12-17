@@ -131,7 +131,11 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
 
         self.r_net = nn.Linear(self.d_model, self.n_head * self.d_head, bias=False)
 
-    def forward(self, w, r, r_w_bias, r_r_bias, attn_mask=None, mems=None, debug=False):
+        # Parameters for the position biases
+        self.r_w_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
+        self.r_r_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
+
+    def forward(self, w, r, attn_mask=None, mems=None, debug=False):
         """
         :param w: input embeddings (E) T x B x H
         :param r: relative encodings (R)
@@ -141,6 +145,9 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         :param mems:
         :return:
         """
+        r_w_bias = self.r_r_bias
+        r_r_bias = self.r_r_bias
+
         qlen, rlen, bsz = w.size(0), r.size(0), w.size(1)
 
         if mems is not None:

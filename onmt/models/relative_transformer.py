@@ -12,6 +12,17 @@ from collections import defaultdict
 import math
 
 
+def expected_length(length, death_rate):
+    e_length = 0
+
+    for l in range(length):
+        survival_rate = 1.0 - (l + 1) / length * death_rate
+
+        e_length += survival_rate
+
+    return e_length
+
+
 #  Positional Embedding with discrete inputs
 class SinusoidalPositionalEmbedding(nn.Module):
     def __init__(self, demb):
@@ -43,19 +54,23 @@ class RelativeTransformerEncoder(TransformerEncoder):
         self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
 
-        # Parameters for the position biases
-        self.r_w_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
-        self.r_r_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
+        e_length = expected_length(self.layers, self.death_rate)
+        # # Parameters for the position biases
+        # self.r_w_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
+        # self.r_r_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
 
-        print("* Transformer Encoder with Relative Attention")
+        print("* Transformer Encoder with Relative Attention with %.2f expected layers" % e_length)
 
     def build_modules(self):
         self.layer_modules = nn.ModuleList()
 
         for l in range(self.layers):
+            # linearly decay the death rate
+            death_r = (l + 1.0) / self.layers * self.death_rate
 
             block = RelativeTransformerEncoderLayer(self.n_heads, self.model_size,
-                                                    self.dropout, self.inner_size, self.attn_dropout)
+                                                    self.dropout, self.inner_size, self.attn_dropout,
+                                                    variational=self.varitional_dropout, death_rate=death_r)
 
             self.layer_modules.append(block)
 
@@ -130,7 +145,8 @@ class RelativeTransformerEncoder(TransformerEncoder):
         for i, layer in enumerate(self.layer_modules):
 
             # len_src x batch_size x d_model
-            context = layer(context, pos_emb, self.r_w_bias, self.r_r_bias, mask_src)
+            # context = layer(context, pos_emb, self.r_w_bias, self.r_r_bias, mask_src)
+            context = layer(context, pos_emb, mask_src)
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -156,20 +172,26 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
     def __init__(self, opt, dicts, positional_encoder, attribute_embeddings=None, ignore_source=False):
 
+        self.death_rate = opt.death_rate
+
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerDecoder, self).__init__(opt, dicts,
                                                          positional_encoder,
                                                          attribute_embeddings,
-                                                         ignore_source)
-
+                                                         ignore_source,
+                                                         allocate_positions=False)
         self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
-
         # Parameters for the position biases
         self.r_w_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
         self.r_r_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
 
-        print("* Transformer Decoder with Relative Attention")
+        e_length = expected_length(self.layers, self.death_rate)
+        # # Parameters for the position biases
+        # self.r_w_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
+        # self.r_r_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
+
+        print("* Transformer Decoder with Relative Attention with %.2f expected layers" % e_length)
 
     def renew_buffer(self, new_len):
         return
@@ -179,8 +201,11 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         for l in range(self.layers):
             # linearly decay the death rate
+            death_r = (l + 1.0) / self.layers * self.death_rate
+
             block = RelativeTransformerDecoderLayer(self.n_heads, self.model_size,
-                                                    self.dropout, self.inner_size, self.attn_dropout)
+                                                    self.dropout, self.inner_size, self.attn_dropout,
+                                                    variational=self.variational_dropout, death_rate=death_r)
 
             self.layer_modules.append(block)
 
@@ -236,8 +261,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
             emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]
         pad_mask = input.transpose(0, 1).eq(onmt.constants.PAD).byte()  # L x B
 
-        # dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
-        # dec_attn_mask = dec_attn_mask.gt(0)
+        dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
+        dec_attn_mask = dec_attn_mask.gt(0)
         if onmt.constants.torch_version >= 1.2:
             dec_attn_mask = dec_attn_mask.bool()
 
@@ -251,7 +276,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         for i, layer in enumerate(self.layer_modules):
             # batch_size x len_src x d_model
-            output, coverage = layer(output, context, pos_emb, self.r_w_bias, self.r_r_bias, dec_attn_mask, mask_src)
+            # output, coverage = layer(output, context, pos_emb, self.r_w_bias, self.r_r_bias, dec_attn_mask, mask_src)
+            output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src)
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -347,8 +373,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
             # output, coverage, buffer = layer.step(output, context, pos_emb, self.r_w_bias, self.r_r_bias,
             #                                       dec_attn_mask, mask_src, buffer=buffer)
-            output, coverage = layer(output, context, pos_emb, self.r_w_bias, self.r_r_bias,
-                                                  dec_attn_mask, mask_src)
+            output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src)
 
             # decoder_state.update_attention_buffer(buffer, i)
 

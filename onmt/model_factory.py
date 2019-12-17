@@ -180,6 +180,8 @@ def build_tm_model(opt, dicts):
     else:
         raise NotImplementedError
 
+    # TODO: adding the "united" model (one encoder and one decoder)
+
     if opt.tie_weights:  
         print("Joining the weights of decoder input and output embeddings")
         model.tie_weights()
@@ -251,6 +253,11 @@ def init_model_parameters(model, opt):
                 init_weight(m.r_r_bias)
             if hasattr(m, 'r_bias'):
                 init_bias(m.r_bias)
+        elif classname.find('RelPartialLearnableMultiHeadAttn') != -1:
+            if hasattr(m, 'r_w_bias'):
+                init_weight(m.r_w_bias)
+            if hasattr(m, 'r_r_bias'):
+                init_weight(m.r_r_bias)
 
     model.apply(weights_init)
     model.decoder.word_lut.apply(weights_init)

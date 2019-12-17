@@ -61,7 +61,7 @@ def make_parser(parser):
                         help='Apply variational dropout (same network per timestep)')
     parser.add_argument('-weight_norm', action='store_true',
                       help='Apply weight normalization on linear modules')
-    parser.add_argument('-death_rate', type=float, default=0.5,
+    parser.add_argument('-death_rate', type=float, default=0.0,
                         help='Stochastic layer death rate')  
     parser.add_argument('-activation_layer', default='linear_relu_linear', type=str,
                         help='The activation layer in each transformer block linear_relu_linear|linear_swish_linear|maxout')

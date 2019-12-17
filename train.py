@@ -79,7 +79,7 @@ def main():
     elif opt.data_format == 'bin':
         print("Loading memory binned data files ....")
         start = time.time()
-        from onmt.data.IndexedDataset import IndexedInMemoryDataset
+        from onmt.data.indexed_dataset import IndexedInMemoryDataset
 
         dicts = torch.load(opt.data + ".dict.pt")
 
@@ -109,7 +109,7 @@ def main():
     elif opt.data_format == 'mmem':
         print("Loading memory mapped data files ....")
         start = time.time()
-        from onmt.data.MMapIndexedDataset import MMapIndexedDataset
+        from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
 
         # d = onmt.Dict()
 
@@ -164,7 +164,7 @@ def main():
                                           augment=opt.augment_speech))
             elif add_format[i] == 'bin':
 
-                from onmt.data.IndexedDataset import IndexedInMemoryDataset
+                from onmt.data.indexed_dataset import IndexedInMemoryDataset
 
                 train_path = add_data[i] + '.train'
                 train_src = IndexedInMemoryDataset(train_path + '.src')

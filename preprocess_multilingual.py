@@ -3,7 +3,7 @@ import onmt.markdown
 import argparse
 import torch
 
-from onmt.data.IndexedDataset import IndexedDatasetBuilder
+from onmt.data.indexed_dataset import IndexedDatasetBuilder
 
 parser = argparse.ArgumentParser(description='preprocess.py')
 onmt.markdown.add_md_help_argument(parser)

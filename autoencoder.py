@@ -90,7 +90,7 @@ def main():
               len(dataset['train']['src']))
         print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
     elif opt.data_format == 'bin':
-        from onmt.data.IndexedDataset import IndexedInMemoryDataset
+        from onmt.data.indexed_dataset import IndexedInMemoryDataset
 
         dicts = torch.load(opt.data + ".dict.pt")
 
