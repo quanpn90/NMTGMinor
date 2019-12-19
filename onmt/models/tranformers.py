@@ -512,25 +512,22 @@ class Transformer(NMTModel):
             batch.switchout(self.switchout, self.src_vocab_size, self.tgt_vocab_size)
 
         src = batch.get('source')
-        #  src = batch.get('source_rev')
         tgt = batch.get('target_input')
+        src_pos = batch.get('source_pos')
+        tgt_pos = batch.get('target_pos')
         tgt_atb = batch.get('target_atb')  # a dictionary of attributes
-
-        # src = flip(src, 0)
-        # inv_idx = torch.arange(src.size(0) - 1, -1, -1, device=src.device, dtype=src.dtype).long()
-        # src = src.index_select(0, inv_idx)
 
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
-        encoder_output = self.encoder(src)
+        encoder_output = self.encoder(src, input_pos=src_pos)
         context = encoder_output['context']
 
         # zero out the encoder part for pre-training
         if zero_encoder:
             context.zero_()
 
-        decoder_output = self.decoder(tgt, context, src, atbs=tgt_atb)
+        decoder_output = self.decoder(tgt, context, src, atbs=tgt_atb, input_pos=tgt_pos)
         output = decoder_output['hidden']
 
         output_dict = defaultdict(lambda: None)

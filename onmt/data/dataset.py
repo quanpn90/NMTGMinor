@@ -52,22 +52,24 @@ class Batch(object):
         self.tgt_align_right = tgt_align_right
 
         if src_data is not None:
-            self.tensors['source'], self.src_lengths = self.collate(src_data,
+            self.tensors['source'], self.tensors['source_pos'], self.src_lengths = self.collate(src_data,
                                                                     align_right=self.src_align_right,
                                                                     type=self.src_type,
                                                                     augmenter=augmenter)
             self.tensors['source'] = self.tensors['source'].transpose(0, 1).contiguous()
+            self.tensors['source_pos'] = self.tensors['source_pos'].transpose(0, 1)
             self.tensors['src_length'] = torch.LongTensor(self.src_lengths)
             self.src_size = sum(self.src_lengths)
         else:
             self.src_size = 0
 
         if tgt_data is not None:
-            target_full, self.tgt_lengths = self.collate(tgt_data, align_right=self.tgt_align_right)
+            target_full, target_pos, self.tgt_lengths = self.collate(tgt_data, align_right=self.tgt_align_right)
             target_full = target_full.t().contiguous()  # transpose BxT to TxB
             self.tensors['target'] = target_full
             self.tensors['target_input'] = target_full[:-1]
             self.tensors['target_output'] = target_full[1:]
+            self.tensors['target_pos'] = target_pos.t().contiguous()[:-1]
             self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.constants.PAD)
             self.has_target = True
             self.tgt_size = sum([len(x) - 1 for x in tgt_data])
@@ -138,14 +140,18 @@ class Batch(object):
         # initialize with batch_size * length
         if type == "text":
             lengths = [x.size(0) for x in data]
+            positions = [torch.arange(length_) for length_ in lengths]
             max_length = max(lengths)
             tensor = data[0].new(len(data), max_length).fill_(onmt.constants.PAD)
+            pos = tensor.new(*tensor.size()).fill_(0)
+
             for i in range(len(data)):
                 data_length = data[i].size(0)
                 offset = max_length - data_length if align_right else 0
                 tensor[i].narrow(0, offset, data_length).copy_(data[i])
+                pos[i].narrow(0, offset, data_length).copy_(positions[i])
 
-            return tensor, lengths
+            return tensor, pos, lengths
 
         elif type == "audio":
 
@@ -167,6 +173,7 @@ class Batch(object):
 
             # compute the lengths afte on-the-fly processing
             lengths = [x.size(0) for x in samples]
+
             max_length = max(lengths)
 
             # allocate data for the batch speech
@@ -250,6 +257,8 @@ class Dataset(torch.utils.data.Dataset):
         self.src = src_data
         self._type = data_type
         self.src_align_right = src_align_right
+        if self.src_align_right:
+            print("* Source sentences aligned to the right side.")
         self.tgt_align_right = tgt_align_right
         self.upsampling = kwargs.get('upsampling', False)
         # self.reshape_speech = reshape_speech

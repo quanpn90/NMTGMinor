@@ -5,6 +5,7 @@ from onmt.models.tranformers import TransformerEncoder, TransformerDecoder, Tran
 from onmt.models.transformer_layers import PositionalEncoding
 from onmt.models.relative_transformer import SinusoidalPositionalEmbedding
 from onmt.modules.copy_generator import CopyGenerator
+from options import backward_compatible
 
 init = torch.nn.init
 
@@ -13,50 +14,7 @@ MAX_LEN = onmt.constants.max_position_length  # This should be the longest sente
 
 def build_model(opt, dicts):
 
-    model = None
-
-    # FOR BACKWARD COMPATIBILITY
-    if not hasattr(opt, 'model'):
-        opt.model = 'recurrent'
-
-    if not hasattr(opt, 'layer_norm'):
-        opt.layer_norm = 'slow'
-
-    if not hasattr(opt, 'attention_out'):
-        opt.attention_out = 'default'
-
-    if not hasattr(opt, 'residual_type'):
-        opt.residual_type = 'regular'
-
-    if not hasattr(opt, 'input_size'):
-        opt.input_size = 40
-
-    if not hasattr(opt, 'init_embedding'):
-        opt.init_embedding = 'xavier'
-
-    if not hasattr(opt, 'ctc_loss'):
-        opt.ctc_loss = 0
-
-    if not hasattr(opt, 'encoder_layers'):
-        opt.encoder_layers = -1
-
-    if not hasattr(opt, 'fusion'):
-        opt.fusion = False
-
-    if not hasattr(opt, 'cnn_downsampling'):
-        opt.cnn_downsampling = False
-
-    if not hasattr(opt, 'switchout'):
-        opt.switchout = 0.0
-
-    if not hasattr(opt, 'variational_dropout'):
-        opt.variational_dropout = False
-
-    if not hasattr(opt, 'copy_generator'):
-        opt.copy_generator = False
-
-    if not hasattr(opt, 'upsampling'):
-        opt.upsampling = False
+    opt = backward_compatible(opt)
 
     onmt.constants.layer_norm = opt.layer_norm
     onmt.constants.weight_norm = opt.weight_norm
@@ -173,9 +131,17 @@ def build_tm_model(opt, dicts):
         generator = nn.ModuleList(generators)
 
         decoder = RelativeTransformerDecoder(opt, embedding_tgt, None, attribute_embeddings=attribute_embeddings)
-        # decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, attribute_embeddings=attribute_embeddings)
-
         model = Transformer(encoder, decoder, generator)
+
+    elif opt.model == 'unified_transformer':
+        from onmt.models.relative_transformer import RelativeTransformer
+
+        if opt.encoder_type == "audio":
+            raise NotImplementedError
+
+        generator = nn.ModuleList(generators)
+        model = RelativeTransformer(opt, embedding_src, embedding_tgt,
+                                    generator, None, attribute_embeddings=attribute_embeddings)
 
     else:
         raise NotImplementedError
@@ -186,30 +152,30 @@ def build_tm_model(opt, dicts):
         print("Joining the weights of decoder input and output embeddings")
         model.tie_weights()
 
-    for g in model.generator:
-        init.xavier_uniform_(g.linear.weight)
-
-    if opt.encoder_type == "audio":
-
-        if opt.init_embedding == 'xavier':
-            init.xavier_uniform_(model.decoder.word_lut.weight)
-        elif opt.init_embedding == 'normal':
-            init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
-    else:
-        if opt.init_embedding == 'xavier':
-            init.xavier_uniform_(model.encoder.word_lut.weight)
-            init.xavier_uniform_(model.decoder.word_lut.weight)
-        elif opt.init_embedding == 'normal':
-            # init.normal_(model.encoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
-            # init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
-            init.normal_(model.encoder.word_lut.weight, mean=0, std=0.01)
-            init.normal_(model.decoder.word_lut.weight, mean=0, std=0.01)
+    # if opt.encoder_type == "audio":
+    #
+    #     if opt.init_embedding == 'xavier':
+    #         init.xavier_uniform_(model.decoder.word_lut.weight)
+    #     elif opt.init_embedding == 'normal':
+    #         init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
+    # else:
+    #     if opt.init_embedding == 'xavier':
+    #         init.xavier_uniform_(model.encoder.word_lut.weight)
+    #         init.xavier_uniform_(model.decoder.word_lut.weight)
+    #     elif opt.init_embedding == 'normal':
+    #         # init.normal_(model.encoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
+    #         # init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
+    #         init.normal_(model.encoder.word_lut.weight, mean=0, std=0.01)
+    #         init.normal_(model.decoder.word_lut.weight, mean=0, std=0.01)
 
     return model
 
 
 def init_model_parameters(model, opt):
-    init_std = 0.02
+    """
+    Initializing model parameters. Mostly using normal distribution (0, std)
+    """
+    init_std = 0.02  # magic number
 
     def init_weight(weight):
         nn.init.normal_(weight, 0.0, init_std)
@@ -260,7 +226,11 @@ def init_model_parameters(model, opt):
                 init_weight(m.r_r_bias)
 
     model.apply(weights_init)
-    model.decoder.word_lut.apply(weights_init)
+
+    if hasattr(model, 'decoder'):
+        model.decoder.word_lut.apply(weights_init)
+    else:
+        model.tgt_embedding.apply(weights_init)
 
     return
 
@@ -318,6 +288,9 @@ def build_fusion(opt, dicts):
 
 
 def optimize_model(model):
+    """
+    Used to potentially upgrade the components with more optimized counterparts in the future
+    """
 
     def replace_layer_norm(m, name):
 
@@ -328,7 +301,6 @@ def optimize_model(model):
             from apex.normalization.fused_layer_norm import FusedLayerNorm
             fused_layer_norm_cuda = importlib.import_module("fused_layer_norm_cuda")
 
-        # except ImportError:
         except ModuleNotFoundError:
             replacable = False
 
@@ -339,7 +311,6 @@ def optimize_model(model):
                     setattr(m, attr_str, FusedLayerNorm(target_attr.normalized_shape,
                                                         eps=target_attr.eps,
                                                         elementwise_affine=target_attr.elementwise_affine))
-                    # print('replaced: ', name, attr_str)
             for n, ch in m.named_children():
                 replace_layer_norm(ch, n)
 

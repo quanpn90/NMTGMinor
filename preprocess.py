@@ -114,6 +114,7 @@ def make_vocab(filenames, size, tokenizer):
 
     return vocab
 
+
 def init_vocab(name, data_files, vocab_file, vocab_size, tokenizer, join=False):
     vocab = None
     if vocab_file is not None:

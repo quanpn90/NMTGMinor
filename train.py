@@ -124,7 +124,8 @@ def main():
                                   batch_size_words=opt.batch_size_words,
                                   data_type="text",
                                   batch_size_sents=opt.batch_size_sents,
-                                  multiplier=opt.batch_size_multiplier)
+                                  multiplier=opt.batch_size_multiplier,
+                                  src_align_right=opt.src_align_right)
 
         valid_path = opt.data + '.valid'
         valid_src = MMapIndexedDataset(valid_path + '.src')
@@ -134,7 +135,8 @@ def main():
                                   valid_tgt,
                                   batch_size_words=opt.batch_size_words,
                                   data_type="text",
-                                  batch_size_sents=opt.batch_size_sents)
+                                  batch_size_sents=opt.batch_size_sents,
+                                  src_align_right=opt.src_align_right)
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
         print("Done after %s" % elapse)
 

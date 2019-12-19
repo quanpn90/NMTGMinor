@@ -166,15 +166,14 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
         return input, coverage
 
-    def step(self, input, context, pos_emb, r_w_bias, r_r_bias, mask_tgt, mask_src, buffer=None):
+    def step(self, input, context, pos_emb, mask_tgt, mask_src, buffer=None):
         """ Self attention layer
             layernorm > attn > dropout > residual
         """
-        raise NotImplementedError
 
         query = self.preprocess_attn(input)
 
-        out, _, buffer = self.multihead_tgt.step(query, pos_emb, r_w_bias, r_r_bias, attn_mask=mask_tgt, buffer=buffer)
+        out, _, buffer = self.multihead_tgt.step(query, pos_emb, attn_mask=mask_tgt, buffer=buffer)
 
         input = self.postprocess_attn(out, input)
 

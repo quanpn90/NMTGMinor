@@ -15,6 +15,9 @@ def make_parser(parser):
                         help='ratio how to use the data and additiona data  e.g. 1;2;2; default 1;1;1;1;...')
     parser.add_argument('-patch_vocab_multiplier', type=int, default=1,
                         help='Pad vocab so that the size divides by this multiplier')
+    parser.add_argument('-src_align_right', action="store_true",
+                        help="""Aligning the source sentences to the right (default=left for Transformer)""")
+    # MODEL UTIL
     parser.add_argument('-save_model', default='model',
                         help="""Model filename (the model will be saved as
                         <save_model>_epochN_PPL.pt where PPL is the
@@ -22,13 +25,14 @@ def make_parser(parser):
     parser.add_argument('-load_from', default='', type=str,
                         help="""If training from a checkpoint then this is the
                         path to the pretrained model.""")
+
+    # MODEL CONFIG
     parser.add_argument('-model', default='recurrent',
                         help="Optimization method. [recurrent|transformer|stochastic_transformer]")
     parser.add_argument('-layers', type=int, default=2,
                         help='Number of layers in the LSTM encoder/decoder')                   
     parser.add_argument('-encoder_layers', type=int, default=-1,
                         help='Number of layers in the LSTM encoder if different')                   
-    # Recurrent Model options
     parser.add_argument('-rnn_size', type=int, default=512,
                         help='Size of LSTM hidden states')
     parser.add_argument('-word_vec_size', type=int, default=512,
@@ -38,9 +42,8 @@ def make_parser(parser):
                         additional input (via concatenation with the word
                         embeddings) to the decoder.""")
 
-    parser.add_argument('-brnn_merge', default='concat',
-                        help="""Merge action for the bidirectional hidden states:
-                        [concat|sum]""")
+    parser.add_argument('-double_position', action='store_true',
+                        help="""Using double position encodings (absolute and relative)""")
 
     # Transforer Model options
     parser.add_argument('-model_size', type=int, default=512,
@@ -144,7 +147,7 @@ def make_parser(parser):
                         help='Reset the optimizer running variables')
     parser.add_argument('-beta1', type=float, default=0.9,
                         help="""beta_1 value for adam""")
-    parser.add_argument('-beta2', type=float, default=0.98,
+    parser.add_argument('-beta2', type=float, default=0.997,
                         help="""beta_2 value for adam""")
     parser.add_argument('-weight_decay', type=float, default=0.0,
                         help="""weight decay (L2 penalty)""")
@@ -207,3 +210,54 @@ def make_parser(parser):
                         help='Zero-out encoders during training')
 
     return parser
+
+
+def backward_compatible(opt):
+    # FOR BACKWARD COMPATIBILITY
+
+    if not hasattr(opt, 'model'):
+        opt.model = 'recurrent'
+
+    if not hasattr(opt, 'layer_norm'):
+        opt.layer_norm = 'slow'
+
+    if not hasattr(opt, 'attention_out'):
+        opt.attention_out = 'default'
+
+    if not hasattr(opt, 'residual_type'):
+        opt.residual_type = 'regular'
+
+    if not hasattr(opt, 'input_size'):
+        opt.input_size = 40
+
+    if not hasattr(opt, 'init_embedding'):
+        opt.init_embedding = 'xavier'
+
+    if not hasattr(opt, 'ctc_loss'):
+        opt.ctc_loss = 0
+
+    if not hasattr(opt, 'encoder_layers'):
+        opt.encoder_layers = -1
+
+    if not hasattr(opt, 'fusion'):
+        opt.fusion = False
+
+    if not hasattr(opt, 'cnn_downsampling'):
+        opt.cnn_downsampling = False
+
+    if not hasattr(opt, 'switchout'):
+        opt.switchout = 0.0
+
+    if not hasattr(opt, 'variational_dropout'):
+        opt.variational_dropout = False
+
+    if not hasattr(opt, 'copy_generator'):
+        opt.copy_generator = False
+
+    if not hasattr(opt, 'upsampling'):
+        opt.upsampling = False
+
+    if not hasattr(opt, 'double_position'):
+        opt.double_position = False
+
+    return opt

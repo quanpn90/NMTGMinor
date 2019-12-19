@@ -47,6 +47,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
     def __init__(self, opt, dicts, positional_encoder, encoder_type='text'):
         self.death_rate = opt.death_rate
+        self.double_position = opt.double_position
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type)
@@ -74,28 +75,36 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
             self.layer_modules.append(block)
 
-    def forward(self, input, **kwargs):
+    def forward(self, input, input_pos=None, **kwargs):
         """
         Inputs Shapes:
-            input: batch_size x len_src (wanna tranpose)
+            input: batch_size x src_len (wanna tranpose)
 
         Outputs Shapes:
-            out: batch_size x len_src x d_model
+            out: batch_size x src_len x d_model
             mask_src
 
         """
 
-        """ Embedding: batch_size x len_src x d_model """
+        """ Embedding: batch_size x src_len x d_model """
         if self.input_type == "text":
-            # mask_src = input.eq(onmt.constants.PAD).unsqueeze(1)  # batch_size x len_src x 1 for broadcasting
-            mask_src = input.transpose(0, 1).eq(onmt.constants.PAD).unsqueeze(0)
-            dec_attn_mask = input.eq(onmt.constants.PAD).unsqueeze(1)
+            bsz_first_input = input
+            input = input.transpose(0, 1)
+            # mask_src = input.eq(onmt.constants.PAD).unsqueeze(1)  # batch_size x src_len x 1 for broadcasting
+            mask_src = input.eq(onmt.constants.PAD).unsqueeze(0)
+            dec_attn_mask = bsz_first_input.transpose(0, 1).eq(onmt.constants.PAD).unsqueeze(1)
 
-            # apply switchout
-            # if self.switchout > 0 and self.training:
-            #     vocab_size = self.word_lut.weight.size(0)
-            #     input = switchout(input, vocab_size, self.switchout)
             emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+
+            if self.double_position:
+                assert input_pos is not None
+
+                # flatten
+                src_len, bsz = input_pos.size(0), input_pos.size(1)
+                input_pos_ = input_pos.view(-1).type_as(emb)
+                abs_pos = self.positional_encoder(input_pos_)
+                abs_pos = abs_pos.squeeze(1).view(src_len, bsz, -1)
+
         else:
             if not self.cnn_downsampling:
                 mask_src = input.narrow(2, 0, 1).squeeze(2).transpose(0, 1).eq(onmt.constants.PAD).unsqueeze(0)
@@ -128,14 +137,18 @@ class RelativeTransformerEncoder(TransformerEncoder):
         """ Scale the emb by sqrt(d_model) """
         emb = emb * math.sqrt(self.model_size)
 
+        if self.double_position:
+            # adding position encoding
+            emb = emb + abs_pos
+
         """ Adding positional encoding """
-        klen = input.size(1)
+        klen = input.size(0)
         pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
 
         pos_emb = self.positional_encoder(pos)
 
         # B x T x H -> T x B x H
-        context = emb.transpose(0, 1)
+        context = emb
 
         # Apply dropout to both context and pos_emb
         context = self.preprocess_layer(context)
@@ -144,7 +157,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         for i, layer in enumerate(self.layer_modules):
 
-            # len_src x batch_size x d_model
+            # src_len x batch_size x d_model
             # context = layer(context, pos_emb, self.r_w_bias, self.r_r_bias, mask_src)
             context = layer(context, pos_emb, mask_src)
 
@@ -173,6 +186,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
     def __init__(self, opt, dicts, positional_encoder, attribute_embeddings=None, ignore_source=False):
 
         self.death_rate = opt.death_rate
+        self.double_position = opt.double_position
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerDecoder, self).__init__(opt, dicts,
@@ -224,21 +238,30 @@ class RelativeTransformerDecoder(TransformerDecoder):
             emb = torch.relu(self.feature_projector(emb))
         return emb
 
-    def forward(self, input, context, src, atbs=None, **kwargs):
+    def forward(self, input, context, src, input_pos=None, atbs=None, **kwargs):
         """
                 Inputs Shapes:
                     input: (Variable) batch_size x len_tgt (wanna tranpose)
-                    context: (Variable) batch_size x len_src x d_model
-                    mask_src (Tensor) batch_size x len_src
+                    context: (Variable) batch_size x src_len x d_model
+                    mask_src (Tensor) batch_size x src_len
                 Outputs Shapes:
                     out: batch_size x len_tgt x d_model
-                    coverage: batch_size x len_tgt x len_src
+                    coverage: batch_size x len_tgt x src_len
 
                 """
 
         """ Embedding: batch_size x len_tgt x d_model """
+        input = input.transpose(0, 1)
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         emb = emb * math.sqrt(self.model_size)
+
+        if self.double_position:
+            assert input_pos is not None
+            tgt_len, bsz = input_pos.size(0), input_pos.size(1)
+            input_pos_ = input_pos.view(-1).type_as(emb)
+            abs_pos = self.positional_encoder(input_pos_).squeeze(1).view(tgt_len, bsz, -1)
+
+            emb = emb + abs_pos
 
         if context is not None:
             if self.encoder_type == "audio":
@@ -253,13 +276,13 @@ class RelativeTransformerDecoder(TransformerDecoder):
         else:
             mask_src = None
 
-        qlen = input.size(1)
-        klen = input.size(1)
-        mlen = 0  # extra memory if expanded
+        qlen = input.size(0)
+        klen = input.size(0)
+        mlen = klen-qlen  # extra memory if expanded
         # preparing self-attention mask. The input is either left or right aligned
         dec_attn_mask = torch.triu(
             emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]
-        pad_mask = input.transpose(0, 1).eq(onmt.constants.PAD).byte()  # L x B
+        pad_mask = input.eq(onmt.constants.PAD).byte()  # L x B
 
         dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
         dec_attn_mask = dec_attn_mask.gt(0)
@@ -270,12 +293,12 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         pos_emb = self.positional_encoder(pos)
 
-        output = self.preprocess_layer(emb.transpose(0, 1).contiguous())
+        output = self.preprocess_layer(emb.contiguous())
 
         pos_emb = self.preprocess_layer(pos_emb)
 
         for i, layer in enumerate(self.layer_modules):
-            # batch_size x len_src x d_model
+            # batch_size x src_len x d_model
             # output, coverage = layer(output, context, pos_emb, self.r_w_bias, self.r_r_bias, dec_attn_mask, mask_src)
             output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src)
 
@@ -293,12 +316,12 @@ class RelativeTransformerDecoder(TransformerDecoder):
         """
         Inputs Shapes:
             input: (Variable) batch_size x len_tgt (wanna tranpose)
-            context: (Variable) batch_size x len_src x d_model
-            mask_src (Tensor) batch_size x len_src
+            context: (Variable) batch_size x src_len x d_model
+            mask_src (Tensor) batch_size x src_len
             buffer (List of tensors) List of batch_size * len_tgt-1 * d_model for self-attention recomputing
         Outputs Shapes:
             out: batch_size x len_tgt x d_model
-            coverage: batch_size x len_tgt x len_src
+            coverage: batch_size x len_tgt x src_len
 
         """
         context = decoder_state.context
@@ -323,11 +346,20 @@ class RelativeTransformerDecoder(TransformerDecoder):
         #     input_ = input
         """ Embedding: batch_size x 1 x d_model """
         # emb = self.word_lut(input_)  # * math.sqrt(self.model_size)
+        input = input.transpose(0, 1)
         emb = self.word_lut(input) * math.sqrt(self.model_size)
 
+        if self.double_position:
+            input_pos = torch.arange(input.size(0), type=emb.type, device=emb.device)
+            input_pos = input_pos.unsqueeze(1).expand_as(input)
+            tgt_len, bsz = input_pos.size(0), input_pos.size(1)
+            input_pos_ = input_pos.view(-1).type_as(emb)
+            abs_pos = self.positional_encoder(input_pos_).squeeze(1).view(tgt_len, bsz, -1)
+            emb = emb + abs_pos
+
         # prepare position encoding
-        klen = input.size(1)
-        qlen = input.size(1)
+        klen = input.size(0)
+        qlen = input.size(0)
         mlen = 0
 
         pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
@@ -337,10 +369,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
         dec_attn_mask = torch.triu(
             emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]
 
-        pad_mask = input.transpose(0, 1).eq(onmt.constants.PAD).byte()  # L x B
+        pad_mask = input.eq(onmt.constants.PAD).byte()  # L x B
 
-        # dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
-        # dec_attn_mask = dec_attn_mask.gt(0)
+        dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
+        dec_attn_mask = dec_attn_mask.gt(0)
 
         if onmt.constants.torch_version >= 1.2:
             dec_attn_mask = dec_attn_mask.bool()
@@ -363,16 +395,14 @@ class RelativeTransformerDecoder(TransformerDecoder):
             emb = torch.cat([emb, atb_emb], dim=-1)
             emb = torch.relu(self.feature_projector(emb))
 
-        emb = emb.transpose(0, 1)
-
         output = emb.contiguous()
 
         for i, layer in enumerate(self.layer_modules):
             buffer = buffers[i] if i in buffers else None
             # assert (output.size(0) == 1)
 
-            # output, coverage, buffer = layer.step(output, context, pos_emb, self.r_w_bias, self.r_r_bias,
-            #                                       dec_attn_mask, mask_src, buffer=buffer)
+            output, coverage, buffer = layer.step(output, context, pos_emb, 
+                                                  dec_attn_mask, mask_src, buffer=buffer)
             output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src)
 
             # decoder_state.update_attention_buffer(buffer, i)
@@ -388,3 +418,144 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         return output_dict
 
+
+class RelativeTransformer(TransformerDecoder):
+    """
+    This class combines the encoder and the decoder into one single sequence
+    Joined attention between encoder and decoder parts
+    """
+    def __init__(self, opt, src_embedding, tgt_embedding, generator, positional_encoder, encoder_type='text', **kwargs):
+        self.death_rate = opt.death_rate
+        self.layer_modules = []
+
+        # build_modules will be called from the inherited constructor
+        super(RelativeTransformer, self).__init__(opt, tgt_embedding,
+                                                  positional_encoder,
+                                                  allocate_positions=False)
+        self.src_embedding = src_embedding
+        self.tgt_embedding = tgt_embedding
+        # self.language_embedding = nn.Embedding(3, self.model_size, padding_idx=0)
+        self.generator = generator
+        self.ignore_source = True
+        self.encoder_type = opt.encoder_type
+
+        self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
+        self.d_head = self.model_size // self.n_heads
+
+        e_length = expected_length(self.layers, self.death_rate)
+
+        print("* Transformer Decoder with Relative Attention with %.2f expected layers" % e_length)
+
+        self.build_modules()
+
+    def build_modules(self):
+        self.layer_modules = nn.ModuleList()
+
+        for l in range(self.layers):
+            # linearly decay the death rate
+            death_r = (l + 1.0) / self.layers * self.death_rate
+
+            block = RelativeTransformerDecoderLayer(self.n_heads, self.model_size,
+                                                    self.dropout, self.inner_size, self.attn_dropout,
+                                                    ignore_source=True,
+                                                    variational=self.variational_dropout, death_rate=death_r)
+            self.layer_modules.append(block)
+
+    def forward(self, batch, target_mask=None, **kwargs):
+
+        src = batch.get('source')  # src_len x batch_size
+        tgt = batch.get('target_input')  # len_tgt x batch_size
+
+        tgt_len = tgt.size(0)
+        src_len = src.size(0)
+        bsz = tgt.size(1)
+
+        # Embedding stage
+        src_emb = embedded_dropout(self.src_embedding, src, dropout=self.word_dropout if self.training else 0)
+        tgt_emb = embedded_dropout(self.tgt_embedding, tgt, dropout=self.word_dropout if self.training else 0)
+
+        # src_lang = src.new(*src.size()).fill_(1)
+        # tgt_lang = tgt.new(*tgt.size()).fill_(1)
+
+        # concatenate embedding
+        emb = torch.cat([src_emb, tgt_emb], dim=0)  # L x batch_size x H
+        emb = emb * math.sqrt(self.model_size)
+
+        # prepare self-attention mask
+        # For the source: we have two different parts
+        # [1 x src_len x batch_size]
+        mask_src_src = src.eq(onmt.constants.PAD).unsqueeze(0).byte()
+        src_pad_mask = mask_src_src
+        mask_src_tgt = mask_src_src.new_ones(1, 1, 1).expand(src_len, tgt_len, bsz)
+        # [src_len x L x batch_size]
+        mask_src = torch.cat([mask_src_src.expand(src_len, src_len, bsz), mask_src_tgt], dim=1)
+        mask_src = mask_src.bool()
+
+        # For the target:
+        qlen = tgt_len
+        klen = tgt_len + src_len
+
+        mlen = klen - qlen  # extra memory if expanded
+        # preparing self-attention mask. The input is either left or right aligned
+        dec_attn_mask = torch.triu(
+            emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]  # tgt_len x L x 1
+        dec_pad_mask = tgt.eq(onmt.constants.PAD).byte().unsqueeze(0)  # 1 x len_tgt x batch_size
+        dec_pad_mask = torch.cat([src_pad_mask, dec_pad_mask], dim=1)  # 1 x L x batch_size
+
+        dec_attn_mask = dec_attn_mask + dec_pad_mask
+        dec_attn_mask = dec_attn_mask.gt(0)
+        dec_mask = dec_attn_mask.bool()  # tgt_len x L x batch_size
+
+        attn_mask = torch.cat([mask_src, dec_mask], dim=0)  # L x L x batch_size
+
+        output = emb
+
+        # position encoding:
+        pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+        pos_emb = self.positional_encoder(pos)
+
+        # Applying dropout
+        output = self.preprocess_layer(output)
+        pos_emb = self.preprocess_layer(pos_emb)
+
+        # FORWARD PASS
+        coverage = None
+        for i, layer in enumerate(self.layer_modules):
+            output, coverage = layer(output, None, pos_emb, attn_mask, None)
+
+        # Final normalization
+        output = self.postprocess_layer(output)
+
+        # extract the "source" and "target" parts of the output
+        context = output[:src_len, :, :]
+        output = output[-tgt_len:, :, :]
+        output_dict = {'hidden': output, 'coverage': coverage, 'context': context, 'src': src,
+                       'target_mask': target_mask}
+
+        # final layer: computing log probabilities
+        logprobs = self.generator[0](output_dict)
+        output_dict['logprobs'] = logprobs
+
+        return output_dict
+
+    def decode(self, batch):
+        raise NotImplementedError
+
+    def renew_buffer(self, new_len):
+        return
+
+    def reset_states(self):
+        return
+
+    def step(self, input_t, decoder_state):
+        raise NotImplementedError
+
+    def create_decoder_state(self, batch, beam_size=1, type=1):
+        raise NotImplementedError
+
+    def tie_weights(self):
+        assert self.generator is not None, "The generator needs to be created before sharing weights"
+        self.generator[0].linear.weight = self.tgt_embedding.weight
+
+    def share_enc_dec_embedding(self):
+        self.src_embedding.weight = self.tgt_embedding.weight

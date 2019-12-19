@@ -238,7 +238,7 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
 
         return output, coverage
 
-    def step(self, w, r, r_w_bias, r_r_bias, attn_mask=None, mems=None, buffer=None, debug=False):
+    def step(self, w, r, attn_mask=None, mems=None, buffer=None, debug=False):
         """
         :param w: input embeddings (E) T x B x H
         :param r: relative encodings (R)
