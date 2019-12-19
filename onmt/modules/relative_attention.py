@@ -248,6 +248,9 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         :param mems:
         :return:
         """
+        r_w_bias = self.r_r_bias
+        r_r_bias = self.r_r_bias
+
         qlen, rlen, bsz = w.size(0), r.size(0), w.size(1)
 
         if mems is not None:

@@ -92,7 +92,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
             input = input.transpose(0, 1)
             # mask_src = input.eq(onmt.constants.PAD).unsqueeze(1)  # batch_size x src_len x 1 for broadcasting
             mask_src = input.eq(onmt.constants.PAD).unsqueeze(0)
-            dec_attn_mask = bsz_first_input.transpose(0, 1).eq(onmt.constants.PAD).unsqueeze(1)
+            dec_attn_mask = bsz_first_input.eq(onmt.constants.PAD).unsqueeze(1)
 
             emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
 
@@ -401,8 +401,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
             buffer = buffers[i] if i in buffers else None
             # assert (output.size(0) == 1)
 
-            output, coverage, buffer = layer.step(output, context, pos_emb, 
-                                                  dec_attn_mask, mask_src, buffer=buffer)
+            # output, coverage, buffer = layer.step(output, context, pos_emb,
+            #                                       dec_attn_mask, mask_src, buffer=buffer)
             output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src)
 
             # decoder_state.update_attention_buffer(buffer, i)
