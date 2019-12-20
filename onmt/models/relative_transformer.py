@@ -40,8 +40,6 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type)
-
-        print("Encoder type: %s", encoder_type)
         self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
 
@@ -269,7 +267,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         qlen = input.size(0)
         klen = input.size(0)
-        mlen = klen-qlen  # extra memory if expanded
+        mlen = klen - qlen  # extra memory if expanded
         # preparing self-attention mask. The input is either left or right aligned
         dec_attn_mask = torch.triu(
             emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]
@@ -320,7 +318,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         atbs = decoder_state.tgt_atb
         mask_src = decoder_state.src_mask
 
-        if decoder_state.concat_input_seq == True:
+        if decoder_state.concat_input_seq:
             if decoder_state.input_seq is None:
                 decoder_state.input_seq = input
             else:
@@ -351,10 +349,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
             emb = emb + abs_pos[-1:, :, :]
 
         # prepare position encoding
-
-        # qlen = input.size(0)
         qlen = emb.size(0)
-        mlen = klen-qlen
+        mlen = klen - qlen
 
         pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
 
@@ -418,6 +414,7 @@ class RelativeTransformer(TransformerDecoder):
     This class combines the encoder and the decoder into one single sequence
     Joined attention between encoder and decoder parts
     """
+
     def __init__(self, opt, src_embedding, tgt_embedding, generator, positional_encoder, encoder_type='text', **kwargs):
         self.death_rate = opt.death_rate
         self.layer_modules = []
@@ -560,6 +557,7 @@ class RelativeTransformer(TransformerDecoder):
     This class combines the encoder and the decoder into one single sequence
     Joined attention between encoder and decoder parts
     """
+
     def __init__(self, opt, src_embedding, tgt_embedding, generator, positional_encoder, encoder_type='text', **kwargs):
         self.death_rate = opt.death_rate
         self.layer_modules = []

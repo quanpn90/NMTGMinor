@@ -27,14 +27,14 @@ def make_parser(parser):
                         path to the pretrained model.""")
 
     # MODEL CONFIG
-    parser.add_argument('-model', default='recurrent',
-                        help="Optimization method. [recurrent|transformer|stochastic_transformer]")
+    parser.add_argument('-model', default='transformer',
+                        help="Translation model. [transformer|relative_transformer  ]")
     parser.add_argument('-layers', type=int, default=2,
-                        help='Number of layers in the LSTM encoder/decoder')                   
+                        help='Number of layers in the Transformer encoder/decoder')
     parser.add_argument('-encoder_layers', type=int, default=-1,
                         help='Number of layers in the LSTM encoder if different')                   
-    parser.add_argument('-rnn_size', type=int, default=512,
-                        help='Size of LSTM hidden states')
+    parser.add_argument('-max_pos_length', type=int, default=128    ,
+                        help='Maximum distance length for relative self-attention')
     parser.add_argument('-word_vec_size', type=int, default=512,
                         help='Word embedding sizes')
     parser.add_argument('-input_feed', type=int, default=1,
@@ -259,5 +259,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'double_position'):
         opt.double_position = False
+
+    if not hasattr(opt, 'max_pos_length'):
+        opt.max_pos_length = 0
 
     return opt

@@ -135,36 +135,16 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         self.r_w_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
         self.r_r_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
 
-    def forward(self, w, r, attn_mask=None, mems=None, debug=False):
-        """
-        :param w: input embeddings (E) T x B x H
-        :param r: relative encodings (R)
-        :param r_w_bias: n_head * d_head
-        :param r_r_bias: n_head * d_head (the global relative position bias)
-        :param attn_mask:
-        :param mems:
-        :return:
-        """
+    def compute_attention(self, r, w_head_q, w_head_k, w_head_v, attn_mask=None, debug=False):
+
         r_w_bias = self.r_r_bias
         r_r_bias = self.r_r_bias
 
-        qlen, rlen, bsz = w.size(0), r.size(0), w.size(1)
-
-        if mems is not None:
-            cat = torch.cat([mems, w], 0)
-            w_heads = self.qkv_net(cat)
-            r_head_k = self.r_net(r)
-
-            w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
-            w_head_q = w_head_q[-qlen:]
-        else:
-            # w_heads = self.qkv_net(self.layer_norm(w))
-            w_heads = self.qkv_net(w)
-            r_head_k = self.r_net(r)
-
-            w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
-
+        qlen, rlen, bsz = w_head_q.size(0), r.size(0), w_head_q.size(1)
         klen = w_head_k.size(0)
+        assert rlen >= klen  # can allocate more relative positions than klen
+
+        r_head_k = self.r_net(r)
 
         w_head_q = w_head_q.contiguous().view(qlen, bsz * self.n_head, self.d_head).transpose(0, 1)
         w_head_k = w_head_k.contiguous().view(klen, bsz * self.n_head, self.d_head).transpose(0, 1)
@@ -174,7 +154,7 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         w_head_k = w_head_k.view(bsz, self.n_head, klen, self.d_head)
 
         # r_head_k is the projected positions (not depending on the tensors)
-        r_head_k = r_head_k.view(rlen, self.n_head, self.d_head).transpose(0, 1)  # qlen x n_head x d_head
+        r_head_k = r_head_k.view(rlen, self.n_head, self.d_head).transpose(0, 1)  # rlen x n_head x d_head
 
         #### compute attention score
         # r_w_bias is [n_head, d_head]
@@ -188,7 +168,12 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         BD = BD.transpose(0, 2).transpose(1, 3)
         # relative_future_shift gives us 5 4 3 2 1 0 1 2 3 4 5 ... relatives for position at 0
         BD = _rel_future_shift(BD)
+
         BD = BD.transpose(0, 2).transpose(1, 3)
+        # output size of BD: [bsz, n_head, q_len, k_len]
+
+        # take the first klen results from BD (the rest might not be necessary)
+        BD = BD[:, :, :, :klen]
 
         # [bsz x n_head x qlen x klen]
         attn_score = AC + BD
@@ -201,7 +186,7 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         if attn_mask is not None and attn_mask.any().item():
             if attn_mask.dim() == 2:
                 attn_score = attn_score.float().masked_fill(
-                        attn_mask[None, :, :, None], -float('inf')).type_as(attn_score)
+                    attn_mask[None, :, :, None], -float('inf')).type_as(attn_score)
             elif attn_mask.dim() == 3:
                 attn_score = attn_score.float().masked_fill(
                     attn_mask[:, :, :, None], -float('inf')).type_as(attn_score)
@@ -212,7 +197,7 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         # [bsz x n_head x qlen x klen] again
         attn_prob = F.softmax(attn_score.float(), dim=-1)
 
-        # nan will happen ... because of the first positions (aligned right) they will have nothing to attend to
+        # nan will happen ... because of the first positions (aligned right) will have nothing to attend to
         nan_mask = torch.isnan(attn_prob)
         attn_prob = attn_prob.masked_fill(nan_mask, 0).type_as(attn_score)
 
@@ -238,20 +223,46 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
 
         return output, coverage
 
-    def step(self, w, r, attn_mask=None, mems=None, buffer=None, debug=False):
+    def forward(self, w, r, attn_mask=None, mems=None, debug=False):
         """
+        :param debug:
         :param w: input embeddings (E) T x B x H
         :param r: relative encodings (R)
-        :param r_w_bias: n_head * d_head
-        :param r_r_bias: n_head * d_head (the global relative position bias)
         :param attn_mask:
         :param mems:
         :return:
         """
-        r_w_bias = self.r_r_bias
-        r_r_bias = self.r_r_bias
 
         qlen, rlen, bsz = w.size(0), r.size(0), w.size(1)
+
+        if mems is not None:
+            cat = torch.cat([mems, w], 0)
+            w_heads = self.qkv_net(cat)
+
+
+            w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
+            w_head_q = w_head_q[-qlen:]
+        else:
+            # w_heads = self.qkv_net(self.layer_norm(w))
+            w_heads = self.qkv_net(w)
+            # r_head_k = self.r_net(r)
+
+            w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
+
+        output, coverage = self.compute_attention(r, w_head_q, w_head_k, w_head_v, attn_mask=attn_mask, debug=debug)
+
+        return output, coverage
+
+    def step(self, w, r, attn_mask=None, mems=None, buffer=None, debug=False):
+        """
+        :param debug:
+        :param buffer:
+        :param w: input embeddings (E) T x B x H
+        :param r: relative encodings (R)
+        :param attn_mask:
+        :param mems:
+        :return:
+        """
 
         if mems is not None:
             raise NotImplementedError
@@ -264,7 +275,7 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         # else:
             # w_heads = self.qkv_net(self.layer_norm(w))
         w_heads = self.qkv_net(w)
-        r_head_k = self.r_net(r)
+        # r_head_k = self.r_net(r)
 
         w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
 
@@ -279,79 +290,7 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
             buffer['k'] = w_head_k
             buffer['v'] = w_head_v
 
-        klen = w_head_k.size(0)
-
-        w_head_q = w_head_q.contiguous().view(qlen, bsz * self.n_head, self.d_head).transpose(0, 1)
-        w_head_k = w_head_k.contiguous().view(klen, bsz * self.n_head, self.d_head).transpose(0, 1)
-        w_head_v = w_head_v.contiguous().view(klen, bsz * self.n_head, self.d_head).transpose(0, 1)
-
-        w_head_q = w_head_q.view(bsz, self.n_head, qlen, self.d_head)
-        w_head_k = w_head_k.view(bsz, self.n_head, klen, self.d_head)
-
-        # r_head_k is the projected positions (not depending on the tensors)
-        r_head_k = r_head_k.view(rlen, self.n_head, self.d_head).transpose(0, 1)  # qlen x n_head x d_head
-
-        #### compute attention score
-        # r_w_bias is [n_head, d_head]
-        rw_head_q = w_head_q + r_w_bias.unsqueeze(1)  # qlen x bsz x n_head x d_head
-        AC = torch.matmul(rw_head_q, w_head_k.transpose(2, 3))
-        # AC = torch.einsum('ibnd,jbnd->ijbn', (rw_head_q, w_head_k))  # qlen x klen x bsz x n_head
-
-        # w_head_q = [
-        rr_head_q = w_head_q + r_r_bias.unsqueeze(1)
-        # [bsz, n_head, q_len, d] > [bsz, n_head, q_len, k_len]
-        BD = torch.matmul(rr_head_q, r_head_k.transpose(1, 2))
-
-        BD = BD.transpose(0, 2).transpose(1, 3)
-        # relative_future_shift gives us 5 4 3 2 1 0 1 2 3 4 5 ... relatives for position at 0
-        BD = _rel_future_shift(BD)
-        BD = BD.transpose(0, 2).transpose(1, 3)
-
-        # [bsz x n_head x qlen x klen]
-        attn_score = AC + BD
-        attn_score.mul_(self.scale)
-
-        # [qlen x klen x bsz x n_head]
-        attn_score = attn_score.transpose(0, 2).transpose(1, 3)
-
-        # compute attention probability
-        if attn_mask is not None and attn_mask.any().item():
-            if attn_mask.dim() == 2:
-                attn_score = attn_score.float().masked_fill(
-                        attn_mask[None, :, :, None], -float('inf')).type_as(attn_score)
-            elif attn_mask.dim() == 3:
-                attn_score = attn_score.float().masked_fill(
-                    attn_mask[:, :, :, None], -float('inf')).type_as(attn_score)
-
-        # [bsz x n_head x qlen x klen] again
-        attn_score = attn_score.transpose(0, 2).transpose(1, 3)
-
-        # [bsz x n_head x qlen x klen] again
-        attn_prob = F.softmax(attn_score.float(), dim=-1)
-
-        # nan will happen ... because of the first positions (aligned right) they will have nothing to attend to
-        nan_mask = torch.isnan(attn_prob)
-        attn_prob = attn_prob.masked_fill(nan_mask, 0).type_as(attn_score)
-
-        if debug:
-            n = nan_mask.byte().sum()
-            total = attn_prob.numel()
-            print("Total nan: %d %d " % (n, total))
-        coverage = attn_prob
-
-        attn_prob = self.dropatt(attn_prob)
-
-        attn_prob = attn_prob.view(bsz * self.n_head, qlen, klen)
-        # compute attention vector
-        # attn_vec = torch.einsum('ijbn,jbnd->ibnd', (attn_prob, w_head_v))
-        attn_vec = torch.bmm(attn_prob, w_head_v)
-
-        # [qlen x bsz x n_head x d_head]
-        attn_vec = attn_vec.transpose(0, 1).contiguous().view(qlen, bsz, self.d_model)
-
-        # linear projection
-        attn_out = self.o_net(attn_vec)
-        output = attn_out
+        output, coverage = self.compute_attention(r, w_head_q, w_head_k, w_head_v, attn_mask=attn_mask, debug=debug)
 
         return output, coverage, buffer
 
@@ -369,14 +308,15 @@ class RelLearnableMultiHeadAttn(RelMultiHeadAttn):
         qlen, bsz = w.size(0), w.size(1)
 
         if mems is not None:
-            cat = torch.cat([mems, w], 0)
-            if self.pre_lnorm:
-                w_heads = self.qkv_net(self.layer_norm(cat))
-            else:
-                w_heads = self.qkv_net(cat)
-            w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
-
-            w_head_q = w_head_q[-qlen:]
+            raise NotImplementedError
+            # cat = torch.cat([mems, w], 0)
+            # if self.pre_lnorm:
+            #     w_heads = self.qkv_net(self.layer_norm(cat))
+            # else:
+            #     w_heads = self.qkv_net(cat)
+            # w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
+            #
+            # w_head_q = w_head_q[-qlen:]
         else:
             if self.pre_lnorm:
                 w_heads = self.qkv_net(self.layer_norm(w))
