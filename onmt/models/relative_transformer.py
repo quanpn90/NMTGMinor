@@ -7,20 +7,9 @@ import onmt
 from onmt.modules.dropout import embedded_dropout
 from onmt.models.transformer_layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
 from onmt.models.relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
-from onmt.utils import flip
+from onmt.utils import flip, expected_length
 from collections import defaultdict
 import math
-
-
-def expected_length(length, death_rate):
-    e_length = 0
-
-    for l in range(length):
-        survival_rate = 1.0 - (l + 1) / length * death_rate
-
-        e_length += survival_rate
-
-    return e_length
 
 
 #  Positional Embedding with discrete inputs
@@ -100,7 +89,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
                 # flatten
                 src_len, bsz = input_pos.size(0), input_pos.size(1)
-                input_pos_ = input_pos.view(-1).type_as(emb)
+                input_pos_ = input_pos.contiguous().view(-1).type_as(emb)
                 abs_pos = self.positional_encoder(input_pos_)
                 abs_pos = abs_pos.squeeze(1).view(src_len, bsz, -1)
 
@@ -342,14 +331,15 @@ class RelativeTransformerDecoder(TransformerDecoder):
         src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
 
         # use the last value of input to continue decoding
-        # if input.size(1) > 1:
-        #     input_ = input[:, -1].unsqueeze(1)
-        # else:
-        #     input_ = input
+        if input.size(1) > 1:
+            input_ = input[:, -1].unsqueeze(1).transpose(0, 1)
+        else:
+            input_ = input.transpose(0, 1)
         """ Embedding: batch_size x 1 x d_model """
-        # emb = self.word_lut(input_)  # * math.sqrt(self.model_size)
+        emb = self.word_lut(input_) * math.sqrt(self.model_size)
         input = input.transpose(0, 1)
-        emb = self.word_lut(input) * math.sqrt(self.model_size)
+        klen = input.size(0)
+        # emb = self.word_lut(input) * math.sqrt(self.model_size)
 
         if self.double_position:
             input_pos = torch.arange(input.size(0), dtype=emb.dtype, device=emb.device)
@@ -357,12 +347,14 @@ class RelativeTransformerDecoder(TransformerDecoder):
             tgt_len, bsz = input_pos.size(0), input_pos.size(1)
             input_pos_ = input_pos.view(-1).type_as(emb)
             abs_pos = self.positional_encoder(input_pos_).squeeze(1).view(tgt_len, bsz, -1)
-            emb = emb + abs_pos
+            # print(abs_pos.size(), emb.size())
+            emb = emb + abs_pos[-1:, :, :]
 
         # prepare position encoding
-        klen = input.size(0)
-        qlen = input.size(0)
-        mlen = 0
+
+        # qlen = input.size(0)
+        qlen = emb.size(0)
+        mlen = klen-qlen
 
         pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
 
@@ -403,14 +395,14 @@ class RelativeTransformerDecoder(TransformerDecoder):
             buffer = buffers[i] if i in buffers else None
             # assert (output.size(0) == 1)
 
-            # output, coverage, buffer = layer.step(output, context, pos_emb,
-            #                                       dec_attn_mask, mask_src, buffer=buffer)
-            output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src)
+            output, coverage, buffer = layer.step(output, context, pos_emb,
+                                                  dec_attn_mask, mask_src, buffer=buffer)
+            # output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src)
 
-            # decoder_state.update_attention_buffer(buffer, i)
+            decoder_state.update_attention_buffer(buffer, i)
 
         output = self.postprocess_layer(output)
-
+        # print(output.size())
         output = output[-1].unsqueeze(0)
 
         output_dict = defaultdict(lambda: None)

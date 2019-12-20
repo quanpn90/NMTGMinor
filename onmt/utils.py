@@ -64,3 +64,17 @@ def flip(x, dim):
              else x.new(torch.arange(x.size(i)-1, -1, -1).tolist()).long()
              for i in range(x.dim()))
     return x[inds]
+
+
+# Stochastic expected length
+def expected_length(length, death_rate):
+    e_length = 0
+
+    for l in range(length):
+        survival_rate = 1.0 - (l + 1) / length * death_rate
+
+        e_length += survival_rate
+
+    return e_length
+
+
