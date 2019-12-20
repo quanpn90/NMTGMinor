@@ -52,12 +52,14 @@ class Batch(object):
         self.tgt_align_right = tgt_align_right
 
         if src_data is not None:
-            self.tensors['source'], self.tensors['source_pos'], self.src_lengths = self.collate(src_data,
-                                                                    align_right=self.src_align_right,
-                                                                    type=self.src_type,
-                                                                    augmenter=augmenter)
+            self.tensors['source'], self.tensors['source_pos'], self.src_lengths = \
+                                                                    self.collate(src_data,
+                                                                                 align_right=self.src_align_right,
+                                                                                 type=self.src_type,
+                                                                                 augmenter=augmenter)
             self.tensors['source'] = self.tensors['source'].transpose(0, 1).contiguous()
-            self.tensors['source_pos'] = self.tensors['source_pos'].transpose(0, 1)
+            if self.tensors['source_pos'] is not None:
+                self.tensors['source_pos'] = self.tensors['source_pos'].transpose(0, 1)
             self.tensors['src_length'] = torch.LongTensor(self.src_lengths)
             self.src_size = sum(self.src_lengths)
         else:
@@ -102,7 +104,7 @@ class Batch(object):
         if self.has_target:
             self.tensors['target'] = switchout(self.tensors['target'], tgt_vocab_size, swrate, transpose=True, offset=1)
             target_full = self.tensors['target']
-            self.tensors['target_input'] = target_full[:  -1]
+            self.tensors['target_input'] = target_full[:-1]
             self.tensors['target_output'] = target_full[1:]
             self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.constants.PAD)
 
@@ -184,7 +186,6 @@ class Batch(object):
             tensor = data[0].float().new(batch_size, max_length, feature_size + 1).fill_(onmt.constants.PAD)
 
             for i in range(len(samples)):
-
                 sample = samples[i]
 
                 data_length = sample.size(0)
@@ -194,7 +195,7 @@ class Batch(object):
                 # in padding dimension: 0 is not padded, 1 is padded
                 tensor[i].narrow(0, offset, data_length).narrow(1, 0, 1).fill_(1)
 
-            return tensor, lengths
+            return tensor, None, lengths
         else:
             raise NotImplementedError
 
@@ -215,13 +216,16 @@ class Batch(object):
                 for k in tensor:
                     v = tensor[k]
                     tensor[k] = v.cuda()
-            else:
+            elif tensor is not None:
                 if tensor.type() == "torch.FloatTensor" and fp16:
                     self.tensors[key] = tensor.half()
                 self.tensors[key] = self.tensors[key].cuda()
+            else:
+                continue
 
 
 # class Dataset(object):
+
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, src_data, tgt_data,

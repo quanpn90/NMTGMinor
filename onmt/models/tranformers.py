@@ -71,10 +71,10 @@ class TransformerEncoder(nn.Module):
         self.word_dropout = opt.word_dropout
         self.attn_dropout = opt.attn_dropout
         self.emb_dropout = opt.emb_dropout
-        self.time = opt.time
-        self.version = opt.version
+
         self.input_type = encoder_type
         self.cnn_downsampling = opt.cnn_downsampling
+        self.death_rate = opt.death_rate
 
         self.switchout = opt.switchout
         self.varitional_dropout = opt.variational_dropout
@@ -107,12 +107,13 @@ class TransformerEncoder(nn.Module):
         else:
             self.word_lut = embedding
 
-        if opt.time == 'positional_encoding':
-            self.time_transformer = positional_encoder
-        elif opt.time == 'gru':
-            self.time_transformer = nn.GRU(self.model_size, self.model_size, 1, batch_first=True)
-        elif opt.time == 'lstm':
-            self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
+        # if opt.time == 'positional_encoding':
+        #     self.time_transformer = positional_encoder
+        # elif opt.time == 'gru':
+        #     self.time_transformer = nn.GRU(self.model_size, self.model_size, 1, batch_first=True)
+        # elif opt.time == 'lstm':
+        #     self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
+        self.time_transformer = positional_encoder
 
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d',
                                                   variational=self.varitional_dropout)
@@ -231,21 +232,17 @@ class TransformerDecoder(nn.Module):
         self.word_dropout = opt.word_dropout
         self.attn_dropout = opt.attn_dropout
         self.emb_dropout = opt.emb_dropout
-        self.time = opt.time
-        self.version = opt.version
         self.encoder_type = opt.encoder_type
         self.ignore_source = ignore_source
         self.encoder_cnn_downsampling = opt.cnn_downsampling
         self.variational_dropout = opt.variational_dropout
         self.switchout = opt.switchout
+        self.death_rate = opt.death_rate
 
         if self.switchout > 0:
             self.word_dropout = 0
 
-        if opt.time == 'positional_encoding':
-            self.time_transformer = positional_encoder
-        else:
-            raise NotImplementedError
+        self.time_transformer = positional_encoder
 
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d',
                                                   variational=self.variational_dropout)
@@ -565,8 +562,10 @@ class Transformer(NMTModel):
         """
 
         src = batch.get('source')
+        src_pos = batch.get('source_pos')
         tgt_input = batch.get('target_input')
         tgt_output = batch.get('target_output')
+        tgt_pos = batch.get('target_pos')
         tgt_atb = batch.get('target_atb')  # a dictionary of attributes
 
         # transpose to have batch first
@@ -574,7 +573,7 @@ class Transformer(NMTModel):
         tgt_input = tgt_input.transpose(0, 1)
         batch_size = tgt_input.size(0)
 
-        context = self.encoder(src)['context']
+        context = self.encoder(src, input_pos=src_pos   )['context']
 
         if hasattr(self, 'autoencoder') and self.autoencoder \
                 and self.autoencoder.representation == "EncoderHiddenState":
@@ -583,7 +582,7 @@ class Transformer(NMTModel):
         gold_scores = context.new(batch_size).zero_()
         gold_words = 0
         allgold_scores = list()
-        decoder_output = self.decoder(tgt_input, context, src, atbs=tgt_atb)['hidden']
+        decoder_output = self.decoder(tgt_input, context, src, atbs=tgt_atb, input_pos=tgt_pos)['hidden']
 
         output = decoder_output
 
@@ -650,10 +649,11 @@ class Transformer(NMTModel):
         :return:
         """
         src = batch.get('source')
+        src_pos = batch.get('source_pos')
         tgt_atb = batch.get('target_atb')
 
         src_transposed = src.transpose(0, 1)
-        encoder_output = self.encoder(src_transposed)
+        encoder_output = self.encoder(src_transposed, input_pos=src_pos)
 
         decoder_state = TransformerDecodingState(src, tgt_atb, encoder_output['context'], encoder_output['src_mask'],
                                                  beam_size=beam_size, model_size=self.model_size, type=type)

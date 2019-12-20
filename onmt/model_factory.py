@@ -97,7 +97,7 @@ def build_tm_model(opt, dicts):
 
     elif opt.model == 'stochastic_transformer':
         
-        from onmt.models.StochasticTransformer import StochasticTransformerEncoder, StochasticTransformerDecoder
+        from onmt.models.stochastic_transformers import StochasticTransformerEncoder, StochasticTransformerDecoder
 
         onmt.constants.weight_norm = opt.weight_norm
         onmt.constants.init_value = opt.param_init
@@ -126,10 +126,9 @@ def build_tm_model(opt, dicts):
             encoder = RelativeTransformerEncoder(opt, embedding_src, None, opt.encoder_type)
         if opt.encoder_type == "audio":
             # raise NotImplementedError
-            encoder = RelativeTransformerEncoder(opt, None, None, opt.encoder_type)
+            encoder = RelativeTransformerEncoder(opt, None, None, encoder_type=opt.encoder_type)
 
         generator = nn.ModuleList(generators)
-
         decoder = RelativeTransformerDecoder(opt, embedding_tgt, None, attribute_embeddings=attribute_embeddings)
         model = Transformer(encoder, decoder, generator)
 
