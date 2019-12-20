@@ -37,10 +37,8 @@ def make_parser(parser):
                         help='Maximum distance length for relative self-attention')
     parser.add_argument('-word_vec_size', type=int, default=512,
                         help='Word embedding sizes')
-    parser.add_argument('-input_feed', type=int, default=1,
-                        help="""Feed the context vector at each time step as
-                        additional input (via concatenation with the word
-                        embeddings) to the decoder.""")
+    parser.add_argument('-learnable_position_encoding', action='store_true',
+                        help="""Use embeddings as learnable position encoding.""")
 
     parser.add_argument('-double_position', action='store_true',
                         help="""Using double position encodings (absolute and relative)""")
@@ -262,5 +260,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'max_pos_length'):
         opt.max_pos_length = 0
+
+    if not hasattr(opt, 'learnable_position_encoding'):
+        opt.learnable_position_encoding = False
 
     return opt

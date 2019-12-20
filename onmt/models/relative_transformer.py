@@ -32,30 +32,50 @@ class SinusoidalPositionalEmbedding(nn.Module):
             return pos_emb[:, None, :]
 
 
+class LearnablePostionEmbedding(nn.Module):
+
+    def __init__(self, max_pos, demb):
+        super(LearnablePostionEmbedding, self).__init__()
+        self.max_pos = max_pos
+        self.embedding = nn.Embedding(2 * max_pos + 1, demb)
+
+    def forward(self, input):
+        pos = torch.clamp(input, -self.max_pos, self.max_pos)
+        k = min((pos.size(0) - 1) // 2, self.max_pos)
+        return self.embedding(pos + k)
+
+
 class RelativeTransformerEncoder(TransformerEncoder):
 
     def __init__(self, opt, dicts, positional_encoder, encoder_type='text'):
         self.death_rate = opt.death_rate
         self.double_position = opt.double_position
+        self.learnable_position_encoding = opt.learnable_position_encoding
+        self.layer_modules = list()
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type)
-        self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
+
+        # learnable position encoding
+        if self.learnable_position_encoding:
+            self.max_pos_length = opt.max_pos_length
+            self.positional_encoder = LearnablePostionEmbedding(self.max_pos_length, self.model_size)
+            print("Learnable position encoding")
+        else:
+            # or using pre-set sinusoidal
+            self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
+
         self.d_head = self.model_size // self.n_heads
 
         e_length = expected_length(self.layers, self.death_rate)
-        # # Parameters for the position biases
-        # self.r_w_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
-        # self.r_r_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
-
         print("* Transformer Encoder with Relative Attention with %.2f expected layers" % e_length)
 
     def build_modules(self):
         self.layer_modules = nn.ModuleList()
 
-        for l in range(self.layers):
+        for _l in range(self.layers):
             # linearly decay the death rate
-            death_r = (l + 1.0) / self.layers * self.death_rate
+            death_r = (_l + 1.0) / self.layers * self.death_rate
 
             block = RelativeTransformerEncoderLayer(self.n_heads, self.model_size,
                                                     self.dropout, self.inner_size, self.attn_dropout,
@@ -84,7 +104,6 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
             if self.double_position:
                 assert input_pos is not None
-
                 # flatten
                 src_len, bsz = input_pos.size(0), input_pos.size(1)
                 input_pos_ = input_pos.contiguous().view(-1).type_as(emb)
@@ -135,9 +154,18 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         """ Adding positional encoding """
         klen = input.size(0)
-        pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
 
-        pos_emb = self.positional_encoder(pos)
+        if not self.learnable_position_encoding:
+            pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+            # L x 1 x H
+            pos_emb = self.positional_encoder(pos)
+        else:
+            pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=input.dtype)
+            # clamp the positions (all postions from afar are treated equally, maybe?)
+            # (2L-1) x 1 x H
+            pos_emb = self.positional_encoder(pos.unsqueeze(1))
+            # print(pos_emb.size())
+
         # B x T x H -> T x B x H
         context = emb
 
@@ -148,7 +176,6 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         for i, layer in enumerate(self.layer_modules):
             # src_len x batch_size x d_model
-            # context = layer(context, pos_emb, self.r_w_bias, self.r_r_bias, mask_src)
             context = layer(context, pos_emb, mask_src)
 
         # From Google T2T
@@ -159,7 +186,6 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         output_dict = {'context': context, 'src_mask': dec_attn_mask, 'src': input}
 
-        # return context, mask_src
         return output_dict
 
 

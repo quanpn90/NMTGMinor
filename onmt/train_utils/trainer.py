@@ -22,7 +22,7 @@ class BaseTrainer(object):
         self.valid_data = valid_data
         self.dicts = dicts
         self.opt = opt
-        self.cuda = (len(opt.gpus) >= 1)
+        self.cuda = (len(opt.gpus) >= 1 and opt.gpus[0] >= 0)
         
         self.loss_function = loss_function
         self.start_time = 0
@@ -98,11 +98,13 @@ class XETrainer(BaseTrainer):
             self.optim.set_parameters(self.model.parameters())
 
             opt_level = "O0" if not self.opt.fp16 else "O2"
-            self.model, self.optim.optimizer = amp.initialize(self.model,
-                                                              self.optim.optimizer,
-                                                              opt_level=opt_level,
-                                                              keep_batchnorm_fp32=False, loss_scale="dynamic",
-                                                              verbosity=0)
+
+            if self.cuda:
+                self.model, self.optim.optimizer = amp.initialize(self.model,
+                                                                  self.optim.optimizer,
+                                                                  opt_level=opt_level,
+                                                                  keep_batchnorm_fp32=False, loss_scale="dynamic",
+                                                                  verbosity=0)
         # An ugly hack to switch between align right and align left
         if hasattr(self.model, 'relative'):
             if self.model.relative:
@@ -252,8 +254,11 @@ class XETrainer(BaseTrainer):
 
                     optimizer = self.optim.optimizer
 
-                    with amp.scale_loss(loss, optimizer) as scaled_loss:
-                        scaled_loss.backward()
+                    if self.cuda:
+                        with amp.scale_loss(loss, optimizer) as scaled_loss:
+                            scaled_loss.backward()
+                    else:
+                        loss.backward()
 
                 except RuntimeError as e:
                     if 'out of memory' in str(e):
