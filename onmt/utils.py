@@ -76,5 +76,3 @@ def expected_length(length, death_rate):
         e_length += survival_rate
 
     return e_length
-
-

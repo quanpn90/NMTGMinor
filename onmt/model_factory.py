@@ -62,21 +62,24 @@ def build_tm_model(opt, dicts):
                                      opt.model_size,
                                      padding_idx=onmt.constants.PAD)
 
-    if 'atb' in dicts and dicts['atb'] is not None:
-        from onmt.modules.utilities import AttributeEmbeddings
-        #
-        attribute_embeddings = AttributeEmbeddings(dicts['atb'], opt.model_size)
-        # attribute_embeddings = nn.Embedding(dicts['atb'].size(), opt.model_size)
-
+    if opt.use_language_embedding:
+        print("* Create language embeddings with %d languages" % len(dicts['langs']))
+        language_embeddings = nn.Embedding(len(dicts['langs']), opt.model_size)
     else:
-        attribute_embeddings = None
+        language_embeddings = None
+
+    # if 'atb' in dicts and dicts['atb'] is not None:
+    #     from onmt.modules.utilities import AttributeEmbeddings
+    #     #
+    #     attribute_embeddings = AttributeEmbeddings(dicts['atb'], opt.model_size)
+    #     # attribute_embeddings = nn.Embedding(dicts['atb'].size(), opt.model_size)
+    # else:
+    #     attribute_embeddings = None
 
     if opt.ctc_loss != 0:
         generators.append(onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size() + 1))
 
     if opt.model == 'transformer':
-        # raise NotImplementedError
-
         onmt.constants.init_value = opt.param_init
 
         if opt.encoder_type == "text":
@@ -91,7 +94,8 @@ def build_tm_model(opt, dicts):
             print ("Unknown encoder type:", opt.encoder_type)
             exit(-1)
 
-        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, attribute_embeddings=attribute_embeddings)
+        # print(opt.use_language_embeddin)
+        decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, language_embeddings=language_embeddings)
 
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
 
@@ -114,7 +118,8 @@ def build_tm_model(opt, dicts):
             print ("Unknown encoder type:", opt.encoder_type)
             exit(-1)
 
-        decoder = StochasticTransformerDecoder(opt, embedding_tgt, positional_encoder, attribute_embeddings=attribute_embeddings)
+        decoder = StochasticTransformerDecoder(opt, embedding_tgt,
+                                               positional_encoder, language_embeddings=language_embeddings)
 
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
 
@@ -123,13 +128,15 @@ def build_tm_model(opt, dicts):
         from onmt.models.relative_transformer import RelativeTransformerEncoder, RelativeTransformerDecoder
 
         if opt.encoder_type == "text":
-            encoder = RelativeTransformerEncoder(opt, embedding_src, None, opt.encoder_type)
+            encoder = RelativeTransformerEncoder(opt, embedding_src, None,
+                                                 opt.encoder_type, language_embeddings=language_embeddings)
         if opt.encoder_type == "audio":
             # raise NotImplementedError
-            encoder = RelativeTransformerEncoder(opt, None, None, encoder_type=opt.encoder_type)
+            encoder = RelativeTransformerEncoder(opt, None, None, encoder_type=opt.encoder_type,
+                                                 language_embeddings=language_embeddings)
 
         generator = nn.ModuleList(generators)
-        decoder = RelativeTransformerDecoder(opt, embedding_tgt, None, attribute_embeddings=attribute_embeddings)
+        decoder = RelativeTransformerDecoder(opt, embedding_tgt, None, language_embeddings=language_embeddings)
         model = Transformer(encoder, decoder, generator)
 
     elif opt.model == 'unified_transformer':
@@ -145,27 +152,9 @@ def build_tm_model(opt, dicts):
     else:
         raise NotImplementedError
 
-    # TODO: adding the "united" model (one encoder and one decoder)
-
     if opt.tie_weights:  
-        print("Joining the weights of decoder input and output embeddings")
+        print("* Joining the weights of decoder input and output embeddings")
         model.tie_weights()
-
-    # if opt.encoder_type == "audio":
-    #
-    #     if opt.init_embedding == 'xavier':
-    #         init.xavier_uniform_(model.decoder.word_lut.weight)
-    #     elif opt.init_embedding == 'normal':
-    #         init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
-    # else:
-    #     if opt.init_embedding == 'xavier':
-    #         init.xavier_uniform_(model.encoder.word_lut.weight)
-    #         init.xavier_uniform_(model.decoder.word_lut.weight)
-    #     elif opt.init_embedding == 'normal':
-    #         # init.normal_(model.encoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
-    #         # init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
-    #         init.normal_(model.encoder.word_lut.weight, mean=0, std=0.01)
-    #         init.normal_(model.decoder.word_lut.weight, mean=0, std=0.01)
 
     return model
 
@@ -174,7 +163,7 @@ def init_model_parameters(model, opt):
     """
     Initializing model parameters. Mostly using normal distribution (0, std)
     """
-    init_std = 0.02  # magic number
+    init_std = 0.02  # magical number
 
     def init_weight(weight):
         nn.init.normal_(weight, 0.0, init_std)

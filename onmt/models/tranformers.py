@@ -56,7 +56,7 @@ class TransformerEncoder(nn.Module):
 
     """
 
-    def __init__(self, opt, embedding, positional_encoder, encoder_type='text'):
+    def __init__(self, opt, embedding, positional_encoder, encoder_type='text', language_embedding=None):
 
         super(TransformerEncoder, self).__init__()
 
@@ -78,6 +78,8 @@ class TransformerEncoder(nn.Module):
 
         self.switchout = opt.switchout
         self.varitional_dropout = opt.variational_dropout
+        self.use_language_embedding = opt.use_language_embedding
+        self.time = opt.time
 
         # disable word dropout when switch out is in action
         if self.switchout > 0.0:
@@ -114,6 +116,7 @@ class TransformerEncoder(nn.Module):
         # elif opt.time == 'lstm':
         #     self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
         self.time_transformer = positional_encoder
+        self.language_embedding = language_embedding
 
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d',
                                                   variational=self.varitional_dropout)
@@ -131,7 +134,7 @@ class TransformerEncoder(nn.Module):
                           self.attn_dropout, variational=self.varitional_dropout) for _ in
              range(self.layers)])
 
-    def forward(self, input, **kwargs):
+    def forward(self, input, input_lang=None, **kwargs):
         """
         Inputs Shapes:
             input: batch_size x len_src (wanna tranpose)
@@ -185,6 +188,11 @@ class TransformerEncoder(nn.Module):
         """ Adding positional encoding """
         emb = self.time_transformer(emb)
 
+        """ Adding language embeddings """
+        if self.use_language_embedding:
+            assert self.language_embedding is not None
+            emb = emb + self.language_embedding(input_lang)
+
         # B x T x H -> T x B x H
         context = emb.transpose(0, 1)
 
@@ -214,7 +222,7 @@ class TransformerDecoder(nn.Module):
     """Decoder in 'Attention is all you need'"""
 
     def __init__(self, opt, embedding, positional_encoder,
-                 attribute_embeddings=None, ignore_source=False, allocate_positions=True):
+                 language_embeddings=None, ignore_source=False, allocate_positions=True):
         """
         :param opt:
         :param embedding:
@@ -238,6 +246,8 @@ class TransformerDecoder(nn.Module):
         self.variational_dropout = opt.variational_dropout
         self.switchout = opt.switchout
         self.death_rate = opt.death_rate
+        self.time = opt.time
+        self.use_language_embedding = opt.use_language_embedding
 
         if self.switchout > 0:
             self.word_dropout = 0
@@ -252,13 +262,14 @@ class TransformerDecoder(nn.Module):
         self.word_lut = embedding
 
         # Using feature embeddings in models
-        if attribute_embeddings is not None:
-            self.use_feature = True
-            self.attribute_embeddings = attribute_embeddings
-            self.feature_projector = nn.Linear(opt.model_size + opt.model_size * attribute_embeddings.size(),
-                                               opt.model_size)
-        else:
-            self.use_feature = None
+        self.language_embeddings = language_embeddings
+        # if attribute_embeddings is not None:
+        #     self.use_feature = True
+        #     self.attribute_embeddings = attribute_embeddings
+        #     self.feature_projector = nn.Linear(opt.model_size + opt.model_size * attribute_embeddings.size(),
+        #                                        opt.model_size)
+        # else:
+        #     self.use_feature = None
 
         self.positional_encoder = positional_encoder
 
@@ -282,7 +293,7 @@ class TransformerDecoder(nn.Module):
         mask = torch.ByteTensor(np.triu(np.ones((new_len+1, new_len+1)), k=1).astype('uint8'))
         self.register_buffer('mask', mask)
 
-    def process_embedding(self, input, atbs=None):
+    def process_embedding(self, input, input_lang=None):
 
         # if self.switchout == 0:
         #     input_ = input
@@ -298,14 +309,15 @@ class TransformerDecoder(nn.Module):
         """ Adding positional encoding """
         emb = self.time_transformer(emb)
 
-        if self.use_feature:
-            len_tgt = emb.size(1)
-            atb_emb = self.attribute_embeddings(atbs).unsqueeze(1).repeat(1, len_tgt, 1)  # B x H to 1 x B x H
-            emb = torch.cat([emb, atb_emb], dim=-1)
-            emb = torch.relu(self.feature_projector(emb))
+        if self.use_language_embedding:
+            emb = emb + self.language_embeddings(input_lang)
+            # len_tgt = emb.size(1)
+            # atb_emb = self.attribute_embeddings(atbs).unsqueeze(1).repeat(1, len_tgt, 1)  # B x H to 1 x B x H
+            # emb = torch.cat([emb, atb_emb], dim=-1)
+            # emb = torch.relu(self.feature_projector(emb))
         return emb
 
-    def forward(self, input, context, src, atbs=None, **kwargs):
+    def forward(self, input, context, src, input_lang=None, **kwargs):
         """
         Inputs Shapes:
             input: (Variable) batch_size x len_tgt (wanna tranpose)
@@ -319,7 +331,7 @@ class TransformerDecoder(nn.Module):
 
         """ Embedding: batch_size x len_tgt x d_model """
 
-        emb = self.process_embedding(input, atbs)
+        emb = self.process_embedding(input, input_lang)
 
         if context is not None:
             if self.encoder_type == "audio":
@@ -379,7 +391,7 @@ class TransformerDecoder(nn.Module):
         """
         context = decoder_state.context
         buffers = decoder_state.attention_buffers
-        atbs = decoder_state.tgt_atb
+        lang = decoder_state.tgt_lang
         mask_src = decoder_state.src_mask
 
         if decoder_state.concat_input_seq == True:
@@ -401,24 +413,16 @@ class TransformerDecoder(nn.Module):
         emb = self.word_lut(input_)
 
         """ Adding positional encoding """
-        if self.time == 'positional_encoding':
-            # print(emb.size())
-            emb = emb * math.sqrt(self.model_size)
-            emb = self.time_transformer(emb, t=input.size(1))
-        else:
-            # prev_h = buffer[0] if buffer is None else None
-            # emb = self.time_transformer(emb, prev_h)
-            # buffer[0] = emb[1]
-            raise NotImplementedError
-
-        if isinstance(emb, tuple):
-            emb = emb[0]
+        emb = emb * math.sqrt(self.model_size)
+        emb = self.time_transformer(emb, t=input.size(1))
         # emb should be batch_size x 1 x dim
 
-        if self.use_feature:
-            atb_emb = self.attribute_embeddings(atbs).unsqueeze(1)  # B x H to B x 1 x H
-            emb = torch.cat([emb, atb_emb], dim=-1)
-            emb = torch.relu(self.feature_projector(emb))
+        if self.use_language_embedding:
+            # atb_emb = self.attribute_embeddings(atbs).unsqueeze(1)  # B x H to B x 1 x H
+            # emb = torch.cat([emb, atb_emb], dim=-1)
+            # emb = torch.relu(self.feature_projector(emb))
+            # emb =
+            emb = emb + self.language_embeddings(lang)
 
         emb = emb.transpose(0, 1)
 
@@ -512,19 +516,21 @@ class Transformer(NMTModel):
         tgt = batch.get('target_input')
         src_pos = batch.get('source_pos')
         tgt_pos = batch.get('target_pos')
-        tgt_atb = batch.get('target_atb')  # a dictionary of attributes
+        src_lang = batch.get('source_lang')
+        tgt_lang = batch.get('target_lang')
+        # tgt_atb = batch.get('target_atb')  # a dictionary of attributes
 
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
-        encoder_output = self.encoder(src, input_pos=src_pos)
+        encoder_output = self.encoder(src, input_pos=src_pos, input_lang=src_lang)
         context = encoder_output['context']
 
         # zero out the encoder part for pre-training
         if zero_encoder:
             context.zero_()
 
-        decoder_output = self.decoder(tgt, context, src, atbs=tgt_atb, input_pos=tgt_pos)
+        decoder_output = self.decoder(tgt, context, src, input_lang=tgt_lang, input_pos=tgt_pos)
         output = decoder_output['hidden']
 
         output_dict = defaultdict(lambda: None)
@@ -566,14 +572,16 @@ class Transformer(NMTModel):
         tgt_input = batch.get('target_input')
         tgt_output = batch.get('target_output')
         tgt_pos = batch.get('target_pos')
-        tgt_atb = batch.get('target_atb')  # a dictionary of attributes
+        # tgt_atb = batch.get('target_atb')  # a dictionary of attributes
+        src_lang = batch.get('source_lang')
+        tgt_lang = batch.get('target_lang')
 
         # transpose to have batch first
         src = src.transpose(0, 1)
         tgt_input = tgt_input.transpose(0, 1)
         batch_size = tgt_input.size(0)
 
-        context = self.encoder(src, input_pos=src_pos   )['context']
+        context = self.encoder(src, input_pos=src_pos, input_lang=src_lang)['context']
 
         if hasattr(self, 'autoencoder') and self.autoencoder \
                 and self.autoencoder.representation == "EncoderHiddenState":
@@ -582,7 +590,7 @@ class Transformer(NMTModel):
         gold_scores = context.new(batch_size).zero_()
         gold_words = 0
         allgold_scores = list()
-        decoder_output = self.decoder(tgt_input, context, src, atbs=tgt_atb, input_pos=tgt_pos)['hidden']
+        decoder_output = self.decoder(tgt_input, context, src, input_lang=tgt_lang, input_pos=tgt_pos)['hidden']
 
         output = decoder_output
 
@@ -651,11 +659,13 @@ class Transformer(NMTModel):
         src = batch.get('source')
         src_pos = batch.get('source_pos')
         tgt_atb = batch.get('target_atb')
+        src_lang = batch.get('source_lang')
+        tgt_lang = batch.get('target_lang')
 
         src_transposed = src.transpose(0, 1)
-        encoder_output = self.encoder(src_transposed, input_pos=src_pos)
+        encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
 
-        decoder_state = TransformerDecodingState(src, tgt_atb, encoder_output['context'], encoder_output['src_mask'],
+        decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], encoder_output['src_mask'],
                                                  beam_size=beam_size, model_size=self.model_size, type=type)
 
         return decoder_state
@@ -663,7 +673,7 @@ class Transformer(NMTModel):
 
 class TransformerDecodingState(DecoderState):
 
-    def __init__(self, src, tgt_atb, context, src_mask, beam_size=1, model_size=512, type=1):
+    def __init__(self, src, tgt_lang, context, src_mask, beam_size=1, model_size=512, type=1):
 
         self.beam_size = beam_size
         self.model_size = model_size
@@ -691,15 +701,16 @@ class TransformerDecodingState(DecoderState):
 
             self.input_seq = None
             self.src_mask = None
+            self.tgt_lang = tgt_lang
 
-            if tgt_atb is not None:
-                self.use_attribute = True
-                self.tgt_atb = tgt_atb
-                # self.tgt_atb = tgt_atb.repeat(beam_size)  # size: Bxb
-                for i in self.tgt_atb:
-                    self.tgt_atb[i] = self.tgt_atb[i].repeat(beam_size)
-            else:
-                self.tgt_atb = None
+            # if tgt_atb is not None:
+            #     self.use_attribute = True
+            #     self.tgt_atb = tgt_atb
+            #     # self.tgt_atb = tgt_atb.repeat(beam_size)  # size: Bxb
+            #     for i in self.tgt_atb:
+            #         self.tgt_atb[i] = self.tgt_atb[i].repeat(beam_size)
+            # else:
+            #     self.tgt_atb = None
 
         elif type == 2:
             bsz = context.size(1)
@@ -709,16 +720,16 @@ class TransformerDecodingState(DecoderState):
             self.src = src.index_select(1, new_order)  # because src is batch first
             self.src_mask = src_mask.index_select(0, new_order)
             self.concat_input_seq = False
+            self.tgt_lang = tgt_lang
 
-            if tgt_atb is not None:
-                self.use_attribute = True
-                self.tgt_atb = tgt_atb
-                # self.tgt_atb = tgt_atb.repeat(beam_size)  # size: Bxb
-                for i in self.tgt_atb:
-                    self.tgt_atb[i] = self.tgt_atb[i].index_select(0, new_order)
-            else:
-                self.tgt_atb = None
-
+            # if tgt_atb is not None:
+            #     self.use_attribute = True
+            #     self.tgt_atb = tgt_atb
+            #     # self.tgt_atb = tgt_atb.repeat(beam_size)  # size: Bxb
+            #     for i in self.tgt_atb:
+            #         self.tgt_atb[i] = self.tgt_atb[i].index_select(0, new_order)
+            # else:
+            #     self.tgt_atb = None
         else:
             raise NotImplementedError
 
@@ -742,16 +753,6 @@ class TransformerDecodingState(DecoderState):
 
             sent_states.copy_(sent_states.index_select(
                 1, beam[b].getCurrentOrigin()))
-
-        if self.tgt_atb is not None:
-            for i in self.tgt_atb:
-                tensor = self.tgt_atb[i]
-
-                state_ = tensor.view(self.beam_size, remaining_sents)[:, idx]
-
-                state_.copy_(state_.index_select(0, beam[b].getCurrentOrigin()))
-
-                self.tgt_atb[i] = tensor
 
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]
@@ -806,10 +807,6 @@ class TransformerDecodingState(DecoderState):
             new_t = view.index_select(1, active_idx).view(*new_size)
             self.src = new_t
 
-        if self.tgt_atb is not None:
-            for i in self.tgt_atb:
-                self.tgt_atb[i] = update_active_without_hidden(self.tgt_atb[i])
-
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]
 
@@ -822,10 +819,6 @@ class TransformerDecodingState(DecoderState):
 
         self.src_mask = self.src_mask.index_select(0, reorder_state)
         self.src = self.src.index_select(1, reorder_state)
-
-        if self.tgt_atb is not None:
-            for i in self.tgt_atb:
-                self.tgt_atb[i] = self.tgt_atb[i].index_select(0, reorder_state)
 
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]

@@ -23,6 +23,8 @@ class Translator(object):
         self.attributes = opt.attributes  # attributes split by |. for example: de|domain1
         self.bos_token = opt.bos_token
         self.sampling = opt.sampling
+        self.src_lang = opt.src_lang
+        self.tgt_lang = opt.tgt_lang
 
         if self.attributes:
             self.attributes = self.attributes.split("|")
@@ -52,11 +54,11 @@ class Translator(object):
                     self._type = "audio"
                 self.tgt_dict = checkpoint['dicts']['tgt']
 
-                if "atb" in checkpoint["dicts"]:
-                    self.atb_dict = checkpoint['dicts']['atb']
+                if "langs" in checkpoint["dicts"]:
+                    self.lang_dict = checkpoint['dicts']['langs']
 
                 else:
-                    self.atb_dict = None
+                    self.lang_dict = { 'src': 0, 'tgt': 1}
 
                 self.bos_id = self.tgt_dict.labelToIdx[self.bos_token]
 
@@ -245,22 +247,27 @@ class Translator(object):
                                                    tgt_bos_word,
                                                    onmt.constants.EOS_WORD) for b in tgt_sents]
 
-        src_atbs = None
-
-        if self.attributes:
-            tgt_atbs = dict()
-
-            idx = 0
-            for i in self.atb_dict:
-                tgt_atbs[i] = [self.atb_dict[i].convertToIdx([self.attributes[idx]], onmt.constants.UNK_WORD)
-                               for _ in src_sents]
-                idx = idx + 1
-
+            tgt_lang_data = [torch.Tensor([self.lang_dict[self.tgt_lang]])]
         else:
-            tgt_atbs = None
+            tgt_lang_data = None
+
+        src_lang_data = [torch.Tensor([self.lang_dict[self.src_lang]])]
+        # src_atbs = None
+        #
+        # if self.attributes:
+        #     tgt_atbs = dict()
+        #
+        #     idx = 0
+        #     for i in self.atb_dict:
+        #         tgt_atbs[i] = [self.atb_dict[i].convertToIdx([self.attributes[idx]], onmt.constants.UNK_WORD)
+        #                        for _ in src_sents]
+        #         idx = idx + 1
+        #
+        # else:
+        #     tgt_atbs = None
 
         return onmt.Dataset(src_data, tgt_data,
-                            src_atbs=src_atbs, tgt_atbs=tgt_atbs,
+                            src_langs=src_lang_data, tgt_langs=tgt_lang_data,
                             batch_size_words=sys.maxsize,
                             data_type=self._type,
                             batch_size_sents=self.opt.batch_size)

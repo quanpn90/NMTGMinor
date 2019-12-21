@@ -26,6 +26,10 @@ parser.add_argument('-input_type', default="word",
                     help="Input type: word/char")
 parser.add_argument('-src', required=True,
                     help='Source sequence to decode (one line per sequence)')
+parser.add_argument('-src_lang', default='src',
+                    help='Source language')
+parser.add_argument('-tgt_lang', default='tgt',
+                    help='Target language')
 parser.add_argument('-attributes', default="",
                     help='Attributes for the decoder. Split them by |   ')
 parser.add_argument('-stride', type=int, default=1,

@@ -44,6 +44,8 @@ def make_parser(parser):
                         help="""Using double position encodings (absolute and relative)""")
 
     # Transforer Model options
+    parser.add_argument('-use_language_embedding', action='store_true',
+                        help="""Language embedding to add into the word embeddings""")
     parser.add_argument('-model_size', type=int, default=512,
         help='Size of embedding / transformer hidden')      
     parser.add_argument('-inner_size', type=int, default=2048,
@@ -263,5 +265,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'learnable_position_encoding'):
         opt.learnable_position_encoding = False
+
+    if not hasattr(opt, 'use_language_embedding'):
+        opt.use_language_embedding = False
 
     return opt

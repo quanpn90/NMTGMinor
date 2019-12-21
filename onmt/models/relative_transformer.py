@@ -47,20 +47,20 @@ class LearnablePostionEmbedding(nn.Module):
 
 class RelativeTransformerEncoder(TransformerEncoder):
 
-    def __init__(self, opt, dicts, positional_encoder, encoder_type='text'):
+    def __init__(self, opt, dicts, positional_encoder, encoder_type='text', language_embeddings=None):
         self.death_rate = opt.death_rate
         self.double_position = opt.double_position
         self.learnable_position_encoding = opt.learnable_position_encoding
         self.layer_modules = list()
 
         # build_modules will be called from the inherited constructor
-        super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type)
+        super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type, language_embeddings)
 
         # learnable position encoding
         if self.learnable_position_encoding:
             self.max_pos_length = opt.max_pos_length
             self.positional_encoder = LearnablePostionEmbedding(self.max_pos_length, self.model_size)
-            print("Learnable position encoding")
+            print("* Learnable position encoding with max %d positions" % self.max_pos_length)
         else:
             # or using pre-set sinusoidal
             self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
@@ -83,7 +83,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
             self.layer_modules.append(block)
 
-    def forward(self, input, input_pos=None, **kwargs):
+    def forward(self, input, input_pos=None, input_lang=None, **kwargs):
         """
         Inputs Shapes:
             input: batch_size x src_len (wanna tranpose)
@@ -112,6 +112,11 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
             else:
                 abs_pos = None
+
+            """ Adding language embeddings """
+            if self.use_language_embedding:
+                assert self.language_embedding is not None
+                emb = emb + self.language_embedding(input_lang)
         else:
             if not self.cnn_downsampling:
                 mask_src = input.narrow(2, 0, 1).squeeze(2).transpose(0, 1).eq(onmt.constants.PAD).unsqueeze(0)
@@ -199,7 +204,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
     """
 
-    def __init__(self, opt, dicts, positional_encoder, attribute_embeddings=None, ignore_source=False):
+    def __init__(self, opt, dicts, positional_encoder, language_embeddings=None, ignore_source=False):
 
         self.death_rate = opt.death_rate
         self.double_position = opt.double_position
@@ -207,7 +212,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerDecoder, self).__init__(opt, dicts,
                                                          positional_encoder,
-                                                         attribute_embeddings,
+                                                         language_embeddings,
                                                          ignore_source,
                                                          allocate_positions=False)
         self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
@@ -239,7 +244,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
             self.layer_modules.append(block)
 
-    def process_embedding(self, input, atbs=None):
+    def process_embedding(self, input, input_lang=None):
 
         input_ = input
 
@@ -247,14 +252,12 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         emb = emb * math.sqrt(self.model_size)
 
-        if self.use_feature:
-            len_tgt = emb.size(1)
-            atb_emb = self.attribute_embeddings(atbs).unsqueeze(1).repeat(1, len_tgt, 1)  # B x H to 1 x B x H
-            emb = torch.cat([emb, atb_emb], dim=-1)
-            emb = torch.relu(self.feature_projector(emb))
+        if self.use_language_embedding:
+            emb = emb + self.language_embeddings(input_lang)
+
         return emb
 
-    def forward(self, input, context, src, input_pos=None, atbs=None, **kwargs):
+    def forward(self, input, context, src, input_pos=None, input_lang=None, **kwargs):
         """
                 Inputs Shapes:
                     input: (Variable) batch_size x len_tgt (wanna tranpose)
@@ -278,6 +281,9 @@ class RelativeTransformerDecoder(TransformerDecoder):
             abs_pos = self.positional_encoder(input_pos_).squeeze(1).view(tgt_len, bsz, -1)
 
             emb = emb + abs_pos
+
+        if self.use_language_embedding:
+            emb = emb + self.language_embeddings(input_lang)
 
         if context is not None:
             if self.encoder_type == "audio":
@@ -341,7 +347,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         """
         context = decoder_state.context
         buffers = decoder_state.attention_buffers
-        atbs = decoder_state.tgt_atb
+        lang = decoder_state.tgt_lang
         mask_src = decoder_state.src_mask
 
         if decoder_state.concat_input_seq:
@@ -371,8 +377,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
             tgt_len, bsz = input_pos.size(0), input_pos.size(1)
             input_pos_ = input_pos.view(-1).type_as(emb)
             abs_pos = self.positional_encoder(input_pos_).squeeze(1).view(tgt_len, bsz, -1)
-            # print(abs_pos.size(), emb.size())
             emb = emb + abs_pos[-1:, :, :]
+
+        if self.use_language_embedding:
+            emb = emb + self.language_embeddings(lang)
 
         # prepare position encoding
         qlen = emb.size(0)

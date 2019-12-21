@@ -4,12 +4,10 @@ import torch.nn as nn
 import onmt
 from onmt.models.transformer_layers import PositionalEncoding
 from onmt.models.transformer_layers import EncoderLayer, DecoderLayer
-from onmt.models.StochasticTransformer import StochasticEncoderLayer, StochasticDecoderLayer
+from onmt.models.stochastic_transformer_layers import StochasticEncoderLayer, StochasticDecoderLayer
 from onmt.models.tranformers import TransformerEncoder, TransformerDecoder
 from onmt.modules.base_seq2seq import NMTModel, Reconstructor
 from onmt.modules.dropout import embedded_dropout
-from onmt.modules.Checkpoint import checkpoint
-
 from onmt.models.transformer_layers import XavierLinear, MultiHeadAttention, PrePostProcessing
 from onmt.modules.linear import FeedForward, FeedForwardSwish
 

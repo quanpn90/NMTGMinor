@@ -11,6 +11,7 @@ from onmt.modules.loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.model_factory import build_model, optimize_model
 from options import make_parser
 from collections import defaultdict
+import os
 
 parser = argparse.ArgumentParser(description='train.py')
 onmt.markdown.add_md_help_argument(parser)
@@ -38,7 +39,6 @@ torch.manual_seed(opt.seed)
 
 
 def main():
-
     if opt.data_format == 'raw':
         start = time.time()
 
@@ -50,7 +50,7 @@ def main():
             dataset = torch.load(opt.data + ".train.pt")
 
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
-        print("Done after %s" % elapse )
+        print("Done after %s" % elapse)
 
         # For backward compatibility
         train_dict = defaultdict(lambda: None, dataset['train'])
@@ -119,8 +119,24 @@ def main():
         train_src = MMapIndexedDataset(train_path + '.src')
         train_tgt = MMapIndexedDataset(train_path + '.tgt')
 
+        # check the lang files if they exist (in the case of multi-lingual models)
+        if os.path.exists(train_path + '.srclang.bin'):
+            assert 'langs' in dicts
+            train_src_langs = MMapIndexedDataset(train_path + '.srclang')
+            train_tgt_langs = MMapIndexedDataset(train_path + '.tgtlang')
+        else:
+            # allocate new languages
+            dicts['langs'] = {'src': 0, 'tgt': 1}
+            train_src_langs = list()
+            train_tgt_langs = list()
+            # for _ in train_src:
+            # Allocation one for the bilingual case
+            train_src_langs.append(torch.Tensor([dicts['langs']['src']]))
+            train_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
+
         train_data = onmt.Dataset(train_src,
                                   train_tgt,
+                                  train_src_langs, train_tgt_langs,
                                   batch_size_words=opt.batch_size_words,
                                   data_type="text",
                                   batch_size_sents=opt.batch_size_sents,
@@ -131,8 +147,22 @@ def main():
         valid_src = MMapIndexedDataset(valid_path + '.src')
         valid_tgt = MMapIndexedDataset(valid_path + '.tgt')
 
-        valid_data = onmt.Dataset(valid_src,
-                                  valid_tgt,
+        if os.path.exists(valid_path + '.srclang.bin'):
+            assert 'langs' in dicts
+            valid_src_langs = MMapIndexedDataset(valid_path + '.srclang')
+            valid_tgt_langs = MMapIndexedDataset(valid_path + '.tgtlang')
+        else:
+            # allocate new languages
+            dicts['langs'] = {'src': 0, 'tgt': 1}
+            valid_src_langs = list()
+            valid_tgt_langs = list()
+
+            # Allocation one for the bilingual case
+            valid_src_langs.append(torch.Tensor([dicts['langs']['src']]))
+            valid_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
+
+        valid_data = onmt.Dataset(valid_src, valid_tgt,
+                                  valid_src_langs, valid_tgt_langs,
                                   batch_size_words=opt.batch_size_words,
                                   data_type="text",
                                   batch_size_sents=opt.batch_size_sents,
@@ -147,7 +177,7 @@ def main():
     if opt.additional_data != "none":
         add_data = opt.additional_data.split(";")
         add_format = opt.additional_data_format.split(";")
-        assert(len(add_data) == len(add_format))
+        assert (len(add_data) == len(add_format))
         for i in range(len(add_data)):
             if add_format[i] == 'raw':
                 if add_data[i].endswith(".train.pt"):
@@ -158,12 +188,12 @@ def main():
                     add_dataset = torch.load(add_data[i] + ".train.pt")
 
                 additional_data.append(onmt.Dataset(add_dataset['train']['src'],
-                                          dataset['train']['tgt'], batch_size_words=opt.batch_size_words,
-                                          data_type=dataset.get("type", "text"),
-                                          batch_size_sents=opt.batch_size_sents,
-                                          multiplier=opt.batch_size_multiplier,
-                                          reshape_speech=opt.reshape_speech,
-                                          augment=opt.augment_speech))
+                                                    dataset['train']['tgt'], batch_size_words=opt.batch_size_words,
+                                                    data_type=dataset.get("type", "text"),
+                                                    batch_size_sents=opt.batch_size_sents,
+                                                    multiplier=opt.batch_size_multiplier,
+                                                    reshape_speech=opt.reshape_speech,
+                                                    augment=opt.augment_speech))
             elif add_format[i] == 'bin':
 
                 from onmt.data.indexed_dataset import IndexedInMemoryDataset
@@ -173,11 +203,11 @@ def main():
                 train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
 
                 additional_data.append(onmt.Dataset(train_src,
-                                       train_tgt,
-                                       batch_size_words=opt.batch_size_words,
-                                       data_type=opt.encoder_type,
-                                       batch_size_sents=opt.batch_size_sents,
-                                       multiplier = opt.batch_size_multiplier))
+                                                    train_tgt,
+                                                    batch_size_words=opt.batch_size_words,
+                                                    data_type=opt.encoder_type,
+                                                    batch_size_sents=opt.batch_size_sents,
+                                                    multiplier=opt.batch_size_multiplier))
 
     if opt.load_from:
         checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)

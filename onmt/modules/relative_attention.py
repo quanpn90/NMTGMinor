@@ -126,12 +126,18 @@ class RelMultiHeadAttn(nn.Module):
 
 # Relative Partially Learnable (from Transformer XL)
 class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
-    def __init__(self, *args, **kwargs):
-        super(RelPartialLearnableMultiHeadAttn, self).__init__(*args, **kwargs)
+    def __init__(self, n_head, d_model, d_head, dropatt=0,
+                 tgt_len=None, ext_len=None, mem_len=None, shared_pos_across_heads=False):
+        super(RelPartialLearnableMultiHeadAttn, self).__init__(n_head, d_model, d_head, dropatt,
+                                                               tgt_len, ext_len, mem_len)
 
-        self.r_net = nn.Linear(self.d_model, self.n_head * self.d_head, bias=False)
+        self.shared_pos_across_heads = shared_pos_across_heads
+
+        if not shared_pos_across_heads:
+            self.r_net = nn.Linear(self.d_model, self.n_head * self.d_head, bias=False)
 
         # Parameters for the position biases
+        # Each head has a different bias
         self.r_w_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
         self.r_r_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
 
@@ -275,8 +281,6 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         # else:
             # w_heads = self.qkv_net(self.layer_norm(w))
         w_heads = self.qkv_net(w)
-        # r_head_k = self.r_net(r)
-
         w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
 
         if buffer is not None and 'k' in buffer and 'v' in buffer:
