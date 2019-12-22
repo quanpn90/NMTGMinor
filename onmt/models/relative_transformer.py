@@ -59,7 +59,9 @@ class RelativeTransformerEncoder(TransformerEncoder):
         # learnable position encoding
         if self.learnable_position_encoding:
             self.max_pos_length = opt.max_pos_length
-            self.positional_encoder = LearnablePostionEmbedding(self.max_pos_length, self.model_size)
+            # pos_emb = self.model_size // self.n_heads
+            pos_emb = self.model_size 
+            self.positional_encoder = LearnablePostionEmbedding(self.max_pos_length, pos_emb)
             print("* Learnable position encoding with max %d positions" % self.max_pos_length)
         else:
             # or using pre-set sinusoidal
@@ -413,11 +415,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
                 mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
         else:
             mask_src = None
-
-        if self.use_feature:
-            atb_emb = self.attribute_embeddings(atbs).unsqueeze(1)  # B x H to B x 1 x H
-            emb = torch.cat([emb, atb_emb], dim=-1)
-            emb = torch.relu(self.feature_projector(emb))
 
         output = emb.contiguous()
 

@@ -147,10 +147,18 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         r_r_bias = self.r_r_bias
 
         qlen, rlen, bsz = w_head_q.size(0), r.size(0), w_head_q.size(1)
+        rsize = r.size(-1)
         klen = w_head_k.size(0)
         assert rlen >= klen  # can allocate more relative positions than klen
 
-        r_head_k = self.r_net(r)
+        # mapping d-model to d-head
+        if rsize == self.d_model:
+            r_head_k = self.r_net(r)
+        elif rsize == self.d_head:
+            # shared R for each head
+            r_head_k = r.unsqueeze(-2).expand(rlen, 1, self.n_head, self.d_head)
+        else:
+            raise NotImplementedError
 
         w_head_q = w_head_q.contiguous().view(qlen, bsz * self.n_head, self.d_head).transpose(0, 1)
         w_head_k = w_head_k.contiguous().view(klen, bsz * self.n_head, self.d_head).transpose(0, 1)
