@@ -125,13 +125,26 @@ class RelMultiHeadAttn(nn.Module):
 
 
 # Relative Partially Learnable (from Transformer XL)
-class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
-    def __init__(self, n_head, d_model, d_head, dropatt=0,
+class RelPartialLearnableMultiHeadAttn(nn.Module):
+    def __init__(self, n_head, d_model, d_head, dropatt=0, asynchronous=False,
                  tgt_len=None, ext_len=None, mem_len=None, shared_pos_across_heads=False):
-        super(RelPartialLearnableMultiHeadAttn, self).__init__(n_head, d_model, d_head, dropatt,
-                                                               tgt_len, ext_len, mem_len)
+        super(RelPartialLearnableMultiHeadAttn, self).__init__()
 
+        self.n_head = n_head
+        self.d_model = d_model
+        self.d_head = d_head
+
+        self.qkv_net = nn.Linear(d_model, 3 * n_head * d_head, bias=False)
+
+        # self.drop = nn.Dropout(dropout)
+        self.dropatt = nn.Dropout(dropatt)
+        self.o_net = nn.Linear(n_head * d_head, d_model, bias=False)
+
+        self.layer_norm = nn.LayerNorm(d_model)
+
+        self.scale = 1 / (d_head ** 0.5)
         self.shared_pos_across_heads = shared_pos_across_heads
+        self.asynchronous = asynchronous
 
         if not shared_pos_across_heads:
             self.r_net = nn.Linear(self.d_model, self.n_head * self.d_head, bias=False)
@@ -181,8 +194,9 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         # [bsz, n_head, q_len, k_len] to [q_len, k_len, bsz, n_head]
         BD = BD.transpose(0, 2).transpose(1, 3)
         # relative_future_shift gives us 5 4 3 2 1 0 1 2 3 4 5 ... relatives for position at 0
-        BD = _rel_future_shift(BD)
-        # BD = _rel_shift(BD)
+        # BD = _rel_future_shift(BD)
+        # Rel shift uses simple view which is faster than torch.gather
+        BD = _rel_shift(BD)
 
         BD = BD.transpose(0, 2).transpose(1, 3)
         # output size of BD: [bsz, n_head, q_len, k_len]
@@ -307,88 +321,6 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         return output, coverage, buffer
 
 
-# Learnable (no sin/cos position encoding)
-class RelLearnableMultiHeadAttn(RelMultiHeadAttn):
-    def __init__(self, *args, **kwargs):
-        super(RelLearnableMultiHeadAttn, self).__init__(*args, **kwargs)
-
-    def forward(self, w, r_emb, r_w_bias, r_bias, attn_mask=None, mems=None):
-        # r_emb: [klen, n_head, d_head], used for term B
-        # r_w_bias: [n_head, d_head], used for term C
-        # r_bias: [klen, n_head], used for term D
-
-        qlen, bsz = w.size(0), w.size(1)
-
-        if mems is not None:
-            raise NotImplementedError
-            # cat = torch.cat([mems, w], 0)
-            # if self.pre_lnorm:
-            #     w_heads = self.qkv_net(self.layer_norm(cat))
-            # else:
-            #     w_heads = self.qkv_net(cat)
-            # w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
-            #
-            # w_head_q = w_head_q[-qlen:]
-        else:
-            if self.pre_lnorm:
-                w_heads = self.qkv_net(self.layer_norm(w))
-            else:
-                w_heads = self.qkv_net(w)
-            w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
-
-        klen = w_head_k.size(0)
-
-        w_head_q = w_head_q.view(qlen, bsz, self.n_head, self.d_head)
-        w_head_k = w_head_k.view(klen, bsz, self.n_head, self.d_head)
-        w_head_v = w_head_v.view(klen, bsz, self.n_head, self.d_head)
-
-        if klen > r_emb.size(0):
-            r_emb_pad = r_emb[0:1].expand(klen - r_emb.size(0), -1, -1)
-            r_emb = torch.cat([r_emb_pad, r_emb], 0)
-            r_bias_pad = r_bias[0:1].expand(klen - r_bias.size(0), -1)
-            r_bias = torch.cat([r_bias_pad, r_bias], 0)
-        else:
-            r_emb = r_emb[-klen:]
-            r_bias = r_bias[-klen:]
-
-        #### compute attention score
-        rw_head_q = w_head_q + r_w_bias[None]  # qlen x bsz x n_head x d_head
-
-        AC = torch.einsum('ibnd,jbnd->ijbn', (rw_head_q, w_head_k))  # qlen x klen x bsz x n_head
-        B_ = torch.einsum('ibnd,jnd->ijbn', (w_head_q, r_emb))  # qlen x klen x bsz x n_head
-        D_ = r_bias[None, :, None]  # 1    x klen x 1   x n_head
-        BD = self._rel_shift(B_ + D_)
-
-        # [qlen x klen x bsz x n_head]
-        attn_score = AC + BD
-        attn_score.mul_(self.scale)
-
-        #### compute attention probability
-        if attn_mask is not None and attn_mask.any().item():
-            if attn_mask.dim() == 2:
-                attn_score.masked_fill_(attn_mask[None, :, :, None], -float('inf'))
-            elif attn_mask.dim() == 3:
-                attn_score.masked_fill_(attn_mask[:, :, :, None], -float('inf'))
-
-        # [qlen x klen x bsz x n_head]
-        attn_prob = F.softmax(attn_score, dim=1)
-        attn_prob = self.dropatt(attn_prob)
-
-        #### compute attention vector
-        attn_vec = torch.einsum('ijbn,jbnd->ibnd', (attn_prob, w_head_v))
-
-        # [qlen x bsz x n_head x d_head]
-        attn_vec = attn_vec.contiguous().view(
-            attn_vec.size(0), attn_vec.size(1), self.n_head * self.d_head)
-
-        ##### linear projection
-        attn_out = self.o_net(attn_vec)
-
-        output = attn_out
-
-        return output
-
-
 if __name__ == '__main__':
 
     bsz = 5
@@ -397,71 +329,81 @@ if __name__ == '__main__':
     qlen = 5
     klen = 12
 
-    x = torch.arange(klen - 1, -1, -1.0).unsqueeze(0).repeat(qlen, 1)
+    x = torch.arange(klen - 1, -klen, -1.0).unsqueeze(0).repeat(qlen, 1)
     input = x.mul(10)
-    print(input)
-    # print(x)
-    # x = x.unsqueeze(-1).unsqueeze(-1)
-    # x = torch.Tensor(qlen, klen, bsz, n_head)
-    # x.normal_(0, 1)
+    print(input, input.size())
 
-    output = _rel_shift(input, zero_triu=False)
-
-    # print(x)
-    # print(x.size())
-    print("REL SHIFT 1 RESULT")
-    print(output)
-
-    idx = torch.arange(0, klen).unsqueeze(0).repeat(qlen, 1)
-    print(idx)
-    shifted_idx = _rel_shift(idx)
-    print(shifted_idx)
-
-    output_2 = torch.gather(input, 1, shifted_idx)
-    print("REL SHIFT 2 RESULT")
-    print(output_2)
-
+    # x = torch.arange(klen - 1, -1, -1.0).unsqueeze(0).repeat(qlen, 1)
+    # input = x.mul(10)
+    # print(input)
+    # # print(x)
+    # # x = x.unsqueeze(-1).unsqueeze(-1)
+    # # x = torch.Tensor(qlen, klen, bsz, n_head)
+    # # x.normal_(0, 1)
+    #
+    # output = _rel_shift(input, zero_triu=False)
+    #
+    # # print(x)
+    # # print(x.size())
+    # print("REL SHIFT 1 RESULT")
+    # print(output)
+    #
+    # idx = torch.arange(0, klen).unsqueeze(0).repeat(qlen, 1)
+    # print(idx)
+    # shifted_idx = _rel_shift(idx)
+    # print(shifted_idx)
+    #
+    # output_2 = torch.gather(input, 1, shifted_idx)
+    # print("REL SHIFT 2 RESULT")
+    # print(output_2)
+    #
+    # # a = torch.arange(klen - qlen, -qlen, -1).unsqueeze(0)
+    # # print(a)
+    # # a = torch.arange(-qlen + 1, klen - qlen + 1, 1).unsqueeze(0)
+    # # a = torch.cat([torch.arange(0, klen-qlen), torch.arange(qlen, -1, -1)]).unsqueeze(0)
+    # # print(a)
+    # # a = torch.arange(0, klen).unsqueeze(0)
+    # # print(a)
+    #
+    # # b = torch.arange(0, qlen, 1).unsqueeze(1)
+    # # print(b)
+    #
+    # # c = (a + b)
+    # # print(c)
+    #
     # a = torch.arange(klen - qlen, -qlen, -1).unsqueeze(0)
-    # print(a)
-    # a = torch.arange(-qlen + 1, klen - qlen + 1, 1).unsqueeze(0)
-    # a = torch.cat([torch.arange(0, klen-qlen), torch.arange(qlen, -1, -1)]).unsqueeze(0)
-    # print(a)
-    # a = torch.arange(0, klen).unsqueeze(0)
-    # print(a)
-
+    # # print(a)
+    #
     # b = torch.arange(0, qlen, 1).unsqueeze(1)
-    # print(b)
-
-    # c = (a + b)
-    # print(c)
-
-    a = torch.arange(klen - qlen, -qlen, -1).unsqueeze(0)
-    # print(a)
-
-    b = torch.arange(0, qlen, 1).unsqueeze(1)
-    # print(b)
-    # print(c)
-    # print(a+b)
-    c = torch.abs(a+b)
-    rearranged_idx = klen - 1 - c
-
-    output_3 = torch.gather(input, 1, rearranged_idx)
+    # # print(b)
+    # # print(c)
+    # # print(a+b)
+    # c = torch.abs(a+b)
+    # rearranged_idx = klen - 1 - c
+    #
+    # output_3 = torch.gather(input, 1, rearranged_idx)
+    # print("REL SHIFT 3 RESULT")
+    # print(output_3)
+    #
+    # # input_repeat = input.unsqueeze(-1).unsqueeze(-1)
+    # #
+    # # input_repeat = input_repeat.repeat(1, 1, bsz, n_head)
+    # #
+    # # idx = rearranged_idx.unsqueeze(-1).unsqueeze(-1).expand_as(input_repeat)
+    # # output_4 = torch.gather(input_repeat, 1, idx)
+    #
     print("REL SHIFT 3 RESULT")
+    output_3 = _rel_shift(input)
+    output_3 = output_3[:, :klen]
     print(output_3)
-
-    # input_repeat = input.unsqueeze(-1).unsqueeze(-1)
-    #
-    # input_repeat = input_repeat.repeat(1, 1, bsz, n_head)
-    #
-    # idx = rearranged_idx.unsqueeze(-1).unsqueeze(-1).expand_as(input_repeat)
-    # output_4 = torch.gather(input_repeat, 1, idx)
 
     print("REL SHIFT 4 RESULT")
     output_4 = _rel_future_shift(input)
+    output_4 = output_4[:, :klen]
     print(output_4)
-
-    input_repeat = input.unsqueeze(-1).unsqueeze(-1)
-
-    input_repeat = input_repeat.repeat(1, 1, bsz, n_head)
-    output_5 = _rel_future_shift(input_repeat)
-    print(output_5)
+    #
+    # input_repeat = input.unsqueeze(-1).unsqueeze(-1)
+    #
+    # input_repeat = input_repeat.repeat(1, 1, bsz, n_head)
+    # output_5 = _rel_future_shift(input_repeat)
+    # print(output_5)

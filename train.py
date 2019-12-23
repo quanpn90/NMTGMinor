@@ -52,26 +52,55 @@ def main():
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
         print("Done after %s" % elapse)
 
+        dicts = dataset['dicts']
+
         # For backward compatibility
         train_dict = defaultdict(lambda: None, dataset['train'])
         valid_dict = defaultdict(lambda: None, dataset['valid'])
 
+        if train_dict['src_lang'] is not None:
+            assert 'langs' in dicts
+            train_src_langs = train_dict['src_lang']
+            train_tgt_langs = train_dict['tgt_lang']
+        else:
+            # allocate new languages
+            dicts['langs'] = {'src': 0, 'tgt': 1}
+            train_src_langs = list()
+            train_tgt_langs = list()
+            # Allocation one for the bilingual case
+            train_src_langs.append(torch.Tensor([dicts['langs']['src']]))
+            train_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
+
         train_data = onmt.Dataset(train_dict['src'], train_dict['tgt'],
-                                  train_dict['src_atbs'], train_dict['tgt_atbs'],
+                                  train_src_langs, train_tgt_langs,
                                   batch_size_words=opt.batch_size_words,
                                   data_type=dataset.get("type", "text"),
                                   batch_size_sents=opt.batch_size_sents,
                                   multiplier=opt.batch_size_multiplier,
                                   augment=opt.augment_speech,
                                   upsampling=opt.upsampling)
+
+        if valid_dict['src_lang'] is not None:
+            assert 'langs' in dicts
+            valid_src_langs = valid_dict['src_lang']
+            valid_tgt_langs = valid_dict['tgt_lang']
+        else:
+            # allocate new languages
+            valid_src_langs = list()
+            valid_tgt_langs = list()
+
+            # Allocation one for the bilingual case
+            valid_src_langs.append(torch.Tensor([dicts['langs']['src']]))
+            valid_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
+
         valid_data = onmt.Dataset(valid_dict['src'], valid_dict['tgt'],
-                                  valid_dict['src_atbs'], valid_dict['tgt_atbs'],
+                                  valid_src_langs, valid_tgt_langs,
                                   batch_size_words=opt.batch_size_words,
                                   data_type=dataset.get("type", "text"),
                                   batch_size_sents=opt.batch_size_sents,
                                   upsampling=opt.upsampling)
 
-        dicts = dataset['dicts']
+
 
         print(' * number of training sentences. %d' % len(dataset['train']['src']))
         print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
@@ -152,8 +181,6 @@ def main():
             valid_src_langs = MMapIndexedDataset(valid_path + '.srclang')
             valid_tgt_langs = MMapIndexedDataset(valid_path + '.tgtlang')
         else:
-            # allocate new languages
-            dicts['langs'] = {'src': 0, 'tgt': 1}
             valid_src_langs = list()
             valid_tgt_langs = list()
 

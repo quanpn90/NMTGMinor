@@ -56,7 +56,7 @@ class TransformerEncoder(nn.Module):
 
     """
 
-    def __init__(self, opt, embedding, positional_encoder, encoder_type='text', language_embedding=None):
+    def __init__(self, opt, embedding, positional_encoder, encoder_type='text', language_embeddings=None):
 
         super(TransformerEncoder, self).__init__()
 
@@ -116,7 +116,7 @@ class TransformerEncoder(nn.Module):
         # elif opt.time == 'lstm':
         #     self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
         self.time_transformer = positional_encoder
-        self.language_embedding = language_embedding
+        self.language_embedding = language_embeddings
 
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d',
                                                   variational=self.varitional_dropout)

@@ -22,9 +22,18 @@ class SinusoidalPositionalEmbedding(nn.Module):
         inv_freq = 1 / (10000 ** (torch.arange(0.0, demb, 2.0) / demb))
         self.register_buffer('inv_freq', inv_freq)
 
-    def forward(self, pos_seq, bsz=None):
+    def forward(self, pos_seq, sin_first=True, bsz=None):
+        """
+        :param bsz:
+        :param pos_seq: sequences of RELATIVE position indices (can be negative for future)
+        :param sin_first: in Attention is all you need paper, sin is first then cosin
+        """
         sinusoid_inp = torch.ger(pos_seq, self.inv_freq)
-        pos_emb = torch.cat([sinusoid_inp.sin(), sinusoid_inp.cos()], dim=-1)
+
+        if sin_first:
+            pos_emb = torch.cat([sinusoid_inp.sin(), sinusoid_inp.cos()], dim=-1)
+        else:
+            pos_emb = torch.cat([sinusoid_inp.cos(), sinusoid_inp.sin()], dim=-1)
 
         if bsz is not None:
             return pos_emb[:, None, :].expand(-1, bsz, -1)
@@ -36,13 +45,14 @@ class LearnablePostionEmbedding(nn.Module):
 
     def __init__(self, max_pos, demb):
         super(LearnablePostionEmbedding, self).__init__()
-        self.max_pos = max_pos
-        self.embedding = nn.Embedding(2 * max_pos + 1, demb)
+        self.max_pos = max(max_pos, 5000)
+        # self.embedding = nn.Embedding(2 * max_pos + 1, demb)
+        self.embedding = nn.Embedding(self.max_pos, demb)
 
     def forward(self, input):
-        pos = torch.clamp(input, -self.max_pos, self.max_pos)
-        k = min((pos.size(0) - 1) // 2, self.max_pos)
-        return self.embedding(pos + k)
+        # pos = torch.clamp(input, 0, self.max_pos)
+        # k = min((pos.size(0) - 1) // 2, self.max_pos)
+        return self.embedding(input)
 
 
 class RelativeTransformerEncoder(TransformerEncoder):
@@ -52,6 +62,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
         self.double_position = opt.double_position
         self.learnable_position_encoding = opt.learnable_position_encoding
         self.layer_modules = list()
+        self.asynchronous = opt.asynchronous
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type, language_embeddings)
@@ -162,16 +173,34 @@ class RelativeTransformerEncoder(TransformerEncoder):
         """ Adding positional encoding """
         klen = input.size(0)
 
-        if not self.learnable_position_encoding:
-            pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
-            # L x 1 x H
-            pos_emb = self.positional_encoder(pos)
+        # Asynchronous positions: 2K+1 positions instead of K+1
+        if self.asynchronous:
+            pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
         else:
-            pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=input.dtype)
-            # clamp the positions (all postions from afar are treated equally, maybe?)
-            # (2L-1) x 1 x H
-            pos_emb = self.positional_encoder(pos.unsqueeze(1))
-            # print(pos_emb.size())
+            # Everything should be asynchronous now
+            pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
+            # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+
+        pos_emb = self.positional_encoder(pos)  
+
+        if self.learnable_position_encoding:
+            raise NotImplementedError
+
+        # if not self.learnable_position_encoding:
+        #     # L x 1 x H
+        #     past_pos = pos[:klen+1]
+        #     future_pos = pos[-klen:]
+        #     past_pos_emb = self.positional_encoder(past_pos, sin_first=True)
+        #     future_pos_emb = self.positional_encoder(future_pos, sin_first=False)
+        #     pos_emb = torch.cat([past_pos_emb, future_pos_emb], dim=0)
+        # else:
+        #     raise NotImplementedError
+        #     pos = pos.long()
+        #     # pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=input.dtype)
+        #     # clamp the positions (all postions from afar are treated equally, maybe?)
+        #     # (2L-1) x 1 x H
+        #     pos_emb = self.positional_encoder(pos.unsqueeze(1))
+        #     # print(pos_emb.size())
 
         # B x T x H -> T x B x H
         context = emb

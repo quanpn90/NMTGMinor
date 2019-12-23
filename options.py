@@ -42,6 +42,8 @@ def make_parser(parser):
 
     parser.add_argument('-double_position', action='store_true',
                         help="""Using double position encodings (absolute and relative)""")
+    parser.add_argument('-asynchronous', action='store_true',
+                        help="""Different attention values for past and future""")
 
     # Transforer Model options
     parser.add_argument('-use_language_embedding', action='store_true',
@@ -268,5 +270,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'use_language_embedding'):
         opt.use_language_embedding = False
+
+    if not hasattr(opt, 'asynchronous'):
+        opt.asynchronous = False
 
     return opt
