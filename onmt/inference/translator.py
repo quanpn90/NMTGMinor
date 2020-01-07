@@ -247,11 +247,8 @@ class Translator(object):
                                                    tgt_bos_word,
                                                    onmt.constants.EOS_WORD) for b in tgt_sents]
 
-            tgt_lang_data = [torch.Tensor([self.lang_dict[self.tgt_lang]])]
-        else:
-            tgt_lang_data = None
-
         src_lang_data = [torch.Tensor([self.lang_dict[self.src_lang]])]
+        tgt_lang_data = [torch.Tensor([self.lang_dict[self.tgt_lang]])]
         # src_atbs = None
         #
         # if self.attributes:

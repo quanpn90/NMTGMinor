@@ -39,6 +39,8 @@ def make_parser(parser):
                         help='Word embedding sizes')
     parser.add_argument('-learnable_position_encoding', action='store_true',
                         help="""Use embeddings as learnable position encoding.""")
+    parser.add_argument('-fix_norm_output_embedding', action='store_true',
+                        help="""Normalize the output embedding""")
 
     parser.add_argument('-double_position', action='store_true',
                         help="""Using double position encodings (absolute and relative)""")
@@ -273,5 +275,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'asynchronous'):
         opt.asynchronous = False
+
+    if not hasattr(opt, 'fix_norm_output_embedding'):
+        opt.fix_norm_output_embedding = False
 
     return opt

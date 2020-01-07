@@ -44,7 +44,8 @@ def build_tm_model(opt, dicts):
     if opt.copy_generator:
         generators = [CopyGenerator(opt.model_size, dicts['tgt'].size())]
     else:
-        generators = [onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size())]
+        generators = [onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size(),
+                                                          fix_norm=opt.fix_norm_output_embedding)]
 
     # BUILD EMBEDDING
     if 'src' in dicts:
@@ -171,7 +172,7 @@ def init_model_parameters(model, opt):
         nn.init.normal_(weight, 0.0, init_std)
 
     def init_embed(weight):
-        nn.init.normal_(weight, mean=0, std=init_std)
+        nn.init.uniform_(weight, -0.01, 0.01)
 
     def init_bias(bias):
         nn.init.constant_(bias, 0.0)
