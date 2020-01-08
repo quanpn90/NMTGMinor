@@ -39,7 +39,7 @@ torch.manual_seed(opt.seed)
 
 
 def main():
-    if opt.data_format == 'raw':
+    if opt.data_format in ['bin', 'raw']:
         start = time.time()
 
         if opt.data.endswith(".train.pt"):
@@ -74,7 +74,7 @@ def main():
         train_data = onmt.Dataset(train_dict['src'], train_dict['tgt'],
                                   train_src_langs, train_tgt_langs,
                                   batch_size_words=opt.batch_size_words,
-                                  data_type=dataset.get("type", "text"),
+                                  data_type=dataset.get("type", "text"), sorting=True,
                                   batch_size_sents=opt.batch_size_sents,
                                   multiplier=opt.batch_size_multiplier,
                                   augment=opt.augment_speech,
@@ -96,70 +96,39 @@ def main():
         valid_data = onmt.Dataset(valid_dict['src'], valid_dict['tgt'],
                                   valid_src_langs, valid_tgt_langs,
                                   batch_size_words=opt.batch_size_words,
-                                  data_type=dataset.get("type", "text"),
+                                  data_type=dataset.get("type", "text"), sorting=True,
                                   batch_size_sents=opt.batch_size_sents,
                                   upsampling=opt.upsampling)
-
-
 
         print(' * number of training sentences. %d' % len(dataset['train']['src']))
         print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
 
-    elif opt.data_format == 'bin':
-        print("Loading memory binned data files ....")
-        start = time.time()
-        from onmt.data.indexed_dataset import IndexedInMemoryDataset
-
-        dicts = torch.load(opt.data + ".dict.pt")
-
-        train_path = opt.data + '.train'
-        train_src = IndexedInMemoryDataset(train_path + '.src')
-        train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
-
-        train_data = onmt.Dataset(train_src,
-                                  train_tgt,
-                                  batch_size_words=opt.batch_size_words,
-                                  data_type="text",
-                                  batch_size_sents=opt.batch_size_sents,
-                                  multiplier=opt.batch_size_multiplier)
-
-        valid_path = opt.data + '.valid'
-        valid_src = IndexedInMemoryDataset(valid_path + '.src')
-        valid_tgt = IndexedInMemoryDataset(valid_path + '.tgt')
-
-        valid_data = onmt.Dataset(valid_src,
-                                  valid_tgt,
-                                  batch_size_words=opt.batch_size_words,
-                                  data_type="text",
-                                  batch_size_sents=opt.batch_size_sents)
-
-        elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
-        print("Done after %s" % elapse)
     elif opt.data_format == 'mmem':
         print("Loading memory mapped data files ....")
         start = time.time()
         from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
 
-        # d = onmt.Dict()
-
         dicts = torch.load(opt.data + ".dict.pt")
+
+        # allocate languages if not
+        if 'langs' not in dicts:
+            dicts['langs'] = {'src': 0, 'tgt': 1}
+        else:
+            print(dicts['langs'])
 
         train_path = opt.data + '.train'
         train_src = MMapIndexedDataset(train_path + '.src')
         train_tgt = MMapIndexedDataset(train_path + '.tgt')
 
         # check the lang files if they exist (in the case of multi-lingual models)
-        if os.path.exists(train_path + '.srclang.bin'):
+        if os.path.exists(train_path + '.src_lang.bin'):
             assert 'langs' in dicts
-            train_src_langs = MMapIndexedDataset(train_path + '.srclang')
-            train_tgt_langs = MMapIndexedDataset(train_path + '.tgtlang')
+            train_src_langs = MMapIndexedDataset(train_path + '.src_lang')
+            train_tgt_langs = MMapIndexedDataset(train_path + '.tgt_lang')
         else:
-            # allocate new languages
-            dicts['langs'] = {'src': 0, 'tgt': 1}
             train_src_langs = list()
             train_tgt_langs = list()
-            # for _ in train_src:
-            # Allocation one for the bilingual case
+            # Allocate a Tensor(1) for the bilingual case
             train_src_langs.append(torch.Tensor([dicts['langs']['src']]))
             train_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
@@ -167,7 +136,7 @@ def main():
                                   train_tgt,
                                   train_src_langs, train_tgt_langs,
                                   batch_size_words=opt.batch_size_words,
-                                  data_type="text",
+                                  data_type="text", sorting=True,
                                   batch_size_sents=opt.batch_size_sents,
                                   multiplier=opt.batch_size_multiplier,
                                   src_align_right=opt.src_align_right)
@@ -176,10 +145,10 @@ def main():
         valid_src = MMapIndexedDataset(valid_path + '.src')
         valid_tgt = MMapIndexedDataset(valid_path + '.tgt')
 
-        if os.path.exists(valid_path + '.srclang.bin'):
+        if os.path.exists(valid_path + '.src_lang.bin'):
             assert 'langs' in dicts
-            valid_src_langs = MMapIndexedDataset(valid_path + '.srclang')
-            valid_tgt_langs = MMapIndexedDataset(valid_path + '.tgtlang')
+            valid_src_langs = MMapIndexedDataset(valid_path + '.src_lang')
+            valid_tgt_langs = MMapIndexedDataset(valid_path + '.tgt_lang')
         else:
             valid_src_langs = list()
             valid_tgt_langs = list()
@@ -191,7 +160,7 @@ def main():
         valid_data = onmt.Dataset(valid_src, valid_tgt,
                                   valid_src_langs, valid_tgt_langs,
                                   batch_size_words=opt.batch_size_words,
-                                  data_type="text",
+                                  data_type="text", sorting=True,
                                   batch_size_sents=opt.batch_size_sents,
                                   src_align_right=opt.src_align_right)
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
@@ -216,7 +185,7 @@ def main():
 
                 additional_data.append(onmt.Dataset(add_dataset['train']['src'],
                                                     dataset['train']['tgt'], batch_size_words=opt.batch_size_words,
-                                                    data_type=dataset.get("type", "text"),
+                                                    data_type=dataset.get("type", "text"), sorting=True,
                                                     batch_size_sents=opt.batch_size_sents,
                                                     multiplier=opt.batch_size_multiplier,
                                                     reshape_speech=opt.reshape_speech,

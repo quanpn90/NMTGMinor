@@ -150,6 +150,4 @@ class Binarizer:
             final_result['data'] += result[idx]['data']
             final_result['sizes'] += result[idx]['sizes']
 
-        print(len(final_result['sizes']))
-
         return final_result

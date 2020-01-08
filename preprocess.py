@@ -43,6 +43,18 @@ parser.add_argument('-valid_src', required=True,
 parser.add_argument('-valid_tgt', required=True,
                     help="Path to the validation target data")
 
+parser.add_argument('-train_src_lang', default="src",
+                    help="Language(s) of the source sequences.")
+
+parser.add_argument('-train_tgt_lang', default="tgt",
+                    help="Language(s) of the target sequences.")
+
+parser.add_argument('-valid_src_lang', default="src",
+                    help="Language(s) of the source sequences.")
+
+parser.add_argument('-valid_tgt_lang', default="tgt",
+                    help="Language(s) of the target sequences.")
+
 parser.add_argument('-save_data', required=True,
                     help="Output file for the prepared data")
 
@@ -93,6 +105,7 @@ opt = parser.parse_args()
 
 torch.manual_seed(opt.seed)
 
+
 def make_vocab(filenames, size, tokenizer):
     vocab = onmt.Dict([onmt.constants.PAD_WORD, onmt.constants.UNK_WORD,
                        onmt.constants.BOS_WORD, onmt.constants.EOS_WORD],
@@ -125,7 +138,6 @@ def init_vocab(name, data_files, vocab_file, vocab_size, tokenizer, join=False):
         print('Loaded ' + str(vocab.size()) + ' ' + name + ' words')
 
     if vocab is None:
-
         print('Building ' + name + ' vocabulary...')
         gen_word_vocab = make_vocab(data_files, vocab_size, tokenizer)
 
@@ -189,9 +201,22 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
     return tensor
 
 
-def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, max_src_length=64, max_tgt_length=64,
+def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer,
+                          max_src_length=256, max_tgt_length=256,
                           add_bos=True,
-                          input_type='word', data_type='int64'):
+                          data_type='int64'):
+    """
+    :param src_file: source text file (to be read)
+    :param tgt_file: target text file (to be read)
+    :param src_dicts: source vocabulary
+    :param tgt_dicts: target vocabulary
+    :param max_src_length: filter sentences longer than this
+    :param max_tgt_length: filter sentences longer than this
+    :param add_bos: add <bos> to the target part
+    :param tokenizer: tokenizer to tokenize sentence
+    :param data_type: data type for storage
+    :return:
+    """
     src, tgt = [], []
     src_sizes = []
     tgt_sizes = []
@@ -222,12 +247,9 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, max_src_leng
             print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
             continue
 
-        if input_type == 'word':
-            src_words = sline.split()
-            tgt_words = tline.split()
-        elif input_type == 'char':
-            src_words = split_line_by_char(sline)
-            tgt_words = split_line_by_char(tline)
+        # TODO: source tokenizer != target tokenizer (unlikely in practice)
+        src_words = tokenizer.tokenize(sline)
+        tgt_words = tokenizer.tokenize(tline)
 
         if len(src_words) <= max_src_length \
                 and len(tgt_words) <= max_tgt_length - 2:
@@ -302,7 +324,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
     print('Processing %s & %s ...' % (src_file, tgt_file))
 
     if asr_format == "h5":
-        file_idx = -1;
+        file_idx = -1
         if src_file[-2:] == "h5":
             srcf = h5.File(src_file, 'r')
         else:
@@ -457,20 +479,38 @@ def main():
 
     tokenizer = onmt.Tokenizer(opt.input_type, opt.lower)
 
+    # construct set of languages from the training languages
+    src_langs = opt.train_src_lang.split("|")
+    tgt_langs = opt.train_tgt_lang.split("|")
+    langs = (src_langs + tgt_langs)
+    langs = list(set(langs))
+
+    dicts['langs'] = dict()
+
+    for lang in langs:
+        idx = len(dicts['langs'])
+        dicts['langs'][lang] = idx
+
+    print(dicts['langs'])
+
+    src_train_files = opt.train_src.split("|")
+    tgt_train_files = opt.train_tgt.split("|")
+
     # for ASR and LM we only need to build vocab for the 'target' language
     if opt.asr or opt.lm:
-        dicts['tgt'] = init_vocab('target', [opt.train_tgt], opt.tgt_vocab,
-                                  opt.tgt_vocab_size,tokenizer)
+        dicts['tgt'] = init_vocab('target', tgt_train_files, opt.tgt_vocab,
+                                  opt.tgt_vocab_size, tokenizer)
     elif opt.join_vocab:
-        dicts['src'] = init_vocab('source', [opt.train_src, opt.train_tgt], opt.src_vocab,
+        dicts['src'] = init_vocab('source', set(src_train_files + tgt_train_files), opt.src_vocab,
                                   opt.tgt_vocab_size, tokenizer)
         dicts['tgt'] = dicts['src']
 
+    # Translation model
     else:
-        dicts['src'] = init_vocab('source', [opt.train_src], opt.src_vocab,
+        dicts['src'] = init_vocab('source', src_train_files, opt.src_vocab,
                                   opt.src_vocab_size, tokenizer)
 
-        dicts['tgt'] = init_vocab('target', [opt.train_tgt], opt.tgt_vocab,
+        dicts['tgt'] = init_vocab('target', tgt_train_files, opt.tgt_vocab,
                                   opt.tgt_vocab_size, tokenizer)
 
     if opt.lm:
@@ -512,31 +552,99 @@ def main():
 
     else:
         print('Preparing training translation model...')
+
+        src_input_files = opt.train_src.split("|")
+        tgt_input_files = opt.train_tgt.split("|")
+
+        src_langs = opt.train_src_lang.split("|")
+        tgt_langs = opt.train_tgt_lang.split("|")
+
+        assert len(src_input_files) == len(src_langs)
+        assert len(src_input_files) == len(tgt_input_files)
+        assert len(tgt_input_files) == len(tgt_langs)
+
+        n_input_files = len(src_input_files)
+
         train = dict()
-        train['src'], train['tgt'] = make_translation_data(opt.train_src, opt.train_tgt,
-                                                           dicts['src'], dicts['tgt'],
-                                                           max_src_length=opt.src_seq_length,
-                                                           max_tgt_length=opt.tgt_seq_length,
-                                                           input_type=opt.input_type,
-                                                           add_bos=(not opt.no_bos),
-                                                           data_type=opt.data_type)
+        train['src'], train['tgt'] = list(), list()
+        train['src_lang'], train['tgt_lang'] = list(), list()
+
+        for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
+
+            src_data, tgt_data = make_translation_data(src_file, tgt_file,
+                                                       dicts['src'], dicts['tgt'],
+                                                       tokenizer,
+                                                       max_src_length=opt.src_seq_length,
+                                                       max_tgt_length=opt.tgt_seq_length,
+                                                       add_bos=(not opt.no_bos),
+                                                       data_type=opt.data_type)
+
+            n_samples = len(src_data)
+            if n_input_files == 1:
+                # For single-file cases we only need to have 1 language per file
+                # which will be broadcasted
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]])]
+            else:
+                # each sample will have a different language id
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
+
+            train['src'] += src_data
+            train['tgt'] += tgt_data
+            train['src_lang'] += src_lang_data
+            train['tgt_lang'] += tgt_lang_data
 
         print('Preparing validation ...')
+
+        src_input_files = opt.valid_src.split("|")
+        tgt_input_files = opt.valid_tgt.split("|")
+
+        src_langs = opt.valid_src_lang.split("|")
+        tgt_langs = opt.valid_tgt_lang.split("|")
+
+        assert len(src_input_files) == len(src_langs)
+        assert len(src_input_files) == len(tgt_input_files)
+        assert len(tgt_input_files) == len(tgt_langs)
+
+        n_input_files = len(src_input_files)
+
         valid = dict()
-        valid['src'], valid['tgt'] = make_translation_data(opt.valid_src, opt.valid_tgt,
-                                                           dicts['src'], dicts['tgt'],
-                                                           max_src_length=max(1024, opt.src_seq_length),
-                                                           max_tgt_length=max(1024, opt.tgt_seq_length),
-                                                           input_type=opt.input_type,
-                                                           add_bos=(not opt.no_bos),
-                                                           data_type=opt.data_type)
+        valid['src'], valid['tgt'] = list(), list()
+        valid['src_lang'], valid['tgt_lang'] = list(), list()
+
+        for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
+
+            src_data, tgt_data = make_translation_data(src_file, tgt_file,
+                                                       dicts['src'], dicts['tgt'],
+                                                       tokenizer,
+                                                       max_src_length=max(1024, opt.src_seq_length),
+                                                       max_tgt_length=max(1024, opt.tgt_seq_length),
+                                                       add_bos=(not opt.no_bos),
+                                                       data_type=opt.data_type)
+
+            n_samples = len(src_data)
+            if n_input_files == 1:
+                # For single-file cases we only need to have 1 language per file
+                # which will be broadcasted
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]])]
+            else:
+                # each sample will have a different language id
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
+
+            valid['src'] += src_data
+            valid['tgt'] += tgt_data
+            valid['src_lang'] += src_lang_data
+            valid['tgt_lang'] += tgt_lang_data
 
     if opt.src_vocab is None and opt.asr == False and opt.lm == False:
         save_vocabulary('source', dicts['src'], opt.save_data + '.src.dict')
     if opt.tgt_vocab is None:
         save_vocabulary('target', dicts['tgt'], opt.save_data + '.tgt.dict')
 
-    if opt.format == 'raw':
+    if opt.format in ['raw', 'bin']:
 
         print('Saving data to \'' + opt.save_data + '.train.pt\'...')
         save_data = {'dicts': dicts,
@@ -546,56 +654,6 @@ def main():
         torch.save(save_data, opt.save_data + '.train.pt')
         print("Done")
 
-    elif opt.format == 'bin':
-        print('Saving data to indexed data files')
-
-        if opt.asr:
-            print("ASR data format isn't compatible with binary")
-            raise AssertionError
-        # save dicts in this format
-        torch.save(dicts, opt.save_data + '.dict.pt')
-
-        # binarize the training set first
-        for set in ['src', 'tgt']:
-
-            if train[set] is None:
-                continue
-            dtype = np.int32
-
-            if set == 'src' and opt.asr:
-                dtype = np.double
-
-            data = IndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set, dtype=dtype)
-
-            # add item from training data to the indexed data
-            for tensor in train[set]:
-                data.add_item(tensor)
-
-            data.finalize(opt.save_data + ".train.%s.idx" % set)
-
-        # binarize the validation set
-        for set in ['src', 'tgt']:
-
-            if valid[set] is None:
-                continue
-
-            if opt.data_type == 'int64':
-                dtype = np.int64
-            else:
-                dtype = np.int32
-
-            if set == 'src' and opt.asr:
-                dtype = np.double
-
-            data = IndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set, dtype=dtype)
-
-            # add item from training data to the indexed data
-            for tensor in valid[set]:
-                data.add_item(tensor)
-
-            data.finalize(opt.save_data + ".valid.%s.idx" % set)
-
-        print("Done")
     elif opt.format in ['mmap', 'mmem']:
         print('Saving data to memory indexed data files')
         from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
@@ -608,8 +666,8 @@ def main():
         torch.save(dicts, opt.save_data + '.dict.pt')
 
         # binarize the training set first
-        for set in ['src', 'tgt']:
-            if train[set] is None:
+        for set_ in ['src', 'tgt', 'src_lang', 'tgt_lang']:
+            if train[set_] is None:
                 continue
 
             if opt.data_type == 'int64':
@@ -617,32 +675,32 @@ def main():
             else:
                 dtype = np.int32
 
-            if set == 'src' and opt.asr:
+            if set_ == 'src' and opt.asr:
                 dtype = np.double
 
-            train_data = MMapIndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set, dtype=dtype)
+            train_data = MMapIndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set_, dtype=dtype)
 
             # add item from training data to the indexed data
-            for tensor in train[set]:
+            for tensor in train[set_]:
                 train_data.add_item(tensor)
 
-            train_data.finalize(opt.save_data + ".train.%s.idx" % set)
+            train_data.finalize(opt.save_data + ".train.%s.idx" % set_)
 
             del train_data
 
-            if valid[set] is None:
+            if valid[set_] is None:
                 continue
 
-            if set == 'src' and opt.asr:
+            if set_ == 'src' and opt.asr:
                 dtype = np.double
 
-            valid_data = MMapIndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set, dtype=dtype)
+            valid_data = MMapIndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set_, dtype=dtype)
 
             # add item from training data to the indexed data
-            for tensor in valid[set]:
+            for tensor in valid[set_]:
                 valid_data.add_item(tensor)
 
-            valid_data.finalize(opt.save_data + ".valid.%s.idx" % set)
+            valid_data.finalize(opt.save_data + ".valid.%s.idx" % set_)
 
             del valid_data
 

@@ -47,6 +47,18 @@ parser.add_argument('-valid_src', required=True,
 parser.add_argument('-valid_tgt', required=True,
                     help="Path to the validation target data")
 
+parser.add_argument('-train_src_lang', default="src",
+                    help="Language(s) of the source sequences.")
+
+parser.add_argument('-train_tgt_lang', default="tgt",
+                    help="Language(s) of the target sequences.")
+
+parser.add_argument('-valid_src_lang', default="src",
+                    help="Language(s) of the source sequences.")
+
+parser.add_argument('-valid_tgt_lang', default="tgt",
+                    help="Language(s) of the target sequences.")
+
 parser.add_argument('-save_data', required=True,
                     help="Output file for the prepared data")
 
@@ -223,92 +235,6 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
 
     tgt = binarized_tgt['data']
     tgt_sizes = binarized_tgt['sizes']
-    # count, ignored = 0, 0
-    #
-    # print('Processing %s & %s ...' % (src_file, tgt_file))
-    # srcf = open(src_file)
-    # tgtf = open(tgt_file)
-    #
-    # while True:
-    #     sline = srcf.readline()
-    #     tline = tgtf.readline()
-    #
-    #     # normal end of file
-    #     if sline == "" and tline == "":
-    #         break
-    #
-    #     # source or target does not have same number of lines
-    #     if sline == "" or tline == "":
-    #         print('WARNING: src and tgt do not have the same # of sentences')
-    #         break
-    #
-    #     sline = sline.strip()
-    #     tline = tline.strip()
-    #
-    #     # source and/or target are empty
-    #     if sline == "" or tline == "":
-    #         print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
-    #         continue
-    #
-    #     if input_type == 'word':
-    #         src_words = sline.split()
-    #         tgt_words = tline.split()
-    #     elif input_type == 'char':
-    #         src_words = split_line_by_char(sline)
-    #         tgt_words = split_line_by_char(tline)
-    #
-    #     if len(src_words) <= max_src_length \
-    #             and len(tgt_words) <= max_tgt_length - 2:
-    #
-    #         # Check truncation condition.
-    #         if opt.src_seq_length_trunc != 0:
-    #             src_words = src_words[:opt.src_seq_length_trunc]
-    #         if opt.tgt_seq_length_trunc != 0:
-    #             tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
-    #
-    #         # For src text, we use BOS for possible reconstruction
-    #         src += [src_dicts.convertToIdx(src_words,
-    #                                       onmt.Constants.UNK_WORD)]
-    #
-    #         if add_bos:
-    #             tgt += [tgt_dicts.convertToIdx(tgt_words,
-    #                                            onmt.Constants.UNK_WORD,
-    #                                            onmt.Constants.BOS_WORD,
-    #                                            onmt.Constants.EOS_WORD, type=data_type)]
-    #         else:
-    #             tgt += [tgt_dicts.convertToIdx(tgt_words,
-    #                                            onmt.Constants.UNK_WORD,
-    #                                            None,
-    #                                            onmt.Constants.EOS_WORD, type=data_type)]
-    #         src_sizes += [len(src_words)]
-    #         tgt_sizes += [len(tgt_words)]
-    #     else:
-    #         ignored += 1
-    #
-    #     count += 1
-    #
-    #     if count % opt.report_every == 0:
-    #         print('... %d sentences prepared' % count)
-    #
-    # srcf.close()
-    # tgtf.close()
-    #
-    # if opt.shuffle == 1:
-    #     print('... shuffling sentences')
-    #     perm = torch.randperm(len(src))
-    #     src = [src[idx] for idx in perm]
-    #     tgt = [tgt[idx] for idx in perm]
-    #     src_sizes = [src_sizes[idx] for idx in perm]
-    #     tgt_sizes = [tgt_sizes[idx] for idx in perm]
-
-    print('... sorting sentences by size')
-    z = zip(src, tgt, src_sizes, tgt_sizes)
-
-    # ultimately sort by target size
-    sorted_z = sorted(sorted(z, key=lambda x: x[2]), key=lambda x: x[3])
-
-    src = [z_[0] for z_ in sorted_z]
-    tgt = [z_[1] for z_ in sorted_z]
 
     # currently we don't ignore anything :D
     ignored = 0
@@ -447,27 +373,6 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
 
     print('Total number of unk words: %d' % n_unk_words)
 
-    if opt.shuffle == 1:
-        print('... shuffling sentences')
-        perm = torch.randperm(len(src))
-        src = [src[idx] for idx in perm]
-        tgt = [tgt[idx] for idx in perm]
-        src_sizes = [src_sizes[idx] for idx in perm]
-        tgt_sizes = [tgt_sizes[idx] for idx in perm]
-
-    print('... sorting sentences by size')
-
-    # _, perm = torch.sort(torch.Tensor(sizes), descending=(opt.sort_type == 'descending'))
-    # src = [src[idx] for idx in perm]
-    # tgt = [tgt[idx] for idx in perm]
-    z = zip(src, tgt, src_sizes, tgt_sizes)
-
-    # ultimately sort by source size
-    sorted_z = sorted(sorted(z, key=lambda x: x[3]), key=lambda x: x[2])
-
-    src = [z_[0] for z_ in sorted_z]
-    tgt = [z_[1] for z_ in sorted_z]
-
     print(('Prepared %d sentences ' +
            '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
           (len(src), ignored, max_src_length, max_tgt_length))
@@ -480,26 +385,42 @@ def main():
 
     tokenizer = onmt.Tokenizer(opt.input_type, opt.lower)
 
+    # construct set of languages from the training languages
+    src_langs = opt.train_src_lang.split("|")
+    tgt_langs = opt.train_tgt_lang.split("|")
+    langs = (src_langs + tgt_langs)
+    langs = list(set(langs))
+
+    dicts['langs'] = dict()
+
+    for lang in langs:
+        idx = len(dicts['langs'])
+        dicts['langs'][lang] = idx
+
+    print(dicts['langs'])
+
     start = time.time()
+
+    src_train_files = opt.train_src.split("|")
+    tgt_train_files = opt.train_tgt.split("|")
     # for ASR and LM we only need to build vocab for the 'target' language
     if opt.asr or opt.lm:
-        dicts['tgt'] = init_vocab('target', [opt.train_tgt], opt.tgt_vocab,
+        dicts['tgt'] = init_vocab('target', tgt_train_files, opt.tgt_vocab,
                                   opt.tgt_vocab_size, tokenizer, num_workers=opt.num_threads)
     elif opt.join_vocab:
-        dicts['src'] = init_vocab('source', [opt.train_src, opt.train_tgt], opt.src_vocab,
+        dicts['src'] = init_vocab('source', set(src_train_files + tgt_train_files), opt.src_vocab,
                                   opt.tgt_vocab_size, tokenizer, num_workers=opt.num_threads)
         dicts['tgt'] = dicts['src']
 
     else:
-        dicts['src'] = init_vocab('source', [opt.train_src], opt.src_vocab,
+        dicts['src'] = init_vocab('source', src_train_files, opt.src_vocab,
                                   opt.src_vocab_size, tokenizer, num_workers=opt.num_threads)
 
-        dicts['tgt'] = init_vocab('target', [opt.train_tgt], opt.tgt_vocab,
+        dicts['tgt'] = init_vocab('target', tgt_train_files, opt.tgt_vocab,
                                   opt.tgt_vocab_size, tokenizer, num_workers=opt.num_threads)
 
     elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
     print("Vocabulary generated after %s" % elapse)
-
 
     if opt.lm:
         print('Preparing training language model ...')
@@ -539,28 +460,97 @@ def main():
                                                    asr_format=opt.asr_format)
 
     else:
-        start = time.time()
-        print('Binarizing the data to train translation models...')
+
+        src_input_files = opt.train_src.split("|")
+        tgt_input_files = opt.train_tgt.split("|")
+
+        src_langs = opt.train_src_lang.split("|")
+        tgt_langs = opt.train_tgt_lang.split("|")
+
+        assert len(src_input_files) == len(src_langs)
+        assert len(src_input_files) == len(tgt_input_files)
+        assert len(tgt_input_files) == len(tgt_langs)
+
+        n_input_files = len(src_input_files)
+
         train = dict()
-        train['src'], train['tgt'] = make_translation_data(opt.train_src, opt.train_tgt,
-                                                           dicts['src'], dicts['tgt'], tokenizer,
-                                                           max_src_length=opt.src_seq_length,
-                                                           max_tgt_length=opt.tgt_seq_length,
-                                                           add_bos=(not opt.no_bos),
-                                                           data_type=opt.data_type,
-                                                           num_workers=opt.num_threads,
-                                                           verbose=opt.verbose)
+        train['src'], train['tgt'] = list(), list()
+        train['src_lang'], train['tgt_lang'] = list(), list()
+
+        start = time.time()
+        print('Binarizing data to train translation models...')
+
+        for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
+
+            src_data, tgt_data = make_translation_data(src_file, tgt_file,
+                                                       dicts['src'], dicts['tgt'], tokenizer,
+                                                       max_src_length=opt.src_seq_length,
+                                                       max_tgt_length=opt.tgt_seq_length,
+                                                       add_bos=(not opt.no_bos),
+                                                       data_type=opt.data_type,
+                                                       num_workers=opt.num_threads,
+                                                       verbose=opt.verbose)
+
+            n_samples = len(src_data)
+            if n_input_files == 1:
+                # For single-file cases we only need to have 1 language per file
+                # which will be broadcasted
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]])]
+            else:
+                # each sample will have a different language id
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
+
+            train['src'] += src_data
+            train['tgt'] += tgt_data
+            train['src_lang'] += src_lang_data
+            train['tgt_lang'] += tgt_lang_data
 
         print('Preparing validation ...')
+
+        src_input_files = opt.valid_src.split("|")
+        tgt_input_files = opt.valid_tgt.split("|")
+
+        src_langs = opt.valid_src_lang.split("|")
+        tgt_langs = opt.valid_tgt_lang.split("|")
+
+        assert len(src_input_files) == len(src_langs)
+        assert len(src_input_files) == len(tgt_input_files)
+        assert len(tgt_input_files) == len(tgt_langs)
+
+        n_input_files = len(src_input_files)
+
         valid = dict()
-        valid['src'], valid['tgt'] = make_translation_data(opt.valid_src, opt.valid_tgt,
-                                                           dicts['src'], dicts['tgt'], tokenizer,
-                                                           max_src_length=max(1024, opt.src_seq_length),
-                                                           max_tgt_length=max(1024, opt.tgt_seq_length),
-                                                           add_bos=(not opt.no_bos),
-                                                           data_type=opt.data_type,
-                                                           num_workers=opt.num_threads,
-                                                           verbose=opt.verbose)
+        valid['src'], valid['tgt'] = list(), list()
+        valid['src_lang'], valid['tgt_lang'] = list(), list()
+
+        for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
+
+            src_data, tgt_data = make_translation_data(src_file, tgt_file,
+                                                               dicts['src'], dicts['tgt'], tokenizer,
+                                                               max_src_length=max(1024, opt.src_seq_length),
+                                                               max_tgt_length=max(1024, opt.tgt_seq_length),
+                                                               add_bos=(not opt.no_bos),
+                                                               data_type=opt.data_type,
+                                                               num_workers=opt.num_threads,
+                                                               verbose=opt.verbose)
+
+            n_samples = len(src_data)
+            if n_input_files == 1:
+                # For single-file cases we only need to have 1 language per file
+                # which will be broadcasted
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]])]
+            else:
+                # each sample will have a different language id
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
+
+            valid['src'] += src_data
+            valid['tgt'] += tgt_data
+            valid['src_lang'] += src_lang_data
+            valid['tgt_lang'] += tgt_lang_data
 
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
         print("Binarization finished after %s" % elapse)
@@ -570,7 +560,8 @@ def main():
     if opt.tgt_vocab is None:
         save_vocabulary('target', dicts['tgt'], opt.save_data + '.tgt.dict')
 
-    if opt.format == 'raw':
+    # SAVE DATA
+    if opt.format in ['raw', 'bin']:
 
         print('Saving data to \'' + opt.save_data + '.train.pt\'...')
         save_data = {'dicts': dicts,
@@ -580,58 +571,7 @@ def main():
         torch.save(save_data, opt.save_data + '.train.pt')
         print("Done")
 
-    elif opt.format == 'bin':
-        print('Saving data to indexed data files')
-
-        if opt.asr:
-            print("ASR data format isn't compatible with binary")
-            raise AssertionError
-        # save dicts in this format
-        torch.save(dicts, opt.save_data + '.dict.pt')
-
-        # binarize the training set first
-        for set in ['src', 'tgt']:
-
-            if train[set] is None:
-                continue
-            dtype = np.int32
-
-            if set == 'src' and opt.asr:
-                dtype = np.double
-
-            data = IndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set, dtype=dtype)
-
-            # add item from training data to the indexed data
-            for tensor in train[set]:
-                data.add_item(tensor)
-
-            data.finalize(opt.save_data + ".train.%s.idx" % set)
-
-        # binarize the validation set
-        for set in ['src', 'tgt']:
-
-            if valid[set] is None:
-                continue
-
-            if opt.data_type == 'int64':
-                dtype = np.int64
-            else:
-                dtype = np.int32
-
-            if set == 'src' and opt.asr:
-                dtype = np.double
-
-            data = IndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set, dtype=dtype)
-
-            # add item from training data to the indexed data
-            for tensor in valid[set]:
-                data.add_item(tensor)
-
-            data.finalize(opt.save_data + ".valid.%s.idx" % set)
-
-        print("Done")
     elif opt.format in ['mmap', 'mmem']:
-        start = time.time()
         print('Saving data to memory indexed data files')
         from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
 
@@ -643,8 +583,8 @@ def main():
         torch.save(dicts, opt.save_data + '.dict.pt')
 
         # binarize the training set first
-        for set in ['src', 'tgt']:
-            if train[set] is None:
+        for set_ in ['src', 'tgt', 'src_lang', 'tgt_lang']:
+            if train[set_] is None:
                 continue
 
             if opt.data_type == 'int64':
@@ -652,36 +592,34 @@ def main():
             else:
                 dtype = np.int32
 
-            if set == 'src' and opt.asr:
+            if set_ == 'src' and opt.asr:
                 dtype = np.double
 
-            train_data = MMapIndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set, dtype=dtype)
+            train_data = MMapIndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set_, dtype=dtype)
 
             # add item from training data to the indexed data
-            for tensor in train[set]:
+            for tensor in train[set_]:
                 train_data.add_item(tensor)
 
-            train_data.finalize(opt.save_data + ".train.%s.idx" % set)
+            train_data.finalize(opt.save_data + ".train.%s.idx" % set_)
 
             del train_data
 
-            if valid[set] is None:
+            if valid[set_] is None:
                 continue
 
-            if set == 'src' and opt.asr:
+            if set_ == 'src' and opt.asr:
                 dtype = np.double
 
-            valid_data = MMapIndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set, dtype=dtype)
+            valid_data = MMapIndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set_, dtype=dtype)
 
             # add item from training data to the indexed data
-            for tensor in valid[set]:
+            for tensor in valid[set_]:
                 valid_data.add_item(tensor)
 
-            valid_data.finalize(opt.save_data + ".valid.%s.idx" % set)
+            valid_data.finalize(opt.save_data + ".valid.%s.idx" % set_)
 
             del valid_data
-        elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
-        print("Saving finished after %s" % elapse)
 
     else:
         raise NotImplementedError

@@ -129,7 +129,9 @@ class RelativeTransformerEncoder(TransformerEncoder):
             """ Adding language embeddings """
             if self.use_language_embedding:
                 assert self.language_embedding is not None
-                emb = emb + self.language_embedding(input_lang)
+                lang_emb = self.language_embedding(input_lang)
+                # There is no "unsqueeze" here because the input is T x B x H and lang_emb is B x H
+                emb = emb + lang_emb
         else:
             if not self.cnn_downsampling:
                 mask_src = input.narrow(2, 0, 1).squeeze(2).transpose(0, 1).eq(onmt.constants.PAD).unsqueeze(0)

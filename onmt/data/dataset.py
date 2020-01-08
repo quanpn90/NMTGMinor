@@ -235,7 +235,7 @@ class Dataset(torch.utils.data.Dataset):
                  src_langs=None, tgt_langs=None,
                  batch_size_words=2048,
                  data_type="text", batch_size_sents=128,
-                 multiplier=1,
+                 multiplier=1, sorting=False,
                  augment=False,
                  src_align_right=False, tgt_align_right=False, **kwargs):
         """
@@ -277,6 +277,29 @@ class Dataset(torch.utils.data.Dataset):
         else:
             self.tgt = None
 
+        # sort data to have efficient mini-batching during training
+        if sorting:
+            assert self.src is not None
+            assert self.tgt is not None
+
+            src_sizes = [data.size(0) for data in src_data]
+            tgt_sizes = [data.size(0) for data in tgt_data]
+            orders = range(len(self.src))
+
+            z = zip(src_sizes, tgt_sizes, orders)
+
+            if self._type == 'text':
+                # For machine translation, sort by source first, and then target
+                sorted_z = sorted(sorted(z, key=lambda x: x[0]), key=lambda x: x[1])
+
+            elif self._type == 'audio':
+                sorted_z = sorted(sorted(z, key=lambda x: x[1]), key=lambda x: x[0])
+
+            sorted_order = [z_[2] for z_ in sorted_z]
+
+            self.src = [self.src[i] for i in sorted_order]
+            self.tgt = [self.tgt[i] for i in sorted_order]
+
         self.src_langs = src_langs
         self.tgt_langs = tgt_langs
         if self.src_langs is not None and self.tgt_langs is not None:
@@ -288,6 +311,9 @@ class Dataset(torch.utils.data.Dataset):
             self.bilingual = True
         else:
             self.bilingual = False
+            if sorting:
+                self.src_langs = [self.src_langs[i] for i in sorted_order]
+                self.tgt_langs = [self.tgt_langs[i] for i in sorted_order]
 
         self.fullSize = len(self.src) if self.src is not None else len(self.tgt)
 
@@ -315,6 +341,8 @@ class Dataset(torch.utils.data.Dataset):
             self.augmenter = Augmenter()
         else:
             self.augmenter = None
+
+        print("* Number of sentences in the data: %d" % self.fullSize)
 
     def size(self):
 

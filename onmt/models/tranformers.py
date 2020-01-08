@@ -191,7 +191,9 @@ class TransformerEncoder(nn.Module):
         """ Adding language embeddings """
         if self.use_language_embedding:
             assert self.language_embedding is not None
-            emb = emb + self.language_embedding(input_lang)
+
+            lang_emb = self.language_embedding(input_lang)
+            emb = emb + lang_emb.unsqueeze(1)
 
         # B x T x H -> T x B x H
         context = emb.transpose(0, 1)
@@ -310,7 +312,9 @@ class TransformerDecoder(nn.Module):
         emb = self.time_transformer(emb)
 
         if self.use_language_embedding:
-            emb = emb + self.language_embeddings(input_lang)
+            lang_emb = self.language_embeddings(input_lang)
+            # print(emb.size(), lang_emb.size())
+            emb = emb + lang_emb.unsqueeze(1)
             # len_tgt = emb.size(1)
             # atb_emb = self.attribute_embeddings(atbs).unsqueeze(1).repeat(1, len_tgt, 1)  # B x H to 1 x B x H
             # emb = torch.cat([emb, atb_emb], dim=-1)
