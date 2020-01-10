@@ -109,8 +109,8 @@ class UnifiedTransformer(TransformerDecoder):
         # For the target:
         mask_tgt_tgt = tgt.eq(onmt.constants.PAD).byte().unsqueeze(1) + self.mask[:tgt_len, :tgt_len]
         mask_tgt_tgt = torch.gt(mask_tgt_tgt, 0).byte()  # bsz x tgt_len x tgt_len
-
-        mask_tgt_src = mask_tgt_tgt.new_zeros(bsz, tgt_len, src_len)
+        
+        mask_tgt_src = mask_tgt_tgt.new_zeros(bsz, tgt_len, src_len) + src.eq(onmt.constants.PAD).unsqueeze(1).byte()
         mask_tgt = torch.cat([mask_tgt_src, mask_tgt_tgt], dim=-1)  # bsz x tgt_len x T
 
         attn_mask = torch.cat([mask_src, mask_tgt], dim=1).bool()     # L x L x batch_size
