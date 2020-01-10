@@ -156,11 +156,13 @@ class DecoderLayer(nn.Module):
         
     """    
     
-    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0, ignore_source=False, variational=False):
+    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0, ignore_source=False,
+                 variational=False, death_rate=0.0):
         super(DecoderLayer, self).__init__()
         self.version = version
         self.ignore_source = ignore_source
         self.variational = variational
+        self.death_rate = death_rate
 
         self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
         self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', variational=self.variational)
@@ -194,31 +196,48 @@ class DecoderLayer(nn.Module):
             layernorm > attn > dropout > residual
         """
 
-        # input and context should be time first ?
-        
-        query = self.preprocess_attn(input)
-        
-        self_context = query
-        
-        out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt)
+        coverage = None
 
-        input = self.postprocess_attn(out, input)
+        coin = True
+        if self.training:
+            coin = (torch.rand(1)[0].item() >= self.death_rate)
 
-        """ Context Attention layer 
-            layernorm > attn > dropout > residual
-        """
-        if not self.ignore_source:
-            query = self.preprocess_src_attn(input)
-            out, coverage = self.multihead_src(query, context, context, mask_src)
-            input = self.postprocess_src_attn(out, input)
-        else:
-            coverage = None
+        if coin:
         
-        """ Feed forward layer 
-            layernorm > ffn > dropout > residual
-        """
-        out = self.feedforward(self.preprocess_ffn(input))
-        input = self.postprocess_ffn(out, input)
+            query = self.preprocess_attn(input)
+
+            self_context = query
+
+            out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt)
+
+            if self.training and self.death_rate > 0:
+                out = out / (1 - self.death_rate)
+
+            input = self.postprocess_attn(out, input)
+
+            """ Context Attention layer 
+                layernorm > attn > dropout > residual
+            """
+            if not self.ignore_source:
+                query = self.preprocess_src_attn(input)
+                out, coverage = self.multihead_src(query, context, context, mask_src)
+
+                if self.training and self.death_rate > 0:
+                    out = out / (1 - self.death_rate)
+
+                input = self.postprocess_src_attn(out, input)
+            else:
+                coverage = None
+
+            """ Feed forward layer 
+                layernorm > ffn > dropout > residual
+            """
+            out = self.feedforward(self.preprocess_ffn(input))
+
+            if self.training and self.death_rate > 0:
+                out = out / (1 - self.death_rate)
+
+            input = self.postprocess_ffn(out, input)
     
         return input, coverage
         

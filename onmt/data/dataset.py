@@ -342,8 +342,6 @@ class Dataset(torch.utils.data.Dataset):
         else:
             self.augmenter = None
 
-        print("* Number of sentences in the data: %d" % self.fullSize)
-
     def size(self):
 
         return self.fullSize

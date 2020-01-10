@@ -129,9 +129,11 @@ class RelativeTransformerEncoder(TransformerEncoder):
             """ Adding language embeddings """
             if self.use_language_embedding:
                 assert self.language_embedding is not None
-                lang_emb = self.language_embedding(input_lang)
                 # There is no "unsqueeze" here because the input is T x B x H and lang_emb is B x H
-                emb = emb + lang_emb
+                if self.language_embedding_type in ['sum', 'all_sum']:
+                    lang_emb = self.language_embedding(input_lang)
+                    emb = emb + lang_emb.unsqueeze(1)
+
         else:
             if not self.cnn_downsampling:
                 mask_src = input.narrow(2, 0, 1).squeeze(2).transpose(0, 1).eq(onmt.constants.PAD).unsqueeze(0)
@@ -284,9 +286,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
         emb = embedded_dropout(self.word_lut, input_, dropout=self.word_dropout if self.training else 0)
 
         emb = emb * math.sqrt(self.model_size)
-
-        if self.use_language_embedding:
-            emb = emb + self.language_embeddings(input_lang)
+        #
+        # if self.use_language_embedding:
+        #     if self.use_language_embedding == 'sum':
+        #         emb = emb + self.language_embeddings(input_lang)
 
         return emb
 
@@ -303,7 +306,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
                 """
 
         """ Embedding: batch_size x len_tgt x d_model """
-        input = input.transpose(0, 1)
+        input = input.transpose(0, 1) # T x B
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         emb = emb * math.sqrt(self.model_size)
 
@@ -316,7 +319,19 @@ class RelativeTransformerDecoder(TransformerDecoder):
             emb = emb + abs_pos
 
         if self.use_language_embedding:
-            emb = emb + self.language_embeddings(input_lang)
+            lang_emb = self.language_embeddings(input_lang)  # B x H or 1 x H
+            if self.language_embedding_type == 'sum':
+                emb = emb + lang_emb
+            elif self.language_embedding_type == 'concat':
+                # replace the bos embedding with the language
+                bos_emb = lang_emb.expand_as(emb[0])
+                emb[0] = bos_emb
+
+                lang_emb = lang_emb.unsqueeze(0).expand_as(emb)
+                concat_emb = torch.cat([emb, lang_emb], dim=-1)
+                emb = torch.relu(self.projector(concat_emb))
+            else:
+                raise NotImplementedError
 
         if context is not None:
             if self.encoder_type == "audio":
@@ -413,7 +428,19 @@ class RelativeTransformerDecoder(TransformerDecoder):
             emb = emb + abs_pos[-1:, :, :]
 
         if self.use_language_embedding:
-            emb = emb + self.language_embeddings(lang)
+            lang_emb = self.language_embeddings(lang)  # B x H
+
+            if self.language_embedding_type in ['sum', 'all_sum']:
+                emb = emb + lang_emb
+            elif self.language_embedding_type == 'concat':
+                if input.size(0) == 1:
+                    emb[0] = lang_emb
+
+                lang_emb = lang_emb.unsqueeze(0).expand_as(emb)
+                concat_emb = torch.cat([emb, lang_emb], dim=-1)
+                emb = torch.relu(self.projector(concat_emb))
+            else:
+                raise NotImplementedError
 
         # prepare position encoding
         qlen = emb.size(0)
@@ -627,7 +654,7 @@ class RelativeTransformer(TransformerDecoder):
         # build_modules will be called from the inherited constructor
         super(RelativeTransformer, self).__init__(opt, tgt_embedding,
                                                   positional_encoder,
-                                                  allocate_positions=False)
+                                                  allocate_positions=True)
         self.src_embedding = src_embedding
         self.tgt_embedding = tgt_embedding
         # self.language_embedding = nn.Embedding(3, self.model_size, padding_idx=0)
@@ -635,7 +662,7 @@ class RelativeTransformer(TransformerDecoder):
         self.ignore_source = True
         self.encoder_type = opt.encoder_type
 
-        self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
+        # self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
 
         e_length = expected_length(self.layers, self.death_rate)

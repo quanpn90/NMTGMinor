@@ -79,6 +79,8 @@ class TransformerEncoder(nn.Module):
         self.switchout = opt.switchout
         self.varitional_dropout = opt.variational_dropout
         self.use_language_embedding = opt.use_language_embedding
+        self.language_embedding_type = opt.language_embedding_type
+
         self.time = opt.time
 
         # disable word dropout when switch out is in action
@@ -192,8 +194,9 @@ class TransformerEncoder(nn.Module):
         if self.use_language_embedding:
             assert self.language_embedding is not None
 
-            lang_emb = self.language_embedding(input_lang)
-            emb = emb + lang_emb.unsqueeze(1)
+            if self.language_embedding_type in ['sum', 'all_sum']:
+                lang_emb = self.language_embedding(input_lang)
+                emb = emb + lang_emb.unsqueeze(1)
 
         # B x T x H -> T x B x H
         context = emb.transpose(0, 1)
@@ -250,6 +253,7 @@ class TransformerDecoder(nn.Module):
         self.death_rate = opt.death_rate
         self.time = opt.time
         self.use_language_embedding = opt.use_language_embedding
+        self.language_embedding_type = opt.language_embedding_type
 
         if self.switchout > 0:
             self.word_dropout = 0
@@ -265,13 +269,9 @@ class TransformerDecoder(nn.Module):
 
         # Using feature embeddings in models
         self.language_embeddings = language_embeddings
-        # if attribute_embeddings is not None:
-        #     self.use_feature = True
-        #     self.attribute_embeddings = attribute_embeddings
-        #     self.feature_projector = nn.Linear(opt.model_size + opt.model_size * attribute_embeddings.size(),
-        #                                        opt.model_size)
-        # else:
-        #     self.use_feature = None
+
+        if self.language_embedding_type == 'concat':
+            self.projector = nn.Linear(opt.model_size * 2, opt.model_size)
 
         self.positional_encoder = positional_encoder
 

@@ -201,7 +201,8 @@ class XETrainer(BaseTrainer):
             batch_order = train_data.create_order()
             iteration = 0
 
-        total_loss, total_words = 0, 0
+        total_tokens, total_loss, total_words = 0, 0, 0
+        total_non_pads = 0
         report_loss, report_tgt_words = 0, 0
         report_src_words = 0
         start = time.time()
@@ -318,18 +319,21 @@ class XETrainer(BaseTrainer):
                     report_src_words += src_size
                     total_loss += loss_data
                     total_words += num_words
+                    total_tokens += batch.get('target_output').nelement()
+                    total_non_pads += batch.get('target_output').ne(onmt.constants.PAD).sum().item()
                     optim = self.optim
+                    batch_efficiency = total_non_pads / total_tokens
 
                     if b == 0 and (i == 0 or (i % opt.log_interval == -1 % opt.log_interval)):
                         print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
-                           "%5.0f src tok/s; %5.0f tgt tok/s; %s elapsed") %
-                          (epoch, i+1, len(train_data),
-                           math.exp(report_loss / report_tgt_words),
-                           optim.getLearningRate(),
-                           optim._step,
-                           report_src_words/(time.time()-start),
-                           report_tgt_words/(time.time()-start),
-                           str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
+                               "%5.0f src tok/s; %5.0f tgt tok/s; %s elapsed") %
+                              (epoch, i+1, len(train_data),
+                               math.exp(report_loss / report_tgt_words),
+                               optim.getLearningRate(),
+                               optim._step,
+                               report_src_words/(time.time()-start),
+                               report_tgt_words/(time.time()-start),
+                               str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
 
                         report_loss, report_tgt_words = 0, 0
                         report_src_words = 0

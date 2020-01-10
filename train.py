@@ -220,6 +220,9 @@ def main():
         print(' * vocabulary size. target = %d' %
               (dicts['tgt'].size()))
 
+    print(' * number of sentences in training data: %d' % train_data.size())
+    print(' * number of sentences in validation data: %d' % valid_data.size())
+
     print('* Building model...')
 
     if not opt.fusion:

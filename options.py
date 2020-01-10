@@ -50,6 +50,8 @@ def make_parser(parser):
     # Transforer Model options
     parser.add_argument('-use_language_embedding', action='store_true',
                         help="""Language embedding to add into the word embeddings""")
+    parser.add_argument('-language_embedding_type', default='sum', type=str,
+                        help="""Language embedding combination type: sum|concat. (Concat uses more parameters)""")
     parser.add_argument('-model_size', type=int, default=512,
         help='Size of embedding / transformer hidden')      
     parser.add_argument('-inner_size', type=int, default=2048,
@@ -272,6 +274,9 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'use_language_embedding'):
         opt.use_language_embedding = False
+
+    if not hasattr(opt, 'language_embedding_type'):
+        opt.language_embedding_type = "sum"
 
     if not hasattr(opt, 'asynchronous'):
         opt.asynchronous = False

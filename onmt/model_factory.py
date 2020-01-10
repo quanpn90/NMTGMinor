@@ -42,12 +42,13 @@ def build_tm_model(opt, dicts):
 
     # BUILD GENERATOR
     if opt.copy_generator:
-        generators = [CopyGenerator(opt.model_size, dicts['tgt'].size())]
+        generators = [CopyGenerator(opt.model_size, dicts['tgt'].size(),
+                                    fix_norm=opt.fix_norm_output_embedding)]
     else:
         generators = [onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size(),
                                                           fix_norm=opt.fix_norm_output_embedding)]
 
-    # BUILD EMBEDDING
+    # BUILD EMBEDDINGS
     if 'src' in dicts:
         embedding_src = nn.Embedding(dicts['src'].size(),
                                      opt.model_size,
@@ -69,14 +70,6 @@ def build_tm_model(opt, dicts):
     else:
         language_embeddings = None
 
-    # if 'atb' in dicts and dicts['atb'] is not None:
-    #     from onmt.modules.utilities import AttributeEmbeddings
-    #     #
-    #     attribute_embeddings = AttributeEmbeddings(dicts['atb'], opt.model_size)
-    #     # attribute_embeddings = nn.Embedding(dicts['atb'].size(), opt.model_size)
-    # else:
-    #     attribute_embeddings = None
-
     if opt.ctc_loss != 0:
         generators.append(onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size() + 1))
 
@@ -97,7 +90,6 @@ def build_tm_model(opt, dicts):
             print ("Unknown encoder type:", opt.encoder_type)
             exit(-1)
 
-        # print(opt.use_language_embeddin)
         decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, language_embeddings=language_embeddings)
 
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
@@ -143,14 +135,14 @@ def build_tm_model(opt, dicts):
         model = Transformer(encoder, decoder, generator)
 
     elif opt.model == 'unified_transformer':
-        from onmt.models.relative_transformer import RelativeTransformer
+        from onmt.models.unified_transformer import UnifiedTransformer
 
         if opt.encoder_type == "audio":
             raise NotImplementedError
 
         generator = nn.ModuleList(generators)
-        model = RelativeTransformer(opt, embedding_src, embedding_tgt,
-                                    generator, None, attribute_embeddings=attribute_embeddings)
+        model = UnifiedTransformer(opt, embedding_src, embedding_tgt,
+                                   generator, positional_encoder, language_embeddings=language_embeddings)
 
     else:
         raise NotImplementedError

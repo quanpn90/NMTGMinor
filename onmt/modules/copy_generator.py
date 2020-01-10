@@ -47,7 +47,7 @@ class CopyGenerator(nn.Module):
        tgt_dict (Vocab): output target dictionary
     """
         
-    def __init__(self, hidden_size, output_size):
+    def __init__(self, hidden_size, output_size, fix_norm=False):
         
         super(CopyGenerator, self).__init__()
 
@@ -65,6 +65,8 @@ class CopyGenerator(nn.Module):
 
         torch.nn.init.uniform_(self.linear.weight, -stdv, stdv)
 
+        self.fix_norm = fix_norm
+
     def forward(self, model_outputs):
         """
 
@@ -73,6 +75,7 @@ class CopyGenerator(nn.Module):
         context = model_outputs['context']
         src = model_outputs['src']
 
+        fix_norm = self.fix_norm
         tlen, bsz, hsize = input.size()
 
         #
@@ -84,7 +87,14 @@ class CopyGenerator(nn.Module):
         copy_prob = torch.sigmoid(self.linear_copy(input).float())  # T x B x 1
         
         """ probabilities from the model output """
-        logits = self.linear(input)
+
+        if not fix_norm:
+            logits = self.linear(input)
+        else:
+            normalized_weights = F.normalize(self.linear.weight, dim=-1)
+            normalized_bias = self.linear.bias
+            logits = F.linear(input, normalized_weights, normalized_bias)
+
         prob = F.softmax(logits.float(), dim=-1)
         p_g = torch.mul(prob,  1 - copy_prob)  # tlen x B x V`
         
