@@ -91,9 +91,10 @@ class EncoderLayer(nn.Module):
         out: batch_size x len_query x d_model
     """
     
-    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, variational=False, **kwargs):
+    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, variational=False, death_rate=0.0, **kwargs):
         super(EncoderLayer, self).__init__()
         self.variational = variational
+        self.death_rate = death_rate
         
         self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
         self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', variational=self.variational)
@@ -115,15 +116,29 @@ class EncoderLayer(nn.Module):
         self.feedforward = Bottle(feedforward)
             
     def forward(self, input, attn_mask):
-        query = self.preprocess_attn(input)
-        out, _ = self.multihead(query, query, query, attn_mask)
-        input = self.postprocess_attn(out, input)
-        
-        """ Feed forward layer 
-            layernorm > ffn > dropout > residual
-        """
-        out = self.feedforward(self.preprocess_ffn(input))
-        input = self.postprocess_ffn(out, input)
+
+        coin = True
+        if self.training:
+            coin = (torch.rand(1)[0].item() >= self.death_rate)
+
+        if coin:
+            query = self.preprocess_attn(input)
+            out, _ = self.multihead(query, query, query, attn_mask)
+
+            if self.training and self.death_rate > 0:
+                out = out / (1 - self.death_rate)
+
+            input = self.postprocess_attn(out, input)
+
+            """ Feed forward layer 
+                layernorm > ffn > dropout > residual
+            """
+            out = self.feedforward(self.preprocess_ffn(input))
+
+            if self.training and self.death_rate > 0:
+                out = out / (1 - self.death_rate)
+
+            input = self.postprocess_ffn(out, input)
         
         return input
     

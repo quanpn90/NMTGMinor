@@ -8,18 +8,10 @@ import onmt
 from onmt.modules.dropout import embedded_dropout, switchout
 from torch.utils.checkpoint import checkpoint
 from collections import defaultdict
-from onmt.utils import flip
+from onmt.utils import flip, expected_length
 from onmt.modules.linear import FeedForward, FeedForwardSwish
 
 torch_version = float(torch.__version__[:3])
-
-
-def custom_layer(module):
-    def custom_forward(*args):
-        output = module(*args)
-        return output
-
-    return custom_forward
 
 
 class MixedEncoder(nn.Module):
@@ -127,14 +119,28 @@ class TransformerEncoder(nn.Module):
 
         self.positional_encoder = positional_encoder
 
+        e_length = expected_length(self.layers, self.death_rate)
+        print("* Transformer Encoder with Absolute Attention with %.2f expected layers" % e_length)
+
+        self.layer_modules = nn.ModuleList()
         self.build_modules()
 
     def build_modules(self):
 
-        self.layer_modules = nn.ModuleList(
-            [EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size,
-                          self.attn_dropout, variational=self.varitional_dropout) for _ in
-             range(self.layers)])
+        for _l in range(self.layers):
+            # linearly decay the death rate
+            death_r = (_l + 1.0) / self.layers * self.death_rate
+
+            block = EncoderLayer(self.n_heads, self.model_size,
+                                 self.dropout, self.inner_size, self.attn_dropout,
+                                 variational=self.varitional_dropout, death_rate=death_r)
+
+            self.layer_modules.append(block)
+
+        # self.layer_modules = nn.ModuleList(
+        #     [EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size,
+        #                   self.attn_dropout, variational=self.varitional_dropout) for _ in
+        #      range(self.layers)])
 
     def forward(self, input, input_lang=None, **kwargs):
         """
@@ -205,10 +211,6 @@ class TransformerEncoder(nn.Module):
 
         for i, layer in enumerate(self.layer_modules):
 
-            if len(self.layer_modules) - i <= onmt.constants.checkpointing and self.training:
-                context = checkpoint(custom_layer(layer), context, mask_src)
-
-            else:
                 context = layer(context, mask_src)  # batch_size x len_src x d_model
 
         # From Google T2T
@@ -281,13 +283,28 @@ class TransformerDecoder(nn.Module):
                 mask = torch.ByteTensor(np.triu(np.ones((len_max, len_max)), k=1).astype('uint8'))
                 self.register_buffer('mask', mask)
 
+        e_length = expected_length(self.layers, self.death_rate)
+        print("* Transformer Decoder with Absolute Attention with %.2f expected layers" % e_length)
+
+        self.layer_modules = nn.ModuleList()
         self.build_modules()
 
     def build_modules(self):
-        self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size,
-                                                         self.dropout, self.inner_size,
-                                                         self.attn_dropout, variational=self.variational_dropout,
-                                                         ignore_source=self.ignore_source) for _ in range(self.layers)])
+
+        for _l in range(self.layers):
+            # linearly decay the death rate
+            death_r = (_l + 1.0) / self.layers * self.death_rate
+
+            block = DecoderLayer(self.n_heads, self.model_size,
+                                 self.dropout, self.inner_size, self.attn_dropout,
+                                 variational=self.variational_dropout, death_rate=death_r)
+
+            self.layer_modules.append(block)
+
+        # self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size,
+        #                                                  self.dropout, self.inner_size,
+        #                                                  self.attn_dropout, variational=self.variational_dropout,
+        #                                                  ignore_source=self.ignore_source) for _ in range(self.layers)])
 
     def renew_buffer(self, new_len):
 
@@ -312,13 +329,19 @@ class TransformerDecoder(nn.Module):
         emb = self.time_transformer(emb)
 
         if self.use_language_embedding:
-            lang_emb = self.language_embeddings(input_lang)
-            # print(emb.size(), lang_emb.size())
-            emb = emb + lang_emb.unsqueeze(1)
-            # len_tgt = emb.size(1)
-            # atb_emb = self.attribute_embeddings(atbs).unsqueeze(1).repeat(1, len_tgt, 1)  # B x H to 1 x B x H
-            # emb = torch.cat([emb, atb_emb], dim=-1)
-            # emb = torch.relu(self.feature_projector(emb))
+            lang_emb = self.language_embeddings(input_lang)  # B x H or 1 x H
+            if self.language_embedding_type == 'sum':
+                emb = emb + lang_emb
+            elif self.language_embedding_type == 'concat':
+                # replace the bos embedding with the language
+                bos_emb = lang_emb.expand_as(emb[:, 0, :])
+                emb[:, 0, :] = bos_emb
+
+                lang_emb = lang_emb.unsqueeze(1).expand_as(emb)
+                concat_emb = torch.cat([emb, lang_emb], dim=-1)
+                emb = torch.relu(self.projector(concat_emb))
+            else:
+                raise NotImplementedError
         return emb
 
     def forward(self, input, context, src, input_lang=None, **kwargs):
@@ -362,13 +385,7 @@ class TransformerDecoder(nn.Module):
 
         for i, layer in enumerate(self.layer_modules):
 
-            if len(self.layer_modules) - i <= onmt.constants.checkpointing and self.training:
-
-                output, coverage = checkpoint(custom_layer(layer), output, context, mask_tgt, mask_src)
-                # batch_size x len_src x d_model
-
-            else:
-                output, coverage = layer(output, context, mask_tgt, mask_src)  # batch_size x len_src x d_model
+            output, coverage = layer(output, context, mask_tgt, mask_src)  # batch_size x len_src x d_model
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -426,8 +443,22 @@ class TransformerDecoder(nn.Module):
             # emb = torch.cat([emb, atb_emb], dim=-1)
             # emb = torch.relu(self.feature_projector(emb))
             # emb =
-            emb = emb + self.language_embeddings(lang)
+            #emb = emb + self.language_embeddings(lang)
+            if self.use_language_embedding:
+                lang_emb = self.language_embeddings(lang)  # B x H or 1 x H
+                if self.language_embedding_type == 'sum':
+                    emb = emb + lang_emb
+                elif self.language_embedding_type == 'concat':
+                # replace the bos embedding with the language
+                    if input.size(1) == 1:
+                        bos_emb = lang_emb.expand_as(emb[:, 0, :])
+                        emb[:, 0, :] = bos_emb
 
+                    lang_emb = lang_emb.unsqueeze(1).expand_as(emb)
+                    concat_emb = torch.cat([emb, lang_emb], dim=-1)
+                    emb = torch.relu(self.projector(concat_emb))
+                else:
+                    raise NotImplementedError
         emb = emb.transpose(0, 1)
 
         # batch_size x 1 x len_src
@@ -650,7 +681,6 @@ class Transformer(NMTModel):
         output_dict['log_prob'] = log_prob
         output_dict['coverage'] = last_coverage
 
-
         return output_dict
 
     def create_decoder_state(self, batch, beam_size=1, type=1):
@@ -717,26 +747,27 @@ class TransformerDecodingState(DecoderState):
             #     self.tgt_atb = None
 
         elif type == 2:
-            bsz = context.size(1)
+            bsz = src.size(1)
             new_order = torch.arange(bsz).view(-1, 1).repeat(1, self.beam_size).view(-1)
-            new_order = new_order.to(context.device)
-            self.context = context.index_select(1, new_order)
+            new_order = new_order.to(src.device)
+
+            if context is not None:
+                self.context = context.index_select(1, new_order)
+            else:
+                self.context = None
+
             self.src = src.index_select(1, new_order)  # because src is batch first
-            self.src_mask = src_mask.index_select(0, new_order)
+
+            if src_mask is not None:
+                self.src_mask = src_mask.index_select(0, new_order)
+            else:
+                self.src_mask = None
+
             self.concat_input_seq = False
             self.tgt_lang = tgt_lang
 
-            # if tgt_atb is not None:
-            #     self.use_attribute = True
-            #     self.tgt_atb = tgt_atb
-            #     # self.tgt_atb = tgt_atb.repeat(beam_size)  # size: Bxb
-            #     for i in self.tgt_atb:
-            #         self.tgt_atb[i] = self.tgt_atb[i].index_select(0, new_order)
-            # else:
-            #     self.tgt_atb = None
         else:
             raise NotImplementedError
-
 
     def update_attention_buffer(self, buffer, layer):
 
@@ -819,9 +850,12 @@ class TransformerDecodingState(DecoderState):
 
     # For the new decoder version only
     def _reorder_incremental_state(self, reorder_state):
-        self.context = self.context.index_select(1, reorder_state)
 
-        self.src_mask = self.src_mask.index_select(0, reorder_state)
+        if self.context is not None:
+            self.context = self.context.index_select(1, reorder_state)
+
+        if self.src_mask is not None:
+            self.src_mask = self.src_mask.index_select(0, reorder_state)
         self.src = self.src.index_select(1, reorder_state)
 
         for l in self.attention_buffers:

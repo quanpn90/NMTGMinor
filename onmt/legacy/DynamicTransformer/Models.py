@@ -2,7 +2,7 @@ import math
 import torch
 import onmt
 from onmt.legacy.DynamicTransformer.Dlcl import  DynamicLinearCombination
-from onmt.models.tranformers import TransformerEncoder, TransformerDecoder
+from onmt.models.transformers import TransformerEncoder, TransformerDecoder
 from onmt.modules.dropout import embedded_dropout
 from torch.utils.checkpoint import checkpoint
 

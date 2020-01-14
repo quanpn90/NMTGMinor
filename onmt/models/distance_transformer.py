@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from onmt.models.transformer_layers import PositionalEncoding, PrePostProcessing
 from onmt.models.transformer_layers import EncoderLayer, DecoderLayer
-from onmt.models.tranformers import TransformerEncoder, TransformerDecoder
+from onmt.models.transformers import TransformerEncoder, TransformerDecoder
 import onmt
 from onmt.modules.dropout import embedded_dropout
 from onmt.models.transformer_layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing

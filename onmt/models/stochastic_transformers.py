@@ -5,7 +5,7 @@ import onmt
 from onmt.models.transformer_layers import PositionalEncoding
 from onmt.models.transformer_layers import EncoderLayer, DecoderLayer
 from onmt.models.stochastic_transformer_layers import StochasticEncoderLayer, StochasticDecoderLayer
-from onmt.models.tranformers import TransformerEncoder, TransformerDecoder
+from onmt.models.transformers import TransformerEncoder, TransformerDecoder
 from onmt.modules.base_seq2seq import NMTModel, Reconstructor
 from onmt.modules.dropout import embedded_dropout
 from onmt.models.transformer_layers import XavierLinear, MultiHeadAttention, PrePostProcessing

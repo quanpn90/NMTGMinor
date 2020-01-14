@@ -2,7 +2,7 @@ import numpy as np
 import torch, math
 import torch.nn as nn
 from onmt.modules.base_seq2seq import DecoderState
-from onmt.models.tranformers import TransformerDecodingState
+from onmt.models.transformers import TransformerDecodingState
 from collections import defaultdict
 import torch.nn.functional as F
 

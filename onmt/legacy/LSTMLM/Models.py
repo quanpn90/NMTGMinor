@@ -1,7 +1,7 @@
 import numpy as np
 import torch, math
 import torch.nn as nn
-from onmt.models.tranformers import TransformerDecodingState
+from onmt.models.transformers import TransformerDecodingState
 from onmt.modules.base_seq2seq import NMTModel, Reconstructor, DecoderState
 import onmt
 from onmt.modules.dropout import embedded_dropout

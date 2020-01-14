@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import onmt
-from onmt.models.tranformers import TransformerEncoder, TransformerDecoder, Transformer, MixedEncoder
+from onmt.models.transformers import TransformerEncoder, TransformerDecoder, Transformer, MixedEncoder
 from onmt.models.transformer_layers import PositionalEncoding
 from onmt.models.relative_transformer import SinusoidalPositionalEmbedding
 from onmt.modules.copy_generator import CopyGenerator
@@ -73,7 +73,7 @@ def build_tm_model(opt, dicts):
     if opt.ctc_loss != 0:
         generators.append(onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size() + 1))
 
-    if opt.model == 'transformer':
+    if opt.model in ['transformer', 'stochastic_transformer']:
         onmt.constants.init_value = opt.param_init
 
         if opt.encoder_type == "text":
@@ -91,30 +91,6 @@ def build_tm_model(opt, dicts):
             exit(-1)
 
         decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, language_embeddings=language_embeddings)
-
-        model = Transformer(encoder, decoder, nn.ModuleList(generators))
-
-    elif opt.model == 'stochastic_transformer':
-        
-        from onmt.models.stochastic_transformers import StochasticTransformerEncoder, StochasticTransformerDecoder
-
-        onmt.constants.weight_norm = opt.weight_norm
-        onmt.constants.init_value = opt.param_init
-        
-        if opt.encoder_type == "text":
-            encoder = StochasticTransformerEncoder(opt, embedding_src, positional_encoder, opt.encoder_type)
-        elif opt.encoder_type == "audio":
-            encoder = StochasticTransformerEncoder(opt, 0, positional_encoder, opt.encoder_type)
-        elif opt.encoder_type == "mix":
-            text_encoder = StochasticTransformerEncoder(opt, embedding_src, positional_encoder, "text")
-            audio_encoder = StochasticTransformerEncoder(opt, None, positional_encoder, "audio")
-            encoder = MixedEncoder(text_encoder, audio_encoder)
-        else:
-            print ("Unknown encoder type:", opt.encoder_type)
-            exit(-1)
-
-        decoder = StochasticTransformerDecoder(opt, embedding_tgt,
-                                               positional_encoder, language_embeddings=language_embeddings)
 
         model = Transformer(encoder, decoder, nn.ModuleList(generators))
 

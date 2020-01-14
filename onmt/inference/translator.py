@@ -46,6 +46,10 @@ class Translator(object):
                                     map_location=lambda storage, loc: storage)
 
             model_opt = checkpoint['opt']
+            dicts = checkpoint['dicts']
+
+            if 'langs' in dicts:
+                print(dicts['langs'])
 
             if i == 0:
                 if "src" in checkpoint['dicts']:
