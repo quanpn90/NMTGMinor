@@ -288,7 +288,6 @@ class UnifiedTransformer(TransformerDecoder):
         attn_mask = self.mask[:seq_len, :seq_len] + seq.eq(onmt.constants.PAD).byte().unsqueeze(1)
         attn_mask = torch.gt(attn_mask, 0).bool()
 
-
         output = emb
 
         # Applying dropout and tranpose to T x B x H
