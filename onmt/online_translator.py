@@ -20,6 +20,7 @@ class TranslatorParameter(object):
         self.gpu = -1
         self.cuda = 0
         self.verbose = False
+        self.normalize = True
 
         self.beta = 0.0
         self.alpha = 0.0
@@ -28,12 +29,14 @@ class TranslatorParameter(object):
         self.ensemble_op = 'mean'
         self.autoencoder = None
         self.encoder_type = 'text'
+        self.lm = None
 
         self.src_lang = 'src'
         self.tgt_lang = 'tgt'
-        self.bos_token = onmt.Constants.BOS_TOKEN
+        self.bos_token = onmt.constants.BOS_WORD
         self.sampling = False
         self.attributes = None
+        self.no_bos_gold = False
         
         self.read_file(filename)
 
@@ -59,7 +62,7 @@ class OnlineTranslator(object):
     def __init__(self, model):
         opt = TranslatorParameter(model)
         from onmt.inference.fast_translator import FastTranslator
-        translator = FastTranslator(opt)
+        self.translator = FastTranslator(opt)
         # self.translator = onmt.EnsembleTranslator(opt)
 
     def translate(self,input):
