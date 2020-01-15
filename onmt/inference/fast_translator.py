@@ -29,7 +29,21 @@ class FastTranslator(Translator):
         self.min_len = 1
         self.normalize_scores = opt.normalize
         self.len_penalty = opt.alpha
-        self.no_repeat_ngram_size = 0
+
+        if hasattr(opt, 'no_repeat_ngram_size'):
+            self.no_repeat_ngram_size = opt.no_repeat_ngram_size
+        else:
+            self.no_repeat_ngram_size = 0
+
+        if hasattr(opt, 'dynamic_max_len'):
+            self.dynamic_max_len = opt.dynamic_max_len
+        else:
+            self.dynamic_max_len = False
+
+        if hasattr(opt, 'dynamic_max_len_scale'):
+            self.dynamic_max_len_scale = opt.dynamic_max_len_scale
+        else:
+            self.dynamic_max_len_scale = 1.2
 
         if opt.verbose:
             print('* Current bos id: %d' % self.bos_id, onmt.constants.BOS)
@@ -193,6 +207,10 @@ class FastTranslator(Translator):
         decoder_states = dict()
         for i in range(self.n_models):
             decoder_states[i] = self.models[i].create_decoder_state(batch, beam_size, type=2)
+
+        if self.dynamic_max_len:
+            src_len = src.size(0)
+            max_len = math.cell(int(src_len) * self.dynamic_max_len_scale)
 
         # Start decoding
         for step in range(max_len + 1):  # one extra step for EOS marker
