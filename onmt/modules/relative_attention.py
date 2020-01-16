@@ -329,81 +329,14 @@ if __name__ == '__main__':
     qlen = 5
     klen = 12
 
-    x = torch.arange(klen - 1, -klen, -1.0).unsqueeze(0).repeat(qlen, 1)
-    input = x.mul(10)
-    print(input, input.size())
-
-    # x = torch.arange(klen - 1, -1, -1.0).unsqueeze(0).repeat(qlen, 1)
+    # x = torch.arange(klen - 1, -klen, -1.0).unsqueeze(0).repeat(qlen, 1)
     # input = x.mul(10)
-    # print(input)
-    # # print(x)
-    # # x = x.unsqueeze(-1).unsqueeze(-1)
-    # # x = torch.Tensor(qlen, klen, bsz, n_head)
-    # # x.normal_(0, 1)
-    #
-    # output = _rel_shift(input, zero_triu=False)
-    #
-    # # print(x)
-    # # print(x.size())
-    # print("REL SHIFT 1 RESULT")
-    # print(output)
-    #
-    # idx = torch.arange(0, klen).unsqueeze(0).repeat(qlen, 1)
-    # print(idx)
-    # shifted_idx = _rel_shift(idx)
-    # print(shifted_idx)
-    #
-    # output_2 = torch.gather(input, 1, shifted_idx)
-    # print("REL SHIFT 2 RESULT")
-    # print(output_2)
-    #
-    # # a = torch.arange(klen - qlen, -qlen, -1).unsqueeze(0)
-    # # print(a)
-    # # a = torch.arange(-qlen + 1, klen - qlen + 1, 1).unsqueeze(0)
-    # # a = torch.cat([torch.arange(0, klen-qlen), torch.arange(qlen, -1, -1)]).unsqueeze(0)
-    # # print(a)
-    # # a = torch.arange(0, klen).unsqueeze(0)
-    # # print(a)
-    #
-    # # b = torch.arange(0, qlen, 1).unsqueeze(1)
-    # # print(b)
-    #
-    # # c = (a + b)
-    # # print(c)
-    #
-    # a = torch.arange(klen - qlen, -qlen, -1).unsqueeze(0)
-    # # print(a)
-    #
-    # b = torch.arange(0, qlen, 1).unsqueeze(1)
-    # # print(b)
-    # # print(c)
-    # # print(a+b)
-    # c = torch.abs(a+b)
-    # rearranged_idx = klen - 1 - c
-    #
-    # output_3 = torch.gather(input, 1, rearranged_idx)
-    # print("REL SHIFT 3 RESULT")
-    # print(output_3)
-    #
-    # # input_repeat = input.unsqueeze(-1).unsqueeze(-1)
-    # #
-    # # input_repeat = input_repeat.repeat(1, 1, bsz, n_head)
-    # #
-    # # idx = rearranged_idx.unsqueeze(-1).unsqueeze(-1).expand_as(input_repeat)
-    # # output_4 = torch.gather(input_repeat, 1, idx)
-    #
-    print("REL SHIFT 3 RESULT")
-    output_3 = _rel_shift(input)
-    output_3 = output_3[:, :klen]
-    print(output_3)
+    # print(input, input.size())
 
-    print("REL SHIFT 4 RESULT")
-    output_4 = _rel_future_shift(input)
-    output_4 = output_4[:, :klen]
-    print(output_4)
-    #
-    # input_repeat = input.unsqueeze(-1).unsqueeze(-1)
-    #
-    # input_repeat = input_repeat.repeat(1, 1, bsz, n_head)
-    # output_5 = _rel_future_shift(input_repeat)
-    # print(output_5)
+    x = torch.randint(0, 100, (klen, klen))
+
+    print(x)
+
+    attn_mask =
+
+
