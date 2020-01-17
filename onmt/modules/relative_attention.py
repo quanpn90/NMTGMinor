@@ -34,7 +34,7 @@ def _rel_future_shift(x):
     rel = torch.arange(klen - qlen, -qlen, -1, device=x.device).unsqueeze(0)
     shift = torch.arange(0, qlen, 1, device=x.device).unsqueeze(1)
 
-    indices = klen - 1 - torch.abs(rel+shift)
+    indices = klen - 1 - torch.abs(rel + shift)
 
     # expanding to the batch size and head dimensions
     for i in range(x.dim() - 2):
@@ -301,7 +301,7 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
         #     # w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
         #     # w_head_q = w_head_q[-qlen:]
         # else:
-            # w_heads = self.qkv_net(self.layer_norm(w))
+        # w_heads = self.qkv_net(self.layer_norm(w))
         w_heads = self.qkv_net(w)
         w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
 
@@ -322,9 +322,11 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
 
 
 if __name__ == '__main__':
-
     bsz = 5
     n_head = 8
+
+    tgt_len = 10
+    src_len = 6
 
     qlen = 5
     klen = 12
@@ -333,10 +335,24 @@ if __name__ == '__main__':
     # input = x.mul(10)
     # print(input, input.size())
 
-    x = torch.randint(0, 100, (klen, klen))
+    x = torch.randint(0, 100, (tgt_len, tgt_len))
 
     print(x)
 
-    attn_mask =
+    tgt_tgt_mask = torch.triu(torch.ones(tgt_len, tgt_len), diagonal=1)
+    tgt_src_mask = torch.zeros(tgt_len, src_len)
 
+    tgt_mask = torch.cat([tgt_src_mask, tgt_tgt_mask], dim=-1)
+    print(tgt_mask)
+    # print(attn_mask)
 
+    src_src_mask = torch.zeros(src_len, src_len)
+    src_tgt_mask = torch.ones(src_len, tgt_len)
+
+    src_mask = torch.cat([src_src_mask, src_tgt_mask], dim=-1)
+
+    print(src_mask)
+    print("FULL ATTENTION MASK")
+    attn_mask = torch.cat([src_mask, tgt_mask], dim=0)
+
+    print(attn_mask)

@@ -119,13 +119,13 @@ class TransformerEncoder(nn.Module):
 
         self.positional_encoder = positional_encoder
 
-        e_length = expected_length(self.layers, self.death_rate)
-        print("* Transformer Encoder with Absolute Attention with %.2f expected layers" % e_length)
-
         self.layer_modules = nn.ModuleList()
         self.build_modules()
 
     def build_modules(self):
+
+        e_length = expected_length(self.layers, self.death_rate)
+        print("* Transformer Encoder with Absolute Attention with %.2f expected layers" % e_length)
 
         for _l in range(self.layers):
             # linearly decay the death rate
@@ -283,13 +283,13 @@ class TransformerDecoder(nn.Module):
                 mask = torch.ByteTensor(np.triu(np.ones((len_max, len_max)), k=1).astype('uint8'))
                 self.register_buffer('mask', mask)
 
-        e_length = expected_length(self.layers, self.death_rate)
-        print("* Transformer Decoder with Absolute Attention with %.2f expected layers" % e_length)
-
         self.layer_modules = nn.ModuleList()
         self.build_modules()
 
     def build_modules(self):
+
+        e_length = expected_length(self.layers, self.death_rate)
+        print("* Transformer Decoder with Absolute Attention with %.2f expected layers" % e_length)
 
         for _l in range(self.layers):
             # linearly decay the death rate

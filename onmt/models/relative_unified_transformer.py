@@ -7,7 +7,9 @@ import onmt
 from onmt.modules.dropout import embedded_dropout
 from onmt.models.transformer_layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
 from onmt.models.transformer_layers import EncoderLayer, DecoderLayer
-# from onmt.models.relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
+from onmt.models.relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
+from onmt.models.unified_transformer import UnifiedTransformer
+from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, LearnablePostionEmbedding
 from onmt.utils import flip, expected_length
 from collections import defaultdict
 import math
@@ -15,7 +17,7 @@ import math
 torch.set_printoptions(profile="full")
 
 
-class UnifiedTransformer(TransformerDecoder):
+class RelativeUnifiedTransformer(UnifiedTransformer):
     """
     This class combines the encoder and the decoder into one single sequence
     Joined attention between encoder and decoder parts
@@ -26,12 +28,13 @@ class UnifiedTransformer(TransformerDecoder):
         self.death_rate = opt.death_rate
         self.bidirectional = opt.bidirectional
         self.layer_modules = []
+        self.learnable_position_encoding = opt.learnable_position_encoding
 
         # build_modules will be called from the inherited constructor
-        super(UnifiedTransformer, self).__init__(opt, tgt_embedding,
-                                                 positional_encoder,
-                                                 language_embeddings=language_embeddings,
-                                                 allocate_positions=True)
+        super(RelativeUnifiedTransformer, self).__init__(opt, tgt_embedding, src_embedding,
+                                                         generator, positional_encoder,
+                                                         language_embeddings=language_embeddings,
+                                                         encoder_type=encoder_type)
         self.src_embedding = src_embedding
         self.tgt_embedding = tgt_embedding
         # self.language_embedding = nn.Embedding(3, self.model_size, padding_idx=0)
@@ -39,6 +42,16 @@ class UnifiedTransformer(TransformerDecoder):
         self.ignore_source = True
         self.encoder_type = opt.encoder_type
 
+        # learnable position encoding
+        if self.learnable_position_encoding:
+            self.max_pos_length = opt.max_pos_length
+            # pos_emb = self.model_size // self.n_heads
+            pos_emb = self.model_size
+            self.positional_encoder = LearnablePostionEmbedding(self.max_pos_length, pos_emb)
+            print("* Learnable position encoding with max %d positions" % self.max_pos_length)
+        else:
+            # or using pre-set sinusoidal
+            self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
         # self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
 
@@ -46,12 +59,13 @@ class UnifiedTransformer(TransformerDecoder):
 
     def gen_mask(self, src, tgt):
 
-        input_seq = torch.cat([src, tgt], dim=-1)
-        seq_len = input_seq.size(1)
+        # both src and tgt are T x B
+        input_seq = torch.cat([src, tgt], dim=0)
+        seq_len = input_seq.size(0)
 
         if self.bidirectional:
-            bsz, src_len = src.size(0), src.size(1)
-            tgt_len = tgt.size(1)
+            bsz, src_len = src.size(1), src.size(0)
+            tgt_len = tgt.size(0)
 
             tgt_tgt_mask = torch.triu(src.new_ones(tgt_len, tgt_len), diagonal=1)
             tgt_src_mask = src.new_zeros(tgt_len, src_len)
@@ -65,26 +79,25 @@ class UnifiedTransformer(TransformerDecoder):
 
             attn_mask = torch.cat([src_mask, tgt_mask], dim=0)
 
-            attn_mask = attn_mask.bool()
+            attn_mask = attn_mask.bool().unsqueeze(-1)
 
-            pad_mask = input_seq.eq(onmt.constants.PAD).unsqueeze(1)
+            pad_mask = input_seq.eq(onmt.constants.PAD).unsqueeze(0)
 
             attn_mask = attn_mask | pad_mask
-            # attn_mask = attn_mask.byte() + input_seq.eq(onmt.constants.PAD).byte().unsqueeze(1)
-            # print(attn_mask[0])
-            # attn_mask = torch.gt(attn_mask, 0).bool()
 
         else:
-            attn_mask = self.mask[:seq_len, :seq_len] + input_seq.eq(onmt.constants.PAD).byte().unsqueeze(1)
-            attn_mask = torch.gt(attn_mask, 0).bool()
+            attn_mask = torch.triu(src.new_ones(seq_len, seq_len), diagonal=1).bool().unsqueeze(-1)  # T x T x -1
+
+            pad_mask = input_seq.eq(onmt.constants.PAD).unsqueeze(0)  # 1 x T x B
+            # attn_mask = self.mask[:seq_len, :seq_len] + input_seq.eq(onmt.constants.PAD).byte().unsqueeze(1)
+            attn_mask = attn_mask | pad_mask
 
         return attn_mask
 
     def build_modules(self):
 
         e_length = expected_length(self.layers, self.death_rate)
-
-        print("* Transformer Decoder with Absolute Attention with %.2f expected layers" % e_length)
+        print("* Transformer Decoder with Relative Attention with %.2f expected layers" % e_length)
 
         self.layer_modules = nn.ModuleList()
 
@@ -92,24 +105,24 @@ class UnifiedTransformer(TransformerDecoder):
             # linearly decay the death rate
             death_r = (l + 1.0) / self.layers * self.death_rate
 
-            block = DecoderLayer(self.n_heads, self.model_size,
-                                                self.dropout, self.inner_size, self.attn_dropout,
-                                                ignore_source=True,
-                                                variational=self.variational_dropout, death_rate=death_r)
+            block = RelativeTransformerDecoderLayer(self.n_heads, self.model_size,
+                                                    self.dropout, self.inner_size, self.attn_dropout,
+                                                    ignore_source=True,
+                                                    variational=self.variational_dropout, death_rate=death_r)
             self.layer_modules.append(block)
 
     def forward(self, batch, target_mask=None, **kwargs):
 
-        src = batch.get('source').transpose(0, 1)  # src_len x batch_size -> bsz x src_len
-        tgt = batch.get('target_input').transpose(0, 1)  # len_tgt x batch_size -> bsz x tgt_len
+        src = batch.get('source')  # src_len x batch_size
+        tgt = batch.get('target_input')  # len_tgt x batch_size
         src_pos = batch.get('source_pos')
         tgt_pos = batch.get('target_pos')
         src_lang = batch.get('source_lang')
         tgt_lang = batch.get('target_lang')
 
-        tgt_len = tgt.size(1)
-        src_len = src.size(1)
-        bsz = tgt.size(0)
+        tgt_len = tgt.size(0)
+        src_len = src.size(0)
+        bsz = tgt.size(1)
 
         # Embedding stage (and scale the embedding)
         src_emb = embedded_dropout(self.src_embedding, src, dropout=self.word_dropout if self.training else 0) \
@@ -117,61 +130,36 @@ class UnifiedTransformer(TransformerDecoder):
         tgt_emb = embedded_dropout(self.tgt_embedding, tgt, dropout=self.word_dropout if self.training else 0) \
                   * math.sqrt(self.model_size)
 
-        # Add position encoding
-        src_emb = self.time_transformer(src_emb)
-        tgt_emb = self.time_transformer(tgt_emb)
-
         if self.use_language_embedding:
             if self.language_embedding_type in ["sum", "all_sum"]:
                 src_lang_emb = self.language_embeddings(src_lang)
-                src_emb += src_lang_emb.unsqueeze(1)
+                src_emb += src_lang_emb
                 tgt_lang_emb = self.language_embeddings(tgt_lang)
-                tgt_emb += tgt_lang_emb.unsqueeze(1)
+                tgt_emb += tgt_lang_emb
+            else:
+                raise NotImplementedError
 
         # concatenate embedding
-        emb = torch.cat([src_emb, tgt_emb], dim=1)  # L x batch_size x H
+        emb = torch.cat([src_emb, tgt_emb], dim=0)  # L x batch_size x H
 
         # prepare self-attention mask
-        # For the source: we have two different parts
-        # [1 x src_len x batch_size]
-        # mask_src_src = src.eq(onmt.constants.PAD).unsqueeze(0).byte()
-        # src_pad_mask = mask_src_src
-        # # Attention from src to target: everything is padded
-        # mask_src_tgt = mask_src_src.new_ones(1, 1, 1).expand(src_len, tgt_len, bsz)
-        # # [src_len x L x batch_size]
-        # mask_src = torch.cat([mask_src_src.expand(src_len, src_len, bsz), mask_src_tgt], dim=1)
-        # mask_src = mask_src.bool()
-        # mask_src_src = src.eq(onmt.constants.PAD).unsqueeze(1).byte()  # B x 1 x src_len
-        # mask_src_tgt = mask_src_src.new_ones(bsz, src_len, tgt_len)  # bsz x src_len x tgt_len
-        #
-        # mask_src = torch.cat([mask_src_src.expand(bsz, src_len, src_len), mask_src_tgt], dim=-1)
-        #
-        # # For the target:
-        # mask_tgt_tgt = tgt.eq(onmt.constants.PAD).byte().unsqueeze(1) + self.mask[:tgt_len, :tgt_len]
-        # mask_tgt_tgt = torch.gt(mask_tgt_tgt, 0).byte()  # bsz x tgt_len x tgt_len
-        #
-        # mask_tgt_src = mask_tgt_tgt.new_zeros(bsz, tgt_len, src_len) + src.eq(onmt.constants.PAD).unsqueeze(1).byte()
-        # mask_tgt = torch.cat([mask_tgt_src, mask_tgt_tgt], dim=-1)  # bsz x tgt_len x T
-        #
-        # attn_mask = torch.cat([mask_src, mask_tgt], dim=1).bool()     # L x L x batch_size
-
-        # lets try to use language modeling style
-        # input_seq = torch.cat([src, tgt], dim=-1)
-        # seq_len = input_seq.size(1)
-        #
-        # attn_mask = self.mask[:seq_len, :seq_len] + input_seq.eq(onmt.constants.PAD).byte().unsqueeze(1)
-        # attn_mask = torch.gt(attn_mask, 0).bool()
         attn_mask = self.gen_mask(src, tgt)
+
+        # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+        klen = src_len + tgt_len
+        pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
+
+        pos_emb = self.positional_encoder(pos)
 
         output = emb
 
-        # Applying dropout and tranpose to T x B x H
-        output = self.preprocess_layer(output).transpose(0, 1)
+        # Applying dropout
+        output = self.preprocess_layer(output)
 
         # FORWARD PASS
         coverage = None
         for i, layer in enumerate(self.layer_modules):
-            output, coverage = layer(output, None, attn_mask, None)  # context and context_mask are None
+            output, coverage = layer(output, None, pos_emb, attn_mask, None)  # context and context_mask are None
 
         # Final normalization
         output = self.postprocess_layer(output)
@@ -208,7 +196,6 @@ class UnifiedTransformer(TransformerDecoder):
         src_len = input.size(1)
         bsz = input.size(0)
         mask_src_src = input.eq(onmt.constants.PAD).unsqueeze(1).byte()  # B x 1 x src_len
-
         mask_src = mask_src_src
 
         attn_mask = mask_src.bool()  # L x L x batch_size
@@ -274,16 +261,14 @@ class UnifiedTransformer(TransformerDecoder):
 
     def step(self, input, decoder_state):
 
-        src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
-        tgt = input
+        src = decoder_state.src if decoder_state.src is not None else None
+        tgt = input.transpose(0, 1)
         tgt_lang = decoder_state.tgt_lang
         src_lang = decoder_state.src_lang
-        # print(src.size(), tgt.size())
-        # print(src_lang, tgt_lang)
 
-        tgt_len = tgt.size(1)
-        src_len = src.size(1)
-        bsz = tgt.size(0)
+        tgt_len = tgt.size(0)
+        src_len = src.size(0)
+        bsz = tgt.size(1)
 
         # Embedding stage (and scale the embedding)
         src_emb = embedded_dropout(self.src_embedding, src, dropout=self.word_dropout if self.training else 0) \
@@ -291,58 +276,36 @@ class UnifiedTransformer(TransformerDecoder):
         tgt_emb = embedded_dropout(self.tgt_embedding, tgt, dropout=self.word_dropout if self.training else 0) \
                   * math.sqrt(self.model_size)
 
-        # Add position encoding
-        src_emb = self.time_transformer(src_emb)
-        tgt_emb = self.time_transformer(tgt_emb)
-
         if self.use_language_embedding:
             if self.language_embedding_type in ["sum", "all_sum"]:
                 src_lang_emb = self.language_embeddings(src_lang)
-                src_emb += src_lang_emb.unsqueeze(1)
+                src_emb += src_lang_emb
                 tgt_lang_emb = self.language_embeddings(tgt_lang)
-                tgt_emb += tgt_lang_emb.unsqueeze(1)
+                tgt_emb += tgt_lang_emb
+            else:
+                raise NotImplementedError
 
         # concatenate embedding
-        emb = torch.cat([src_emb, tgt_emb], dim=1)  # L x batch_size x H
+        emb = torch.cat([src_emb, tgt_emb], dim=0)  # L x batch_size x H
 
         # prepare self-attention mask
-        # For the source: we have two different parts
-        # [1 x src_len x batch_size]
-        # mask_src_src = src.eq(onmt.constants.PAD).unsqueeze(0).byte()
-        # src_pad_mask = mask_src_src
-        # # Attention from src to target: everything is padded
-        # mask_src_tgt = mask_src_src.new_ones(1, 1, 1).expand(src_len, tgt_len, bsz)
-        # # [src_len x L x batch_size]
-        # mask_src = torch.cat([mask_src_src.expand(src_len, src_len, bsz), mask_src_tgt], dim=1)
-        # mask_src = mask_src.bool()
-        # mask_src_src = src.eq(onmt.constants.PAD).unsqueeze(1).byte()  # B x 1 x src_len
-        # mask_src_tgt = mask_src_src.new_ones(bsz, src_len, tgt_len)  # bsz x src_len x tgt_len
-        #
-        # mask_src = torch.cat([mask_src_src.expand(bsz, src_len, src_len), mask_src_tgt], dim=-1)
-        #
-        # # For the target:
-        # mask_tgt_tgt = tgt.eq(onmt.constants.PAD).byte().unsqueeze(1) + self.mask[:tgt_len, :tgt_len]
-        # mask_tgt_tgt = torch.gt(mask_tgt_tgt, 0).byte()  # bsz x tgt_len x tgt_len
-        #
-        # mask_tgt_src = mask_tgt_tgt.new_zeros(bsz, tgt_len, src_len) + src.eq(onmt.constants.PAD).unsqueeze(1).byte()
-        # mask_tgt = torch.cat([mask_tgt_src, mask_tgt_tgt], dim=-1)  # bsz x tgt_len x T
-        # attn_mask = torch.cat([mask_src, mask_tgt], dim=1).bool()  # L x L x batch_size
 
-        attn_mask = self.gen_mask(src, input)
-        # seq = torch.cat([src, input], dim=-1)
-        # seq_len = seq.size(1)
-        # attn_mask = self.mask[:seq_len, :seq_len] + seq.eq(onmt.constants.PAD).byte().unsqueeze(1)
-        # attn_mask = torch.gt(attn_mask, 0).bool()
+        attn_mask = self.gen_mask(src, tgt)
+
+        klen = src_len + tgt_len
+        pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
+
+        pos_emb = self.positional_encoder(pos)
 
         output = emb
 
-        # Applying dropout and tranpose to T x B x H
-        output = self.preprocess_layer(output).transpose(0, 1)
+        # Applying dropout
+        output = self.preprocess_layer(output)
 
         # FORWARD PASS
         coverage = None
         for i, layer in enumerate(self.layer_modules):
-            output, coverage = layer(output, None, attn_mask, None)  # context and context_mask are None
+            output, coverage = layer(output, None, pos_emb, attn_mask, None)  # context and context_mask are None
 
         # Final normalization
         output = self.postprocess_layer(output)

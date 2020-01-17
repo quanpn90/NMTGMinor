@@ -80,10 +80,11 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         self.d_head = self.model_size // self.n_heads
 
+    def build_modules(self):
+
         e_length = expected_length(self.layers, self.death_rate)
         print("* Transformer Encoder with Relative Attention with %.2f expected layers" % e_length)
 
-    def build_modules(self):
         self.layer_modules = nn.ModuleList()
 
         for _l in range(self.layers):
@@ -256,17 +257,15 @@ class RelativeTransformerDecoder(TransformerDecoder):
         self.r_w_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
         self.r_r_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
 
-        e_length = expected_length(self.layers, self.death_rate)
-        # # Parameters for the position biases
-        # self.r_w_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
-        # self.r_r_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
-
-        print("* Transformer Decoder with Relative Attention with %.2f expected layers" % e_length)
-
     def renew_buffer(self, new_len):
         return
 
     def build_modules(self):
+
+        e_length = expected_length(self.layers, self.death_rate)
+
+        print("* Transformer Decoder with Relative Attention with %.2f expected layers" % e_length)
+
         self.layer_modules = nn.ModuleList()
 
         for l in range(self.layers):

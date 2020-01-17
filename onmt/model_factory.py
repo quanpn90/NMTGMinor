@@ -120,6 +120,16 @@ def build_tm_model(opt, dicts):
         model = UnifiedTransformer(opt, embedding_src, embedding_tgt,
                                    generator, positional_encoder, language_embeddings=language_embeddings)
 
+    elif opt.model == 'relative_unified_transformer':
+        from onmt.models.relative_unified_transformer import RelativeUnifiedTransformer
+
+        if opt.encoder_type == "audio":
+            raise NotImplementedError
+
+        generator = nn.ModuleList(generators)
+        model = RelativeUnifiedTransformer(opt, embedding_src, embedding_tgt,
+                                           generator, positional_encoder, language_embeddings=language_embeddings)
+
     else:
         raise NotImplementedError
 

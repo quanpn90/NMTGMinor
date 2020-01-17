@@ -1,13 +1,13 @@
 import argparse
 
-def make_parser(parser):
 
+def make_parser(parser):
     # Data options
     parser.add_argument('-data', required=True,
                         help='Path to the *-train.pt file from preprocess.py')
     parser.add_argument('-data_format', required=False, default='raw',
                         help='Default data format: raw')
-    parser.add_argument('-additional_data', required=False,default= 'none',
+    parser.add_argument('-additional_data', required=False, default='none',
                         help='Path to the *-train.pt file from preprocess.py for addtional data; sepeated by semi-colon')
     parser.add_argument('-additional_data_format', required=False, default='bin',
                         help='Default data format: raw')
@@ -32,8 +32,8 @@ def make_parser(parser):
     parser.add_argument('-layers', type=int, default=2,
                         help='Number of layers in the Transformer encoder/decoder')
     parser.add_argument('-encoder_layers', type=int, default=-1,
-                        help='Number of layers in the LSTM encoder if different')                   
-    parser.add_argument('-max_pos_length', type=int, default=128    ,
+                        help='Number of layers in the LSTM encoder if different')
+    parser.add_argument('-max_pos_length', type=int, default=128,
                         help='Maximum distance length for relative self-attention')
     parser.add_argument('-word_vec_size', type=int, default=512,
                         help='Word embedding sizes')
@@ -53,52 +53,54 @@ def make_parser(parser):
     parser.add_argument('-language_embedding_type', default='sum', type=str,
                         help="""Language embedding combination type: sum|concat. (Concat uses more parameters)""")
     parser.add_argument('-model_size', type=int, default=512,
-        help='Size of embedding / transformer hidden')      
+                        help='Size of embedding / transformer hidden')
     parser.add_argument('-inner_size', type=int, default=2048,
-        help='Size of inner feed forward layer')
+                        help='Size of inner feed forward layer')
     parser.add_argument('-attribute_size', type=int, default=1,
                         help='Number of attributes')
     parser.add_argument('-n_heads', type=int, default=8,
-        help='Number of heads for multi-head attention') 
+                        help='Number of heads for multi-head attention')
     parser.add_argument('-checkpointing', type=int, default=0,
-        help='Number of checkpointed layers in the Transformer') 
+                        help='Number of checkpointed layers in the Transformer')
     parser.add_argument('-attn_dropout', type=float, default=0.1,
-                        help='Dropout probability; applied on multi-head attention.')   
+                        help='Dropout probability; applied on multi-head attention.')
     parser.add_argument('-emb_dropout', type=float, default=0.1,
                         help='Dropout probability; applied on top of embedding.')
     parser.add_argument('-variational_dropout', action='store_true',
                         help='Apply variational dropout (same network per timestep)')
     parser.add_argument('-weight_norm', action='store_true',
-                      help='Apply weight normalization on linear modules')
+                        help='Apply weight normalization on linear modules')
     parser.add_argument('-death_rate', type=float, default=0.0,
-                        help='Stochastic layer death rate')  
+                        help='Stochastic layer death rate')
     parser.add_argument('-activation_layer', default='linear_relu_linear', type=str,
                         help='The activation layer in each transformer block linear_relu_linear|linear_swish_linear|maxout')
     parser.add_argument('-time', default='positional_encoding', type=str,
-                        help='Type of time representation positional_encoding|gru|lstm')                        
+                        help='Type of time representation positional_encoding|gru|lstm')
     parser.add_argument('-version', type=float, default=1.0,
                         help='Transformer version. 1.0 = Google type | 2.0 is different')
     parser.add_argument('-residual_type', default='regular',
-                      help='Type of residual type. regular|gated')
+                        help='Type of residual type. regular|gated')
     # Optimization options
     parser.add_argument('-encoder_type', default='text',
                         help="Type of encoder to use. Options are [text|img].")
     parser.add_argument('-input_size', type=int, default=2048,
-                        help='Size of input features')  
+                        help='Size of input features')
     parser.add_argument('-init_embedding', default='normal',
                         help="How to init the embedding matrices. Xavier or Normal.")
     parser.add_argument('-batch_size_words', type=int, default=2048,
                         help='Maximum batch size in word dimension')
     parser.add_argument('-batch_size_sents', type=int, default=128,
                         help='Maximum number of sentences in a batch')
+    parser.add_argument('-bidirectional', action='store_true',
+                        help='Bidirectional attention (for unified transformer)')
     parser.add_argument('-ctc_loss', type=float, default=0.0,
                         help='CTC Loss as additional loss function with this weight')
     parser.add_argument('-batch_size_update', type=int, default=2048,
-                        help='Maximum number of words per update')                    
+                        help='Maximum number of words per update')
     parser.add_argument('-batch_size_multiplier', type=int, default=1,
-                        help='Maximum number of words per update')                    
+                        help='Maximum number of words per update')
     parser.add_argument('-max_position_length', type=int, default=1024,
-        help='Maximum length for positional embedding')
+                        help='Maximum length for positional embedding')
     parser.add_argument('-epochs', type=int, default=13,
                         help='Number of training epochs')
     parser.add_argument('-start_epoch', type=int, default=1,
@@ -158,9 +160,9 @@ def make_parser(parser):
     parser.add_argument('-weight_decay', type=float, default=0.0,
                         help="""weight decay (L2 penalty)""")
     parser.add_argument('-amsgrad', action='store_true',
-                        help='Using AMSGRad for adam')    
+                        help='Using AMSGRad for adam')
     parser.add_argument('-update_method', default='regular',
-                        help="Type of update rule to use. Options are [regular|noam].")                                    
+                        help="Type of update rule to use. Options are [regular|noam].")
     # pretrained word vectors
     parser.add_argument('-tie_weights', action='store_true',
                         help='Tie the weights of the encoder and decoder layer')
@@ -179,7 +181,7 @@ def make_parser(parser):
     parser.add_argument('-gpus', default=[], nargs='+', type=int,
                         help="Use CUDA on the listed devices.")
     parser.add_argument('-fp16', action='store_true',
-                        help='Use half precision training')     
+                        help='Use half precision training')
     parser.add_argument('-fp16_loss_scale', type=float, default=8,
                         help="""Loss scale for fp16 loss (to avoid overflowing in fp16).""")
     parser.add_argument('-seed', default=9999, type=int,
@@ -281,7 +283,13 @@ def backward_compatible(opt):
     if not hasattr(opt, 'asynchronous'):
         opt.asynchronous = False
 
+    if not hasattr(opt, 'bidirectional'):
+        opt.bidirectional = False
+
     if not hasattr(opt, 'fix_norm_output_embedding'):
         opt.fix_norm_output_embedding = False
+
+    if opt.model == 'relative_unified_transformer' and not opt.src_align_right:
+        print(" !!! Warning: model %s requires source sentences aligned to the right (-src_align_right)" % opt.model)
 
     return opt
