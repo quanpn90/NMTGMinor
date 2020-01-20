@@ -123,7 +123,7 @@ class EncoderLayer(nn.Module):
 
         if coin:
             query = self.preprocess_attn(input)
-            out, _ = self.multihead(query, query, query, attn_mask)
+            out, _, _ = self.multihead(query, query, query, attn_mask)
 
             if self.training and self.death_rate > 0:
                 out = out / (1 - self.death_rate)
@@ -205,7 +205,8 @@ class DecoderLayer(nn.Module):
             raise NotImplementedError
         self.feedforward = Bottle(feedforward)
     
-    def forward(self, input, context, mask_tgt, mask_src):
+    def forward(self, input, context, mask_tgt, mask_src,
+                incremental=False, incremental_cache=None):
         
         """ Self attention layer 
             layernorm > attn > dropout > residual
@@ -223,7 +224,8 @@ class DecoderLayer(nn.Module):
 
             self_context = query
 
-            out, _ = self.multihead_tgt(query, self_context, self_context, mask_tgt)
+            out, _, incremental_cache = self.multihead_tgt(query, self_context, self_context, mask_tgt,
+                                           incremental=incremental, incremental_cache=incremental_cache)
 
             if self.training and self.death_rate > 0:
                 out = out / (1 - self.death_rate)
@@ -235,7 +237,8 @@ class DecoderLayer(nn.Module):
             """
             if not self.ignore_source:
                 query = self.preprocess_src_attn(input)
-                out, coverage = self.multihead_src(query, context, context, mask_src)
+                out, coverage, incremental_cache = self.multihead_src(query, context, context, mask_src,
+                                                      incremental=incremental, incremental_cache=incremental_cache)
 
                 if self.training and self.death_rate > 0:
                     out = out / (1 - self.death_rate)
@@ -254,7 +257,7 @@ class DecoderLayer(nn.Module):
 
             input = self.postprocess_ffn(out, input)
     
-        return input, coverage
+        return input, coverage, incremental_cache
         
     def step(self, input, context, mask_tgt, mask_src, buffer=None):
         """ Self attention layer 

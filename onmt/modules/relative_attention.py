@@ -252,7 +252,8 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
 
         return output, coverage
 
-    def forward(self, w, r, attn_mask=None, mems=None, debug=False):
+    def forward(self, w, r, attn_mask=None, debug=False,
+                incremental=False, incremental_cache=None):
         """
         :param debug:
         :param w: input embeddings (E) T x B x H
@@ -264,22 +265,24 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
 
         qlen, rlen, bsz = w.size(0), r.size(0), w.size(1)
 
-        if mems is not None:
-            cat = torch.cat([mems, w], 0)
-            w_heads = self.qkv_net(cat)
+        w_heads = self.qkv_net(w)
+        w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
 
-            w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
-            w_head_q = w_head_q[-qlen:]
-        else:
-            # w_heads = self.qkv_net(self.layer_norm(w))
-            w_heads = self.qkv_net(w)
-            # r_head_k = self.r_net(r)
-
-            w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
+        if incremental:
+            if incremental_cache is not None and 'k' in incremental_cache and 'v' in incremental_cache:
+                w_head_k = torch.cat([incremental_cache['k'], w_head_k], dim=0)  # time first
+                incremental_cache['k'] = w_head_k
+                w_head_v = torch.cat([incremental_cache['v'], w_head_v], dim=0)  # time first
+                incremental_cache['v'] = w_head_v
+            else:
+                if incremental_cache is None:
+                    incremental_cache = dict()
+                incremental_cache['k'] = w_head_k
+                incremental_cache['v'] = w_head_v
 
         output, coverage = self.compute_attention(r, w_head_q, w_head_k, w_head_v, attn_mask=attn_mask, debug=debug)
 
-        return output, coverage
+        return output, coverage, incremental_cache
 
     def step(self, w, r, attn_mask=None, mems=None, buffer=None, debug=False):
         """

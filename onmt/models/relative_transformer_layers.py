@@ -52,7 +52,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
         if coin:
 
             query = self.preprocess_attn(input)
-            out, _ = self.multihead(query, pos_emb, attn_mask=attn_mask)
+            out, _, _ = self.multihead(query, pos_emb, attn_mask=attn_mask)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -113,7 +113,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.feedforward = Bottle(feedforward)
 
     # def forward(self, input, context, pos_emb, r_w_bias, r_r_bias, mask_tgt, mask_src):
-    def forward(self, input, context, pos_emb, mask_tgt, mask_src):
+    def forward(self, input, context, pos_emb, mask_tgt, mask_src,
+                incremental=False, incremental_cache=None):
 
         """ Self attention layer
             layernorm > attn > dropout > residual
@@ -128,7 +129,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
             query = self.preprocess_attn(input)
 
             # out, _ = self.multihead_tgt(query, pos_emb, r_w_bias, r_r_bias, attn_mask=mask_tgt)
-            out, _ = self.multihead_tgt(query, pos_emb, attn_mask=mask_tgt)
+            out, _, incremental_cache = self.multihead_tgt(query, pos_emb, attn_mask=mask_tgt,
+                                        incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -141,7 +143,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
             """
             if not self.ignore_source:
                 query = self.preprocess_src_attn(input)
-                out, coverage = self.multihead_src(query, context, context, mask_src)
+                out, coverage, incremental_cache = self.multihead_src(query, context, context, mask_src,
+                                                   incremental=incremental, incremental_cache=incremental_cache)
 
                 # rescaling before residual
                 if self.training and self.death_rate > 0:
@@ -164,7 +167,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
         else:
             coverage = None
 
-        return input, coverage
+        return input, coverage, incremental_cache
 
     def step(self, input, context, pos_emb, mask_tgt, mask_src, buffer=None):
         """ Self attention layer
@@ -194,66 +197,4 @@ class RelativeTransformerDecoderLayer(nn.Module):
         input = self.postprocess_ffn(out, input)
 
         return input, coverage, buffer
-#
-#     def forward(self, input, pos, r_w_bias, r_r_bias, mask, mems=None):
-#
-#         """
-#         :param mems: The hidden layers from the previous segments
-#         :param mask: The attention mask to avoid padding
-#         :param input: Embedding (from the last layer) T x B x H
-#         :param pos: Positional Encoding T x B x H
-#         :return:
-#         """
-#
-#         # input and context should be time first ?
-#
-#         if mems is not None:
-#             cat = torch.cat([mems, input], 0)
-#             query = self.preprocess_attn(cat)
-#         else:
-#             query = self.preprocess_attn(input)
-#
-#         out, coverage = self.multihead_tgt(query, pos, r_w_bias, r_r_bias, mask)
-#
-#         # dropout + residual
-#         input = self.postprocess_attn(out, input)
-#
-#         """ Feed forward layer
-#             layernorm > ffn > dropout > residual
-#         """
-#         out = self.feedforward(self.preprocess_ffn(input))
-#         input = self.postprocess_ffn(out, input)
-#
-#         return input, coverage
 
-    # def step(self, input, pos, context, mask_tgt, mask_src, buffer=None):
-    #     """ Self attention layer
-    #         layernorm > attn > dropout > residual
-    #     """
-    #
-    #     query = self.preprocess_attn(input)
-    #
-    #     out, _, buffer = self.multihead_tgt.step(query, pos, mask_tgt, buffer=buffer)
-    #
-    #     input = self.postprocess_attn(out, input)
-    #
-    #     """ Context Attention layer
-    #         layernorm > attn > dropout > residual
-    #     """
-    #     if not self.ignore_source:
-    #         query = self.preprocess_src_attn(input)
-    #         out, coverage, buffer = self.multihead_src.step(query, context, context, mask_src, buffer=buffer)
-    #         input = self.postprocess_src_attn(out, input)
-    #     else:
-    #         coverage = None
-    #
-    #     """ Feed forward layer
-    #         layernorm > ffn > dropout > residual
-    #     """
-    #     out = self.feedforward(self.preprocess_ffn(input))
-    #     input = self.postprocess_ffn(out, input)
-    #
-    #     return input, coverage, buffer
-
-
-# class RelativeEncoderLayer(EncoderLayer):

@@ -48,9 +48,6 @@ class Translator(object):
             model_opt = checkpoint['opt']
             dicts = checkpoint['dicts']
 
-            if 'langs' in dicts:
-                print(dicts['langs'])
-
             if i == 0:
                 if "src" in checkpoint['dicts']:
                     self.src_dict = checkpoint['dicts']['src']

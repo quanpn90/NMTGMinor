@@ -58,12 +58,11 @@ class MultiHeadAttention(nn.Module):
         else:
             self.attn_dropout = nn.Dropout(attn_p)
 
-    def forward(self, query, key, value, mask, query_mask=None, value_mask=None):
+    def forward(self, query, key, value, mask,
+                incremental=False, incremental_cache=None):
 
         len_query, b = query.size(0), query.size(1)
         len_key, b_ = key.size(0), key.size(1)
-
-        key_mask = value_mask
 
         # batch_size*h x len_query x d_head
         # project inputs to multi-heads
@@ -71,14 +70,44 @@ class MultiHeadAttention(nn.Module):
             shared_qkv = group_linear(
                 [self.fc_query.function.linear, self.fc_key.function.linear, self.fc_value.function.linear], query)
             proj_query, proj_key, proj_value = shared_qkv.chunk(3, dim=-1)
+
+            # In incremental case: we concatenate the previously computed (mapped) states to the proj_key and proj_v
+            if incremental:
+                if incremental_cache is not None and 'k' in incremental_cache and 'v' in incremental_cache:
+                    proj_key = torch.cat([incremental_cache['k'], proj_key], dim=0)  # time first
+                    incremental_cache['k'] = proj_key
+                    proj_value = torch.cat([incremental_cache['v'], proj_value], dim=0)  # time first
+                    incremental_cache['v'] = proj_value
+                    len_key, b_ = proj_key.size(0), proj_key.size(1)
+                else:
+                    if incremental_cache is None:
+                        incremental_cache = dict()
+                    incremental_cache['k'] = proj_key
+                    incremental_cache['v'] = proj_value
+
         elif self.share == 2:
+
+            # This function will have to change in the future for Transformer XL
             proj_query = self.fc_query(query)  # batch_size x len_query x h*d_head
             shared_kv = group_linear([self.fc_key.function.linear, self.fc_value.function.linear], key)
             proj_key, proj_value = shared_kv.chunk(2, dim=-1)
+
+            if incremental:
+                if incremental_cache is not None and 'c_k' in incremental_cache and 'c_v' in incremental_cache:
+                    proj_key = incremental_cache['c_k']
+                    proj_value = incremental_cache['c_v']
+                else:
+                    if incremental_cache is None:
+                        incremental_cache = dict()
+                    shared_kv = group_linear([self.fc_key.function.linear, self.fc_value.function.linear], key)
+                    proj_key, proj_value = shared_kv.chunk(2, dim=-1)
+                    incremental_cache['c_k'] = proj_key
+                    incremental_cache['c_v'] = proj_value
+
         else:
-            proj_query = self.fc_query(query, mask=query_mask)
-            proj_key = self.fc_key(key, mask=key_mask)  # batch_size x len_key x h*d_head
-            proj_value = self.fc_value(value, mask=value_mask)  # batch_size x len_key x h*d_head
+            proj_query = self.fc_query(query)
+            proj_key = self.fc_key(key)  # batch_size x len_key x h*d_head
+            proj_value = self.fc_value(value)  # batch_size x len_key x h*d_head
 
         q, k, v = proj_query, proj_key, proj_value
         # prepare the shape for applying softmax
@@ -107,74 +136,4 @@ class MultiHeadAttention(nn.Module):
 
         out = self.fc_concat(out)
 
-        return out, coverage
-
-    def step(self, query, key, value, mask, query_mask=None, value_mask=None, buffer=None):
-
-        len_query, b = query.size(0), query.size(1)
-        len_key, b_ = key.size(0), key.size(1)
-
-        key_mask = value_mask
-
-        # project inputs to multi-heads
-        if self.share == 1:
-            # proj_query = self.fc_query(query, mask=query_mask)   # batch_size*h x len_query x d_head
-            # proj_key   = self.fc_key(key, mask=key_mask)             # batch_size x len_key x h*d_head
-            # proj_value = self.fc_value(value, mask=value_mask)       # batch_size x len_key x h*d_head
-            shared_qkv = group_linear(
-                [self.fc_query.function.linear, self.fc_key.function.linear, self.fc_value.function.linear], query)
-            proj_query, proj_key, proj_value = shared_qkv.chunk(3, dim=-1)
-            if buffer is not None and 'k' in buffer and 'v' in buffer:
-                proj_key = torch.cat([buffer['k'], proj_key], dim=0)  # time first
-                buffer['k'] = proj_key
-                proj_value = torch.cat([buffer['v'], proj_value], dim=0)  # time first
-                buffer['v'] = proj_value
-                len_key, b_ = proj_key.size(0), proj_key.size(1)
-            else:
-                if buffer is None:
-                    buffer = dict()
-                buffer['k'] = proj_key
-                buffer['v'] = proj_value
-        elif self.share == 2:
-            proj_query = self.fc_query(query)  # batch_size x len_query x h*d_head
-            if buffer is not None and 'c_k' in buffer and 'c_v' in buffer:
-                proj_key = buffer['c_k']
-                proj_value = buffer['c_v']
-            else:
-                if buffer is None:
-                    buffer = dict()
-                shared_kv = group_linear([self.fc_key.function.linear, self.fc_value.function.linear], key)
-                proj_key, proj_value = shared_kv.chunk(2, dim=-1)
-                buffer['c_k'] = proj_key
-                buffer['c_v'] = proj_value
-        else:
-            raise NotImplementedError
-
-        q, k, v = proj_query, proj_key, proj_value
-
-        # prepare the shape for applying softmax
-        q = q.contiguous().view(len_query, b * self.h, self.d_head).transpose(0, 1)
-        k = k.contiguous().view(len_key, b * self.h, self.d_head).transpose(0, 1)
-        v = v.contiguous().view(len_key, b * self.h, self.d_head).transpose(0, 1)
-
-        q = q * (self.d_head ** -0.5)
-
-        # get dotproduct softmax attns for each head
-        attns = torch.bmm(q, k.transpose(1, 2))  # batch_size*h x len_query x len_key
-
-        attns = attns.view(b, self.h, len_query, len_key)
-        mask_ = mask.unsqueeze(-3)
-        # FP16 support: cast to float and back
-        attns = attns.float().masked_fill_(mask_, -float('inf')).type_as(attns)
-        attns = F.softmax(attns.float(), dim=-1).type_as(attns)
-        # return mean attention from all heads as coverage
-        coverage = torch.mean(attns, dim=1)
-        attns = attns.view(b * self.h, len_query, len_key)
-
-        # apply attns on value
-        out = torch.bmm(attns, v)  # batch_size*h x len_query x d_head
-        out = out.transpose(0, 1).contiguous().view(len_query, b, self.d)
-
-        out = self.fc_concat(out)
-
-        return out, coverage, buffer
+        return out, coverage, incremental_cache

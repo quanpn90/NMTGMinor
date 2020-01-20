@@ -86,21 +86,6 @@ class Batch(object):
             self.tensors['source_lang'] = torch.cat(src_lang_data).long()
         if tgt_lang_data is not None:
             self.tensors['target_lang'] = torch.cat(tgt_lang_data).long()
-        # if src_atb_data is not None:
-        #     self.src_atb_data = dict()
-        #
-        #     for i in src_atb_data:
-        #         self.src_atb_data[i] = torch.cat(src_atb_data[i])
-        #
-        #     self.tensors['source_atb'] = self.src_atb_data
-
-        # if tgt_atb_data is not None:
-        #     self.tgt_atb_data = dict()
-        #
-        #     for i in tgt_atb_data:
-        #         self.tgt_atb_data[i] = torch.cat(tgt_atb_data[i])
-        #
-        #     self.tensors['target_atb'] = self.tgt_atb_data
 
     def switchout(self, swrate, src_vocab_size, tgt_vocab_size):
         # Switch out function ... currently works with only source text data

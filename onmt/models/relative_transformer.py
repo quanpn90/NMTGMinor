@@ -368,7 +368,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         for i, layer in enumerate(self.layer_modules):
             # batch_size x src_len x d_model
             # output, coverage = layer(output, context, pos_emb, self.r_w_bias, self.r_r_bias, dec_attn_mask, mask_src)
-            output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src)
+            output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src)
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -479,9 +479,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
             buffer = buffers[i] if i in buffers else None
             # assert (output.size(0) == 1)
 
-            output, coverage, buffer = layer.step(output, context, pos_emb,
-                                                  dec_attn_mask, mask_src, buffer=buffer)
-            # output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src)
+            # output, coverage, buffer = layer.step(output, context, pos_emb,
+            #                                       dec_attn_mask, mask_src, buffer=buffer)
+            output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                                     incremental=True, incremental_cache=buffer)
 
             decoder_state.update_attention_buffer(buffer, i)
 

@@ -385,7 +385,7 @@ class TransformerDecoder(nn.Module):
 
         for i, layer in enumerate(self.layer_modules):
 
-            output, coverage = layer(output, context, mask_tgt, mask_src)  # batch_size x len_src x d_model
+            output, coverage, _ = layer(output, context, mask_tgt, mask_src)  # batch_size x len_src x d_model
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -415,7 +415,7 @@ class TransformerDecoder(nn.Module):
         lang = decoder_state.tgt_lang
         mask_src = decoder_state.src_mask
 
-        if decoder_state.concat_input_seq == True:
+        if decoder_state.concat_input_seq:
             if decoder_state.input_seq is None:
                 decoder_state.input_seq = input
             else:
@@ -439,17 +439,12 @@ class TransformerDecoder(nn.Module):
         # emb should be batch_size x 1 x dim
 
         if self.use_language_embedding:
-            # atb_emb = self.attribute_embeddings(atbs).unsqueeze(1)  # B x H to B x 1 x H
-            # emb = torch.cat([emb, atb_emb], dim=-1)
-            # emb = torch.relu(self.feature_projector(emb))
-            # emb =
-            #emb = emb + self.language_embeddings(lang)
             if self.use_language_embedding:
                 lang_emb = self.language_embeddings(lang)  # B x H or 1 x H
                 if self.language_embedding_type == 'sum':
                     emb = emb + lang_emb
                 elif self.language_embedding_type == 'concat':
-                # replace the bos embedding with the language
+                    # replace the bos embedding with the language
                     if input.size(1) == 1:
                         bos_emb = lang_emb.expand_as(emb[:, 0, :])
                         emb[:, 0, :] = bos_emb
@@ -459,6 +454,7 @@ class TransformerDecoder(nn.Module):
                     emb = torch.relu(self.projector(concat_emb))
                 else:
                     raise NotImplementedError
+
         emb = emb.transpose(0, 1)
 
         # batch_size x 1 x len_src
@@ -497,21 +493,18 @@ class TransformerDecoder(nn.Module):
             buffer = buffers[i] if i in buffers else None
             assert (output.size(0) == 1)
 
-            output, coverage, buffer = layer.step(output, context, mask_tgt, mask_src, buffer=buffer)
+            # output, coverage, buffer = layer.step(output, context, mask_tgt, mask_src, buffer=buffer)
+            output, coverage, buffer = layer(output, context, mask_tgt, mask_src,
+                                             incremental=True, incremental_cache=buffer)
 
             decoder_state.update_attention_buffer(buffer, i)
 
-        # From Google T2T
-        # if normalization is done in layer_preprocess, then it should also be done
-        # on the output, since the output can grow very large, being the sum of
-        # a whole stack of unnormalized layer outputs.
         output = self.postprocess_layer(output)
 
         output_dict = defaultdict(lambda: None)
         output_dict['hidden'] = output
         output_dict['coverage'] = coverage
         output_dict['context'] = context
-        # output_dict = {'hidden': output, 'coverage': coverage, 'context': context}
 
         return output_dict
 
