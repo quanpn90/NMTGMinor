@@ -45,17 +45,13 @@ class Stream(object):
         self.feature_size = kwargs.get('feature_size', 40)
         self.src_align_right = src_align_right
 
-
         if src_data is not None:
             self.tensors['source'], self.tensors['source_pos'], self.src_lengths = \
                                                                     self.collate(src_data,
                                                                                  align_right=self.src_align_right,
                                                                                  type=self.src_type,
                                                                                  augmenter=augmenter)
-            self.tensors['source'] = self.tensors['source'].transpose(0, 1).contiguous()
-            if self.tensors['source_pos'] is not None:
-                self.tensors['source_pos'] = self.tensors['source_pos'].transpose(0, 1)
-            self.tensors['src_length'] = torch.LongTensor(self.src_lengths)
+            self.tensors['src_length'] = self.src_lengths
             self.src_size = sum(self.src_lengths)
 
         else:
@@ -127,24 +123,16 @@ class Stream(object):
         data (list of Torch.Tensor) size 1 x T
         """
 
-        return data
-        # # initialize with batch_size * length
-        # if type == "text":
-        #     lengths = [x.size(0) for x in data]
-        #     positions = [torch.arange(length_) for length_ in lengths]
-        #     max_length = max(lengths)
-        #     tensor = data[0].new(len(data), max_length).fill_(onmt.constants.PAD)
-        #     pos = tensor.new(*tensor.size()).fill_(0)
-        #
-        #     for i in range(len(data)):
-        #         data_length = data[i].size(0)
-        #         offset = max_length - data_length if align_right else 0
-        #         tensor[i].narrow(0, offset, data_length).copy_(data[i])
-        #         pos[i].narrow(0, offset, data_length).copy_(positions[i])
-        #
-        #     return tensor, pos, lengths
-        #
-        # elif type == "audio":
+        if type == "text":
+            lengths = [x.size(0) for x in data]
+            positions = [torch.arange(length_) for length_ in lengths]
+
+            tensor_length = sum(lengths)
+
+            return data, positions, lengths
+
+        elif type == "audio":
+            raise NotImplementedError
         #
         #     # First step: on-the-fly processing for the samples
         #     # Reshaping: either downsampling or upsampling

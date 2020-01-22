@@ -11,6 +11,7 @@ import os
 from onmt.model_factory import init_model_parameters
 from onmt.utils import checkpoint_paths, normalize_gradients
 from apex import amp
+from onmt.train_utils.stats import Logger
 
 
 class BaseTrainer(object):
@@ -150,6 +151,7 @@ class XETrainer(BaseTrainer):
     def eval(self, data):
         total_loss = 0
         total_words = 0
+        opt = self.opt
                 
         batch_order = data.create_order(random=False)
         self.model.eval()
@@ -169,7 +171,8 @@ class XETrainer(BaseTrainer):
                 """
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.constants.PAD)
-                outputs = self.model(batch, target_mask=tgt_mask)
+                outputs = self.model(batch, target_mask=tgt_mask,
+                                     mirror=opt.mirror_loss)
 
                 outputs['tgt_mask'] = tgt_mask
 
@@ -243,7 +246,8 @@ class XETrainer(BaseTrainer):
                     # can be flexibly controlled within models for easier extensibility
                     targets = batch.get('target_output')
                     tgt_mask = targets.data.ne(onmt.constants.PAD)
-                    outputs = self.model(batch, target_mask=tgt_mask, zero_encoder=opt.zero_encoder)
+                    outputs = self.model(batch, target_mask=tgt_mask, zero_encoder=opt.zero_encoder,
+                                         mirror=opt.mirror_loss)
 
                     batch_size = batch.size
 
@@ -285,13 +289,15 @@ class XETrainer(BaseTrainer):
                     counter = counter + 1
                     num_accumulated_words += tgt_size
                     num_accumulated_sents += batch_size
-                
+
                     #   We only update the parameters after getting gradients from n mini-batches
-                    # simulating the multi-gpu situation
-                    # if counter == opt.virtual_gpu:
-                    # if counter >= opt.batch_size_update:
-                
-                    if num_accumulated_words >= opt.batch_size_update * 0.95:
+                    update_flag = False
+                    if 0 < opt.batch_size_update and opt.batch_size_update >= num_accumulated_words:
+                        update_flag = True
+                    elif counter >= opt.update_frequency:
+                        update_flag = True
+
+                    if update_flag:
                         grad_denom = 1 / denom
                         if self.opt.normalize_gradient:
                             grad_denom = num_accumulated_words / denom

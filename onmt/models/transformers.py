@@ -10,6 +10,7 @@ from torch.utils.checkpoint import checkpoint
 from collections import defaultdict
 from onmt.utils import flip, expected_length
 from onmt.modules.linear import FeedForward, FeedForwardSwish
+import copy
 
 torch_version = float(torch.__version__[:3])
 
@@ -512,7 +513,7 @@ class TransformerDecoder(nn.Module):
 class Transformer(NMTModel):
     """Main model in 'Attention is all you need' """
 
-    def __init__(self, encoder, decoder, generator=None):
+    def __init__(self, encoder, decoder, generator=None, mirror=False):
         super().__init__(encoder, decoder, generator)
         self.model_size = self.decoder.model_size
         self.switchout = self.decoder.switchout
@@ -523,19 +524,21 @@ class Transformer(NMTModel):
         else:
             self.src_vocab_size = 0
 
+        if mirror:
+            self.mirror_decoder = copy.deepcopy(self.decoder)
+
+
     def reset_states(self):
         return
 
-    def forward(self, batch, target_mask=None, zero_encoder=False):
+    def forward(self, batch, target_mask=None, zero_encoder=False,
+                mirror=False):
         """
-        Inputs Shapes:
-            src: len_src x batch_size
-            tgt: len_tgt x batch_size
-
-        Outputs Shapes:
-            out:      batch_size*len_tgt x model_size
-
-
+        :param mirror: if using mirror network for future anticipation
+        :param batch: data object sent from the dataset
+        :param target_mask:
+        :param zero_encoder: zero out the encoder output (if necessary)
+        :return:
         """
         if self.switchout > 0 and self.training:
             batch.switchout(self.switchout, self.src_vocab_size, self.tgt_vocab_size)
@@ -546,7 +549,6 @@ class Transformer(NMTModel):
         tgt_pos = batch.get('target_pos')
         src_lang = batch.get('source_lang')
         tgt_lang = batch.get('target_lang')
-        # tgt_atb = batch.get('target_atb')  # a dictionary of attributes
 
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
@@ -568,6 +570,26 @@ class Transformer(NMTModel):
         output_dict['src'] = src
         output_dict['target_mask'] = target_mask
 
+        # final layer: computing softmax
+        logprobs = self.generator[0](output_dict)
+        output_dict['logprobs'] = logprobs
+
+        # Mirror network: reverse the target sequence and perform backward language model
+        if mirror:
+            tgt_reverse = torch.flip(batch.get('target_input'), (0, ))
+            tgt_pos = torch.flip(batch.get('target_pos'), (0, ))
+            tgt_reverse = tgt_reverse.transpose(0, 1)
+            # perform an additional backward pass
+            reverse_decoder_output = self.mirror_decoder(tgt_reverse, context, src, input_lang=tgt_lang, input_pos=tgt_pos)
+
+            reverse_decoder_output['src'] = src
+            reverse_decoder_output['context'] = context
+            reverse_decoder_output['target_mask'] = target_mask
+            reverse_logprobs = self.generator[0](reverse_decoder_output)
+
+            output_dict['reverse_hidden'] = reverse_decoder_output['hidden']
+            output_dict['reverse_logprobs'] = reverse_logprobs
+
         # # This step removes the padding to reduce the load for the final layer
         # if target_masking is not None:
         #     output = output.contiguous().view(-1, output.size(-1))
@@ -579,11 +601,6 @@ class Transformer(NMTModel):
         #     non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
         #
         #     output = output.index_select(0, non_pad_indices)
-
-        # final layer: computing softmax
-        logprobs = self.generator[0](output_dict)
-
-        output_dict['logprobs'] = logprobs
 
         return output_dict
 

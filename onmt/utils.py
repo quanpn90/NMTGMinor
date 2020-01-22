@@ -58,11 +58,12 @@ def normalize_gradients(parameters, denom=1.0):
     return
 
 
-def flip(x, dim):
+# flip a tensor on certain dimension
+def flip(x, dim=0):
     dim = x.dim() + dim if dim < 0 else dim
     inds = tuple(slice(None, None) if i != dim
-             else x.new(torch.arange(x.size(i)-1, -1, -1).tolist()).long()
-             for i in range(x.dim()))
+                 else x.new(torch.arange(x.size(i) - 1, -1, -1).tolist()).long()
+                 for i in range(x.dim()))
     return x[inds]
 
 

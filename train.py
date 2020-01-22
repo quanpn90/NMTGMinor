@@ -235,7 +235,8 @@ def main():
                                               ctc_weight=opt.ctc_loss)
         else:
             loss_function = NMTLossFunc(dicts['tgt'].size(),
-                                        label_smoothing=opt.label_smoothing)
+                                        label_smoothing=opt.label_smoothing,
+                                        mirror=opt.mirror_loss)
 
         # This function replaces modules with the more optimized counterparts
         # Currently exp with LayerNorm

@@ -183,7 +183,7 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
         # r_head_k is the projected positions (not depending on the tensors)
         r_head_k = r_head_k.view(rlen, self.n_head, self.d_head).transpose(0, 1)  # rlen x n_head x d_head
 
-        #### compute attention score
+        # compute attention score
         # r_w_bias is [n_head, d_head]
         rw_head_q = w_head_q + r_w_bias.unsqueeze(1)  # qlen x bsz x n_head x d_head
         AC = torch.matmul(rw_head_q, w_head_k.transpose(2, 3))
@@ -226,7 +226,7 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
         # [bsz x n_head x qlen x klen] again
         attn_prob = F.softmax(attn_score.float(), dim=-1)
 
-        # nan will happen ... because of the first positions (aligned right) will have nothing to attend to
+        # nan may happen ... because of the first positions (aligned right) will have nothing to attend to
         nan_mask = torch.isnan(attn_prob)
         attn_prob = attn_prob.masked_fill(nan_mask, 0).type_as(attn_score)
 
@@ -234,6 +234,7 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
             n = nan_mask.byte().sum()
             total = attn_prob.numel()
             print("Total nan: %d %d " % (n, total))
+
         coverage = attn_prob
 
         attn_prob = self.dropatt(attn_prob)
@@ -255,11 +256,13 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
     def forward(self, w, r, attn_mask=None, debug=False,
                 incremental=False, incremental_cache=None):
         """
+        :type attn_mask:
+        :param incremental_cache:
+        :param incremental:
         :param debug:
         :param w: input embeddings (E) T x B x H
         :param r: relative encodings (R)
         :param attn_mask:
-        :param mems:
         :return:
         """
 
@@ -283,45 +286,6 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
         output, coverage = self.compute_attention(r, w_head_q, w_head_k, w_head_v, attn_mask=attn_mask, debug=debug)
 
         return output, coverage, incremental_cache
-
-    def step(self, w, r, attn_mask=None, mems=None, buffer=None, debug=False):
-        """
-        :param debug:
-        :param buffer:
-        :param w: input embeddings (E) T x B x H
-        :param r: relative encodings (R)
-        :param attn_mask:
-        :param mems:
-        :return:
-        """
-
-        if mems is not None:
-            raise NotImplementedError
-        #     # cat = torch.cat([mems, w], 0)
-        #     # w_heads = self.qkv_net(cat)
-        #     # r_head_k = self.r_net(r)
-        #     #
-        #     # w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
-        #     # w_head_q = w_head_q[-qlen:]
-        # else:
-        # w_heads = self.qkv_net(self.layer_norm(w))
-        w_heads = self.qkv_net(w)
-        w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
-
-        if buffer is not None and 'k' in buffer and 'v' in buffer:
-            w_head_k = torch.cat([buffer['k'], w_head_k], dim=0)  # time first
-            buffer['k'] = w_head_k
-            w_head_v = torch.cat([buffer['v'], w_head_v], dim=0)  # time first
-            buffer['v'] = w_head_v
-        else:
-            if buffer is None:
-                buffer = dict()
-            buffer['k'] = w_head_k
-            buffer['v'] = w_head_v
-
-        output, coverage = self.compute_attention(r, w_head_q, w_head_k, w_head_v, attn_mask=attn_mask, debug=debug)
-
-        return output, coverage, buffer
 
 
 if __name__ == '__main__':

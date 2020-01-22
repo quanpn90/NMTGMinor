@@ -95,8 +95,12 @@ def make_parser(parser):
                         help='Bidirectional attention (for unified transformer)')
     parser.add_argument('-ctc_loss', type=float, default=0.0,
                         help='CTC Loss as additional loss function with this weight')
-    parser.add_argument('-batch_size_update', type=int, default=2048,
+    parser.add_argument('-mirror_loss', action='store_true',
+                        help='Using mirror loss')
+    parser.add_argument('-batch_size_update', type=int, default=-1,
                         help='Maximum number of words per update')
+    parser.add_argument('-update_frequency', type=int, default=1,
+                        help='Maximum number of batches per update (will override the batch_size_update')
     parser.add_argument('-batch_size_multiplier', type=int, default=1,
                         help='Maximum number of words per update')
     parser.add_argument('-max_position_length', type=int, default=1024,
@@ -288,6 +292,9 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'fix_norm_output_embedding'):
         opt.fix_norm_output_embedding = False
+
+    if not hasattr(opt, 'mirror_loss'):
+        opt.mirror_loss = False
 
     if opt.model == 'relative_unified_transformer' and not opt.src_align_right:
         print(" !!! Warning: model %s requires source sentences aligned to the right (-src_align_right)" % opt.model)

@@ -92,7 +92,7 @@ def build_tm_model(opt, dicts):
 
         decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, language_embeddings=language_embeddings)
 
-        model = Transformer(encoder, decoder, nn.ModuleList(generators))
+        model = Transformer(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss)
 
     elif opt.model == 'relative_transformer':
 
@@ -108,7 +108,7 @@ def build_tm_model(opt, dicts):
 
         generator = nn.ModuleList(generators)
         decoder = RelativeTransformerDecoder(opt, embedding_tgt, None, language_embeddings=language_embeddings)
-        model = Transformer(encoder, decoder, generator)
+        model = Transformer(encoder, decoder, generator, mirror=opt.mirror_loss)
 
     elif opt.model == 'unified_transformer':
         from onmt.models.unified_transformer import UnifiedTransformer

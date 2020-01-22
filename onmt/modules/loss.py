@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch, math
 import torch.nn.functional as F
 from torch.nn.modules.loss import _Loss
+from onmt.utils import flip
 
 import numpy
 
@@ -53,6 +54,14 @@ class NMTLossFunc(CrossEntropyLossBase):
     """
     Standard NMT Loss Computation.
     """
+    def __init__(self, output_size, label_smoothing, mirror=False):
+        super(NMTLossFunc, self).__init__(output_size, label_smoothing)
+        self.output_size = output_size
+        self.padding_idx = onmt.constants.PAD
+        self.smoothing_value = label_smoothing / (output_size - 2)
+        self.confidence = 1.0 - label_smoothing
+        self.label_smoothing = label_smoothing
+        self.mirror = mirror
 
     def forward(self, model_outputs, targets, model=None, backward=False, normalizer=1, **kwargs):
         """
@@ -71,32 +80,64 @@ class NMTLossFunc(CrossEntropyLossBase):
 
         outputs = model_outputs['hidden']
         logprobs = model_outputs['logprobs']
+        mirror = self.mirror
 
-        # flatten the output
-        targets = targets.view(-1)
+        if mirror:
+            reverse_outputs = model_outputs['reverse_hidden']
+            reverse_logprobs = model_outputs['reverse_logprobs']
+            reverse_targets = torch.flip(targets, (0, ))
 
-        mask = model_outputs['tgt_mask']
+            alpha = 1.0
 
-        if mask is not None and logprobs.dim() < 3:
-            """ We remove all positions with PAD """
+        loss, loss_data = self._compute_loss(logprobs, targets)
+
+        total_loss = loss
+
+        if mirror:
+            reverse_loss, _ = self._compute_loss(reverse_logprobs, reverse_targets)
+
+            mask = model_outputs['tgt_mask']
             flattened_mask = mask.view(-1)
-
             non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
+            # remove the pads
+            outputs = outputs.contiguous().view(-1, outputs.size(-1))
+            outputs = outputs.index_select(0, non_pad_indices)
 
-            clean_targets = targets.index_select(0, non_pad_indices)
+            # reverse_mask = torch.flip(mask.long(), (0, )).bool
+            # Here we have to flip the reverse outputs again so the states have the same order with the original seq
+            reverse_outputs = torch.flip(reverse_outputs, (0, ))
+            reverse_mask = mask
+            flattened_reverse_mask = reverse_mask.view(-1)
+            reverse_non_pad_indices = torch.nonzero(flattened_reverse_mask).squeeze(1)
+            reverse_outputs = reverse_outputs.contiguous().view(-1, reverse_outputs.size(-1))
+            reverse_outputs = reverse_outputs.index_select(0, reverse_non_pad_indices)
 
-        else:
-            clean_targets = targets
-
-        loss, loss_data = self._compute_loss(logprobs, clean_targets)
+            # mirror_loss = (outputs - reverse_outputs).float() ** 2
+            mirror_outputs = reverse_outputs.detach()
+            mirror_loss = F.mse_loss(outputs, mirror_outputs, reduction='sum')
+            total_loss = total_loss + reverse_loss + alpha * mirror_loss
 
         if backward:
-            loss.div(normalizer).backward()
+            total_loss.div(normalizer).backward()
 
         output_dict = {"loss": loss, "data": loss_data}
 
         # return loss, loss_data, None
         return output_dict
+
+        #
+
+        # targets = targets.view(-1)
+        # if mask is not None and logprobs.dim() < 3:
+        #     """ We remove all positions with PAD """
+        #     flattened_mask = mask.view(-1)
+        #
+        #     non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
+        #
+        #     clean_targets = targets.index_select(0, non_pad_indices)
+        #
+        # else:
+        #     clean_targets = targets
 
 
 class CTCLossFunc(_Loss):
