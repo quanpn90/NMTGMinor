@@ -71,7 +71,7 @@ class Optim(object):
         self.params = list(params_)  # careful: params may be a generator
         if self.method == 'sgd':
             self.optimizer = optim.SGD(self.params, lr=self.lr, weight_decay=self.weight_decay, momentum=0.0)
-        elif self.method == 'adam':
+        elif self.method in ['adam', 'fused_adam']:
 
             fast_adam = True
             try:

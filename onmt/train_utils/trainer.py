@@ -171,7 +171,7 @@ class XETrainer(BaseTrainer):
                 """
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.constants.PAD)
-                outputs = self.model(batch, target_mask=tgt_mask,
+                outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                      mirror=opt.mirror_loss)
 
                 outputs['tgt_mask'] = tgt_mask
@@ -190,6 +190,7 @@ class XETrainer(BaseTrainer):
         
         opt = self.opt
         train_data = self.train_data
+        streaming = opt.streaming
         
         # Clear the gradients of the model
         # self.runner.zero_grad()
@@ -246,7 +247,7 @@ class XETrainer(BaseTrainer):
                     # can be flexibly controlled within models for easier extensibility
                     targets = batch.get('target_output')
                     tgt_mask = targets.data.ne(onmt.constants.PAD)
-                    outputs = self.model(batch, target_mask=tgt_mask, zero_encoder=opt.zero_encoder,
+                    outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask, zero_encoder=opt.zero_encoder,
                                          mirror=opt.mirror_loss)
 
                     batch_size = batch.size

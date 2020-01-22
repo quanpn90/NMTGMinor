@@ -287,23 +287,24 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer,
     srcf.close()
     tgtf.close()
 
-    if opt.shuffle == 1:
-        print('... shuffling sentences')
-        perm = torch.randperm(len(src))
-        src = [src[idx] for idx in perm]
-        tgt = [tgt[idx] for idx in perm]
-        src_sizes = [src_sizes[idx] for idx in perm]
-        tgt_sizes = [tgt_sizes[idx] for idx in perm]
-
-    print('... sorting sentences by size')
-
-    z = zip(src, tgt, src_sizes, tgt_sizes)
-
-    # ultimately sort by target size
-    sorted_z = sorted(sorted(z, key=lambda x: x[2]), key=lambda x: x[3])
-
-    src = [z_[0] for z_ in sorted_z]
-    tgt = [z_[1] for z_ in sorted_z]
+    # don't sort anymore
+    # if opt.shuffle == 1:
+    #     print('... shuffling sentences')
+    #     perm = torch.randperm(len(src))
+    #     src = [src[idx] for idx in perm]
+    #     tgt = [tgt[idx] for idx in perm]
+    #     src_sizes = [src_sizes[idx] for idx in perm]
+    #     tgt_sizes = [tgt_sizes[idx] for idx in perm]
+    #
+    # print('... sorting sentences by size')
+    #
+    # z = zip(src, tgt, src_sizes, tgt_sizes)
+    #
+    # # ultimately sort by target size
+    # sorted_z = sorted(sorted(z, key=lambda x: x[2]), key=lambda x: x[3])
+    #
+    # src = [z_[0] for z_ in sorted_z]
+    # tgt = [z_[1] for z_ in sorted_z]
 
     print(('Prepared %d sentences ' +
            '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %

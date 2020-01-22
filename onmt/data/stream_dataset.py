@@ -21,18 +21,15 @@ class Stream(object):
     def __init__(self, src_data, tgt_data=None,
                  src_lang_data=None, tgt_lang_data=None,
                  src_type='text',
-                 src_align_right=False, tgt_align_right=False,
+                 length_multiplier=1,
                  augmenter=None, upsampling=False,
-                  **kwargs):
+                 **kwargs):
         """
         :param src_data: list of source tensors
         :param tgt_data: list of target tensors
         :param src_lang_data: list of language features for the source (TB finished)
         :param tgt_lang_data: list of language features for the target (TB finished)
         :param src_type: text or audio
-        :param src_align_right: if the source sequences are aligned to the right
-        :param tgt_align_right: if the target sequences are aligned to the right
-        (default False and maybe never changed unless new models need)
         :param reshape_speech: the number of frames to be reshaped
         :param augmenter: using augmentation for speech
         :param merge: if the two sequences are going to be merged for Relative Transformer
@@ -41,16 +38,15 @@ class Stream(object):
         self.tensors = defaultdict(lambda: None)
         self.has_target = False
         self.src_type = src_type
-        self.upsampling = upsampling
-        self.feature_size = kwargs.get('feature_size', 40)
-        self.src_align_right = src_align_right
+        # self.upsampling = upsampling
+        # self.feature_size = kwargs.get('feature_size', 40)
+        self.length_mutliplier = length_multiplier
 
         if src_data is not None:
             self.tensors['source'], self.tensors['source_pos'], self.src_lengths = \
-                                                                    self.collate(src_data,
-                                                                                 align_right=self.src_align_right,
-                                                                                 type=self.src_type,
-                                                                                 augmenter=augmenter)
+                self.collate(src_data,
+                             type=self.src_type,
+                             augmenter=augmenter)
             self.tensors['src_length'] = self.src_lengths
             self.src_size = sum(self.src_lengths)
 
@@ -58,12 +54,11 @@ class Stream(object):
             self.src_size = 0
 
         if tgt_data is not None:
-            target_full, target_pos, self.tgt_lengths = self.collate(tgt_data, align_right=self.tgt_align_right)
-            target_full = target_full.t().contiguous()  # transpose BxT to TxB
+            target_full, target_pos, self.tgt_lengths = self.collate(tgt_data)
             self.tensors['target'] = target_full
             self.tensors['target_input'] = target_full[:-1]
             self.tensors['target_output'] = target_full[1:]
-            self.tensors['target_pos'] = target_pos.t().contiguous()[:-1]
+            self.tensors['target_pos'] = target_pos[:-1]
             self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.constants.PAD)
             self.has_target = True
             self.tgt_size = sum([len(x) - 1 for x in tgt_data])
@@ -124,12 +119,26 @@ class Stream(object):
         """
 
         if type == "text":
-            lengths = [x.size(0) for x in data]
+            lengths = torch.LongTensor([x.size(0) for x in data])
             positions = [torch.arange(length_) for length_ in lengths]
+            positions = torch.cat(positions)
 
-            tensor_length = sum(lengths)
+            # the last part is padded (so that the actual batch size divides by the multiplier
+            # tensor_length = math.ceil(sum(lengths) / self.length_mutliplier) * self.length_mutliplier
+            tensor_length = torch.sum(lengths).item()
 
-            return data, positions, lengths
+            # create a placeholder for the data
+            tensor = data[0].new(tensor_length).fill_(onmt.constants.PAD)
+
+            offset = 0
+            for sample in data:
+                current_length = sample.size(0)
+                tensor.narrow(0, offset, current_length).copy_(sample)
+                offset += current_length
+
+            tensor = tensor.unsqueeze(1)  # batch size is 1
+
+            return tensor, positions, lengths
 
         elif type == "audio":
             raise NotImplementedError
@@ -199,3 +208,237 @@ class Stream(object):
                 self.tensors[key] = self.tensors[key].cuda()
             else:
                 continue
+
+
+class StreamDataset(torch.utils.data.Dataset):
+    def __init__(self, src_data, tgt_data,
+                 src_langs=None, tgt_langs=None,
+                 batch_size_words=2048,
+                 data_type="text", batch_size_sents=128,
+                 multiplier=1,
+                 augment=False,
+                 **kwargs):
+        """
+        :param src_data: List of tensors for the source side (1D for text, 2 or 3Ds for other modalities)
+        :param tgt_data: List of tensors (1D text) for the target side (already padded with <s> and </s>
+        :param src_langs: Source languages (list of one-tensors)
+        :param tgt_langs: Target Languages (list of one-tensors)
+        :param batch_size_words: Maximum number of words in the minibatch (MB can't have more than this)
+        :param data_type: Text or Audio
+        :param batch_size_sents: Maximum number of sequences in the minibatch (MB can't have more than this)
+        :param multiplier: The number of sequences must divide by this number (for fp16 when multiplier=8)
+        :param reshape_speech: Put N frames together to reduce the length (this might be done already in preprocessing)
+        :param augment: Speech Augmentation (currently only spec augmentation is implemented)
+        """
+
+        """
+        For alignment, the right-aligned data looks like:
+        P P P P D D D D
+        P P D D D D D D
+        P P P P P D D D
+        P P P D D D D D
+        This can affect positional encoding (whose implementation is not consistent w.r.t padding)
+        For models with absolute positional encoding, src and tgt should be aligned left (This is default)
+        For models with relative positional encoding, src should be right and tgt should be left
+        """
+        self.src = src_data
+        self._type = data_type
+        self.upsampling = kwargs.get('upsampling', False)
+        # self.reshape_speech = reshape_speech
+        if tgt_data:
+            self.tgt = tgt_data
+
+            if src_data:
+                assert (len(self.src) == len(self.tgt))
+        else:
+            self.tgt = None
+
+        # in stream dataset we don't sort data
+
+        self.src_langs = src_langs
+        self.tgt_langs = tgt_langs
+        if self.src_langs is not None and self.tgt_langs is not None:
+            assert (len(src_langs) == len(tgt_langs))
+
+        # In "bilingual" case, the src_langs only contains one single vector
+        # Which is broadcasted to batch_size
+        if len(src_langs) <= 1:
+            self.bilingual = True
+        else:
+            self.bilingual = False
+
+        self.fullSize = len(self.src) if self.src is not None else len(self.tgt)
+
+        # maximum number of tokens in a mb
+        self.batch_size_words = batch_size_words
+
+        # maximum sequences in a mb
+        self.batch_size_sents = batch_size_sents
+
+        # the actual batch size must divide by this multiplier (for fp16 it has to be 4 or 8)
+        self.multiplier = multiplier
+
+        # by default: count the amount of padding when we group mini-batches
+        self.pad_count = False
+
+        # group samples into mini-batches
+        self.batches = []
+        self.num_batches = 0
+        self.allocate_batch()
+
+        self.cur_index = 0
+        self.batchOrder = None
+
+        if augment:
+            self.augmenter = Augmenter()
+        else:
+            self.augmenter = None
+
+    def size(self):
+
+        return self.fullSize
+
+    def switchout(self, batch):
+
+        pass
+
+    # This function allocates the mini-batches (grouping sentences with the same size)
+    def allocate_batch(self):
+
+        cur_batch = []
+        cur_batch_size = 0
+        cur_batch_sizes = []
+
+        def oversize_(cur_batch, sent_size):
+
+            if len(cur_batch) >= self.batch_size_sents:
+                return True
+
+            if cur_batch_size + sent_size > self.batch_size_words:
+                return True
+
+        i = 0
+        while i < self.fullSize:
+
+            if self.tgt is not None and self.src is not None:
+                sentence_length = max(self.tgt[i].size(0) - 1, self.src[i].size(0))
+                # print(sentence_length)
+            elif self.tgt is not None:
+                sentence_length = self.tgt[i].size(0) - 1
+            else:
+                sentence_length = self.src[i].size(0)
+
+            oversized = oversize_(cur_batch, sentence_length)
+            # if the current item makes the batch exceed max size
+            # then we create a new batch
+            if oversized:
+                # cut-off the current list to fit the multiplier
+                current_size = len(cur_batch)
+                scaled_size = max(
+                    self.multiplier * (current_size // self.multiplier),
+                    current_size % self.multiplier)
+
+                batch_ = cur_batch[:scaled_size]
+                self.batches.append(batch_)  # add this batch into the batch list
+
+                cur_batch = cur_batch[scaled_size:]  # reset the current batch
+                cur_batch_sizes = cur_batch_sizes[scaled_size:]
+                cur_batch_size = sum(cur_batch_sizes)
+
+            cur_batch.append(i)
+            cur_batch_size += sentence_length
+            cur_batch_sizes.append(sentence_length)
+
+            i = i + 1
+
+        # catch the last batch
+        if len(cur_batch) > 0:
+            self.batches.append(cur_batch)
+
+        self.num_batches = len(self.batches)
+
+    def __len__(self):
+        return self.num_batches
+
+    def __getitem__(self, index):
+        """
+        :param index: the index of the mini-batch in the list
+        :return: Batch
+        """
+        assert index < self.num_batches, "%d > %d" % (index, self.num_batches)
+
+        batch_ids = self.batches[index]
+        if self.src:
+            src_data = [self.src[i] for i in batch_ids]
+        else:
+            src_data = None
+
+        if self.tgt:
+            tgt_data = [self.tgt[i] for i in batch_ids]
+        else:
+            tgt_data = None
+
+        src_lang_data = None
+        tgt_lang_data = None
+
+        if self.bilingual:
+            if self.src_langs is not None:
+                src_lang_data = [self.src_langs[0]]  # should be a tensor [0]
+            if self.tgt_langs is not None:
+                tgt_lang_data = [self.tgt_langs[0]]  # should be a tensor [1]
+        else:
+            if self.src_langs is not None:
+                src_lang_data = [self.src_langs[i] for i in batch_ids]
+            if self.tgt_langs is not None:
+                tgt_lang_data = [self.tgt_langs[i] for i in batch_ids]
+
+        batch = Stream(src_data, tgt_data=tgt_data,
+                       src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
+                       src_type=self._type,
+                       augmenter=self.augmenter, upsampling=self.upsampling)
+
+        return batch
+
+    def __len__(self):
+        return self.num_batches
+
+    # genereate a new batch - order (static)
+    def create_order(self, random=True):
+
+        # always generate in order of the data
+        self.batchOrder = torch.arange(self.num_batches).long()
+
+        self.cur_index = 0
+
+        return self.batchOrder
+
+    # return the next batch according to the iterator
+    def next(self, curriculum=False, reset=True, split_sizes=1):
+
+        # reset iterator if reach data size limit
+        if self.cur_index >= self.num_batches:
+            if reset:
+                self.cur_index = 0
+            else:
+                return None
+
+        if curriculum or self.batchOrder is None:
+            batch_index = self.cur_index
+        else:
+            batch_index = self.batchOrder[self.cur_index]
+
+        batch = self[batch_index]
+
+        # move the iterator one step
+        self.cur_index += 1
+
+        return [batch]
+
+    def shuffle(self):
+        data = list(zip(self.src, self.tgt))
+        self.src, self.tgt = zip(*[data[i] for i in torch.randperm(len(data))])
+
+    def set_index(self, iteration):
+
+        assert (0 <= iteration < self.num_batches)
+        self.cur_index = iteration

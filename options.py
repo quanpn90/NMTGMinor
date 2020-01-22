@@ -25,6 +25,8 @@ def make_parser(parser):
     parser.add_argument('-load_from', default='', type=str,
                         help="""If training from a checkpoint then this is the
                         path to the pretrained model.""")
+    parser.add_argument('-streaming', action='store_true',
+                        help="""Using streaming in training""")
 
     # MODEL CONFIG
     parser.add_argument('-model', default='transformer',

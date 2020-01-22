@@ -54,7 +54,7 @@ class NMTLossFunc(CrossEntropyLossBase):
     """
     Standard NMT Loss Computation.
     """
-    def __init__(self, output_size, label_smoothing, mirror=False):
+    def __init__(self, hidden_size, output_size, label_smoothing, mirror=False):
         super(NMTLossFunc, self).__init__(output_size, label_smoothing)
         self.output_size = output_size
         self.padding_idx = onmt.constants.PAD

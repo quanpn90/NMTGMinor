@@ -71,14 +71,24 @@ def main():
             train_src_langs.append(torch.Tensor([dicts['langs']['src']]))
             train_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
-        train_data = onmt.Dataset(train_dict['src'], train_dict['tgt'],
-                                  train_src_langs, train_tgt_langs,
-                                  batch_size_words=opt.batch_size_words,
-                                  data_type=dataset.get("type", "text"), sorting=True,
-                                  batch_size_sents=opt.batch_size_sents,
-                                  multiplier=opt.batch_size_multiplier,
-                                  augment=opt.augment_speech,
-                                  upsampling=opt.upsampling)
+        if not opt.streaming:
+            train_data = onmt.Dataset(train_dict['src'], train_dict['tgt'],
+                                      train_src_langs, train_tgt_langs,
+                                      batch_size_words=opt.batch_size_words,
+                                      data_type=dataset.get("type", "text"), sorting=True,
+                                      batch_size_sents=opt.batch_size_sents,
+                                      multiplier=opt.batch_size_multiplier,
+                                      augment=opt.augment_speech,
+                                      upsampling=opt.upsampling)
+        else:
+            train_data = onmt.StreamDataset(train_dict['src'], train_dict['tgt'],
+                                            train_src_langs, train_tgt_langs,
+                                            batch_size_words=opt.batch_size_words,
+                                            data_type=dataset.get("type", "text"), sorting=True,
+                                            batch_size_sents=opt.batch_size_sents,
+                                            multiplier=opt.batch_size_multiplier,
+                                            augment=opt.augment_speech,
+                                            upsampling=opt.upsampling)
 
         if valid_dict['src_lang'] is not None:
             assert 'langs' in dicts
@@ -93,12 +103,20 @@ def main():
             valid_src_langs.append(torch.Tensor([dicts['langs']['src']]))
             valid_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
-        valid_data = onmt.Dataset(valid_dict['src'], valid_dict['tgt'],
-                                  valid_src_langs, valid_tgt_langs,
-                                  batch_size_words=opt.batch_size_words,
-                                  data_type=dataset.get("type", "text"), sorting=True,
-                                  batch_size_sents=opt.batch_size_sents,
-                                  upsampling=opt.upsampling)
+        if not opt.streaming:
+            valid_data = onmt.Dataset(valid_dict['src'], valid_dict['tgt'],
+                                      valid_src_langs, valid_tgt_langs,
+                                      batch_size_words=opt.batch_size_words,
+                                      data_type=dataset.get("type", "text"), sorting=True,
+                                      batch_size_sents=opt.batch_size_sents,
+                                      upsampling=opt.upsampling)
+        else:
+            valid_data = onmt.StreamDataset(valid_dict['src'], valid_dict['tgt'],
+                                            valid_src_langs, valid_tgt_langs,
+                                            batch_size_words=opt.batch_size_words,
+                                            data_type=dataset.get("type", "text"), sorting=True,
+                                            batch_size_sents=opt.batch_size_sents,
+                                            upsampling=opt.upsampling)
 
         print(' * number of training sentences. %d' % len(dataset['train']['src']))
         print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
@@ -132,14 +150,23 @@ def main():
             train_src_langs.append(torch.Tensor([dicts['langs']['src']]))
             train_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
-        train_data = onmt.Dataset(train_src,
-                                  train_tgt,
-                                  train_src_langs, train_tgt_langs,
-                                  batch_size_words=opt.batch_size_words,
-                                  data_type="text", sorting=True,
-                                  batch_size_sents=opt.batch_size_sents,
-                                  multiplier=opt.batch_size_multiplier,
-                                  src_align_right=opt.src_align_right)
+        if not opt.streaming:
+            train_data = onmt.Dataset(train_src,
+                                      train_tgt,
+                                      train_src_langs, train_tgt_langs,
+                                      batch_size_words=opt.batch_size_words,
+                                      data_type="text", sorting=True,
+                                      batch_size_sents=opt.batch_size_sents,
+                                      multiplier=opt.batch_size_multiplier,
+                                      src_align_right=opt.src_align_right)
+        else:
+            train_data = onmt.StreamDataset(train_src,
+                                            train_tgt,
+                                            train_src_langs, train_tgt_langs,
+                                            batch_size_words=opt.batch_size_words,
+                                            data_type="text", sorting=True,
+                                            batch_size_sents=opt.batch_size_sents,
+                                            multiplier=opt.batch_size_multiplier)
 
         valid_path = opt.data + '.valid'
         valid_src = MMapIndexedDataset(valid_path + '.src')
@@ -157,53 +184,61 @@ def main():
             valid_src_langs.append(torch.Tensor([dicts['langs']['src']]))
             valid_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
-        valid_data = onmt.Dataset(valid_src, valid_tgt,
-                                  valid_src_langs, valid_tgt_langs,
-                                  batch_size_words=opt.batch_size_words,
-                                  data_type="text", sorting=True,
-                                  batch_size_sents=opt.batch_size_sents,
-                                  src_align_right=opt.src_align_right)
+        if not opt.streaming:
+            valid_data = onmt.Dataset(valid_src, valid_tgt,
+                                      valid_src_langs, valid_tgt_langs,
+                                      batch_size_words=opt.batch_size_words,
+                                      data_type="text", sorting=True,
+                                      batch_size_sents=opt.batch_size_sents,
+                                      src_align_right=opt.src_align_right)
+        else:
+            valid_data = onmt.StreamDataset(valid_src, valid_tgt,
+                                            valid_src_langs, valid_tgt_langs,
+                                            batch_size_words=opt.batch_size_words,
+                                            data_type="text", sorting=True,
+                                            batch_size_sents=opt.batch_size_sents)
+
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
         print("Done after %s" % elapse)
 
     else:
         raise NotImplementedError
 
-    additional_data = []
-    if opt.additional_data != "none":
-        add_data = opt.additional_data.split(";")
-        add_format = opt.additional_data_format.split(";")
-        assert (len(add_data) == len(add_format))
-        for i in range(len(add_data)):
-            if add_format[i] == 'raw':
-                if add_data[i].endswith(".train.pt"):
-                    print("Loading data from '%s'" % opt.data)
-                    add_dataset = torch.load(add_data[i])
-                else:
-                    print("Loading data from %s" % opt.data + ".train.pt")
-                    add_dataset = torch.load(add_data[i] + ".train.pt")
-
-                additional_data.append(onmt.Dataset(add_dataset['train']['src'],
-                                                    dataset['train']['tgt'], batch_size_words=opt.batch_size_words,
-                                                    data_type=dataset.get("type", "text"), sorting=True,
-                                                    batch_size_sents=opt.batch_size_sents,
-                                                    multiplier=opt.batch_size_multiplier,
-                                                    reshape_speech=opt.reshape_speech,
-                                                    augment=opt.augment_speech))
-            elif add_format[i] == 'bin':
-
-                from onmt.data.indexed_dataset import IndexedInMemoryDataset
-
-                train_path = add_data[i] + '.train'
-                train_src = IndexedInMemoryDataset(train_path + '.src')
-                train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
-
-                additional_data.append(onmt.Dataset(train_src,
-                                                    train_tgt,
-                                                    batch_size_words=opt.batch_size_words,
-                                                    data_type=opt.encoder_type,
-                                                    batch_size_sents=opt.batch_size_sents,
-                                                    multiplier=opt.batch_size_multiplier))
+    # additional_data = []
+    # if opt.additional_data != "none":
+    #     add_data = opt.additional_data.split(";")
+    #     add_format = opt.additional_data_format.split(";")
+    #     assert (len(add_data) == len(add_format))
+    #     for i in range(len(add_data)):
+    #         if add_format[i] == 'raw':
+    #             if add_data[i].endswith(".train.pt"):
+    #                 print("Loading data from '%s'" % opt.data)
+    #                 add_dataset = torch.load(add_data[i])
+    #             else:
+    #                 print("Loading data from %s" % opt.data + ".train.pt")
+    #                 add_dataset = torch.load(add_data[i] + ".train.pt")
+    #
+    #             additional_data.append(onmt.Dataset(add_dataset['train']['src'],
+    #                                                 dataset['train']['tgt'], batch_size_words=opt.batch_size_words,
+    #                                                 data_type=dataset.get("type", "text"), sorting=True,
+    #                                                 batch_size_sents=opt.batch_size_sents,
+    #                                                 multiplier=opt.batch_size_multiplier,
+    #                                                 reshape_speech=opt.reshape_speech,
+    #                                                 augment=opt.augment_speech))
+    #         elif add_format[i] == 'bin':
+    #
+    #             from onmt.data.indexed_dataset import IndexedInMemoryDataset
+    #
+    #             train_path = add_data[i] + '.train'
+    #             train_src = IndexedInMemoryDataset(train_path + '.src')
+    #             train_tgt = IndexedInMemoryDataset(train_path + '.tgt')
+    #
+    #             additional_data.append(onmt.Dataset(train_src,
+    #                                                 train_tgt,
+    #                                                 batch_size_words=opt.batch_size_words,
+    #                                                 data_type=opt.encoder_type,
+    #                                                 batch_size_sents=opt.batch_size_sents,
+    #                                                 multiplier=opt.batch_size_multiplier))
 
     if opt.load_from:
         checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
@@ -234,11 +269,11 @@ def main():
                                               label_smoothing=opt.label_smoothing,
                                               ctc_weight=opt.ctc_loss)
         else:
-            loss_function = NMTLossFunc(dicts['tgt'].size(),
+            loss_function = NMTLossFunc(opt.model_size, dicts['tgt'].size(),
                                         label_smoothing=opt.label_smoothing,
                                         mirror=opt.mirror_loss)
 
-        # This function replaces modules with the more optimized counterparts
+        # This function replaces modules with the more optimized counterparts so that it can run faster
         # Currently exp with LayerNorm
         optimize_model(model)
 
@@ -254,11 +289,11 @@ def main():
     print('* number of parameters: %d' % n_params)
 
     if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
-        raise NotImplementedError("Warning! Multi-GPU training is not fully tested and potential bugs can happen.")
+        raise NotImplementedError("Multi-GPU training is not supported at the moment.")
     else:
         trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
-        if len(additional_data) > 0:
-            trainer.add_additional_data(additional_data, opt.data_ratio);
+        # if len(additional_data) > 0:
+        #     trainer.add_additional_data(additional_data, opt.data_ratio);
 
     trainer.run(checkpoint=checkpoint)
 

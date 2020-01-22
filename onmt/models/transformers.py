@@ -526,12 +526,12 @@ class Transformer(NMTModel):
 
         if mirror:
             self.mirror_decoder = copy.deepcopy(self.decoder)
-
+            self.mirror_g = nn.Linear(decoder.model_size, decoder.model_size)
 
     def reset_states(self):
         return
 
-    def forward(self, batch, target_mask=None, zero_encoder=False,
+    def forward(self, batch, target_mask=None, streaming=False, zero_encoder=False,
                 mirror=False):
         """
         :param mirror: if using mirror network for future anticipation
@@ -549,18 +549,22 @@ class Transformer(NMTModel):
         tgt_pos = batch.get('target_pos')
         src_lang = batch.get('source_lang')
         tgt_lang = batch.get('target_lang')
+        src_lengths = batch.src_lengths
+        tgt_lengths = batch.tgt_lengths
 
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
-        encoder_output = self.encoder(src, input_pos=src_pos, input_lang=src_lang)
+        encoder_output = self.encoder(src, input_pos=src_pos, input_lang=src_lang, streaming=streaming,
+                                      src_lengths=src_lengths)
         context = encoder_output['context']
 
         # zero out the encoder part for pre-training
         if zero_encoder:
             context.zero_()
 
-        decoder_output = self.decoder(tgt, context, src, input_lang=tgt_lang, input_pos=tgt_pos)
+        decoder_output = self.decoder(tgt, context, src, input_lang=tgt_lang, input_pos=tgt_pos, streaming=streaming,
+                                      src_lengths=src_lengths, tgt_lengths=tgt_lengths)
         output = decoder_output['hidden']
 
         output_dict = defaultdict(lambda: None)
@@ -589,6 +593,9 @@ class Transformer(NMTModel):
 
             output_dict['reverse_hidden'] = reverse_decoder_output['hidden']
             output_dict['reverse_logprobs'] = reverse_logprobs
+
+            # learn weights for mapping (g in the paper)
+            output_dict['hidden'] = self.mirror_g(output_dict['hidden'])
 
         # # This step removes the padding to reduce the load for the final layer
         # if target_masking is not None:
