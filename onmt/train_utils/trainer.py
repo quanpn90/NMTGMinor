@@ -156,6 +156,12 @@ class XETrainer(BaseTrainer):
         batch_order = data.create_order(random=False)
         self.model.eval()
         self.model.reset_states()
+
+        if opt.streaming:
+            streaming_state = self.model.init_stream()
+        else:
+            streaming_state = None
+
         """ PyTorch semantics: save space by not creating gradients """
         with torch.no_grad():
             for i in range(len(data)):
@@ -172,7 +178,10 @@ class XETrainer(BaseTrainer):
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.constants.PAD)
                 outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                     mirror=opt.mirror_loss)
+                                     mirror=opt.mirror_loss, streaming_state=streaming_state)
+
+                if opt.streaming:
+                    streaming_state = outputs['streaming_state']
 
                 outputs['tgt_mask'] = tgt_mask
 
@@ -217,6 +226,11 @@ class XETrainer(BaseTrainer):
         num_accumulated_sents = 0
         denom = 3584
         nan = False
+
+        if opt.streaming:
+            streaming_state = self.model.init_stream()
+        else:
+            streaming_state = None
         
         for i in range(iteration, n_samples):
 
@@ -248,7 +262,7 @@ class XETrainer(BaseTrainer):
                     targets = batch.get('target_output')
                     tgt_mask = targets.data.ne(onmt.constants.PAD)
                     outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask, zero_encoder=opt.zero_encoder,
-                                         mirror=opt.mirror_loss)
+                                         mirror=opt.mirror_loss, streaming_state=streaming_state)
 
                     batch_size = batch.size
 
@@ -293,9 +307,9 @@ class XETrainer(BaseTrainer):
 
                     #   We only update the parameters after getting gradients from n mini-batches
                     update_flag = False
-                    if 0 < opt.batch_size_update and opt.batch_size_update >= num_accumulated_words:
+                    if 0 < opt.batch_size_update <= num_accumulated_words:
                         update_flag = True
-                    elif counter >= opt.update_frequency:
+                    elif counter >= opt.update_frequency and 0 >= opt.batch_size_update:
                         update_flag = True
 
                     if update_flag:

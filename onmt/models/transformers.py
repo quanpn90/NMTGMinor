@@ -394,7 +394,7 @@ class TransformerDecoder(nn.Module):
         # a whole stack of unnormalized layer outputs.
         output = self.postprocess_layer(output)
 
-        output_dict = {'hidden': output, 'coverage': coverage, 'context': context}
+        output_dict = defaultdict(lambda: None, {'hidden': output, 'coverage': coverage, 'context': context})
 
         # return output, None
         return output_dict
@@ -532,8 +532,10 @@ class Transformer(NMTModel):
         return
 
     def forward(self, batch, target_mask=None, streaming=False, zero_encoder=False,
-                mirror=False):
+                mirror=False, streaming_state=None):
         """
+        :param streaming_state:
+        :param streaming:
         :param mirror: if using mirror network for future anticipation
         :param batch: data object sent from the dataset
         :param target_mask:
@@ -556,15 +558,23 @@ class Transformer(NMTModel):
         tgt = tgt.transpose(0, 1)
 
         encoder_output = self.encoder(src, input_pos=src_pos, input_lang=src_lang, streaming=streaming,
-                                      src_lengths=src_lengths)
+                                      src_lengths=src_lengths, streaming_state=streaming_state)
+
         context = encoder_output['context']
+
+        # the state is changed
+        streaming_state = encoder_output['streaming_state']
 
         # zero out the encoder part for pre-training
         if zero_encoder:
             context.zero_()
 
         decoder_output = self.decoder(tgt, context, src, input_lang=tgt_lang, input_pos=tgt_pos, streaming=streaming,
-                                      src_lengths=src_lengths, tgt_lengths=tgt_lengths)
+                                      src_lengths=src_lengths, tgt_lengths=tgt_lengths, streaming_state=streaming_state)
+
+        # update the streaming state again
+        decoder_output = defaultdict(lambda : None, decoder_output)
+        streaming_state = decoder_output['streaming_state']
         output = decoder_output['hidden']
 
         output_dict = defaultdict(lambda: None)
@@ -573,6 +583,7 @@ class Transformer(NMTModel):
         output_dict['src_mask'] = encoder_output['src_mask']
         output_dict['src'] = src
         output_dict['target_mask'] = target_mask
+        output_dict['streaming_state'] = streaming_state
 
         # final layer: computing softmax
         logprobs = self.generator[0](output_dict)
@@ -720,6 +731,43 @@ class Transformer(NMTModel):
                                                  beam_size=beam_size, model_size=self.model_size, type=type)
 
         return decoder_state
+
+    def init_stream(self):
+        stream_state = StreamState()
+        return stream_state
+
+
+class StreamState(object):
+
+    def __init__(self):
+        self.src_buffer = defaultdict(lambda: None)
+        self.prev_src_mem_size = 0
+        self.src_lengths = []
+        self.tgt_buffer = defaultdict(lambda: None)
+        self.prev_tgt_mem_size = 0
+        self.tgt_lengths = []
+
+    def prune_source_memory(self, mem_size):
+
+        pruning = mem_size < self.prev_src_mem_size
+        self.prev_src_mem_size = min(mem_size, self.prev_src_mem_size)
+
+        if pruning:
+            for i in self.src_buffer:
+                if self.src_buffer[i] is not None:
+                    for key in self.src_buffer[i]:
+                        self.src_buffer[i][key] = self.src_buffer[i][key][-mem_size:]
+
+    def prune_target_memory(self, mem_size):
+
+        pruning = mem_size < self.prev_tgt_mem_size
+        self.prev_tgt_mem_size = min(mem_size, self.prev_tgt_mem_size)
+
+        if pruning:
+            for i in self.tgt_buffer:
+                if self.tgt_buffer[i] is not None:
+                    for key in self.tgt_buffer[i]:
+                        self.tgt_buffer[i][key] = self.tgt_buffer[i][key][-mem_size:]
 
 
 class TransformerDecodingState(DecoderState):
@@ -881,3 +929,5 @@ class TransformerDecodingState(DecoderState):
                 for k in buffer_.keys():
                     t_, br_, d_ = buffer_[k].size()
                     buffer_[k] = buffer_[k].index_select(1, reorder_state)  # 1 for time first
+
+

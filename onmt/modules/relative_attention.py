@@ -273,15 +273,16 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
 
         if incremental:
             if incremental_cache is not None and 'k' in incremental_cache and 'v' in incremental_cache:
-                w_head_k = torch.cat([incremental_cache['k'], w_head_k], dim=0)  # time first
-                incremental_cache['k'] = w_head_k
-                w_head_v = torch.cat([incremental_cache['v'], w_head_v], dim=0)  # time first
-                incremental_cache['v'] = w_head_v
+                with torch.no_grad():
+                    w_head_k = torch.cat([incremental_cache['k'], w_head_k], dim=0)  # time first
+                    incremental_cache['k'] = w_head_k.detach()
+                    w_head_v = torch.cat([incremental_cache['v'], w_head_v], dim=0)  # time first
+                    incremental_cache['v'] = w_head_v.detach()
             else:
                 if incremental_cache is None:
                     incremental_cache = dict()
-                incremental_cache['k'] = w_head_k
-                incremental_cache['v'] = w_head_v
+                incremental_cache['k'] = w_head_k.detach()
+                incremental_cache['v'] = w_head_v.detach()
 
         output, coverage = self.compute_attention(r, w_head_q, w_head_k, w_head_v, attn_mask=attn_mask, debug=debug)
 

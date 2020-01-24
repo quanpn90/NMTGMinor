@@ -11,6 +11,8 @@ from onmt.utils import flip, expected_length
 from collections import defaultdict
 import math
 
+torch.set_printoptions(threshold=500000)
+
 
 #  Positional Embedding with discrete inputs
 class SinusoidalPositionalEmbedding(nn.Module):
@@ -63,15 +65,17 @@ class RelativeTransformerEncoder(TransformerEncoder):
         self.learnable_position_encoding = opt.learnable_position_encoding
         self.layer_modules = list()
         self.asynchronous = opt.asynchronous
+        self.max_memory_size = opt.max_memory_size
 
         # build_modules will be called from the inherited constructor
-        super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type, language_embeddings)
+        super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type,
+                                                         language_embeddings)
 
         # learnable position encoding
         if self.learnable_position_encoding:
             self.max_pos_length = opt.max_pos_length
             # pos_emb = self.model_size // self.n_heads
-            pos_emb = self.model_size 
+            pos_emb = self.model_size
             self.positional_encoder = LearnablePostionEmbedding(self.max_pos_length, pos_emb)
             print("* Learnable position encoding with max %d positions" % self.max_pos_length)
         else:
@@ -97,16 +101,99 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
             self.layer_modules.append(block)
 
-    def create_stream_mask(self, input_length):
+    def create_stream_mask(self, input, input_length, prev_mem_size):
 
-        raise NotImplementedError
+        lengths = input_length.tolist()
+        mask = None
+
+        for length in lengths:
+
+            # the current mask should be either None or
+
+            if mask is None:
+                prev_length = 0
+            else:
+                prev_length = mask.size(1)
+
+            # n current queries attend to n + p keys
+            current_mask = input.new_zeros(length, length + prev_length)
+
+            if prev_length > 0:
+                prev_mask = input.new_ones(prev_length, length)
+                prev_mask = torch.cat([mask, prev_mask], dim=-1)
+            else:
+                prev_mask = None
+
+            if prev_mask is not None:
+                mask = torch.cat([prev_mask, current_mask], dim=0)
+            else:
+                mask = current_mask
+
+        if prev_mem_size > 0:
+            # all current elements attend to all buffer elements
+            buffer_mask = mask.new_zeros(mask.size(0), prev_mem_size)
+            mask = torch.cat([buffer_mask, mask], dim=-1)
+
+        mask = mask.bool()
+
+        return mask
+        # raise NotImplementedError
 
     def forward_stream(self, input, input_pos, input_lang, **kwargs):
         input_length = kwargs.get('src_lengths', None)
-        # print(input_length)
-        print(input.size())
+        streaming_state = kwargs.get('streaming_state', None)
+        input = input.transpose(0, 1)
 
-        raise NotImplementedError
+        mask_src = self.create_stream_mask(input, input_length, streaming_state.prev_src_mem_size)
+        mask_src = mask_src.unsqueeze(2)
+
+        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)  #
+
+        """ Adding language embeddings """
+        if self.use_language_embedding:
+            assert self.language_embedding is not None
+            # There is no "unsqueeze" here because the input is T x B x H and lang_emb is B x H
+            if self.language_embedding_type in ['sum', 'all_sum']:
+                lang_emb = self.language_embedding(input_lang)
+                emb = emb + lang_emb.unsqueeze(1)
+
+        """ Scale the emb by sqrt(d_model) """
+        emb = emb * math.sqrt(self.model_size)
+
+        klen = input.size(0) + streaming_state.prev_src_mem_size
+
+        pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
+
+        pos_emb = self.positional_encoder(pos)
+
+        context = emb
+
+        # Apply dropout to both context and pos_emb
+        context = self.preprocess_layer(context)
+
+        pos_emb = self.preprocess_layer(pos_emb)
+
+        for i, layer in enumerate(self.layer_modules):
+            # src_len x batch_size x d_model
+            buffer = streaming_state.src_buffer[i]
+            context, buffer = layer(context, pos_emb, mask_src, incremental=True, incremental_cache=buffer)
+            streaming_state.src_buffer[i] = buffer
+
+        # From Google T2T
+        # if normalization is done in layer_preprocess, then it should also be done
+        # on the output, since the output can grow very large, being the sum of
+        # a whole stack of unnormalized layer outputs.
+        context = self.postprocess_layer(context)
+
+        output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': mask_src, 'src': input})
+        output_dict['streaming_state'] = streaming_state
+        streaming_state.prev_src_mem_size += sum(input_length.tolist())
+
+        streaming_state.prune_source_memory(self.max_memory_size)
+
+        # streaming_state.src_lengths = streaming_state.src_lengths[1000:]
+
+        return output_dict
 
     def forward(self, input, input_pos=None, input_lang=None, streaming=False, **kwargs):
         """
@@ -117,7 +204,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
             mask_src
         """
         if streaming:
-            return self.forward_stream(input, input_pos, input_lang, ** kwargs)
+            return self.forward_stream(input, input_pos, input_lang, **kwargs)
 
         """ Embedding: batch_size x src_len x d_model """
         if self.input_type == "text":
@@ -199,7 +286,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
             pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
             # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
 
-        pos_emb = self.positional_encoder(pos)  
+        pos_emb = self.positional_encoder(pos)
 
         if self.learnable_position_encoding:
             raise NotImplementedError
@@ -228,6 +315,8 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         pos_emb = self.preprocess_layer(pos_emb)
 
+        # print(context.size(), mask_src.size())
+
         for i, layer in enumerate(self.layer_modules):
             # src_len x batch_size x d_model
             context = layer(context, pos_emb, mask_src)
@@ -238,25 +327,18 @@ class RelativeTransformerEncoder(TransformerEncoder):
         # a whole stack of unnormalized layer outputs.
         context = self.postprocess_layer(context)
 
-        output_dict = {'context': context, 'src_mask': dec_attn_mask, 'src': input}
+        output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask, 'src': input})
 
         return output_dict
 
 
 class RelativeTransformerDecoder(TransformerDecoder):
-    """Encoder in 'Attention is all you need'
-
-    Args:
-        opt
-        dicts
-
-
-    """
 
     def __init__(self, opt, dicts, positional_encoder, language_embeddings=None, ignore_source=False):
 
         self.death_rate = opt.death_rate
         self.double_position = opt.double_position
+        self.max_memory_size = opt.max_memory_size
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerDecoder, self).__init__(opt, dicts,
@@ -293,21 +375,111 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
     def process_embedding(self, input, input_lang=None):
 
-        input_ = input
+        return input
 
-        emb = embedded_dropout(self.word_lut, input_, dropout=self.word_dropout if self.training else 0)
+    def create_self_attn_mask(self):
 
-        emb = emb * math.sqrt(self.model_size)
-        #
-        # if self.use_language_embedding:
-        #     if self.use_language_embedding == 'sum':
-        #         emb = emb + self.language_embeddings(input_lang)
+        raise NotImplementedError
 
-        return emb
+    def create_context_mask(self, input, src, src_lengths, tgt_lengths):
+
+        mask = None
+
+        for (src_length, tgt_length) in zip(src_lengths, tgt_lengths):
+
+            if mask is None:
+                prev_src_length = 0
+                prev_tgt_length = 0
+            else:
+                prev_src_length, prev_tgt_length = mask.size(1), mask.size(0)
+
+            # current sent attend to current src sent and all src in the past
+            current_mask = input.new_zeros(tgt_length, src_length + prev_src_length)
+
+            # the previous target cannot attend to the current source
+            if prev_tgt_length > 0:
+                prev_mask = input.new_ones(prev_tgt_length, src_length)
+                prev_mask = torch.cat([mask, prev_mask], dim=-1)
+            else:
+                prev_mask = None
+
+            # the output mask has two parts: the prev and the current
+            if prev_mask is not None:
+                mask = torch.cat([prev_mask, current_mask], dim=0)
+            else:
+                mask = current_mask
+
+        mask = mask.bool()
+
+        return mask
+
+    def create_self_attn_mask(self, input, tgt_lengths, prev_tgt_mem_size):
+
+        qlen = sum(tgt_lengths.tolist())
+        mlen = prev_tgt_mem_size
+        klen = qlen + mlen
+
+        mask = torch.triu(input.new_ones(qlen, klen), diagonal=1 + mlen).bool()[:, :, None]
+
+        return mask
 
     def forward_stream(self, input, context, src, input_pos, input_lang, **kwargs):
 
-        raise NotImplementedError
+        input = input.transpose(0, 1)
+        src_lengths = kwargs.get("src_lengths", None)
+        tgt_lengths = kwargs.get("tgt_lengths", None)
+        streaming_state = kwargs.get("streaming_state")
+
+        emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        emb = emb * math.sqrt(self.model_size)
+
+        if self.use_language_embedding:
+            lang_emb = self.language_embeddings(input_lang)  # B x H or 1 x H
+            if self.language_embedding_type == 'sum':
+                emb = emb + lang_emb
+            elif self.language_embedding_type == 'concat':
+                # replace the bos embedding with the language
+                bos_emb = lang_emb.expand_as(emb[0])
+                emb[0] = bos_emb
+
+                lang_emb = lang_emb.unsqueeze(0).expand_as(emb)
+                concat_emb = torch.cat([emb, lang_emb], dim=-1)
+                emb = torch.relu(self.projector(concat_emb))
+            else:
+                raise NotImplementedError
+
+        if context is not None:
+            context_attn_mask = self.create_context_mask(input, src, src_lengths, tgt_lengths)
+            context_attn_mask = context_attn_mask.unsqueeze(0)
+        else:
+            context_attn_mask = None
+
+        dec_attn_mask = self.create_self_attn_mask(input, tgt_lengths, streaming_state.prev_tgt_mem_size)
+
+        klen = input.size(0) + streaming_state.prev_tgt_mem_size
+        pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+
+        pos_emb = self.positional_encoder(pos)
+
+        output = self.preprocess_layer(emb)
+
+        for i, layer in enumerate(self.layer_modules):
+            # batch_size x src_len x d_model
+            buffer = streaming_state.tgt_buffer[i]
+            # output, coverage = layer(output, context, pos_emb, self.r_w_bias, self.r_r_bias, dec_attn_mask, mask_src)
+            output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, context_attn_mask,
+                                             incremental=True, incremental_cache=buffer, reuse_source=False)
+            streaming_state.tgt_buffer[i] = buffer
+
+        output = self.postprocess_layer(output)
+
+        streaming_state.prev_tgt_mem_size += sum(tgt_lengths.tolist())
+        streaming_state.prune_target_memory(self.max_memory_size)
+
+        output_dict = defaultdict(lambda: None, {'hidden': output, 'coverage': coverage, 'context': context})
+        output_dict['streaming_state'] = streaming_state
+
+        return output_dict
 
     def forward(self, input, context, src, input_pos=None, input_lang=None, streaming=False, **kwargs):
         """
@@ -324,7 +496,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
             return self.forward_stream(input, context, src, input_pos, input_lang, **kwargs)
 
         """ Embedding: batch_size x len_tgt x d_model """
-        input = input.transpose(0, 1) # T x B
+        input = input.transpose(0, 1)  # T x B
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         emb = emb * math.sqrt(self.model_size)
 
@@ -501,7 +673,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
             # output, coverage, buffer = layer.step(output, context, pos_emb,
             #                                       dec_attn_mask, mask_src, buffer=buffer)
             output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, mask_src,
-                                     incremental=True, incremental_cache=buffer)
+                                             incremental=True, incremental_cache=buffer)
 
             decoder_state.update_attention_buffer(buffer, i)
 
@@ -515,3 +687,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
         output_dict['context'] = context
 
         return output_dict
+
+        self.src_memory_length = 0
+        self.tgt_memory_length = 0

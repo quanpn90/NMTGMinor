@@ -57,6 +57,8 @@ class Stream(object):
             target_full, target_pos, self.tgt_lengths = self.collate(tgt_data)
             self.tensors['target'] = target_full
             self.tensors['target_input'] = target_full[:-1]
+            # the last sentence has one element (eos) missing
+            self.tgt_lengths[-1] = self.tgt_lengths[-1] - 1
             self.tensors['target_output'] = target_full[1:]
             self.tensors['target_pos'] = target_pos[:-1]
             self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.constants.PAD)
@@ -311,11 +313,16 @@ class StreamDataset(torch.utils.data.Dataset):
 
         def oversize_(cur_batch, sent_size):
 
+            if len(cur_batch) == 0:
+                return False
+
             if len(cur_batch) >= self.batch_size_sents:
                 return True
 
             if cur_batch_size + sent_size > self.batch_size_words:
                 return True
+
+            return False
 
         i = 0
         while i < self.fullSize:
