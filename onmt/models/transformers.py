@@ -560,6 +560,7 @@ class Transformer(NMTModel):
         encoder_output = self.encoder(src, input_pos=src_pos, input_lang=src_lang, streaming=streaming,
                                       src_lengths=src_lengths, streaming_state=streaming_state)
 
+        encoder_output = defaultdict(lambda : None, encoder_output)
         context = encoder_output['context']
 
         # the state is changed

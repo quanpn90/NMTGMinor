@@ -311,6 +311,8 @@ class XETrainer(BaseTrainer):
                         update_flag = True
                     elif counter >= opt.update_frequency and 0 >= opt.batch_size_update:
                         update_flag = True
+                    elif i == n_samples - 1:  # update for the last minibatch
+                        update_flag = True
 
                     if update_flag:
                         grad_denom = 1 / denom
