@@ -335,8 +335,3 @@ if __name__ == '__main__':
 
     x = torch.randint(0, 100, (klen, klen))
 
-    print(x)
-
-    attn_mask =
-
-
