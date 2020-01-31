@@ -159,7 +159,7 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
         # FORWARD PASS
         coverage = None
         for i, layer in enumerate(self.layer_modules):
-            output, coverage = layer(output, None, pos_emb, attn_mask, None)  # context and context_mask are None
+            output, coverage, _ = layer(output, None, pos_emb, attn_mask, None)  # context and context_mask are None
 
         # Final normalization
         output = self.postprocess_layer(output)
@@ -265,6 +265,7 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
         tgt = input.transpose(0, 1)
         tgt_lang = decoder_state.tgt_lang
         src_lang = decoder_state.src_lang
+        buffers = decoder_state.attention_buffers
 
         tgt_len = tgt.size(0)
         src_len = src.size(0)
@@ -305,7 +306,7 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
         # FORWARD PASS
         coverage = None
         for i, layer in enumerate(self.layer_modules):
-            output, coverage = layer(output, None, pos_emb, attn_mask, None)  # context and context_mask are None
+            output, coverage, _ = layer(output, None, pos_emb, attn_mask, None)  # context and context_mask are None
 
         # Final normalization
         output = self.postprocess_layer(output)
@@ -408,7 +409,6 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
         # _ = self.encode(src_transposed, decoder_state, input_pos=src_pos, input_lang=src_lang)
 
         decoder_state.src_lang = src_lang
-
 
         # buffers = decoder_state.attention_buffers
         # bsz = src.size(1)

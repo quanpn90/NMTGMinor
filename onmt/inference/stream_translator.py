@@ -3,16 +3,14 @@ import onmt.modules
 import torch.nn as nn
 import torch
 import math
-from torch.autograd import Variable
 from onmt.model_factory import build_model
 import torch.nn.functional as F
 from onmt.inference.search import BeamSearch, DiverseBeamSearch
 from onmt.inference.translator import Translator
+from collections import defaultdict
 
-model_list = ['transformer', 'stochastic_transformer']
 
-
-class FastTranslator(Translator):
+class StreamTranslator(Translator):
     """
     A fast implementation of the Beam Search based translator
     Based on Fairseq implementation
@@ -28,6 +26,7 @@ class FastTranslator(Translator):
         self.min_len = 1
         self.normalize_scores = opt.normalize
         self.len_penalty = opt.alpha
+        self.decoder_states = defaultdict(lambda: None)
 
         if hasattr(opt, 'no_repeat_ngram_size'):
             self.no_repeat_ngram_size = opt.no_repeat_ngram_size
@@ -47,6 +46,11 @@ class FastTranslator(Translator):
         if opt.verbose:
             print('* Current bos id: %d' % self.bos_id, onmt.constants.BOS)
             print('* Using fast beam search implementation')
+
+        self.max_memory_size = opt.max_memory_size
+
+        for i in range(len(self.models)):
+            self.models[i].set_memory_size(self.max_memory_size, self.max_memory_size)
 
     def translateBatch(self, batch):
 
@@ -203,9 +207,11 @@ class FastTranslator(Translator):
         # initialize the decoder state, including:
         # - expanding the context over the batch dimension len_src x (B*beam) x H
         # - expanding the mask over the batch dimension    (B*beam) x len_src
-        decoder_states = dict()
         for i in range(self.n_models):
-            decoder_states[i] = self.models[i].create_decoder_state(batch, beam_size, type=2)
+            # decoder_states[i] = self.models[i].create_decoder_state(batch, beam_size, type=2, streaming=False)
+            self.decoder_states[i] = self.models[i].create_decoder_state(batch, beam_size,
+                                                                         previous_decoding_state=self.decoder_states[i],
+                                                                         streaming=True)
 
         if self.dynamic_max_len:
             src_len = src.size(0)
@@ -220,13 +226,14 @@ class FastTranslator(Translator):
                     corr = batch_idxs - torch.arange(batch_idxs.numel()).type_as(batch_idxs)
                     reorder_state.view(-1, beam_size).add_(corr.unsqueeze(-1) * beam_size)
                 for i, model in enumerate(self.models):
-                    decoder_states[i]._reorder_incremental_state(reorder_state)
+                    self.decoder_states[i]._reorder_incremental_state(reorder_state)
 
             decode_input = tokens[:, :step + 1]
-            lprobs, avg_attn_scores = self._decode(decode_input, decoder_states)
+            lprobs, avg_attn_scores = self._decode(decode_input, self.decoder_states)
             avg_attn_scores = None
 
             lprobs[:, self.pad] = -math.inf  # never select pad
+            lprobs[:, self.bos] = -math.inf  # never select bos ...
 
             # handle min and max length constraints
             if step >= max_len:
@@ -443,6 +450,8 @@ class FastTranslator(Translator):
         for sent in range(len(finalized)):
             finalized[sent] = sorted(finalized[sent], key=lambda r: r['score'], reverse=True)
 
+        # self.decoder_states = defaultdict(lambda : None)
+
         return finalized, gold_scores, gold_words, allgold_scores
 
     def _decode(self, tokens, decoder_states):
@@ -452,7 +461,8 @@ class FastTranslator(Translator):
         attns = dict()
 
         for i in range(self.n_models):
-            decoder_output = self.models[i].step(tokens, decoder_states[i])
+            # streaming = True in this case
+            decoder_output = self.models[i].step(tokens, decoder_states[i], streaming=True)
 
             # take the last decoder state
             # decoder_hidden = decoder_hidden.squeeze(1)
@@ -498,4 +508,3 @@ class FastTranslator(Translator):
             )
 
         return pred_batch, pred_score, pred_length, gold_score, gold_words, allgold_words
-

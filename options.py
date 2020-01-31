@@ -27,6 +27,8 @@ def make_parser(parser):
                         path to the pretrained model.""")
     parser.add_argument('-streaming', action='store_true',
                         help="""Using streaming in training""")
+    parser.add_argument('-stream_context', default='global', type=str,
+                        help="""Using streaming in training""")
 
     # MODEL CONFIG
     parser.add_argument('-model', default='transformer',
@@ -302,6 +304,9 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'max_memory_size'):
         opt.max_memory_size = 0
+
+    if not hasattr(opt, 'stream_context'):
+        opt.stream_context = 'local'
 
     if opt.model == 'relative_unified_transformer' and not opt.src_align_right:
         print(" !!! Warning: model %s requires source sentences aligned to the right (-src_align_right)" % opt.model)

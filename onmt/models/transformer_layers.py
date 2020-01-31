@@ -206,7 +206,7 @@ class DecoderLayer(nn.Module):
         self.feedforward = Bottle(feedforward)
     
     def forward(self, input, context, mask_tgt, mask_src,
-                incremental=False, incremental_cache=None):
+                incremental=False, incremental_cache=None, reuse_source=True):
         
         """ Self attention layer 
             layernorm > attn > dropout > residual

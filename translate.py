@@ -12,12 +12,16 @@ import sys
 import h5py as h5
 import numpy as np
 import apex
+from onmt.inference.fast_translator import FastTranslator
+from onmt.inference.stream_translator import StreamTranslator
 
 parser = argparse.ArgumentParser(description='translate.py')
 onmt.markdown.add_md_help_argument(parser)
 
 parser.add_argument('-model', required=True,
                     help='Path to model .pt file')
+parser.add_argument('-streaming', action="store_true",
+                    help="""Use streaming mode (for model with streaming)""")
 parser.add_argument('-lm', required=False,
                     help='Path to language model .pt file. Used for cold fusion')
 parser.add_argument('-autoencoder', required=False,
@@ -42,6 +46,8 @@ parser.add_argument('-encoder_type', default='text',
                     help="Type of encoder to use. Options are [text|img|audio].")
 parser.add_argument('-previous_context', type=int, default=0,
                     help="Number of previous sentence for context")
+parser.add_argument('-max_memory_size', type=int, default=512,
+                    help="Number of memory states stored in the buffer for XL models")
 
 parser.add_argument('-tgt',
                     help='True target sequence (optional)')
@@ -162,10 +168,12 @@ def main():
     else:
         in_file = open(opt.src)
 
-    if not opt.fast_translate:
-        translator = onmt.Translator(opt)
+    if opt.streaming:
+        if opt.batch_size != 1:
+            opt.batch_size = 1
+            print("Warning: Streaming only works with batch size 1")
+        translator = StreamTranslator(opt)
     else:
-        from onmt.inference.fast_translator import FastTranslator
         translator = FastTranslator(opt)
 
     # Audio processing for the source batch
@@ -233,7 +241,7 @@ def main():
                 src_batch, tgt_batch, type='asr')
 
             print("Result:", len(pred_batch))
-            count, pred_score, pred_words, gold_score, goldWords = translateBatch(opt, tgtF, count, outF, translator,
+            count, pred_score, pred_words, gold_score, goldWords = translate_batch(opt, tgtF, count, outF, translator,
                                                                                src_batch, tgt_batch, pred_batch, pred_score,
                                                                                pred_length, gold_score, num_gold_words,
                                                                                all_gold_scores, opt.input_type)
@@ -250,7 +258,7 @@ def main():
                 src_batch,
                 tgt_batch, type='asr')
             print("Result:", len(pred_batch))
-            count, pred_score, pred_words, gold_score, goldWords = translateBatch(opt, tgtF, count, outF, translator,
+            count, pred_score, pred_words, gold_score, goldWords = translate_batch(opt, tgtF, count, outF, translator,
                                                                                src_batch, tgt_batch, pred_batch, pred_score,
                                                                                pred_length, gold_score, num_gold_words,
                                                                                all_gold_scores, opt.input_type)
@@ -292,7 +300,7 @@ def main():
                                                                                                             tgt_batch)
 
             # convert output tensor to words
-            count, pred_score, pred_words, gold_score, goldWords = translateBatch(opt, tgtF, count, outF, translator,
+            count, pred_score, pred_words, gold_score, goldWords = translate_batch(opt, tgtF, count, outF, translator,
                                                                                src_batch, tgt_batch,
                                                                                pred_batch, pred_score, pred_length,
                                                                                gold_score, num_gold_words,
@@ -314,7 +322,7 @@ def main():
         json.dump(translator.beam_accum, open(opt.dump_beam, 'w'))
 
 
-def translateBatch(opt, tgtF, count, outF, translator, src_batch, tgt_batch, pred_batch, pred_score, pred_length, gold_score,
+def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch, pred_batch, pred_score, pred_length, gold_score,
                    num_gold_words, all_gold_scores, input_type):
     original_pred_batch = pred_batch
     original_pred_score = pred_score

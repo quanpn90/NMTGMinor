@@ -55,12 +55,14 @@ class Stream(object):
 
         if tgt_data is not None:
             target_full, target_pos, self.tgt_lengths = self.collate(tgt_data)
-            self.tensors['target'] = target_full
-            self.tensors['target_input'] = target_full[:-1]
+            # self.tensors['target'] = target_full
+            # self.tensors['target_input'] = target_full[:-1]
             # the last sentence has one element (eos) missing
-            self.tgt_lengths[-1] = self.tgt_lengths[-1] - 1
-            self.tensors['target_output'] = target_full[1:]
-            self.tensors['target_pos'] = target_pos[:-1]
+            # self.tgt_lengths[-1] = self.tgt_lengths[-1] - 1
+            # self.tensors['target_output'] = target_full[1:]
+            # self.tensors['target_pos'] = target_pos[:-1]
+            self.tensors['target_input'], self.tensors['target_output'], \
+                self.tensors['target_pos'], self.tgt_lengths = self.collate(tgt_data, target=True)
             self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.constants.PAD)
             self.has_target = True
             self.tgt_size = sum([len(x) - 1 for x in tgt_data])
@@ -109,10 +111,11 @@ class Stream(object):
 
         return
 
-    def collate(self, data, type="text", augmenter=None):
+    def collate(self, data, type="text", augmenter=None, target=False):
 
         """
         Assembling the individual sequences into one single tensor, included padding
+        :param target:
         :param data: the list of sequences in chronological order
         :param type: text or audio
         :param augmenter: for augmentation in audio models
@@ -121,26 +124,56 @@ class Stream(object):
         """
 
         if type == "text":
-            lengths = torch.LongTensor([x.size(0) for x in data])
-            positions = [torch.arange(length_) for length_ in lengths]
-            positions = torch.cat(positions)
 
-            # the last part is padded (so that the actual batch size divides by the multiplier
-            # tensor_length = math.ceil(sum(lengths) / self.length_mutliplier) * self.length_mutliplier
-            tensor_length = torch.sum(lengths).item()
+            if not target:
 
-            # create a placeholder for the data
-            tensor = data[0].new(tensor_length).fill_(onmt.constants.PAD)
+                lengths = torch.LongTensor([x.size(0) for x in data])
+                positions = [torch.arange(length_) for length_ in lengths]
+                positions = torch.cat(positions)
 
-            offset = 0
-            for sample in data:
-                current_length = sample.size(0)
-                tensor.narrow(0, offset, current_length).copy_(sample)
-                offset += current_length
+                # the last part is padded (so that the actual batch size divides by the multiplier
+                # tensor_length = math.ceil(sum(lengths) / self.length_mutliplier) * self.length_mutliplier
+                tensor_length = torch.sum(lengths).item()
 
-            tensor = tensor.unsqueeze(1)  # batch size is 1
+                # create a placeholder for the data
+                tensor = data[0].new(tensor_length).fill_(onmt.constants.PAD)
 
-            return tensor, positions, lengths
+                offset = 0
+                for sample in data:
+                    current_length = sample.size(0)
+                    tensor.narrow(0, offset, current_length).copy_(sample)
+                    offset += current_length
+
+                tensor = tensor.unsqueeze(1)  # batch size is 1
+
+                return tensor, positions, lengths
+
+            else:
+                # because we take the last unit away
+                lengths = torch.LongTensor([x.size(0) - 1 for x in data])
+
+                positions = [torch.arange(length_) for length_ in lengths]
+                positions = torch.cat(positions)
+
+                tensor_length = torch.sum(lengths).item()
+
+                # create a placeholder for the data
+                input = data[0].new(tensor_length).fill_(onmt.constants.PAD)
+
+                # create a placeholder for the data
+                target = data[0].new(tensor_length).fill_(onmt.constants.PAD)
+
+                offset = 0
+                for sample in data:
+                    current_length = sample.size(0) - 1
+                    input.narrow(0, offset, current_length).copy_(sample[:-1])
+                    target.narrow(0, offset, current_length).copy_(sample[1:])
+                    offset += current_length
+
+                input = input.unsqueeze(1)
+                target = target.unsqueeze(1)
+
+                return input, target, positions, lengths
 
         elif type == "audio":
             raise NotImplementedError

@@ -399,7 +399,7 @@ class TransformerDecoder(nn.Module):
         # return output, None
         return output_dict
 
-    def step(self, input, decoder_state):
+    def step(self, input, decoder_state, **kwargs):
         """
         Inputs Shapes:
             input: (Variable) batch_size x len_tgt (wanna tranpose)
@@ -686,17 +686,18 @@ class Transformer(NMTModel):
     def renew_buffer(self, new_len):
         self.decoder.renew_buffer(new_len)
 
-    def step(self, input_t, decoder_state):
+    def step(self, input_t, decoder_state, streaming=False):
         """
         Decoding function:
         generate new decoder output based on the current input and current decoder state
         the decoder state is updated in the process
+        :param streaming:
         :param input_t: the input word index at time t
         :param decoder_state: object DecoderState containing the buffers required for decoding
         :return: a dictionary containing: log-prob output and the attention coverage
         """
 
-        output_dict = self.decoder.step(input_t, decoder_state)
+        output_dict = self.decoder.step(input_t, decoder_state, streaming=streaming)
         output_dict['src'] = decoder_state.src.transpose(0, 1)
 
         # squeeze to remove the time step dimension
@@ -712,9 +713,11 @@ class Transformer(NMTModel):
 
         return output_dict
 
-    def create_decoder_state(self, batch, beam_size=1, type=1):
+    def create_decoder_state(self, batch, beam_size=1, type=1, **kwargs):
         """
         Generate a new decoder state based on the batch input
+        :param streaming:
+        :param type:
         :param batch: Batch object (may not contain target during decoding)
         :param beam_size: Size of beam used in beam search
         :return:
@@ -726,49 +729,20 @@ class Transformer(NMTModel):
         tgt_lang = batch.get('target_lang')
 
         src_transposed = src.transpose(0, 1)
-        encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
 
+        encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
         decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], encoder_output['src_mask'],
                                                  beam_size=beam_size, model_size=self.model_size, type=type)
 
         return decoder_state
 
     def init_stream(self):
-        stream_state = StreamState()
-        return stream_state
 
+        pass
 
-class StreamState(object):
+    def set_memory_size(self, src_memory_size, tgt_memory_size):
 
-    def __init__(self):
-        self.src_buffer = defaultdict(lambda: None)
-        self.prev_src_mem_size = 0
-        self.src_lengths = []
-        self.tgt_buffer = defaultdict(lambda: None)
-        self.prev_tgt_mem_size = 0
-        self.tgt_lengths = []
-
-    def prune_source_memory(self, mem_size):
-
-        pruning = mem_size < self.prev_src_mem_size
-        self.prev_src_mem_size = min(mem_size, self.prev_src_mem_size)
-
-        if pruning:
-            for i in self.src_buffer:
-                if self.src_buffer[i] is not None:
-                    for key in self.src_buffer[i]:
-                        self.src_buffer[i][key] = self.src_buffer[i][key][-mem_size:]
-
-    def prune_target_memory(self, mem_size):
-
-        pruning = mem_size < self.prev_tgt_mem_size
-        self.prev_tgt_mem_size = min(mem_size, self.prev_tgt_mem_size)
-
-        if pruning:
-            for i in self.tgt_buffer:
-                if self.tgt_buffer[i] is not None:
-                    for key in self.tgt_buffer[i]:
-                        self.tgt_buffer[i][key] = self.tgt_buffer[i][key][-mem_size:]
+        pass
 
 
 class TransformerDecodingState(DecoderState):
@@ -813,7 +787,7 @@ class TransformerDecodingState(DecoderState):
             #     self.tgt_atb = None
 
         elif type == 2:
-            bsz = src.size(1)
+            bsz = src.size(1)  # src is T x B
             new_order = torch.arange(bsz).view(-1, 1).repeat(1, self.beam_size).view(-1)
             new_order = new_order.to(src.device)
 

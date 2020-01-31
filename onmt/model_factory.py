@@ -3,7 +3,7 @@ import torch.nn as nn
 import onmt
 from onmt.models.transformers import TransformerEncoder, TransformerDecoder, Transformer, MixedEncoder
 from onmt.models.transformer_layers import PositionalEncoding
-from onmt.models.relative_transformer import SinusoidalPositionalEmbedding
+from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, RelativeTransformer
 from onmt.modules.copy_generator import CopyGenerator
 from options import backward_compatible
 
@@ -96,7 +96,8 @@ def build_tm_model(opt, dicts):
 
     elif opt.model == 'relative_transformer':
 
-        from onmt.models.relative_transformer import RelativeTransformerEncoder, RelativeTransformerDecoder
+        from onmt.models.relative_transformer import RelativeTransformerEncoder, RelativeTransformerDecoder, \
+            RelativeTransformer
 
         if opt.encoder_type == "text":
             encoder = RelativeTransformerEncoder(opt, embedding_src, None,
@@ -108,7 +109,7 @@ def build_tm_model(opt, dicts):
 
         generator = nn.ModuleList(generators)
         decoder = RelativeTransformerDecoder(opt, embedding_tgt, None, language_embeddings=language_embeddings)
-        model = Transformer(encoder, decoder, generator, mirror=opt.mirror_loss)
+        model = RelativeTransformer(encoder, decoder, generator, mirror=opt.mirror_loss)
 
     elif opt.model == 'unified_transformer':
         from onmt.models.unified_transformer import UnifiedTransformer

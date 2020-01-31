@@ -61,6 +61,7 @@ class Batch(object):
             if self.tensors['source_pos'] is not None:
                 self.tensors['source_pos'] = self.tensors['source_pos'].transpose(0, 1)
             self.tensors['src_length'] = torch.LongTensor(self.src_lengths)
+            self.src_lengths = self.tensors['src_length']
             self.src_size = sum(self.src_lengths)
 
         else:

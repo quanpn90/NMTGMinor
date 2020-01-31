@@ -324,3 +324,4 @@ if __name__ == '__main__':
     attn_mask = torch.cat([src_mask, tgt_mask], dim=0)
 
     print(attn_mask)
+
