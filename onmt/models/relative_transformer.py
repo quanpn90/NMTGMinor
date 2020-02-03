@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from onmt.models.transformer_layers import PositionalEncoding, PrePostProcessing
 from onmt.models.transformer_layers import EncoderLayer, DecoderLayer
-from onmt.models.transformers import TransformerEncoder, TransformerDecoder, Transformer
+from onmt.models.transformers import TransformerEncoder, TransformerDecoder, Transformer, TransformerDecodingState
 import onmt
 from onmt.modules.base_seq2seq import NMTModel, Reconstructor, DecoderState
 from onmt.modules.dropout import embedded_dropout
@@ -740,6 +740,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
         lang = decoder_state.tgt_lang
         streaming_state = decoder_state.streaming_state
 
+        # for global model: push the context in
+
         if decoder_state.concat_input_seq:
             if decoder_state.input_seq is None:
                 decoder_state.input_seq = input
@@ -779,7 +781,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
                 raise NotImplementedError
 
         # need to manually definte src_lengths and tgt_lengths here
-        src_lengths = torch.LongTensor([src.size(1)])
+        src_lengths = torch.LongTensor([context.size(0)])
         tgt_lengths = torch.LongTensor([1])
 
         if context is not None:
@@ -853,11 +855,18 @@ class RelativeTransformer(Transformer):
 
             encoder_output = self.encoder(src_transposed, input_pos=src_pos,
                                           input_lang=src_lang, src_lengths=src_lengths,
-                                          streaming=True, streaming_state=streaming_state)
-            decoder_state = StreamDecodingState(src, tgt_lang, encoder_output['context'],
-                                                encoder_output['src_mask'],
-                                                beam_size=beam_size, model_size=self.model_size, type=type,
-                                                cloning=True, streaming_state=streaming_state)
+                                          streaming=streaming, streaming_state=streaming_state)
+
+            if streaming:
+
+                decoder_state = StreamDecodingState(src, tgt_lang, encoder_output['context'],
+                                                    encoder_output['src_mask'],
+                                                    beam_size=beam_size, model_size=self.model_size, type=type,
+                                                    cloning=True, streaming_state=streaming_state)
+            else:
+                decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'],
+                                                         encoder_output['src_mask'],
+                                                         beam_size=beam_size, model_size=self.model_size, type=type)
         else:
             streaming_state = previous_decoding_state.streaming_state
 
@@ -868,10 +877,20 @@ class RelativeTransformer(Transformer):
                                           input_lang=src_lang, src_lengths=src_lengths,
                                           streaming=True, streaming_state=streaming_state)
 
-            decoder_state = StreamDecodingState(src, tgt_lang, encoder_output['context'],
+            context = encoder_output['context']
+            #
+            # if self.decoder.stream_context == 'global':
+            #     context = streaming_state.push_context(context, self.decoder.max_memory_size)
+
+            decoder_state = StreamDecodingState(src, tgt_lang, context,
                                                 encoder_output['src_mask'],
                                                 beam_size=beam_size, model_size=self.model_size, type=type,
                                                 cloning=False, streaming_state=streaming_state)
+        # else:
+        #     encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
+        #     decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'],
+        #                                              encoder_output['src_mask'],
+        #                                              beam_size=beam_size, model_size=self.model_size, type=type)
 
         return decoder_state
 
@@ -922,6 +941,21 @@ class StreamState(object):
         self.tgt_buffer = defaultdict(lambda: None)
         self.prev_tgt_mem_size = 0
         self.tgt_lengths = []
+
+        self.context_memory = None
+
+    def push_context(self, context, max_size=512):
+
+        if self.context_memory is None:
+            self.context_memory = context
+
+        else:
+            self.context_memory = torch.cat([self.context_memory, context], dim=0)
+
+        # prune the context memory
+        self.context_memory = self.context_memory[-max_size:, :, :]
+
+        return self.context_memory
 
     def prune_source_memory(self, mem_size):
 
@@ -1018,6 +1052,9 @@ class StreamDecodingState(DecoderState):
                     if buffer_[k] is not None:
                         t_, br_, d_ = buffer_[k].size()
                         buffer_[k] = buffer_[k].index_select(1, reorder_state)  # 1 for time first
+
+        if self.streaming_state.context_memory is not None:
+            self.streaming_state.context_memory = self.streaming_state.context_memory.index_select(1, reorder_state)
 
         # for l in self.attention_buffers:
         #     buffer_ = self.attention_buffers[l]

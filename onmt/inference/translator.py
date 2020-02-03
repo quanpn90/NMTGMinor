@@ -250,25 +250,13 @@ class Translator(object):
 
         src_lang_data = [torch.Tensor([self.lang_dict[self.src_lang]])]
         tgt_lang_data = [torch.Tensor([self.lang_dict[self.tgt_lang]])]
-        # src_atbs = None
-        #
-        # if self.attributes:
-        #     tgt_atbs = dict()
-        #
-        #     idx = 0
-        #     for i in self.atb_dict:
-        #         tgt_atbs[i] = [self.atb_dict[i].convertToIdx([self.attributes[idx]], onmt.constants.UNK_WORD)
-        #                        for _ in src_sents]
-        #         idx = idx + 1
-        #
-        # else:
-        #     tgt_atbs = None
 
         return onmt.Dataset(src_data, tgt_data,
                             src_langs=src_lang_data, tgt_langs=tgt_lang_data,
                             batch_size_words=sys.maxsize,
                             data_type=self._type,
-                            batch_size_sents=self.opt.batch_size)
+                            batch_size_sents=self.opt.batch_size,
+                            src_align_right=self.opt.src_align_right)
 
     def build_asr_data(self, src_data, tgt_sents):
         # This needs to be the same as preprocess.py.

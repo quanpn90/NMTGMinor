@@ -45,6 +45,10 @@ class Search(object):
                 the indices of the chosen elements
             beams: (bsz x output_beam_size)
                 the hypothesis ids of the chosen elements, in the range [0, input_beam_size)
+                :param lprobs:
+                :param step:
+                :param scores:
+                :param beam_size:
         """
         raise NotImplementedError
 

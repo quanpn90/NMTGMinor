@@ -94,6 +94,8 @@ parser.add_argument('-print_nbest', action='store_true',
 parser.add_argument('-ensemble_op', default='mean', help="""Ensembling operator""")
 parser.add_argument('-normalize', action='store_true',
                     help='To normalize the scores based on output length')
+parser.add_argument('-src_align_right', action='store_true',
+                    help='To normalize the scores based on output length')
 parser.add_argument('-fp16', action='store_true',
                     help='To use floating point 16 in decoding')
 parser.add_argument('-gpu', type=int, default=-1,

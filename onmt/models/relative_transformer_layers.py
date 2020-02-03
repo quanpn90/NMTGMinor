@@ -53,7 +53,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
             query = self.preprocess_attn(input)
             out, _, incremental_cache = self.multihead(query, pos_emb, attn_mask=attn_mask,
-                                       incremental=incremental, incremental_cache=incremental_cache)
+                                                       incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -203,5 +203,3 @@ class RelativeTransformerDecoderLayer(nn.Module):
         input = self.postprocess_ffn(out, input)
 
         return input, coverage, buffer
-
-

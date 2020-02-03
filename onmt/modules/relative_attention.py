@@ -284,6 +284,8 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
                 incremental_cache['k'] = w_head_k.detach()
                 incremental_cache['v'] = w_head_v.detach()
 
+        # print(w_head_q.size(), w_head_k.size(), w_head_v.size())
+
         output, coverage = self.compute_attention(r, w_head_q, w_head_k, w_head_v, attn_mask=attn_mask, debug=debug)
 
         return output, coverage, incremental_cache
