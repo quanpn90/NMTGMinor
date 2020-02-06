@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from onmt.models.transformer_layers import PositionalEncoding, PrePostProcessing
 from onmt.models.transformer_layers import EncoderLayer, DecoderLayer
 from onmt.models.transformers import TransformerEncoder, TransformerDecoder, TransformerDecodingState
@@ -9,12 +10,34 @@ from onmt.models.transformer_layers import XavierLinear, MultiHeadAttention, Fee
 from onmt.models.transformer_layers import EncoderLayer, DecoderLayer
 from onmt.models.relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
 from onmt.models.unified_transformer import UnifiedTransformer
-from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, LearnablePostionEmbedding
+from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, LearnablePostionEmbedding, \
+    StreamState, StreamDecodingState
 from onmt.utils import flip, expected_length
 from collections import defaultdict
 import math
 
 torch.set_printoptions(profile="full")
+
+
+def seperate_tensor(input, lengths):
+
+    bsz, tgt_len = input.size(1), input.size(0)
+
+    assert (bsz == 1)
+
+    outputs = list()
+
+    # starting from the first position of the tensor
+    offset = 0
+
+    for length in lengths:
+        segment = input.narrow(0, offset, length)
+
+        offset += length
+
+        outputs.append(segment)
+
+    return outputs
 
 
 class RelativeUnifiedTransformer(UnifiedTransformer):
@@ -29,6 +52,7 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
         self.bidirectional = opt.bidirectional
         self.layer_modules = []
         self.learnable_position_encoding = opt.learnable_position_encoding
+        self.max_memory_size = opt.max_memory_size
 
         # build_modules will be called from the inherited constructor
         super(RelativeUnifiedTransformer, self).__init__(opt, tgt_embedding, src_embedding,
@@ -55,9 +79,8 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
         # self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
 
-        # self.build_modules()
-
     def gen_mask(self, src, tgt):
+        # generate the mask for the mini-batch data
 
         # both src and tgt are T x B
         input_seq = torch.cat([src, tgt], dim=0)
@@ -111,7 +134,212 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
                                                     variational=self.variational_dropout, death_rate=death_r)
             self.layer_modules.append(block)
 
-    def forward(self, batch, target_mask=None, **kwargs):
+    def create_mask_stream(self, src, tgt, src_lengths, tgt_lengths, mem_length=0):
+
+        if self.bidirectional:
+
+            mask = None
+            prev_length = 0
+            # go through the src and tgt lengths to create mask
+            for i, (src_len, tgt_len) in enumerate(zip(src_lengths, tgt_lengths)):
+
+                # print("Step ", i, src_len, tgt_len)
+                # first, the source sentence should have full bidirectional attention to the end of itself
+                src_mask = src.new_zeros(src_len, src_len + prev_length)
+
+                if prev_length == 0:
+                    mask = src_mask
+                else:
+                    # everything in the past doesn't look at the future
+
+                    prev_mask = src.new_ones(prev_length, src_len)
+                    if mask is not None:
+                        mask = torch.cat([mask, prev_mask], dim=1)  # prev_len x (src_len + prev_length)
+                    else:
+                        mask = prev_mask
+
+                    mask = torch.cat([mask, src_mask], dim=0)  # (src_len + prev_length) x (src_len + prev_length)
+
+                prev_length += src_len
+
+                # the target sentence
+                # everything in the past doesn't look at the future
+                prev_mask = tgt.new_ones(prev_length, tgt_len)
+
+                # the target has unidirectional attention towards everything in the past
+                mlen = prev_length
+                qlen = tgt_len
+                klen = qlen + mlen
+                tgt_mask = torch.triu(tgt.new_ones(qlen, klen), diagonal=1 + mlen)
+
+                mask = torch.cat([mask, prev_mask], dim=1)  # prev_len x (prev_len + tgt_len)
+                mask = torch.cat([mask, tgt_mask], dim=0)  #
+
+                prev_length += tgt_len
+
+            if mem_length > 0:
+                past_mask = src.new_zeros(prev_length, mem_length)
+                mask = torch.cat([past_mask, mask], dim=1)
+
+            attn_mask = mask.bool().unsqueeze(-1)
+
+        else:
+            seq_len = sum(src_lengths) + sum(tgt_lengths)
+
+            mask = torch.triu(src.new_ones(seq_len, seq_len), diagonal=1)
+
+            if mem_length > 0:
+                past_mask = src.new_zeros(seq_len, mem_length)
+                mask = torch.cat([past_mask, mask], dim=1)
+
+            attn_mask = mask.bool().unsqueeze(-1)
+
+        return attn_mask
+
+    def forward_stream(self, batch, **kwargs):
+
+        streaming_state = kwargs.get('streaming_state', None)
+        src = batch.get('source')  # src_len x batch_size
+        tgt = batch.get('target_input')  # len_tgt x batch_size
+
+        bsz = src.size(1)
+        assert bsz == 1
+
+        src_lang = batch.get('source_lang')
+        tgt_lang = batch.get('target_lang')
+        src_lengths = batch.src_lengths
+        tgt_lengths = batch.tgt_lengths
+
+        # First: separate the input tensor into segments
+        src_segments = seperate_tensor(src, src_lengths)
+
+        tgt_segments = seperate_tensor(tgt, tgt_lengths)
+
+        # Embedding stage (and scale the embedding)
+        embed = self.src_embedding
+        if self.word_dropout > 0 and self.training:
+            mask = embed.weight.new().resize_((embed.weight.size(0), 1)). \
+                       bernoulli_(1 - self.word_dropout).expand_as(embed.weight) / (1 - self.word_dropout)
+            masked_embed_weight = mask * embed.weight
+        else:
+            masked_embed_weight = embed.weight
+
+        padding_idx = embed.padding_idx
+        if padding_idx is None:
+            padding_idx = -1
+
+        # Second: Embedding
+        src_embeddings = []
+        for src_segment in src_segments:
+
+            src_emb = F.embedding(
+                src_segment, masked_embed_weight, padding_idx, embed.max_norm,
+                embed.norm_type, embed.scale_grad_by_freq, embed.sparse)
+
+            src_emb.mul_(math.sqrt(self.model_size))
+
+            if self.use_language_embedding:
+                if self.language_embedding_type in ["sum", "all_sum"]:
+                    src_lang_emb = self.language_embeddings(src_lang)
+                    src_emb += src_lang_emb
+
+            src_embeddings.append(src_emb)
+
+        tgt_embeddings = []
+        for tgt_segment in tgt_segments:
+
+            tgt_emb = F.embedding(
+                tgt_segment, masked_embed_weight, padding_idx, embed.max_norm,
+                embed.norm_type, embed.scale_grad_by_freq, embed.sparse)
+
+            tgt_emb.mul_(math.sqrt(self.model_size))
+
+            if self.use_language_embedding:
+                if self.language_embedding_type in ["sum", "all_sum"]:
+                    tgt_lang_emb = self.language_embeddings(tgt_lang)
+                    tgt_emb += tgt_lang_emb
+
+            tgt_embeddings.append(tgt_emb)
+
+        # add src1, tgt1, src2, tgt2 .... srcn, tgtn
+        all_embeddings = []
+        for (src_emb, tgt_emb) in zip(src_embeddings, tgt_embeddings):
+            all_embeddings.append(src_emb)
+            all_embeddings.append(tgt_emb)
+
+        emb = torch.cat(all_embeddings, dim=0)
+
+        # prepare attention mask
+        mem_length = streaming_state.prev_tgt_mem_size
+        attn_mask = self.create_mask_stream(src, tgt, src_lengths, tgt_lengths, mem_length=mem_length)
+
+        klen = emb.size(0) + mem_length
+
+        if self.bidirectional:
+            pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
+        else:
+            pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+
+        pos_emb = self.positional_encoder(pos)
+
+        output = emb
+
+        # Applying dropout
+        output = self.preprocess_layer(output)
+
+        pos_emb = self.preprocess_layer(pos_emb)
+
+        # FORWARD PASS
+        coverage = None
+        for i, layer in enumerate(self.layer_modules):
+            buffer = streaming_state.tgt_buffer[i]
+            output, coverage, buffer = layer(output, None, pos_emb, attn_mask, None,
+                                             incremental=True, incremental_cache=buffer)
+            # context and context_mask are None
+            streaming_state.tgt_buffer[i] = buffer
+
+        # final layer norm
+        output = self.postprocess_layer(output)
+
+        # update the memory and then prune
+        streaming_state.prev_tgt_mem_size += klen
+        streaming_state.prune_target_memory(self.max_memory_size)
+
+        # now we have to separate the target states from the "output" to generate translations
+        target_outputs = []
+        contexts = []
+        offset = 0
+        for (src_len, tgt_len) in zip(src_lengths, tgt_lengths):
+
+            source_output = output.narrow(0, offset, src_len)
+
+            offset += src_len
+
+            target_output = output.narrow(0, offset, tgt_len)
+
+            offset += tgt_len
+
+            target_outputs.append(target_output)
+            contexts.append(source_output)
+
+        context = torch.cat(contexts, dim=0)
+        output = torch.cat(target_outputs, dim=0)
+
+        output_dict = {'hidden': output, 'coverage': coverage, 'context': context, 'src': src,
+                       'target_mask': None}
+        output_dict = defaultdict(lambda: None, output_dict)
+
+        # final layer: computing log probabilities
+        logprobs = self.generator[0](output_dict)
+        output_dict['logprobs'] = logprobs
+        output_dict['streaming_state'] = streaming_state
+
+        return output_dict
+
+    def forward(self, batch, target_mask=None, streaming=False, **kwargs):
+
+        if streaming:
+            return self.forward_stream(batch, **kwargs)
 
         src = batch.get('source')  # src_len x batch_size
         tgt = batch.get('target_input')  # len_tgt x batch_size
@@ -124,11 +352,17 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
         src_len = src.size(0)
         bsz = tgt.size(1)
 
-        # Embedding stage (and scale the embedding)
-        src_emb = embedded_dropout(self.src_embedding, src, dropout=self.word_dropout if self.training else 0) \
-                  * math.sqrt(self.model_size)
-        tgt_emb = embedded_dropout(self.tgt_embedding, tgt, dropout=self.word_dropout if self.training else 0) \
-                  * math.sqrt(self.model_size)
+        src_emb = F.embedding(
+            src, masked_embed_weight, padding_idx, embed.max_norm,
+            embed.norm_type, embed.scale_grad_by_freq, embed.sparse)
+
+        src_emb.mul_(math.sqrt(self.model_size))
+
+        tgt_emb = F.embedding(
+            tgt, masked_embed_weight, padding_idx, embed.max_norm,
+            embed.norm_type, embed.scale_grad_by_freq, embed.sparse)
+
+        tgt_emb.mul_(math.sqrt(self.model_size))
 
         if self.use_language_embedding:
             if self.language_embedding_type in ["sum", "all_sum"]:
@@ -147,7 +381,11 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
 
         # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
         klen = src_len + tgt_len
-        pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
+
+        if self.bidirectional:
+            pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
+        else:
+            pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
 
         pos_emb = self.positional_encoder(pos)
 
@@ -155,6 +393,8 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
 
         # Applying dropout
         output = self.preprocess_layer(output)
+
+        pos_emb = self.preprocess_layer(pos_emb)
 
         # FORWARD PASS
         coverage = None
@@ -351,7 +591,8 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
 
         # forward pass through the input to get the buffer
         # src_transposed = src_transposed.repeat(beam_size, 1)
-        encoder_output, decoder_state = self.encode(src_transposed, decoder_state, input_pos=src_pos, input_lang=src_lang)
+        encoder_output, decoder_state = self.encode(src_transposed, decoder_state, input_pos=src_pos,
+                                                    input_lang=src_lang)
 
         decoder_state.src_lang = src_lang
 
@@ -375,3 +616,8 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
 
     def share_enc_dec_embedding(self):
         self.src_embedding.weight = self.tgt_embedding.weight
+
+    def init_stream(self):
+
+        streaming_state = StreamState()
+        return streaming_state

@@ -62,7 +62,6 @@ class MultiHeadAttention(nn.Module):
                 incremental=False, incremental_cache=None):
 
         len_query, b = query.size(0), query.size(1)
-        len_key, b_ = key.size(0), key.size(1)
 
         # batch_size*h x len_query x d_head
         # project inputs to multi-heads
@@ -110,6 +109,7 @@ class MultiHeadAttention(nn.Module):
             proj_value = self.fc_value(value)  # batch_size x len_key x h*d_head
 
         q, k, v = proj_query, proj_key, proj_value
+        len_key, b_ = k.size(0), k.size(1)
         # prepare the shape for applying softmax
         q = q.contiguous().view(len_query, b * self.h, self.d_head).transpose(0, 1)
         k = k.contiguous().view(len_key, b * self.h, self.d_head).transpose(0, 1)

@@ -80,7 +80,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
 class RelativeTransformerDecoderLayer(nn.Module):
 
-    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0, ignore_source=False,
+    def __init__(self, h, d_model, p,    d_ff, attn_p=0.1, version=1.0, ignore_source=False,
                  variational=False, death_rate=0.0):
         super(RelativeTransformerDecoderLayer, self).__init__()
         self.version = version

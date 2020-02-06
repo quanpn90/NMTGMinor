@@ -11,6 +11,7 @@ from onmt.models.relative_transformer_layers import RelativeTransformerEncoderLa
 from onmt.utils import flip, expected_length
 from collections import defaultdict
 import math
+import sys
 
 torch.set_printoptions(threshold=500000)
 
@@ -187,7 +188,8 @@ class RelativeTransformerEncoder(TransformerEncoder):
         output_dict['streaming_state'] = streaming_state
         streaming_state.prev_src_mem_size += sum(input_length.tolist())
 
-        streaming_state.prune_source_memory(self.max_memory_size)
+        # always keep at least the current sentence in memory
+        streaming_state.prune_source_memory(self.max_memory_size + input.size(0))
 
         return output_dict
 
@@ -503,6 +505,9 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         pos_emb = self.positional_encoder(pos)
 
+        # apply dropout to pos_emb
+        pos_emb = self.preprocess_layer(pos_emb)
+
         output = self.preprocess_layer(emb)
 
         for i, layer in enumerate(self.layer_modules):
@@ -724,7 +729,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
             decoder_state.update_attention_buffer(buffer, i)
 
         output = self.postprocess_layer(output)
-        # print(output.size())
         output = output[-1].unsqueeze(0)
 
         output_dict = defaultdict(lambda: None)
@@ -735,6 +739,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         return output_dict
 
     def step_streaming(self, input, decoder_state):
+        """Step function in streaming case"""
 
         context = decoder_state.context
         lang = decoder_state.tgt_lang
@@ -762,6 +767,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         input = input.transpose(0, 1)  # B x T to T x B
         klen = input.size(0)
 
+        # If we start a new sentence to decode: reset the context memory
         if klen == 1:
             streaming_state.reset_context_memory()
 
@@ -805,7 +811,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
             # T x B x d_model
             buffer = streaming_state.tgt_buffer[i]
             # output, coverage = layer(output, context, pos_emb, self.r_w_bias, self.r_r_bias, dec_attn_mask, mask_src)
-            # reuse_source = True if klen == 1 else False
+            # reuse_source = True if input.size(1) == 1 else False
             reuse_source = True
 
             # reuse source is True in this case because we can reuse the context ...
@@ -878,19 +884,11 @@ class RelativeTransformer(Transformer):
                                           streaming=True, streaming_state=streaming_state)
 
             context = encoder_output['context']
-            #
-            # if self.decoder.stream_context == 'global':
-            #     context = streaming_state.push_context(context, self.decoder.max_memory_size)
 
             decoder_state = StreamDecodingState(src, tgt_lang, context,
                                                 encoder_output['src_mask'],
                                                 beam_size=beam_size, model_size=self.model_size, type=type,
                                                 cloning=False, streaming_state=streaming_state)
-        # else:
-        #     encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
-        #     decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'],
-        #                                              encoder_output['src_mask'],
-        #                                              beam_size=beam_size, model_size=self.model_size, type=type)
 
         return decoder_state
 
@@ -913,13 +911,10 @@ class RelativeTransformer(Transformer):
         output_dict = self.decoder.step(input_t, decoder_state, streaming=streaming)
         output_dict['src'] = decoder_state.src.transpose(0, 1)
 
-        # squeeze to remove the time step dimension
         log_prob = self.generator[0](output_dict).squeeze(0)
 
         coverage = output_dict['coverage']
         last_coverage = coverage[:, -1, :].squeeze(1)
-
-        # output_dict = defaultdict(lambda: None)
 
         output_dict['log_prob'] = log_prob
         output_dict['coverage'] = last_coverage
@@ -944,7 +939,7 @@ class StreamState(object):
 
         self.context_memory = None
 
-    def push_context(self, context, max_size=512):
+    def push_context(self, context, max_size=sys.maxsize):
 
         if self.context_memory is None:
             self.context_memory = context
@@ -953,7 +948,8 @@ class StreamState(object):
             self.context_memory = torch.cat([self.context_memory, context], dim=0)
 
         # prune the context memory
-        self.context_memory = self.context_memory[-max_size:, :, :]
+        if maxsize < sys.maxsize:
+            self.context_memory = self.context_memory[-max_size:, :, :]
 
         return self.context_memory
 
@@ -977,7 +973,9 @@ class StreamState(object):
             for i in self.tgt_buffer:
                 if self.tgt_buffer[i] is not None:
                     for key in self.tgt_buffer[i]:
-                        self.tgt_buffer[i][key] = self.tgt_buffer[i][key][-mem_size:]
+                        # Don't prune the buffer for enc-dec context, only prune the memory
+                        if key not in ['c_k', 'c_v']:
+                            self.tgt_buffer[i][key] = self.tgt_buffer[i][key][-mem_size:]
 
     # When we start a sentence a new, the context key and value buffers need to be reset
     def reset_context_memory(self):
@@ -1015,11 +1013,6 @@ class StreamDecodingState(DecoderState):
             self.context = context
             self.src = src
 
-        # if src_mask is not None:
-        #     self.src_mask = src_mask.index_select(0, new_order)
-        # else:
-        #     self.src_mask = None
-
         self.concat_input_seq = False
         self.tgt_lang = tgt_lang
 
@@ -1055,13 +1048,6 @@ class StreamDecodingState(DecoderState):
 
         if self.streaming_state.context_memory is not None:
             self.streaming_state.context_memory = self.streaming_state.context_memory.index_select(1, reorder_state)
-
-        # for l in self.attention_buffers:
-        #     buffer_ = self.attention_buffers[l]
-        #     if buffer_ is not None:
-        #         for k in buffer_.keys():
-        #             t_, br_, d_ = buffer_[k].size()
-        #             buffer_[k] = buffer_[k].index_select(1, reorder_state)  # 1 for time first
 
     def prune_complete_beam(self, active_idx, remaining_sents):
         pass

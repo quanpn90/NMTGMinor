@@ -85,6 +85,9 @@ parser.add_argument('-no_bos_gold', action="store_true",
 parser.add_argument('-n_best', type=int, default=1,
                     help="""If verbose is set, will output the n_best
                     decoded sentences""")
+parser.add_argument('-no_repeat_ngram_size', type=int, default=0,
+                    help="""If verbose is set, will output the n_best
+                    decoded sentences""")
 parser.add_argument('-alpha', type=float, default=0.6,
                     help="""Length Penalty coefficient""")
 parser.add_argument('-beta', type=float, default=0.0,
