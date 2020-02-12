@@ -43,6 +43,11 @@ class StreamTranslator(Translator):
         else:
             self.dynamic_max_len_scale = 1.2
 
+        if hasattr(opt, 'dynamic_min_len_scale'):
+            self.dynamic_min_len_scale = opt.dynamic_min_len_scale
+        else:
+            self.dynamic_min_len_scale = 0.8
+
         if opt.verbose:
             print('* Current bos id: %d' % self.bos_id, onmt.constants.BOS)
             print('* Using fast beam search implementation')
@@ -215,7 +220,10 @@ class StreamTranslator(Translator):
 
         if self.dynamic_max_len:
             src_len = src.size(0)
-            max_len = math.cell(int(src_len) * self.dynamic_max_len_scale)
+            max_len = math.ceil(int(src_len) * self.dynamic_max_len_scale)
+            min_len = math.ceil(int(src_len) * self.dynamic_min_len_scale)
+        else:
+            min_len = self.min_len
 
         # Start decoding
         for step in range(max_len + 1):  # one extra step for EOS marker
@@ -239,7 +247,7 @@ class StreamTranslator(Translator):
             if step >= max_len:
                 lprobs[:, :self.eos] = -math.inf
                 lprobs[:, self.eos + 1:] = -math.inf
-            elif step < self.min_len:
+            elif step < min_len:
                 lprobs[:, self.eos] = -math.inf
 
             # handle prefix tokens (possibly with different lengths)

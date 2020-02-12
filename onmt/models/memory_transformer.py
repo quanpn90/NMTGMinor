@@ -72,7 +72,8 @@ class MemoryTransformerDecoderLayer(nn.Module):
             raise NotImplementedError
         self.feedforward = Bottle(feedforward)
 
-    def forward(self, input_, context, pos_emb, mask_tgt, mask_src, mems=None):
+    def forward(self, input_, context, pos_emb, mask_tgt, mask_src, mems=None,
+                incremental=False, incremental_cache=None):
         # incremental=False, incremental_cache=None, reuse_source=True):
 
         """ Self attention layer with memory
@@ -84,9 +85,6 @@ class MemoryTransformerDecoderLayer(nn.Module):
         if self.training and self.death_rate > 0:
             coin = (torch.rand(1)[0].item() >= self.death_rate)
 
-        # if mems is not None:
-        #     input =
-
         if coin:
             # input and context should be time first ?
             query = self.preprocess_attn(input_)
@@ -97,7 +95,8 @@ class MemoryTransformerDecoderLayer(nn.Module):
                 mems = None
 
             # out, _ = self.multihead_tgt(query, pos_emb, r_w_bias, r_r_bias, attn_mask=mask_tgt)
-            out, _, incremental_cache = self.multihead_tgt(query, pos_emb, attn_mask=mask_tgt, mems=mems)
+            out, _, incremental_cache = self.multihead_tgt(query, pos_emb, attn_mask=mask_tgt,
+                                                           incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -124,36 +123,28 @@ class MemoryTransformerDecoderLayer(nn.Module):
         else:
             coverage = None
 
+        if incremental:
+            return input_, coverage, incremental_cache
+
         return input_, coverage
 
-    # def step(self, input, context, pos_emb, mask_tgt, mask_src, buffer=None):
-    #     """ Self attention layer
-    #         layernorm > attn > dropout > residual
-    #     """
-    #
-    #     query = self.preprocess_attn(input)
-    #
-    #     out, _, buffer = self.multihead_tgt.step(query, pos_emb, attn_mask=mask_tgt, buffer=buffer)
-    #
-    #     input = self.postprocess_attn(out, input)
-    #
-    #     """ Context Attention layer
-    #         layernorm > attn > dropout > residual
-    #     """
-    #     if not self.ignore_source:
-    #         query = self.preprocess_src_attn(input)
-    #         out, coverage, buffer = self.multihead_src.step(query, context, context, mask_src, buffer=buffer)
-    #         input = self.postprocess_src_attn(out, input)
-    #     else:
-    #         coverage = None
-    #
-    #     """ Feed forward layer
-    #         layernorm > ffn > dropout > residual
-    #     """
-    #     out = self.feedforward(self.preprocess_ffn(input))
-    #     input = self.postprocess_ffn(out, input)
-    #
-    #     return input, coverage, buffer
+    def step(self, input, context, pos_emb, mask_tgt, mask_src, buffer=None):
+        """ Self attention layer
+            layernorm > attn > dropout > residual
+        """
+        query = self.preprocess_attn(input)
+
+        out, _, buffer = self.multihead_tgt(query, pos_emb, attn_mask=mask_tgt, buffer=buffer)
+
+        input = self.postprocess_attn(out, input)
+
+        """ Feed forward layer
+            layernorm > ffn > dropout > residual
+        """
+        out = self.feedforward(self.preprocess_ffn(input))
+        input = self.postprocess_ffn(out, input)
+
+        return input, coverage, buffer
 
 
 class MemoryTransformer(UnifiedTransformer):
@@ -576,17 +567,25 @@ class MemoryTransformer(UnifiedTransformer):
         emb = src_emb
         src_len = input.size(0)
         bsz = input.size(1)
-        mask_src_src = input.eq(onmt.constants.PAD).byte()  # B x 1 x src_len
-        mask_src = mask_src_src.unsqueeze(0)
+        mask_src_src = input.eq(onmt.constants.PAD).expand(src_len, src_len, bsz)
 
+        buffer = buffers[0] if 0 in buffers else None
+        if buffer is not None:
+            mem_len = buffer['k'].size(0)
+        else:
+            mem_len = 0
+
+        if mem_len > 0:
+            # print(mask_src_src.size())
+            past_mask = input.new_zeros(src_len, mem_len).bool().unsqueeze(-1).expand(src_len, mem_len, bsz)
+            mask_src_src = torch.cat([past_mask, mask_src_src], dim=1)
+
+        mask_src = mask_src_src
         attn_mask = mask_src.bool()  # L x L x batch_size
 
         output = emb
 
-        # Applying dropout and tranpose to T x B x H
-        output = self.preprocess_layer(output)
-
-        klen = src_len
+        klen = src_len + mem_len
         pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
 
         pos_emb = self.positional_encoder(pos)
@@ -596,6 +595,9 @@ class MemoryTransformer(UnifiedTransformer):
         for i, layer in enumerate(self.layer_modules):
             # context and context_mask are None
             buffer = buffers[i] if i in buffers else None
+            # if i == 0 and buffer is not None:
+            #     key = next(iter(buffer))
+            #     print(buffer[key].size())
             # output, coverage, buffer = layer.step(output, None, attn_mask, None, buffer)
             output, coverage, buffer = layer(output, None, pos_emb, attn_mask, None,
                                              incremental=True, incremental_cache=buffer)
@@ -647,7 +649,7 @@ class MemoryTransformer(UnifiedTransformer):
     def reset_states(self):
         return
 
-    def step(self, input, decoder_state):
+    def step(self, input, decoder_state, **kwargs):
 
         src = decoder_state.src if decoder_state.src is not None else None
         tgt = input.transpose(0, 1)
@@ -676,16 +678,22 @@ class MemoryTransformer(UnifiedTransformer):
                 raise NotImplementedError
 
         # concatenate embedding
-        # emb = torch.cat([src_emb, tgt_emb], dim=0)  # L x batch_size x H
         emb = tgt_emb
 
         # prepare self-attention mask
+        # attn_mask = self.gen_mask(src, tgt)
+        buffer = buffers[0] if 0 in buffers else None
+        if buffer is not None:
+            mem_len = buffer['k'].size(0)
+        else:
+            mem_len = 0
 
-        attn_mask = self.gen_mask(src, tgt)
+        qlen = tgt_len
+        klen = qlen + mem_len
+        attn_mask = torch.triu(emb.new_ones(qlen, klen), diagonal=1+mem_len).bool().unsqueeze(-1)
         # last attn_mask step
         attn_mask = attn_mask[-1:, :, :]
 
-        klen = src_len + tgt_len
         pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
 
         pos_emb = self.positional_encoder(pos)
@@ -718,9 +726,20 @@ class MemoryTransformer(UnifiedTransformer):
         output_dict['log_prob'] = logprobs
         output_dict['coverage'] = logprobs.new(bsz, tgt_len, src_len).zero_()
 
+        # pruning
+        max_mem_size = self.max_memory_size + tgt_len + 1
+
+        for i in range(self.layers):
+            buffer = buffers[i] if i in buffers else None
+            for k in buffer:
+                v = buffer[k]
+                buffer[k] = v[-max_mem_size:, :, :]
+
+            decoder_state.update_attention_buffer(buffer, i)
+
         return output_dict
 
-    def create_decoder_state(self, batch, beam_size=1, type=1):
+    def create_decoder_state(self, batch, beam_size=1, type=2, streaming=False, previous_decoding_state=None):
 
         src = batch.get('source')
         src_pos = batch.get('source_pos')
@@ -729,27 +748,37 @@ class MemoryTransformer(UnifiedTransformer):
 
         src_transposed = src.transpose(0, 1)  # B x T
 
-        decoder_state = TransformerDecodingState(src, tgt_lang, None, None,
-                                                 beam_size=beam_size, model_size=self.model_size, type=type)
+        if previous_decoding_state is None:
+            decoder_state = TransformerDecodingState(src, tgt_lang, None, None,
+                                                     beam_size=beam_size, model_size=self.model_size, type=type,
+                                                     cloning=True)
+        else:
+            src = src.repeat(1, beam_size)
+            decoder_state = TransformerDecodingState(src, tgt_lang, None, None,
+                                                     beam_size=beam_size, model_size=self.model_size,
+                                                     type=type, cloning=False)
+            decoder_state.attention_buffers = previous_decoding_state.attention_buffers
 
         # forward pass through the input to get the buffer
-        # src_transposed = src_transposed.repeat(beam_size, 1)
+        src_transposed = src_transposed.repeat(beam_size, 1)
         encoder_output, decoder_state = self.encode(src_transposed, decoder_state, input_pos=src_pos,
                                                     input_lang=src_lang)
 
         decoder_state.src_lang = src_lang
 
-        buffers = decoder_state.attention_buffers
-        bsz = src.size(1)
-        new_order = torch.arange(bsz).view(-1, 1).repeat(1, beam_size).view(-1)
-        new_order = new_order.to(src.device)
 
-        for l in buffers:
-            buffer_ = buffers[l]
-            if buffer_ is not None:
-                for k in buffer_.keys():
-                    t_, br_, d_ = buffer_[k].size()
-                    buffer_[k] = buffer_[k].index_select(1, new_order)  # 1 for time first
+
+        # buffers = decoder_state.attention_buffers
+        # bsz = src.size(1)
+        # new_order = torch.arange(bsz).view(-1, 1).repeat(1, beam_size).view(-1)
+        # new_order = new_order.to(src.device)
+        #
+        # for l in buffers:
+        #     buffer_ = buffers[l]
+        #     if buffer_ is not None:
+        #         for k in buffer_.keys():
+        #             t_, br_, d_ = buffer_[k].size()
+        #             buffer_[k] = buffer_[k].index_select(1, new_order)  # 1 for time first
 
         return decoder_state
 
@@ -766,6 +795,9 @@ class MemoryTransformer(UnifiedTransformer):
         layers = self.layers
         streaming_state = MemoryState(layers, self.max_memory_size, param.device, param.dtype)
         return streaming_state
+
+    def set_memory_size(self, src_memory_size, tgt_memory_size):
+        self.max_memory_size = src_memory_size + tgt_memory_size
 
 
 class MemoryState(object):

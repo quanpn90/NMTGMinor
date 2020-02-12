@@ -105,6 +105,12 @@ parser.add_argument('-gpu', type=int, default=-1,
                     help="Device to run on")
 parser.add_argument('-fast_translate', action='store_true',
                     help='Using the fast decoder')
+parser.add_argument('-dynamic_max_len', action='store_true',
+                    help='Using the fast decoder')
+parser.add_argument('-dynamic_max_len_scale', type=float, default=5.0,
+                    help='Using the fast decoder')
+parser.add_argument('-dynamic_min_len_scale', type=float, default=0.0,
+                    help='Using the fast decoder')
 
 def reportScore(name, score_total, words_total):
     print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (

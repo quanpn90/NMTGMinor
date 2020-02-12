@@ -747,7 +747,7 @@ class Transformer(NMTModel):
 
 class TransformerDecodingState(DecoderState):
 
-    def __init__(self, src, tgt_lang, context, src_mask, beam_size=1, model_size=512, type=1):
+    def __init__(self, src, tgt_lang, context, src_mask, beam_size=1, model_size=512, type=2, cloning=True):
 
         self.beam_size = beam_size
         self.model_size = model_size
@@ -755,6 +755,7 @@ class TransformerDecodingState(DecoderState):
 
         if type == 1:
             # if audio only take one dimension since only used for mask
+            raise NotImplementedError
             self.original_src = src  # TxBxC
             self.concat_input_seq = True
 
@@ -791,17 +792,22 @@ class TransformerDecodingState(DecoderState):
             new_order = torch.arange(bsz).view(-1, 1).repeat(1, self.beam_size).view(-1)
             new_order = new_order.to(src.device)
 
-            if context is not None:
-                self.context = context.index_select(1, new_order)
-            else:
-                self.context = None
+            if cloning:
+                self.src = src.index_select(1, new_order)  # because src is batch first
 
-            self.src = src.index_select(1, new_order)  # because src is batch first
+                if context is not None:
+                    self.context = context.index_select(1, new_order)
+                else:
+                    self.context = None
 
-            if src_mask is not None:
-                self.src_mask = src_mask.index_select(0, new_order)
+                if src_mask is not None:
+                    self.src_mask = src_mask.index_select(0, new_order)
+                else:
+                    self.src_mask = None
             else:
-                self.src_mask = None
+                self.context = context
+                self.src = src
+                self.src_mask = src_mask
 
             self.concat_input_seq = False
             self.tgt_lang = tgt_lang
