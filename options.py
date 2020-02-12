@@ -165,7 +165,7 @@ def make_parser(parser):
                         help='Reset the optimizer running variables')
     parser.add_argument('-beta1', type=float, default=0.9,
                         help="""beta_1 value for adam""")
-    parser.add_argument('-beta2', type=float, default=0.997,
+    parser.add_argument('-beta2', type=float, default=0.98,
                         help="""beta_2 value for adam""")
     parser.add_argument('-weight_decay', type=float, default=0.0,
                         help="""weight decay (L2 penalty)""")

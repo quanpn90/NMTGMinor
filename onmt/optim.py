@@ -121,7 +121,7 @@ class Optim(object):
         self.normalize_grad(denom=grad_denom)
 
         "Compute gradients norm."
-        grad_norm = clip_grad_norm(self.params, self.max_grad_norm).item()
+        # grad_norm = clip_grad_norm(self.params, self.max_grad_norm).item()
 
         "Automatically scale learning rate over learning period"
         self._step += 1
@@ -129,7 +129,7 @@ class Optim(object):
             self.updateLearningRate()
         self.optimizer.step()
 
-        return grad_norm
+        # return grad_norm
 
     """Reset the denom for normalization"""
 

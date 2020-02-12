@@ -320,6 +320,8 @@ class XETrainer(BaseTrainer):
                             grad_denom = num_accumulated_words / denom
                         normalize_gradients(amp.master_params(optimizer), grad_denom)
                         # Update the parameters.
+                        if self.opt.max_grad_norm > 0:
+                            torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), self.opt.max_grad_norm)
                         self.optim.step(grad_denom=grad_denom)
                         self.optim.zero_grad()
                         self.model.zero_grad()

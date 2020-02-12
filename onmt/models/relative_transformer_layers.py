@@ -43,7 +43,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.feedforward = Bottle(feedforward)
 
     # def forward(self, input, pos_emb, r_w_bias, r_r_bias, attn_mask):
-    def forward(self, input, pos_emb, attn_mask, incremental=False, incremental_cache=None):
+    def forward(self, input, pos_emb, attn_mask, incremental=False, incremental_cache=None, mems=None):
 
         coin = True
         if self.training and self.death_rate > 0:
@@ -51,8 +51,13 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
         if coin:
 
+            if mems is not None and mems.size(0) > 0:
+                mems = self.preprocess_attn(mems)
+            else:
+                mems = None
+
             query = self.preprocess_attn(input)
-            out, _, incremental_cache = self.multihead(query, pos_emb, attn_mask=attn_mask,
+            out, _, incremental_cache = self.multihead(query, pos_emb, attn_mask=attn_mask, mems=mems,
                                                        incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
@@ -118,7 +123,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
     # def forward(self, input, context, pos_emb, r_w_bias, r_r_bias, mask_tgt, mask_src):
     def forward(self, input, context, pos_emb, mask_tgt, mask_src,
-                incremental=False, incremental_cache=None, reuse_source=True):
+                incremental=False, incremental_cache=None, reuse_source=True, mems=None):
 
         """ Self attention layer
             layernorm > attn > dropout > residual
@@ -130,10 +135,16 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
         if coin:
             # input and context should be time first ?
+            if mems is not None and mems.size(0) > 0:
+                mems = self.preprocess_attn(mems)
+            else:
+                mems = None
+
             query = self.preprocess_attn(input)
 
             # out, _ = self.multihead_tgt(query, pos_emb, r_w_bias, r_r_bias, attn_mask=mask_tgt)
-            out, _, incremental_cache = self.multihead_tgt(query, pos_emb, attn_mask=mask_tgt,
+            # print(query.size(), pos_emb.size(), mask_tgt.size(), mems.size() if mems is not None else 0)
+            out, _, incremental_cache = self.multihead_tgt(query, pos_emb, attn_mask=mask_tgt, mems=mems,
                                                            incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual

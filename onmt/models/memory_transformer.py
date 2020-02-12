@@ -1,10 +1,12 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from onmt.modules.relative_attention import RelPartialLearnableMultiHeadAttn
 from onmt.models.transformer_layers import PositionalEncoding, PrePostProcessing
 from onmt.models.transformer_layers import EncoderLayer, DecoderLayer
 from onmt.models.transformers import TransformerEncoder, TransformerDecoder, TransformerDecodingState
 import onmt
+from onmt.modules.bottle import Bottle
 from onmt.modules.dropout import embedded_dropout
 from onmt.models.transformer_layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
 from onmt.models.transformer_layers import EncoderLayer, DecoderLayer
@@ -15,8 +17,6 @@ from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, Lear
 from onmt.utils import flip, expected_length
 from collections import defaultdict
 import math
-
-torch.set_printoptions(profile="full")
 
 
 def seperate_tensor(input, lengths):
@@ -40,7 +40,123 @@ def seperate_tensor(input, lengths):
     return outputs
 
 
-class RelativeUnifiedTransformer(UnifiedTransformer):
+class MemoryTransformerDecoderLayer(nn.Module):
+
+    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0, ignore_source=False,
+                 variational=False, death_rate=0.0):
+        super(MemoryTransformerDecoderLayer, self).__init__()
+        self.version = version
+        self.ignore_source = ignore_source
+        self.variational = variational
+        self.death_rate = death_rate
+
+        self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
+        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', variational=self.variational)
+
+        self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
+        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', variational=self.variational)
+
+        d_head = d_model // h
+        self.multihead_tgt = RelPartialLearnableMultiHeadAttn(h, d_model, d_head, dropatt=attn_p)
+
+        if onmt.constants.activation_layer == 'linear_relu_linear':
+            ff_p = p
+            feedforward = FeedForward(d_model, d_ff, ff_p, variational=self.variational)
+        elif onmt.constants.activation_layer == 'maxout':
+            k = int(math.ceil(d_ff / d_model))
+            feedforward = MaxOut(d_model, d_model, k)
+        elif onmt.constants.activation_layer == 'linear_swish_linear':
+            ff_p = p
+            feedforward = FeedForwardSwish(d_model, d_ff, ff_p)
+        else:
+            raise NotImplementedError
+        self.feedforward = Bottle(feedforward)
+
+    def forward(self, input_, context, pos_emb, mask_tgt, mask_src, mems=None):
+        # incremental=False, incremental_cache=None, reuse_source=True):
+
+        """ Self attention layer with memory
+            layernorm > attn > dropout > residual
+        """
+        assert context is None, "This model does not have an context encoder"
+
+        coin = True
+        if self.training and self.death_rate > 0:
+            coin = (torch.rand(1)[0].item() >= self.death_rate)
+
+        # if mems is not None:
+        #     input =
+
+        if coin:
+            # input and context should be time first ?
+            query = self.preprocess_attn(input_)
+
+            if mems is not None and mems.size(0) > 0:
+                mems = self.preprocess_attn(mems)
+            else:
+                mems = None
+
+            # out, _ = self.multihead_tgt(query, pos_emb, r_w_bias, r_r_bias, attn_mask=mask_tgt)
+            out, _, incremental_cache = self.multihead_tgt(query, pos_emb, attn_mask=mask_tgt, mems=mems)
+
+            # rescaling before residual
+            if self.training and self.death_rate > 0:
+                out = out / (1 - self.death_rate)
+
+            input_ = self.postprocess_attn(out, input_)
+
+            """ Context Attention layer 
+                layernorm > attn > dropout > residual
+            """
+
+            coverage = None
+
+            """ Feed forward layer 
+                layernorm > ffn > dropout > residual
+            """
+            out = self.feedforward(self.preprocess_ffn(input_))
+
+            # rescaling before residual
+            if self.training and self.death_rate > 0:
+                out = out / (1 - self.death_rate)
+
+            input_ = self.postprocess_ffn(out, input_)
+        else:
+            coverage = None
+
+        return input_, coverage
+
+    # def step(self, input, context, pos_emb, mask_tgt, mask_src, buffer=None):
+    #     """ Self attention layer
+    #         layernorm > attn > dropout > residual
+    #     """
+    #
+    #     query = self.preprocess_attn(input)
+    #
+    #     out, _, buffer = self.multihead_tgt.step(query, pos_emb, attn_mask=mask_tgt, buffer=buffer)
+    #
+    #     input = self.postprocess_attn(out, input)
+    #
+    #     """ Context Attention layer
+    #         layernorm > attn > dropout > residual
+    #     """
+    #     if not self.ignore_source:
+    #         query = self.preprocess_src_attn(input)
+    #         out, coverage, buffer = self.multihead_src.step(query, context, context, mask_src, buffer=buffer)
+    #         input = self.postprocess_src_attn(out, input)
+    #     else:
+    #         coverage = None
+    #
+    #     """ Feed forward layer
+    #         layernorm > ffn > dropout > residual
+    #     """
+    #     out = self.feedforward(self.preprocess_ffn(input))
+    #     input = self.postprocess_ffn(out, input)
+    #
+    #     return input, coverage, buffer
+
+
+class MemoryTransformer(UnifiedTransformer):
     """
     This class combines the encoder and the decoder into one single sequence
     Joined attention between encoder and decoder parts
@@ -53,12 +169,14 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
         self.layer_modules = []
         self.learnable_position_encoding = opt.learnable_position_encoding
         self.max_memory_size = opt.max_memory_size
+        self.mem_len = self.max_memory_size
+        self.dictionary = kwargs.get('dictionary', None)
 
         # build_modules will be called from the inherited constructor
-        super(RelativeUnifiedTransformer, self).__init__(opt, tgt_embedding, src_embedding,
-                                                         generator, positional_encoder,
-                                                         language_embeddings=language_embeddings,
-                                                         encoder_type=encoder_type)
+        super(MemoryTransformer, self).__init__(opt, tgt_embedding, src_embedding,
+                                                generator, positional_encoder,
+                                                language_embeddings=language_embeddings,
+                                                encoder_type=encoder_type)
         self.src_embedding = src_embedding
         self.tgt_embedding = tgt_embedding
         # self.language_embedding = nn.Embedding(3, self.model_size, padding_idx=0)
@@ -128,10 +246,10 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
             # linearly decay the death rate
             death_r = (l + 1.0) / self.layers * self.death_rate
 
-            block = RelativeTransformerDecoderLayer(self.n_heads, self.model_size,
-                                                    self.dropout, self.inner_size, self.attn_dropout,
-                                                    ignore_source=True,
-                                                    variational=self.variational_dropout, death_rate=death_r)
+            block = MemoryTransformerDecoderLayer(self.n_heads, self.model_size,
+                                                  self.dropout, self.inner_size, self.attn_dropout,
+                                                  ignore_source=True,
+                                                  variational=self.variational_dropout, death_rate=death_r)
             self.layer_modules.append(block)
 
     def create_mask_stream(self, src, tgt, src_lengths, tgt_lengths, mem_length=0):
@@ -186,11 +304,12 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
         else:
             seq_len = sum(src_lengths) + sum(tgt_lengths)
 
-            mask = torch.triu(src.new_ones(seq_len, seq_len), diagonal=1)
+            # mask = torch.triu(src.new_ones(seq_len, seq_len), diagonal=1)
 
-            if mem_length > 0:
-                past_mask = src.new_zeros(seq_len, mem_length)
-                mask = torch.cat([past_mask, mask], dim=1)
+            # if mem_length > 0:
+            #     past_mask = src.new_zeros(seq_len, mem_length)
+            #     mask = torch.cat([past_mask, mask], dim=1)
+            mask = torch.triu(src.new_ones(seq_len, seq_len + mem_length), diagonal=1 + mem_length)
 
             attn_mask = mask.bool().unsqueeze(-1)
 
@@ -199,6 +318,7 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
     def forward_stream(self, batch, **kwargs):
 
         streaming_state = kwargs.get('streaming_state', None)
+        mems = streaming_state.mems
         src = batch.get('source')  # src_len x batch_size
         tgt = batch.get('target_input')  # (len_tgt x batch_size) x 1
 
@@ -214,6 +334,16 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
         src_segments = seperate_tensor(src, src_lengths)
 
         tgt_segments = seperate_tensor(tgt, tgt_lengths)
+
+        # if self.dictionary is not None:
+        #     for src_, tgt_ in zip(src_segments, tgt_segments):
+        #         src_ = src_.squeeze(1)
+        #         tgt_ = tgt_.squeeze(1)
+        #
+        #         src_words = " ".join(self.dictionary.convertToLabels(src_, onmt.constants.EOS))
+        #         tgt_words = " ".join(self.dictionary.convertToLabels(tgt_, onmt.constants.EOS))
+        #         print(src_words, tgt_words)
+        #         input("Press any key to continue...")
 
         # Embedding stage (and scale the embedding)
         embed = self.src_embedding
@@ -270,9 +400,10 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
         emb = torch.cat(all_embeddings, dim=0)
 
         # prepare attention mask
-        mem_length = streaming_state.prev_tgt_mem_size
+        mem_length = streaming_state.mems[0].size(0) if mems is not None else 0
         attn_mask = self.create_mask_stream(src, tgt, src_lengths, tgt_lengths, mem_length=mem_length)
 
+        qlen = emb.size(0)
         klen = emb.size(0) + mem_length
 
         if self.bidirectional:
@@ -289,28 +420,27 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
 
         pos_emb = self.preprocess_layer(pos_emb)
 
+        hids = [output]
+
         # FORWARD PASS
         coverage = None
         for i, layer in enumerate(self.layer_modules):
-            buffer = streaming_state.tgt_buffer[i]
-            output, coverage, buffer = layer(output, None, pos_emb, attn_mask, None,
-                                             incremental=True, incremental_cache=buffer)
+            mems_i = None if mems is None else mems[i]
+            output, coverage = layer(output, None, pos_emb, attn_mask, None, mems=mems_i)
             # context and context_mask are None
-            streaming_state.tgt_buffer[i] = buffer
+            hids.append(output)
 
         # final layer norm
         output = self.postprocess_layer(output)
 
         # update the memory and then prune
-        streaming_state.prev_tgt_mem_size += klen
-        streaming_state.prune_target_memory(self.max_memory_size)
+        streaming_state.update_mems(hids, qlen)
 
         # now we have to separate the target states from the "output" to generate translations
         target_outputs = []
         contexts = []
         offset = 0
         for (src_len, tgt_len) in zip(src_lengths, tgt_lengths):
-
             source_output = output.narrow(0, offset, src_len)
 
             offset += src_len
@@ -634,5 +764,67 @@ class RelativeUnifiedTransformer(UnifiedTransformer):
 
         param = next(self.parameters())
         layers = self.layers
-        streaming_state = StreamState(layers, self.max_memory_size, param.device, param.dtype)
+        streaming_state = MemoryState(layers, self.max_memory_size, param.device, param.dtype)
         return streaming_state
+
+
+class MemoryState(object):
+
+    def __init__(self, nlayers, mem_len, device, dtype):
+        self.mem_len = mem_len
+
+        self.mems = []
+        self.nlayers = nlayers
+
+        # n+1 memory slots (embeddings and n layers)
+        # but maybe we don't need to store the upper layer?
+        for i in range(self.nlayers + 1):
+            empty = torch.empty(0, dtype=dtype, device=device)
+            self.mems.append(empty)
+
+    def update_mems(self, hids, qlen):
+        # does not deal with None
+        if self.mems is None:
+            return None
+
+        mlen = self.mems[0].size(0) if self.mems is not None else 0
+
+        # mems is not None
+        assert len(hids) == len(self.mems), 'len(hids) != len(mems)'
+        # There are `mlen + qlen` steps that can be cached into mems
+        # For the next step, the last `ext_len` of the `qlen` tokens
+        # will be used as the extended context. Hence, we only cache
+        # the tokens from `mlen + qlen - self.ext_len - self.mem_len`
+        # to `mlen + qlen - self.ext_len`.
+        with torch.no_grad():
+            new_mems = []
+            end_idx = mlen + qlen
+            beg_idx = max(0, end_idx - self.mem_len)
+            for i in range(len(hids)):
+                cat = torch.cat([self.mems[i], hids[i]], dim=0)
+                new_mems.append(cat[beg_idx:end_idx].detach())
+
+            # Important:
+
+        self.mems = new_mems
+
+        # self.src_buffer = defaultdict(lambda: None)
+        # self.prev_src_mem_size = 0
+        # self.src_lengths = []
+        # self.tgt_buffer = defaultdict(lambda: None)
+        # self.prev_tgt_mem_size = 0
+        # self.tgt_lengths = []
+        #
+        # self.context_memory = None
+
+    # def init_mems(self):
+    #     if self.mem_len > 0:
+    #         mems = []
+    #         param = next(self.parameters())
+    #         for i in range(self.n_layer + 1):
+    #             empty = torch.empty(0, dtype=param.dtype, device=param.device)
+    #             mems.append(empty)
+    #
+    #         return mems
+    #     else:
+    #         return None

@@ -13,7 +13,6 @@ MAX_LEN = onmt.constants.max_position_length  # This should be the longest sente
 
 
 def build_model(opt, dicts):
-
     opt = backward_compatible(opt)
 
     onmt.constants.layer_norm = opt.layer_norm
@@ -33,7 +32,6 @@ def build_model(opt, dicts):
 
 
 def build_tm_model(opt, dicts):
-
     # BUILD POSITIONAL ENCODING
     if opt.time == 'positional_encoding':
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
@@ -87,7 +85,7 @@ def build_tm_model(opt, dicts):
             audio_encoder = TransformerEncoder(opt, None, positional_encoder, "audio")
             encoder = MixedEncoder(text_encoder, audio_encoder)
         else:
-            print ("Unknown encoder type:", opt.encoder_type)
+            print("Unknown encoder type:", opt.encoder_type)
             exit(-1)
 
         decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, language_embeddings=language_embeddings)
@@ -131,10 +129,21 @@ def build_tm_model(opt, dicts):
         model = RelativeUnifiedTransformer(opt, embedding_src, embedding_tgt,
                                            generator, positional_encoder, language_embeddings=language_embeddings)
 
+    elif opt.model == 'memory_transformer':
+        from onmt.models.memory_transformer import MemoryTransformer
+
+        if opt.encoder_type == "audio":
+            raise NotImplementedError
+
+        generator = nn.ModuleList(generators)
+        model = MemoryTransformer(opt, embedding_src, embedding_tgt,
+                                  generator, positional_encoder, language_embeddings=language_embeddings,
+                                  dictionary=dicts['tgt'])
+
     else:
         raise NotImplementedError
 
-    if opt.tie_weights:  
+    if opt.tie_weights:
         print("* Joining the weights of decoder input and output embeddings")
         model.tie_weights()
 
@@ -206,7 +215,6 @@ def init_model_parameters(model, opt):
 
 
 def build_language_model(opt, dicts):
-
     onmt.constants.layer_norm = opt.layer_norm
     onmt.constants.weight_norm = opt.weight_norm
     onmt.constants.activation_layer = opt.activation_layer
@@ -235,7 +243,6 @@ def build_language_model(opt, dicts):
 
 
 def build_fusion(opt, dicts):
-
     # the fusion model requires a pretrained language model
     print("Loading pre-trained language model from %s" % opt.lm_checkpoint)
     lm_checkpoint = torch.load(opt.lm_checkpoint, map_location=lambda storage, loc: storage)

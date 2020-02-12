@@ -361,8 +361,7 @@ class StreamDataset(torch.utils.data.Dataset):
         while i < self.fullSize:
 
             if self.tgt is not None and self.src is not None:
-                sentence_length = max(self.tgt[i].size(0) - 1, self.src[i].size(0))
-                # print(sentence_length)
+                sentence_length = self.tgt[i].size(0) + self.src[i].size(0) - 1
             elif self.tgt is not None:
                 sentence_length = self.tgt[i].size(0) - 1
             else:

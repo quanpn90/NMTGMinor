@@ -230,11 +230,6 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
         nan_mask = torch.isnan(attn_prob)
         attn_prob = attn_prob.masked_fill(nan_mask, 0).type_as(attn_score)
 
-        if debug:
-            n = nan_mask.byte().sum()
-            total = attn_prob.numel()
-            print("Total nan: %d %d " % (n, total))
-
         coverage = attn_prob
 
         attn_prob = self.dropatt(attn_prob)
@@ -253,10 +248,11 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
 
         return output, coverage
 
-    def forward(self, w, r, attn_mask=None, debug=False,
+    def forward(self, w, r, attn_mask=None, debug=False, mems=None,
                 incremental=False, incremental_cache=None):
         """
-        :type attn_mask:
+        :param mems:
+        :param attn_mask:
         :param incremental_cache:
         :param incremental:
         :param debug:
@@ -268,8 +264,13 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
 
         qlen, rlen, bsz = w.size(0), r.size(0), w.size(1)
 
-        w_heads = self.qkv_net(w)
+        if mems is not None:
+            w_heads = self.qkv_net(torch.cat([mems, w], 0))
+        else:
+            w_heads = self.qkv_net(w)
+
         w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
+        w_head_q = w_head_q[-qlen:]
 
         if incremental:
             if incremental_cache is not None and 'k' in incremental_cache and 'v' in incremental_cache:
@@ -284,7 +285,7 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
                 incremental_cache['k'] = w_head_k.detach()
                 incremental_cache['v'] = w_head_v.detach()
 
-        # print(w_head_q.size(), w_head_k.size(), w_head_v.size())
+            # print(w_head_q.size(), w_head_k.size(), w_head_v.size())
 
         output, coverage = self.compute_attention(r, w_head_q, w_head_k, w_head_v, attn_mask=attn_mask, debug=debug)
 
