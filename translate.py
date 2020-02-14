@@ -58,7 +58,7 @@ parser.add_argument('-beam_size', type=int, default=5,
                     help='Beam size')
 parser.add_argument('-batch_size', type=int, default=30,
                     help='Batch size')
-parser.add_argument('-max_sent_length', type=int, default=256,
+parser.add_argument('-max_sent_length', type=int, default=1024,
                     help='Maximum sentence length.')
 parser.add_argument('-replace_unk', action="store_true",
                     help="""Replace the generated UNK tokens with the source
@@ -111,6 +111,7 @@ parser.add_argument('-dynamic_max_len_scale', type=float, default=5.0,
                     help='Using the fast decoder')
 parser.add_argument('-dynamic_min_len_scale', type=float, default=0.0,
                     help='Using the fast decoder')
+
 
 def reportScore(name, score_total, words_total):
     print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (

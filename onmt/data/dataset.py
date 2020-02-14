@@ -63,7 +63,6 @@ class Batch(object):
             self.tensors['src_length'] = torch.LongTensor(self.src_lengths)
             self.src_lengths = self.tensors['src_length']
             self.src_size = sum(self.src_lengths)
-
         else:
             self.src_size = 0
 

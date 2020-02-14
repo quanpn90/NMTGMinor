@@ -150,23 +150,30 @@ def main():
             train_src_langs.append(torch.Tensor([dicts['langs']['src']]))
             train_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
+        if opt.encoder_type == 'audio':
+            data_type = 'audio'
+        else:
+            data_type = 'text'
+
         if not opt.streaming:
             train_data = onmt.Dataset(train_src,
                                       train_tgt,
                                       train_src_langs, train_tgt_langs,
                                       batch_size_words=opt.batch_size_words,
-                                      data_type="text", sorting=True,
+                                      data_type=data_type, sorting=True,
                                       batch_size_sents=opt.batch_size_sents,
                                       multiplier=opt.batch_size_multiplier,
-                                      src_align_right=opt.src_align_right)
+                                      src_align_right=opt.src_align_right,
+                                      upsampling=opt.upsampling)
         else:
             train_data = onmt.StreamDataset(train_src,
                                             train_tgt,
                                             train_src_langs, train_tgt_langs,
                                             batch_size_words=opt.batch_size_words,
-                                            data_type="text", sorting=True,
+                                            data_type=data_type, sorting=True,
                                             batch_size_sents=opt.batch_size_sents,
-                                            multiplier=opt.batch_size_multiplier)
+                                            multiplier=opt.batch_size_multiplier,
+                                            upsampling=opt.upsampling)
 
         valid_path = opt.data + '.valid'
         valid_src = MMapIndexedDataset(valid_path + '.src')
@@ -192,9 +199,10 @@ def main():
                                       batch_size_sents=opt.batch_size_sents,
                                       src_align_right=opt.src_align_right)
         else:
+            # for validation data, we have to go through sentences (very slow but to ensure correctness)
             valid_data = onmt.StreamDataset(valid_src, valid_tgt,
                                             valid_src_langs, valid_tgt_langs,
-                                            batch_size_words=opt.batch_size_words,
+                                            batch_size_words=1,
                                             data_type="text", sorting=True,
                                             batch_size_sents=opt.batch_size_sents)
 

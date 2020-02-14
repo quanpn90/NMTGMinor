@@ -7,6 +7,8 @@ from onmt.data.indexed_dataset import IndexedDatasetBuilder
 
 import h5py as h5
 import numpy as np
+import hashlib
+from collections import defaultdict
 
 parser = argparse.ArgumentParser(description='preprocess.py')
 onmt.markdown.add_md_help_argument(parser)
@@ -83,6 +85,8 @@ parser.add_argument('-asr', action='store_true',
                     help="prepare data for asr task")
 parser.add_argument('-asr_format', default="h5",
                     help="Format of asr data h5 or scp")
+parser.add_argument('-asr_hashing', action='store_true',
+                    help="hash the audio features so that joint training data ")
 parser.add_argument('-lm', action='store_true',
                     help="prepare data for LM task")
 parser.add_argument('-fp16', action='store_true',
@@ -314,7 +318,8 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer,
 
 
 def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_length=64,
-                  input_type='word', stride=1, concat=1, prev_context=0, fp16=False, reshape=True, asr_format="h5"):
+                  input_type='word', stride=1, concat=1, prev_context=0, fp16=False, reshape=True,
+                  asr_format="h5", asr_hashing=False):
     src, tgt = [], []
     # sizes = []
     src_sizes = []
@@ -365,11 +370,15 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
         else:
             raise NotImplementedError
 
+        if asr_hashing:
+            audio_hash = hashlib.sha1(feature_vectors).hexdigest()
+
         if stride == 1:
             sline = torch.from_numpy(feature_vectors)
         else:
             sline = torch.from_numpy(feature_vectors[0::opt.stride])
 
+        # handling reshaping the file
         if reshape:
             if concat != 1:
                 # the number of frames added to make the length divisible by 4
@@ -383,12 +392,13 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
 
                 # reshape: every $concat frames into one
                 sline = sline.reshape((int(sline.size()[0] / concat), sline.size()[1] * concat))
-        index += 1;
+
+        index += 1
 
         tline = tline.strip()
 
         if prev_context > 0:
-            print("Multiple ASR context isn't supported at the moment   ")
+            print("Multiple ASR context isn't supported")
             raise NotImplementedError
 
             # s_prev_context.append(sline)
@@ -450,29 +460,32 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
 
     print('Total number of unk words: %d' % n_unk_words)
 
-    if opt.shuffle == 1:
-        print('... shuffling sentences')
-        perm = torch.randperm(len(src))
-        src = [src[idx] for idx in perm]
-        tgt = [tgt[idx] for idx in perm]
-        src_sizes = [src_sizes[idx] for idx in perm]
-        tgt_sizes = [tgt_sizes[idx] for idx in perm]
-
-    print('... sorting sentences by size')
-
-    z = zip(src, tgt, src_sizes, tgt_sizes)
-
-    # ultimately sort by source size
-    sorted_z = sorted(sorted(z, key=lambda x: x[3]), key=lambda x: x[2])
-
-    src = [z_[0] for z_ in sorted_z]
-    tgt = [z_[1] for z_ in sorted_z]
+    # if opt.shuffle == 1:
+    #     print('... shuffling sentences')
+    #     perm = torch.randperm(len(src))
+    #     src = [src[idx] for idx in perm]
+    #     tgt = [tgt[idx] for idx in perm]
+    #     src_sizes = [src_sizes[idx] for idx in perm]
+    #     tgt_sizes = [tgt_sizes[idx] for idx in perm]
+    #
+    # print('... sorting sentences by size')
+    #
+    # z = zip(src, tgt, src_sizes, tgt_sizes)
+    #
+    # # ultimately sort by source size
+    # sorted_z = sorted(sorted(z, key=lambda x: x[3]), key=lambda x: x[2])
+    #
+    # src = [z_[0] for z_ in sorted_z]
+    # tgt = [z_[1] for z_ in sorted_z]
 
     print(('Prepared %d sentences ' +
            '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
           (len(src), ignored, max_src_length, max_tgt_length))
 
-    return src, tgt
+    if asr_hashing:
+        return audio_data, src, tgt
+    else:
+        return src, tgt
 
 
 def main():
@@ -537,7 +550,8 @@ def main():
                                                    stride=opt.stride, concat=opt.concat,
                                                    prev_context=opt.previous_context,
                                                    fp16=opt.fp16, reshape=(opt.reshape_speech == 1),
-                                                   asr_format=opt.asr_format)
+                                                   asr_format=opt.asr_format,
+                                                   asr_hashing=opt.asr_hashing)
 
         print('Preparing validation ...')
         valid = dict()
@@ -647,6 +661,9 @@ def main():
 
     if opt.format in ['raw', 'bin']:
 
+        # save dicts in this format
+        torch.save(dicts, opt.save_data + '.dict.pt')
+
         print('Saving data to \'' + opt.save_data + '.train.pt\'...')
         save_data = {'dicts': dicts,
                      'type': opt.src_type,
@@ -656,12 +673,15 @@ def main():
         print("Done")
 
     elif opt.format in ['mmap', 'mmem']:
+        train = defaultdict(lambda: None, train)
+        valid = defaultdict(lambda: None, valid)
+
         print('Saving data to memory indexed data files')
         from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
 
-        if opt.asr:
-            print("ASR data format isn't compatible with memory indexed format")
-            raise AssertionError
+        # if opt.asr:
+        #     print("ASR data format isn't compatible with memory indexed format")
+        #     raise AssertionError
 
         # save dicts in this format
         torch.save(dicts, opt.save_data + '.dict.pt')
@@ -677,7 +697,10 @@ def main():
                 dtype = np.int32
 
             if set_ == 'src' and opt.asr:
-                dtype = np.double
+                if opt.fp16:
+                    dtype = np.float16
+                else:
+                    dtype = np.float32
 
             train_data = MMapIndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set_, dtype=dtype)
 

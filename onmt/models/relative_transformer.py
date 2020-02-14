@@ -388,7 +388,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
                 else:
                     mask = current_mask
 
-        elif self.stream_context == 'local':
+        elif self.stream_context in ['local', 'limited']:
             # Local context: only attends to the aligned context
             for (src_length, tgt_length) in zip(src_lengths, tgt_lengths):
 
@@ -417,11 +417,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
                     mask = torch.cat([prev_mask, current_mask], dim=0)
                 else:
                     mask = current_mask
-        else:
-            raise NotImplementedError
 
         mask = mask.bool()
-
         return mask
 
     def create_self_attn_mask(self, input, tgt_lengths, prev_tgt_mem_size):
@@ -433,11 +430,41 @@ class RelativeTransformerDecoder(TransformerDecoder):
         :return:
         """
 
-        qlen = sum(tgt_lengths.tolist())
-        mlen = prev_tgt_mem_size
-        klen = qlen + mlen
+        if self.stream_context in ['local', 'global']:
+            qlen = sum(tgt_lengths.tolist())
+            mlen = prev_tgt_mem_size
+            klen = qlen + mlen
+            mask = torch.triu(input.new_ones(qlen, klen), diagonal=1 + mlen).bool()[:, :, None]
+        elif self.stream_context in ['limited']:
 
-        mask = torch.triu(input.new_ones(qlen, klen), diagonal=1 + mlen).bool()[:, :, None]
+            # past_length = prev_tgt_mem_size
+            mask = None
+            # assert prev_tgt_mem_size == 0, "This model is limited and doesn't accept memory"
+
+            for length in tgt_lengths:
+
+                past_length = mask.size(0) if mask is not None else 0
+
+                if past_length > 0:
+                    # don't look at the past
+                    past_mask = input.new_ones(length, past_length)
+                else:
+                    past_mask = None
+
+                # pay attention to the past words in the current sentence
+                current_mask = torch.triu(input.new_ones(length, length), diagonal=1)
+
+                if past_mask is not None:
+                    current_mask = torch.cat([past_mask, current_mask], dim=1)
+
+                if mask is None:
+                    mask = current_mask
+                else:
+                    no_future_mask = input.new_ones(past_length, length)
+                    mask = torch.cat([mask, no_future_mask], dim=1)
+                    mask = torch.cat([mask, current_mask], dim=0)
+
+            mask = mask.bool().unsqueeze(-1)
 
         return mask
 
@@ -542,7 +569,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         for i, layer in enumerate(self.layer_modules):
             # batch_size x src_len x d_model
             # output, coverage = layer(output, context, pos_emb, self.r_w_bias, self.r_r_bias, dec_attn_mask, mask_src)
-            mems_i = mems[i] if mems is not None and streaming else None
+            mems_i = mems[i] if mems is not None and streaming and self.stream_context in ['local', 'global'] else None
             output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src, mems=mems_i)
             if streaming:
                 hids.append(output)
@@ -557,7 +584,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
         output_dict = defaultdict(lambda: None, output_dict)
 
         if streaming:
-            streaming_state.update_tgt_mems(hids, qlen)
+            if self.stream_context in ['local', 'global']:
+                streaming_state.update_tgt_mems(hids, qlen)
             output_dict['streaming_state'] = streaming_state
 
         return output_dict
@@ -598,6 +626,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
             input_ = input[:, -1].unsqueeze(1).transpose(0, 1)
         else:
             input_ = input.transpose(0, 1)
+
         """ Embedding: batch_size x 1 x d_model """
         emb = self.word_lut(input_) * math.sqrt(self.model_size)
         input = input.transpose(0, 1)
@@ -714,6 +743,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
         # If we start a new sentence to decode: reset the context memory
         if klen == 1:
             streaming_state.reset_context_memory()
+            if self.stream_context == 'limited':
+                streaming_state.reset_target_memory()
 
         if self.use_language_embedding:
             lang_emb = self.language_embeddings(lang)  # B x H or 1 x H
@@ -944,6 +975,14 @@ class StreamState(object):
             buffer_ = self.tgt_buffer[l]
             buffer_.pop('c_k', None)
             buffer_.pop('c_v', None)
+
+    def reset_target_memory(self):
+        for l in self.tgt_buffer:
+            buffer_ = self.tgt_buffer[l]
+            buffer_.pop('k', None)
+            buffer_.pop('v', None)
+
+        self.prev_tgt_mem_size = 0
 
     def update_src_mems(self, hids, qlen):
         # does not deal with None
