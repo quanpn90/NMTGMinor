@@ -149,9 +149,6 @@ class RelativeTransformerEncoder(TransformerEncoder):
             mask_src
         """
 
-        # if streaming:
-        #     return self.forward_stream(input, input_pos, input_lang, **kwargs)
-
         """ Embedding: batch_size x src_len x d_model """
         if self.input_type == "text":
             bsz_first_input = input
@@ -163,7 +160,8 @@ class RelativeTransformerEncoder(TransformerEncoder):
             if streaming:
                 streaming_state = kwargs.get('streaming_state', None)
                 mems = streaming_state.src_mems
-                mem_len = streaming_state.src_mems[0].size(0)
+                # mem_len = streaming_state.src_mems[0].size(0)
+                mem_len = streaming_state.prev_src_mem_size
                 input_length = kwargs.get('src_lengths', None)
                 streaming_state = kwargs.get('streaming_state', None)
                 mask_src = self.create_stream_mask(input, input_length, mem_len)
@@ -283,11 +281,17 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         for i, layer in enumerate(self.layer_modules):
             # src_len x batch_size x d_model
-            mems_i = mems[i] if mems is not None and streaming else None
-            context = layer(context, pos_emb, mask_src, mems=mems_i)
 
             if streaming:
-                hids.append(context)
+                buffer = streaming_state.src_buffer[i]
+                context, buffer = layer(context, pos_emb, mask_src, incremental=True, incremental_cache=buffer)
+                streaming_state.src_buffer[i] = buffer
+            else:
+                # mems_i = mems[i] if mems is not None and streaming else None
+                context = layer(context, pos_emb, mask_src)
+
+            # if streaming:
+            #     hids.append(context)
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -298,7 +302,9 @@ class RelativeTransformerEncoder(TransformerEncoder):
         output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask, 'src': input})
 
         if streaming:
-            streaming_state.update_src_mems(hids, qlen)
+            streaming_state.prev_src_mem_size += sum(input_length.tolist())
+            streaming_state.prune_source_memory(self.max_memory_size)
+            # streaming_state.update_src_mems(hids, qlen)
             output_dict['streaming_state'] = streaming_state
 
         return output_dict
@@ -494,8 +500,9 @@ class RelativeTransformerDecoder(TransformerDecoder):
             src_lengths = kwargs.get("src_lengths", None)
             tgt_lengths = kwargs.get("tgt_lengths", None)
             streaming_state = kwargs.get("streaming_state")
-            mems = streaming_state.tgt_mems
-            mem_len = mems[0].size(0) if mems is not None else 0
+            # mems = streaming_state.tgt_mems
+            mem_len = streaming_state.prev_tgt_mem_size
+            # mem_len = mems[0].size(0) if mems is not None else 0
         else:
             mem_len = 0
             mems = None
@@ -567,12 +574,19 @@ class RelativeTransformerDecoder(TransformerDecoder):
         pos_emb = self.preprocess_layer(pos_emb)
 
         for i, layer in enumerate(self.layer_modules):
-            # batch_size x src_len x d_model
-            # output, coverage = layer(output, context, pos_emb, self.r_w_bias, self.r_r_bias, dec_attn_mask, mask_src)
-            mems_i = mems[i] if mems is not None and streaming and self.stream_context in ['local', 'global'] else None
-            output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src, mems=mems_i)
+            # batch_size x src_len x d_model output, coverage = layer(output, context, pos_emb, self.r_w_bias,
+            # self.r_r_bias, dec_attn_mask, mask_src)
+            # mems_i = mems[i] if mems is not None and streaming and
+            # self.stream_context in ['local', 'global'] else None
             if streaming:
-                hids.append(output)
+                buffer = streaming_state.tgt_buffer[i]
+                output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, context_attn_mask,
+                                                 incremental=True, incremental_cache=buffer, reuse_source=False)
+                streaming_state.tgt_buffer[i] = buffer
+            else:
+                output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src, mems=mems_i)
+                # if streaming:
+                #     hids.append(output)
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -584,8 +598,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
         output_dict = defaultdict(lambda: None, output_dict)
 
         if streaming:
-            if self.stream_context in ['local', 'global']:
-                streaming_state.update_tgt_mems(hids, qlen)
+            streaming_state.prev_tgt_mem_size += sum(tgt_lengths.tolist())
+            streaming_state.prune_target_memory(self.max_memory_size)
+            # if self.stream_context in ['local', 'global']:
+            #     streaming_state.update_tgt_mems(hids, qlen)
             output_dict['streaming_state'] = streaming_state
 
         return output_dict
