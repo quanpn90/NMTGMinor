@@ -40,7 +40,7 @@ class Dict(object):
             idx = int(line[right_space_idx+1:])
 
             # print(label, idx)
-            self.add(label, idx)
+            self.add(label, None)
 
     def writeFile(self, filename):
         "Write entries to a file."
@@ -142,7 +142,13 @@ class Dict(object):
             vec += [self.lookup(eos_word)]
 
         if type == 'int64':
-            return torch.LongTensor(vec)
+            try:
+                return torch.LongTensor(vec)
+            except TypeError as e:
+                print("Type Error", e)
+                print(labels)
+                print(vec)
+                exit()
         elif type == 'int32' or type == 'int':
             return torch.IntTensor(vec)
         elif type == 'int16':

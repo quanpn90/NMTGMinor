@@ -222,7 +222,8 @@ class Dataset(torch.utils.data.Dataset):
                  data_type="text", batch_size_sents=128,
                  multiplier=1, sorting=False,
                  augment=False,
-                 src_align_right=False, tgt_align_right=False, **kwargs):
+                 src_align_right=False, tgt_align_right=False,
+                 verbose=False, cleaning=False, **kwargs):
         """
         :param src_data: List of tensors for the source side (1D for text, 2 or 3Ds for other modalities)
         :param tgt_data: List of tensors (1D text) for the target side (already padded with <s> and </s>
@@ -249,7 +250,7 @@ class Dataset(torch.utils.data.Dataset):
         self.src = src_data
         self._type = data_type
         self.src_align_right = src_align_right
-        if self.src_align_right:
+        if self.src_align_right and verbose:
             print("* Source sentences aligned to the right side.")
         self.tgt_align_right = tgt_align_right
         self.upsampling = kwargs.get('upsampling', False)
@@ -262,13 +263,38 @@ class Dataset(torch.utils.data.Dataset):
         else:
             self.tgt = None
 
+        # Remove the sentences that are empty
+        if cleaning:
+            cleaned_src = []
+            cleaned_tgt = []
+            n_remove = 0
+
+            for (src_tensor, tgt_tensor) in zip(self.src, self.tgt):
+
+                src_size = src_tensor.size(0)
+                tgt_size = tgt_tensor.size(0)
+
+                if src_size > 0 and tgt_size > 2:
+                    cleaned_src.append(src_tensor)
+                    cleaned_tgt.append(tgt_tensor)
+                else:
+                    n_remove += 1
+
+            self.src = cleaned_src
+            self.tgt = cleaned_tgt
+            if verbose:
+                print("* Removed %d empty sentences" % n_remove)
+
+        if verbose:
+            print("* Loaded data with %d sentences." % len(self.src))
+
         # sort data to have efficient mini-batching during training
         if sorting:
             assert self.src is not None
             assert self.tgt is not None
 
-            src_sizes = [data.size(0) for data in src_data]
-            tgt_sizes = [data.size(0) for data in tgt_data]
+            src_sizes = [data.size(0) for data in self.src]
+            tgt_sizes = [data.size(0) for data in self.tgt]
             orders = range(len(self.src))
 
             z = zip(src_sizes, tgt_sizes, orders)
@@ -287,6 +313,7 @@ class Dataset(torch.utils.data.Dataset):
 
         self.src_langs = src_langs
         self.tgt_langs = tgt_langs
+
         if self.src_langs is not None and self.tgt_langs is not None:
             assert(len(src_langs) == len(tgt_langs))
 
