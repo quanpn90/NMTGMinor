@@ -224,6 +224,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
             emb = emb.transpose(0, 1)
             input = input.transpose(0, 1)
             abs_pos = None
+            mem_len = 0
 
         if onmt.constants.torch_version >= 1.2:
             mask_src = mask_src.bool()
@@ -584,7 +585,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
                                                  incremental=True, incremental_cache=buffer, reuse_source=False)
                 streaming_state.tgt_buffer[i] = buffer
             else:
-                output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src, mems=mems_i)
+                output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src   )
                 # if streaming:
                 #     hids.append(output)
 
