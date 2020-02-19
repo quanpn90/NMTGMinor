@@ -96,6 +96,7 @@ parser.add_argument('-seed', type=int, default=3435,
                     help="Random seed")
 
 parser.add_argument('-lower', action='store_true', help='lowercase data')
+parser.add_argument('-load_bpe_voc', action='store_true', help='lowercase data')
 parser.add_argument('-no_bos', action='store_true', help='not adding bos word (this is done manually in the data)')
 parser.add_argument('-sort_by_target', action='store_true', help='lowercase data')
 parser.add_argument('-join_vocab', action='store_true', help='Using one dictionary for both source and target')
@@ -136,7 +137,12 @@ def init_vocab(name, data_files, vocab_file, vocab_size, tokenizer, num_workers=
     if vocab_file is not None:
         # If given, load existing word dictionary.
         print('Reading ' + name + ' vocabulary from \'' + vocab_file + '\'...')
-        vocab = onmt.Dict()
+        if not opt.load_bpe_voc:
+            vocab = onmt.Dict()
+        else:
+            vocab = onmt.Dict([onmt.constants.PAD_WORD, onmt.constants.UNK_WORD,
+                               onmt.constants.BOS_WORD, onmt.constants.EOS_WORD],
+                              lower=opt.lower)
         vocab.loadFile(vocab_file)
         print('Loaded ' + str(vocab.size()) + ' ' + name + ' words')
 

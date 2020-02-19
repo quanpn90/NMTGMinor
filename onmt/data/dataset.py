@@ -223,7 +223,8 @@ class Dataset(torch.utils.data.Dataset):
                  multiplier=1, sorting=False,
                  augment=False,
                  src_align_right=False, tgt_align_right=False,
-                 verbose=False, cleaning=False, **kwargs):
+                 verbose=False, cleaning=False,
+                 **kwargs):
         """
         :param src_data: List of tensors for the source side (1D for text, 2 or 3Ds for other modalities)
         :param tgt_data: List of tensors (1D text) for the target side (already padded with <s> and </s>
@@ -247,6 +248,7 @@ class Dataset(torch.utils.data.Dataset):
         For models with absolute positional encoding, src and tgt should be aligned left (This is default)
         For models with relative positional encoding, src should be right and tgt should be left
         """
+
         self.src = src_data
         self._type = data_type
         self.src_align_right = src_align_right
@@ -254,6 +256,16 @@ class Dataset(torch.utils.data.Dataset):
             print("* Source sentences aligned to the right side.")
         self.tgt_align_right = tgt_align_right
         self.upsampling = kwargs.get('upsampling', False)
+
+        self.max_src_len = kwargs.get('max_src_len', None)
+        self.max_tgt_len = kwargs.get('max_tgt_len', 256)
+
+        if self.max_src_len is None:
+            if self._type == 'text':
+                self.max_src_len = 256
+            else:
+                self.max_src_len = 1024
+
         # self.reshape_speech = reshape_speech
         if tgt_data:
             self.tgt = tgt_data
@@ -274,7 +286,7 @@ class Dataset(torch.utils.data.Dataset):
                 src_size = src_tensor.size(0)
                 tgt_size = tgt_tensor.size(0)
 
-                if src_size > 0 and tgt_size > 2:
+                if 0 < src_size < self.max_src_len and 2 < tgt_size < self.max_tgt_len:
                     cleaned_src.append(src_tensor)
                     cleaned_tgt.append(tgt_tensor)
                 else:

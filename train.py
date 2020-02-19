@@ -165,7 +165,7 @@ def main():
                                       multiplier=opt.batch_size_multiplier,
                                       src_align_right=opt.src_align_right,
                                       upsampling=opt.upsampling,
-                                      cleaning=False, verbose=True)
+                                      cleaning=True , verbose=True)
         else:
             train_data = onmt.StreamDataset(train_src,
                                             train_tgt,
@@ -199,7 +199,7 @@ def main():
                                       data_type="text", sorting=False,
                                       batch_size_sents=opt.batch_size_sents,
                                       src_align_right=opt.src_align_right,
-                                      cleaning=False, verbose=True)
+                                      cleaning=True, verbose=True)
         else:
             # for validation data, we have to go through sentences (very slow but to ensure correctness)
             valid_data = onmt.StreamDataset(valid_src, valid_tgt,

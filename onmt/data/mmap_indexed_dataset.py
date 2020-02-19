@@ -34,7 +34,6 @@ def code(dtype):
             return k
     raise ValueError(dtype)
 
-
 def index_file_path(prefix_path):
     return prefix_path + '.idx'
 
@@ -42,12 +41,10 @@ def index_file_path(prefix_path):
 def data_file_path(prefix_path):
     return prefix_path + '.bin'
 
-
 def _warmup_mmap_file(path):
     with open(path, 'rb') as stream:
         while stream.read(100 * 1024 * 1024):
             pass
-
 
 class MMapIndexedDataset(torch.utils.data.Dataset):
     class Index(object):
@@ -226,5 +223,5 @@ class MMapIndexedDatasetBuilder(object):
     def finalize(self, index_file):
         self._data_file.close()
 
-        with MMapIndexedDataset.Index.writer(index_file, np.int32) as index:
+        with MMapIndexedDataset.Index.writer(index_file, self._dtype) as index:
             index.write(self._sizes)
