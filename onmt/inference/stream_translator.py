@@ -220,7 +220,7 @@ class StreamTranslator(Translator):
 
         if self.dynamic_max_len:
             src_len = src.size(0)
-            max_len = math.ceil(int(src_len) * self.dynamic_max_len_scale)
+            max_len = min(math.ceil(int(src_len) * self.dynamic_max_len_scale), self.opt.max_sent_length)
             min_len = math.ceil(int(src_len) * self.dynamic_min_len_scale)
         else:
             min_len = self.min_len

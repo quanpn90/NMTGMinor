@@ -68,6 +68,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
         self.layer_modules = list()
         self.asynchronous = opt.asynchronous
         self.max_memory_size = opt.max_memory_size
+        self.extra_context_size = opt.extra_context_size
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type,
@@ -319,6 +320,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         self.double_position = opt.double_position
         self.max_memory_size = opt.max_memory_size
         self.stream_context = opt.stream_context
+        self.extra_context_size = opt.extra_context_size
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerDecoder, self).__init__(opt, dicts,
@@ -357,9 +359,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         return input
 
-    def create_context_mask(self, input, src, src_lengths, tgt_lengths):
+    def create_context_mask(self, input, src, src_lengths, tgt_lengths, extra_context_length=0):
         """
         Generate the mask so that part of the target attends to a part of the source
+        :param extra_context_length:
         :param input:
         :param src:
         :param src_lengths:
@@ -395,6 +398,39 @@ class RelativeTransformerDecoder(TransformerDecoder):
                 else:
                     mask = current_mask
 
+        # elif self.stream_context == 'local_xl':
+        #     # Local extra context: only attends to the aligned context + extra mem
+        #     # This mode ensures that all target sentences have the same memory, not uneven like "global"
+        #
+        #     for (src_length, tgt_length) in zip(src_lengths, tgt_lengths):
+        #
+        #         # First: we read the existing mask to know where we are
+        #         if mask is None:
+        #             prev_src_length = 0
+        #             prev_tgt_length = 0
+        #         else:
+        #             prev_src_length, prev_tgt_length = mask.size(1), mask.size(0)
+        #
+        #             # current tgt sent attend to only current src sent
+        #             if prev_src_length > 0:
+        #                 current_mask = torch.cat([input.new_ones(tgt_length, prev_src_length - extra_context_length),
+        #                                           input.new_zeros(tgt_length, src_length + extra_context_length)], dim=-1)
+        #             else:
+        #                 current_mask = input.new_zeros(tgt_length, src_length + extra_context_length)
+        #
+        #                 # the previous target cannot attend to the current source
+        #                 if prev_tgt_length > 0:
+        #                     prev_mask = input.new_ones(prev_tgt_length, src_length)
+        #                     prev_mask = torch.cat([mask, prev_mask], dim=-1)
+        #                 else:
+        #                     prev_mask = None
+        #
+        #                 # the output mask has two parts: the prev and the current
+        #                 if prev_mask is not None:
+        #                     mask = torch.cat([prev_mask, current_mask], dim=0)
+        #                 else:
+        #                     mask = current_mask
+
         elif self.stream_context in ['local', 'limited']:
             # Local context: only attends to the aligned context
             for (src_length, tgt_length) in zip(src_lengths, tgt_lengths):
@@ -407,10 +443,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
                 # current tgt sent attend to only current src sent
                 if prev_src_length > 0:
-                    current_mask = torch.cat([input.new_ones(tgt_length, prev_src_length),
-                                              input.new_zeros(tgt_length, src_length)], dim=-1)
+                    current_mask = torch.cat([input.new_ones(tgt_length, prev_src_length - extra_context_length),
+                                              input.new_zeros(tgt_length, src_length + extra_context_length)], dim=-1)
                 else:
-                    current_mask = input.new_zeros(tgt_length, src_length)
+                    current_mask = input.new_zeros(tgt_length, src_length + extra_context_length)
 
                 # the previous target cannot attend to the current source
                 if prev_tgt_length > 0:
@@ -489,8 +525,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
                     coverage: batch_size x len_tgt x src_len
 
                 """
-        # if streaming:
-        #     return self.forward_stream(input, context, src, input_pos, input_lang, **kwargs)
 
         """ Embedding: batch_size x len_tgt x d_model """
         input = input.transpose(0, 1)  # T x B
@@ -503,10 +537,13 @@ class RelativeTransformerDecoder(TransformerDecoder):
             streaming_state = kwargs.get("streaming_state")
             # mems = streaming_state.tgt_mems
             mem_len = streaming_state.prev_tgt_mem_size
+            extra_context = streaming_state.extra_context
+            extra_context_length = extra_context.size(0) if extra_context is not None else 0
             # mem_len = mems[0].size(0) if mems is not None else 0
         else:
             mem_len = 0
             mems = None
+            extra_context = None
 
         if self.double_position:
             assert input_pos is not None
@@ -540,7 +577,9 @@ class RelativeTransformerDecoder(TransformerDecoder):
                     mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
             else:
                 if streaming:
-                    context_attn_mask = self.create_context_mask(input, src, src_lengths, tgt_lengths)
+                    context_attn_mask = self.create_context_mask(input, src,
+                                                                 src_lengths, tgt_lengths,
+                                                                 extra_context_length)
                     mask_src = context_attn_mask.unsqueeze(0)
                 else:
                     mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
@@ -571,6 +610,9 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         if streaming:
             hids = [output]
+            if extra_context is not None:
+                context = torch.cat([extra_context, context], dim=0)
+                # print(context.size(), context_attn_mask.size())
 
         pos_emb = self.preprocess_layer(pos_emb)
 
@@ -601,6 +643,12 @@ class RelativeTransformerDecoder(TransformerDecoder):
         if streaming:
             streaming_state.prev_tgt_mem_size += sum(tgt_lengths.tolist())
             streaming_state.prune_target_memory(self.max_memory_size)
+
+            # if we use the extra context: keep the last context
+            if self.extra_context_size > 0:
+                extra_context = context[-self.extra_context_size:].detach()
+                streaming_state.extra_context = extra_context
+
             # if self.stream_context in ['local', 'global']:
             #     streaming_state.update_tgt_mems(hids, qlen)
             output_dict['streaming_state'] = streaming_state
@@ -816,6 +864,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
         streaming_state.prev_tgt_mem_size += 1
         streaming_state.prune_target_memory(self.max_memory_size + input.size(0))
 
+        extra_context = context[-self.extra_context_size:].detach()
+
         output_dict = defaultdict(lambda: None, {'hidden': output, 'coverage': coverage, 'context': context})
         output_dict['streaming_state'] = streaming_state
 
@@ -824,7 +874,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
 class RelativeTransformer(Transformer):
 
-    def create_decoder_state(self, batch, beam_size=1, type=1, streaming=False, previous_decoding_state=None):
+    def create_decoder_state(self, batch, beam_size=1, type=1, streaming=False, previous_decoding_state=None,
+                             **kwargs):
         """
         Generate a new decoder state based on the batch input
         :param previous_decoding_state:
@@ -870,12 +921,23 @@ class RelativeTransformer(Transformer):
 
             # to have the same batch/beam size with the previous memory ..
             src_transposed = src_transposed.repeat(beam_size, 1)
+            src = src.repeat(1, beam_size)
 
             encoder_output = self.encoder(src_transposed, input_pos=src_pos,
                                           input_lang=src_lang, src_lengths=src_lengths,
                                           streaming=True, streaming_state=streaming_state)
 
             context = encoder_output['context']
+
+            if self.decoder.extra_context_size > 0:
+                # print("Using extra context with extra %d states" % self.decoder.extra_context_size)
+                # print("")
+                prev_context = previous_decoding_state.context
+                extra_context = prev_context[-self.decoder.extra_context_size:].detach()
+                context = torch.cat([extra_context, context], dim=0)
+
+                prev_src = previous_decoding_state.src[-self.decoder.extra_context_size:].detach()
+                src = torch.cat([prev_src, src], dim=0)
 
             decoder_state = StreamDecodingState(src, tgt_lang, context,
                                                 encoder_output['src_mask'],
@@ -946,21 +1008,8 @@ class StreamState(object):
                 empty = torch.empty(0, dtype=dtype, device=device)
                 self.tgt_mems.append(empty)
 
+        self.extra_context = None
         self.context_memory = None
-
-    def push_context(self, context, max_size=sys.maxsize):
-
-        if self.context_memory is None:
-            self.context_memory = context
-
-        else:
-            self.context_memory = torch.cat([self.context_memory, context], dim=0)
-
-        # prune the context memory
-        if maxsize < sys.maxsize:
-            self.context_memory = self.context_memory[-max_size:, :, :]
-
-        return self.context_memory
 
     def prune_source_memory(self, mem_size):
 

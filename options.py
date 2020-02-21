@@ -111,6 +111,8 @@ def make_parser(parser):
                         help='Maximum length for positional embedding')
     parser.add_argument('-max_memory_size', type=int, default=1024,
                         help='Maximum memory size for buffering in transformer XL')
+    parser.add_argument('-extra_context_size', type=int, default=32,
+                        help='Extra context size in transformer Xl')
     parser.add_argument('-epochs', type=int, default=13,
                         help='Number of training epochs')
     parser.add_argument('-start_epoch', type=int, default=1,
@@ -307,6 +309,9 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'stream_context'):
         opt.stream_context = 'local'
+
+    if not hasattr(opt, 'extra_context_size'):
+        opt.extra_context_size = 0
 
     if opt.model == 'relative_unified_transformer' and not opt.src_align_right:
         print(" !!! Warning: model %s requires source sentences aligned to the right (-src_align_right)" % opt.model)
