@@ -109,6 +109,23 @@ def build_tm_model(opt, dicts):
         decoder = RelativeTransformerDecoder(opt, embedding_tgt, None, language_embeddings=language_embeddings)
         model = RelativeTransformer(encoder, decoder, generator, mirror=opt.mirror_loss)
 
+    elif opt.model == 'distance_transformer':
+
+        from onmt.models.relative_transformer import RelativeTransformerDecoder, RelativeTransformer
+        from onmt.models.distance_transformer import DistanceTransformerEncoder
+
+        if opt.encoder_type == "text":
+            encoder = DistanceTransformerEncoder(opt, embedding_src, None,
+                                                 opt.encoder_type, language_embeddings=language_embeddings)
+        if opt.encoder_type == "audio":
+            # raise NotImplementedError
+            encoder = DistanceTransformerEncoder(opt, None, None, encoder_type=opt.encoder_type,
+                                                 language_embeddings=language_embeddings)
+
+        generator = nn.ModuleList(generators)
+        decoder = RelativeTransformerDecoder(opt, embedding_tgt, None, language_embeddings=language_embeddings)
+        model = RelativeTransformer(encoder, decoder, generator, mirror=opt.mirror_loss)
+
     elif opt.model == 'unified_transformer':
         from onmt.models.unified_transformer import UnifiedTransformer
 
@@ -173,8 +190,12 @@ def init_model_parameters(model, opt):
             if hasattr(m, 'bias') and m.bias is not None:
                 init_bias(m.bias)
         elif classname.find('Embedding') != -1:
-            if hasattr(m, 'weight'):
-                init_weight(m.weight)
+            if opt.init_embedding == 'normal':
+                if hasattr(m, 'weight'):
+                    init_weight(m.weight)
+            elif opt.init_embedding in ['uniform', 'xavier']:
+                if hasattr(m, 'weight'):
+                    init_embed(m.weight)
         elif classname.find('LayerNorm') != -1 or classname.find('FusedLayerNorm') != -1:
             if hasattr(m, 'weight'):
                 nn.init.normal_(m.weight, 1.0, init_std)

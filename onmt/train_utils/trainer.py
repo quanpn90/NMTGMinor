@@ -157,16 +157,22 @@ class XETrainer(BaseTrainer):
         self.model.eval()
         self.model.reset_states()
 
-        if opt.streaming:
-            streaming_state = self.model.init_stream()
-        else:
-            streaming_state = None
+        # if opt.streaming:
+        #     streaming_state = self.model.init_stream()
+        # else:
+        #     streaming_state = None
 
         """ PyTorch semantics: save space by not creating gradients """
         with torch.no_grad():
             for i in range(len(data)):
 
                 batch = data.next()[0]
+
+                if opt.streaming:
+                    if data.is_new_stream():
+                        streaming_state = self.model.init_stream()
+                else:
+                    streaming_state = None
 
                 if self.cuda:
                     batch.cuda(fp16=self.opt.fp16)
@@ -227,10 +233,10 @@ class XETrainer(BaseTrainer):
         denom = 3584
         nan = False
 
-        if opt.streaming:
-            streaming_state = self.model.init_stream()
-        else:
-            streaming_state = None
+        # if opt.streaming:
+        #     streaming_state = self.model.init_stream()
+        # else:
+        #     streaming_state = None
         
         for i in range(iteration, n_samples):
 
@@ -254,6 +260,12 @@ class XETrainer(BaseTrainer):
                 batch = batches[b]
                 if self.cuda:
                     batch.cuda(fp16=self.opt.fp16)
+
+                if opt.streaming:
+                    if train_data.is_new_stream():
+                        streaming_state = self.model.init_stream()
+                else:
+                    streaming_state = None
             
                 oom = False
                 try:

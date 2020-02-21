@@ -317,12 +317,14 @@ class StreamDataset(torch.utils.data.Dataset):
         self.pad_count = False
 
         # group samples into mini-batches
-        self.batches = []
+        self.streams = []
         self.num_batches = 0
+        self.n_streams = 0
         self.allocate_batch()
 
-        self.cur_index = 0
-        self.batchOrder = None
+        self.current_stream_index = 0
+        self.in_stream_index = 0
+        self.stream_order = None
 
         if augment:
             self.augmenter = Augmenter()
@@ -340,6 +342,7 @@ class StreamDataset(torch.utils.data.Dataset):
     # This function allocates the mini-batches (grouping sentences with the same size)
     def allocate_batch(self):
 
+        cur_stream = []
         cur_batch = []
         cur_batch_size = 0
         cur_batch_sizes = []
@@ -360,6 +363,8 @@ class StreamDataset(torch.utils.data.Dataset):
         i = 0
         while i < self.fullSize:
 
+            src_size = self.src[i].size(0) if self.src is not None else 0
+            tgt_size = self.tgt[i].size(0) if self.tgt is not None else 0
             if self.tgt is not None and self.src is not None:
                 sentence_length = self.tgt[i].size(0) + self.src[i].size(0) - 1
             elif self.tgt is not None:
@@ -367,9 +372,25 @@ class StreamDataset(torch.utils.data.Dataset):
             else:
                 sentence_length = self.src[i].size(0)
 
+            # first of document or meet a blank line:
+            if i == 0 or src_size == 0 or tgt_size == 2:
+
+                if len(cur_stream) > 0:
+                    self.streams.append(cur_stream)
+
+                cur_stream = []
+                cur_batch = []
+                cur_batch_size = 0
+                cur_batch_sizes = []
+
+                if src_size == 0 or tgt_size == 2:  # blank line, move on
+                    i = i + 1
+                    continue
+
             oversized = oversize_(cur_batch, sentence_length)
             # if the current item makes the batch exceed max size
             # then we create a new batch
+
             if oversized:
                 # cut-off the current list to fit the multiplier
                 current_size = len(cur_batch)
@@ -378,7 +399,7 @@ class StreamDataset(torch.utils.data.Dataset):
                     current_size % self.multiplier)
 
                 batch_ = cur_batch[:scaled_size]
-                self.batches.append(batch_)  # add this batch into the batch list
+                cur_stream.append(batch_)  # add this batch into the current stream
 
                 cur_batch = cur_batch[scaled_size:]  # reset the current batch
                 cur_batch_sizes = cur_batch_sizes[scaled_size:]
@@ -392,9 +413,15 @@ class StreamDataset(torch.utils.data.Dataset):
 
         # catch the last batch
         if len(cur_batch) > 0:
-            self.batches.append(cur_batch)
+            cur_stream.append(cur_batch)
 
-        self.num_batches = len(self.batches)
+        # catch the last stream:
+        if len(cur_stream) > 0:
+            self.streams.append(cur_stream)
+
+        self.num_batches = sum([len(stream) for stream in self.streams])
+        self.n_streams = len(self.streams)
+        print("* Total %d streams collected." % self.n_streams)
 
     def __len__(self):
         return self.num_batches
@@ -404,9 +431,17 @@ class StreamDataset(torch.utils.data.Dataset):
         :param index: the index of the mini-batch in the list
         :return: Batch
         """
-        assert index < self.num_batches, "%d > %d" % (index, self.num_batches)
+        # print("!!! Stream dataset cannot be accessed with getitem ...")
+        # raise NotImplementedError
+        stream_id, batch_id = index
 
-        batch_ids = self.batches[index]
+        n_batches = len(self.streams[stream_id])
+        assert stream_id < self.n_streams, "%d > %d" % (stream_id, self.n_streams)
+        assert batch_id < n_batches, "%d > %d" % (batch_id, n_batches)
+
+        # access the batch
+        batch_ids = self.streams[stream_id][batch_id]
+
         if self.src:
             src_data = [self.src[i] for i in batch_ids]
         else:
@@ -444,34 +479,49 @@ class StreamDataset(torch.utils.data.Dataset):
     # genereate a new batch - order (static)
     def create_order(self, random=True):
 
-        # always generate in order of the data
-        self.batchOrder = torch.arange(self.num_batches).long()
+        self.current_stream_index = 0
+        self.in_stream_index = 0
 
-        self.cur_index = 0
+        if random:
+            self.stream_order = torch.randperm(len(self.streams))
+        else:
+            self.stream_order = torch.arange(len(self.streams)).long()
 
-        return self.batchOrder
+        return self.stream_order
 
     # return the next batch according to the iterator
     def next(self, curriculum=False, reset=True, split_sizes=1):
 
         # reset iterator if reach data size limit
-        if self.cur_index >= self.num_batches:
+        if self.current_stream_index >= self.n_streams:
             if reset:
-                self.cur_index = 0
+                self.current_stream_index = 0
+                self.in_stream_index = 0
             else:
                 return None
 
-        if curriculum or self.batchOrder is None:
-            batch_index = self.cur_index
-        else:
-            batch_index = self.batchOrder[self.cur_index]
-
+        current_stream_size = len(self.streams[self.stream_order[self.current_stream_index]])
+        #
+        # if curriculum or self.batchOrder is None:
+        #     batch_index = self.cur_index
+        # else:
+        # batch_index = self.batchOrder[self.cur_index]
+        batch_index = [self.stream_order[self.current_stream_index], self.in_stream_index]
         batch = self[batch_index]
-
+        #
         # move the iterator one step
-        self.cur_index += 1
+        self.in_stream_index += 1
+        # if the current stream run out of batch: move to a new stream
+        if self.in_stream_index >= current_stream_size:
+            self.current_stream_index += 1
+            self.in_stream_index = 0
 
         return [batch]
+
+    def is_new_stream(self):
+
+        # 1 because we will call this function after the "0" was given
+        return self.in_stream_index == 1
 
     def shuffle(self):
         data = list(zip(self.src, self.tgt))
@@ -479,5 +529,8 @@ class StreamDataset(torch.utils.data.Dataset):
 
     def set_index(self, iteration):
 
-        assert (0 <= iteration < self.num_batches)
-        self.cur_index = iteration
+        print("This jumping is not implemented for stream dataset. Use -reset_optim instead to start from beginning")
+        raise NotImplementedError
+
+        # assert (0 <= iteration < self.num_batches)
+        # self.cur_index = iteration

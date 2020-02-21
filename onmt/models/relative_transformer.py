@@ -45,20 +45,6 @@ class SinusoidalPositionalEmbedding(nn.Module):
             return pos_emb[:, None, :]
 
 
-class LearnablePostionEmbedding(nn.Module):
-
-    def __init__(self, max_pos, demb):
-        super(LearnablePostionEmbedding, self).__init__()
-        self.max_pos = max(max_pos, 5000)
-        # self.embedding = nn.Embedding(2 * max_pos + 1, demb)
-        self.embedding = nn.Embedding(self.max_pos, demb)
-
-    def forward(self, input):
-        # pos = torch.clamp(input, 0, self.max_pos)
-        # k = min((pos.size(0) - 1) // 2, self.max_pos)
-        return self.embedding(input)
-
-
 class RelativeTransformerEncoder(TransformerEncoder):
 
     def __init__(self, opt, dicts, positional_encoder, encoder_type='text', language_embeddings=None):
@@ -76,11 +62,12 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         # learnable position encoding
         if self.learnable_position_encoding:
-            self.max_pos_length = opt.max_pos_length
-            # pos_emb = self.model_size // self.n_heads
-            pos_emb = self.model_size
-            self.positional_encoder = LearnablePostionEmbedding(self.max_pos_length, pos_emb)
-            print("* Learnable position encoding with max %d positions" % self.max_pos_length)
+            raise NotImplementedError
+            # self.max_pos_length = opt.max_pos_length
+            # # pos_emb = self.model_size // self.n_heads
+            # pos_emb = self.model_size
+            # self.positional_encoder = LearnablePostionEmbedding(self.max_pos_length, pos_emb)
+            # print("* Learnable position encoding with max %d positions" % self.max_pos_length)
         else:
             # or using pre-set sinusoidal
             self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
