@@ -250,7 +250,7 @@ class StreamDataset(torch.utils.data.Dataset):
                  src_langs=None, tgt_langs=None,
                  batch_size_words=2048,
                  data_type="text", batch_size_sents=128,
-                 multiplier=1,
+                 multiplier=1, cleaning=False,
                  augment=False,
                  **kwargs):
         """
@@ -288,12 +288,49 @@ class StreamDataset(torch.utils.data.Dataset):
         else:
             self.tgt = None
 
-        # in stream dataset we don't sort data
+        self.max_src_len = kwargs.get('max_src_len', None)
+        self.max_tgt_len = kwargs.get('max_tgt_len', 256)
 
+        if self.max_src_len is None:
+            if self._type == 'text':
+                self.max_src_len = 256
+            else:
+                self.max_src_len = 1024
+
+        # Remove the sentences that are empty
+        if cleaning:
+            cleaned_src = []
+            cleaned_tgt = []
+            n_removes = []
+
+            for i, (src_tensor, tgt_tensor) in enumerate(zip(self.src, self.tgt)):
+
+                src_size = src_tensor.size(0)
+                tgt_size = tgt_tensor.size(0)
+
+                if src_size < self.max_src_len and tgt_size < self.max_tgt_len:
+                    cleaned_src.append(src_tensor)
+                    cleaned_tgt.append(tgt_tensor)
+                else:
+                    n_removes.append(i)
+
+            self.src = cleaned_src
+            self.tgt = cleaned_tgt
+            print("Removed %d sentences that are too long. " % len(n_removes))
+
+        # in stream dataset we don't sort data
         self.src_langs = src_langs
         self.tgt_langs = tgt_langs
         if self.src_langs is not None and self.tgt_langs is not None:
             assert (len(src_langs) == len(tgt_langs))
+
+            if cleaning:
+                n_samples = len(src_langs)
+                if len(self.src_langs) > 1:
+                    self.src_langs = [self.src_langs[i] for i in range(n_samples) and i not in n_removes]
+
+                if len(self.tgt_langs) > 1:
+                    self.tgt_langs = [self.tgt_langs[i] for i in range(n_samples) and i not in n_removes]
 
         # In "bilingual" case, the src_langs only contains one single vector
         # Which is broadcasted to batch_size
@@ -511,7 +548,7 @@ class StreamDataset(torch.utils.data.Dataset):
         #
         # move the iterator one step
         self.in_stream_index += 1
-        # if the current stream run out of batch: move to a new stream
+        # if the current stream runs out of batch: move to a new stream
         if self.in_stream_index >= current_stream_size:
             self.current_stream_index += 1
             self.in_stream_index = 0

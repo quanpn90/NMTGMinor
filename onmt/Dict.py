@@ -174,15 +174,18 @@ class Dict(object):
 
         return torch.LongTensor(vec)
 
-    def convertToLabels(self, idx, stop):
+    def convertToLabels(self, idx, stop, including_stop=True):
         """
         Convert `idx` to labels.
         If index `stop` is reached, convert it and return.
         """
-        #~ print(self.idxToLabel)
         labels = []
 
         for i in idx:
+
+            if not including_stop:
+                if i == stop:
+                    break
 
             word = self.getLabel(int(i))
             labels += [word]

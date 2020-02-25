@@ -105,6 +105,8 @@ parser.add_argument('-gpu', type=int, default=-1,
                     help="Device to run on")
 parser.add_argument('-fast_translate', action='store_true',
                     help='Using the fast decoder')
+parser.add_argument('-global_search', action='store_true',
+                    help='Using the global beam search for streaming')
 parser.add_argument('-dynamic_max_len', action='store_true',
                     help='Using the fast decoder')
 parser.add_argument('-dynamic_max_len_scale', type=float, default=5.0,
@@ -184,7 +186,13 @@ def main():
         if opt.batch_size != 1:
             opt.batch_size = 1
             print("Warning: Streaming only works with batch size 1")
-        translator = StreamTranslator(opt)
+
+        if opt.global_search:
+            print(" Using global search algorithm ")
+            from onmt.inference.global_translator import GlobalStreamTranslator
+            translator = GlobalStreamTranslator(opt)
+        else:
+            translator = StreamTranslator(opt)
     else:
         translator = FastTranslator(opt)
 

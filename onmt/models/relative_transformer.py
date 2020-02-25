@@ -894,7 +894,6 @@ class RelativeTransformer(Transformer):
                                           streaming=streaming, streaming_state=streaming_state)
 
             if streaming:
-
                 decoder_state = StreamDecodingState(src, tgt_lang, encoder_output['context'],
                                                     encoder_output['src_mask'],
                                                     beam_size=beam_size, model_size=self.model_size, type=type,
@@ -1022,6 +1021,38 @@ class StreamState(object):
                         if key not in ['c_k', 'c_v']:
                             self.tgt_buffer[i][key] = self.tgt_buffer[i][key][-mem_size:]
 
+    def get_beam_buffer(self, beam_id):
+
+        buffer = dict()
+
+        for i in self.tgt_buffer:
+
+            buffer[i] = dict()
+
+            buffer[i]['v'] = self.tgt_buffer[i]['v'].index_select(1, beam_id)  # the batch dim is 1
+            buffer[i]['k'] = self.tgt_buffer[i]['k'].index_select(1, beam_id)
+
+        return buffer
+
+    def set_beam_buffer(self, sent_states):
+
+        # assert(len(sent_states) == len(self.tgt_buffer))
+        tensor = self.tgt_buffer[0]['v']
+        hidden_size = tensor.size(-1)
+
+        # first let's try with min_length
+        beam_size = len(sent_states)
+        min_length = min([sent_states[b]['hidden_buffer'][0]['k'].size(0) for b in range(beam_size)])
+
+        mem_length = min_length
+        for l in self.tgt_buffer:
+            self.tgt_buffer[l]['v'] = tensor.new(mem_length, beam_size, hidden_size).zero_()
+            self.tgt_buffer[l]['k'] = tensor.new(mem_length, beam_size, hidden_size).zero_()
+
+            for b in range(beam_size):
+                self.tgt_buffer[l]['v'][:, b, :].copy_(sent_states[b]['hidden_buffer'][l]['v'][-mem_length:, 0])
+                self.tgt_buffer[l]['k'][:, b, :].copy_(sent_states[b]['hidden_buffer'][l]['k'][-mem_length:, 0])
+
     # When we start a sentence a new, the context key and value buffers need to be reset
     def reset_context_memory(self):
         for l in self.tgt_buffer:
@@ -1120,6 +1151,16 @@ class StreamDecodingState(DecoderState):
 
         self.concat_input_seq = False
         self.tgt_lang = tgt_lang
+        self.origin = torch.arange(self.beam_size).to(src.device)
+        # to know where each hypothesis comes from the previous beam
+
+    def get_beam_buffer(self, beam_id):
+
+        return self.streaming_state.get_beam_buffer(beam_id)
+
+    def set_beam_buffer(self, sent_states):
+
+        return self.streaming_state.set_beam_buffer(sent_states)
 
     def update_attention_buffer(self, buffer, layer):
 
@@ -1165,6 +1206,8 @@ class StreamDecodingState(DecoderState):
 
         if self.streaming_state.context_memory is not None:
             self.streaming_state.context_memory = self.streaming_state.context_memory.index_select(1, reorder_state)
+
+        self.origin = self.origin.index_select(0, reorder_state)
 
     def prune_complete_beam(self, active_idx, remaining_sents):
         pass

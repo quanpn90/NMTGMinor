@@ -61,7 +61,7 @@ class BeamSearch(Search):
     def __init__(self, tgt_dict):
         super().__init__(tgt_dict)
 
-    def step(self, step, lprobs, scores):
+    def step(self, step, lprobs, scores, initial_score=None, **kwargs):
         super()._init_buffers(lprobs)
 
         # batch size first, then beam size
@@ -70,23 +70,33 @@ class BeamSearch(Search):
         if step == 0:
             # at the first step all hypotheses are equally likely, so use
             # only the first beam
-            lprobs = lprobs[:, ::beam_size, :].contiguous()
+            if initial_score is None or torch.sum(initial_score).item() == 0:
+                lprobs = lprobs[:, ::beam_size, :].contiguous()
+            else:
+                lprobs.add_(initial_score.unsqueeze(-1))
+            # if we don't do this, the first beam will contain top K of exactly the same thing ...
         else:
+
             # make probs contain cumulative scores for each hypothesis
             lprobs.add_(scores[:, :, step - 1].unsqueeze(-1))
 
+        # here lprobs should be (bsz, beam_size, V) (in streaming, bsz should be 1)
         torch.topk(
-            lprobs.view(bsz, -1),
+            lprobs.view(bsz, -1),  # after view, it should be (bsz, beam_size x V)
             k=min(
                 # Take the best 2 x beam_size predictions. We'll choose the first
                 # beam_size of these which don't predict eos to continue with.
                 beam_size * 2,
-                lprobs.view(bsz, -1).size(1) - 1,  # -1 so we never select pad
+                lprobs.view(bsz, -1).size(1) - beam_size,  # -beam_size so we never select pad (beam_size times)
             ),
             out=(self.scores_buf, self.indices_buf),
         )
+
         # torch.div(self.indices_buf, vocab_size, out=self.beams_buf)
+        # beams_buf helps us know where the origin of each
         self.beams_buf = torch.div(self.indices_buf, vocab_size)
+
+        # indices: the word indices in the vocabulary
         self.indices_buf.fmod_(vocab_size)
         return self.scores_buf, self.indices_buf, self.beams_buf
 
