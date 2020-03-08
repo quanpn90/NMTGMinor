@@ -10,6 +10,7 @@ import os, sys
 from onmt.model_factory import build_model, build_language_model
 from copy import deepcopy
 from onmt.utils import checkpoint_paths, normalize_gradients
+import glob
 
 
 parser = argparse.ArgumentParser(description='translate.py')
@@ -19,6 +20,8 @@ parser.add_argument('-models', required=True,
                     help='Path to model .pt file')
 parser.add_argument('-lm', action='store_true',
                     help='Language model (default is seq2seq model')
+parser.add_argument('-sort_by_date', action='store_true',
+                    help='Sort the model files by date')
 parser.add_argument('-output', default='model.averaged',
                     help="""Path to output averaged model""")
 parser.add_argument('-gpu', type=int, default=-1,
@@ -38,6 +41,7 @@ def custom_build_model(opt, dict, lm=False):
 
     return model
 
+
 def main():
     
     opt = parser.parse_args()
@@ -49,7 +53,12 @@ def main():
 
     path = opt.models
 
-    existed_save_files = checkpoint_paths(path)
+    if not opt.sort_by_date:
+        existed_save_files = checkpoint_paths(path)
+    else:
+        existed_save_files = glob.glob(path + "/" + "*.pt")
+        existed_save_files.sort(key=os.path.getmtime)
+        print("\n".join(existed_save_files))
 
     # print(existed_save_files)
     models = existed_save_files

@@ -194,7 +194,10 @@ def main():
         else:
             translator = StreamTranslator(opt)
     else:
-        translator = FastTranslator(opt)
+        if opt.fast_translate:
+            translator = FastTranslator(opt)
+        else:
+            translator = onmt.Translator(opt)
 
     # Audio processing for the source batch
     if opt.encoder_type == "audio":
@@ -297,6 +300,12 @@ def main():
                     src_tokens = list(line.strip())
                 else:
                     raise NotImplementedError("Input type unknown")
+                if line.strip() == "":
+                    if opt.streaming:
+                        print("Found a document break")
+                        translator.reset_stream()
+                        continue
+
                 src_batch += [src_tokens]
                 if tgtF:
                     # ~ tgt_tokens = tgtF.readline().split() if tgtF else None

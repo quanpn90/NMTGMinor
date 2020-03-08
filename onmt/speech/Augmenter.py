@@ -4,6 +4,7 @@ from collections import defaultdict
 import onmt
 import random
 
+
 class Augmenter(object):
     """
     Implementation of the "Spec Augmentation" method

@@ -204,7 +204,7 @@ def main():
             # for validation data, we have to go through sentences (very slow but to ensure correctness)
             valid_data = onmt.StreamDataset(valid_src, valid_tgt,
                                             valid_src_langs, valid_tgt_langs,
-                                            batch_size_words=1,
+                                            batch_size_words=opt.batch_size_words,
                                             data_type="text", sorting=True,
                                             batch_size_sents=opt.batch_size_sents)
 

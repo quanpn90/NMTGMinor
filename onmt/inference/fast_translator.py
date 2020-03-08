@@ -209,7 +209,7 @@ class FastTranslator(Translator):
 
         if self.dynamic_max_len:
             src_len = src.size(0)
-            max_len = math.cell(int(src_len) * self.dynamic_max_len_scale)
+            max_len = math.ceil(int(src_len) * self.dynamic_max_len_scale)
 
         # Start decoding
         for step in range(max_len + 1):  # one extra step for EOS marker

@@ -190,12 +190,18 @@ def init_model_parameters(model, opt):
             if hasattr(m, 'bias') and m.bias is not None:
                 init_bias(m.bias)
         elif classname.find('Embedding') != -1:
-            if opt.init_embedding == 'normal':
-                if hasattr(m, 'weight'):
-                    init_weight(m.weight)
-            elif opt.init_embedding in ['uniform', 'xavier']:
-                if hasattr(m, 'weight'):
-                    init_embed(m.weight)
+
+            initialize = True
+            if hasattr(m, "no_need_to_initialize"):
+                if m.no_need_to_initialize:
+                    initialize = False
+            if initialize:
+                if opt.init_embedding == 'normal':
+                    if hasattr(m, 'weight'):
+                        init_weight(m.weight)
+                elif opt.init_embedding in ['uniform', 'xavier']:
+                    if hasattr(m, 'weight'):
+                        init_embed(m.weight)
         elif classname.find('LayerNorm') != -1 or classname.find('FusedLayerNorm') != -1:
             if hasattr(m, 'weight'):
                 nn.init.normal_(m.weight, 1.0, init_std)

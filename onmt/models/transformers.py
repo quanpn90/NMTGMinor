@@ -755,7 +755,7 @@ class TransformerDecodingState(DecoderState):
 
         if type == 1:
             # if audio only take one dimension since only used for mask
-            raise NotImplementedError
+            # raise NotImplementedError
             self.original_src = src  # TxBxC
             self.concat_input_seq = True
 

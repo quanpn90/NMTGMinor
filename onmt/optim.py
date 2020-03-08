@@ -92,6 +92,8 @@ class Optim(object):
         print(self.optimizer)
 
     def __init__(self, opt):
+        self.optimizer = None
+        self.params = None
         self.lr = opt.learning_rate
         self.model_size = opt.model_size
         self.max_grad_norm = opt.max_grad_norm
@@ -100,6 +102,14 @@ class Optim(object):
 
         if 'noam' in self.update_method:
             self.init_lr = self.model_size ** (-0.5) * self.lr
+        elif 'cosine' in self.update_method:
+            print("* Using Cosine learning rate schedule")
+            self.scheduler = None
+            self.eta_min = 0.0
+            self.max_step = opt.max_step if hasattr(opt, 'max_step') else 33333
+            self.init_lr = self.lr
+            # optim.lr_scheduler.CosineAnnealingLR(optimizer,
+            #                                                       opt.max_step, eta_min=0.0)
         else:
             self.init_lr = self.lr
         self.lr = self.init_lr
@@ -107,7 +117,7 @@ class Optim(object):
         if self.update_method == 'noam2':
             self._step = opt.warmup_steps
         if self.update_method == 'cosine':
-            self.min_lr = 0.00001
+            self.min_lr = 0.00
         self.warmup_steps = opt.warmup_steps
         self.beta1 = opt.beta1
         self.beta2 = opt.beta2
@@ -152,11 +162,25 @@ class Optim(object):
             else:
                 self.lr = self.init_lr * self._step ** (-0.5)
 
-        elif self.update_method in ['cosine']:
-            self.lr = self.min_lr + (self.init_lr - self.min_lr) * \
-                      (1 + math.cos(math.pi * self._step / self.max_steps)) / 2
+            self.optimizer.param_groups[0]['lr'] = self.lr
 
-        self.optimizer.param_groups[0]['lr'] = self.lr
+        elif self.update_method in ['cosine']:
+            # if self.scheduler is None:
+            #     self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, self.max_step,
+            #                                                           eta_min=self.eta_min)
+            #
+            # self.scheduler.step(self._step)
+            self.lr = self.min_lr + 0.5 * (self.init_lr - self.min_lr) * \
+                (1 + math.cos((self._step / self.max_step) * math.pi))
+            self.optimizer.param_groups[0]['lr'] = self.lr
+            # self.lr = self.optimizer.param_groups[0]['lr']
+            # self.lr = self.min_lr + (self.init_lr - self.min_lr) * \
+            #           (1 + math.cos(math.pi * self._step / self.max_steps)) / 2
+        elif self.update_method in ['regular', 'basic']:
+
+            " :) "
+            self.lr = self.optimizer.param_groups[0]['lr']
+            self.optimizer.param_groups[0]['lr'] = self.lr
 
     def setLearningRate(self, lr):
         self.optimizer.param_groups[0]['lr'] = lr

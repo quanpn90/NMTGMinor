@@ -18,11 +18,24 @@ torch.set_printoptions(threshold=500000)
 
 class LearnablePostionEmbedding(nn.Module):
 
-    def __init__(self, max_pos, demb):
+    def __init__(self, max_pos, demb, nheads):
         super(LearnablePostionEmbedding, self).__init__()
         self.max_pos = max(max_pos, 5000)
+
+        d = demb // nheads
+
+        inv_freq = 1 / (10000 ** (torch.arange(0.0, demb, 2.0) / d))
+
         # self.embedding = nn.Embedding(2 * max_pos + 1, demb)
         self.embedding = nn.Embedding(2 * self.max_pos + 1, demb)
+
+        # initialization
+        pos_seq = torch.arange(-self.max_pos, self.max_pos+1).float()
+        sinusoid_inp = torch.ger(pos_seq, inv_freq)
+        pos_emb = torch.cat([sinusoid_inp.sin(), sinusoid_inp.cos()], dim=-1)
+
+        self.embedding.weight.data.copy_(pos_emb)
+        self.embedding.no_need_to_initialize = True
 
     def forward(self, input):
         pos = torch.clamp(input, -self.max_pos, self.max_pos)
@@ -52,7 +65,7 @@ class DistanceTransformerEncoder(TransformerEncoder):
                                                          language_embeddings)
 
         # learnable position encoding
-        self.positional_encoder = LearnablePostionEmbedding(self.max_pos_length, self.model_size)
+        self.positional_encoder = LearnablePostionEmbedding(self.max_pos_length, self.model_size, self.n_heads)
 
         self.d_head = self.model_size // self.n_heads
 

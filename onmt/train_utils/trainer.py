@@ -12,6 +12,7 @@ from onmt.model_factory import init_model_parameters
 from onmt.utils import checkpoint_paths, normalize_gradients
 from apex import amp
 from onmt.train_utils.stats import Logger
+from onmt.model_factory import build_model, build_language_model, optimize_model
 
 
 class BaseTrainer(object):
@@ -46,15 +47,19 @@ class BaseTrainer(object):
         
         raise NotImplementedError
         
-    def to_variable(self, data):
+    def load_encoder_weight(self, checkpoint_file):
 
-        for i, t in enumerate(data):
-            if self.cuda:
-                data[i] = Variable(data[i].cuda())
-            else:
-                data[i] = Variable(data[i])
+        print("Loading pretrained models from %s" % checkpoint_file)
+        checkpoint = torch.load(checkpoint_file, map_location=lambda storage, loc: storage)
 
-        return data
+        pretrained_model = build_model(checkpoint['opt'], checkpoint['dicts'])
+        pretrained_model.load_state_dict(checkpoint['model'])
+
+        print("Loading pretrained encoder weights ...")
+        encoder_state_dict = pretrained_model.encoder.state_dict()
+        self.model.encoder.load_state_dict(encoder_state_dict)
+
+        return
 
     def _get_grads(self):
         grads = []
@@ -157,10 +162,10 @@ class XETrainer(BaseTrainer):
         self.model.eval()
         self.model.reset_states()
 
-        # if opt.streaming:
-        #     streaming_state = self.model.init_stream()
-        # else:
-        #     streaming_state = None
+        if opt.streaming:
+            streaming_state = self.model.init_stream()
+        else:
+            streaming_state = None
 
         """ PyTorch semantics: save space by not creating gradients """
         with torch.no_grad():
@@ -168,11 +173,11 @@ class XETrainer(BaseTrainer):
 
                 batch = data.next()[0]
 
-                if opt.streaming:
-                    if data.is_new_stream():
-                        streaming_state = self.model.init_stream()
-                else:
-                    streaming_state = None
+                # if opt.streaming:
+                #     if data.is_new_stream():
+                #         streaming_state = self.model.init_stream()
+                # else:
+                #     streaming_state = None
 
                 if self.cuda:
                     batch.cuda(fp16=self.opt.fp16)
@@ -233,10 +238,10 @@ class XETrainer(BaseTrainer):
         denom = 3584
         nan = False
 
-        # if opt.streaming:
-        #     streaming_state = self.model.init_stream()
-        # else:
-        #     streaming_state = None
+        if opt.streaming:
+            streaming_state = self.model.init_stream()
+        else:
+            streaming_state = None
         
         for i in range(iteration, n_samples):
 
@@ -261,11 +266,11 @@ class XETrainer(BaseTrainer):
                 if self.cuda:
                     batch.cuda(fp16=self.opt.fp16)
 
-                if opt.streaming:
-                    if train_data.is_new_stream():
-                        streaming_state = self.model.init_stream()
-                else:
-                    streaming_state = None
+                # if opt.streaming:
+                #     if train_data.is_new_stream():
+                #         streaming_state = self.model.init_stream()
+                # else:
+                #     streaming_state = None
             
                 oom = False
                 try:
@@ -298,6 +303,8 @@ class XETrainer(BaseTrainer):
                         oom = True
                         torch.cuda.empty_cache()
                         loss = 0
+                        if opt.streaming: # reset stream in this case ...
+                            streaming_state = self.model.init_stream()
                     else:
                         raise e
 
@@ -428,6 +435,9 @@ class XETrainer(BaseTrainer):
             init_model_parameters(model, opt)
             resume=False
             self.init_additional_data()
+
+        if opt.load_encoder_from:
+            self.load_encoder_weight(opt.load_encoder_from)
 
         valid_loss = self.eval(self.valid_data)
         valid_ppl = math.exp(min(valid_loss, 100))

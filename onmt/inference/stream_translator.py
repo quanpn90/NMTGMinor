@@ -57,6 +57,10 @@ class StreamTranslator(Translator):
         for i in range(len(self.models)):
             self.models[i].set_memory_size(self.max_memory_size, self.max_memory_size)
 
+    def reset_stream(self):
+
+        self.decoder_states = defaultdict(lambda: None)
+
     def translateBatch(self, batch):
 
         with torch.no_grad():

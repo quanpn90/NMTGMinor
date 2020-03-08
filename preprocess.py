@@ -164,7 +164,7 @@ def save_vocabulary(name, vocab, file):
     vocab.writeFile(file)
 
 
-def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', data_type='int32'):
+def make_lm_data(tgt_file, tgt_dicts, tokenizer, max_tgt_length=1000, input_type='word', data_type='int32'):
     tgt = []
     sizes = []
     count, ignored = 0, 0
@@ -172,32 +172,31 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
     print('Processing %s ...' % (tgt_file))
     tgtf = open(tgt_file)
 
-    eos = torch.LongTensor(1).fill_(onmt.constants.EOS)
-    tensors = [eos]
+    # eos = torch.LongTensor(1).fill_(onmt.constants.EOS)
+    #     # tensors = [eos]
+    tensors = list()
 
     # find the number of words in the sentence
     while True:
         tline = tgtf.readline()
 
         # normal end of file
-        if tline == "": break
+        if tline == "":
+            break
         tline = tline.strip()
         # source and/or target are empty
         if tline == "":
             print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
             continue
 
-        if input_type == 'word':
-            tgt_words = tline.split()
-        elif input_type == 'char':
-            tgt_words = split_line_by_char(tline)
+        tgt_words = tokenizer.tokenize(tline)
 
+        # only uses EOS for language model
         tensor = tgt_dicts.convertToIdx(tgt_words,
                                         onmt.constants.UNK_WORD,
                                         None,
                                         onmt.constants.EOS_WORD,
                                         type=data_type)
-        # print(tensor.size())
         tensors.append(tensor)
 
         count = count + 1
@@ -207,10 +206,7 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
 
     tgtf.close()
 
-    # concatenate all tensors into one
-    tensor = torch.cat(tensors, dim=-1)
-
-    return tensor
+    return tensors
 
 
 def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer,
@@ -538,12 +534,12 @@ def main():
     if opt.lm:
         print('Preparing training language model ...')
         train = dict()
-        train['tgt'] = make_lm_data(opt.train_tgt,
+        train['tgt'] = make_lm_data(opt.train_tgt, tokenizer,
                                     dicts['tgt'])
         train['src'] = None
 
         valid = dict()
-        valid['tgt'] = make_lm_data(opt.valid_tgt,
+        valid['tgt'] = make_lm_data(opt.valid_tgt, tokenizer,
                                     dicts['tgt'])
         valid['src'] = None
 
