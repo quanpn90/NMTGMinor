@@ -5,17 +5,25 @@ import torch
 import torch.utils.data
 from collections import defaultdict
 import onmt
+from onmt.data.dataset import Dataset
 
 
 class LanguageModelBatch(object):
 
-    def __init__(self, data, target, **kwargs):
+    def __init__(self, data, target, lang, **kwargs):
 
         self.data = data
         self.target = target
+        self.lang = lang
 
+        self.tensors = defaultdict(lambda: None)
         self.tensors['target_input'] = data
         self.tensors['target_output'] = target
+        self.tensors['target_lang'] = lang
+
+        self.tgt_size = target.numel()
+        self.src_size = 0
+        self.size = target.size(1)
 
     def get(self, name):
         if name in self.tensors:
@@ -44,15 +52,27 @@ class LanguageModelBatch(object):
 
 class LanguageModelDataset(Dataset):
 
-    def __init__(self, data, batch_size_sents=128, batch_size_words=9999,
+    def __init__(self, data, langs, batch_size_sents=128, batch_size_words=9999,
                  seq_length=64, **kwargs):
 
         # concatenate all sentences in the data to get a stream
-        self.data = torch.cat(data, dim=0)
+        if len(langs) <= 1:
+            self.single_language = True
+        else:
+            self.single_language = False
 
+        if not self.single_language:
+            self.langs = [torch.Tensor([data[i].size(0)]).fill_(langs[i]) for i in range(len(langs))]
+        else:
+            self.langs = langs
+
+        self.langs = torch.cat(self.langs, dim=0).long()
+        self.data = torch.cat(data, dim=0).long()
+            
         self.batch_size_sents = batch_size_sents
         self.batch_size_words = batch_size_words
         self.seq_length = seq_length
+        self.bptt = seq_length
 
         full_length = sum([x.size(0) for x in data])
         # group samples into mini batches
@@ -79,17 +99,22 @@ class LanguageModelDataset(Dataset):
 
         self.batches = []
 
-        for i in range(start, self.data.size(0) - 1, self.bptt):
+        for i in range(0, self.data.size(0) - 1, self.bptt):
             bptt = self.seq_length
             seq_len = min(bptt, self.data.size(0) - 1 - i)
 
             end_idx = i + seq_len
-            beg_idx = max(0, i - self.ext_len)
+            beg_idx = max(0, i)
 
             data = self.data[beg_idx:end_idx]
             target = self.data[i + 1:i + 1 + seq_len]
 
-            self.batches.append((data, target))
+            if self.single_language:
+                lang = self.langs
+            else:
+                lang = self.langs[beg_idx:end_idx]
+
+            self.batches.append((data, target, lang))
 
     # genereate a new batch - order (static)
     def create_order(self, random=False):
@@ -128,8 +153,8 @@ class LanguageModelDataset(Dataset):
             else:
                 return None
 
-
-        data, target = self.batches[self.cur_index]
+        data, target, lang = self.batches[self.cur_index]
+        batch = LanguageModelBatch(data, target, lang)
         self.cur_index += 1
 
         return [batch]

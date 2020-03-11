@@ -302,8 +302,6 @@ def main():
         raise NotImplementedError("Multi-GPU training is not supported at the moment.")
     else:
         trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
-        # if len(additional_data) > 0:
-        #     trainer.add_additional_data(additional_data, opt.data_ratio);
 
     trainer.run(checkpoint=checkpoint)
 

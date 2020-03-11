@@ -110,7 +110,7 @@ class XETrainer(BaseTrainer):
                                                                   self.optim.optimizer,
                                                                   opt_level=opt_level,
                                                                   keep_batchnorm_fp32=False, loss_scale="dynamic",
-                                                                  verbosity=0)
+                                                                  verbosity=1)
         # An ugly hack to switch between align right and align left
         if hasattr(self.model, 'relative'):
             if self.model.relative:
