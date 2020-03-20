@@ -25,6 +25,7 @@ class Bottle(nn.Module):
         """
 
         # revert to no-op for variational dropout
+        # print(input.type(), self.function.weight.data.type())
         return self.function(input)
 
         # # remember the original shape

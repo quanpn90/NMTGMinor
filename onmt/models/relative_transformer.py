@@ -186,6 +186,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
                 input = input.narrow(2, 1, input.size(2) - 1)
                 emb = self.audio_trans(input.contiguous().view(-1, input.size(2))).view(input.size(0),
                                                                                         input.size(1), -1)
+                emb = emb.type_as(input)
             else:
                 long_mask = input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
                 input = input.narrow(2, 1, input.size(2) - 1)

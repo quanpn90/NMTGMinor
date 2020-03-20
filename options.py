@@ -198,6 +198,8 @@ def make_parser(parser):
                         help="Use CUDA on the listed devices.")
     parser.add_argument('-fp16', action='store_true',
                         help='Use half precision training')
+    parser.add_argument('-fp16_mixed', action='store_true',
+                        help='Use mixed half precision training. fp16 must be enabled.')
     parser.add_argument('-fp16_loss_scale', type=float, default=8,
                         help="""Loss scale for fp16 loss (to avoid overflowing in fp16).""")
     parser.add_argument('-seed', default=9999, type=int,

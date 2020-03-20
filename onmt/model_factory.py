@@ -242,6 +242,8 @@ def init_model_parameters(model, opt):
 
 
 def build_language_model(opt, dicts):
+    opt = backward_compatible(opt)
+
     onmt.constants.layer_norm = opt.layer_norm
     onmt.constants.weight_norm = opt.weight_norm
     onmt.constants.activation_layer = opt.activation_layer
@@ -249,22 +251,29 @@ def build_language_model(opt, dicts):
     onmt.constants.attention_out = opt.attention_out
     onmt.constants.residual_type = opt.residual_type
 
-    from onmt.legacy.LSTMLM.Models import LSTMLMDecoder, LSTMLM
+    # from onmt.legacy.LSTMLM.Models import LSTMLMDecoder, LSTMLM
+    from onmt.models.transformer_xl import TransformerXL
 
-    decoder = LSTMLMDecoder(opt, dicts['tgt'])
+    # decoder = LSTMLMDecoder(opt, dicts['tgt'])
 
+    embedding_tgt = nn.Embedding(dicts['tgt'].size(),
+                                 opt.model_size,
+                                 padding_idx=onmt.constants.PAD)
+    if opt.use_language_embedding:
+        print("* Create language embeddings with %d languages" % len(dicts['langs']))
+        language_embeddings = nn.Embedding(len(dicts['langs']), opt.model_size)
+    else:
+        language_embeddings = None
+    #
     generators = [onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size())]
 
-    model = LSTMLM(None, decoder, nn.ModuleList(generators))
+    model = TransformerXL(opt, embedding_tgt, nn.ModuleList(generators), language_embeddings=language_embeddings)
+
+    model.tgt_dict = dicts['tgt']
 
     if opt.tie_weights:
         print("* Joining the weights of decoder input and output embeddings")
         model.tie_weights()
-
-    for g in model.generator:
-        init.xavier_uniform_(g.linear.weight)
-
-    init.normal_(model.decoder.word_lut.weight, mean=0, std=opt.model_size ** -0.5)
 
     return model
 

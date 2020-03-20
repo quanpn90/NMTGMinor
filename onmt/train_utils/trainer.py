@@ -31,7 +31,7 @@ class BaseTrainer(object):
 
         self.additional_data = []
 
-    def add_additional_data(self,d,ratio):
+    def add_additional_data(self, d, ratio):
         self.additional_data = d
         if ratio == "-1" :
             self.additional_data_ratio = [1]*(len(self.additional_data + 1))
@@ -103,14 +103,23 @@ class XETrainer(BaseTrainer):
             self.optim = onmt.Optim(opt)
             self.optim.set_parameters(self.model.parameters())
 
-            opt_level = "O0" if not self.opt.fp16 else "O2"
+            if not self.opt.fp16:
+                opt_level = "O0"
+                keep_batchnorm_fp32 = False
+            elif self.opt.fp16_mixed:
+                opt_level = "O1"
+                keep_batchnorm_fp32 = None
+            else:
+                opt_level = "O2"
+                keep_batchnorm_fp32 = False
 
             if self.cuda:
                 self.model, self.optim.optimizer = amp.initialize(self.model,
                                                                   self.optim.optimizer,
                                                                   opt_level=opt_level,
-                                                                  keep_batchnorm_fp32=False, loss_scale="dynamic",
-                                                                  verbosity=0)
+                                                                  keep_batchnorm_fp32=keep_batchnorm_fp32,
+                                                                  loss_scale="dynamic",
+                                                                  verbosity=1)
         # An ugly hack to switch between align right and align left
         if hasattr(self.model, 'relative'):
             if self.model.relative:
@@ -141,7 +150,7 @@ class XETrainer(BaseTrainer):
                 'additional_data_iteration' : getattr(self, 'additional_data_iteration', None),
                 'amp': amp.state_dict()
         }
-        
+            
         file_name = '%s_ppl_%.6f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
         print('Writing to %s' % file_name)
         torch.save(checkpoint, file_name)
@@ -180,7 +189,7 @@ class XETrainer(BaseTrainer):
                 #     streaming_state = None
 
                 if self.cuda:
-                    batch.cuda(fp16=self.opt.fp16)
+                    batch.cuda(fp16=self.opt.fp16 and not self.opt.fp16_mixed)
                 
                 """ outputs can be either 
                         hidden states from decoder or
@@ -264,7 +273,7 @@ class XETrainer(BaseTrainer):
             for b in range(len(batches)):
                 batch = batches[b]
                 if self.cuda:
-                    batch.cuda(fp16=self.opt.fp16)
+                    batch.cuda(fp16=self.opt.fp16 and not self.opt.fp16_mixed)
 
                 # if opt.streaming:
                 #     if train_data.is_new_stream():
@@ -399,11 +408,17 @@ class XETrainer(BaseTrainer):
         
         if checkpoint is not None:
             self.model.load_state_dict(checkpoint['model'])
+            prev_opt = checkpoint['opt'] if 'opt' in checkpoint else None
             
             if not opt.reset_optim:
                 self.optim.load_state_dict(checkpoint['optim'])
-                if 'amp' in checkpoint:
-                    amp.load_state_dict(checkpoint['amp'])
+                if prev_opt is not None and hasattr(prev_opt, "fp16_mixed"):
+                    # Only load amp information if the mode is the same
+                    # Maybe its better to change between optimization mode?
+                    if opt.fp16_mixed == prev_opt.fp16_mixed and opt.fp16 == prev_opt.fp16:
+                        if 'amp' in checkpoint:
+                            amp.load_state_dict(checkpoint['amp'])
+
                 if 'batch_order' in checkpoint:
                     batch_order = checkpoint['batch_order']
                     iteration = checkpoint['iteration'] + 1
@@ -412,7 +427,7 @@ class XETrainer(BaseTrainer):
                     iteration = 0
                 opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
 
-                resume=True
+                resume = True
                 if len(self.additional_data) > 0:
                     if 'additional_batch_order' in checkpoint:
                         self.additional_batch_order = checkpoint['additional_batch_order']
@@ -422,7 +437,7 @@ class XETrainer(BaseTrainer):
             else:
                 batch_order = None
                 iteration = 0
-                resume=False
+                resume = False
                 self.init_additional_data()
 
             del checkpoint['model']

@@ -545,6 +545,23 @@ def main():
 
     elif opt.asr:
         print('Preparing training acoustic model ...')
+
+        src_input_files = opt.train_src.split("|")
+        tgt_input_files = opt.train_tgt.split("|")
+
+        src_langs = opt.train_src_lang.split("|")
+        tgt_langs = opt.train_tgt_lang.split("|")
+
+        assert len(src_input_files) == len(src_langs)
+        assert len(src_input_files) == len(tgt_input_files)
+        assert len(tgt_input_files) == len(tgt_langs)
+
+        # n_input_files = len(src_input_files)
+        #
+        # train = dict()
+        # train['src'], train['tgt'] = list(), list()
+        # train['src_lang'], train['tgt_lang'] = list(), list()
+
         train = dict()
         train['src'], train['tgt'] = make_asr_data(opt.train_src, opt.train_tgt,
                                                    dicts['tgt'],
