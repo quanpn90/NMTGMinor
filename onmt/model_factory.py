@@ -251,10 +251,7 @@ def build_language_model(opt, dicts):
     onmt.constants.attention_out = opt.attention_out
     onmt.constants.residual_type = opt.residual_type
 
-    # from onmt.legacy.LSTMLM.Models import LSTMLMDecoder, LSTMLM
     from onmt.models.transformer_xl import TransformerXL
-
-    # decoder = LSTMLMDecoder(opt, dicts['tgt'])
 
     embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                  opt.model_size,
@@ -264,7 +261,7 @@ def build_language_model(opt, dicts):
         language_embeddings = nn.Embedding(len(dicts['langs']), opt.model_size)
     else:
         language_embeddings = None
-    #
+
     generators = [onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size())]
 
     model = TransformerXL(opt, embedding_tgt, nn.ModuleList(generators), language_embeddings=language_embeddings)

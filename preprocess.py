@@ -534,13 +534,15 @@ def main():
     if opt.lm:
         print('Preparing training language model ...')
         train = dict()
-        train['tgt'] = make_lm_data(opt.train_tgt, tokenizer,
-                                    dicts['tgt'])
+        train['tgt'] = make_lm_data(opt.train_tgt,
+                                    dicts['tgt'],
+                                    tokenizer)
         train['src'] = None
 
         valid = dict()
-        valid['tgt'] = make_lm_data(opt.valid_tgt, tokenizer,
-                                    dicts['tgt'])
+        valid['tgt'] = make_lm_data(opt.valid_tgt,
+                                    dicts['tgt'],
+                                    tokenizer)
         valid['src'] = None
 
     elif opt.asr:

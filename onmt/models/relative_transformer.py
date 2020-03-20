@@ -464,33 +464,37 @@ class RelativeTransformerDecoder(TransformerDecoder):
             klen = qlen + mlen
             mask = torch.triu(input.new_ones(qlen, klen), diagonal=1 + mlen).bool()[:, :, None]
         elif self.stream_context in ['limited']:
-
+            # limited means that every sentence only pay attention to the extra memory size
+            extra_mem_len = self.max_memory_size
             # past_length = prev_tgt_mem_size
             mask = None
-            # assert prev_tgt_mem_size == 0, "This model is limited and doesn't accept memory"
+            memory_size = prev_tgt_mem_size
 
             for length in tgt_lengths:
 
                 past_length = mask.size(0) if mask is not None else 0
 
-                if past_length > 0:
-                    # don't look at the past
-                    past_mask = input.new_ones(length, past_length)
+                qlen = length
+                mlen = min(memory_size, self.max_memory_size)
+                klen = qlen + mlen
+
+                cur_attn_mask = torch.triu(input.new_ones(qlen, klen), diagonal=1 + mlen)
+
+                # for the rest of the past sequence: don't look at them
+                if mlen < memory_size:
+                    no_attn_mask = input.new_ones(qlen, memory_size - mlen)
+                    cur_attn_mask = torch.cat([no_attn_mask, cur_attn_mask], dim=1)
+
+                if mask is not None:
+                    prev_q, prev_k = mask.size(0), mask.size(1)
+                    # the past doesn't look at future
+                    prev_mask = input.new_ones(prev_q, qlen)
+                    mask = torch.cat([mask, prev_mask], dim=1)  # first, concatenate for the K dim
+                    mask = torch.cat([mask, cur_attn_mask], dim=0)  # concatenate for the Q dim
                 else:
-                    past_mask = None
+                    mask = cur_attn_mask
 
-                # pay attention to the past words in the current sentence
-                current_mask = torch.triu(input.new_ones(length, length), diagonal=1)
-
-                if past_mask is not None:
-                    current_mask = torch.cat([past_mask, current_mask], dim=1)
-
-                if mask is None:
-                    mask = current_mask
-                else:
-                    no_future_mask = input.new_ones(past_length, length)
-                    mask = torch.cat([mask, no_future_mask], dim=1)
-                    mask = torch.cat([mask, current_mask], dim=0)
+                memory_size = mask.size(1)
 
             mask = mask.bool().unsqueeze(-1)
 
@@ -797,8 +801,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
         # If we start a new sentence to decode: reset the context memory
         if klen == 1:
             streaming_state.reset_context_memory()
-            if self.stream_context == 'limited':
-                streaming_state.reset_target_memory()
 
         if self.use_language_embedding:
             lang_emb = self.language_embeddings(lang)  # B x H or 1 x H

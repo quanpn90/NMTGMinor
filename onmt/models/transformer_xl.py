@@ -161,12 +161,6 @@ class TransformerXL(RelativeTransformerDecoder):
         tgt = batch.get('target_input')
         tgt_lang = batch.get('target_lang')
 
-        # sent = tgt[:, 0]
-        #
-        # sent = self.tgt_dict.convertToLabels(sent, 1000000000)
-        #
-        # print(sent)
-
         if streaming:
             streaming_state = kwargs.get('streaming_state', None)
             mems = streaming_state.tgt_mems
@@ -260,3 +254,5 @@ class TransformerXL(RelativeTransformerDecoder):
     def sample(self, input):
 
         return
+
+

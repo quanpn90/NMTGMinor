@@ -68,7 +68,7 @@ class LanguageModelDataset(Dataset):
 
         self.langs = torch.cat(self.langs, dim=0).long()
         self.data = torch.cat(data, dim=0).long()
-
+            
         self.batch_size_sents = batch_size_sents
         self.batch_size_words = batch_size_words
         self.seq_length = seq_length
