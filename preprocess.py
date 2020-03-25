@@ -558,35 +558,87 @@ def main():
         assert len(src_input_files) == len(tgt_input_files)
         assert len(tgt_input_files) == len(tgt_langs)
 
-        # n_input_files = len(src_input_files)
-        #
-        # train = dict()
-        # train['src'], train['tgt'] = list(), list()
-        # train['src_lang'], train['tgt_lang'] = list(), list()
+        n_input_files = len(src_input_files)
 
         train = dict()
-        train['src'], train['tgt'] = make_asr_data(opt.train_src, opt.train_tgt,
-                                                   dicts['tgt'],
-                                                   max_src_length=opt.src_seq_length,
-                                                   max_tgt_length=opt.tgt_seq_length,
-                                                   input_type=opt.input_type,
-                                                   stride=opt.stride, concat=opt.concat,
-                                                   prev_context=opt.previous_context,
-                                                   fp16=opt.fp16, reshape=(opt.reshape_speech == 1),
-                                                   asr_format=opt.asr_format,
-                                                   asr_hashing=opt.asr_hashing)
+        train['src'], train['tgt'] = list(), list()
+        train['src_lang'], train['tgt_lang'] = list(), list()
+
+        for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
+            src_data, tgt_data = make_asr_data(src_file, tgt_file,
+                                               dicts['tgt'],
+                                               max_src_length=opt.src_seq_length,
+                                               max_tgt_length=opt.tgt_seq_length,
+                                               input_type=opt.input_type,
+                                               stride=opt.stride, concat=opt.concat,
+                                               prev_context=opt.previous_context,
+                                               fp16=opt.fp16, reshape=(opt.reshape_speech == 1),
+                                               asr_format=opt.asr_format,
+                                               asr_hashing=opt.asr_hashing)
+
+            n_samples = len(src_data)
+            if n_input_files == 1:
+                # For single-file cases we only need to have 1 language per file
+                # which will be broadcasted
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]])]
+            else:
+                # each sample will have a different language id
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
+
+            train['src'] += src_data
+            train['tgt'] += tgt_data
+            train['src_lang'] += src_lang_data
+            train['tgt_lang'] += tgt_lang_data
+        # train = dict()
+        # train['src'], train['tgt'] =
 
         print('Preparing validation ...')
+
+        src_input_files = opt.valid_src.split("|")
+        tgt_input_files = opt.valid_tgt.split("|")
+
+        src_langs = opt.valid_src_lang.split("|")
+        tgt_langs = opt.valid_tgt_lang.split("|")
+
+        assert len(src_input_files) == len(src_langs)
+        assert len(src_input_files) == len(tgt_input_files)
+        assert len(tgt_input_files) == len(tgt_langs)
+
+        n_input_files = len(src_input_files)
+
         valid = dict()
-        valid['src'], valid['tgt'] = make_asr_data(opt.valid_src, opt.valid_tgt,
-                                                   dicts['tgt'],
-                                                   max_src_length=max(1024, opt.src_seq_length),
-                                                   max_tgt_length=max(1024, opt.tgt_seq_length),
-                                                   input_type=opt.input_type,
-                                                   stride=opt.stride, concat=opt.concat,
-                                                   prev_context=opt.previous_context,
-                                                   fp16=opt.fp16, reshape=(opt.reshape_speech == 1),
-                                                   asr_format=opt.asr_format)
+        valid['src'], valid['tgt'] = list(), list()
+        valid['src_lang'], valid['tgt_lang'] = list(), list()
+
+        for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
+
+            src_data, tgt_data = make_asr_data(src_file, tgt_file,
+                                               dicts['tgt'],
+                                               max_src_length=max(1024, opt.src_seq_length),
+                                               max_tgt_length=max(1024, opt.tgt_seq_length),
+                                               input_type=opt.input_type,
+                                               stride=opt.stride, concat=opt.concat,
+                                               prev_context=opt.previous_context,
+                                               fp16=opt.fp16, reshape=(opt.reshape_speech == 1),
+                                               asr_format=opt.asr_format)
+
+        n_samples = len(src_data)
+        if n_input_files == 1:
+            # For single-file cases we only need to have 1 language per file
+            # which will be broadcasted
+            src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
+            tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]])]
+        else:
+            # each sample will have a different language id
+            src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
+            tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
+
+        valid['src'] += src_data
+        valid['tgt'] += tgt_data
+        valid['src_lang'] += src_lang_data
+        valid['tgt_lang'] += tgt_lang_data
 
     else:
         print('Preparing training translation model...')
@@ -702,9 +754,9 @@ def main():
         print('Saving data to memory indexed data files')
         from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
 
-        # if opt.asr:
-        #     print("ASR data format isn't compatible with memory indexed format")
-        #     raise AssertionError
+        if opt.asr:
+            print("ASR data format isn't compatible with memory indexed format")
+            raise AssertionError
 
         # save dicts in this format
         torch.save(dicts, opt.save_data + '.dict.pt')

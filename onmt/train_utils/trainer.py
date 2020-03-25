@@ -16,16 +16,16 @@ from onmt.model_factory import build_model, build_language_model, optimize_model
 
 
 class BaseTrainer(object):
-    
+
     def __init__(self, model, loss_function, train_data, valid_data, dicts, opt):
-        
+
         self.model = model
         self.train_data = train_data
         self.valid_data = valid_data
         self.dicts = dicts
         self.opt = opt
         self.cuda = (len(opt.gpus) >= 1 and opt.gpus[0] >= 0)
-        
+
         self.loss_function = loss_function
         self.start_time = 0
 
@@ -33,20 +33,20 @@ class BaseTrainer(object):
 
     def add_additional_data(self, d, ratio):
         self.additional_data = d
-        if ratio == "-1" :
-            self.additional_data_ratio = [1]*(len(self.additional_data + 1))
+        if ratio == "-1":
+            self.additional_data_ratio = [1] * (len(self.additional_data + 1))
         else:
             self.additional_data_ratio = [int(s) for s in ratio.split(";")]
-            assert(len(self.additional_data_ratio) == len(self.additional_data) + 1)
+            assert (len(self.additional_data_ratio) == len(self.additional_data) + 1)
 
-    def run(self, *args,**kwargs):
-        
-        raise NotImplementedError    
-    
-    def eval(self, data):
-        
+    def run(self, *args, **kwargs):
+
         raise NotImplementedError
-        
+
+    def eval(self, data):
+
+        raise NotImplementedError
+
     def load_encoder_weight(self, checkpoint_file):
 
         print("Loading pretrained models from %s" % checkpoint_file)
@@ -56,9 +56,13 @@ class BaseTrainer(object):
         pretrained_model.load_state_dict(checkpoint['model'])
 
         print("Loading pretrained encoder weights ...")
+        pretrained_model.encoder.language_embedding = None
+        enc_language_embedding = self.model.encoder.language_embedding
+        self.model.encoder.language_embedding = None
         encoder_state_dict = pretrained_model.encoder.state_dict()
-        self.model.encoder.load_state_dict(encoder_state_dict)
 
+        self.model.encoder.load_state_dict(encoder_state_dict)
+        self.model.encoder.language_embedding = enc_language_embedding
         return
 
     def _get_grads(self):
@@ -68,12 +72,12 @@ class BaseTrainer(object):
                 continue
             if p.grad is None:
                 raise RuntimeError('Model parameter did not receive gradient: ' + name + '. '
-                                   'Use the param in the forward pass or set requires_grad=False.' +
+                                                                                         'Use the param in the forward pass or set requires_grad=False.' +
                                    ' If you are using Stochastic model + fp16 - try to increase the number of minibatches' +
-                                   ' each update to avoid uninitialized gradients.' )
+                                   ' each update to avoid uninitialized gradients.')
             grads.append(p.grad.data)
         return grads
-        
+
     def _get_flat_grads(self, out=None):
         grads = self._get_grads()
         if out is None:
@@ -82,7 +86,7 @@ class BaseTrainer(object):
         offset = 0
         for g in grads:
             numel = g.numel()
-            out[offset:offset+numel].copy_(g.view(-1))
+            out[offset:offset + numel].copy_(g.view(-1))
             offset += numel
         return out[:offset]
 
@@ -129,44 +133,44 @@ class XETrainer(BaseTrainer):
                 self.valid_data.tgt_align_right = False
 
     def save(self, epoch, valid_ppl, batch_order=None, iteration=-1):
-        
+
         opt = self.opt
         model = self.model
         dicts = self.dicts
 
         model_state_dict = self.model.state_dict()
         optim_state_dict = self.optim.state_dict()
-                
+
         #  drop a checkpoint
         checkpoint = {
-                'model': model_state_dict,
-                'dicts': dicts,
-                'opt': opt,
-                'epoch': epoch,
-                'iteration' : iteration,
-                'batch_order' : batch_order,
-                'optim': optim_state_dict,
-                'additional_batch_order' : getattr(self, 'additional_batch_order', None),
-                'additional_data_iteration' : getattr(self, 'additional_data_iteration', None),
-                'amp': amp.state_dict()
+            'model': model_state_dict,
+            'dicts': dicts,
+            'opt': opt,
+            'epoch': epoch,
+            'iteration': iteration,
+            'batch_order': batch_order,
+            'optim': optim_state_dict,
+            'additional_batch_order': getattr(self, 'additional_batch_order', None),
+            'additional_data_iteration': getattr(self, 'additional_data_iteration', None),
+            'amp': amp.state_dict()
         }
-            
+
         file_name = '%s_ppl_%.6f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
         print('Writing to %s' % file_name)
         torch.save(checkpoint, file_name)
-        
+
         # check the save directory here
         checkpoint_dir = os.path.dirname(opt.save_model)
         existed_save_files = checkpoint_paths(checkpoint_dir)
         for save_file in existed_save_files[opt.keep_save_files:]:
-            print (" * Deleting old save file %s ...." % save_file)
+            print(" * Deleting old save file %s ...." % save_file)
             os.remove(save_file)
 
     def eval(self, data):
         total_loss = 0
         total_words = 0
         opt = self.opt
-                
+
         batch_order = data.create_order(random=False)
         self.model.eval()
         self.model.reset_states()
@@ -190,7 +194,7 @@ class XETrainer(BaseTrainer):
 
                 if self.cuda:
                     batch.cuda(fp16=self.opt.fp16 and not self.opt.fp16_mixed)
-                
+
                 """ outputs can be either 
                         hidden states from decoder or
                         prob distribution from decoder generator
@@ -214,13 +218,13 @@ class XETrainer(BaseTrainer):
 
         self.model.train()
         return total_loss / total_words
-        
+
     def train_epoch(self, epoch, resume=False, batch_order=None, iteration=0):
-        
+
         opt = self.opt
         train_data = self.train_data
         streaming = opt.streaming
-        
+
         # Clear the gradients of the model
         # self.runner.zero_grad()
         self.model.zero_grad()
@@ -240,7 +244,7 @@ class XETrainer(BaseTrainer):
         report_src_words = 0
         start = time.time()
         n_samples = len(train_data)
-        
+
         counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
@@ -251,17 +255,17 @@ class XETrainer(BaseTrainer):
             streaming_state = self.model.init_stream()
         else:
             streaming_state = None
-        
+
         for i in range(iteration, n_samples):
 
             curriculum = (epoch < opt.curriculum)
 
             batches = [train_data.next(curriculum=curriculum)[0]]
 
-            if(len(self.additional_data) > 0 and
-                i % self.additional_data_ratio[0] == 0):
+            if (len(self.additional_data) > 0 and
+                    i % self.additional_data_ratio[0] == 0):
                 for j in range(len(self.additional_data)):
-                    for k in range(self.additional_data_ratio[j+1]):
+                    for k in range(self.additional_data_ratio[j + 1]):
                         if self.additional_data_iteration[j] == len(self.additional_data[j]):
                             self.additional_data_iteration[j] = 0
                             self.additional_data[j].shuffle()
@@ -280,14 +284,15 @@ class XETrainer(BaseTrainer):
                 #         streaming_state = self.model.init_stream()
                 # else:
                 #     streaming_state = None
-            
+
                 oom = False
                 try:
                     # outputs is a dictionary containing keys/values necessary for loss function
                     # can be flexibly controlled within models for easier extensibility
                     targets = batch.get('target_output')
                     tgt_mask = targets.data.ne(onmt.constants.PAD)
-                    outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask, zero_encoder=opt.zero_encoder,
+                    outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                                         zero_encoder=opt.zero_encoder,
                                          mirror=opt.mirror_loss, streaming_state=streaming_state)
 
                     batch_size = batch.size
@@ -312,7 +317,7 @@ class XETrainer(BaseTrainer):
                         oom = True
                         torch.cuda.empty_cache()
                         loss = 0
-                        if opt.streaming: # reset stream in this case ...
+                        if opt.streaming:  # reset stream in this case ...
                             streaming_state = self.model.init_stream()
                     else:
                         raise e
@@ -324,11 +329,11 @@ class XETrainer(BaseTrainer):
                     self.optim.zero_grad()
                     num_accumulated_words = 0
                     num_accumulated_sents = 0
-                
+
                 if not oom:
                     src_size = batch.src_size
                     tgt_size = batch.tgt_size
-                
+
                     counter = counter + 1
                     num_accumulated_words += tgt_size
                     num_accumulated_sents += batch_size
@@ -357,13 +362,13 @@ class XETrainer(BaseTrainer):
                         num_accumulated_words = 0
                         num_accumulated_sents = 0
                         num_updates = self.optim._step
-                        if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every :
+                        if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every:
                             valid_loss = self.eval(self.valid_data)
                             valid_ppl = math.exp(min(valid_loss, 100))
                             print('Validation perplexity: %g' % valid_ppl)
-                        
+
                             ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
-                        
+
                             self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
 
                     num_words = tgt_size
@@ -380,12 +385,12 @@ class XETrainer(BaseTrainer):
                     if b == 0 and (i == 0 or (i % opt.log_interval == -1 % opt.log_interval)):
                         print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
                                "%5.0f src tok/s; %5.0f tgt tok/s; %s elapsed") %
-                              (epoch, i+1, len(train_data),
+                              (epoch, i + 1, len(train_data),
                                math.exp(report_loss / report_tgt_words),
                                optim.getLearningRate(),
                                optim._step,
-                               report_src_words/(time.time()-start),
-                               report_tgt_words/(time.time()-start),
+                               report_src_words / (time.time() - start),
+                               report_tgt_words / (time.time() - start),
                                str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
 
                         report_loss, report_tgt_words = 0, 0
@@ -400,16 +405,16 @@ class XETrainer(BaseTrainer):
         opt = self.opt
         model = self.model
         optim = self.optim
-        
+
         # Try to load the save_file
         # checkpoint = None
         # if save_file:
         #     checkpoint = torch.load(save_file, map_location=lambda storage, loc: storage)
-        
+
         if checkpoint is not None:
             self.model.load_state_dict(checkpoint['model'])
             prev_opt = checkpoint['opt'] if 'opt' in checkpoint else None
-            
+
             if not opt.reset_optim:
                 self.optim.load_state_dict(checkpoint['optim'])
                 if prev_opt is not None and hasattr(prev_opt, "fp16_mixed"):
@@ -448,7 +453,7 @@ class XETrainer(BaseTrainer):
             iteration = 0
             print('Initializing model parameters')
             init_model_parameters(model, opt)
-            resume=False
+            resume = False
             self.init_additional_data()
 
         if opt.load_encoder_from:
@@ -457,16 +462,16 @@ class XETrainer(BaseTrainer):
         valid_loss = self.eval(self.valid_data)
         valid_ppl = math.exp(min(valid_loss, 100))
         print('Validation perplexity: %g' % valid_ppl)
-        
+
         self.start_time = time.time()
-        
+
         for epoch in range(opt.start_epoch, opt.start_epoch + opt.epochs):
             print('')
 
             #  (1) train for one epoch on the training set
             train_loss = self.train_epoch(epoch, resume=resume,
-                                                 batch_order=batch_order,
-                                                 iteration=iteration)
+                                          batch_order=batch_order,
+                                          iteration=iteration)
             train_ppl = math.exp(min(train_loss, 100))
             print('Train perplexity: %g' % train_ppl)
 

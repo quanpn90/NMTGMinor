@@ -234,6 +234,8 @@ class RelativeTransformerEncoder(TransformerEncoder):
             pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
             # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
 
+        # pos has size 2T+1
+        # pos_emb has size 2T+1 x 1 x H
         pos_emb = self.positional_encoder(pos)
 
         if self.learnable_position_encoding:
@@ -668,6 +670,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         buffers = decoder_state.attention_buffers
         lang = decoder_state.tgt_lang
         mask_src = decoder_state.src_mask
+        buffering = decoder_state.buffering
 
         if decoder_state.concat_input_seq:
             if decoder_state.input_seq is None:
@@ -679,11 +682,14 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
 
-        # use the last value of input to continue decoding
-        if input.size(1) > 1:
-            input_ = input[:, -1].unsqueeze(1).transpose(0, 1)
+        if buffering:
+            # use the last value of input to continue decoding
+            if input.size(1) > 1:
+                input_ = input[:, -1].unsqueeze(1).transpose(0, 1)
+            else:
+                input_ = input.transpose(0, 1)
         else:
-            input_ = input.transpose(0, 1)
+            input_ = input.transpose(0, 1)  # from B x T to T x B
 
         """ Embedding: batch_size x 1 x d_model """
         emb = self.word_lut(input_) * math.sqrt(self.model_size)
@@ -754,11 +760,14 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
             # output, coverage, buffer = layer.step(output, context, pos_emb,
             #                                       dec_attn_mask, mask_src, buffer=buffer)
-            output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, mask_src,
-                                             incremental=True, incremental_cache=buffer)
+            if buffering:
+                output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                                                 incremental=True, incremental_cache=buffer)
+                decoder_state.update_attention_buffer(buffer, i)
+            else:
+                output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src)
 
-            decoder_state.update_attention_buffer(buffer, i)
-
+        # normalize and take the last time step
         output = self.postprocess_layer(output)
         output = output[-1].unsqueeze(0)
 

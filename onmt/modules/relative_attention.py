@@ -196,6 +196,103 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
         # relative_future_shift gives us 5 4 3 2 1 0 1 2 3 4 5 ... relatives for position at 0
         # BD = _rel_future_shift(BD)
         # Rel shift uses simple view which is faster than torch.gather
+
+        # the input to rel_shift should have size: [qlen, klen, bsz, n_head]
+        BD = _rel_shift(BD)
+
+        BD = BD.transpose(0, 2).transpose(1, 3)
+        # output size of BD: [bsz, n_head, q_len, k_len]
+
+        # take the first klen results from BD (the rest might not be necessary)
+        BD = BD[:, :, :, :klen]
+
+        # [bsz x n_head x qlen x klen]
+        attn_score = AC + BD
+        attn_score.mul_(self.scale)
+
+        # [qlen x klen x bsz x n_head]
+        attn_score = attn_score.transpose(0, 2).transpose(1, 3)
+
+        # compute attention probability
+        if attn_mask is not None and attn_mask.any().item():
+            if attn_mask.dim() == 2:
+                attn_score = attn_score.float().masked_fill(
+                    attn_mask[None, :, :, None], -float('inf')).type_as(attn_score)
+            elif attn_mask.dim() == 3:
+                attn_score = attn_score.float().masked_fill(
+                    attn_mask[:, :, :, None], -float('inf')).type_as(attn_score)
+
+        # [bsz x n_head x qlen x klen] again
+        attn_score = attn_score.transpose(0, 2).transpose(1, 3)
+
+        # [bsz x n_head x qlen x klen] again
+        attn_prob = F.softmax(attn_score.float(), dim=-1)
+
+        # nan may happen ... because of the first positions (aligned right) will have nothing to attend to
+        nan_mask = torch.isnan(attn_prob)
+        attn_prob = attn_prob.masked_fill(nan_mask, 0).type_as(attn_score)
+
+        coverage = attn_prob
+
+        attn_prob = self.dropatt(attn_prob)
+
+        attn_prob = attn_prob.view(bsz * self.n_head, qlen, klen)
+        # compute attention vector
+        attn_vec = torch.bmm(attn_prob, w_head_v)
+
+        # [qlen x bsz x n_head x d_head]
+        attn_vec = attn_vec.transpose(0, 1).contiguous().view(qlen, bsz, self.d_model)
+
+        # linear projection
+        attn_out = self.o_net(attn_vec)
+
+        output = attn_out
+
+        return output, coverage
+
+    def compute_attention_short(self, r, w_head_q, w_head_k, w_head_v, attn_mask=None, debug=False):
+
+        r_w_bias = self.r_r_bias
+        r_r_bias = self.r_r_bias
+
+        qlen, rlen, bsz = w_head_q.size(0), r.size(0), w_head_q.size(1)
+        rsize = r.size(-1)
+        klen = w_head_k.size(0)
+        assert rlen >= klen  # can allocate more relative positions than klen
+
+        # mapping d-model to d-head
+        if rsize == self.d_model:
+            r_head_k = self.r_net(r)  # should have size [rlen, 1, H]
+        elif rsize == self.d_head:
+            # shared R for each head
+            r_head_k = r.unsqueeze(-2).expand(rlen, 1, self.n_head, self.d_head)
+        else:
+            raise NotImplementedError
+
+        w_head_q = w_head_q.contiguous().view(qlen, bsz * self.n_head, self.d_head).transpose(0, 1)
+        w_head_k = w_head_k.contiguous().view(klen, bsz * self.n_head, self.d_head).transpose(0, 1)
+        w_head_v = w_head_v.contiguous().view(klen, bsz * self.n_head, self.d_head).transpose(0, 1)
+
+        w_head_q = w_head_q.view(bsz, self.n_head, qlen, self.d_head)
+        w_head_k = w_head_k.view(bsz, self.n_head, klen, self.d_head)
+
+        # r_head_k is the projected positions (not depending on the tensors)
+        r_head_k = r_head_k.view(rlen, self.n_head, self.d_head).transpose(0, 1)  # rlen x n_head x d_head
+
+        # compute attention score
+        # r_w_bias is [n_head, d_head]
+        rw_head_q = w_head_q + r_w_bias.unsqueeze(1)  # [bsz, n_head, q_len, d]
+        AC = torch.matmul(rw_head_q, w_head_k.transpose(2, 3))
+
+        rr_head_q = w_head_q + r_r_bias.unsqueeze(1)  # [bsz, n_head, q_len, d]
+
+        # [bsz, n_head, q_len, d] x [nhead, d, x rlen] > [bsz, n_head, q_len, rlen]
+        BD = torch.matmul(rr_head_q, r_head_k.transpose(1, 2))
+
+        # [bsz, n_head, q_len, rlen] to [q_len, r_len, bsz, n_head]
+        BD = BD.transpose(0, 2).transpose(1, 3)
+
+        # the input to rel_shift should have size: [qlen, klen, bsz, n_head]
         BD = _rel_shift(BD)
 
         BD = BD.transpose(0, 2).transpose(1, 3)
@@ -293,7 +390,7 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
 
 
 if __name__ == '__main__':
-    bsz = 5
+    bsz = 1
     n_head = 8
 
     tgt_len = 10
@@ -302,29 +399,38 @@ if __name__ == '__main__':
     qlen = 5
     klen = 12
 
+    pos = torch.arange(klen - 1, -klen, -1.0).unsqueeze(1).expand(-1, bsz)  # T x B
+    pos = pos.unsqueeze(0).expand(klen, -1, -1)
+
+    print(pos.size())
+    pos = _rel_shift(pos)
+
+    print(pos.size())
+    print(pos.squeeze(-1))
+
     # x = torch.arange(klen - 1, -klen, -1.0).unsqueeze(0).repeat(qlen, 1)
     # input = x.mul(10)
     # print(input, input.size())
 
-    x = torch.randint(0, 100, (tgt_len, tgt_len))
-
-    print(x)
-
-    tgt_tgt_mask = torch.triu(torch.ones(tgt_len, tgt_len), diagonal=1)
-    tgt_src_mask = torch.zeros(tgt_len, src_len)
-
-    tgt_mask = torch.cat([tgt_src_mask, tgt_tgt_mask], dim=-1)
-    print(tgt_mask)
+    # x = torch.randint(0, 100, (tgt_len, tgt_len))
+    #
+    # print(x)
+    #
+    # tgt_tgt_mask = torch.triu(torch.ones(tgt_len, tgt_len), diagonal=1)
+    # tgt_src_mask = torch.zeros(tgt_len, src_len)
+    #
+    # tgt_mask = torch.cat([tgt_src_mask, tgt_tgt_mask], dim=-1)
+    # print(tgt_mask)
+    # # print(attn_mask)
+    #
+    # src_src_mask = torch.zeros(src_len, src_len)
+    # src_tgt_mask = torch.ones(src_len, tgt_len)
+    #
+    # src_mask = torch.cat([src_src_mask, src_tgt_mask], dim=-1)
+    #
+    # print(src_mask)
+    # print("FULL ATTENTION MASK")
+    # attn_mask = torch.cat([src_mask, tgt_mask], dim=0)
+    #
     # print(attn_mask)
-
-    src_src_mask = torch.zeros(src_len, src_len)
-    src_tgt_mask = torch.ones(src_len, tgt_len)
-
-    src_mask = torch.cat([src_src_mask, src_tgt_mask], dim=-1)
-
-    print(src_mask)
-    print("FULL ATTENTION MASK")
-    attn_mask = torch.cat([src_mask, tgt_mask], dim=0)
-
-    print(attn_mask)
 

@@ -28,6 +28,7 @@ class FastTranslator(Translator):
         self.min_len = 1
         self.normalize_scores = opt.normalize
         self.len_penalty = opt.alpha
+        self.buffering = not opt.no_buffering
 
         if hasattr(opt, 'no_repeat_ngram_size'):
             self.no_repeat_ngram_size = opt.no_repeat_ngram_size
@@ -205,7 +206,7 @@ class FastTranslator(Translator):
         # - expanding the mask over the batch dimension    (B*beam) x len_src
         decoder_states = dict()
         for i in range(self.n_models):
-            decoder_states[i] = self.models[i].create_decoder_state(batch, beam_size, type=2)
+            decoder_states[i] = self.models[i].create_decoder_state(batch, beam_size, type=2, buffering=self.buffering)
 
         if self.dynamic_max_len:
             src_len = src.size(0)

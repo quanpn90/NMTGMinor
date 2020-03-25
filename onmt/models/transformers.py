@@ -713,7 +713,7 @@ class Transformer(NMTModel):
 
         return output_dict
 
-    def create_decoder_state(self, batch, beam_size=1, type=1, **kwargs):
+    def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True, **kwargs):
         """
         Generate a new decoder state based on the batch input
         :param streaming:
@@ -732,7 +732,8 @@ class Transformer(NMTModel):
 
         encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
         decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], encoder_output['src_mask'],
-                                                 beam_size=beam_size, model_size=self.model_size, type=type)
+                                                 beam_size=beam_size, model_size=self.model_size,
+                                                 type=type, buffering=buffering)
 
         return decoder_state
 
@@ -747,11 +748,13 @@ class Transformer(NMTModel):
 
 class TransformerDecodingState(DecoderState):
 
-    def __init__(self, src, tgt_lang, context, src_mask, beam_size=1, model_size=512, type=2, cloning=True):
+    def __init__(self, src, tgt_lang, context, src_mask, beam_size=1, model_size=512, type=2,
+                 cloning=True, buffering=False):
 
         self.beam_size = beam_size
         self.model_size = model_size
         self.attention_buffers = dict()
+        self.buffering = buffering
 
         if type == 1:
             # if audio only take one dimension since only used for mask
