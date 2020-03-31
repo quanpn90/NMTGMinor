@@ -65,6 +65,60 @@ class BaseTrainer(object):
         self.model.encoder.language_embedding = enc_language_embedding
         return
 
+    def load_decoder_weight(self, checkpoint_file):
+
+        print("Loading pretrained models from %s" % checkpoint_file)
+        checkpoint = torch.load(checkpoint_file, map_location=lambda storage, loc: storage)
+        chkpoint_dict = checkpoint['dicts']
+
+        pretrained_model = build_model(checkpoint['opt'], chkpoint_dict)
+        pretrained_model.load_state_dict(checkpoint['model'])
+
+        print("Loading pretrained decoder weights ...")
+        # first we have to remove the embeddings which probably have difference size ...
+        pretrained_word_emb = pretrained_model.decoder.word_lut
+        pretrained_model.decoder.word_lut = None
+        pretrained_lang_emb = pretrained_model.decoder.language_embeddings
+        pretrained_model.decoder.language_embeddings = None
+
+        # actually we assume that two decoders have the same language embeddings... 
+        untrained_word_emb = self.model.decoder.word_lut
+        self.model.decoder.word_lut = None
+        untrained_lang_emb = self.model.decoder.language_embeddings
+        self.model.decoder.language_embeddings = None
+
+        decoder_state_dict = pretrained_model.decoder.state_dict()
+        self.model.decoder.load_state_dict(decoder_state_dict)
+
+        # now we load the embeddings ....
+        n_copies = 0
+        for token in self.dicts['tgt'].labelToIdx:
+
+            untrained_id = self.dicts['tgt'].labelToIdx[token]
+
+            if token in chkpoint_dict['tgt'].labelToIdx:
+                pretrained_id = chkpoint_dict['tgt'].labelToIdx[token]
+                untrained_word_emb.weight.data[untrained_id].copy_(pretrained_word_emb.weight.data[pretrained_id])
+
+                self.model.generator[0].linear.bias.data[untrained_id].copy_(pretrained_model
+                                                                         .generator[0].linear.bias.data[pretrained_id])
+                n_copies += 1
+
+        print("Copied embedding for %d words" % n_copies)
+        self.model.decoder.word_lut = untrained_word_emb
+
+        # now we load the language embeddings ...
+        if pretrained_lang_emb and untrained_lang_emb and 'langs' in chkpoint_dict:
+            for lang in self.dicts['langs']:
+
+                untrained_id = self.dicts['langs'][lang]
+                if lang in chkpoint_dict['langs']:
+
+                    pretrained_id = chkpoint_dict['langs'][lang]
+                    untrained_lang_emb.weight.data[untrained_id].copy_(pretrained_lang_emb.weight.data[pretrained_id])
+
+        self.model.decoder.language_embeddings = untrained_lang_emb
+
     def _get_grads(self):
         grads = []
         for name, p in self.model.named_parameters():
@@ -458,6 +512,9 @@ class XETrainer(BaseTrainer):
 
         if opt.load_encoder_from:
             self.load_encoder_weight(opt.load_encoder_from)
+
+        if opt.load_decoder_from:
+            self.load_decoder_weight(opt.load_decoder_from)
 
         valid_loss = self.eval(self.valid_data)
         valid_ppl = math.exp(min(valid_loss, 100))

@@ -55,6 +55,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
         self.asynchronous = opt.asynchronous
         self.max_memory_size = opt.max_memory_size
         self.extra_context_size = opt.extra_context_size
+        self.experimental = opt.experimental
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type,

@@ -11,7 +11,7 @@ class Augmenter(object):
     (Only vertical and horizontal masking)
     """
 
-    def __init__(self, F=27, mf=2, T=70, max_t=0.2, mt=2):
+    def __init__(self, F=16, mf=2, T=64, max_t=0.2, mt=2):
 
         self.F = F
         self.mf = mf
@@ -28,7 +28,7 @@ class Augmenter(object):
 
         tensor = tensor.float()
         # First we have to upsample the tensor (if it was downsampled during preprocessing)
-        # Copy to a new storage because otherwise it is zeroed permanently`
+        #         # Copy to a new storage because otherwise it is zeroed permanently`
         tensor_ = tensor.view(-1, 40).new(*tensor.size()).copy_(tensor)
 
         for _ in range(self.mf):
@@ -42,7 +42,7 @@ class Augmenter(object):
 
         for _ in range(self.mt):
             # time masking (first dimension)
-            t = int(random.uniform(0.0, self.F))
+            t = int(random.uniform(0.0, self.T))
 
             t = min(t, int(self.max_t * original_len))
 

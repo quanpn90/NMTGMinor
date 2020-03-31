@@ -259,6 +259,7 @@ class Dataset(torch.utils.data.Dataset):
 
         self.max_src_len = kwargs.get('max_src_len', None)
         self.max_tgt_len = kwargs.get('max_tgt_len', 256)
+        self.cleaning = cleaning
 
         if self.max_src_len is None:
             if self._type == 'text':
@@ -276,32 +277,35 @@ class Dataset(torch.utils.data.Dataset):
             self.tgt = None
 
         # Remove the sentences that are empty
-        if cleaning:
-            cleaned_src = []
-            cleaned_tgt = []
-            n_remove = 0
-
-            for (src_tensor, tgt_tensor) in zip(self.src, self.tgt):
-
-                src_size = src_tensor.size(0)
-                tgt_size = tgt_tensor.size(0)
-
-                if 0 < src_size < self.max_src_len and 2 < tgt_size < self.max_tgt_len:
-                    cleaned_src.append(src_tensor)
-                    cleaned_tgt.append(tgt_tensor)
-                else:
-                    n_remove += 1
-
-            self.src = cleaned_src
-            self.tgt = cleaned_tgt
-            if verbose:
-                print("* Removed %d empty sentences" % n_remove)
+        # if cleaning:
+        #     cleaned_src = []
+        #     cleaned_tgt = []
+        #     n_remove = 0
+        #
+        #     for (src_tensor, tgt_tensor) in zip(self.src, self.tgt):
+        #
+        #         src_size = src_tensor.size(0)
+        #         tgt_size = tgt_tensor.size(0)
+        #
+        #         if 0 < src_size < self.max_src_len and 2 < tgt_size < self.max_tgt_len:
+        #             cleaned_src.append(src_tensor)
+        #             cleaned_tgt.append(tgt_tensor)
+        #         else:
+        #             n_remove += 1
+        #
+        #     self.src = cleaned_src
+        #     self.tgt = cleaned_tgt
+        #     if verbose:
+        #         print("* Removed %d empty sentences" % n_remove)
 
         if verbose:
             print("* Loaded data with %d sentences." % len(self.src))
 
+        self.order = range(len(self.src))
+
         # sort data to have efficient mini-batching during training
         if sorting:
+            print("* Sorting data ...")
             assert self.src is not None
             assert self.tgt is not None
 
@@ -320,8 +324,9 @@ class Dataset(torch.utils.data.Dataset):
 
             sorted_order = [z_[2] for z_ in sorted_z]
 
-            self.src = [self.src[i] for i in sorted_order]
-            self.tgt = [self.tgt[i] for i in sorted_order]
+            self.order = sorted_order
+            # self.src = [self.src[i] for i in sorted_order]
+            # self.tgt = [self.tgt[i] for i in sorted_order]
 
         self.src_langs = src_langs
         self.tgt_langs = tgt_langs
@@ -335,9 +340,9 @@ class Dataset(torch.utils.data.Dataset):
             self.bilingual = True
         else:
             self.bilingual = False
-            if sorting:
-                self.src_langs = [self.src_langs[i] for i in sorted_order]
-                self.tgt_langs = [self.tgt_langs[i] for i in sorted_order]
+            # if sorting:
+            #     self.src_langs = [self.src_langs[i] for i in sorted_order]
+            #     self.tgt_langs = [self.tgt_langs[i] for i in sorted_order]
 
         self.fullSize = len(self.src) if self.src is not None else len(self.tgt)
 
@@ -397,16 +402,28 @@ class Dataset(torch.utils.data.Dataset):
                     return True
             return False
 
-        i = 0
-        while i < self.fullSize:
+        idx = 0
+        while idx < self.fullSize:
+            i = self.order[idx]
 
             if self.tgt is not None and self.src is not None:
                 sentence_length = max(self.tgt[i].size(0) - 1, self.src[i].size(0))
-                # print(sentence_length)
+                src_size = self.src[i].size(0)
+                tgt_size = self.tgt[i].size(0)
+                # print(i, sentence_length)
             elif self.tgt is not None:
                 sentence_length = self.tgt[i].size(0) - 1
+                tgt_size = self.tgt[i].size(0)
+                src_size = 0
             else:
                 sentence_length = self.src[i].size(0)
+                src_size = self.src[i].size(0)
+                tgt_size = 0
+
+            if self.cleaning:
+                if not (0 < src_size < self.max_src_len and 2 < tgt_size < self.max_tgt_len):
+                    idx = idx + 1
+                    continue
 
             oversized = oversize_(cur_batch, sentence_length)
             # if the current item makes the batch exceed max size
@@ -429,7 +446,7 @@ class Dataset(torch.utils.data.Dataset):
             cur_batch_size += sentence_length
             cur_batch_sizes.append(sentence_length)
 
-            i = i + 1
+            idx = idx + 1
 
         # catch the last batch
         if len(cur_batch) > 0:

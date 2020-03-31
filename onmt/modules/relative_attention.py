@@ -325,7 +325,11 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
 
         # nan may happen ... because of the first positions (aligned right) will have nothing to attend to
         nan_mask = torch.isnan(attn_prob)
-        attn_prob = attn_prob.masked_fill(nan_mask, 0).type_as(attn_score)
+
+        if nan_mask.any():
+            attn_prob = attn_prob.masked_fill(nan_mask, 0)
+
+        attn_prob = attn_prob.type_as(attn_score)
 
         coverage = attn_prob
 

@@ -27,6 +27,8 @@ def make_parser(parser):
                         path to the pretrained model.""")
     parser.add_argument('-load_encoder_from', default='', type=str,
                         help="""Load encoder weight from a pretrained model.""")
+    parser.add_argument('-load_decoder_from', default='', type=str,
+                        help="""Load encoder weight from a pretrained model.""")
     parser.add_argument('-streaming', action='store_true',
                         help="""Using streaming in training""")
     parser.add_argument('-stream_context', default='global', type=str,
@@ -182,6 +184,8 @@ def make_parser(parser):
     # pretrained word vectors
     parser.add_argument('-tie_weights', action='store_true',
                         help='Tie the weights of the encoder and decoder layer')
+    parser.add_argument('-experimental', action='store_true',
+                        help='Set the model into the experimental mode (trying unverified features)')
     parser.add_argument('-join_embedding', action='store_true',
                         help='Jointly train the embedding of encoder and decoder in one weight')
     parser.add_argument('-pre_word_vecs_enc',
@@ -321,5 +325,8 @@ def backward_compatible(opt):
 
     if opt.model == 'relative_unified_transformer' and not opt.src_align_right:
         print(" !!! Warning: model %s requires source sentences aligned to the right (-src_align_right)" % opt.model)
+
+    if not hasattr(opt, 'experimental'):
+        opt.experimental = False
 
     return opt
