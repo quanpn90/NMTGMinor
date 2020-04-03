@@ -61,6 +61,8 @@ class TranslatorParameter(object):
                 self.tgt_lang = w[1]
             elif w[0] == "no_repeat_ngram_size":
                 self.no_repeat_ngram_size = int(w[1])
+            elif w[0] == 'gpu':
+                self.gpu = int(w[1])
 
             line = f.readline()
 
