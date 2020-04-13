@@ -1,5 +1,6 @@
 import onmt
 import onmt.modules
+import os
 
 
 class TranslatorParameter(object):
@@ -17,8 +18,8 @@ class TranslatorParameter(object):
         self.dump_beam = ""
         self.n_best = self.beam_size
         self.replace_unk = False
-        self.gpu = -1
-        self.cuda = 0
+        # self.gpu = -1
+        # self.cuda = 0
         self.verbose = False
         self.normalize = True
 
@@ -38,6 +39,15 @@ class TranslatorParameter(object):
         self.attributes = None
         self.no_bos_gold = False
         self.no_repeat_ngram_size = 0
+
+        print("Looking for GPU ....")
+        self.gpu = os.getenv('GPU_DEVICE', -1)
+        self.cuda = self.gpu > -1
+        if self.cuda:
+            print("GPU found. Launching translator on GPU ...")
+            torch.cuda.set_device(opt.gpu)
+        else:
+            print("GPU not found. Launching translator on CPU ...")
         
         self.read_file(filename)
 
@@ -61,8 +71,6 @@ class TranslatorParameter(object):
                 self.tgt_lang = w[1]
             elif w[0] == "no_repeat_ngram_size":
                 self.no_repeat_ngram_size = int(w[1])
-            elif w[0] == 'gpu':
-                self.gpu = int(w[1])
 
             line = f.readline()
 
