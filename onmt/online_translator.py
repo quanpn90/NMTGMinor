@@ -1,6 +1,7 @@
 import onmt
 import onmt.modules
 import os
+import torch
 
 
 class TranslatorParameter(object):
@@ -45,7 +46,7 @@ class TranslatorParameter(object):
         self.cuda = self.gpu > -1
         if self.cuda:
             print("GPU found. Launching translator on GPU ...")
-            torch.cuda.set_device(opt.gpu)
+            torch.cuda.set_device(self.gpu)
         else:
             print("GPU not found. Launching translator on CPU ...")
         
