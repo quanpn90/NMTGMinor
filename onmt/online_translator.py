@@ -41,7 +41,7 @@ class TranslatorParameter(object):
         self.no_repeat_ngram_size = 0
 
         print("Looking for GPU ....")
-        self.gpu = os.getenv('GPU_DEVICE', -1)
+        self.gpu = int(os.getenv('GPU_DEVICE', -1))
         self.cuda = self.gpu > -1
         if self.cuda:
             print("GPU found. Launching translator on GPU ...")
