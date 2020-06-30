@@ -14,7 +14,6 @@ import numpy as np
 parser = argparse.ArgumentParser(description='preprocess.py')
 onmt.markdown.add_md_help_argument(parser)
 
-
 # **Preprocess Options**
 
 parser.add_argument('-config', help="Read options from this file")
@@ -114,6 +113,7 @@ opt = parser.parse_args()
 
 torch.manual_seed(opt.seed)
 
+
 def make_vocab(filenames, size, tokenizer, num_workers=1):
     vocab = onmt.Dict([onmt.constants.PAD_WORD, onmt.constants.UNK_WORD,
                        onmt.constants.BOS_WORD, onmt.constants.EOS_WORD],
@@ -122,7 +122,6 @@ def make_vocab(filenames, size, tokenizer, num_workers=1):
     for filename in filenames:
         print("Generating vocabulary from file %s ... " % filename)
         onmt.Dict.gen_dict_from_file(filename, vocab, tokenizer, num_workers=num_workers)
-    
 
     original_size = vocab.size()
     vocab = vocab.prune(size)
@@ -147,7 +146,6 @@ def init_vocab(name, data_files, vocab_file, vocab_size, tokenizer, num_workers=
         print('Loaded ' + str(vocab.size()) + ' ' + name + ' words')
 
     if vocab is None:
-
         print('Building ' + name + ' vocabulary...')
         gen_word_vocab = make_vocab(data_files, vocab_size, tokenizer, num_workers=num_workers)
 
@@ -214,7 +212,6 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
 
 def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, max_src_length=64, max_tgt_length=64,
                           add_bos=True, data_type='int64', num_workers=1, verbose=False):
-
     src, tgt = [], []
     src_sizes = []
     tgt_sizes = []
@@ -249,7 +246,7 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
            '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
           (len(src), ignored, max_src_length, max_tgt_length))
 
-    return src, tgt
+    return src, tgt, src_sizes, tgt_sizes
 
 
 def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_length=64,
@@ -439,6 +436,10 @@ def main():
         valid['tgt'] = make_lm_data(opt.valid_tgt,
                                     dicts['tgt'])
         valid['src'] = None
+        train['src_sizes'] = None
+        train['tgt_sizes'] = None
+        valid['src_sizes'] = None
+        valid['tgt_sizes'] = None
 
     elif opt.asr:
         print('Preparing training acoustic model ...')
@@ -465,6 +466,11 @@ def main():
                                                    fp16=opt.fp16, reshape=(opt.reshape_speech == 1),
                                                    asr_format=opt.asr_format)
 
+        train['src_sizes'] = None
+        train['tgt_sizes'] = None
+        valid['src_sizes'] = None
+        valid['tgt_sizes'] = None
+
     else:
 
         src_input_files = opt.train_src.split("|")
@@ -481,6 +487,7 @@ def main():
 
         train = dict()
         train['src'], train['tgt'] = list(), list()
+        train['src_sizes'], train['tgt_sizes'] = list(), list()
         train['src_lang'], train['tgt_lang'] = list(), list()
 
         start = time.time()
@@ -488,14 +495,14 @@ def main():
 
         for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
 
-            src_data, tgt_data = make_translation_data(src_file, tgt_file,
-                                                       dicts['src'], dicts['tgt'], tokenizer,
-                                                       max_src_length=opt.src_seq_length,
-                                                       max_tgt_length=opt.tgt_seq_length,
-                                                       add_bos=(not opt.no_bos),
-                                                       data_type=opt.data_type,
-                                                       num_workers=opt.num_threads,
-                                                       verbose=opt.verbose)
+            src_data, tgt_data, src_sizes, tgt_sizes = make_translation_data(src_file, tgt_file,
+                                                                             dicts['src'], dicts['tgt'], tokenizer,
+                                                                             max_src_length=opt.src_seq_length,
+                                                                             max_tgt_length=opt.tgt_seq_length,
+                                                                             add_bos=(not opt.no_bos),
+                                                                             data_type=opt.data_type,
+                                                                             num_workers=opt.num_threads,
+                                                                             verbose=opt.verbose)
 
             n_samples = len(src_data)
             if n_input_files == 1:
@@ -510,6 +517,8 @@ def main():
 
             train['src'] += src_data
             train['tgt'] += tgt_data
+            train['src_sizes'] += src_sizes
+            train['tgt_sizes'] += tgt_sizes
             train['src_lang'] += src_lang_data
             train['tgt_lang'] += tgt_lang_data
 
@@ -529,18 +538,21 @@ def main():
 
         valid = dict()
         valid['src'], valid['tgt'] = list(), list()
+        valid['src_sizes'], valid['tgt_sizes'] = list(), list()
         valid['src_lang'], valid['tgt_lang'] = list(), list()
 
         for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
 
-            src_data, tgt_data = make_translation_data(src_file, tgt_file,
-                                                               dicts['src'], dicts['tgt'], tokenizer,
-                                                               max_src_length=max(1024, opt.src_seq_length),
-                                                               max_tgt_length=max(1024, opt.tgt_seq_length),
-                                                               add_bos=(not opt.no_bos),
-                                                               data_type=opt.data_type,
-                                                               num_workers=opt.num_threads,
-                                                               verbose=opt.verbose)
+            src_data, tgt_data, src_sizes, tgt_sizes = make_translation_data(src_file, tgt_file,
+                                                                             dicts['src'], dicts['tgt'], tokenizer,
+                                                                             max_src_length=max(1024,
+                                                                                                opt.src_seq_length),
+                                                                             max_tgt_length=max(1024,
+                                                                                                opt.tgt_seq_length),
+                                                                             add_bos=(not opt.no_bos),
+                                                                             data_type=opt.data_type,
+                                                                             num_workers=opt.num_threads,
+                                                                             verbose=opt.verbose)
 
             n_samples = len(src_data)
             if n_input_files == 1:
@@ -555,6 +567,8 @@ def main():
 
             valid['src'] += src_data
             valid['tgt'] += tgt_data
+            valid['src_sizes'] += src_sizes
+            valid['tgt_sizes'] += tgt_sizes
             valid['src_lang'] += src_lang_data
             valid['tgt_lang'] += tgt_lang_data
 
@@ -626,6 +640,23 @@ def main():
             valid_data.finalize(opt.save_data + ".valid.%s.idx" % set_)
 
             del valid_data
+
+        for set_ in ['src_sizes', 'tgt_sizes']:
+
+            if train[set_] is not None:
+
+                np_array = np.asarray(train[set_])
+                np.save(opt.save_data + ".train.%s.npy" % set_, np_array)
+            else:
+                print("Training %s not found " % set_)
+
+            if valid[set_] is not None:
+
+                np_array = np.asarray(valid[set_])
+                np.save(opt.save_data + ".valid.%s.npy" % set_, np_array)
+            else:
+                print("Validation %s not found " % set_)
+
 
     else:
         raise NotImplementedError

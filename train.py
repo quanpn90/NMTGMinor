@@ -12,6 +12,7 @@ from onmt.model_factory import build_model, optimize_model
 from options import make_parser
 from collections import defaultdict
 import os
+import numpy as np
 
 parser = argparse.ArgumentParser(description='train.py')
 onmt.markdown.add_md_help_argument(parser)
@@ -73,6 +74,7 @@ def main():
 
         if not opt.streaming:
             train_data = onmt.Dataset(train_dict['src'], train_dict['tgt'],
+                                      None, None,
                                       train_src_langs, train_tgt_langs,
                                       batch_size_words=opt.batch_size_words,
                                       data_type=dataset.get("type", "text"), sorting=True,
@@ -105,6 +107,7 @@ def main():
 
         if not opt.streaming:
             valid_data = onmt.Dataset(valid_dict['src'], valid_dict['tgt'],
+                                      None, None,
                                       valid_src_langs, valid_tgt_langs,
                                       batch_size_words=opt.batch_size_words,
                                       data_type=dataset.get("type", "text"), sorting=True,
@@ -150,6 +153,13 @@ def main():
             train_src_langs.append(torch.Tensor([dicts['langs']['src']]))
             train_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
+        # check the length files if they exist
+        if os.path.exists(train_path + '.src_sizes.npy'):
+            train_src_sizes = np.load(train_path + '.src_sizes.npy')
+            train_tgt_sizes = np.load(train_path + '.tgt_sizes.npy')
+        else:
+            train_src_sizes, train_tgt_sizes = None, None
+
         if opt.encoder_type == 'audio':
             data_type = 'audio'
         else:
@@ -158,6 +168,7 @@ def main():
         if not opt.streaming:
             train_data = onmt.Dataset(train_src,
                                       train_tgt,
+                                      train_src_sizes, train_tgt_sizes,
                                       train_src_langs, train_tgt_langs,
                                       batch_size_words=opt.batch_size_words,
                                       data_type=data_type, sorting=True,
@@ -165,7 +176,7 @@ def main():
                                       multiplier=opt.batch_size_multiplier,
                                       src_align_right=opt.src_align_right,
                                       upsampling=opt.upsampling,
-                                      cleaning=True , verbose=True)
+                                      cleaning=True, verbose=True)
         else:
             train_data = onmt.StreamDataset(train_src,
                                             train_tgt,
@@ -192,14 +203,22 @@ def main():
             valid_src_langs.append(torch.Tensor([dicts['langs']['src']]))
             valid_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
+        # check the length files if they exist
+        if os.path.exists(valid_path + '.src_sizes.npy'):
+            valid_src_sizes = np.load(valid_path + '.src_sizes.npy')
+            valid_tgt_sizes = np.load(valid_path + '.tgt_sizes.npy')
+        else:
+            valid_src_sizes, valid_tgt_sizes = None, None
+
         if not opt.streaming:
             valid_data = onmt.Dataset(valid_src, valid_tgt,
+                                      valid_src_sizes, valid_tgt_sizes,
                                       valid_src_langs, valid_tgt_langs,
                                       batch_size_words=opt.batch_size_words,
-                                      data_type="text", sorting=False,
+                                      data_type="text", sorting=True,
                                       batch_size_sents=opt.batch_size_sents,
                                       src_align_right=opt.src_align_right,
-                                      cleaning=True, verbose=True)
+                                      cleaning=True, verbose=True, debug=True)
         else:
             # for validation data, we have to go through sentences (very slow but to ensure correctness)
             valid_data = onmt.StreamDataset(valid_src, valid_tgt,

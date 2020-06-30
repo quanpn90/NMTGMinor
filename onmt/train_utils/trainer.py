@@ -275,6 +275,7 @@ class XETrainer(BaseTrainer):
 
     def train_epoch(self, epoch, resume=False, batch_order=None, iteration=0):
 
+        global rec_ppl
         opt = self.opt
         train_data = self.train_data
         streaming = opt.streaming
@@ -296,6 +297,7 @@ class XETrainer(BaseTrainer):
         total_non_pads = 0
         report_loss, report_tgt_words = 0, 0
         report_src_words = 0
+        report_rec_loss, report_rev_loss, report_mirror_loss = 0, 0, 0
         start = time.time()
         n_samples = len(train_data)
 
@@ -356,11 +358,34 @@ class XETrainer(BaseTrainer):
                     loss_dict = self.loss_function(outputs, targets, model=self.model)
                     loss_data = loss_dict['data']
                     loss = loss_dict['loss'].div(denom)  # a little trick to avoid gradient overflow with fp16
+                    full_loss = loss
+
+                    if opt.mirror_loss:
+                        rev_loss = loss_dict['rev_loss'].div(denom)
+                        rev_loss_data = loss_dict['rev_loss_data']
+                        mirror_loss = loss_dict['mirror_loss'].div(denom)
+                        full_loss = full_loss + rev_loss + mirror_loss
+                        mirror_loss_data = loss_dict['mirror_loss'].item()
+                    else:
+                        rev_loss = None
+                        rev_loss_data = None
+                        mirror_loss_data = 0
+
+                    # reconstruction loss
+                    if opt.reconstruct:
+                        rec_loss = loss_dict['rec_loss']
+                        rec_loss = rec_loss.div(denom)
+                        full_loss = full_loss + rec_loss
+                        rec_loss_data = loss_dict['rec_loss_data']
+                        # print(rec_loss_data)
+                    else:
+                        # full_loss = loss
+                        rec_loss_data = None
 
                     optimizer = self.optim.optimizer
 
                     if self.cuda:
-                        with amp.scale_loss(loss, optimizer) as scaled_loss:
+                        with amp.scale_loss(full_loss, optimizer) as scaled_loss:
                             scaled_loss.backward()
                     else:
                         loss.backward()
@@ -436,19 +461,44 @@ class XETrainer(BaseTrainer):
                     optim = self.optim
                     batch_efficiency = total_non_pads / total_tokens
 
-                    if b == 0 and (i == 0 or (i % opt.log_interval == -1 % opt.log_interval)):
-                        print(("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; lr: %.7f ; num updates: %7d " +
-                               "%5.0f src tok/s; %5.0f tgt tok/s; %s elapsed") %
-                              (epoch, i + 1, len(train_data),
-                               math.exp(report_loss / report_tgt_words),
-                               optim.getLearningRate(),
-                               optim._step,
-                               report_src_words / (time.time() - start),
-                               report_tgt_words / (time.time() - start),
-                               str(datetime.timedelta(seconds=int(time.time() - self.start_time)))))
+                    if opt.reconstruct:
+                        report_rec_loss += rec_loss_data
 
-                        report_loss, report_tgt_words = 0, 0
-                        report_src_words = 0
+                    if opt.mirror_loss:
+                        report_rev_loss += rev_loss_data
+                        report_mirror_loss += mirror_loss_data
+
+                    if b == 0 and (i == 0 or (i % opt.log_interval == -1 % opt.log_interval)):
+                        log_string = ("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; " %
+                                      (epoch, i + 1, len(train_data),
+                                       math.exp(report_loss / report_tgt_words)))
+
+                        if opt.reconstruct:
+                            rec_ppl = math.exp(report_rec_loss / report_src_words.item())
+                            log_string += (" rec_ppl: %6.2f ; " % rec_ppl)
+
+                        if opt.mirror_loss:
+                            rev_ppl = math.exp(report_rev_loss / report_tgt_words)
+                            log_string += (" rev_ppl: %6.2f ; " % rev_ppl)
+                            # mirror loss per word
+                            log_string += (" mir_loss: %6.2f ; " % (report_mirror_loss / report_tgt_words))
+
+                        log_string += ("lr: %.7f ; updates: %7d; " %
+                                       (optim.getLearningRate(),
+                                        optim._step))
+
+                        log_string += ("%5.0f src tok/s; %5.0f tgt tok/s; " %
+                                       (report_src_words / (time.time() - start),
+                                        report_tgt_words / (time.time() - start)))
+
+                        log_string += ("%s elapsed" %
+                                       str(datetime.timedelta(seconds=int(time.time() - self.start_time))))
+
+                        print(log_string)
+
+                        report_loss = 0
+                        report_tgt_words, report_src_words = 0, 0
+                        report_rec_loss, report_rev_loss, report_mirror_loss = 0, 0, 0
                         start = time.time()
 
         return total_loss / total_words
@@ -467,14 +517,14 @@ class XETrainer(BaseTrainer):
 
         if checkpoint is not None:
             self.model.load_state_dict(checkpoint['model'])
-            prev_opt = checkpoint['opt'] if 'opt' in checkpoint else None
+            prec_opt = checkpoint['opt'] if 'opt' in checkpoint else None
 
             if not opt.reset_optim:
                 self.optim.load_state_dict(checkpoint['optim'])
-                if prev_opt is not None and hasattr(prev_opt, "fp16_mixed"):
+                if prec_opt is not None and hasattr(prec_opt, "fp16_mixed"):
                     # Only load amp information if the mode is the same
                     # Maybe its better to change between optimization mode?
-                    if opt.fp16_mixed == prev_opt.fp16_mixed and opt.fp16 == prev_opt.fp16:
+                    if opt.fp16_mixed == prec_opt.fp16_mixed and opt.fp16 == prec_opt.fp16:
                         if 'amp' in checkpoint:
                             amp.load_state_dict(checkpoint['amp'])
 

@@ -513,8 +513,8 @@ class TransformerDecoder(nn.Module):
 class Transformer(NMTModel):
     """Main model in 'Attention is all you need' """
 
-    def __init__(self, encoder, decoder, generator=None, mirror=False):
-        super().__init__(encoder, decoder, generator)
+    def __init__(self, encoder, decoder, generator=None, rec_decoder=None, rec_generator=None, mirror=False):
+        super().__init__(encoder, decoder, generator, rec_decoder, rec_generator)
         self.model_size = self.decoder.model_size
         self.switchout = self.decoder.switchout
         self.tgt_vocab_size = self.decoder.word_lut.weight.size(0)
@@ -527,6 +527,13 @@ class Transformer(NMTModel):
         if mirror:
             self.mirror_decoder = copy.deepcopy(self.decoder)
             self.mirror_g = nn.Linear(decoder.model_size, decoder.model_size)
+            self.mirror_generator = copy.deepcopy(self.generator)
+            self.mirror_generator[0].linear.weight = self.decoder.word_lut.weight
+
+
+        if self.reconstruct:
+            self.rec_linear = nn.Linear(decoder.model_size, decoder.model_size)
+
 
     def reset_states(self):
         return
@@ -554,6 +561,8 @@ class Transformer(NMTModel):
         src_lengths = batch.src_lengths
         tgt_lengths = batch.tgt_lengths
 
+        org_src = src
+        org_tgt = tgt
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
@@ -592,34 +601,50 @@ class Transformer(NMTModel):
 
         # Mirror network: reverse the target sequence and perform backward language model
         if mirror:
-            tgt_reverse = torch.flip(batch.get('target_input'), (0, ))
+            # tgt_reverse = torch.flip(batch.get('target_input'), (0, ))
             tgt_pos = torch.flip(batch.get('target_pos'), (0, ))
-            tgt_reverse = tgt_reverse.transpose(0, 1)
+            tgt_reverse = torch.flip(batch.get('target'), (0, ))
+            tgt_reverse_input = tgt_reverse[:-1]
+            tgt_reverse_output = tgt_reverse[1:]
+
+            tgt_reverse_input = tgt_reverse_input.transpose(0, 1)
             # perform an additional backward pass
-            reverse_decoder_output = self.mirror_decoder(tgt_reverse, context, src, input_lang=tgt_lang, input_pos=tgt_pos)
+            reverse_decoder_output = self.mirror_decoder(tgt_reverse_input, context, src,
+                                                         input_lang=tgt_lang, input_pos=tgt_pos)
 
             reverse_decoder_output['src'] = src
             reverse_decoder_output['context'] = context
             reverse_decoder_output['target_mask'] = target_mask
-            reverse_logprobs = self.generator[0](reverse_decoder_output)
 
+            reverse_logprobs = self.mirror_generator[0](reverse_decoder_output)
+
+            output_dict['reverse_target'] = tgt_reverse_output
             output_dict['reverse_hidden'] = reverse_decoder_output['hidden']
             output_dict['reverse_logprobs'] = reverse_logprobs
+            output_dict['target_input'] = batch.get('target_input')
+            output_dict['target_lengths'] = batch.tgt_lengths
 
             # learn weights for mapping (g in the paper)
             output_dict['hidden'] = self.mirror_g(output_dict['hidden'])
 
-        # # This step removes the padding to reduce the load for the final layer
-        # if target_masking is not None:
-        #     output = output.contiguous().view(-1, output.size(-1))
-        #
-        #     mask = target_masking
-        #     """ We remove all positions with PAD """
-        #     flattened_mask = mask.view(-1)
-        #
-        #     non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
-        #
-        #     output = output.index_select(0, non_pad_indices)
+        # Reconstruction network
+        if self.reconstruct:
+            bos = org_tgt[0].unsqueeze(0) # 1 x B
+            src_input = torch.cat([bos, org_src[:-1]], dim=0) # T x B
+            src_output = org_src
+
+            src_input = src_input.transpose(0, 1)
+            rec_context = self.rec_linear(output_dict['hidden'])  # T x B x H
+            rec_decoder_output = self.rec_decoder(src_input, rec_context, tgt, input_lang=src_lang, input_pos=src_pos)
+            rec_output = rec_decoder_output['hidden']
+            rec_logprobs = self.rec_generator[0](rec_decoder_output)
+
+            output_dict['rec_logprobs'] = rec_logprobs
+            output_dict['rec_hidden'] = rec_output
+            output_dict['reconstruct'] = True
+            output_dict['rec_target'] = src_output
+        else:
+            output_dict['reconstruct'] = False
 
         return output_dict
 

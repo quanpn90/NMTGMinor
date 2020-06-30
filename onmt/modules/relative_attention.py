@@ -181,7 +181,7 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
         w_head_k = w_head_k.view(bsz, self.n_head, klen, self.d_head)
 
         # r_head_k is the projected positions (not depending on the tensors)
-        r_head_k = r_head_k.view(rlen, self.n_head, self.d_head).transpose(0, 1)  # rlen x n_head x d_head
+        r_head_k = r_head_k.view(rlen, self.n_head, self.d_head).transpose(0, 1)  # n_head  xrlen x d_head
 
         # compute attention score
         # r_w_bias is [n_head, d_head]
@@ -391,6 +391,168 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
         output, coverage = self.compute_attention(r, w_head_q, w_head_k, w_head_v, attn_mask=attn_mask, debug=debug)
 
         return output, coverage, incremental_cache
+
+
+class LearnableRelMultiHeadAttn(nn.Module):
+
+    def __init__(self, n_head, d_model, d_head, dropatt=0, max_len=64,
+                 tgt_len=None, ext_len=None, mem_len=None):
+        super(LearnableRelMultiHeadAttn, self).__init__()
+
+        self.n_head = n_head
+        self.d_model = d_model
+        self.d_head = d_head
+        self.max_len = max_len
+
+        self.qkv_net = nn.Linear(d_model, 3 * n_head * d_head, bias=False)
+
+        self.position_embedding = nn.Embedding(2 * self.max_len + 1, d_head)
+
+        self.dropatt = nn.Dropout(dropatt)
+        self.o_net = nn.Linear(n_head * d_head, d_model, bias=False)
+
+        self.scale = 1 / (d_head ** 0.5)
+
+    def generate_relative_positions(self, qlen, klen, device, caching=False):
+
+        if caching:
+            distance_mat = torch.arange(-klen+1, 1, 1).unsqueeze(0)  # 1 x T
+            distance_mat = distance_mat.to(device)
+        else:
+            # assert qlen == klen
+            range_vec = torch.arange(klen)  # klen
+            range_vec = range_vec.to(device)
+            range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+            distance_mat = range_mat - range_mat.transpose(0, 1)  # T x T
+
+        distance_mat_clipped = torch.clamp(distance_mat, min=-self.max_len, max=self.max_len)
+
+        relative_distance = distance_mat_clipped + self.max_len
+
+        return relative_distance
+
+    def forward(self, w, attn_mask=None, debug=False, mems=None,
+                incremental=False, incremental_cache=None):
+        """
+        :param mems:
+        :param attn_mask:
+        :param incremental_cache:
+        :param incremental:
+        :param debug:
+        :param w: input embeddings (E) T x B x H
+        :param r: relative encodings (R)
+        :param attn_mask:
+        :return:
+        """
+
+        qlen, bsz = w.size(0), w.size(1)
+
+        if mems is not None:
+            w_heads = self.qkv_net(torch.cat([mems, w], 0))
+        else:
+            w_heads = self.qkv_net(w)
+
+        w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
+        w_head_q = w_head_q[-qlen:]  # why ?
+
+        if incremental:
+            if incremental_cache is not None and 'k' in incremental_cache and 'v' in incremental_cache:
+                with torch.no_grad():
+                    w_head_k = torch.cat([incremental_cache['k'], w_head_k], dim=0)  # time first
+                    incremental_cache['k'] = w_head_k.detach()
+                    w_head_v = torch.cat([incremental_cache['v'], w_head_v], dim=0)  # time first
+                    incremental_cache['v'] = w_head_v.detach()
+            else:
+                if incremental_cache is None:
+                    incremental_cache = dict()
+                incremental_cache['k'] = w_head_k.detach()
+                incremental_cache['v'] = w_head_v.detach()
+
+        q_len = w_head_q.size(0)
+        k_len = w_head_k.size(0)
+
+        device_ = w_head_q.device
+        r_matrix = self.generate_relative_positions(q_len, k_len, device_, caching=incremental)
+
+        r = self.position_embedding(r_matrix)
+
+        output, coverage = self.compute_attention(r, w_head_q, w_head_k, w_head_v, attn_mask=attn_mask, debug=debug)
+
+        return output, coverage, incremental_cache
+
+    def compute_attention(self, r, w_head_q, w_head_k, w_head_v, attn_mask=None, debug=False):
+
+        qlen, rlen, bsz = w_head_q.size(0), r.size(0), w_head_q.size(1)
+        rsize = r.size(1)
+        klen = w_head_k.size(0)
+        assert rlen >= klen  # can allocate more relative positions than klen
+
+        w_head_q = w_head_q.contiguous().view(qlen, bsz * self.n_head, self.d_head).transpose(0, 1)
+        w_head_k = w_head_k.contiguous().view(klen, bsz * self.n_head, self.d_head).transpose(0, 1)
+        w_head_v = w_head_v.contiguous().view(klen, bsz * self.n_head, self.d_head).transpose(0, 1)
+
+        w_head_q.mul_(self.scale)
+
+        w_head_q = w_head_q.view(bsz, self.n_head, qlen, self.d_head)
+        w_head_k = w_head_k.view(bsz, self.n_head, klen, self.d_head)
+        w_head_v = w_head_v.view(bsz, self.n_head, klen, self.d_head)
+
+        qk_score = torch.matmul(w_head_q, w_head_k.transpose(2, 3))
+
+        w_head_q_t = w_head_q.permute(2, 0, 1, 3)  # qlen x bsz x n_head x d_head
+        w_head_q_r = w_head_q_t.reshape(qlen, bsz * self.n_head, -1)
+        r_t = r.transpose(1, 2)  # klen x dhead x klen
+
+        qr_score = torch.matmul(w_head_q_r, r_t)
+        qr_score = qr_score.reshape(klen, bsz, self.n_head, -1)
+        qr_score = qr_score.permute(1, 2, 0, 3)
+
+        attn_score = qk_score + qr_score
+
+        # [qlen x klen x bsz x n_head]
+        attn_score = attn_score.transpose(0, 2).transpose(1, 3)
+
+        # compute attention probability
+        if attn_mask is not None and attn_mask.any().item():
+            if attn_mask.dim() == 2:
+                attn_score = attn_score.float().masked_fill(
+                    attn_mask[None, :, :, None], -float('inf')).type_as(attn_score)
+            elif attn_mask.dim() == 3:
+                attn_score = attn_score.float().masked_fill(
+                    attn_mask[:, :, :, None], -float('inf')).type_as(attn_score)
+
+        # [bsz x n_head x qlen x klen] again
+        attn_score = attn_score.transpose(0, 2).transpose(1, 3)
+
+        # [bsz x n_head x qlen x klen] again
+        attn_prob = F.softmax(attn_score.float(), dim=-1)
+
+        # nan may happen ... because of the first positions (aligned right) will have nothing to attend to
+        nan_mask = torch.isnan(attn_prob)
+        attn_prob = attn_prob.masked_fill(nan_mask, 0).type_as(attn_score)
+
+        coverage = attn_prob
+        attn_prob = self.dropatt(attn_prob)
+
+        context_org = torch.matmul(attn_prob, w_head_v)
+
+        attn_t = attn_prob.permute(2, 0, 1, 3)
+        attn_r = attn_t.reshape(klen, bsz * self.n_head, -1)
+
+        context_pos = torch.matmul(attn_r, r)
+        context_pos = context_pos.reshape(klen, bsz, self.n_head, -1)
+        context_pos = context_pos.permute(1, 2, 0, 3)
+
+        attn_vec = context_org + context_pos
+
+        # [qlen x bsz x n_head x d_head]
+        attn_vec = attn_vec.transpose(1, 2).contiguous().view(bsz, qlen, self.n_head * self.d_head)
+        # linear projection and transpose to T B D
+        attn_out = self.o_net(attn_vec).transpose(0, 1)
+
+        output = attn_out
+
+        return output, coverage
 
 
 if __name__ == '__main__':

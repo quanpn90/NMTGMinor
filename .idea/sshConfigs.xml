@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="SshConfigs">
+    <configs>
+      <sshConfig authType="PASSWORD" host="rg3hpc1.ira.uka.de" id="73665ea0-750a-4485-a837-763d82ab21d8" port="22" nameFormat="DESCRIPTIVE" username="pquan" />
+    </configs>
+  </component>
+</project>

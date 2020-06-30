@@ -38,6 +38,11 @@ def build_tm_model(opt, dicts):
     else:
         raise NotImplementedError
 
+    if opt.reconstruct:
+        # reconstruction is only compatible
+        assert opt.model == 'relative_transformer'
+        assert opt.encoder_type == 'text'
+
     # BUILD GENERATOR
     if opt.copy_generator:
         generators = [CopyGenerator(opt.model_size, dicts['tgt'].size(),
@@ -107,7 +112,17 @@ def build_tm_model(opt, dicts):
 
         generator = nn.ModuleList(generators)
         decoder = RelativeTransformerDecoder(opt, embedding_tgt, None, language_embeddings=language_embeddings)
-        model = RelativeTransformer(encoder, decoder, generator, mirror=opt.mirror_loss)
+
+        if opt.reconstruct:
+            rev_decoder = RelativeTransformerDecoder(opt, embedding_src, None, language_embeddings=language_embeddings)
+            rev_generator = [onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['src'].size(),
+                                                          fix_norm=opt.fix_norm_output_embedding)]
+            rev_generator = nn.ModuleList(rev_generator)
+        else:
+            rev_decoder = None
+            rev_generator = None
+
+        model = RelativeTransformer(encoder, decoder, generator, rev_decoder, rev_generator, mirror=opt.mirror_loss)
 
     elif opt.model == 'distance_transformer':
 

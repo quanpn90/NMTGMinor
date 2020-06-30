@@ -7,6 +7,7 @@ from collections import defaultdict
 import onmt
 from onmt.speech.Augmenter import Augmenter
 from onmt.modules.dropout import switchout
+import numpy as np
 
 """
 Data management for sequence-to-sequence models
@@ -217,13 +218,14 @@ class Batch(object):
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, src_data, tgt_data,
+                 src_sizes=None, tgt_sizes=None,
                  src_langs=None, tgt_langs=None,
                  batch_size_words=2048,
                  data_type="text", batch_size_sents=128,
                  multiplier=1, sorting=False,
                  augment=False,
                  src_align_right=False, tgt_align_right=False,
-                 verbose=False, cleaning=False,
+                 verbose=False, cleaning=False, debug=False,
                  **kwargs):
         """
         :param src_data: List of tensors for the source side (1D for text, 2 or 3Ds for other modalities)
@@ -260,6 +262,7 @@ class Dataset(torch.utils.data.Dataset):
         self.max_src_len = kwargs.get('max_src_len', None)
         self.max_tgt_len = kwargs.get('max_tgt_len', 256)
         self.cleaning = cleaning
+        self.debug = debug
 
         if self.max_src_len is None:
             if self._type == 'text':
@@ -276,28 +279,6 @@ class Dataset(torch.utils.data.Dataset):
         else:
             self.tgt = None
 
-        # Remove the sentences that are empty
-        # if cleaning:
-        #     cleaned_src = []
-        #     cleaned_tgt = []
-        #     n_remove = 0
-        #
-        #     for (src_tensor, tgt_tensor) in zip(self.src, self.tgt):
-        #
-        #         src_size = src_tensor.size(0)
-        #         tgt_size = tgt_tensor.size(0)
-        #
-        #         if 0 < src_size < self.max_src_len and 2 < tgt_size < self.max_tgt_len:
-        #             cleaned_src.append(src_tensor)
-        #             cleaned_tgt.append(tgt_tensor)
-        #         else:
-        #             n_remove += 1
-        #
-        #     self.src = cleaned_src
-        #     self.tgt = cleaned_tgt
-        #     if verbose:
-        #         print("* Removed %d empty sentences" % n_remove)
-
         if verbose:
             print("* Loaded data with %d sentences." % len(self.src))
 
@@ -306,27 +287,38 @@ class Dataset(torch.utils.data.Dataset):
         # sort data to have efficient mini-batching during training
         if sorting:
             print("* Sorting data ...")
-            assert self.src is not None
-            assert self.tgt is not None
 
-            src_sizes = [data.size(0) for data in self.src]
-            tgt_sizes = [data.size(0) for data in self.tgt]
-            orders = range(len(self.src))
+            need_collect_sizes = not (src_sizes is not None and tgt_sizes is not None)
 
-            z = zip(src_sizes, tgt_sizes, orders)
+            if need_collect_sizes :
+                assert self.src is not None
+                assert self.tgt is not None
 
-            if self._type == 'text':
-                # For machine translation, sort by source first, and then target
-                sorted_z = sorted(sorted(z, key=lambda x: x[0]), key=lambda x: x[1])
+                src_sizes = np.asarray([data.size(0) for data in self.src])
+                tgt_sizes = np.asarray([data.size(0) for data in self.tgt])
+                orders = range(len(self.src))
 
-            elif self._type == 'audio':
-                sorted_z = sorted(sorted(z, key=lambda x: x[1]), key=lambda x: x[0])
+                # z = zip(src_sizes, tgt_sizes, orders)
 
-            sorted_order = [z_[2] for z_ in sorted_z]
+                # if self._type == 'text':
+                #     # For machine translation, sort by source first, and then target
+                #     sorted_z = sorted(sorted(z, key=lambda x: x[0]), key=lambda x: x[1])
+                #
+                # elif self._type == 'audio':
+                #     sorted_z = sorted(sorted(z, key=lambda x: x[1]), key=lambda x: x[0])
+                if self._type == 'text':
+                    sorted_order = np.lexsort((src_sizes, tgt_sizes))
+                elif self._type == 'audio':
+                    sorted_order = np.lexsort((tgt_sizes, src_sizes))
 
-            self.order = sorted_order
-            # self.src = [self.src[i] for i in sorted_order]
-            # self.tgt = [self.tgt[i] for i in sorted_order]
+                self.order = sorted_order
+            else:
+                if self._type == 'text':
+                    sorted_order = np.lexsort((src_sizes, tgt_sizes))
+                elif self._type == 'audio':
+                    sorted_order = np.lexsort((tgt_sizes, src_sizes))
+
+                self.order = sorted_order
 
         self.src_langs = src_langs
         self.tgt_langs = tgt_langs
@@ -361,6 +353,7 @@ class Dataset(torch.utils.data.Dataset):
         # group samples into mini-batches
         self.batches = []
         self.num_batches = 0
+        print("* Allocating mini-batches ...")
         self.allocate_batch()
 
         self.cur_index = 0
@@ -405,12 +398,13 @@ class Dataset(torch.utils.data.Dataset):
         idx = 0
         while idx < self.fullSize:
             i = self.order[idx]
+            # if self.debug:
+            #     print(self.src[i].size(0), self.tgt[i].size(0))
 
             if self.tgt is not None and self.src is not None:
                 sentence_length = max(self.tgt[i].size(0) - 1, self.src[i].size(0))
                 src_size = self.src[i].size(0)
                 tgt_size = self.tgt[i].size(0)
-                # print(i, sentence_length)
             elif self.tgt is not None:
                 sentence_length = self.tgt[i].size(0) - 1
                 tgt_size = self.tgt[i].size(0)
@@ -437,7 +431,6 @@ class Dataset(torch.utils.data.Dataset):
 
                 batch_ = cur_batch[:scaled_size]
                 self.batches.append(batch_)  # add this batch into the batch list
-
                 cur_batch = cur_batch[scaled_size:]  # reset the current batch
                 cur_batch_sizes = cur_batch_sizes[scaled_size:]
                 cur_batch_size = sum(cur_batch_sizes)

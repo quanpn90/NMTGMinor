@@ -84,25 +84,16 @@ class Binarizer:
 
         result = dict()
 
-        # result['total'] = 0
         for i in range(num_workers):
             result[i] = dict()
 
         final_result = dict()
 
-        result_list = list()
-
         def merge_result(bin_result):
-            # print("HELLO MERGING")
-            # result['total'] += bin_result['total']
-            # result_list.append(bin_result)
             result[bin_result['id']]['data'] = bin_result['data']
             result[bin_result['id']]['sizes'] = bin_result['sizes']
 
-        # num_workers = 1
-
         offsets = Binarizer.find_offsets(filename, num_workers)
-        # print(offsets)
 
         if num_workers > 1:
             pool = mp.Pool(processes=num_workers)
@@ -115,32 +106,16 @@ class Binarizer:
                           offsets[worker_id], offsets[worker_id + 1], data_type, verbose),
                     ))
 
-                # pool.apply_async(
-                #         Binarizer.binarize_file_single_thread,
-                #         args=(filename, tokenizer, vocab, worker_id, bos_word, eos_word,
-                #               offsets[worker_id], offsets[worker_id + 1], data_type),
-                #         callback=merge_result
-                #         )
-
             pool.close()
             pool.join()
 
             for r in mp_results:
                 merge_result(r.get())
-            #     merge_result(r)
 
         else:
             sp_result = Binarizer.binarize_file_single_thread(filename, tokenizer, vocab, 0, bos_word, eos_word,
                                                               offsets[0], offsets[1], data_type)
             merge_result(sp_result)
-
-        # print(result_list)
-
-        # print(result)
-        # for _res in result_list:
-        #     _worker_id = _res['id']
-        #     print(_worker_id)
-        #     result[_worker_id] = {'data': _res['data'], 'sizes': _res['sizes']}
 
         final_result['data'] = list()
         final_result['sizes'] = list()

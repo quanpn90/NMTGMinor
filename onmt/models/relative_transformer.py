@@ -56,6 +56,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
         self.max_memory_size = opt.max_memory_size
         self.extra_context_size = opt.extra_context_size
         self.experimental = opt.experimental
+        self.unidirectional = opt.unidirectional
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type,
@@ -74,6 +75,8 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         e_length = expected_length(self.layers, self.death_rate)
         print("* Transformer Encoder with Relative Attention with %.2f expected layers" % e_length)
+        if self.unidirectional:
+            print("* Running a unidirectional Encoder.")
 
         self.layer_modules = nn.ModuleList()
 
@@ -213,6 +216,18 @@ class RelativeTransformerEncoder(TransformerEncoder):
             mem_len = 0
             mems = None
 
+        if self.unidirectional:
+            qlen = input.size(0)
+            klen = qlen + mem_len
+            attn_mask_src = torch.triu(
+                emb.new_ones(qlen, klen), diagonal=1 + mem_len).byte()[:, :, None]
+
+            pad_mask = mask_src
+
+            mask_src = pad_mask + attn_mask_src
+            # dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
+            mask_src = mask_src.gt(0)
+
         if onmt.constants.torch_version >= 1.2:
             mask_src = mask_src.bool()
 
@@ -228,8 +243,8 @@ class RelativeTransformerEncoder(TransformerEncoder):
         klen = qlen + mem_len
 
         # Asynchronous positions: 2K+1 positions instead of K+1
-        if self.asynchronous:
-            pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
+        if self.unidirectional:
+            pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
         else:
             # Everything should be asynchronous now
             pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)

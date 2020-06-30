@@ -54,6 +54,10 @@ def make_parser(parser):
                         help="""Using double position encodings (absolute and relative)""")
     parser.add_argument('-asynchronous', action='store_true',
                         help="""Different attention values for past and future""")
+    parser.add_argument('-unidirectional', action='store_true',
+                        help="""Unidirectional encoder""")
+    parser.add_argument('-reconstruct', action='store_true',
+                        help='Apply reconstruction with an additional decoder')
 
     # Transforer Model options
     parser.add_argument('-use_language_embedding', action='store_true',
@@ -328,5 +332,11 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'experimental'):
         opt.experimental = False
+
+    if not hasattr(opt, 'reconstruct'):
+        opt.reconstruct = False
+
+    if not hasattr(opt, 'unidirectional'):
+        opt.unidirectional = False
 
     return opt

@@ -2,12 +2,11 @@
 <project version="4">
   <component name="WebServers">
     <option name="servers">
-      <webServer id="47e058d3-9b74-409a-875d-e07729c4e7e1" name="rg3hpc1" url="http://rg3hpc.ira.uka.de">
-        <fileTransfer host="rg3hpc.ira.uka.de" port="22" accessType="SFTP">
+      <webServer id="47e058d3-9b74-409a-875d-e07729c4e7e1" name="rg3hpc1" url="http://rg3hpc1.ira.uka.de">
+        <fileTransfer accessType="SFTP" host="rg3hpc1.ira.uka.de" port="22" sshConfigId="73665ea0-750a-4485-a837-763d82ab21d8" sshConfig="pquan@rg3hpc1.ira.uka.de:22 password">
           <advancedOptions>
             <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
           </advancedOptions>
-          <option name="port" value="22" />
         </fileTransfer>
       </webServer>
     </option>
