@@ -3,6 +3,8 @@ import torch, math
 import torch.nn as nn
 from onmt.models.transformer_layers import EncoderLayer, DecoderLayer, PositionalEncoding, \
     PrePostProcessing
+from onmt.reversible_models.transformers import ReversibleTransformerEncoderLayer, ReversibleEncoderFunction, \
+    ReversibleDecoderFunction, ReversibleTransformerDecoderLayer
 from onmt.modules.base_seq2seq import NMTModel, Reconstructor, DecoderState
 import onmt
 from onmt.modules.dropout import embedded_dropout, switchout
@@ -24,7 +26,7 @@ class MixedEncoder(nn.Module):
     def forward(self, input, **kwargs):
         """
         Inputs Shapes:
-            input: batch_size x len_src (wanna tranpose)
+            input: batch_size x len_src (to be transposed)
 
         Outputs Shapes:
             out: batch_size x len_src x d_model
@@ -53,6 +55,7 @@ class TransformerEncoder(nn.Module):
 
         super(TransformerEncoder, self).__init__()
 
+        self.opt = opt
         self.model_size = opt.model_size
         self.n_heads = opt.n_heads
         self.inner_size = opt.inner_size
@@ -75,6 +78,8 @@ class TransformerEncoder(nn.Module):
         self.language_embedding_type = opt.language_embedding_type
 
         self.time = opt.time
+        self.lsh_src_attention = opt.lsh_src_attention
+        self.reversible = opt.src_reversible
 
         # disable word dropout when switch out is in action
         if self.switchout > 0.0:
@@ -127,26 +132,32 @@ class TransformerEncoder(nn.Module):
 
         e_length = expected_length(self.layers, self.death_rate)
         print("* Transformer Encoder with Absolute Attention with %.2f expected layers" % e_length)
+        if self.reversible:
+            print("* Reversible Transformer Encoder")
 
         for _l in range(self.layers):
             # linearly decay the death rate
             death_r = (_l + 1.0) / self.layers * self.death_rate
 
-            block = EncoderLayer(self.n_heads, self.model_size,
-                                 self.dropout, self.inner_size, self.attn_dropout,
-                                 variational=self.varitional_dropout, death_rate=death_r)
+            if not self.lsh_src_attention:
+                if not self.reversible:
+                    block = EncoderLayer(self.n_heads, self.model_size,
+                                         self.dropout, self.inner_size, self.attn_dropout,
+                                         variational=self.varitional_dropout, death_rate=death_r)
+                else:
+
+                    block = ReversibleTransformerEncoderLayer(self.opt, death_rate=death_r)
+
+            else:
+                from onmt.models.reformer import ReformerEncoderLayer
+                block = ReformerEncoderLayer(self.opt, death_rate=death_r)
 
             self.layer_modules.append(block)
-
-        # self.layer_modules = nn.ModuleList(
-        #     [EncoderLayer(self.n_heads, self.model_size, self.dropout, self.inner_size,
-        #                   self.attn_dropout, variational=self.varitional_dropout) for _ in
-        #      range(self.layers)])
 
     def forward(self, input, input_lang=None, **kwargs):
         """
         Inputs Shapes:
-            input: batch_size x len_src (wanna tranpose)
+            input: batch_size x len_src (to be transposed)
 
         Outputs Shapes:
             out: batch_size x len_src x d_model
@@ -211,13 +222,16 @@ class TransformerEncoder(nn.Module):
 
         context = self.preprocess_layer(context)
 
-        for i, layer in enumerate(self.layer_modules):
+        if self.reversible:
+            # x_1 and x_2 are the same at first for reversible
+            context = torch.cat([context, context], dim=-1)
+
+        if self.reversible:
+            context = ReversibleEncoderFunction.apply(context, self.layer_modules, mask_src)
+        else:
+            for i, layer in enumerate(self.layer_modules):
                 context = layer(context, mask_src)  # batch_size x len_src x d_model
 
-        # From Google T2T
-        # if normalization is done in layer_preprocess, then it should also be done
-        # on the output, since the output can grow very large, being the sum of
-        # a whole stack of unnormalized layer outputs.
         context = self.postprocess_layer(context)
 
         output_dict = {'context': context, 'src_mask': mask_src}
@@ -239,6 +253,8 @@ class TransformerDecoder(nn.Module):
         :param ignore_source:
         """
         super(TransformerDecoder, self).__init__()
+        opt.ignore_source = ignore_source
+        self.opt = opt
 
         self.model_size = opt.model_size
         self.n_heads = opt.n_heads
@@ -257,6 +273,7 @@ class TransformerDecoder(nn.Module):
         self.time = opt.time
         self.use_language_embedding = opt.use_language_embedding
         self.language_embedding_type = opt.language_embedding_type
+        self.reversible = opt.tgt_reversible
 
         if self.switchout > 0:
             self.word_dropout = 0
@@ -290,27 +307,28 @@ class TransformerDecoder(nn.Module):
     def build_modules(self):
 
         e_length = expected_length(self.layers, self.death_rate)
-        print("* Transformer Decoder with Absolute Attention with %.2f expected layers" % e_length)
+
+        if self.reversible:
+            print("* Reversible Transformer Decoder with Absolute Attention with %.2f expected layers" % e_length)
+        else:
+            print("* Transformer Decoder with Absolute Attention with %.2f expected layers" % e_length)
 
         for _l in range(self.layers):
             # linearly decay the death rate
             death_r = (_l + 1.0) / self.layers * self.death_rate
-
-            block = DecoderLayer(self.n_heads, self.model_size,
-                                 self.dropout, self.inner_size, self.attn_dropout,
-                                 variational=self.variational_dropout, death_rate=death_r)
+            if not self.reversible:
+                block = DecoderLayer(self.n_heads, self.model_size,
+                                     self.dropout, self.inner_size, self.attn_dropout,
+                                     variational=self.variational_dropout, death_rate=death_r)
+            else:
+                block = ReversibleTransformerDecoderLayer(self.opt, death_rate=death_r)
 
             self.layer_modules.append(block)
-
-        # self.layer_modules = nn.ModuleList([DecoderLayer(self.n_heads, self.model_size,
-        #                                                  self.dropout, self.inner_size,
-        #                                                  self.attn_dropout, variational=self.variational_dropout,
-        #                                                  ignore_source=self.ignore_source) for _ in range(self.layers)])
 
     def renew_buffer(self, new_len):
 
         self.positional_encoder.renew(new_len)
-        mask = torch.ByteTensor(np.triu(np.ones((new_len+1, new_len+1)), k=1).astype('uint8'))
+        mask = torch.ByteTensor(np.triu(np.ones((new_len + 1, new_len + 1)), k=1).astype('uint8'))
         self.register_buffer('mask', mask)
 
     def process_embedding(self, input, input_lang=None):
@@ -348,7 +366,7 @@ class TransformerDecoder(nn.Module):
     def forward(self, input, context, src, input_lang=None, **kwargs):
         """
         Inputs Shapes:
-            input: (Variable) batch_size x len_tgt (wanna tranpose)
+            input: (Variable) batch_size x len_tgt (to be transposed)
             context: (Variable) batch_size x len_src x d_model
             mask_src (Tensor) batch_size x len_src
         Outputs Shapes:
@@ -384,14 +402,19 @@ class TransformerDecoder(nn.Module):
 
         output = self.preprocess_layer(emb.transpose(0, 1).contiguous())
 
-        for i, layer in enumerate(self.layer_modules):
+        if self.reversible:
+            # x_1 and x_2 are the same at first for reversible
+            output = torch.cat([output, output], dim=-1)
 
-            output, coverage, _ = layer(output, context, mask_tgt, mask_src)  # batch_size x len_src x d_model
+        if self.reversible:
+            output = ReversibleDecoderFunction.apply(output, context, self.layer_modules,
+                                                                  mask_tgt, mask_src)
+            coverage = None
+        else:
+            for i, layer in enumerate(self.layer_modules):
+                output, coverage, _ = layer(output, context, mask_tgt, mask_src)  # batch_size x len_src x d_model
 
-        # From Google T2T
-        # if normalization is done in layer_preprocess, then it should also be done
-        # on the output, since the output can grow very large, being the sum of
-        # a whole stack of unnormalized layer outputs.
+        # From Google T2T: normalization to control network output magnitude
         output = self.postprocess_layer(output)
 
         output_dict = defaultdict(lambda: None, {'hidden': output, 'coverage': coverage, 'context': context})
@@ -402,7 +425,7 @@ class TransformerDecoder(nn.Module):
     def step(self, input, decoder_state, **kwargs):
         """
         Inputs Shapes:
-            input: (Variable) batch_size x len_tgt (wanna tranpose)
+            input: (Variable) batch_size x len_tgt (to be transposed)
             context: (Variable) batch_size x len_src x d_model
             mask_src (Tensor) batch_size x len_src
             buffer (List of tensors) List of batch_size * len_tgt-1 * d_model for self-attention recomputing
@@ -530,10 +553,8 @@ class Transformer(NMTModel):
             self.mirror_generator = copy.deepcopy(self.generator)
             self.mirror_generator[0].linear.weight = self.decoder.word_lut.weight
 
-
         if self.reconstruct:
             self.rec_linear = nn.Linear(decoder.model_size, decoder.model_size)
-
 
     def reset_states(self):
         return
@@ -569,7 +590,7 @@ class Transformer(NMTModel):
         encoder_output = self.encoder(src, input_pos=src_pos, input_lang=src_lang, streaming=streaming,
                                       src_lengths=src_lengths, streaming_state=streaming_state)
 
-        encoder_output = defaultdict(lambda : None, encoder_output)
+        encoder_output = defaultdict(lambda: None, encoder_output)
         context = encoder_output['context']
 
         # the state is changed
@@ -583,7 +604,7 @@ class Transformer(NMTModel):
                                       src_lengths=src_lengths, tgt_lengths=tgt_lengths, streaming_state=streaming_state)
 
         # update the streaming state again
-        decoder_output = defaultdict(lambda : None, decoder_output)
+        decoder_output = defaultdict(lambda: None, decoder_output)
         streaming_state = decoder_output['streaming_state']
         output = decoder_output['hidden']
 
@@ -602,8 +623,8 @@ class Transformer(NMTModel):
         # Mirror network: reverse the target sequence and perform backward language model
         if mirror:
             # tgt_reverse = torch.flip(batch.get('target_input'), (0, ))
-            tgt_pos = torch.flip(batch.get('target_pos'), (0, ))
-            tgt_reverse = torch.flip(batch.get('target'), (0, ))
+            tgt_pos = torch.flip(batch.get('target_pos'), (0,))
+            tgt_reverse = torch.flip(batch.get('target'), (0,))
             tgt_reverse_input = tgt_reverse[:-1]
             tgt_reverse_output = tgt_reverse[1:]
 
@@ -629,8 +650,8 @@ class Transformer(NMTModel):
 
         # Reconstruction network
         if self.reconstruct:
-            bos = org_tgt[0].unsqueeze(0) # 1 x B
-            src_input = torch.cat([bos, org_src[:-1]], dim=0) # T x B
+            bos = org_tgt[0].unsqueeze(0)  # 1 x B
+            src_input = torch.cat([bos, org_src[:-1]], dim=0)  # T x B
             src_output = org_src
 
             src_input = src_input.transpose(0, 1)
@@ -938,5 +959,3 @@ class TransformerDecodingState(DecoderState):
                 for k in buffer_.keys():
                     t_, br_, d_ = buffer_[k].size()
                     buffer_[k] = buffer_[k].index_select(1, reorder_state)  # 1 for time first
-
-

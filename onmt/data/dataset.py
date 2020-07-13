@@ -8,6 +8,8 @@ import onmt
 from onmt.speech.Augmenter import Augmenter
 from onmt.modules.dropout import switchout
 import numpy as np
+import pyximport
+from .batch_utils import allocate_batch
 
 """
 Data management for sequence-to-sequence models
@@ -73,7 +75,8 @@ class Batch(object):
             self.tensors['target'] = target_full
             self.tensors['target_input'] = target_full[:-1]
             self.tensors['target_output'] = target_full[1:]
-            self.tensors['target_pos'] = target_pos.t().contiguous()[:-1]
+            if target_pos is not None:
+                self.tensors['target_pos'] = target_pos.t().contiguous()[:-1]
             self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.constants.PAD)
             self.has_target = True
             self.tgt_size = sum([len(x) - 1 for x in tgt_data])
@@ -132,18 +135,19 @@ class Batch(object):
         :return:
         """
         # initialize with batch_size * length
+        # TODO: rewrite this function in Cython
         if type == "text":
             lengths = [x.size(0) for x in data]
-            positions = [torch.arange(length_) for length_ in lengths]
+            # positions = [torch.arange(length_) for length_ in lengths]
             max_length = max(lengths)
             tensor = data[0].new(len(data), max_length).fill_(onmt.constants.PAD)
-            pos = tensor.new(*tensor.size()).fill_(0)
+            pos = None
 
             for i in range(len(data)):
                 data_length = data[i].size(0)
                 offset = max_length - data_length if align_right else 0
                 tensor[i].narrow(0, offset, data_length).copy_(data[i])
-                pos[i].narrow(0, offset, data_length).copy_(positions[i])
+                # pos[i].narrow(0, offset, data_length).copy_(positions[i])
 
             return tensor, pos, lengths
 
@@ -274,52 +278,54 @@ class Dataset(torch.utils.data.Dataset):
         if tgt_data:
             self.tgt = tgt_data
 
-            if src_data:
-                assert (len(self.src) == len(self.tgt))
+            # if src_data:
+            #     assert (len(self.src) == len(self.tgt))
         else:
             self.tgt = None
 
-        if verbose:
-            print("* Loaded data with %d sentences." % len(self.src))
+        # if verbose:
+        #     print("* Loaded data with %d sentences." % len(self.src))
 
-        self.order = range(len(self.src))
+        self.order = np.arange(len(self.src))
+
+        # Processing data sizes
+        if self.src is not None:
+            if src_sizes is not None:
+                self.src_sizes = src_sizes
+            else:
+                self.src_sizes = np.asarray([data.size(0) for data in self.src])
+        else:
+            self.src_sizes = None
+
+        if self.tgt is not None:
+            if tgt_sizes is not None:
+                self.tgt_sizes = tgt_sizes
+            else:
+                self.tgt_sizes = np.asarray([data.size(0) for data in self.tgt])
+        else:
+            self.tgt_sizes = None
 
         # sort data to have efficient mini-batching during training
         if sorting:
             print("* Sorting data ...")
 
-            need_collect_sizes = not (src_sizes is not None and tgt_sizes is not None)
+            if self._type == 'text':
+                sorted_order = np.lexsort((self.src_sizes, self.tgt_sizes))
+            elif self._type == 'audio':
+                sorted_order = np.lexsort((self.tgt_sizes, self.src_sizes))
 
-            if need_collect_sizes :
-                assert self.src is not None
-                assert self.tgt is not None
+            self.order = sorted_order
 
-                src_sizes = np.asarray([data.size(0) for data in self.src])
-                tgt_sizes = np.asarray([data.size(0) for data in self.tgt])
-                orders = range(len(self.src))
+        # store data length in numpy for fast query
+        if self.tgt is not None and self.src is not None:
+            stacked_sizes = np.stack((self.src_sizes, self.tgt_sizes - 1), axis=0)
+            self.data_lengths = np.amax(stacked_sizes, axis=0)
+        elif self.src is None:
+            self.data_lengths = self.tgt_sizes
+        else:
+            self.data_lengths = self.src_sizes
 
-                # z = zip(src_sizes, tgt_sizes, orders)
-
-                # if self._type == 'text':
-                #     # For machine translation, sort by source first, and then target
-                #     sorted_z = sorted(sorted(z, key=lambda x: x[0]), key=lambda x: x[1])
-                #
-                # elif self._type == 'audio':
-                #     sorted_z = sorted(sorted(z, key=lambda x: x[1]), key=lambda x: x[0])
-                if self._type == 'text':
-                    sorted_order = np.lexsort((src_sizes, tgt_sizes))
-                elif self._type == 'audio':
-                    sorted_order = np.lexsort((tgt_sizes, src_sizes))
-
-                self.order = sorted_order
-            else:
-                if self._type == 'text':
-                    sorted_order = np.lexsort((src_sizes, tgt_sizes))
-                elif self._type == 'audio':
-                    sorted_order = np.lexsort((tgt_sizes, src_sizes))
-
-                self.order = sorted_order
-
+        # Processing language ids
         self.src_langs = src_langs
         self.tgt_langs = tgt_langs
 
@@ -351,10 +357,14 @@ class Dataset(torch.utils.data.Dataset):
         self.pad_count = True
 
         # group samples into mini-batches
-        self.batches = []
-        self.num_batches = 0
         print("* Allocating mini-batches ...")
-        self.allocate_batch()
+        # self.allocate_batch()
+        self.batches = allocate_batch(self.order, self.data_lengths,
+                                      self.src_sizes, self.tgt_sizes,
+                                      batch_size_words, batch_size_sents, self.multiplier,
+                                      self.max_src_len, self.max_tgt_len, self.cleaning)
+
+        self.num_batches = len(self.batches)
 
         self.cur_index = 0
         self.batchOrder = None
@@ -371,81 +381,6 @@ class Dataset(torch.utils.data.Dataset):
     def switchout(self, batch):
 
         pass
-
-    # This function allocates the mini-batches (grouping sentences with the same size)
-    def allocate_batch(self):
-
-        cur_batch = []
-        cur_batch_size = 0
-        cur_batch_sizes = []
-
-        def oversize_(cur_batch, sent_size):
-
-            if len(cur_batch) >= self.batch_size_sents:
-                return True
-
-            if not self.pad_count:
-                if cur_batch_size + sent_size > self.batch_size_words:
-                    return True
-            else:
-                if len(cur_batch_sizes) == 0:
-                    return False
-
-                if (max(max(cur_batch_sizes), sent_size)) * (len(cur_batch) + 1) > self.batch_size_words:
-                    return True
-            return False
-
-        idx = 0
-        while idx < self.fullSize:
-            i = self.order[idx]
-            # if self.debug:
-            #     print(self.src[i].size(0), self.tgt[i].size(0))
-
-            if self.tgt is not None and self.src is not None:
-                sentence_length = max(self.tgt[i].size(0) - 1, self.src[i].size(0))
-                src_size = self.src[i].size(0)
-                tgt_size = self.tgt[i].size(0)
-            elif self.tgt is not None:
-                sentence_length = self.tgt[i].size(0) - 1
-                tgt_size = self.tgt[i].size(0)
-                src_size = 0
-            else:
-                sentence_length = self.src[i].size(0)
-                src_size = self.src[i].size(0)
-                tgt_size = 0
-
-            if self.cleaning:
-                if not (0 < src_size < self.max_src_len and 2 < tgt_size < self.max_tgt_len):
-                    idx = idx + 1
-                    continue
-
-            oversized = oversize_(cur_batch, sentence_length)
-            # if the current item makes the batch exceed max size
-            # then we create a new batch
-            if oversized:
-                # cut-off the current list to fit the multiplier
-                current_size = len(cur_batch)
-                scaled_size = max(
-                    self.multiplier * (current_size // self.multiplier),
-                    current_size % self.multiplier)
-
-                batch_ = cur_batch[:scaled_size]
-                self.batches.append(batch_)  # add this batch into the batch list
-                cur_batch = cur_batch[scaled_size:]  # reset the current batch
-                cur_batch_sizes = cur_batch_sizes[scaled_size:]
-                cur_batch_size = sum(cur_batch_sizes)
-
-            cur_batch.append(i)
-            cur_batch_size += sentence_length
-            cur_batch_sizes.append(sentence_length)
-
-            idx = idx + 1
-
-        # catch the last batch
-        if len(cur_batch) > 0:
-            self.batches.append(cur_batch)
-
-        self.num_batches = len(self.batches)
 
     def __len__(self):
         return self.num_batches

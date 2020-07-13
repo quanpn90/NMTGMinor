@@ -6,6 +6,7 @@ import torch
 import torch.utils.data
 from functools import lru_cache
 
+
 def read_longs(f, n):
     a = np.empty(n, dtype=np.int64)
     f.readinto(a)
@@ -34,6 +35,7 @@ def code(dtype):
             return k
     raise ValueError(dtype)
 
+
 def index_file_path(prefix_path):
     return prefix_path + '.idx'
 
@@ -41,10 +43,12 @@ def index_file_path(prefix_path):
 def data_file_path(prefix_path):
     return prefix_path + '.bin'
 
+
 def _warmup_mmap_file(path):
     with open(path, 'rb') as stream:
         while stream.read(100 * 1024 * 1024):
             pass
+
 
 class MMapIndexedDataset(torch.utils.data.Dataset):
     class Index(object):
@@ -94,7 +98,7 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
 
         def __init__(self, path):
             # print("hello " + path)
-            with open(path, 'rb') as         stream:
+            with open(path, 'rb') as stream:
                 magic_test = stream.read(9)
                 assert self._HDR_MAGIC == magic_test, (
                     'Index file doesn\'t match expected format. '

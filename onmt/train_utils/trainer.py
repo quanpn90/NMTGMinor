@@ -136,7 +136,8 @@ class BaseTrainer(object):
         grads = self._get_grads()
         if out is None:
             grads_size = sum(g.numel() for g in grads)
-            out = grads[0].new(grads_size).zero_()
+            out = grads[0].new(
+                grads_size).zero_()
         offset = 0
         for g in grads:
             numel = g.numel()
@@ -152,7 +153,8 @@ class XETrainer(BaseTrainer):
 
         if self.cuda:
             torch.cuda.set_device(self.opt.gpus[0])
-            torch.manual_seed(self.opt.seed)
+            if self.opt.seed >= 0:
+                torch.manual_seed(self.opt.seed)
             self.loss_function = self.loss_function.cuda()
             self.model = self.model.cuda()
 

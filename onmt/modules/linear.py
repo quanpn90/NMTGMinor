@@ -38,10 +38,10 @@ class XavierLinear(nn.Module):
         else:
             self.linear = linear
 
-        init.xavier_uniform_(self.linear.weight)
-
-        if bias:
-            self.linear.bias.data.zero_()
+        # init.xavier_uniform_(self.linear.weight)
+        #
+        # if bias:
+        #     self.linear.bias.data.zero_()
 
     def forward(self, x):
         return self.linear(x)
@@ -157,3 +157,39 @@ class FeedForward(nn.Module):
         out = self.dropout(out)
         out = self.fc_2(out)
         return out
+
+
+# class ChunkFeedForward(nn.Module):
+#     """Applies position-wise feed forward to CHUNKs of inputs
+#
+#         Args:
+#             d_model: dimension of model
+#             d_ff:    dimension of feed forward
+#             p:       dropout probability
+#
+#         Params:
+#             fc_1: FC layer from d_model to d_ff
+#             fc_2: FC layer from d_ff to d_model
+#
+#         Input Shapes:
+#             input: batch_size x len x d_model or len x batch_size x d_model
+#
+#         Output Shapes:
+#             out: batch_size x len x d_model or len x batch_size x d_model
+#         """
+
+    # def __init__(self, d_model, d_ff, p, **kwargs):
+    #     super(ChunkFeedForward, self).__init__()
+    #     self.d_model = d_model
+    #     self.d_ff = d_ff
+    #     self.fc_1 = Linear(d_model, d_ff, nonlinearity="relu")
+    #     self.fc_2 = Linear(d_ff, d_model)
+    #
+    #     i
+    #
+    # def forward(self, input):
+    #
+    #     out = F.relu(self.fc_1(input), inplace=True)
+    #     out = self.dropout(out)
+    #     out = self.fc_2(out)
+    #     return out

@@ -121,9 +121,10 @@ class MultiHeadAttention(nn.Module):
         attns = torch.bmm(q, k.transpose(1, 2))  # batch_size*h x len_query x len_key
 
         attns = attns.view(b, self.h, len_query, len_key)
-        mask_ = mask.unsqueeze(-3)
-        # FP16 support: cast to float and back
-        attns = attns.float().masked_fill_(mask_, -float('inf')).type_as(attns)
+        if mask is not None:
+            mask_ = mask.unsqueeze(-3)
+            # FP16 support: cast to float and back
+            attns = attns.float().masked_fill_(mask_, -float('inf')).type_as(attns)
         attns = F.softmax(attns.float(), dim=-1).type_as(attns)
         # return mean attention from all heads as coverage
         coverage = torch.mean(attns, dim=1)

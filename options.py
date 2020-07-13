@@ -210,7 +210,7 @@ def make_parser(parser):
                         help='Use mixed half precision training. fp16 must be enabled.')
     parser.add_argument('-fp16_loss_scale', type=float, default=8,
                         help="""Loss scale for fp16 loss (to avoid overflowing in fp16).""")
-    parser.add_argument('-seed', default=9999, type=int,
+    parser.add_argument('-seed', default=-1, type=int,
                         help="Seed for deterministic runs.")
 
     parser.add_argument('-log_interval', type=int, default=100,
@@ -243,6 +243,23 @@ def make_parser(parser):
     parser.add_argument('-zero_encoder', action='store_true',
                         help='Zero-out encoders during training')
 
+    # for Reformer
+    parser.add_argument('-lsh_src_attention', action='store_true',
+                        help='Using LSH for source attention')
+    parser.add_argument('-chunk_length', type=int, default=32,
+                        help="Length of chunk which attends to itself in LSHSelfAttention.")
+    parser.add_argument('-lsh_num_chunks_after', type=int, default=0,
+                        help="Length of chunk which attends to itself in LSHSelfAttention.")
+    parser.add_argument('-lsh_num_chunks_before', type=int, default=1,
+                        help="Length of chunk which attends to itself in LSHSelfAttention.")
+    parser.add_argument('-num_hashes', type=int, default=4,
+                        help="Number of hasing rounds.")
+
+    # for Reversible Transformer
+    parser.add_argument('-src_reversible', action='store_true',
+                        help='Using reversible models for encoder')
+    parser.add_argument('-tgt_reversible', action='store_true',
+                        help='Using reversible models for decoder')
     return parser
 
 
@@ -338,5 +355,14 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'unidirectional'):
         opt.unidirectional = False
+
+    if not hasattr(opt, 'lsh_src_attention'):
+        opt.lsh_src_attention = False
+
+    if not hasattr(opt, 'src_reversible'):
+        opt.src_reversible = False
+
+    if not hasattr(opt, 'tgt_reversible'):
+        opt.tgt_reversible = False
 
     return opt

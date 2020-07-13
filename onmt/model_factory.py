@@ -190,12 +190,14 @@ def init_model_parameters(model, opt):
 
     def init_weight(weight):
         nn.init.normal_(weight, 0.0, init_std)
+        # nn.init.uniform_(weight, init_std, init_std)
 
     def init_embed(weight):
         nn.init.uniform_(weight, -0.01, 0.01)
 
     def init_bias(bias):
-        nn.init.constant_(bias, 0.0)
+        # nn.init.constant_(bias, 0.0)
+        nn.init.normal_(bias, 0.0, init_std)
 
     def weights_init(m):
         classname = m.__class__.__name__

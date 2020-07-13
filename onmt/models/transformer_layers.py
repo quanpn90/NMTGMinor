@@ -55,7 +55,7 @@ class PrePostProcessing(nn.Module):
         output = tensor
         for step in self.steps:
             if step == 'n':
-                output = self.layer_norm(output, mask=mask)
+                output = self.layer_norm(output.type_as(self.layer_norm.function.weight), mask=mask)
                 output = output
             if step == 'd':
                 output = self.dropout(output)
