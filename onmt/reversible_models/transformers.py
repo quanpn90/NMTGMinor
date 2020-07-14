@@ -295,7 +295,7 @@ class ReversibleDecoderFunction(Function):
             if grad_context is None:
                 grad_context = grad_context_
             elif grad_context_ is not None:  # prevent ignoring layer making this None
-                grad_context += grad_context_
+                grad_context.add_(grad_context_)
                 del grad_context_
 
         grad_hidden_states = torch.cat([grad_attn_output, grad_hidden_states], dim=-1)
@@ -524,7 +524,6 @@ class ReversibleTransformerDecoderLayer(nn.Module):
                                                                incremental=incremental,
                                                                incremental_cache=incremental_cache)
 
-                    # res_attn_output = F.relu(res_attn_output, inplace=True)
                     res_attn_output = nn.functional.dropout(res_attn_output, p=self.dropout)
                     res_attn_output = res_attn_output + self_attn
 

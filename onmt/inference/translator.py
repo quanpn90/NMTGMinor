@@ -428,7 +428,7 @@ class Translator(object):
     def translate(self, src_data, tgt_data):
         #  (1) convert words to indexes
         dataset = self.build_data(src_data, tgt_data)
-        batch = dataset.next()[0]
+        batch = dataset.get_batch(0)  # this dataset has only one mini-batch
         if self.cuda:
             batch.cuda(fp16=self.fp16)
         batch_size = batch.size
@@ -450,7 +450,7 @@ class Translator(object):
         #  (1) convert words to indexes
         dataset = self.build_asr_data(src_data, tgt_data)
         # src, tgt = batch
-        batch = dataset.next()[0]
+        batch = dataset.get_batch(0)
         if self.cuda:
             batch.cuda(fp16=self.fp16)
         batch_size = batch.size

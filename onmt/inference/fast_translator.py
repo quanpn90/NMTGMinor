@@ -474,10 +474,10 @@ class FastTranslator(Translator):
     def translate(self, src_data, tgt_data, type='mt'):
         #  (1) convert words to indexes
         dataset = self.build_data(src_data, tgt_data, type=type)
-        batch = dataset.next()[0]
+        batch = dataset.get_batch(0)
         if self.cuda:
             batch.cuda(fp16=self.fp16)
-        # ~ batch = self.to_variable(dataset.next()[0])
+
         batch_size = batch.size
 
         #  (2) translate

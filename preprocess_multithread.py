@@ -260,14 +260,14 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
 
     print('Processing %s & %s ...' % (src_file, tgt_file))
 
-    if (asr_format == "h5"):
-        fileIdx = -1;
-        if (src_file[-2:] == "h5"):
+    if asr_format == "h5":
+        file_idx = -1;
+        if src_file[-2:] == "h5":
             srcf = h5.File(src_file, 'r')
         else:
-            fileIdx = 0
-            srcf = h5.File(src_file + "." + str(fileIdx) + ".h5", 'r')
-    elif (asr_format == "scp"):
+            file_idx = 0
+            srcf = h5.File(src_file + "." + str(file_idx) + ".h5", 'r')
+    elif asr_format == "scp":
         import kaldiio
         from kaldiio import ReadHelper
         audio_data = iter(ReadHelper('scp:' + src_file))
@@ -285,24 +285,24 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
         if tline == "":
             break
 
-        if (asr_format == "h5"):
-            if (str(index) in srcf):
-                featureVectors = np.array(srcf[str(index)])
-            elif (fileIdx != -1):
+        if asr_format == "h5":
+            if str(index) in srcf:
+                feature_vectors = np.array(srcf[str(index)])
+            elif file_idx != -1:
                 srcf.close()
-                fileIdx += 1
-                srcf = h5.File(src_file + "." + str(fileIdx) + ".h5", 'r')
-                featureVectors = np.array(srcf[str(index)])
+                file_idx += 1
+                srcf = h5.File(src_file + "." + str(file_idx) + ".h5", 'r')
+                feature_vectors = np.array(srcf[str(index)])
             else:
                 print("No feature vector for index:", index, file=sys.stderr)
                 exit(-1)
-        elif (asr_format == "scp"):
-            _, featureVectors = next(audio_data)
+        elif asr_format == "scp":
+            _, feature_vectors = next(audio_data)
 
-        if (stride == 1):
-            sline = torch.from_numpy(featureVectors)
+        if stride == 1:
+            sline = torch.from_numpy(feature_vectors)
         else:
-            sline = torch.from_numpy(featureVectors[0::opt.stride])
+            sline = torch.from_numpy(feature_vectors[0::opt.stride])
 
         if reshape:
             if concat != 1:
@@ -310,7 +310,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
                 z = torch.FloatTensor(add, sline.size()[1]).zero_()
                 sline = torch.cat((sline, z), 0)
                 sline = sline.reshape((int(sline.size()[0] / concat), sline.size()[1] * concat))
-        index += 1;
+        index += 1
 
         tline = tline.strip()
 
@@ -370,7 +370,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_leng
 
         if count % opt.report_every == 0:
             print('... %d sentences prepared' % count)
-    if (asr_format == "h5"):
+    if asr_format == "h5":
         srcf.close()
     tgtf.close()
 
@@ -590,6 +590,12 @@ def main():
                      'valid': valid}
         torch.save(save_data, opt.save_data + '.train.pt')
         print("Done")
+
+    elif opt.format in ['scpmem']:
+
+        assert opt.asr
+        print("ASR data format is required for this memory indexed format")
+        raise NotImplementedError
 
     elif opt.format in ['mmap', 'mmem']:
         print('Saving data to memory indexed data files')

@@ -17,6 +17,15 @@ def make_parser(parser):
                         help='Pad vocab so that the size divides by this multiplier')
     parser.add_argument('-src_align_right', action="store_true",
                         help="""Aligning the source sentences to the right (default=left for Transformer)""")
+    parser.add_argument('-buffer_size', type=int, default=16,
+                        help='The iterator fills the data buffer with this size')
+    parser.add_argument('-num_workers', type=int, default=4,
+                        help='Number of extra workers for data fetching. 0=uses the main process. ')
+    parser.add_argument('-pin_memory', action="store_true",
+                        help='The data loader pins memory into the GPU to reduce the bottleneck between GPU-CPU')
+    parser.add_argument('-memory_profiling', action="store_true",
+                        help='Analyze memory consumption for the model')
+
     # MODEL UTIL
     parser.add_argument('-save_model', default='model',
                         help="""Model filename (the model will be saved as
