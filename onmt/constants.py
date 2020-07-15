@@ -15,4 +15,5 @@ static = False
 residual_type = 'regular'
 max_position_length = 8192
 torch_version = float(torch.__version__[:3])
+double_precision = False
 

@@ -26,6 +26,26 @@ class VariationalDropout(torch.nn.Module):
         return mask * x
 
 
+def variational_dropout(x, p=0.5, training=True, inplace=False, batch_first=False):
+
+    if not training or p <= 0:
+        return x
+
+    if batch_first:
+        m = x.new(x.size(0), 1, x.size(2)).bernoulli_(1 - p)
+    else:
+        m = x.new(1, x.size(1), x.size(2)).bernoulli_(1 - p)
+
+    m.div_(1 - p)
+
+    if inplace:
+        x.mul_(m)
+        return x
+    else:
+        return x * m
+
+
+
 def embedded_dropout(embed, words, dropout=0.1, scale=None):
     if dropout:
         mask = embed.weight.data.new().resize_((embed.weight.size(0), 1)).bernoulli_(1 - dropout).expand_as(embed.weight) / (1 - dropout)

@@ -125,7 +125,9 @@ class MultiHeadAttention(nn.Module):
             mask_ = mask.unsqueeze(-3)
             # FP16 support: cast to float and back
             attns = attns.float().masked_fill_(mask_, -float('inf')).type_as(attns)
-        attns = F.softmax(attns.float(), dim=-1).type_as(attns)
+
+        dtype_ = torch.float64 if onmt.constants.double_precision else torch.float32
+        attns = F.softmax(attns, dim=-1, dtype=dtype_).type_as(attns)
         # return mean attention from all heads as coverage
         coverage = torch.mean(attns, dim=1)
         attns = self.attn_dropout(attns)

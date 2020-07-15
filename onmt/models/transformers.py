@@ -131,9 +131,11 @@ class TransformerEncoder(nn.Module):
     def build_modules(self):
 
         e_length = expected_length(self.layers, self.death_rate)
-        print("* Transformer Encoder with Absolute Attention with %.2f expected layers" % e_length)
+
         if self.reversible:
-            print("* Reversible Transformer Encoder")
+            print("* Reversible Transformer Encoder with Absolute Attention with %.2f expected layer" % e_length)
+        else:
+            print("* Transformer Encoder with Absolute Attention with %.2f expected layers" % e_length)
 
         for _l in range(self.layers):
             # linearly decay the death rate
@@ -321,7 +323,7 @@ class TransformerDecoder(nn.Module):
                                      self.dropout, self.inner_size, self.attn_dropout,
                                      variational=self.variational_dropout, death_rate=death_r)
             else:
-                block = ReversibleTransformerDecoderLayer(self.opt, death_rate=death_r)
+                block = ReversibleTransformerDecoderLayer(self.opt, death_rate=_l, layer_id=_l)
 
             self.layer_modules.append(block)
 

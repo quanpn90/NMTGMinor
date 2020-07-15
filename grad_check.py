@@ -47,6 +47,7 @@ if __name__ == "__main__":
     onmt.constants.weight_norm = False
     onmt.constants.checkpointing = False
     onmt.constants.max_position_length = 4096
+    onmt.constants.double_precision = True
 
     opt.layers = 2
     opt.variational_dropout = False
@@ -77,7 +78,7 @@ if __name__ == "__main__":
         print("Testing decoder ...")
         opt.ignore_source = False
 
-        layers = nn.ModuleList([ReversibleTransformerDecoderLayer(opt) for _ in range(opt.layers)])
+        layers = nn.ModuleList([ReversibleTransformerDecoderLayer(opt, layer_id=x) for x in range(opt.layers)])
 
         net = TestDecoder(layers)
         net = net.double().cuda()
