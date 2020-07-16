@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
 from onmt.models.transformer_layers import PositionalEncoding, PrePostProcessing
 from onmt.models.transformer_layers import EncoderLayer, DecoderLayer
 from onmt.models.transformers import TransformerEncoder, TransformerDecoder, Transformer, TransformerDecodingState
@@ -8,6 +10,8 @@ from onmt.modules.base_seq2seq import NMTModel, Reconstructor, DecoderState
 from onmt.modules.dropout import embedded_dropout
 from onmt.models.transformer_layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
 from onmt.models.relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
+from onmt.reversible_models.relative_transformers import ReversibleEncoderFunction, ReversibleDecoderFunction, \
+    ReversibleTransformerDecoderLayer, ReversibleTransformerEncoderLayer
 from onmt.utils import flip, expected_length
 from collections import defaultdict
 import math
@@ -57,6 +61,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
         self.extra_context_size = opt.extra_context_size
         self.experimental = opt.experimental
         self.unidirectional = opt.unidirectional
+        self.reversible = opt.src_reversible
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type,
@@ -74,7 +79,10 @@ class RelativeTransformerEncoder(TransformerEncoder):
     def build_modules(self):
 
         e_length = expected_length(self.layers, self.death_rate)
-        print("* Transformer Encoder with Relative Attention with %.2f expected layers" % e_length)
+        if self.reversible:
+            print("* Reversible Encoder with Relative Attention with %.2f expected layers" % e_length)
+        else:
+            print("* Transformer Encoder with Relative Attention with %.2f expected layers" % e_length)
         if self.unidirectional:
             print("* Running a unidirectional Encoder.")
 
@@ -84,9 +92,12 @@ class RelativeTransformerEncoder(TransformerEncoder):
             # linearly decay the death rate
             death_r = (_l + 1.0) / self.layers * self.death_rate
 
-            block = RelativeTransformerEncoderLayer(self.n_heads, self.model_size,
-                                                    self.dropout, self.inner_size, self.attn_dropout,
-                                                    variational=self.varitional_dropout, death_rate=death_r)
+            if not self.reversible:
+                block = RelativeTransformerEncoderLayer(self.n_heads, self.model_size,
+                                                        self.dropout, self.inner_size, self.attn_dropout,
+                                                        variational=self.varitional_dropout, death_rate=death_r)
+            else:
+                block = ReversibleTransformerEncoderLayer(self.opt, death_rate=death_r)
 
             self.layer_modules.append(block)
 
@@ -178,7 +189,8 @@ class RelativeTransformerEncoder(TransformerEncoder):
                 # There is no "unsqueeze" here because the input is T x B x H and lang_emb is B x H
                 if self.language_embedding_type in ['sum', 'all_sum']:
                     lang_emb = self.language_embedding(input_lang)
-                    emb = emb + lang_emb.unsqueeze(1)
+                    # print(lang_emb.size(), emb.size())
+                    emb = emb + lang_emb.unsqueeze(0)
 
         else:
             if streaming:
@@ -284,24 +296,23 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         pos_emb = self.preprocess_layer(pos_emb)
 
-        for i, layer in enumerate(self.layer_modules):
-            # src_len x batch_size x d_model
+        if self.reversible:
+            context = torch.cat([context, context], dim=-1)
 
-            # if streaming:
-            #     buffer = streaming_state.src_buffer[i]
-            #     context, buffer = layer(context, pos_emb, mask_src, incremental=True, incremental_cache=buffer)
-            #     streaming_state.src_buffer[i] = buffer
-            # else:
-            mems_i = mems[i] if mems is not None and streaming and self.max_memory_size > 0 else None
-            context = layer(context, pos_emb, mask_src, mems=mems_i)
+            assert streaming is not True, "Streaming and Reversible is not usable yet."
+            # print(context.size(), pos_emb.size())
+            context = ReversibleEncoderFunction.apply(context, pos_emb, self.layer_modules, mask_src)
+        else:
+            for i, layer in enumerate(self.layer_modules):
+                # src_len x batch_size x d_model
 
-            if streaming:
-                hids.append(context)
+                mems_i = mems[i] if mems is not None and streaming and self.max_memory_size > 0 else None
+                context = layer(context, pos_emb, mask_src, mems=mems_i)
 
-        # From Google T2T
-        # if normalization is done in layer_preprocess, then it should also be done
-        # on the output, since the output can grow very large, being the sum of
-        # a whole stack of unnormalized layer outputs.
+                if streaming:
+                    hids.append(context)
+
+        # final layer norm
         context = self.postprocess_layer(context)
 
         output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask, 'src': input})
@@ -343,8 +354,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
     def build_modules(self):
 
         e_length = expected_length(self.layers, self.death_rate)
-
-        print("* Transformer Decoder with Relative Attention with %.2f expected layers" % e_length)
+        if self.reversible:
+            print("* Transformer Reversible Decoder with Relative Attention with %.2f expected layers" % e_length)
+        else:
+            print("* Transformer Decoder with Relative Attention with %.2f expected layers" % e_length)
 
         self.layer_modules = nn.ModuleList()
 
@@ -352,9 +365,12 @@ class RelativeTransformerDecoder(TransformerDecoder):
             # linearly decay the death rate
             death_r = (l + 1.0) / self.layers * self.death_rate
 
-            block = RelativeTransformerDecoderLayer(self.n_heads, self.model_size,
-                                                    self.dropout, self.inner_size, self.attn_dropout,
-                                                    variational=self.variational_dropout, death_rate=death_r)
+            if not self.reversible:
+                block = RelativeTransformerDecoderLayer(self.n_heads, self.model_size,
+                                                        self.dropout, self.inner_size, self.attn_dropout,
+                                                        variational=self.variational_dropout, death_rate=death_r)
+            else:
+                block = ReversibleTransformerDecoderLayer(self.opt, death_rate=death_r)
 
             self.layer_modules.append(block)
 
@@ -625,21 +641,29 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         pos_emb = self.preprocess_layer(pos_emb)
 
-        for i, layer in enumerate(self.layer_modules):
-            # batch_size x src_len x d_model output, coverage = layer(output, context, pos_emb, self.r_w_bias,
-            # self.r_r_bias, dec_attn_mask, mask_src)
-            mems_i = mems[i] if mems is not None and streaming and \
-                self.stream_context in ['local', 'global'] and self.max_memory_size > 0 else None
-            # if streaming:
-            #     buffer = streaming_state.tgt_buffer[i]
-            #     output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, context_attn_mask,
-            #                                      incremental=True, incremental_cache=buffer, reuse_source=False)
-            #     streaming_state.tgt_buffer[i] = buffer
-            # else:
+        if self.reversible:
+            output = torch.cat([output, output], dim=-1)
 
-            output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src, mems=mems_i)
-            if streaming:
-                hids.append(output)
+            output = ReversibleDecoderFunction.apply(output, pos_emb, context, self.layer_modules,
+                                                     dec_attn_mask, mask_src)
+            coverage = None
+        else:
+
+            for i, layer in enumerate(self.layer_modules):
+                # batch_size x src_len x d_model output, coverage = layer(output, context, pos_emb, self.r_w_bias,
+                # self.r_r_bias, dec_attn_mask, mask_src)
+                mems_i = mems[i] if mems is not None and streaming and \
+                    self.stream_context in ['local', 'global'] and self.max_memory_size > 0 else None
+                # if streaming:
+                #     buffer = streaming_state.tgt_buffer[i]
+                #     output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, context_attn_mask,
+                #                                      incremental=True, incremental_cache=buffer, reuse_source=False)
+                #     streaming_state.tgt_buffer[i] = buffer
+                # else:
+
+                output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src, mems=mems_i)
+                if streaming:
+                    hids.append(output)
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -774,8 +798,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
             buffer = buffers[i] if i in buffers else None
             # assert (output.size(0) == 1)
 
-            # output, coverage, buffer = layer.step(output, context, pos_emb,
-            #                                       dec_attn_mask, mask_src, buffer=buffer)
             if buffering:
                 output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, mask_src,
                                                  incremental=True, incremental_cache=buffer)
@@ -983,6 +1005,7 @@ class RelativeTransformer(Transformer):
         output_dict['src'] = decoder_state.src.transpose(0, 1)
 
         log_prob = self.generator[0](output_dict).squeeze(0)
+        log_prob = F.log_softmax(log_prob, dim=-1, dtype=torch.float32)
 
         coverage = output_dict['coverage']
         last_coverage = coverage[:, -1, :].squeeze(1)

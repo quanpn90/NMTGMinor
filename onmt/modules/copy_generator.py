@@ -46,13 +46,16 @@ class CopyGenerator(nn.Module):
        input_size (int): size of input representation
        tgt_dict (Vocab): output target dictionary
     """
-        
+
     def __init__(self, hidden_size, output_size, fix_norm=False):
-        
+
         super(CopyGenerator, self).__init__()
 
         self.hidden_size = hidden_size
         self.output_size = output_size
+
+        # this constant is used to inverse the softmax function
+        self.c = 0.1712209
 
         # gate for linear
         self.linear_copy = XavierLinear(hidden_size, 1)
@@ -84,8 +87,8 @@ class CopyGenerator(nn.Module):
         # src_len_, batch, vocab_size = src_map.size()
 
         """ Probability of copying p(z=1) batch. """
-        copy_prob = torch.sigmoid(self.linear_copy(input).float())  # T x B x 1
-        
+        copy_prob = torch.sigmoid(self.linear_copy(input))  # T x B x 1
+
         """ probabilities from the model output """
 
         if not fix_norm:
@@ -95,22 +98,23 @@ class CopyGenerator(nn.Module):
             normalized_bias = self.linear.bias
             logits = F.linear(input, normalized_weights, normalized_bias)
 
-        prob = F.softmax(logits.float(), dim=-1)
-        p_g = torch.mul(prob,  1 - copy_prob)  # tlen x B x V`
-        
+        prob = F.softmax(logits.float(), dim=-1, dtype=torch.float32)
+        p_g = torch.mul(prob, 1 - copy_prob)  # tlen x B x V
+
         """ probabilities from copy """
         query = input.transpose(0, 1)
-        keys = context.transpose(0, 1) # B x slen x H
+        keys = context.transpose(0, 1)  # B x slen x H
 
         attn_score = torch.bmm(query, keys.transpose(1, 2))  # B x tlen x slen
         src_mask = src.eq(onmt.constants.PAD).unsqueeze(1)  # B x s_len
 
         attn_score = attn_score.float().masked_fill_(src_mask, -float('inf')).type_as(attn_score)
-        attns = F.softmax(attn_score.float(), dim=-1) # B x tlen x slen
+        attns = F.softmax(attn_score.float(), dim=-1)  # B x tlen x slen
 
         p_c = torch.mul(attns.transpose(0, 1), copy_prob)  # tlen x B x slen
 
         src_indices = src.unsqueeze(0).expand_as(p_c)
+        # add the probabilities into the positions directly
         p_g.scatter_add_(2, src_indices, p_c)
         # p_c = torch.bmm(mul_attn, src)
 
@@ -118,11 +122,8 @@ class CopyGenerator(nn.Module):
         # p_c = torch.bmm(mul_attn.transpose(0, 1),
         #                       src_map.transpose(0, 1)).transpose(0, 1) # tlen, batch, vocab_size
 
-        # added 1e-20 for numerical stability
-        output = torch.log(p_g)
+        # revert the softmax function to get logits
+        output = torch.log(p_g) + self.c
 
-        # output = torch.log(p_g + p_c + 1e-20)
-        
-        # from this log probability we can use normal loss function ?
+        # the logits is then used in the normal loss function
         return output
-

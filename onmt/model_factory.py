@@ -6,6 +6,7 @@ from onmt.models.transformer_layers import PositionalEncoding
 from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, RelativeTransformer
 from onmt.modules.copy_generator import CopyGenerator
 from options import backward_compatible
+import math
 
 init = torch.nn.init
 
@@ -116,7 +117,7 @@ def build_tm_model(opt, dicts):
         if opt.reconstruct:
             rev_decoder = RelativeTransformerDecoder(opt, embedding_src, None, language_embeddings=language_embeddings)
             rev_generator = [onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['src'].size(),
-                                                          fix_norm=opt.fix_norm_output_embedding)]
+                                                                 fix_norm=opt.fix_norm_output_embedding)]
             rev_generator = nn.ModuleList(rev_generator)
         else:
             rev_decoder = None
@@ -189,7 +190,11 @@ def init_model_parameters(model, opt):
     init_std = 0.02  # magical number
 
     def init_weight(weight):
-        nn.init.normal_(weight, 0.0, init_std)
+        if len(weight.shape) == 2:
+            std_ = math.sqrt(2.0 / (weight.shape[0] + weight.shape[1]))
+            nn.init.normal_(weight, 0.0, std_)
+        else:
+            nn.init.normal_(weight, 0.0, init_std)
         # nn.init.uniform_(weight, init_std, init_std)
 
     def init_embed(weight):
@@ -224,6 +229,7 @@ def init_model_parameters(model, opt):
                 nn.init.normal_(m.weight, 1.0, init_std)
             if hasattr(m, 'bias') and m.bias is not None:
                 init_bias(m.bias)
+
         elif classname.find('RelativeTransformerEncoder') != -1:
             if hasattr(m, 'r_emb'):
                 init_weight(m.r_emb)

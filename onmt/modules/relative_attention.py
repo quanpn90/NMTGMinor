@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from onmt.constants import double_precision
 
 
 def _rel_shift(x, zero_triu=False):
@@ -226,7 +227,8 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
         attn_score = attn_score.transpose(0, 2).transpose(1, 3)
 
         # [bsz x n_head x qlen x klen] again
-        attn_prob = F.softmax(attn_score.float(), dim=-1)
+        _dtype = torch.float64 if double_precision else torch.float32
+        attn_prob = F.softmax(attn_score, dim=-1, dtype=_dtype)
 
         # nan may happen ... because of the first positions (aligned right) will have nothing to attend to
         nan_mask = torch.isnan(attn_prob)
@@ -525,7 +527,8 @@ class LearnableRelMultiHeadAttn(nn.Module):
         attn_score = attn_score.transpose(0, 2).transpose(1, 3)
 
         # [bsz x n_head x qlen x klen] again
-        attn_prob = F.softmax(attn_score.float(), dim=-1)
+        dtype_ = torch.float64 if double_precision else torch.float32
+        attn_prob = F.softmax(attn_score, dim=-1, dtype=dtype_)
 
         # nan may happen ... because of the first positions (aligned right) will have nothing to attend to
         nan_mask = torch.isnan(attn_prob)

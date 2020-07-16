@@ -142,16 +142,23 @@ def make_parser(parser):
     parser.add_argument('-max_grad_norm', type=float, default=0,
                         help="""If the norm of the gradient vector exceeds this,
                         renormalize it to have the norm equal to max_grad_norm""")
+
+    # Dropout
     parser.add_argument('-dropout', type=float, default=0.3,
                         help='Dropout probability; applied between LSTM stacks.')
     parser.add_argument('-word_dropout', type=float, default=0.0,
                         help='Dropout probability; applied on embedding indices.')
     parser.add_argument('-switchout', type=float, default=0.0,
                         help='Switchout algorithm')
+
+    # Loss function
     parser.add_argument('-label_smoothing', type=float, default=0.0,
                         help='Label smoothing value for loss functions.')
     parser.add_argument('-scheduled_sampling_rate', type=float, default=0.0,
                         help='Scheduled sampling rate.')
+    parser.add_argument('-fast_xentropy', action="store_true",
+                        help="""Fast cross entropy loss""")
+
     parser.add_argument('-curriculum', type=int, default=-1,
                         help="""For this many epochs, order the minibatches based
                         on source sequence length. Sometimes setting this to 1 will
@@ -373,5 +380,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'tgt_reversible'):
         opt.tgt_reversible = False
+
+    if not hasattr(opt, 'fast_xentropy'):
+        opt.fast_xentropy = False
 
     return opt

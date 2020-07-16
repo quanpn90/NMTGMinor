@@ -20,8 +20,7 @@ class SelfAttention(nn.Module):
 
     def __init__(self, opt):
         super().__init__()
-        # self.layer_norm = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
-        self.layer_norm = nn.LayerNorm((opt.model_size,), elementwise_affine=True)
+        self.layer_norm = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.attn = MultiHeadAttention(opt.n_heads, opt.model_size, attn_p=opt.attn_dropout, share=1)
         self.dropout = opt.attn_dropout
         self.variational = opt.variational_dropout
@@ -45,15 +44,13 @@ class FeedForward(nn.Module):
 
     def __init__(self, opt):
         super().__init__()
-        self.layer_norm = nn.LayerNorm((opt.model_size, ), elementwise_affine=True)
-        # self.layer_norm = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+        self.layer_norm = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.feedforward = position_wise_feed_forward(opt.model_size, opt.inner_size, opt.dropout,
                                                       variational=opt.variational_dropout)
         self.dropout = opt.dropout
         self.variational = opt.variational_dropout
 
     def forward(self, input, cleaning=False):
-
         x_norm = self.layer_norm(input)
         x_ff = self.feedforward(x_norm)
 
@@ -192,17 +189,35 @@ class ReversibleTransformerEncoderLayer(nn.Module):
             # for dropout and save for forward fn in backward pass
             # to have correct dropout
 
-            self._init_attention_seed(x2)
-            z1, _, _ = self.self_attn(x2, attn_mask, cleaning=True)
+            coin = True
+            if self.training:
+                if self.training:
+                    coin = (torch.rand(1)[0].item() >= self.death_rate)
 
-            y1 = z1 + x1
+            self.forward_coin = coin
 
-            self._init_feedforward_seed(y1)
-            z2 = self.feedforward(y1, cleaning=True)
+            if coin:
+                self._init_attention_seed(x2)
+                z1, _, _ = self.self_attn(x2, attn_mask, cleaning=True)
 
-            y2 = z2 + x2
+                if self.training and self.death_rate > 0:
+                    z1 = z1 / (1 - self.death_rate)
 
-            del x1, x2, z1, z2
+                y1 = z1 + x1
+
+                self._init_feedforward_seed(y1)
+                z2 = self.feedforward(y1, cleaning=True)
+
+                if self.training and self.death_rate > 0:
+                    z2 = z2 / (1 - self.death_rate)
+
+                y2 = z2 + x2
+
+                del x1, x2, z1, z2
+
+            else:
+                y1 = x1
+                y2 = x2
 
         """return Y1 and Y2"""
         return y1, y2
@@ -218,6 +233,9 @@ class ReversibleTransformerEncoderLayer(nn.Module):
         """
         """Implementation of the backward pass for reversible transformer encoder"""
 
+        if not self.forward_coin:  # this layer was skipped, just return
+            return y1, y2, dy1, dy2
+
         with torch.enable_grad():
             y1.requires_grad = True
             with torch.random.fork_rng(devices=self.ffn_gpu_devices, enabled=True):
@@ -225,6 +243,9 @@ class ReversibleTransformerEncoderLayer(nn.Module):
                 set_device_states(self.ffn_gpu_devices, self.ffn_gpu_states)
 
                 z2 = self.feedforward(y1)
+
+                if self.training and self.death_rate > 0:
+                    z2 = z2 / (1 - self.death_rate)
 
             # res_hidden_states.backward(grad_hidden_states, retain_graph=True)
             torch.autograd.backward(z2, dy2)
@@ -249,6 +270,9 @@ class ReversibleTransformerEncoderLayer(nn.Module):
 
                 z1, _, _ = self.self_attn(x2, attn_mask)
 
+                if self.training and self.death_rate > 0:
+                    z1 = z1 / (1 - self.death_rate)
+
             z1.backward(dx1)
 
         with torch.no_grad():
@@ -270,20 +294,17 @@ class ReversibleDecoderFunction(Function):
     def forward(ctx, hidden_states, context, layers, tgt_mask, src_mask,
                 incremental=False, incremental_cache=None):
 
-        bsz, seq_len = hidden_states.shape[0], hidden_states.shape[1]
-        B = bsz * seq_len
-        idx = 0
         attn_output, hidden_states = torch.chunk(hidden_states, 2, dim=-1)
-        # print(attn_output.sum()/B, hidden_states.sum()/B)
 
         for layer in layers:
-            idx = idx + 1
             # forward pass in the layer
             attn_output, hidden_states, coverage, incremental_cache = layer(
                 attn_output, hidden_states, context, tgt_mask, src_mask,
                 incremental=incremental, incremental_cache=incremental_cache
             )
+
         # attach params to ctx for backward
+
         # why should we detach here? because Y1 Y2 were built within torch.no_grad()
         # so cutting the backward from these variables seems unnecessary
 
@@ -402,54 +423,49 @@ class ReversibleTransformerDecoderLayer(nn.Module):
         :param reuse_source:
         :return:
         """
-        # if self.training:
-        #     coin = (torch.rand(1)[0].item() >= self.death_rate)
-        #
-        # self.forward_coin = coin
+        coin = True
+        if self.training:
+            coin = (torch.rand(1)[0].item() >= self.death_rate)
 
-        with torch.no_grad():
-            # print("x1", x1.sum() / (x1.size(0) * x2.size(1)))
-            # print("x2", x2.sum() / (x2.size(0) * x2.size(1)))
+        self.forward_coin = coin
 
+        if coin:
+            with torch.no_grad():
 
-            # prepare the state for the first function (att > src->att)
-            self._init_attention_seed(x2)
-            f_x2, coverage, incremental_cache = self.self_attention(x2, mask_tgt,
-                                                                    incremental=incremental,
-                                                                    incremental_cache=incremental_cache,
-                                                                    cleaning=True)
+                # prepare the state for the first function (att > src->att)
+                self._init_attention_seed(x2)
+                f_x2, coverage, incremental_cache = self.self_attention(x2, mask_tgt,
+                                                                        incremental=incremental,
+                                                                        incremental_cache=incremental_cache,
+                                                                        cleaning=True)
 
-            z = f_x2
-            # print("self_attention", z.sum() / (z.size(0) * z.size(1)))
-            # if not self.ignore_source:
-            f_x2, coverage, incremental_cache = self.src_attention(f_x2, context, mask_src,
-                                                                   incremental=incremental,
-                                                                   incremental_cache=incremental_cache,
-                                                                   cleaning=True)
+                z = f_x2
+                # if not self.ignore_source:
+                f_x2, coverage, incremental_cache = self.src_attention(f_x2, context, mask_src,
+                                                                       incremental=incremental,
+                                                                       incremental_cache=incremental_cache,
+                                                                       cleaning=True)
+                f_x2 = f_x2 + z
+                del z
 
-            # print("src_attention", f_x2.sum() / (f_x2.size(0) * f_x2.size(1)))
-            f_x2 = f_x2 + z
-            del z
+                if self.training and self.death_rate > 0:
+                    f_x2 = f_x2 / (1 - self.death_rate)
 
-            # if self.training and self.death_rate > 0:
-            #     f_x2 = f_x2 / (1 - self.death_rate)
+                y1 = x1 + f_x2
+                del f_x2, x1
 
-            y1 = x1 + f_x2
-            # del f_x2, x1
+                # prepare the state for the second function
+                self._init_feedforward_seed(y1)
+                g_y1 = self.feed_forward(y1, cleaning=True)
 
-            # prepare the state for the second function
-            self._init_feedforward_seed(y1)
-            # print("y1", y1.sum() / (y1.size(0) * y1.size(1)))
-            g_y1 = self.feed_forward(y1, cleaning=True)
+                if self.training and self.death_rate > 0:
+                    g_y1 = g_y1 / (1 - self.death_rate)
 
-            # if self.training and self.death_rate > 0:
-            #     g_y1 = g_y1 / (1 - self.death_rate)
-
-            y2 = x2 + g_y1
-
-            # print("y2", y2.sum() / (y2.size(0) * y2.size(1)))
-
-            del g_y1, x2
+                y2 = x2 + g_y1
+                del g_y1, x2
+        else:
+            y1, y2 = x1, x2
+            coverage = None
 
         """return Y1 and Y2"""
         return y1, y2, coverage, incremental_cache
@@ -471,8 +487,8 @@ class ReversibleTransformerDecoderLayer(nn.Module):
         :return:
         """
 
-        # if not self.forward_coin:  # this layer was skipped, just return
-        #     return y1, y2, dy1, dy2, None
+        if not self.forward_coin:  # this layer was skipped, just return
+            return y1, y2, dy1, dy2, None
 
         # first block: recompute the ffn transition function
         with torch.enable_grad():
@@ -483,6 +499,8 @@ class ReversibleTransformerDecoderLayer(nn.Module):
                 set_device_states(self.ffn_gpu_devices, self.ffn_gpu_states)
 
                 g_y1 = self.feed_forward(y1)
+                if self.training and self.death_rate > 0:
+                    g_y1 = g_y1 / (1 - self.death_rate)
 
             torch.autograd.backward(g_y1, dy2)
 
@@ -517,6 +535,9 @@ class ReversibleTransformerDecoderLayer(nn.Module):
                                                 incremental_cache=incremental_cache)
 
                 f_x2 = f_x2 + z
+
+                if self.training and self.death_rate > 0:
+                    f_x2 = f_x2 / (1 - self.death_rate)
 
             torch.autograd.backward(f_x2, dx1)
 

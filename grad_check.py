@@ -2,7 +2,9 @@ import torch.nn as nn
 import onmt
 import torch
 
-from onmt.reversible_models.transformers import ReversibleTransformerEncoderLayer, ReversibleEncoderFunction, \
+# from onmt.reversible_models.transformers import ReversibleTransformerEncoderLayer, ReversibleEncoderFunction, \
+#     ReversibleTransformerDecoderLayer, ReversibleDecoderFunction
+from onmt.reversible_models.relative_transformers import ReversibleTransformerEncoderLayer, ReversibleEncoderFunction, \
     ReversibleTransformerDecoderLayer, ReversibleDecoderFunction
 
 
@@ -12,9 +14,9 @@ class TestEncoder(nn.Module):
         super().__init__()
         self.layers = layers
 
-    def forward(self, input):
+    def forward(self, input, pos):
 
-        return ReversibleEncoderFunction.apply(input, self.layers, None)
+        return ReversibleEncoderFunction.apply(input, pos, self.layers, None)
 
 
 class TestDecoder(nn.Module):
@@ -23,9 +25,9 @@ class TestDecoder(nn.Module):
         super().__init__()
         self.layers = layers
 
-    def forward(self, input, context):
+    def forward(self, input, context, pos):
 
-        return ReversibleDecoderFunction.apply(input, context, self.layers,
+        return ReversibleDecoderFunction.apply(input, pos, context, self.layers,
                                                None, None, False, None)
 
 
@@ -60,6 +62,9 @@ if __name__ == "__main__":
     seq_len = 16
 
     input_states = torch.randn(*(seq_len, bsz, opt.model_size*2)).double().cuda()
+    pos = torch.randn(*(seq_len, 1, opt.model_size)).double().cuda()
+
+    pos.requires_grad=False
 
     if not opt.test_decoder:
         layers = nn.ModuleList([ReversibleTransformerEncoderLayer(opt) for _ in range(opt.layers)])
@@ -71,14 +76,14 @@ if __name__ == "__main__":
 
         print("start gradchecking  ...")
         input_states.requires_grad = True
-        torch.autograd.gradcheck(net, input_states)
+        torch.autograd.gradcheck(net, (input_states, pos))
 
         print("gradchecking completed.")
     else:
         print("Testing decoder ...")
         opt.ignore_source = False
 
-        layers = nn.ModuleList([ReversibleTransformerDecoderLayer(opt, layer_id=x) for x in range(opt.layers)])
+        layers = nn.ModuleList([ReversibleTransformerDecoderLayer(opt) for x in range(opt.layers)])
 
         net = TestDecoder(layers)
         net = net.double().cuda()
@@ -89,7 +94,7 @@ if __name__ == "__main__":
         print("start gradchecking for input and context...")
         input_states.requires_grad = True
         context.requires_grad = True
-        torch.autograd.gradcheck(net, (input_states, context))
+        torch.autograd.gradcheck(net, (input_states, context, pos))
         print("gradchecking completed.")
 
         # context.requires_grad = True

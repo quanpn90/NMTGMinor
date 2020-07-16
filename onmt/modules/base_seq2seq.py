@@ -22,14 +22,15 @@ class Generator(nn.Module):
 
     # def forward(self, input, log_softmax=True):
     def forward(self, output_dicts):
+        """
+        :param output_dicts: dictionary contains the outputs from the decoder
+        :return: logits (the elements before softmax)
+        """
 
         input = output_dicts['hidden']
         fix_norm = self.fix_norm
         target_mask = output_dicts['target_mask']
 
-        # TODO: only compute the softmax for the masked parts to save computation?
-
-        # added float to the end
         if not fix_norm:
             logits = self.linear(input).float()
         else:
@@ -38,8 +39,9 @@ class Generator(nn.Module):
             normalized_bias = self.linear.bias
             logits = F.linear(input, normalized_weights, normalized_bias)
 
-        output = F.log_softmax(logits, dim=-1, dtype=torch.float32)
-        return output
+        # softmax will be done at the loss function
+        # output = F.log_softmax(logits, dim=-1, dtype=torch.float32)
+        return logits
         
 
 class NMTModel(nn.Module):

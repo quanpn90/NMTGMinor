@@ -248,13 +248,13 @@ class Dataset(torch.utils.data.Dataset):
         self.upsampling = kwargs.get('upsampling', False)
 
         self.max_src_len = kwargs.get('max_src_len', None)
-        self.max_tgt_len = kwargs.get('max_tgt_len', 64)
+        self.max_tgt_len = kwargs.get('max_tgt_len', 256)
         self.cleaning = cleaning
         self.debug = debug
 
         if self.max_src_len is None:
             if self._type == 'text':
-                self.max_src_len = 64
+                self.max_src_len = 256
             else:
                 self.max_src_len = 1024
 

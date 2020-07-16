@@ -1,18 +1,21 @@
+import copy
+import math
 import numpy as np
-import torch, math
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from collections import defaultdict
+from torch.utils.checkpoint import checkpoint
+
+import onmt
 from onmt.models.transformer_layers import EncoderLayer, DecoderLayer, PositionalEncoding, \
     PrePostProcessing
+from onmt.modules.base_seq2seq import NMTModel, Reconstructor, DecoderState
+from onmt.modules.dropout import embedded_dropout, switchout
+from onmt.modules.linear import FeedForward, FeedForwardSwish
 from onmt.reversible_models.transformers import ReversibleTransformerEncoderLayer, ReversibleEncoderFunction, \
     ReversibleDecoderFunction, ReversibleTransformerDecoderLayer
-from onmt.modules.base_seq2seq import NMTModel, Reconstructor, DecoderState
-import onmt
-from onmt.modules.dropout import embedded_dropout, switchout
-from torch.utils.checkpoint import checkpoint
-from collections import defaultdict
 from onmt.utils import flip, expected_length
-from onmt.modules.linear import FeedForward, FeedForwardSwish
-import copy
 
 torch_version = float(torch.__version__[:3])
 
@@ -133,7 +136,7 @@ class TransformerEncoder(nn.Module):
         e_length = expected_length(self.layers, self.death_rate)
 
         if self.reversible:
-            print("* Reversible Transformer Encoder with Absolute Attention with %.2f expected layer" % e_length)
+            print("* Reversible Transformer Encoder with Absolute Attention with %.2f expected layers" % e_length)
         else:
             print("* Transformer Encoder with Absolute Attention with %.2f expected layers" % e_length)
 
@@ -228,7 +231,6 @@ class TransformerEncoder(nn.Module):
             # x_1 and x_2 are the same at first for reversible
             context = torch.cat([context, context], dim=-1)
 
-        if self.reversible:
             context = ReversibleEncoderFunction.apply(context, self.layer_modules, mask_src)
         else:
             for i, layer in enumerate(self.layer_modules):
@@ -323,7 +325,7 @@ class TransformerDecoder(nn.Module):
                                      self.dropout, self.inner_size, self.attn_dropout,
                                      variational=self.variational_dropout, death_rate=death_r)
             else:
-                block = ReversibleTransformerDecoderLayer(self.opt, death_rate=_l, layer_id=_l)
+                block = ReversibleTransformerDecoderLayer(self.opt, death_rate=_l)
 
             self.layer_modules.append(block)
 
@@ -408,9 +410,8 @@ class TransformerDecoder(nn.Module):
             # x_1 and x_2 are the same at first for reversible
             output = torch.cat([output, output], dim=-1)
 
-        if self.reversible:
             output = ReversibleDecoderFunction.apply(output, context, self.layer_modules,
-                                                                  mask_tgt, mask_src)
+                                                     mask_tgt, mask_src)
             coverage = None
         else:
             for i, layer in enumerate(self.layer_modules):
@@ -515,15 +516,26 @@ class TransformerDecoder(nn.Module):
 
         output = emb.contiguous()
 
+        if self.reversible:
+            # x_1 and x_2 are the same at first for reversible
+            # output = torch.cat([output, output], dim=-1)
+            output1, output2 = output, output
+
         for i, layer in enumerate(self.layer_modules):
             buffer = buffers[i] if i in buffers else None
             assert (output.size(0) == 1)
 
-            # output, coverage, buffer = layer.step(output, context, mask_tgt, mask_src, buffer=buffer)
-            output, coverage, buffer = layer(output, context, mask_tgt, mask_src,
-                                             incremental=True, incremental_cache=buffer)
+            if self.reversible:
+                output1, output2, coverage, buffer = layer(output1, output2, context, mask_tgt, mask_src,
+                                                           incremental=True, incremental_cache=buffer)
+            else:
+                output, coverage, buffer = layer(output, context, mask_tgt, mask_src,
+                                                 incremental=True, incremental_cache=buffer)
 
             decoder_state.update_attention_buffer(buffer, i)
+
+        if self.reversible:
+            output = output1 + output2
 
         output = self.postprocess_layer(output)
 
@@ -721,6 +733,7 @@ class Transformer(NMTModel):
                 gen_t = self.generator[0](dec_out)
             else:
                 gen_t = self.generator(dec_out)
+            gen_t = F.log_softmax(gen_t, dim=-1, dtype=torch.float32)
             gen_t = gen_t.squeeze(0)
             tgt_t = tgt_t.unsqueeze(1)
             scores = gen_t.gather(1, tgt_t)
@@ -750,6 +763,7 @@ class Transformer(NMTModel):
 
         # squeeze to remove the time step dimension
         log_prob = self.generator[0](output_dict).squeeze(0)
+        log_prob = F.log_softmax(log_prob, dim=-1, dtype=torch.float32)
 
         coverage = output_dict['coverage']
         last_coverage = coverage[:, -1, :].squeeze(1)

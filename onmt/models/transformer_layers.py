@@ -333,7 +333,7 @@ class PositionalEncoding(nn.Module):
         inv_timescales = torch.exp(torch.arange(0, num_timescales).float() * -log_timescale_increment)
         scaled_time = position.unsqueeze(1) * inv_timescales.unsqueeze(0)
         pos_emb = torch.cat((torch.sin(scaled_time), torch.cos(scaled_time)), 1)
-        
+
         if cuda:
             pos_emb = pos_emb.cuda()
 
@@ -354,7 +354,8 @@ class PositionalEncoding(nn.Module):
             self.renew(len_seq)
 
         if word_emb.size(1) == len_seq:
-            out = word_emb + self.pos_emb[:len_seq, :].type_as(word_emb)
+            time_ = self.pos_emb[:len_seq, :].type_as(word_emb)
+            out = word_emb + time_
         else:
             # out = word_emb + Variable(self.pos_emb[:len_seq, :][-1, :], requires_grad=False)
             time_emb = self.pos_emb[len_seq-1, :] # 1 x dim

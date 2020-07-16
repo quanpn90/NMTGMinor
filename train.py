@@ -300,7 +300,8 @@ def main():
         else:
             loss_function = NMTLossFunc(opt.model_size, dicts['tgt'].size(),
                                         label_smoothing=opt.label_smoothing,
-                                        mirror=opt.mirror_loss)
+                                        mirror=opt.mirror_loss,
+                                        fast_xentropy=opt.fast_xentropy)
 
         # This function replaces modules with the more optimized counterparts so that it can run faster
         # Currently exp with LayerNorm

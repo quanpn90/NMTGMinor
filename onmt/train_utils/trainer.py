@@ -243,8 +243,8 @@ class BaseTrainer(object):
             else:
                 loss.backward()
 
-            print('========= after backward =========')
             if self.opt.memory_profiling:
+                print('========= after backward =========')
                 reporter.report(verbose=True)
 
         except RuntimeError as e:
@@ -258,8 +258,9 @@ class BaseTrainer(object):
         else:
             print("* Warming up successuflly.")
 
-        print(torch.cuda.memory_summary())
         if self.opt.memory_profiling:
+            if hasattr(torch.cuda, 'memory_summary'):
+                print(torch.cuda.memory_summary())
             exit()
 
 
@@ -350,6 +351,7 @@ class XETrainer(BaseTrainer):
         epoch_iterator = data_iterator.next_epoch_itr(False, pin_memory=False)
 
         self.model.eval()
+        self.loss_function.eval()
         self.model.reset_states()
 
         if opt.streaming:
@@ -387,7 +389,7 @@ class XETrainer(BaseTrainer):
 
                 outputs['tgt_mask'] = tgt_mask
 
-                loss_dict = self.loss_function(outputs, targets, model=self.model)
+                loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True)
 
                 loss_data = loss_dict['data']
 
@@ -396,6 +398,7 @@ class XETrainer(BaseTrainer):
                 i = i + 1
 
         self.model.train()
+        self.loss_function.train()
         return total_loss / total_words
 
     def train_epoch(self, epoch, resume=False, batch_order=None, iteration=0):
@@ -405,6 +408,8 @@ class XETrainer(BaseTrainer):
         train_data = self.train_data
         streaming = opt.streaming
 
+        self.model.train()
+        self.loss_function.train()
         # Clear the gradients of the model
         # self.runner.zero_grad()
         self.model.zero_grad()
@@ -542,6 +547,7 @@ class XETrainer(BaseTrainer):
                 self.optim.zero_grad()
                 num_accumulated_words = 0
                 num_accumulated_sents = 0
+                print("Warning!!! Loss is Nan")
 
             if not oom:
                 src_size = batch.src_size

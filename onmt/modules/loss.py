@@ -1,15 +1,16 @@
-import onmt
-import onmt.modules
+import math
+import numpy
+import torch
 import torch.nn as nn
-import torch, math
 import torch.nn.functional as F
 from torch.nn.modules.loss import _Loss
+
+import onmt
+import onmt.modules
 from onmt.utils import flip
 
-import numpy
 
 class CrossEntropyLossBase(_Loss):
-
     """
     Class for managing efficient loss computation.
     loss computations
@@ -19,7 +20,7 @@ class CrossEntropyLossBase(_Loss):
         output_size: number of words in vocabulary()
     """
 
-    def __init__(self, output_size, label_smoothing):
+    def __init__(self, output_size, label_smoothing, fast_xentropy=False):
         super(CrossEntropyLossBase, self).__init__()
         self.output_size = output_size
         self.padding_idx = onmt.constants.PAD
@@ -27,26 +28,50 @@ class CrossEntropyLossBase(_Loss):
         self.confidence = 1.0 - label_smoothing
         self.label_smoothing = label_smoothing
 
-    def _compute_loss(self, scores, targets):
+        # use apex fast entropy implementation
+        self.fast_xentropy = fast_xentropy
 
-        gtruth = targets.view(-1)  # batch * time
-        scores = scores.view(-1, scores.size(-1))  # batch * time X vocab_size
+        if self.fast_xentropy:
+            try:
+                from apex.contrib import xentropy as label_smoothing
+                self.softmax_xentropy = label_smoothing.SoftmaxCrossEntropyLoss.apply
+            except ModuleNotFoundError:
+                print("Fast xentropy cannot be found. Reinstalling apex with --xentropy is probably required.")
+                self.softmax_xentropy = False
+        else:
+            self.softmax_xentropy = None
 
-        lprobs = scores
-        non_pad_mask = gtruth.ne(self.padding_idx)
-        nll_loss = -lprobs.gather(1, gtruth.unsqueeze(1))[non_pad_mask]
-        smooth_loss = -lprobs.sum(dim=-1, keepdim=True)[non_pad_mask]
-        nll_loss = nll_loss.sum()
-        smooth_loss = smooth_loss.sum()
+    def _compute_loss(self, logits, targets):
+        """
+        :param logits: T x B x V or B x T x V tensor (output of decoder)
+        :param targets: T x B x V or B x T target tensor
+        :return:
+        """
+        gtruth = targets.view(-1)  # B*T
+        logits = logits.view(-1, logits.size(-1))  # B*T x V
+        label_smoothing = self.label_smoothing if self.training else 0.0
+        eps_i = self.smoothing_value if self.training else 0.0
 
-        eps_i = self.smoothing_value
-        loss = (1. - self.label_smoothing) * nll_loss + eps_i * smooth_loss
-        loss_data = nll_loss.data.item()
+        if not self.fast_xentropy:
+            lprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
+
+            non_pad_mask = gtruth.ne(self.padding_idx)
+            nll_loss = -lprobs.gather(1, gtruth.unsqueeze(1))[non_pad_mask]
+            smooth_loss = -lprobs.sum(dim=-1, keepdim=True)[non_pad_mask]
+            nll_loss = nll_loss.sum()
+            smooth_loss = smooth_loss.sum()
+
+            loss = (1. - label_smoothing) * nll_loss + eps_i * smooth_loss
+            loss_data = loss.data.item()
+        else:
+            half_to_float = (logits.dtype == torch.half)
+            loss = self.softmax_xentropy(logits, gtruth, label_smoothing, self.padding_idx, half_to_float)
+            loss = loss.sum()
+            loss_data = loss.data.item()
 
         return loss, loss_data
 
     def forward(self, model_outputs, targets, hiddens, **kwargs):
-
         return NotImplementedError
 
 
@@ -54,8 +79,17 @@ class NMTLossFunc(CrossEntropyLossBase):
     """
     Standard NMT Loss Computation.
     """
-    def __init__(self, hidden_size, output_size, label_smoothing, mirror=False):
-        super(NMTLossFunc, self).__init__(output_size, label_smoothing)
+
+    def __init__(self, hidden_size, output_size, label_smoothing, mirror=False, fast_xentropy=False):
+        """
+        :param hidden_size:
+        :param output_size:
+        :param label_smoothing:
+        :param mirror:
+        :param fast_xentropy:
+        """
+        super(NMTLossFunc, self).__init__(output_size, label_smoothing, fast_xentropy=fast_xentropy)
+        self.hidden_size = hidden_size
         self.output_size = output_size
         self.padding_idx = onmt.constants.PAD
         self.smoothing_value = label_smoothing / (output_size - 2)
@@ -67,34 +101,37 @@ class NMTLossFunc(CrossEntropyLossBase):
         """
         Compute the loss. Subclass must define this method.
         Args:
-
-            model_outputs: a dictionary containing the predictive output from the model.
+            :param model_outputs:  a dictionary containing the predictive output from the model.
                                                       time x batch x vocab_size
                                                    or time x batch x hidden_size
-            targets: the validate target to compare output with. time x batch
-            model: passing the model in for necessary components
-            backward: to control if we should perform backward pass (to free the graph) or not
-            normalizer: the denominator of the loss before backward
-            **kwargs(optional): additional info for computing loss.
+            :param targets: the validate target to compare output with. time x batch
+            :param model: passing the model in for necessary components
+            :param backward: to control if we should perform backward pass (to free the graph) or not
+            :param normalizer:the denominator of the loss before backward
         """
 
         outputs = model_outputs['hidden']
-        logprobs = model_outputs['logprobs']
+        # the model no longer outputs logprobs, only logits
+        logits = model_outputs['logprobs']
         mirror = self.mirror
+        #
+        # if not self.fast_nll:
+        #     logprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
 
         if mirror:
             reverse_outputs = model_outputs['reverse_hidden']
-            reverse_logprobs = model_outputs['reverse_logprobs']
+            reverse_logits = model_outputs['reverse_logprobs']
+
             # reverse_targets = torch.flip(targets, (0, ))  # reverse the targets in time dimension
             reverse_targets = model_outputs['reverse_target']
             alpha = 1.0
 
-        loss, loss_data = self._compute_loss(logprobs, targets)
+        loss, loss_data = self._compute_loss(logits, targets)
 
         total_loss = loss
 
         if mirror:
-            reverse_loss, rev_loss_data = self._compute_loss(reverse_logprobs, reverse_targets)
+            reverse_loss, rev_loss_data = self._compute_loss(reverse_logits, reverse_targets)
 
             # flip the reverse outputs so they have the same thing
             reverse_outputs = torch.flip(reverse_outputs, (0,))
@@ -107,15 +144,6 @@ class NMTLossFunc(CrossEntropyLossBase):
             # backward: 9 8 7 6 5 4 3 2 > 2 3 4 5 6 7 8 9
             # we want 1 == 3, 2 == 4, 5 == 7 etc because they predict the same output word
 
-            # slow version
-            # for (b, length) in enumerate(lengths):
-            #     L = length - 1
-            #     fwd_hiddens = outputs[:L-1, b]
-            #     bwd_hiddens = reverse_outputs[1:L, b]
-            #     # print(fwd_hiddens.size(), bwd_hiddens.size())
-            #     mirror_loss += F.mse_loss(fwd_hiddens, bwd_hiddens, reduction='sum')
-
-            # fast version
             fwd_mask = model_outputs['tgt_mask'].new(outputs.size(0), outputs.size(1)).fill_(0)
             bwd_mask = model_outputs['tgt_mask'].new(outputs.size(0), outputs.size(1)).fill_(0)
 
@@ -140,27 +168,6 @@ class NMTLossFunc(CrossEntropyLossBase):
 
             mirror_loss = mirror_loss_2.div(outputs.size(-1))
 
-            # fwd_hiddens = outputs[]
-
-            # mask = model_outputs['tgt_mask']
-            # flattened_mask = mask.view(-1)
-            # non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
-            # # remove the pads
-            # outputs = outputs.contiguous().view(-1, outputs.size(-1))
-            # outputs = outputs.index_select(0, non_pad_indices)
-
-            # Here we have to flip the reverse outputs again so the states have the same order with the original seq
-            # reverse_outputs = torch.flip(reverse_outputs, (0, ))
-            # reverse_mask = mask
-            # flattened_reverse_mask = reverse_mask.view(-1)
-            # reverse_non_pad_indices = torch.nonzero(flattened_reverse_mask).squeeze(1)
-            # reverse_outputs = reverse_outputs.contiguous().view(-1, reverse_outputs.size(-1))
-            # reverse_outputs = reverse_outputs.index_select(0, reverse_non_pad_indices)
-            #
-            # # mirror_loss = (outputs - reverse_outputs).float() ** 2
-            # mirror_outputs = reverse_outputs.detach()
-            # mirror_loss = F.mse_loss(outputs, mirror_outputs, reduction='sum')
-            # mirror_loss = mirror_loss.div(outputs.size(-1))
             total_loss = total_loss + reverse_loss + alpha * mirror_loss
             rev_loss = reverse_loss
         else:
@@ -171,9 +178,9 @@ class NMTLossFunc(CrossEntropyLossBase):
         # if we also use reconstruction:
         if model_outputs['reconstruct']:
 
-            rec_logprobs = model_outputs['rec_logprobs']
+            rec_logits = model_outputs['rec_logprobs']
             rec_targets = model_outputs['rec_target']
-            rec_loss, rec_loss_data = self._compute_loss(rec_logprobs, rec_targets)
+            rec_loss, rec_loss_data = self._compute_loss(rec_logits, rec_targets)
             total_loss = total_loss + rec_loss
         else:
             rec_loss, rec_loss_data = None, None
@@ -210,7 +217,7 @@ class CTCLossFunc(_Loss):
 
     def __init__(self, output_size, label_smoothing=0.0):
         super(CTCLossFunc, self).__init__(output_size)
-        self.ctc = nn.CTCLoss(output_size-1, reduction='sum')
+        self.ctc = nn.CTCLoss(output_size - 1, reduction='sum')
 
     def forward(self, model_outputs, targets, model=None, backward=False, normalizer=1, **kwargs):
         """
@@ -289,11 +296,11 @@ class NMTAndCTCLossFunc(_Loss):
     Standard NMT Loss Computation.
     """
 
-    def __init__(self, output_size, label_smoothing=0.0, ctc_weight = 0.0):
+    def __init__(self, output_size, label_smoothing=0.0, ctc_weight=0.0):
         super(NMTAndCTCLossFunc, self).__init__(output_size)
         self.ctc_weight = ctc_weight
-        self.ce_loss = NMTLossFunc(output_size,label_smoothing)
-        self.ctc_loss = CTCLossFunc(output_size+1,label_smoothing)
+        self.ce_loss = NMTLossFunc(output_size, label_smoothing)
+        self.ctc_loss = CTCLossFunc(output_size + 1, label_smoothing)
 
     def forward(self, model_outputs, targets, model=None, backward=False, normalizer=1, **kwargs):
         """
@@ -308,16 +315,16 @@ class NMTAndCTCLossFunc(_Loss):
             normalizer: the denominator of the loss before backward
             **kwargs(optional): additional info for computing loss.
         """
-        ce_loss = self.ce_loss(model_outputs, targets, model,False, normalizer)
+        ce_loss = self.ce_loss(model_outputs, targets, model, False, normalizer)
         ctc_loss = self.ctc_loss(model_outputs, targets, model, False, normalizer)
 
-        loss = self.ctc_weight * ctc_loss['loss'] + (1-self.ctc_weight) * ce_loss['loss']
-        loss_data = self.ctc_weight * ctc_loss['data'] + (1-self.ctc_weight) * ce_loss['data']
+        loss = self.ctc_weight * ctc_loss['loss'] + (1 - self.ctc_weight) * ce_loss['loss']
+        loss_data = self.ctc_weight * ctc_loss['data'] + (1 - self.ctc_weight) * ce_loss['data']
 
         if not numpy.isfinite(ctc_loss['data']):
-            print("CTC_Loss:",ctc_loss['data'])
-            print("NMT_Loss:",ce_loss['data'])
-            print("Loss:",loss_data)
+            print("CTC_Loss:", ctc_loss['data'])
+            print("NMT_Loss:", ce_loss['data'])
+            print("Loss:", loss_data)
             exit()
 
         if backward:
