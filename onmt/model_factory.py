@@ -127,7 +127,7 @@ def build_tm_model(opt, dicts):
 
     elif opt.model == 'distance_transformer':
 
-        from onmt.models.relative_transformer import RelativeTransformerDecoder, RelativeTransformer
+        # from onmt.models.relative_transformer import RelativeTransformerDecoder, RelativeTransformer
         from onmt.models.distance_transformer import DistanceTransformerEncoder
 
         if opt.encoder_type == "text":
@@ -139,8 +139,8 @@ def build_tm_model(opt, dicts):
                                                  language_embeddings=language_embeddings)
 
         generator = nn.ModuleList(generators)
-        decoder = RelativeTransformerDecoder(opt, embedding_tgt, None, language_embeddings=language_embeddings)
-        model = RelativeTransformer(encoder, decoder, generator, mirror=opt.mirror_loss)
+        decoder = DistanceTransformerDecoder(opt, embedding_tgt, None, language_embeddings=language_embeddings)
+        model = Transformer(encoder, decoder, generator, mirror=opt.mirror_loss)
 
     elif opt.model == 'unified_transformer':
         from onmt.models.unified_transformer import UnifiedTransformer

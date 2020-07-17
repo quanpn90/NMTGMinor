@@ -12,38 +12,33 @@ from onmt.modules.linear import group_linear, FeedForwardSwish, FeedForward
 from onmt.modules.attention import MultiHeadAttention
 from onmt.modules.dropout import VariationalDropout
 from onmt.modules.relative_attention import RelPartialLearnableMultiHeadAttn
+from onmt.modules.optimized.encdec_attention import EncdecMultiheadAttn
+
 
 
 class RelativeTransformerEncoderLayer(nn.Module):
-    def __init__(self, h, d_model, p, d_ff, attn_p=0.1, variational=False, death_rate=0.0, **kwargs):
+    # def __init__(self, h, d_model, p, d_ff, attn_p=0.1, variational=False, death_rate=0.0, **kwargs):
+    def __init__(self, opt, death_rate=0.0, **kwargs):
         super(RelativeTransformerEncoderLayer, self).__init__()
-        self.variational = variational
+        self.variational = opt.variational_dropout
         self.death_rate = death_rate
 
-        self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', variational=self.variational)
-        self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', variational=self.variational)
-        # self.multihead = MultiHeadAttention(h, d_model, attn_p=attn_p, share=2)
-        d_head = d_model // h
-        self.multihead = RelPartialLearnableMultiHeadAttn(h, d_model, d_head, dropatt=attn_p)
+        self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+        self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                  variational=self.variational)
+        self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+        self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                 variational=self.variational)
+        d_head = opt.model_size // opt.n_heads
+        self.multihead = RelPartialLearnableMultiHeadAttn(opt.n_heads, opt.model_size, d_head, dropatt=opt.attn_dropout)
 
-        if onmt.constants.activation_layer == 'linear_relu_linear':
-            ff_p = p
-            feedforward = FeedForward(d_model, d_ff, ff_p, variational=self.variational)
-        elif onmt.constants.activation_layer == 'maxout':
-            k = int(math.ceil(d_ff / d_model))
-            feedforward = MaxOut(d_model, d_model, k)
-        elif onmt.constants.activation_layer == 'linear_swish_linear':
-            ff_p = p
-            feedforward = FeedForwardSwish(d_model, d_ff, ff_p, variational=self.variational)
-        else:
-            raise NotImplementedError
-
+        feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
         self.feedforward = Bottle(feedforward)
 
-    # def forward(self, input, pos_emb, r_w_bias, r_r_bias, attn_mask):
     def forward(self, input, pos_emb, attn_mask, incremental=False, incremental_cache=None, mems=None):
+
+        if incremental and incremental_cache is None:
+            incremental_cache = dict()
 
         coin = True
         if self.training and self.death_rate > 0:
@@ -85,40 +80,39 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
 class RelativeTransformerDecoderLayer(nn.Module):
 
-    def __init__(self, h, d_model, p,    d_ff, attn_p=0.1, version=1.0, ignore_source=False,
-                 variational=False, death_rate=0.0):
+    # def __init__(self, h, d_model, p,    d_ff, attn_p=0.1, version=1.0, ignore_source=False,
+    #              variational=False, death_rate=0.0):
+    def __init__(self, opt, death_rate=0.0):
         super(RelativeTransformerDecoderLayer, self).__init__()
-        self.version = version
-        self.ignore_source = ignore_source
-        self.variational = variational
+        self.ignore_source = opt.ignore_source
+        self.variational = opt.variational_dropout
         self.death_rate = death_rate
 
-        self.preprocess_attn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_attn = PrePostProcessing(d_model, p, sequence='da', variational=self.variational)
+        self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+        self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                  variational=self.variational)
 
         if not self.ignore_source:
-            self.preprocess_src_attn = PrePostProcessing(d_model, p, sequence='n')
-            self.postprocess_src_attn = PrePostProcessing(d_model, p, sequence='da', variational=self.variational)
-            self.multihead_src = MultiHeadAttention(h, d_model, attn_p=attn_p, share=2)
+            self.preprocess_src_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+            self.postprocess_src_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                          variational=self.variational)
 
-        self.preprocess_ffn = PrePostProcessing(d_model, p, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(d_model, p, sequence='da', variational=self.variational)
+            if opt.fast_xattention:
+                self.multihead_src = EncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout)
+            else:
+                self.multihead_src = MultiHeadAttention(opt.n_heads, opt.model_size, attn_p=opt.attn_dropout, share=2)
 
-        d_head = d_model // h
-        self.multihead_tgt = RelPartialLearnableMultiHeadAttn(h, d_model, d_head, dropatt=attn_p)
-        # self.multihead_tgt = MultiHeadAttention(h, d_model, attn_p=attn_p, share=1)
+        self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+        self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                 variational=self.variational)
 
-        if onmt.constants.activation_layer == 'linear_relu_linear':
-            ff_p = p
-            feedforward = FeedForward(d_model, d_ff, ff_p, variational=self.variational)
-        elif onmt.constants.activation_layer == 'maxout':
-            k = int(math.ceil(d_ff / d_model))
-            feedforward = MaxOut(d_model, d_model, k)
-        elif onmt.constants.activation_layer == 'linear_swish_linear':
-            ff_p = p
-            feedforward = FeedForwardSwish(d_model, d_ff, ff_p)
-        else:
-            raise NotImplementedError
+        d_head = opt.model_size // opt.n_heads
+        self.multihead_tgt = RelPartialLearnableMultiHeadAttn(opt.n_heads, opt.model_size, d_head,
+                                                              dropatt=opt.attn_dropout)
+
+        feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
+        # feedforward = FeedForwardSwish(opt.model_size, d_ff, ff_p)
+
         self.feedforward = Bottle(feedforward)
 
     # def forward(self, input, context, pos_emb, r_w_bias, r_r_bias, mask_tgt, mask_src):
@@ -128,6 +122,9 @@ class RelativeTransformerDecoderLayer(nn.Module):
         """ Self attention layer
             layernorm > attn > dropout > residual
         """
+
+        if incremental and incremental_cache is None:
+            incremental_cache = dict()
 
         coin = True
         if self.training and self.death_rate > 0:
@@ -159,9 +156,9 @@ class RelativeTransformerDecoderLayer(nn.Module):
             if not self.ignore_source:
                 query = self.preprocess_src_attn(input)
                 incremental_source = incremental and reuse_source
-                out, coverage, incremental_cache = self.multihead_src(query, context, context, mask_src,
-                                                                      incremental=incremental_source,
-                                                                      incremental_cache=incremental_cache)
+                out, coverage = self.multihead_src(query, context, context, mask_src,
+                                                   incremental=incremental_source,
+                                                   incremental_cache=incremental_cache)
 
                 # rescaling before residual
                 if self.training and self.death_rate > 0:
@@ -185,32 +182,3 @@ class RelativeTransformerDecoderLayer(nn.Module):
             coverage = None
 
         return input, coverage, incremental_cache
-
-    def step(self, input, context, pos_emb, mask_tgt, mask_src, buffer=None):
-        """ Self attention layer
-            layernorm > attn > dropout > residual
-        """
-
-        query = self.preprocess_attn(input)
-
-        out, _, buffer = self.multihead_tgt.step(query, pos_emb, attn_mask=mask_tgt, buffer=buffer)
-
-        input = self.postprocess_attn(out, input)
-
-        """ Context Attention layer
-            layernorm > attn > dropout > residual
-        """
-        if not self.ignore_source:
-            query = self.preprocess_src_attn(input)
-            out, coverage, buffer = self.multihead_src.step(query, context, context, mask_src, buffer=buffer)
-            input = self.postprocess_src_attn(out, input)
-        else:
-            coverage = None
-
-        """ Feed forward layer
-            layernorm > ffn > dropout > residual
-        """
-        out = self.feedforward(self.preprocess_ffn(input))
-        input = self.postprocess_ffn(out, input)
-
-        return input, coverage, buffer

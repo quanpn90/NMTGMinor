@@ -115,6 +115,7 @@ class SelfMultiheadAttn(nn.Module):
             outputs, coverage = self.attn_func(attn_mask is not None, is_training, self.num_heads, query,
                                                input_weights, self.out_proj_weight,
                                                input_bias, self.out_proj_bias,
-                                               mask, self.dropout)
+                                               mask, self.dropout,
+                                               incremental, incremental_cache)
 
-        return outputs, coverage, incremental_cache
+        return outputs, coverage

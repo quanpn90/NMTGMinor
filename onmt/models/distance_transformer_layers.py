@@ -128,6 +128,8 @@ class DistanceTransformerDecoderLayer(nn.Module):
         """ Self attention layer
             layernorm > attn > dropout > residual
         """
+        if incremental and incremental_cache is None:
+            incremental_cache = dict()
 
         coin = True
         if self.training and self.death_rate > 0:
@@ -144,8 +146,8 @@ class DistanceTransformerDecoderLayer(nn.Module):
 
             # out, _ = self.multihead_tgt(query, pos_emb, r_w_bias, r_r_bias, attn_mask=mask_tgt)
             # print(query.size(), pos_emb.size(), mask_tgt.size(), mems.size() if mems is not None else 0)
-            out, _, incremental_cache = self.multihead_tgt(query, attn_mask=mask_tgt, mems=mems,
-                                                           incremental=incremental, incremental_cache=incremental_cache)
+            out, _, = self.multihead_tgt(query, attn_mask=mask_tgt, mems=mems,
+                                         incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -159,9 +161,9 @@ class DistanceTransformerDecoderLayer(nn.Module):
             if not self.ignore_source:
                 query = self.preprocess_src_attn(input)
                 incremental_source = incremental and reuse_source
-                out, coverage, incremental_cache = self.multihead_src(query, context, context, mask_src,
-                                                                      incremental=incremental_source,
-                                                                      incremental_cache=incremental_cache)
+                out, coverage = self.multihead_src(query, context, context, mask_src,
+                                                   incremental=incremental_source,
+                                                   incremental_cache=incremental_cache)
 
                 # rescaling before residual
                 if self.training and self.death_rate > 0:

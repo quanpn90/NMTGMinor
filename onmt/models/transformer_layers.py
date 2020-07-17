@@ -16,6 +16,7 @@ from onmt.modules.attention import MultiHeadAttention
 from onmt.modules.dropout import VariationalDropout
 from onmt.modules.optimized.encdec_attention import EncdecMultiheadAttn
 from onmt.modules.optimized.self_attention import SelfMultiheadAttn
+from collections import defaultdict
 
 
 class PrePostProcessing(nn.Module):
@@ -105,9 +106,7 @@ class EncoderLayer(nn.Module):
         self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                  variational=self.variational)
-        # if opt.fast_xattention:
-        #     self.multihead = EncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout)
-        # else:
+
         if opt.fast_self_attention:
             self.multihead = SelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
         else:
@@ -127,9 +126,9 @@ class EncoderLayer(nn.Module):
             query = self.preprocess_attn(input)
 
             if self.fast_self_attention:
-                out, _, _ = self.multihead(query, query, query, attn_mask, None)
+                out, _ = self.multihead(query, query, query, attn_mask, None)
             else:
-                out, _, _ = self.multihead(query, query, query, attn_mask)
+                out, _ = self.multihead(query, query, query, attn_mask)
 
             if self.training and self.death_rate > 0:
                 out = out / (1 - self.death_rate)
@@ -219,6 +218,9 @@ class DecoderLayer(nn.Module):
         """ Self attention layer 
             layernorm > attn > dropout > residual
         """
+        if incremental:
+            if incremental_cache is None:
+                incremental_cache = dict()
 
         coverage = None
 
@@ -231,13 +233,13 @@ class DecoderLayer(nn.Module):
             query = self.preprocess_attn(input)
 
             if self.fast_self_attention:
-                out, _, incremental_cache = self.multihead_tgt(query, query, query, None, mask_tgt,
-                                                               incremental=incremental,
-                                                               incremental_cache=incremental_cache)
+                out, _, = self.multihead_tgt(query, query, query, None, mask_tgt,
+                                             incremental=incremental,
+                                             incremental_cache=incremental_cache)
             else:
-                out, _, incremental_cache = self.multihead_tgt(query, query, query, mask_tgt,
-                                                               incremental=incremental,
-                                                               incremental_cache=incremental_cache)
+                out, _, = self.multihead_tgt(query, query, query, mask_tgt,
+                                             incremental=incremental,
+                                             incremental_cache=incremental_cache)
 
             if self.training and self.death_rate > 0:
                 out = out / (1 - self.death_rate)
@@ -249,9 +251,9 @@ class DecoderLayer(nn.Module):
             """
             if not self.ignore_source:
                 query = self.preprocess_src_attn(input)
-                out, coverage, incremental_cache = self.multihead_src(query, context, context, mask_src,
-                                                                      incremental=incremental,
-                                                                      incremental_cache=incremental_cache)
+                out, coverage = self.multihead_src(query, context, context, mask_src,
+                                                   incremental=incremental,
+                                                   incremental_cache=incremental_cache)
 
                 if self.training and self.death_rate > 0:
                     out = out / (1 - self.death_rate)

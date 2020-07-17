@@ -365,9 +365,9 @@ class BufferedIterator(object):
             if time.time() - self.start_time > 5 * 60:
                 if self.warning_time is None or time.time() - self.warning_time > 15 * 60:
                     print(
-                        "Data loading buffer is empty or nearly empty. This may "
+                        "Data loading buffer is empty or nearly empty (%d). This may "
                         "indicate a data loading bottleneck, and increasing the "
-                        "number of workers (--num-workers) may help."
+                        "number of workers (--num-workers) may help." % self._queue.qsize()
                     )
                     self.warning_time = time.time()
 

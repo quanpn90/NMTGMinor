@@ -7,13 +7,16 @@ class EncdecAttnFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx, use_time_mask, is_training, heads, inputs_q, inputs_kv,
                 input_weights_q, input_weights_kv, output_weights,
-                mask, dropout_prob):
+                mask, dropout_prob,
+                incremental, incremental_cache):
         heads_t = torch.tensor([heads])
         # scale_t = torch.tensor([scale])
         dropout_prob_t = torch.tensor([dropout_prob])
         null_tensor = torch.tensor([])
         head_dim = inputs_q.size(2) // heads
         scale_t = torch.tensor([head_dim ** -0.5])
+
+        bsz, len_q, len_k = inputs_q.size(1), inputs_q.size(0), inputs_kv.size(0)
 
         # TODO: add incremental cache
 
@@ -25,24 +28,44 @@ class EncdecAttnFunc(torch.autograd.Function):
         input_lin_q_results = torch.mm(inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
                                        input_weights_q.transpose(0, 1))
         input_lin_q_results = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1), input_weights_q.size(0))
+        queries = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1) * heads, head_dim)
         # Input Linear GEMM KV
         # input1: (activations) [seql_k, bsz, embed_dim(1024)]
         # input2: (weights)     [embed_dim*2 (2048), embed_dim (1024)] (transpose [0,1])
         # output:               [seql_k, bsz, embed_dim*2]
         # GEMM: ( (seql_k*seqs) x embed_dim ) x ( embed_dim x embed_dim*2 ) = (seql_k*seqs x embed_dim*2)
 
-        input_lin_kv_results = torch.mm(inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)),
-                                        input_weights_kv.transpose(0, 1))
-        input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1), input_weights_kv.size(0))
-
         # Slice out k,v from one big Input Linear outuput (should only impact meta data, no copies!)
         # Sequences and heads are combined to make the batch of the Batched GEMM
         # input_lin_kv_results: [seql_k, seqs, heads(16), 2, head_dim(64)]
         # input_lin_kv_results: [seql_k, batches=seqs*heads, 2, head_dim]
-        queries = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1) * heads, head_dim)
-        input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1) * heads, 2, head_dim)
-        keys = input_lin_kv_results[:, :, 0, :]
-        values = input_lin_kv_results[:, :, 1, :]
+
+        # input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1) * heads, 2, head_dim)
+        # keys = input_lin_kv_results[:, :, 0, :]
+        # values = input_lin_kv_results[:, :, 1, :]
+        if incremental and ('c_k' in incremental_cache and 'c_v' in incremental_cache):
+            keys = incremental_cache['c_k']
+            values = incremental_cache['c_v']
+            keys = keys.view(len_k, bsz * heads, head_dim)
+            values = values.view(len_k, bsz * heads, head_dim)
+            input_lin_kv_results = torch.stack([keys, values], dim=-2)
+        else:
+            input_lin_kv_results = torch.mm(inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)),
+                                            input_weights_kv.transpose(0, 1))
+            input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1),
+                                                             input_weights_kv.size(0))
+            input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1) * heads, 2, head_dim)
+            keys = input_lin_kv_results[:, :, 0, :]
+            values = input_lin_kv_results[:, :, 1, :]
+            if incremental:
+                keys = keys.contiguous().view(len_k, bsz, heads * head_dim)
+                values = values.contiguous().view(len_k, bsz, heads * head_dim)
+
+                incremental_cache['c_k'] = keys
+                incremental_cache['c_v'] = values
+
+                keys = keys.view(len_k, bsz*heads, head_dim)
+                values = values.view(len_k, bsz*heads, head_dim)
 
         # Matmul1 Batched GEMMs
         # The output tensor is specified prior to the Batch GEMM because baddbmm requires its specification
@@ -243,7 +266,7 @@ class EncdecAttnFunc(torch.autograd.Function):
         return None, None, None \
             , input_q_grads, input_kv_grads \
             , input_weight_q_grads, input_weight_kv_grads, output_weight_grads \
-            , None, None
+            , None, None, None, None
 
 
 encdec_attn_func = EncdecAttnFunc.apply

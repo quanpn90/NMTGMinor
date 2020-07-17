@@ -62,6 +62,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
         self.experimental = opt.experimental
         self.unidirectional = opt.unidirectional
         self.reversible = opt.src_reversible
+        self.n_heads = opt.n_heads
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type,
@@ -93,9 +94,10 @@ class RelativeTransformerEncoder(TransformerEncoder):
             death_r = (_l + 1.0) / self.layers * self.death_rate
 
             if not self.reversible:
-                block = RelativeTransformerEncoderLayer(self.n_heads, self.model_size,
-                                                        self.dropout, self.inner_size, self.attn_dropout,
-                                                        variational=self.varitional_dropout, death_rate=death_r)
+                # block = RelativeTransformerEncoderLayer(self.n_heads, self.model_size,
+                #                                         self.dropout, self.inner_size, self.attn_dropout,
+                #                                         variational=self.varitional_dropout, death_rate=death_r)
+                block = RelativeTransformerEncoderLayer(self.opt, death_rate=death_r)
             else:
                 block = ReversibleTransformerEncoderLayer(self.opt, death_rate=death_r)
 
@@ -335,6 +337,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         self.max_memory_size = opt.max_memory_size
         self.stream_context = opt.stream_context
         self.extra_context_size = opt.extra_context_size
+        self.n_heads = opt.n_heads
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerDecoder, self).__init__(opt, dicts,
@@ -344,7 +347,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
                                                          allocate_positions=False)
         self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
-        # Parameters for the position biases
+        # Parameters for the position biases - deprecated. kept for backward compatibility
         self.r_w_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
         self.r_r_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
 
@@ -354,6 +357,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
     def build_modules(self):
 
         e_length = expected_length(self.layers, self.death_rate)
+        self.opt.ignore_source = self.ignore_source
         if self.reversible:
             print("* Transformer Reversible Decoder with Relative Attention with %.2f expected layers" % e_length)
         else:
@@ -366,9 +370,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
             death_r = (l + 1.0) / self.layers * self.death_rate
 
             if not self.reversible:
-                block = RelativeTransformerDecoderLayer(self.n_heads, self.model_size,
-                                                        self.dropout, self.inner_size, self.attn_dropout,
-                                                        variational=self.variational_dropout, death_rate=death_r)
+                # block = RelativeTransformerDecoderLayer(self.n_heads, self.model_size,
+                #                                         self.dropout, self.inner_size, self.attn_dropout,
+                #                                         variational=self.variational_dropout, death_rate=death_r)
+                block = RelativeTransformerDecoderLayer(self.opt)
             else:
                 block = ReversibleTransformerDecoderLayer(self.opt, death_rate=death_r)
 

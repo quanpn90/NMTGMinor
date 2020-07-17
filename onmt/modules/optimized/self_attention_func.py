@@ -8,13 +8,16 @@ class SelfAttnFunc(torch.autograd.Function):
     def forward(ctx, use_time_mask, is_training, heads, inputs,
                 input_weights, output_weights,
                 input_biases, output_biases,
-                mask, dropout_prob):
+                mask, dropout_prob,
+                incremental, incremental_cache):
         heads_t = torch.tensor([heads])
 
         dropout_prob_t = torch.tensor([dropout_prob])
         null_tensor = torch.tensor([])
         head_dim = inputs.size(2) // heads
         scale_t = torch.tensor([head_dim ** -0.5])
+
+        bsz, len_q = inputs.size(1), inputs.size(0)
 
         # Input Linear GEMM
         # input1: (activations) [seql_q, seqs, embed_dim(1024)]
@@ -37,6 +40,20 @@ class SelfAttnFunc(torch.autograd.Function):
         keys = input_lin_results[:, :, 1, :]
         values = input_lin_results[:, :, 2, :]
 
+        if incremental:
+            keys = keys.contiguous().view(len_q, bsz, heads * head_dim)
+            values = values.contiguous().view(len_q, bsz, heads * head_dim)
+            if 'k' in incremental_cache and 'v' in incremental_cache:
+                keys = torch.cat([incremental_cache['k'], keys], dim=0)  # time first
+                incremental_cache['k'] = keys
+                values = torch.cat([incremental_cache['v'], values], dim=0)  # time first
+                incremental_cache['v'] = values
+            else:
+                incremental_cache['k'] = keys
+                incremental_cache['v'] = values
+            keys = keys.view(-1, bsz * heads, head_dim)
+            values = values.view(-1, bsz * heads, head_dim)
+
         # Matmul1 Batched GEMMs
         # The output tensor is specified prior to the Batch GEMM because baddbmm requires its specification
         # baddbmm is used to apply the scale parameter via the Batched GEMM's alpha parameter instead of
@@ -54,7 +71,7 @@ class SelfAttnFunc(torch.autograd.Function):
             # Self Attention Time Mask
             if use_time_mask:
                 assert (len(mask.size()) == 2), "Timing mask is not 2D!"
-                assert (mask.size(0) == mask.size(1)), "Sequence length should match!"
+                # assert (mask.size(0) == mask.size(1)), "Sequence length should match!"
                 mask = mask.to(torch.bool)
                 matmul1_results = matmul1_results.masked_fill_(mask, float('-inf'))
             # Key Padding Mask
@@ -228,7 +245,7 @@ class SelfAttnFunc(torch.autograd.Function):
             input_grads, \
             input_weight_grads, output_weight_grads, \
             input_bias_grads, output_bias_grads, \
-            None, None
+            None, None, None, None
 
 
 self_attn_func = SelfAttnFunc.apply

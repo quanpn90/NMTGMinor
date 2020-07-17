@@ -503,9 +503,8 @@ class TransformerDecoder(nn.Module):
             mask_src = None
 
         len_tgt = input.size(1)
-        mask_tgt = input.eq(onmt.constants.PAD).byte().unsqueeze(1)
-        mask_tgt = mask_tgt + self.mask[:len_tgt, :len_tgt].type_as(mask_tgt)
-        mask_tgt = torch.gt(mask_tgt, 0)
+        mask_tgt = torch.triu(
+            emb.new_ones(len_tgt, len_tgt), diagonal=1).byte().unsqueeze(0)
         # only get the final step of the mask during decoding (because the input of the network is only the last step)
         mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
 

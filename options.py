@@ -393,6 +393,6 @@ def backward_compatible(opt):
         opt.fast_xattention = False
 
     if not hasattr(opt, 'fast_self_attention'):
-        opt.fast_xattention = False
+        opt.fast_self_attention = False
 
     return opt

@@ -72,15 +72,13 @@ class MultiHeadAttention(nn.Module):
 
             # In incremental case: we concatenate the previously computed (mapped) states to the proj_key and proj_v
             if incremental:
-                if incremental_cache is not None and 'k' in incremental_cache and 'v' in incremental_cache:
+                if 'k' in incremental_cache and 'v' in incremental_cache:
                     proj_key = torch.cat([incremental_cache['k'], proj_key], dim=0)  # time first
                     incremental_cache['k'] = proj_key
                     proj_value = torch.cat([incremental_cache['v'], proj_value], dim=0)  # time first
                     incremental_cache['v'] = proj_value
                     len_key, b_ = proj_key.size(0), proj_key.size(1)
                 else:
-                    if incremental_cache is None:
-                        incremental_cache = dict()
                     incremental_cache['k'] = proj_key
                     incremental_cache['v'] = proj_value
 
@@ -88,18 +86,14 @@ class MultiHeadAttention(nn.Module):
 
             # This function will have to change in the future for Transformer XL
             proj_query = self.fc_query(query)  # batch_size x len_query x h*d_head
-            shared_kv = group_linear([self.fc_key.function.linear, self.fc_value.function.linear], key)
-            proj_key, proj_value = shared_kv.chunk(2, dim=-1)
 
-            if incremental:
-                if incremental_cache is not None and 'c_k' in incremental_cache and 'c_v' in incremental_cache:
+            if incremental and ('c_k' in incremental_cache and 'c_v' in incremental_cache):
                     proj_key = incremental_cache['c_k']
                     proj_value = incremental_cache['c_v']
-                else:
-                    if incremental_cache is None:
-                        incremental_cache = dict()
-                    shared_kv = group_linear([self.fc_key.function.linear, self.fc_value.function.linear], key)
-                    proj_key, proj_value = shared_kv.chunk(2, dim=-1)
+            else:
+                shared_kv = group_linear([self.fc_key.function.linear, self.fc_value.function.linear], key)
+                proj_key, proj_value = shared_kv.chunk(2, dim=-1)
+                if incremental:
                     incremental_cache['c_k'] = proj_key
                     incremental_cache['c_v'] = proj_value
 
@@ -139,4 +133,4 @@ class MultiHeadAttention(nn.Module):
 
         out = self.fc_concat(out)
 
-        return out, coverage, incremental_cache
+        return out, coverage

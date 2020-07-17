@@ -228,7 +228,7 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
 
         # [bsz x n_head x qlen x klen] again
         _dtype = torch.float64 if double_precision else torch.float32
-        attn_prob = F.softmax(attn_score, dim=-1, dtype=_dtype)
+        attn_prob = F.softmax(attn_score, dim=-1, dtype=_dtype).type_as(attn_score)
 
         # nan may happen ... because of the first positions (aligned right) will have nothing to attend to
         if debug:
@@ -377,15 +377,13 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
         w_head_q = w_head_q[-qlen:]
 
         if incremental:
-            if incremental_cache is not None and 'k' in incremental_cache and 'v' in incremental_cache:
+            if 'k' in incremental_cache and 'v' in incremental_cache:
                 with torch.no_grad():
                     w_head_k = torch.cat([incremental_cache['k'], w_head_k], dim=0)  # time first
                     incremental_cache['k'] = w_head_k.detach()
                     w_head_v = torch.cat([incremental_cache['v'], w_head_v], dim=0)  # time first
                     incremental_cache['v'] = w_head_v.detach()
             else:
-                if incremental_cache is None:
-                    incremental_cache = dict()
                 incremental_cache['k'] = w_head_k.detach()
                 incremental_cache['v'] = w_head_v.detach()
 
@@ -459,15 +457,13 @@ class LearnableRelMultiHeadAttn(nn.Module):
         w_head_q = w_head_q[-qlen:]  # why ?
 
         if incremental:
-            if incremental_cache is not None and 'k' in incremental_cache and 'v' in incremental_cache:
+            if 'k' in incremental_cache and 'v' in incremental_cache:
                 with torch.no_grad():
                     w_head_k = torch.cat([incremental_cache['k'], w_head_k], dim=0)  # time first
                     incremental_cache['k'] = w_head_k.detach()
                     w_head_v = torch.cat([incremental_cache['v'], w_head_v], dim=0)  # time first
                     incremental_cache['v'] = w_head_v.detach()
             else:
-                if incremental_cache is None:
-                    incremental_cache = dict()
                 incremental_cache['k'] = w_head_k.detach()
                 incremental_cache['v'] = w_head_v.detach()
 
@@ -529,7 +525,7 @@ class LearnableRelMultiHeadAttn(nn.Module):
 
         # [bsz x n_head x qlen x klen] again
         dtype_ = torch.float64 if double_precision else torch.float32
-        attn_prob = F.softmax(attn_score, dim=-1, dtype=dtype_)
+        attn_prob = F.softmax(attn_score, dim=-1, dtype=dtype_).type_as(attn_score)
 
         # nan may happen ... because of the first positions (aligned right) will have nothing to attend to
         nan_mask = torch.isnan(attn_prob)

@@ -71,7 +71,7 @@ class EncdecMultiheadAttn(nn.Module):
 
         is_training = self.training
         time_masking = False
-        if self.optimized == 2 and self.training:
+        if self.optimized == 2 and (self.training and not incremental):
             if attn_mask is not None:
                 if attn_mask.dim() == 3:
                     attn_mask = attn_mask.squeeze(1)
@@ -85,14 +85,15 @@ class EncdecMultiheadAttn(nn.Module):
 
         # during evaluation we use the python binding which is safer ....
         else:
-            outputs, coverage = self.attn_func(time_masking, is_training,
-                                               self.num_heads, query, key,
-                                               self.in_proj_weight_q, self.in_proj_weight_kv,
-                                               self.out_proj_weight, attn_mask, self.dropout)
+            outputs, coverage, = self.attn_func(time_masking, is_training,
+                                                self.num_heads, query, key,
+                                                self.in_proj_weight_q, self.in_proj_weight_kv,
+                                                self.out_proj_weight, attn_mask, self.dropout,
+                                                incremental, incremental_cache)
 
         # TODO: add incremental cache
 
-        return outputs, coverage, incremental_cache
+        return outputs, coverage
 
         # create attention function over here
         # if self.include_norm_add:
