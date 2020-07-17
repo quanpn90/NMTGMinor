@@ -231,8 +231,9 @@ class RelPartialLearnableMultiHeadAttn(nn.Module):
         attn_prob = F.softmax(attn_score, dim=-1, dtype=_dtype)
 
         # nan may happen ... because of the first positions (aligned right) will have nothing to attend to
-        nan_mask = torch.isnan(attn_prob)
-        attn_prob = attn_prob.masked_fill(nan_mask, 0).type_as(attn_score)
+        if debug:
+            nan_mask = torch.isnan(attn_prob)
+            attn_prob = attn_prob.masked_fill(nan_mask, 0).type_as(attn_score)
 
         coverage = attn_prob
 

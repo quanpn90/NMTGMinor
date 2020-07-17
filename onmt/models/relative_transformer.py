@@ -620,12 +620,11 @@ class RelativeTransformerDecoder(TransformerDecoder):
         else:
             dec_attn_mask = torch.triu(
                 emb.new_ones(qlen, klen), diagonal=1 + mem_len).byte()[:, :, None]
-            pad_mask = input.eq(onmt.constants.PAD).byte()  # L x B
-
-            dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
-            dec_attn_mask = dec_attn_mask.gt(0)
-            if onmt.constants.torch_version >= 1.2:
-                dec_attn_mask = dec_attn_mask.bool()
+            # pad_mask = input.eq(onmt.constants.PAD).byte()  # L x B
+            #
+            # dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
+            # dec_attn_mask = dec_attn_mask.gt(0)
+            dec_attn_mask = dec_attn_mask.bool()
 
         pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
 
@@ -653,7 +652,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
                 # batch_size x src_len x d_model output, coverage = layer(output, context, pos_emb, self.r_w_bias,
                 # self.r_r_bias, dec_attn_mask, mask_src)
                 mems_i = mems[i] if mems is not None and streaming and \
-                    self.stream_context in ['local', 'global'] and self.max_memory_size > 0 else None
+                                    self.stream_context in ['local', 'global'] and self.max_memory_size > 0 else None
                 # if streaming:
                 #     buffer = streaming_state.tgt_buffer[i]
                 #     output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, context_attn_mask,
@@ -794,16 +793,31 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         output = emb.contiguous()
 
+        if self.reversible:
+            output_1, output_2 = output, output
+
         for i, layer in enumerate(self.layer_modules):
             buffer = buffers[i] if i in buffers else None
-            # assert (output.size(0) == 1)
 
-            if buffering:
-                output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, mask_src,
-                                                 incremental=True, incremental_cache=buffer)
-                decoder_state.update_attention_buffer(buffer, i)
+            if self.reversible:
+                if buffering:
+                    output_1, output_2, coverage, buffer = layer(output_1, output_2, pos_emb, context,
+                                                                 dec_attn_mask, mask_src, incremental=True,
+                                                                 incremental_cache=buffer)
+                    decoder_state.update_attention_buffer(buffer, i)
+                else:
+                    output_1, output_2, coverage, _ = layer(output_1, output_2, pos_emb, context,
+                                                            dec_attn_mask, mask_src)
             else:
-                output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src)
+                if buffering:
+                    output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                                                     incremental=True, incremental_cache=buffer)
+                    decoder_state.update_attention_buffer(buffer, i)
+                else:
+                    output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src)
+
+        if self.reversible:
+            output = output_1 + output_2
 
         # normalize and take the last time step
         output = self.postprocess_layer(output)
@@ -1078,7 +1092,6 @@ class StreamState(object):
         buffer = dict()
 
         for i in self.tgt_buffer:
-
             buffer[i] = dict()
 
             buffer[i]['v'] = self.tgt_buffer[i]['v'].index_select(1, beam_id)  # the batch dim is 1
@@ -1249,7 +1262,7 @@ class StreamDecodingState(DecoderState):
         if self.streaming_state.src_mems is not None:
             for l in range(len(self.streaming_state.src_mems)):
                 mems = self.streaming_state.src_mems[l]
-                if mems.size(0) > 0 :
+                if mems.size(0) > 0:
                     self.streaming_state.src_mems[l] = mems.index_select(1, reorder_state)
 
         if self.streaming_state.tgt_mems is not None:
@@ -1268,4 +1281,3 @@ class StreamDecodingState(DecoderState):
 
     def update_beam(self, beam, b, remaining_sents, idx):
         pass
-

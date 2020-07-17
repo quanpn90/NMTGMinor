@@ -172,7 +172,6 @@ class BaseTrainer(object):
 
         batch = self.train_data.get_largest_batch()
         opt = self.opt
-        denom = 32000
 
         if self.cuda:
             batch.cuda(fp16=self.opt.fp16 and not self.opt.fp16_mixed)
@@ -200,18 +199,18 @@ class BaseTrainer(object):
             outputs['tgt_mask'] = tgt_mask
 
             loss_dict = self.loss_function(outputs, targets, model=self.model)
-            loss = loss_dict['loss'].div(denom)  # a little trick to avoid gradient overflow with fp16
+            loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
             full_loss = loss
 
             if opt.mirror_loss:
-                rev_loss = loss_dict['rev_loss'].div(denom)
-                mirror_loss = loss_dict['mirror_loss'].div(denom)
+                rev_loss = loss_dict['rev_loss']
+                mirror_loss = loss_dict['mirror_loss']
                 full_loss = full_loss + rev_loss + mirror_loss
 
             # reconstruction loss
             if opt.reconstruct:
                 rec_loss = loss_dict['rec_loss']
-                rec_loss = rec_loss.div(denom)
+                rec_loss = rec_loss
                 full_loss = full_loss + rec_loss
 
             optimizer = self.optim.optimizer
@@ -438,7 +437,7 @@ class XETrainer(BaseTrainer):
         counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
-        denom = 3584
+
         nan = False
 
         if opt.streaming:
@@ -468,8 +467,8 @@ class XETrainer(BaseTrainer):
 
             # for b in range(len(batches)):
             batch = next(epoch_iterator)
-
             batch = rewrap(batch)
+            grad_scaler = self.opt.batch_size_words if self.opt.update_frequency > 1 else batch.tgt_size
 
             if self.cuda:
                 batch.cuda(fp16=self.opt.fp16 and not self.opt.fp16_mixed)
@@ -496,13 +495,13 @@ class XETrainer(BaseTrainer):
 
                 loss_dict = self.loss_function(outputs, targets, model=self.model)
                 loss_data = loss_dict['data']
-                loss = loss_dict['loss'].div(denom)  # a little trick to avoid gradient overflow with fp16
+                loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
                 full_loss = loss
 
                 if opt.mirror_loss:
-                    rev_loss = loss_dict['rev_loss'].div(denom)
+                    rev_loss = loss_dict['rev_loss']
                     rev_loss_data = loss_dict['rev_loss_data']
-                    mirror_loss = loss_dict['mirror_loss'].div(denom)
+                    mirror_loss = loss_dict['mirror_loss']
                     full_loss = full_loss + rev_loss + mirror_loss
                     mirror_loss_data = loss_dict['mirror_loss'].item()
                 else:
@@ -513,21 +512,23 @@ class XETrainer(BaseTrainer):
                 # reconstruction loss
                 if opt.reconstruct:
                     rec_loss = loss_dict['rec_loss']
-                    rec_loss = rec_loss.div(denom)
+                    rec_loss = rec_loss
                     full_loss = full_loss + rec_loss
                     rec_loss_data = loss_dict['rec_loss_data']
-                    # print(rec_loss_data)
                 else:
-                    # full_loss = loss
                     rec_loss_data = None
 
                 optimizer = self.optim.optimizer
+
+                # When the batch size is large, each gradient step is very easy to explode on fp16
+                # Normalizing the loss to grad scaler ensures this will not happen
+                full_loss.div_(grad_scaler)
 
                 if self.cuda:
                     with amp.scale_loss(full_loss, optimizer) as scaled_loss:
                         scaled_loss.backward()
                 else:
-                    loss.backward()
+                    full_loss.backward()
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
@@ -559,22 +560,27 @@ class XETrainer(BaseTrainer):
 
                 #   We only update the parameters after getting gradients from n mini-batches
                 update_flag = False
-                if 0 < opt.batch_size_update <= num_accumulated_words:
+                if counter >= opt.update_frequency > 0:
                     update_flag = True
-                elif counter >= opt.update_frequency and 0 >= opt.batch_size_update:
+                elif 0 < opt.batch_size_update <= num_accumulated_words:
                     update_flag = True
-                elif i == n_samples - 1:  # update for the last minibatch
+                elif i == n_samples:  # update for the last minibatch
                     update_flag = True
 
                 if update_flag:
-                    grad_denom = 1 / denom
-                    if self.opt.normalize_gradient:
-                        grad_denom = num_accumulated_words / denom
+                    # accumulated gradient case, in this case the update frequency
+                    if (counter == 1 and self.opt.update_frequency != 1) or counter > 1:
+                        grad_denom = 1 / grad_scaler
+                        if self.opt.normalize_gradient:
+                            grad_denom = num_accumulated_words * grad_denom
+                    else:
+                        grad_denom = 1
+                    # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
                     normalize_gradients(amp.master_params(optimizer), grad_denom)
                     # Update the parameters.
                     if self.opt.max_grad_norm > 0:
                         torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), self.opt.max_grad_norm)
-                    self.optim.step(grad_denom=grad_denom)
+                    self.optim.step()
                     self.optim.zero_grad()
                     self.model.zero_grad()
                     counter = 0

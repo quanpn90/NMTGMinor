@@ -158,6 +158,10 @@ def make_parser(parser):
                         help='Scheduled sampling rate.')
     parser.add_argument('-fast_xentropy', action="store_true",
                         help="""Fast cross entropy loss""")
+    parser.add_argument('-fast_xattention', action="store_true",
+                        help="""Fast cross attention between encoder decoder""")
+    parser.add_argument('-fast_self_attention', action="store_true",
+                        help="""Fast cross attention between encoder decoder""")
 
     parser.add_argument('-curriculum', type=int, default=-1,
                         help="""For this many epochs, order the minibatches based
@@ -253,7 +257,8 @@ def make_parser(parser):
     parser.add_argument('-augment_speech', action='store_true',
                         help='Use f/t augmentation for speech')
     parser.add_argument('-upsampling', action='store_true',
-                        help='In case the data is downsampled during preprocess. This option will upsample the samples again')
+                        help='In case the data is downsampled during preprocess. This option will upsample the '
+                             'samples again')
     parser.add_argument('-cnn_downsampling', action='store_true',
                         help='Use CNN for downsampling instead of reshaping')
     parser.add_argument('-zero_encoder', action='store_true',
@@ -383,5 +388,11 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'fast_xentropy'):
         opt.fast_xentropy = False
+
+    if not hasattr(opt, 'fast_xattention'):
+        opt.fast_xattention = False
+
+    if not hasattr(opt, 'fast_self_attention'):
+        opt.fast_xattention = False
 
     return opt

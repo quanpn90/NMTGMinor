@@ -146,11 +146,11 @@ class TransformerEncoder(nn.Module):
 
             if not self.lsh_src_attention:
                 if not self.reversible:
-                    block = EncoderLayer(self.n_heads, self.model_size,
-                                         self.dropout, self.inner_size, self.attn_dropout,
-                                         variational=self.varitional_dropout, death_rate=death_r)
+                    # block = EncoderLayer(self.n_heads, self.model_size,
+                    #                      self.dropout, self.inner_size, self.attn_dropout,
+                    #                      variational=self.varitional_dropout, death_rate=death_r)
+                    block = EncoderLayer(self.opt, death_rate=death_r)
                 else:
-
                     block = ReversibleTransformerEncoderLayer(self.opt, death_rate=death_r)
 
             else:
@@ -172,7 +172,7 @@ class TransformerEncoder(nn.Module):
 
         """ Embedding: batch_size x len_src x d_model """
         if self.input_type == "text":
-            mask_src = input.eq(onmt.constants.PAD).unsqueeze(1)  # batch_size x len_src x 1 for broadcasting
+            mask_src = input.eq(onmt.constants.PAD).unsqueeze(1)  # batch_size x 1 x len_src for broadcasting
 
             # apply switchout
             # if self.switchout > 0 and self.training:
@@ -205,8 +205,7 @@ class TransformerEncoder(nn.Module):
                 # the size seems to be B x T ?
                 emb = input
 
-        if torch_version >= 1.2:
-            mask_src = mask_src.bool()
+        mask_src = mask_src.bool()
 
         """ Scale the emb by sqrt(d_model) """
         emb = emb * math.sqrt(self.model_size)
@@ -261,8 +260,6 @@ class TransformerDecoder(nn.Module):
         self.opt = opt
 
         self.model_size = opt.model_size
-        self.n_heads = opt.n_heads
-        self.inner_size = opt.inner_size
         self.layers = opt.layers
         self.dropout = opt.dropout
         self.word_dropout = opt.word_dropout
@@ -321,9 +318,10 @@ class TransformerDecoder(nn.Module):
             # linearly decay the death rate
             death_r = (_l + 1.0) / self.layers * self.death_rate
             if not self.reversible:
-                block = DecoderLayer(self.n_heads, self.model_size,
-                                     self.dropout, self.inner_size, self.attn_dropout,
-                                     variational=self.variational_dropout, death_rate=death_r)
+                # block = DecoderLayer(self.n_heads, self.model_size,
+                #                      self.dropout, self.inner_size, self.attn_dropout,
+                #                      variational=self.variational_dropout, death_rate=death_r)
+                block = DecoderLayer(self.opt, death_rate=death_r)
             else:
                 block = ReversibleTransformerDecoderLayer(self.opt, death_rate=_l)
 
@@ -397,12 +395,12 @@ class TransformerDecoder(nn.Module):
             mask_src = None
 
         len_tgt = input.size(1)
-        mask_tgt = input.eq(onmt.constants.PAD).byte().unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
-        mask_tgt = torch.gt(mask_tgt, 0)
+        # mask_tgt = input.eq(onmt.constants.PAD).byte().unsqueeze(1) + self.mask[:len_tgt, :len_tgt]
+        # mask_tgt = torch.gt(mask_tgt, 0)
+        mask_tgt = torch.triu(
+                emb.new_ones(len_tgt, len_tgt), diagonal=1).byte().unsqueeze(0)
 
-        # an ugly hack to bypass torch 1.2 breaking changes
-        if torch_version >= 1.2:
-            mask_tgt = mask_tgt.bool()
+        mask_tgt = mask_tgt.bool()
 
         output = self.preprocess_layer(emb.transpose(0, 1).contiguous())
 
