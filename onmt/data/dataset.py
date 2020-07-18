@@ -8,7 +8,6 @@ import onmt
 from onmt.speech.Augmenter import Augmenter
 from onmt.modules.dropout import switchout
 import numpy as np
-import pyximport
 from .batch_utils import allocate_batch
 
 """
@@ -178,6 +177,19 @@ class Batch(object):
                     self.tensors[key] = self.tensors[key].cuda()
             else:
                 continue
+
+    def switchout(self, swrate, src_vocab_size, tgt_vocab_size):
+        # Switch out function ... currently works with only source text data
+        # if self.src_type == 'text':
+        if len(self.tensors['source'].shape) == 2:
+            self.tensors['source'] = switchout(self.tensors['source'], src_vocab_size, swrate, transpose=True)
+
+        if self.has_target:
+            self.tensors['target'] = switchout(self.tensors['target'], tgt_vocab_size, swrate, transpose=True, offset=1)
+            target_full = self.tensors['target']
+            self.tensors['target_input'] = target_full[:-1]
+            self.tensors['target_output'] = target_full[1:]
+            self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.constants.PAD)
 
 
 class LightBatch:

@@ -73,9 +73,14 @@ def allocate_batch(indices, lengths,
                    src_sizes, tgt_sizes,
                    batch_size_words, batch_size_sents, batch_size_multiplier,
                    max_src_len, max_tgt_len, cleaning=True):
-    import pyximport
 
-    if tgt_sizes is None or src_sizes is None:
+    try:
+        import pyximport
+        cython_available = True
+    except ModuleNotFoundError as e:
+        cython_available = False
+
+    if not cython_available or (tgt_sizes is None or src_sizes is None):
         return allocate_batch_slow(indices, lengths, src_sizes, tgt_sizes,
                                    batch_size_words, batch_size_sents, batch_size_multiplier,
                                    max_src_len, max_tgt_len, cleaning)
@@ -88,7 +93,6 @@ def allocate_batch(indices, lengths,
 
     if isinstance(indices, list):
         indices = np.asarray(indices)
-
     # convert to np int64
 
     return fast_batch_allocate(indices, lengths,

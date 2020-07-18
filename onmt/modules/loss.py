@@ -35,9 +35,10 @@ class CrossEntropyLossBase(_Loss):
             try:
                 from apex.contrib import xentropy as label_smoothing
                 self.softmax_xentropy = label_smoothing.SoftmaxCrossEntropyLoss.apply
-            except ModuleNotFoundError:
+            except (ModuleNotFoundError, AttributeError):
                 print("Fast xentropy cannot be found. Reinstalling apex with --xentropy is probably required.")
-                self.softmax_xentropy = False
+                self.softmax_xentropy = None
+                self.fast_xentropy = False
         else:
             self.softmax_xentropy = None
 
