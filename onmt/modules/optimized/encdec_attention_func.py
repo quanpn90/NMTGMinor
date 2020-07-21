@@ -10,7 +10,6 @@ class EncdecAttnFunc(torch.autograd.Function):
                 mask, dropout_prob,
                 incremental, incremental_cache):
         heads_t = torch.tensor([heads])
-        # scale_t = torch.tensor([scale])
         dropout_prob_t = torch.tensor([dropout_prob])
         null_tensor = torch.tensor([])
         head_dim = inputs_q.size(2) // heads
@@ -37,12 +36,7 @@ class EncdecAttnFunc(torch.autograd.Function):
 
         # Slice out k,v from one big Input Linear outuput (should only impact meta data, no copies!)
         # Sequences and heads are combined to make the batch of the Batched GEMM
-        # input_lin_kv_results: [seql_k, seqs, heads(16), 2, head_dim(64)]
-        # input_lin_kv_results: [seql_k, batches=seqs*heads, 2, head_dim]
 
-        # input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1) * heads, 2, head_dim)
-        # keys = input_lin_kv_results[:, :, 0, :]
-        # values = input_lin_kv_results[:, :, 1, :]
         if incremental and ('c_k' in incremental_cache and 'c_v' in incremental_cache):
             keys = incremental_cache['c_k']
             values = incremental_cache['c_v']
@@ -71,12 +65,12 @@ class EncdecAttnFunc(torch.autograd.Function):
         # The output tensor is specified prior to the Batch GEMM because baddbmm requires its specification
         # baddbmm is used to apply the scale parameter via the Batched GEMM's alpha parameter instead of
         # a separate elementwise operation.
-        # Input1: (Queries) [seql_q, seqs*heads, head_dim] tranpose(0,1)
+        # Input1: (Queries) [seql_q, seqs*heads, head_dim] transpose(0,1)
         # Input2: (Keys)    [seql_k, seqs*heads, head_dim] transpose(0,1)
         # output:           [seqs*heads, seql_q, seql_k]
         # GEMM: Per batch: ( seql_q x head_dim ) x ( head_dim x seql_k ) = ( seql_q x seql_k )
         matmul1_results = torch.empty((queries.size(1), queries.size(0), keys.size(0)), dtype=queries.dtype,
-                                      device=torch.device('cuda'))
+                                      device=queries.device)
         matmul1_results = torch.baddbmm(matmul1_results, queries.transpose(0, 1), keys.transpose(0, 1).transpose(1, 2),
                                         out=matmul1_results, beta=0.0, alpha=scale_t[0])
 
@@ -116,7 +110,7 @@ class EncdecAttnFunc(torch.autograd.Function):
         # Output:              [seql_q, seqs*heads, head_dim] transpose(0,1)
         # GEMM: Per batch: ( seql_q x seql_k ) x ( seql_k x head_dim ) = (seql_q x head_dim)
         matmul2_results = torch.empty((dropout_results.size(1), dropout_results.size(0), values.size(2)),
-                                      dtype=dropout_results.dtype, device=torch.device('cuda')).transpose(1, 0)
+                                      dtype=dropout_results.dtype, device=dropout_results.device).transpose(1, 0)
         matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1), out=matmul2_results)
         matmul2_results = matmul2_results.transpose(0, 1).contiguous().view(inputs_q.size(0), inputs_q.size(1),
                                                                             inputs_q.size(2))

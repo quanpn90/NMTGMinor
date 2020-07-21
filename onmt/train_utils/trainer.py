@@ -305,7 +305,7 @@ class XETrainer(BaseTrainer):
                 self.valid_data.src_align_right = True
                 self.valid_data.tgt_align_right = False
 
-    def save(self, epoch, valid_ppl, batch_order=None, iteration=-1):
+    def save(self, epoch, valid_ppl, itr=None):
 
         opt = self.opt
         model = self.model
@@ -314,14 +314,18 @@ class XETrainer(BaseTrainer):
         model_state_dict = self.model.state_dict()
         optim_state_dict = self.optim.state_dict()
 
+        if itr:
+            itr_state_dict = itr.state_dict()
+        else:
+            itr_state_dict = None
+
         #  drop a checkpoint
         checkpoint = {
             'model': model_state_dict,
             'dicts': dicts,
             'opt': opt,
             'epoch': epoch,
-            'iteration': iteration,
-            'batch_order': batch_order,
+            'itr': itr_state_dict,
             'optim': optim_state_dict,
             'additional_batch_order': getattr(self, 'additional_batch_order', None),
             'additional_data_iteration': getattr(self, 'additional_data_iteration', None),
@@ -344,7 +348,6 @@ class XETrainer(BaseTrainer):
         total_words = 0
         opt = self.opt
 
-        # batch_order = data.create_order(random=False)
         data_iterator = DataIterator(data, data.collater, data.batches, seed=self.opt.seed,
                                      num_workers=opt.num_workers, epoch=1, buffer_size=opt.buffer_size)
         epoch_iterator = data_iterator.next_epoch_itr(False, pin_memory=False)
@@ -400,7 +403,7 @@ class XETrainer(BaseTrainer):
         self.loss_function.train()
         return total_loss / total_words
 
-    def train_epoch(self, epoch, resume=False, batch_order=None, iteration=0):
+    def train_epoch(self, epoch, resume=False, itr_progress=None):
 
         global rec_ppl
         opt = self.opt
@@ -414,17 +417,14 @@ class XETrainer(BaseTrainer):
         self.model.zero_grad()
         self.model.reset_states()
 
-        # if resume:
-        # train_data.batch_order = batch_order
-        # train_data.set_index(iteration)
-        # print("Resuming from iteration: %d" % iteration)
-        # else:
-        # batch_order = train_data.create_order()
-        # iteration = 0
         dataset = train_data
         data_iterator = DataIterator(dataset, dataset.collater, dataset.batches, seed=self.opt.seed,
                                      num_workers=opt.num_workers, epoch=epoch, buffer_size=opt.buffer_size)
-        epoch_iterator = data_iterator.next_epoch_itr(True, pin_memory=opt.pin_memory)
+
+        if resume:
+            data_iterator.load_state_dict(itr_progress)
+
+        epoch_iterator = data_iterator.next_epoch_itr(not streaming, pin_memory=opt.pin_memory)
 
         total_tokens, total_loss, total_words = 0, 0, 0
         total_non_pads = 0
@@ -439,31 +439,29 @@ class XETrainer(BaseTrainer):
         num_accumulated_sents = 0
 
         nan = False
+        nan_counter = 0
 
         if opt.streaming:
             streaming_state = self.model.init_stream()
         else:
             streaming_state = None
 
-        i = 0
-        # for i in range(iteration, n_samples):
+        i = data_iterator.iterations_in_epoch
         while not data_iterator.end_of_epoch():
 
             curriculum = (epoch < opt.curriculum)
 
-            # batches = [train_data.next(curriculum=curriculum)[0]]
-
-            if (len(self.additional_data) > 0 and
-                    i % self.additional_data_ratio[0] == 0):
-                for j in range(len(self.additional_data)):
-                    for k in range(self.additional_data_ratio[j + 1]):
-                        if self.additional_data_iteration[j] == len(self.additional_data[j]):
-                            self.additional_data_iteration[j] = 0
-                            self.additional_data[j].shuffle()
-                            self.additional_batch_order[j] = self.additional_data[j].create_order()
-
-                        batches.append(self.additional_data[j].next()[0])
-                        self.additional_data_iteration[j] += 1
+            # if (len(self.additional_data) > 0 and
+            #         i % self.additional_data_ratio[0] == 0):
+            #     for j in range(len(self.additional_data)):
+            #         for k in range(self.additional_data_ratio[j + 1]):
+            #             if self.additional_data_iteration[j] == len(self.additional_data[j]):
+            #                 self.additional_data_iteration[j] = 0
+            #                 self.additional_data[j].shuffle()
+            #                 self.additional_batch_order[j] = self.additional_data[j].create_order()
+            #
+            #             batches.append(self.additional_data[j].next()[0])
+            #             self.additional_data_iteration[j] += 1
 
             # for b in range(len(batches)):
             batch = next(epoch_iterator)
@@ -548,7 +546,13 @@ class XETrainer(BaseTrainer):
                 self.optim.zero_grad()
                 num_accumulated_words = 0
                 num_accumulated_sents = 0
+                nan_counter = nan_counter + 1
                 print("Warning!!! Loss is Nan")
+                if nan_counter >= 15:
+                    raise ValueError("Training stopped because of multiple NaN occurence. "
+                                     "For ASR, using the Relative Transformer is more stable and recommended.")
+            else:
+                nan_counter = 0
 
             if not oom:
                 src_size = batch.src_size
@@ -594,7 +598,7 @@ class XETrainer(BaseTrainer):
 
                         ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
 
-                        self.save(ep, valid_ppl, batch_order=batch_order, iteration=i)
+                        self.save(ep, valid_ppl, itr=data_iterator)
 
                 num_words = tgt_size
                 report_loss += loss_data
@@ -658,11 +662,6 @@ class XETrainer(BaseTrainer):
         model = self.model
         optim = self.optim
 
-        # Try to load the save_file
-        # checkpoint = None
-        # if save_file:
-        #     checkpoint = torch.load(save_file, map_location=lambda storage, loc: storage)
-
         if checkpoint is not None:
             self.model.load_state_dict(checkpoint['model'])
             prec_opt = checkpoint['opt'] if 'opt' in checkpoint else None
@@ -676,12 +675,11 @@ class XETrainer(BaseTrainer):
                         if 'amp' in checkpoint:
                             amp.load_state_dict(checkpoint['amp'])
 
-                if 'batch_order' in checkpoint:
-                    batch_order = checkpoint['batch_order']
-                    iteration = checkpoint['iteration'] + 1
+                # Only load the progress when we use the same optimizer
+                if 'itr' in checkpoint:
+                    itr_progress = checkpoint['itr']
                 else:
-                    batch_order = None
-                    iteration = 0
+                    itr_progress = None
                 opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
 
                 resume = True
@@ -692,8 +690,7 @@ class XETrainer(BaseTrainer):
                     else:
                         self.init_additional_data()
             else:
-                batch_order = None
-                iteration = 0
+                itr_progress = None
                 resume = False
                 self.init_additional_data()
 
@@ -701,8 +698,7 @@ class XETrainer(BaseTrainer):
             del checkpoint['optim']
             del checkpoint
         else:
-            batch_order = None
-            iteration = 0
+            itr_progress = None
             print('Initializing model parameters')
             init_model_parameters(model, opt)
             resume = False
@@ -728,9 +724,7 @@ class XETrainer(BaseTrainer):
             print('')
 
             #  (1) train for one epoch on the training set
-            train_loss = self.train_epoch(epoch, resume=resume,
-                                          batch_order=batch_order,
-                                          iteration=iteration)
+            train_loss = self.train_epoch(epoch, resume=resume, itr_progress=itr_progress)
             train_ppl = math.exp(min(train_loss, 100))
             print('Train perplexity: %g' % train_ppl)
 
@@ -740,8 +734,7 @@ class XETrainer(BaseTrainer):
             print('Validation perplexity: %g' % valid_ppl)
 
             self.save(epoch, valid_ppl)
-            batch_order = None
-            iteration = None
+            itr_progress = None
             resume = False
 
     def init_additional_data(self):

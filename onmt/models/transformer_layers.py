@@ -349,3 +349,20 @@ class PositionalEncoding(nn.Module):
             # out should have size bs x 1 x dim
             out = word_emb + time_emb.unsqueeze(0).repeat(word_emb.size(0), 1, 1).type_as(word_emb)
         return out
+
+    def get_positional_embeddings(self, word_emb, t=None):
+
+        len_seq = t if t else word_emb.size(1)
+
+        self.data_type = word_emb.type()
+        if len_seq > self.len_max:
+            self.renew(len_seq)
+
+        if word_emb.size(1) == len_seq:
+            time_emb = self.pos_emb[:len_seq, :].type_as(word_emb)
+
+        else:
+            time_emb = self.pos_emb[len_seq - 1, :]
+            time_emb = time_emb.unsqueeze(0).repeat(word_emb.size(0), 1, 1)
+
+        return time_emb

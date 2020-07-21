@@ -49,7 +49,7 @@ class EncdecMultiheadAttn(nn.Module):
         except ModuleNotFoundError as e:
             # print(e)
             # print("Cannot use fast self-attention implementation")
-            self.optimized = 1
+            self.optimized = 2
             self.attn_func_fast = None
 
     def reset_parameters(self):
@@ -71,7 +71,7 @@ class EncdecMultiheadAttn(nn.Module):
 
         is_training = self.training
         time_masking = False
-        if self.optimized == 2 and (self.training and not incremental):
+        if self.optimized == 1 and (self.training and not incremental):
             if attn_mask is not None:
                 if attn_mask.dim() == 3:
                     attn_mask = attn_mask.squeeze(1)

@@ -142,15 +142,21 @@ def build_tm_model(opt, dicts):
         decoder = DistanceTransformerDecoder(opt, embedding_tgt, None, language_embeddings=language_embeddings)
         model = Transformer(encoder, decoder, generator, mirror=opt.mirror_loss)
 
-    elif opt.model == 'unified_transformer':
-        from onmt.models.unified_transformer import UnifiedTransformer
-
-        if opt.encoder_type == "audio":
-            raise NotImplementedError
+    elif opt.model == 'universal_transformer':
+        from onmt.models.universal_transformer import UniversalTransformerDecoder, UniversalTransformerEncoder
 
         generator = nn.ModuleList(generators)
-        model = UnifiedTransformer(opt, embedding_src, embedding_tgt,
-                                   generator, positional_encoder, language_embeddings=language_embeddings)
+
+        if opt.encoder_type == "text":
+            encoder = UniversalTransformerEncoder(opt, embedding_src, positional_encoder,
+                                                  opt.encoder_type, language_embeddings=language_embeddings)
+        elif opt.encoder_type == "audio":
+            encoder = UniversalTransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
+
+        decoder = UniversalTransformerDecoder(opt, embedding_tgt, positional_encoder,
+                                              language_embeddings=language_embeddings)
+
+        model = Transformer(encoder, decoder, generator, mirror=opt.mirror_loss)
 
     elif opt.model == 'relative_unified_transformer':
         from onmt.models.relative_unified_transformer import RelativeUnifiedTransformer
@@ -189,13 +195,14 @@ def init_model_parameters(model, opt):
     """
     init_std = 0.02  # magical number
 
+    # opt.init something ...
+
     def init_weight(weight):
         if len(weight.shape) == 2:
             std_ = math.sqrt(2.0 / (weight.shape[0] + weight.shape[1]))
             nn.init.normal_(weight, 0.0, std_)
         else:
             nn.init.normal_(weight, 0.0, init_std)
-        # nn.init.uniform_(weight, init_std, init_std)
 
     def init_embed(weight):
         nn.init.uniform_(weight, -0.01, 0.01)

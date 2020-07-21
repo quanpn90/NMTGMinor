@@ -1,12 +1,11 @@
 import torch
 import torch.nn as nn
 from onmt.models.transformer_layers import PositionalEncoding, PrePostProcessing
-from onmt.models.transformer_layers import EncoderLayer, DecoderLayer
 from onmt.models.transformers import TransformerEncoder, TransformerDecoder, TransformerDecodingState
 import onmt
 from onmt.modules.dropout import embedded_dropout
 from onmt.models.transformer_layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
-from onmt.models.transformer_layers import EncoderLayer, DecoderLayer
+from onmt.models.universal_transformer_layers import UniversalEncoderLayer, UniversalDecoderLayer
 # from onmt.models.relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
 from onmt.utils import flip, expected_length
 from collections import defaultdict
@@ -92,10 +91,7 @@ class UnifiedTransformer(TransformerDecoder):
             # linearly decay the death rate
             death_r = (l + 1.0) / self.layers * self.death_rate
 
-            block = DecoderLayer(self.n_heads, self.model_size,
-                                                self.dropout, self.inner_size, self.attn_dropout,
-                                                ignore_source=True,
-                                                variational=self.variational_dropout, death_rate=death_r)
+            block = DecoderLayer(opt, death_rate=death_r)
             self.layer_modules.append(block)
 
     def forward(self, batch, target_mask=None, **kwargs):
