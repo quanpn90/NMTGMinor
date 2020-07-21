@@ -44,7 +44,7 @@ class SinusoidalPositionalEmbedding(nn.Module):
             pos_emb = torch.cat([sinusoid_inp.cos(), sinusoid_inp.sin()], dim=-1)
 
         if bsz is not None:
-            return pos_emb[:, None, :].expand(-1, bsz, -1)
+            return pos_emb[:, None, :].repeat(1, bsz, 1)
         else:
             return pos_emb[:, None, :]
 
@@ -63,6 +63,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
         self.unidirectional = opt.unidirectional
         self.reversible = opt.src_reversible
         self.n_heads = opt.n_heads
+        self.fast_self_attn = opt.fast_self_attention
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type,
@@ -266,26 +267,10 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         # pos has size 2T+1
         # pos_emb has size 2T+1 x 1 x H
-        pos_emb = self.positional_encoder(pos)
+        pos_emb = self.positional_encoder(pos, bsz=input.size(1) if self.fast_self_attn else None)
 
         if self.learnable_position_encoding:
             raise NotImplementedError
-
-        # if not self.learnable_position_encoding:
-        #     # L x 1 x H
-        #     past_pos = pos[:klen+1]
-        #     future_pos = pos[-klen:]
-        #     past_pos_emb = self.positional_encoder(past_pos, sin_first=True)
-        #     future_pos_emb = self.positional_encoder(future_pos, sin_first=False)
-        #     pos_emb = torch.cat([past_pos_emb, future_pos_emb], dim=0)
-        # else:
-        #     raise NotImplementedError
-        #     pos = pos.long()
-        #     # pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=input.dtype)
-        #     # clamp the positions (all postions from afar are treated equally, maybe?)
-        #     # (2L-1) x 1 x H
-        #     pos_emb = self.positional_encoder(pos.unsqueeze(1))
-        #     # print(pos_emb.size())
 
         # B x T x H -> T x B x H
         context = emb
@@ -338,6 +323,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         self.stream_context = opt.stream_context
         self.extra_context_size = opt.extra_context_size
         self.n_heads = opt.n_heads
+        self.fast_self_attn = opt.fast_self_attention
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerDecoder, self).__init__(opt, dicts,
@@ -633,7 +619,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
 
-        pos_emb = self.positional_encoder(pos)
+        pos_emb = self.positional_encoder(pos, bsz=input.size(1) if self.fast_self_attn else None)
 
         output = self.preprocess_layer(emb.contiguous())
 

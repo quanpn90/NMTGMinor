@@ -4,6 +4,7 @@ import onmt
 
 from onmt.models.transformer_layers import PrePostProcessing, MultiHeadAttention, Linear
 from onmt.modules.relative_attention import RelPartialLearnableMultiHeadAttn
+from onmt.modules.optimized.relative_self_attention import RelativeSelfMultiheadAttn
 from onmt.utils import flip
 from onmt.modules.bottle import Bottle
 from onmt.modules.linear import XavierLinear as Linear
@@ -15,13 +16,13 @@ from onmt.modules.relative_attention import RelPartialLearnableMultiHeadAttn
 from onmt.modules.optimized.encdec_attention import EncdecMultiheadAttn
 
 
-
 class RelativeTransformerEncoderLayer(nn.Module):
     # def __init__(self, h, d_model, p, d_ff, attn_p=0.1, variational=False, death_rate=0.0, **kwargs):
     def __init__(self, opt, death_rate=0.0, **kwargs):
         super(RelativeTransformerEncoderLayer, self).__init__()
         self.variational = opt.variational_dropout
         self.death_rate = death_rate
+        self.fast_self_attention = opt.fast_self_attention
 
         self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
@@ -30,7 +31,11 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                  variational=self.variational)
         d_head = opt.model_size // opt.n_heads
-        self.multihead = RelPartialLearnableMultiHeadAttn(opt.n_heads, opt.model_size, d_head, dropatt=opt.attn_dropout)
+        if not self.fast_self_attention:
+            self.multihead = RelPartialLearnableMultiHeadAttn(opt.n_heads, opt.model_size,
+                                                              d_head, dropatt=opt.attn_dropout)
+        else:
+            self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
         feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
         self.feedforward = Bottle(feedforward)
@@ -52,8 +57,12 @@ class RelativeTransformerEncoderLayer(nn.Module):
                 mems = None
 
             query = self.preprocess_attn(input)
-            out, _, incremental_cache = self.multihead(query, pos_emb, attn_mask=attn_mask, mems=mems,
-                                                       incremental=incremental, incremental_cache=incremental_cache)
+            if not self.fast_self_attention:
+                out, _, incremental_cache = self.multihead(query, pos_emb, attn_mask=attn_mask, mems=mems,
+                                                           incremental=incremental, incremental_cache=incremental_cache)
+            else:
+                out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
+                                        incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -87,6 +96,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.ignore_source = opt.ignore_source
         self.variational = opt.variational_dropout
         self.death_rate = death_rate
+        self.fast_self_attention = opt.fast_self_attention
 
         self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
@@ -107,8 +117,12 @@ class RelativeTransformerDecoderLayer(nn.Module):
                                                  variational=self.variational)
 
         d_head = opt.model_size // opt.n_heads
-        self.multihead_tgt = RelPartialLearnableMultiHeadAttn(opt.n_heads, opt.model_size, d_head,
-                                                              dropatt=opt.attn_dropout)
+
+        if not self.fast_self_attention:
+            self.multihead_tgt = RelPartialLearnableMultiHeadAttn(opt.n_heads, opt.model_size, d_head,
+                                                                  dropatt=opt.attn_dropout)
+        else:
+            self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
         feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
         # feedforward = FeedForwardSwish(opt.model_size, d_ff, ff_p)
@@ -139,10 +153,13 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
             query = self.preprocess_attn(input)
 
-            # out, _ = self.multihead_tgt(query, pos_emb, r_w_bias, r_r_bias, attn_mask=mask_tgt)
-            # print(query.size(), pos_emb.size(), mask_tgt.size(), mems.size() if mems is not None else 0)
-            out, _, incremental_cache = self.multihead_tgt(query, pos_emb, attn_mask=mask_tgt, mems=mems,
-                                                           incremental=incremental, incremental_cache=incremental_cache)
+            if self.fast_self_attention:
+                out, _ = self.multihead_tgt(query, pos_emb, None, mask_tgt, mems=mems,
+                                            incremental=incremental, incremental_cache=incremental_cache)
+            else:
+                out, _, incremental_cache = self.multihead_tgt(query, pos_emb, attn_mask=mask_tgt, mems=mems,
+                                                               incremental=incremental,
+                                                               incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:

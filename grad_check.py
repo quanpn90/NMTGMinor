@@ -2,14 +2,14 @@ import torch.nn as nn
 import onmt
 import torch
 
-from onmt.modules.optimized.relative_self_attention_func import RelativeShift
+from onmt.modules.optimized.relative_self_attention_func import RelativeShiftFunction
 
 
 class TestDecoder(nn.Module):
 
     def __init__(self):
         super().__init__()
-        self.function = RelativeShift.apply
+        self.function = RelativeShiftFunction.apply
 
     def forward(self, input):
 
@@ -43,15 +43,23 @@ if __name__ == "__main__":
     opt.n_heads = 1
     opt.inner_size = 16
 
-    bsz = 4
-    seq_len = 16
+    bsz = 3
+    seq_len = 5
+    len_q = 2
 
-    input_states = torch.randn(*(seq_len, seq_len, bsz)).double().cuda()
+    x = torch.arange(seq_len - 1, -1, -1).unsqueeze(0).unsqueeze(0)
+    x = x.expand(bsz, len_q, seq_len)
+
+    print(x)
+
+    input_states = torch.randn(*(bsz, len_q, seq_len)).double().cuda()
 
     net = TestDecoder()
 
     net = net.double().cuda()
     print(net)
+    x = x.double().cuda()
+    print(net(x))
 
     print("start gradchecking  ...")
     input_states.requires_grad = True
