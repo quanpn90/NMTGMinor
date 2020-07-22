@@ -761,10 +761,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
         dec_attn_mask = torch.triu(
             emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]
 
-        pad_mask = input.eq(onmt.constants.PAD).byte()  # L x B
+        # pad_mask = input.eq(onmt.constants.PAD).byte()  # L x B
 
-        dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
-        dec_attn_mask = dec_attn_mask.gt(0)
+        # dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
+        # dec_attn_mask = dec_attn_mask.gt(0)
 
         if onmt.constants.torch_version >= 1.2:
             dec_attn_mask = dec_attn_mask.bool()

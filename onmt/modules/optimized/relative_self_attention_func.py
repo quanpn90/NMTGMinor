@@ -263,18 +263,18 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         :return:
         """
         heads_t, \
-        scale_t, \
-        matmul2_results, \
-        dropout_results, \
-        softmax_results, \
-        input_lin_results, pos_lin_results, \
-        rw_head_q, rr_head_q, \
-        inputs, pos, r_head_k, \
-        input_weights, pos_weights, \
-        output_weights, \
-        r_w_bias, r_r_bias, \
-        dropout_mask, \
-        dropout_prob_t = ctx.saved_tensors
+            scale_t, \
+            matmul2_results, \
+            dropout_results, \
+            softmax_results, \
+            input_lin_results, pos_lin_results, \
+            rw_head_q, rr_head_q, \
+            inputs, pos, r_head_k, \
+            input_weights, pos_weights, \
+            output_weights, \
+            r_w_bias, r_r_bias, \
+            dropout_mask, \
+            dropout_prob_t = ctx.saved_tensors
 
         head_dim = inputs.size(2) // heads_t[0]
         len_q, bsz = inputs.size(0), inputs.size(1)
@@ -426,11 +426,8 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         pos_bias_grads = torch.sum(r_head_k_grad, 0)
 
         return input_grads, None, None, None, None, input_weight_grads, output_weight_grads, pos_weight_grads, \
-               input_bias_grads, output_bias_grads, pos_bias_grads, r_w_bias_grads, r_r_bias_grads, \
-               None, None, None, None, None
-        # return None, None, None, None, None, None, output_weight_grads, None, \
-        #     None, None, None, None, None, \
-        #     None, None, None, None, None
+            input_bias_grads, output_bias_grads, pos_bias_grads, r_w_bias_grads, r_r_bias_grads, \
+            None, None, None, None, None
 
 
 relative_self_attn_func = RelativeSelfAttnFunc.apply

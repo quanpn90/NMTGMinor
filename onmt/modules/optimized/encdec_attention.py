@@ -44,7 +44,7 @@ class EncdecMultiheadAttn(nn.Module):
             # the fast one requires apex and does not work with incremental so careful
             from apex.contrib.multihead_attn.fast_encdec_multihead_attn_func import fast_encdec_attn_func
             self.attn_func_fast = fast_encdec_attn_func
-            self.optimized = 2
+            self.optimized = 1
 
         except ModuleNotFoundError as e:
             # print(e)
@@ -71,7 +71,8 @@ class EncdecMultiheadAttn(nn.Module):
 
         is_training = self.training
         time_masking = False
-        if self.optimized == 1 and (self.training and not incremental):
+        len_key = key.size(0)
+        if self.optimized == 1 and (self.training and not incremental) and len_key <= 1024:
             if attn_mask is not None:
                 if attn_mask.dim() == 3:
                     attn_mask = attn_mask.squeeze(1)
