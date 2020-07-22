@@ -80,9 +80,8 @@ class UniversalDecoderLayer(DecoderLayer):
         :return:
         """
         # sum up
-        # print(input.size(), time_embedding.size(), layer_vector.size())
         input = input + time_embedding.unsqueeze(1) + layer_vector
-
+        assert(len(input.shape) == 3)
         if incremental:
             if incremental_cache is None:
                 incremental_cache = dict()

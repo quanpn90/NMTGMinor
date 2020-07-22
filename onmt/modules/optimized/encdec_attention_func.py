@@ -91,8 +91,9 @@ class EncdecAttnFunc(torch.autograd.Function):
             matmul1_results = matmul1_results.masked_fill_(mask, float('-inf'))
             matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
 
-        dtype_ = torch.float64 if double_precision else torch.float32
+        dtype_ = torch.float64
         softmax_results = F.softmax(matmul1_results, dim=-1, dtype=dtype_).type_as(matmul1_results)
+        # softmax_results = F.softmax(matmul1_results.float(), dim=-1).type_as(matmul1_results)
 
         # Dropout - is not executed for inference
         if is_training:

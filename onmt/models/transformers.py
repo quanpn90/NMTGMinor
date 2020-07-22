@@ -631,6 +631,7 @@ class Transformer(NMTModel):
         logprobs = self.generator[0](output_dict)
         output_dict['logprobs'] = logprobs
 
+
         # Mirror network: reverse the target sequence and perform backward language model
         if mirror:
             # tgt_reverse = torch.flip(batch.get('target_input'), (0, ))
@@ -765,8 +766,6 @@ class Transformer(NMTModel):
         coverage = output_dict['coverage']
         last_coverage = coverage[:, -1, :].squeeze(1)
 
-        # output_dict = defaultdict(lambda: None)
-
         output_dict['log_prob'] = log_prob
         output_dict['coverage'] = last_coverage
 
@@ -824,7 +823,6 @@ class TransformerDecodingState(DecoderState):
             if src is not None:
                 if src.dim() == 3:
                     self.src = src.narrow(2, 0, 1).squeeze(2).repeat(1, beam_size)
-                    print(self.src.size())
                     # self.src = src.repeat(1, beam_size, 1) # T x Bb x c
                 else:
                     self.src = src.repeat(1, beam_size)

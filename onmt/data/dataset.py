@@ -119,6 +119,7 @@ def collect_fn(src_data, tgt_data,
         tensors['tgt_lengths'] = tgt_lengths
     else:
         tgt_size = 0
+        tensors['tgt_lengths'] = None
 
     tensors['tgt_size'] = tgt_size
     tensors['size'] = len(src_data) if src_data is not None else len(tgt_data)
@@ -150,7 +151,7 @@ class Batch(object):
         self.size = tensors['size']
         self.src_lengths = tensors['src_lengths']
         self.tgt_lengths = tensors['tgt_lengths']
-        self.has_target = True if self.tensors['target'] is not None else Falsed
+        self.has_target = True if self.tensors['target'] is not None else False
 
     def get(self, name):
         if name in self.tensors:

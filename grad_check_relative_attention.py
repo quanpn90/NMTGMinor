@@ -6,7 +6,6 @@ from torch.nn import Parameter
 
 from onmt.modules.optimized.relative_self_attention_func import RelativeShiftFunction
 
-
 class Parameters(nn.Module):
 
     def __init__(self, model_size=16, heads=1):
@@ -39,6 +38,22 @@ class Parameters(nn.Module):
 
         nn.init.normal_(self.r_w_bias, 0.0, std_)
         nn.init.normal_(self.r_r_bias, 0.0, std_)
+
+
+class TestFeedForward(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+        self.function = feed_forward_relu
+
+    def forward(self, input, input_weights, input_biases, output_weights, output_biases):
+
+        training = self.training
+        dropout = 0.1
+        variational = True
+
+        return self.function(input, input_weights, input_biases, output_weights, output_biases,
+                             dropout, training, variational)
 
 
 class TestAttention(nn.Module):
@@ -83,21 +98,22 @@ class TestAttention(nn.Module):
                 in_proj_bias, out_proj_bias, pos_proj_bias, r_w_bias, r_r_bias):
 
         use_time_mask = False
-        is_training = False
+        is_training = True
         mask = None
+        dropout = 0.0
 
         return self.function(input, pos, use_time_mask, is_training, self.heads,
                              in_proj_weight, out_proj_weight, pos_proj_weight,
                              in_proj_bias, out_proj_bias, pos_proj_bias,
                              r_w_bias, r_r_bias,
-                             mask, 0.0, False, None, True)   # double precision set to true
+                             mask, dropout, False, None, True)   # double precision set to true
 
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description='reversible transformer')
-    parser.add_argument('-model_size', type=int, default=64,
+    parser.add_argument('-model_size', type=int, default=32,
                         help='Size of embedding / transformer hidden')
     parser.add_argument('-gpu', default=0, type=int,
                         help="Seed for deterministic runs.")
@@ -120,8 +136,8 @@ if __name__ == "__main__":
     opt.n_heads = 8
     opt.inner_size = 16
 
-    bsz = 4
-    seq_len = 8
+    bsz = 1
+    seq_len = 2
     len_r = 15
 
     # x = torch.arange(seq_len - 1, -1, -1).unsqueeze(0).unsqueeze(0)
@@ -164,4 +180,5 @@ if __name__ == "__main__":
 
     torch.autograd.gradcheck(net, (input_states, pos, in_proj_weight, out_proj_weight, pos_proj_weight,
                                    in_proj_bias, out_proj_bias, pos_proj_bias, r_w_bias, r_r_bias))
+    #
     print("gradchecking completed.")

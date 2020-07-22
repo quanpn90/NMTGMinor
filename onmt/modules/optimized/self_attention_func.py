@@ -11,7 +11,6 @@ class SelfAttnFunc(torch.autograd.Function):
                 mask, dropout_prob,
                 incremental, incremental_cache):
         heads_t = torch.tensor([heads])
-
         dropout_prob_t = torch.tensor([dropout_prob])
         null_tensor = torch.tensor([])
         head_dim = inputs.size(2) // heads
@@ -63,7 +62,7 @@ class SelfAttnFunc(torch.autograd.Function):
         # output:           [seqs*heads, seql_q, seql_k]
         # GEMM: Per batch: ( seql_q x head_dim ) x ( head_dim x seql_k ) = ( seql_q x seql_k )
         matmul1_results = torch.empty((queries.size(1), queries.size(0), keys.size(0)), dtype=queries.dtype,
-                                      device=torch.device('cuda'))
+                                      device=queries.device)
         matmul1_results = torch.baddbmm(matmul1_results, queries.transpose(0, 1), keys.transpose(0, 1).transpose(1, 2),
                                         out=matmul1_results, beta=0.0, alpha=scale_t[0])
 
@@ -102,7 +101,7 @@ class SelfAttnFunc(torch.autograd.Function):
         # Output:              [seql_q, seqs*heads, head_dim] transpose(0,1)
         # GEMM: Per batch: ( seql_q x seql_k ) x ( seql_k x head_dim ) = (seql_q x head_dim)
         matmul2_results = torch.empty((dropout_results.size(1), dropout_results.size(0), values.size(2)),
-                                      dtype=dropout_results.dtype, device=torch.device('cuda')).transpose(1, 0)
+                                      dtype=dropout_results.dtype, device=queries.device).transpose(1, 0)
         matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1), out=matmul2_results)
         matmul2_results = matmul2_results.transpose(0, 1).contiguous().view(inputs.size(0), inputs.size(1),
                                                                             inputs.size(2))

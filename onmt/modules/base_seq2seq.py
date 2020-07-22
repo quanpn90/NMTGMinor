@@ -20,6 +20,7 @@ class Generator(nn.Module):
         
         self.linear.bias.data.zero_()
 
+
     # def forward(self, input, log_softmax=True):
     def forward(self, output_dicts):
         """

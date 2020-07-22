@@ -14,13 +14,11 @@ from onmt.modules.attention import MultiHeadAttention
 from onmt.modules.dropout import VariationalDropout
 from onmt.modules.relative_attention import RelPartialLearnableMultiHeadAttn
 from onmt.modules.optimized.encdec_attention import EncdecMultiheadAttn
-from onmt.modules.optimized.feed_forward import PositionWiseFeedForward
 
 
-class RelativeTransformerEncoderLayer(nn.Module):
-    # def __init__(self, h, d_model, p, d_ff, attn_p=0.1, variational=False, death_rate=0.0, **kwargs):
+class RelativeUniversalEncoderLayer(nn.Module):
     def __init__(self, opt, death_rate=0.0, **kwargs):
-        super(RelativeTransformerEncoderLayer, self).__init__()
+        super().__init__()
         self.variational = opt.variational_dropout
         self.death_rate = death_rate
         self.fast_self_attention = opt.fast_self_attention
@@ -32,18 +30,12 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                  variational=self.variational)
         d_head = opt.model_size // opt.n_heads
-        if not self.fast_self_attention:
-            self.multihead = RelPartialLearnableMultiHeadAttn(opt.n_heads, opt.model_size,
-                                                              d_head, dropatt=opt.attn_dropout)
-        else:
-            self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
-        if not opt.fast_feed_forward:
-            feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
-            self.feedforward = Bottle(feedforward)
-        else:
-            self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                       variational=self.variational)
+        # this model defaults as fast relative self attention
+        self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+
+        feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
+        self.feedforward = Bottle(feedforward)
 
     def forward(self, input, pos_emb, attn_mask, incremental=False, incremental_cache=None, mems=None):
 

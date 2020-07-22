@@ -362,7 +362,6 @@ class PositionalEncoding(nn.Module):
             time_emb = self.pos_emb[:len_seq, :].type_as(word_emb)
 
         else:
-            time_emb = self.pos_emb[len_seq - 1, :]
-            time_emb = time_emb.unsqueeze(0).repeat(word_emb.size(0), 1, 1)
+            time_emb = self.pos_emb[len_seq - 1, :].unsqueeze(0).type_as(word_emb)
 
         return time_emb

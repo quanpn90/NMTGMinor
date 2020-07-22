@@ -220,8 +220,6 @@ class UniversalTransformerDecoder(TransformerDecoder):
 
         output = self.preprocess_layer(emb.transpose(0, 1).contiguous())
 
-
-
         for i in range(self.max_layers):
             layer_tensor = torch.LongTensor([i]).to(output.device)
             layer_embedding = self.layer_embeddings(layer_tensor)
@@ -237,22 +235,18 @@ class UniversalTransformerDecoder(TransformerDecoder):
 
         return output_dict
 
-    def step(self, input, decoder_state, streaming=False):
+    def step(self, input, decoder_state, **kwargs):
         """
         Inputs Shapes:
-            input: (Variable) batch_size x len_tgt (wanna tranpose)
-            context: (Variable) batch_size x src_len x d_model
-            mask_src (Tensor) batch_size x src_len
+            input: (Variable) batch_size x len_tgt (to be transposed)
+            context: (Variable) batch_size x len_src x d_model
+            mask_src (Tensor) batch_size x len_src
             buffer (List of tensors) List of batch_size * len_tgt-1 * d_model for self-attention recomputing
         Outputs Shapes:
             out: batch_size x len_tgt x d_model
-            coverage: batch_size x len_tgt x src_len
+            coverage: batch_size x len_tgt x len_src
 
         """
-
-        if streaming:
-            return self.step_streaming(input, decoder_state)
-
         context = decoder_state.context
         buffers = decoder_state.attention_buffers
         lang = decoder_state.tgt_lang
@@ -264,88 +258,85 @@ class UniversalTransformerDecoder(TransformerDecoder):
             else:
                 # concatenate the last input to the previous input sequence
                 decoder_state.input_seq = torch.cat([decoder_state.input_seq, input], 0)
-            input = decoder_state.input_seq.transpose(0, 1)  # B x T
+            input = decoder_state.input_seq.transpose(0, 1)
 
-        src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
+            src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
 
-        # use the last value of input to continue decoding
         if input.size(1) > 1:
-            input_ = input[:, -1].unsqueeze(1).transpose(0, 1)
+            input_ = input[:, -1].unsqueeze(1)
         else:
-            input_ = input.transpose(0, 1)
-
+            input_ = input
         """ Embedding: batch_size x 1 x d_model """
-        emb = self.word_lut(input_) * math.sqrt(self.model_size)
-        input = input.transpose(0, 1)
-        klen = input.size(0)
-        # emb = self.word_lut(input) * math.sqrt(self.model_size)
+        check = input_.gt(self.word_lut.num_embeddings)
+        emb = self.word_lut(input_)
 
-        if self.double_position:
-            input_pos = torch.arange(input.size(0), dtype=emb.dtype, device=emb.device)
-            input_pos = input_pos.unsqueeze(1).repeat(1, input.size(1))
-            tgt_len, bsz = input_pos.size(0), input_pos.size(1)
-            input_pos_ = input_pos.view(-1).type_as(emb)
-            abs_pos = self.positional_encoder(input_pos_).squeeze(1).view(tgt_len, bsz, -1)
-            emb = emb + abs_pos[-1:, :, :]
+        """ Adding positional encoding """
+        emb = emb * math.sqrt(self.model_size)
+        time_embedding = self.time_transformer.get_positional_embeddings(emb, t=input.size(1))
+        # emb should be batch_size x 1 x dim
 
         if self.use_language_embedding:
-            lang_emb = self.language_embeddings(lang)  # B x H
+            if self.use_language_embedding:
+                lang_emb = self.language_embeddings(lang)  # B x H or 1 x H
+                if self.language_embedding_type == 'sum':
+                    emb = emb + lang_emb
+                elif self.language_embedding_type == 'concat':
+                    # replace the bos embedding with the language
+                    if input.size(1) == 1:
+                        bos_emb = lang_emb.expand_as(emb[:, 0, :])
+                        emb[:, 0, :] = bos_emb
 
-            if self.language_embedding_type in ['sum', 'all_sum']:
-                emb = emb + lang_emb
-            elif self.language_embedding_type == 'concat':
-                if input.size(0) == 1:
-                    emb[0] = lang_emb
-
-                lang_emb = lang_emb.unsqueeze(0).expand_as(emb)
-                concat_emb = torch.cat([emb, lang_emb], dim=-1)
-                emb = torch.relu(self.projector(concat_emb))
-            else:
-                raise NotImplementedError
-
-        # prepare position encoding
-        qlen = emb.size(0)
-        mlen = klen - qlen
-
-        dec_attn_mask = torch.triu(
-            emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]
-
-        pad_mask = input.eq(onmt.constants.PAD).byte()  # L x B
-
-        dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
-        dec_attn_mask = dec_attn_mask.gt(0)
-
-        if onmt.constants.torch_version >= 1.2:
-            dec_attn_mask = dec_attn_mask.bool()
-
-        if context is not None:
-            if self.encoder_type == "audio":
-                if not self.encoder_cnn_downsampling:
-                    mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
+                    lang_emb = lang_emb.unsqueeze(1).expand_as(emb)
+                    concat_emb = torch.cat([emb, lang_emb], dim=-1)
+                    emb = torch.relu(self.projector(concat_emb))
                 else:
-                    long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
-                    mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
-            else:
+                    raise NotImplementedError
 
-                mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
+        emb = emb.transpose(0, 1)
+
+        # batch_size x 1 x len_src
+        if context is not None:
+            if mask_src is None:
+                if self.encoder_type == "audio":
+                    if src.data.dim() == 3:
+                        if self.encoder_cnn_downsampling:
+                            long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
+                            mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
+                        else:
+                            mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
+                    elif self.encoder_cnn_downsampling:
+                        long_mask = src.eq(onmt.constants.PAD)
+                        mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
+                    else:
+                        mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
+                else:
+                    mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
         else:
             mask_src = None
 
+        len_tgt = input.size(1)
+        mask_tgt = torch.triu(
+            emb.new_ones(len_tgt, len_tgt), diagonal=1).byte().unsqueeze(0)
+        # # only get the final step of the mask during decoding (because the input of the network is only the last step)
+        mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
+        # mask_tgt = None
+        mask_tgt = mask_tgt.bool()
+
         output = emb.contiguous()
 
-        for i, layer in enumerate(self.layer_modules):
+        for i in range(self.max_layers):
             buffer = buffers[i] if i in buffers else None
-            # assert (output.size(0) == 1)
+            layer_tensor = torch.LongTensor([i]).to(output.device)
+            layer_embedding = self.layer_embeddings(layer_tensor)
+            assert (output.size(0) == 1)
 
-            # output, coverage, buffer = layer.step(output, context, pos_emb,
-            #                                       dec_attn_mask, mask_src, buffer=buffer)
-            output, coverage, buffer = layer(output, context, dec_attn_mask, mask_src,
-                                             incremental=True, incremental_cache=buffer)
+            output, coverage, buffer = self.universal_layer(output, time_embedding, layer_embedding, context,
+                                                            mask_tgt, mask_src,
+                                                            incremental=True, incremental_cache=buffer)
 
             decoder_state.update_attention_buffer(buffer, i)
 
         output = self.postprocess_layer(output)
-        output = output[-1].unsqueeze(0)
 
         output_dict = defaultdict(lambda: None)
         output_dict['hidden'] = output

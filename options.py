@@ -161,6 +161,8 @@ def make_parser(parser):
     parser.add_argument('-fast_xattention', action="store_true",
                         help="""Fast cross attention between encoder decoder""")
     parser.add_argument('-fast_self_attention', action="store_true",
+                        help="""Fast self attention between encoder decoder""")
+    parser.add_argument('-fast_feed_forward', action="store_true",
                         help="""Fast cross attention between encoder decoder""")
 
     parser.add_argument('-curriculum', type=int, default=-1,
@@ -394,5 +396,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'fast_self_attention'):
         opt.fast_self_attention = False
+
+    if not hasattr(opt, 'fast_feed_forward'):
+        opt.fast_feed_forward = False
 
     return opt
