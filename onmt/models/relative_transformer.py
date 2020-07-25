@@ -95,9 +95,6 @@ class RelativeTransformerEncoder(TransformerEncoder):
             death_r = (_l + 1.0) / self.layers * self.death_rate
 
             if not self.reversible:
-                # block = RelativeTransformerEncoderLayer(self.n_heads, self.model_size,
-                #                                         self.dropout, self.inner_size, self.attn_dropout,
-                #                                         variational=self.varitional_dropout, death_rate=death_r)
                 block = RelativeTransformerEncoderLayer(self.opt, death_rate=death_r)
             else:
                 block = ReversibleTransformerEncoderLayer(self.opt, death_rate=death_r)
@@ -261,11 +258,8 @@ class RelativeTransformerEncoder(TransformerEncoder):
         if self.unidirectional:
             pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
         else:
-            # Everything should be asynchronous now
             pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
-            # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
 
-        # pos has size 2T+1
         # pos_emb has size 2T+1 x 1 x H
         pos_emb = self.positional_encoder(pos, bsz=input.size(1) if self.fast_self_attn else None)
 

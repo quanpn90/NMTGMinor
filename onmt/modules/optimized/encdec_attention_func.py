@@ -58,8 +58,8 @@ class EncdecAttnFunc(torch.autograd.Function):
                 incremental_cache['c_k'] = keys
                 incremental_cache['c_v'] = values
 
-                keys = keys.view(len_k, bsz*heads, head_dim)
-                values = values.view(len_k, bsz*heads, head_dim)
+                keys = keys.view(len_k, bsz * heads, head_dim)
+                values = values.view(len_k, bsz * heads, head_dim)
 
         # Matmul1 Batched GEMMs
         # The output tensor is specified prior to the Batch GEMM because baddbmm requires its specification
@@ -69,10 +69,15 @@ class EncdecAttnFunc(torch.autograd.Function):
         # Input2: (Keys)    [seql_k, seqs*heads, head_dim] transpose(0,1)
         # output:           [seqs*heads, seql_q, seql_k]
         # GEMM: Per batch: ( seql_q x head_dim ) x ( head_dim x seql_k ) = ( seql_q x seql_k )
-        matmul1_results = torch.empty((queries.size(1), queries.size(0), keys.size(0)), dtype=queries.dtype,
-                                      device=queries.device)
-        matmul1_results = torch.baddbmm(matmul1_results, queries.transpose(0, 1), keys.transpose(0, 1).transpose(1, 2),
-                                        out=matmul1_results, beta=0.0, alpha=scale_t[0])
+        if queries.is_cuda:
+            matmul1_results = torch.empty((queries.size(1), queries.size(0), keys.size(0)), dtype=queries.dtype,
+                                          device=queries.device)
+            matmul1_results = torch.baddbmm(matmul1_results, queries.transpose(0, 1),
+                                            keys.transpose(0, 1).transpose(1, 2),
+                                            out=matmul1_results, beta=0.0, alpha=scale_t[0])
+        else:
+            matmul1_results = torch.matmul(queries.transpose(0, 1), keys.transpose(0, 1).transpose(1, 2))
+            matmul1_results.mul_(scale_t[0])
 
         if mask is not None:
             # Self Attention Time Mask
@@ -110,9 +115,12 @@ class EncdecAttnFunc(torch.autograd.Function):
         # Input2: (values)     [seql_v, seqs*heads, head_dim] transpose(0,1)
         # Output:              [seql_q, seqs*heads, head_dim] transpose(0,1)
         # GEMM: Per batch: ( seql_q x seql_k ) x ( seql_k x head_dim ) = (seql_q x head_dim)
-        matmul2_results = torch.empty((dropout_results.size(1), dropout_results.size(0), values.size(2)),
-                                      dtype=dropout_results.dtype, device=dropout_results.device).transpose(1, 0)
-        matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1), out=matmul2_results)
+        if queries.is_cuda:
+            matmul2_results = torch.empty((dropout_results.size(1), dropout_results.size(0), values.size(2)),
+                                          dtype=dropout_results.dtype, device=dropout_results.device).transpose(1, 0)
+            matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1), out=matmul2_results)
+        else:
+            matmul2_results = torch.matmul(dropout_results, values.transpose(0, 1))
         matmul2_results = matmul2_results.transpose(0, 1).contiguous().view(inputs_q.size(0), inputs_q.size(1),
                                                                             inputs_q.size(2))
 
@@ -222,8 +230,8 @@ class EncdecAttnFunc(torch.autograd.Function):
         # Input2: (activations) [seql_q, seqs*heads, head_dim] transpose(0,1)
         # Output:               [seqs*heads, seql_k, head_dim] transpose(0,1)
         # GEMM: Per batch: ( seql_k x seql_q ) x ( seql_q x head_dim ) = ( seql_k x head_dim )
-        keys_grads = torch.baddbmm(keys_grads.transpose(0, 1), softmax_grads.transpose(1, 2), queries.transpose(0, 1),
-                                   out=keys_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
+        torch.baddbmm(keys_grads.transpose(0, 1), softmax_grads.transpose(1, 2), queries.transpose(0, 1),
+                      out=keys_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
 
         # Input Q Linear GEMM - DGRAD
         # input1: (data grads) [seql_q, seqs, embed_dim(1024)]

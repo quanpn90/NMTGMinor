@@ -68,6 +68,11 @@ def make_parser(parser):
     parser.add_argument('-reconstruct', action='store_true',
                         help='Apply reconstruction with an additional decoder')
 
+    parser.add_argument('-universal', action='store_true',
+                        help='Using one layer universally (recurrent)')
+    parser.add_argument('-act', action='store_true',
+                        help='Using ACT for Universal models (TODO)')
+
     # Transforer Model options
     parser.add_argument('-use_language_embedding', action='store_true',
                         help="""Language embedding to add into the word embeddings""")
@@ -163,6 +168,8 @@ def make_parser(parser):
     parser.add_argument('-fast_self_attention', action="store_true",
                         help="""Fast self attention between encoder decoder""")
     parser.add_argument('-fast_feed_forward', action="store_true",
+                        help="""Fast cross attention between encoder decoder""")
+    parser.add_argument('-overclocking', action="store_true",
                         help="""Fast cross attention between encoder decoder""")
 
     parser.add_argument('-curriculum', type=int, default=-1,

@@ -1,3 +1,6 @@
+# Copyright (c) 2017-present, Facebook, Inc.
+# All rights reserved.
+
 import itertools
 import logging
 import math
@@ -364,11 +367,11 @@ class BufferedIterator(object):
         if self._queue.qsize() < max(1, self._queue.maxsize // 2):
             if time.time() - self.start_time > 5 * 60:
                 if self.warning_time is None or time.time() - self.warning_time > 15 * 60:
-                    print(
-                        "Data loading buffer is empty or nearly empty (%d). This may "
-                        "indicate a data loading bottleneck, and increasing the "
-                        "number of workers (--num-workers) may help." % self._queue.qsize()
-                    )
+                    # print(
+                    #     "Data loading buffer is empty or nearly empty (%d). This may "
+                    #     "indicate a data loading bottleneck, and increasing the "
+                    #     "number of workers (--num-workers) may help." % self._queue.qsize()
+                    # )
                     self.warning_time = time.time()
 
         # Get next example

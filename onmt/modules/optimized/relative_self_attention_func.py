@@ -260,7 +260,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                               dropout_mask,
                               dropout_prob_t)
 
-        coverage = softmax_results.clone().zero_()
+        coverage = softmax_results
 
         return outputs.detach(), coverage
         # return outputs.detach()

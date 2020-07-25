@@ -31,36 +31,32 @@ class PositionWiseFeedForward(nn.Module):
         self.reset_parameters()
         try:
             from apex.mlp.mlp import mlp_function
-            self.optimized = 2
+            self.optimized = 1
             self.fast_mlp_func = mlp_function
         except ModuleNotFoundError as e:
             self.optimized = 2
 
     def reset_parameters(self):
-        # nn.init.xavier_uniform_(self.in_proj_weight, gain=math.sqrt(2))
-        # nn.init.xavier_uniform_(self.out_proj_weight)
         std_ = math.sqrt(2.0 / (self.model_size + self.inner_size))
         nn.init.normal_(self.in_proj_weight, 0.0, std_)
         nn.init.normal_(self.out_proj_weight, 0.0, std_)
 
-        nn.init.constant_(self.in_proj_bias, 0.)
-        nn.init.constant_(self.out_proj_bias, 0.)
+        nn.init.normal_(self.in_proj_bias, 0.0, 0.02)
+        nn.init.normal_(self.out_proj_bias, 0.0, 0.02)
 
     def forward(self, input):
 
-        if self.optimized == 2 or not input.device.is_cuda:
+        if self.optimized == 2 or not input.is_cuda:
             hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)
-            hidden = torch.relu(hidden)
+            hidden = F.relu(hidden, inplace=True)
             if self.variational:
                 hidden = variational_dropout(hidden, p=self.dropout, training=self.training)
             else:
                 hidden = F.dropout(hidden, p=self.dropout, training=self.training)
             hidden = F.linear(hidden, self.out_proj_weight, self.out_proj_bias)
-            hidden = torch.relu(hidden)
         else:
-            # Here weight dropout has to be done instead of dropout because
-            # Apex MLP does not support dropout
-
+            # Apex MLP does not support dropout so instead we use dropconnect
+            # Theoretically they should be the same ^^
             weights = [F.dropout(self.in_proj_weight, p=self.dropout, training=self.training),
                        F.dropout(self.out_proj_weight, p=self.dropout, training=self.training)]
             biases = [F.dropout(self.in_proj_bias, p=self.dropout, training=self.training),

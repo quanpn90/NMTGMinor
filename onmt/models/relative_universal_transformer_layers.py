@@ -14,6 +14,7 @@ from onmt.modules.attention import MultiHeadAttention
 from onmt.modules.dropout import VariationalDropout
 from onmt.modules.relative_attention import RelPartialLearnableMultiHeadAttn
 from onmt.modules.optimized.encdec_attention import EncdecMultiheadAttn
+from onmt.modules.optimized.feed_forward import PositionWiseFeedForward
 
 
 class RelativeUniversalEncoderLayer(nn.Module):
@@ -34,10 +35,12 @@ class RelativeUniversalEncoderLayer(nn.Module):
         # this model defaults as fast relative self attention
         self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
-        feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
-        self.feedforward = Bottle(feedforward)
+        self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                   variational=self.variational)
 
-    def forward(self, input, pos_emb, attn_mask, incremental=False, incremental_cache=None, mems=None):
+    def forward(self, input, pos_emb, layer_vector, attn_mask, incremental=False, incremental_cache=None, mems=None):
+
+        input = input + layer_vector
 
         if incremental and incremental_cache is None:
             incremental_cache = dict()
@@ -54,12 +57,8 @@ class RelativeUniversalEncoderLayer(nn.Module):
                 mems = None
 
             query = self.preprocess_attn(input)
-            if not self.fast_self_attention:
-                out, _, incremental_cache = self.multihead(query, pos_emb, attn_mask=attn_mask, mems=mems,
-                                                           incremental=incremental, incremental_cache=incremental_cache)
-            else:
-                out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
-                                        incremental=incremental, incremental_cache=incremental_cache)
+            out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
+                                    incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -84,12 +83,10 @@ class RelativeUniversalEncoderLayer(nn.Module):
         return input
 
 
-class RelativeTransformerDecoderLayer(nn.Module):
+class RelativeUniversalDecoderLayer(nn.Module):
 
-    # def __init__(self, h, d_model, p,    d_ff, attn_p=0.1, version=1.0, ignore_source=False,
-    #              variational=False, death_rate=0.0):
     def __init__(self, opt, death_rate=0.0):
-        super(RelativeTransformerDecoderLayer, self).__init__()
+        super().__init__()
         self.ignore_source = opt.ignore_source
         self.variational = opt.variational_dropout
         self.death_rate = death_rate
@@ -104,10 +101,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
             self.postprocess_src_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                           variational=self.variational)
 
-            if opt.fast_xattention:
-                self.multihead_src = EncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout)
-            else:
-                self.multihead_src = MultiHeadAttention(opt.n_heads, opt.model_size, attn_p=opt.attn_dropout, share=2)
+            self.multihead_src = EncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout)
 
         self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
@@ -115,24 +109,19 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
         d_head = opt.model_size // opt.n_heads
 
-        if not self.fast_self_attention:
-            self.multihead_tgt = RelPartialLearnableMultiHeadAttn(opt.n_heads, opt.model_size, d_head,
-                                                                  dropatt=opt.attn_dropout)
-        else:
-            self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+        self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
-        feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
-        # feedforward = FeedForwardSwish(opt.model_size, d_ff, ff_p)
+        feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                              variational=self.variational)
 
-        self.feedforward = Bottle(feedforward)
+        self.feedforward = feedforward
 
     # def forward(self, input, context, pos_emb, r_w_bias, r_r_bias, mask_tgt, mask_src):
-    def forward(self, input, context, pos_emb, mask_tgt, mask_src,
+    def forward(self, input, context, pos_emb, layer_vector, mask_tgt, mask_src,
                 incremental=False, incremental_cache=None, reuse_source=True, mems=None):
 
-        """ Self attention layer
-            layernorm > attn > dropout > residual
-        """
+        # sum up input with the layer embedding
+        input = input + layer_vector
 
         if incremental and incremental_cache is None:
             incremental_cache = dict()
@@ -150,13 +139,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
             query = self.preprocess_attn(input)
 
-            if self.fast_self_attention:
-                out, _ = self.multihead_tgt(query, pos_emb, None, mask_tgt, mems=mems,
-                                            incremental=incremental, incremental_cache=incremental_cache)
-            else:
-                out, _, incremental_cache = self.multihead_tgt(query, pos_emb, attn_mask=mask_tgt, mems=mems,
-                                                               incremental=incremental,
-                                                               incremental_cache=incremental_cache)
+            out, _ = self.multihead_tgt(query, pos_emb, None, mask_tgt, mems=mems,
+                                       incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:

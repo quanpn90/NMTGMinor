@@ -158,6 +158,22 @@ def build_tm_model(opt, dicts):
 
         model = Transformer(encoder, decoder, generator, mirror=opt.mirror_loss)
 
+    elif opt.model == 'relative_universal_transformer':
+        from onmt.models.relative_universal_transformer import \
+            RelativeUniversalTransformerEncoder, RelativeUniversalTransformerDecoder
+        generator = nn.ModuleList(generators)
+
+        if opt.encoder_type == "text":
+            encoder = RelativeUniversalTransformerEncoder(opt, embedding_src, None,
+                                                          opt.encoder_type, language_embeddings=language_embeddings)
+        elif opt.encoder_type == "audio":
+            encoder = RelativeUniversalTransformerDecoder(opt, None, None, opt.encoder_type)
+
+        decoder = RelativeUniversalTransformerDecoder(opt, embedding_tgt, None,
+                                                      language_embeddings=language_embeddings)
+
+        model = Transformer(encoder, decoder, generator, mirror=opt.mirror_loss)
+
     elif opt.model == 'relative_unified_transformer':
         from onmt.models.relative_unified_transformer import RelativeUnifiedTransformer
 
