@@ -204,19 +204,24 @@ class DataIterator(EpochBatchIterating):
 
     def load_state_dict(self, state_dict):
         """Copies the state of the iterator from the given *state_dict*."""
-        self.epoch = state_dict['epoch']
-        itr_pos = state_dict.get('iterations_in_epoch', 0)
-        if itr_pos > 0:
-            # fast-forward epoch iterator
-            self._next_epoch_itr = self._get_iterator_for_epoch(
-                self.epoch,
-                shuffle=state_dict.get('shuffle', True),
-                offset=itr_pos,
-            )
-            if self._next_epoch_itr is None:
-                # we finished the epoch, increment epoch counter
-                self.epoch += 1
+        if state_dict is not None:
+            self.epoch = state_dict['epoch']
+            itr_pos = state_dict.get('iterations_in_epoch', 0)
+            if itr_pos > 0:
+                # fast-forward epoch iterator
+                self._next_epoch_itr = self._get_iterator_for_epoch(
+                    self.epoch,
+                    shuffle=state_dict.get('shuffle', True),
+                    offset=itr_pos,
+                )
+                if self._next_epoch_itr is None:
+                    # we finished the epoch, increment epoch counter
+                    self.epoch += 1
+            else:
+                self._next_epoch_itr = None
         else:
+            self.epoch = 1
+            itr_pos = 0
             self._next_epoch_itr = None
 
     def _get_iterator_for_epoch(self, epoch, shuffle, offset=0, pin_memory=False):
