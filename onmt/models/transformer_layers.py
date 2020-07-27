@@ -16,6 +16,7 @@ from onmt.modules.attention import MultiHeadAttention
 from onmt.modules.dropout import VariationalDropout
 from onmt.modules.optimized.encdec_attention import EncdecMultiheadAttn
 from onmt.modules.optimized.self_attention import SelfMultiheadAttn
+from onmt.modules.optimized.feed_forward import PositionWiseFeedForward
 from collections import defaultdict
 
 
@@ -112,9 +113,14 @@ class EncoderLayer(nn.Module):
         else:
             self.multihead = MultiHeadAttention(opt.n_heads, opt.model_size, attn_p=opt.attn_dropout, share=1)
 
-        feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                  variational=self.variational)
-        self.feedforward = Bottle(feedforward)
+        if not opt.fast_feed_forward:
+
+            feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                      variational=self.variational)
+            self.feedforward = Bottle(feedforward)
+        else:
+            self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                       variational=self.variational)
 
     def forward(self, input, attn_mask):
 
@@ -208,9 +214,14 @@ class DecoderLayer(nn.Module):
         self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                  variational=self.variational)
 
-        feedforward = FeedForward(opt.model_size, opt.inner_size,
-                                  opt.dropout, variational=self.variational)
-        self.feedforward = Bottle(feedforward)
+        if not opt.fast_feed_forward:
+
+            feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                      variational=self.variational)
+            self.feedforward = Bottle(feedforward)
+        else:
+            self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                       variational=self.variational)
 
     def forward(self, input, context, mask_tgt, mask_src,
                 incremental=False, incremental_cache=None, reuse_source=True):

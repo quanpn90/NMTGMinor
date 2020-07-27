@@ -129,10 +129,12 @@ class RelativeTransformerDecoderLayer(nn.Module):
         else:
             self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
-        feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
-        # feedforward = FeedForwardSwish(opt.model_size, d_ff, ff_p)
-
-        self.feedforward = Bottle(feedforward)
+        if not opt.fast_feed_forward:
+            feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
+            self.feedforward = Bottle(feedforward)
+        else:
+            self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                       variational=self.variational)
 
     # def forward(self, input, context, pos_emb, r_w_bias, r_r_bias, mask_tgt, mask_src):
     def forward(self, input, context, pos_emb, mask_tgt, mask_src,

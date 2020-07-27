@@ -373,7 +373,7 @@ class LearnableRelMultiHeadAttn(nn.Module):
 
         device_ = w_head_q.device
         r_matrix = self.generate_relative_positions(q_len, k_len, device_, caching=incremental)
-
+        # T x T x H
         r = self.position_embedding(r_matrix)
 
         output, coverage = self.compute_attention(r, w_head_q, w_head_k, w_head_v, attn_mask=attn_mask, debug=debug)
@@ -440,6 +440,7 @@ class LearnableRelMultiHeadAttn(nn.Module):
         attn_t = attn_prob.permute(2, 0, 1, 3)
         attn_r = attn_t.reshape(klen, bsz * self.n_head, -1)
 
+        # what is r size?
         context_pos = torch.matmul(attn_r, r)
         context_pos = context_pos.reshape(klen, bsz, self.n_head, -1)
         context_pos = context_pos.permute(1, 2, 0, 3)

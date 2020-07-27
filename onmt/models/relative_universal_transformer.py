@@ -74,7 +74,7 @@ class RelativeUniversalTransformerEncoder(TransformerEncoder):
     def build_modules(self):
 
         e_length = expected_length(self.layers, self.death_rate)
-        print("* Universal Transformer Encoder with Absolute Attention with %.2f expected layers" % e_length)
+        print("* Universal Transformer Encoder with Relative Attention with %.2f expected layers" % e_length)
         self.universal_layer = RelativeUniversalEncoderLayer(self.opt, death_rate=self.death_rate)
 
     def forward(self, input, input_pos=None, input_lang=None, streaming=False, **kwargs):
@@ -148,6 +148,8 @@ class RelativeUniversalTransformerEncoder(TransformerEncoder):
         # B x T x H -> T x B x H
         context = self.preprocess_layer(emb.transpose(0, 1))
 
+        time_encoding = self.preprocess_layer(time_encoding)
+
         # print(input.size(), context.size(), pos.size(), time_encoding.size())
 
         for i in range(self.layers):
@@ -198,7 +200,7 @@ class RelativeUniversalTransformerDecoder(TransformerDecoder):
 
         e_length = expected_length(self.layers, self.death_rate)
 
-        print("* Universal Transformer Decoder with Absolute Attention with %.2f expected layers" % e_length)
+        print("* Universal Transformer Decoder with Relative Attention with %.2f expected layers" % e_length)
 
         self.universal_layer = RelativeUniversalDecoderLayer(self.opt, death_rate=self.death_rate)
 
@@ -220,7 +222,7 @@ class RelativeUniversalTransformerDecoder(TransformerDecoder):
         if self.use_language_embedding:
             lang_emb = self.language_embeddings(input_lang)  # B x H or 1 x H
             if self.language_embedding_type == 'sum':
-                emb = emb + lang_emb
+                emb = emb + lang_emb.unsqueeze(1)
             elif self.language_embedding_type == 'concat':
                 # replace the bos embedding with the language
                 bos_emb = lang_emb.expand_as(emb[:, 0, :])
@@ -258,6 +260,7 @@ class RelativeUniversalTransformerDecoder(TransformerDecoder):
         time_encoding = self.positional_encoder(pos, bsz=input.size(0))
 
         output = self.preprocess_layer(emb.transpose(0, 1).contiguous())
+        time_encoding = self.preprocess_layer(time_encoding)
 
         for i in range(self.layers):
             layer_tensor = torch.LongTensor([i]).to(output.device)

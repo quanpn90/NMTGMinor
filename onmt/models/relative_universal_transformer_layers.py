@@ -46,8 +46,8 @@ class RelativeUniversalEncoderLayer(nn.Module):
             incremental_cache = dict()
 
         coin = True
-        if self.training and self.death_rate > 0:
-            coin = (torch.rand(1)[0].item() >= self.death_rate)
+        # if self.training and self.death_rate > 0:
+        #     coin = (torch.rand(1)[0].item() >= self.death_rate)
 
         if coin:
 
@@ -127,8 +127,8 @@ class RelativeUniversalDecoderLayer(nn.Module):
             incremental_cache = dict()
 
         coin = True
-        if self.training and self.death_rate > 0:
-            coin = (torch.rand(1)[0].item() >= self.death_rate)
+        # if self.training and self.death_rate > 0:
+        #     coin = (torch.rand(1)[0].item() >= self.death_rate)
 
         if coin:
             # input and context should be time first ?
@@ -140,7 +140,7 @@ class RelativeUniversalDecoderLayer(nn.Module):
             query = self.preprocess_attn(input)
 
             out, _ = self.multihead_tgt(query, pos_emb, None, mask_tgt, mems=mems,
-                                       incremental=incremental, incremental_cache=incremental_cache)
+                                        incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:

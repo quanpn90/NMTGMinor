@@ -5,57 +5,69 @@ import torch.nn.functional as F
 class RelativeShiftFunction(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, x):
+    def forward(ctx, x, batch_first, emb_last):
         assert len(x.shape) == 3, "Input must have 3 dimensions B x len_q x len_r!"
 
-        return RelativeShift.forward(x)
+        ctx.batch_first = batch_first
+        ctx.emb_last = emb_last
+        return RelativeShift.forward(x, batch_first, emb_last)
 
     @staticmethod
     def backward(ctx, grad_x):
-        return RelativeShift.backward(grad_x)
+        batch_first = ctx.batch_first
+        emb_last = ctx.emb_last
+        return RelativeShift.backward(grad_x, batch_first, emb_last), False, False
 
 
 class RelativeShift(object):
 
     @staticmethod
-    def forward(x):
-        assert len(x.shape) == 3, "Input must have 3 dimensions B x len_q x len_r!"
+    def forward(x, batch_first, emb_last):
+        assert len(x.shape) == 3, "Input must have 3 dimensions B x len_q x len_r or len_q x len_r x demb!"
+        assert (batch_first or emb_last) and not(batch_first and emb_last), \
+            "Batch first and Embedding last must be mutually exclusive"
 
-        # zero_pad dim: [T x 1 x (B x H)]
-        bsz = x.size(0)
-        zero_pad = torch.zeros((bsz, x.size(1), 1),
-                               device=x.device, dtype=x.dtype)
+        if batch_first:
+            bsz = x.size(0)
+            zero_pad = torch.zeros((bsz, x.size(1), 1),
+                                   device=x.device, dtype=x.dtype)
 
-        # padded into [T x T+1 x (B x H)]
-        x_padded = torch.cat([zero_pad, x], dim=2)
+            # padded into [T x T+1 x (B x H)]
+            x_padded = torch.cat([zero_pad, x], dim=2)
 
-        # view into [T+1 x T x (BxH)]
-        x_view = x_padded.view(bsz, x.size(2) + 1, x.size(1))
+            # view into [T+1 x T x (BxH)]
+            x_view = x_padded.view(bsz, x.size(2) + 1, x.size(1))
 
-        # remove the first collumn
-        x = x_view[:, 1:].view_as(x)
+            # remove the first collumn
+            x = x_view[:, 1:].view_as(x)
+        else:
+            raise NotImplementedError
 
         return x
 
     @staticmethod
-    def backward(grad_x):
-        bsz = grad_x.size(0)
-        len_q, len_r = grad_x.size(1), grad_x.size(2)
+    def backward(grad_x, batch_first, emb_last):
 
-        grad_x_view = grad_x.view(bsz, len_r, len_q)
+        if batch_first:
+            bsz = grad_x.size(0)
+            len_q, len_r = grad_x.size(1), grad_x.size(2)
 
-        zero_pad = torch.zeros((bsz, 1, len_q), device=grad_x.device, dtype=grad_x.dtype)
+            grad_x_view = grad_x.view(bsz, len_r, len_q)
 
-        # grad_x should have size B x len_q x len_r
-        # x_view should have size B x len_q+1 x len_r
+            zero_pad = torch.zeros((bsz, 1, len_q), device=grad_x.device, dtype=grad_x.dtype)
 
-        # put the zeros into the missing gradients
-        grad_x_view = torch.cat([zero_pad, grad_x_view], dim=1)
-        # print(grad_x_view.size())
-        grad_x_padded = grad_x_view.view(bsz, len_q, len_r + 1)
+            # grad_x should have size B x len_q x len_r
+            # x_view should have size B x len_q+1 x len_r
 
-        # because the first index in the padded dim was from zero_pad
-        grad_output = grad_x_padded[:, :, 1:]
+            # put the zeros into the missing gradients
+            grad_x_view = torch.cat([zero_pad, grad_x_view], dim=1)
+            # print(grad_x_view.size())
+            grad_x_padded = grad_x_view.view(bsz, len_q, len_r + 1)
+
+            # because the first index in the padded dim was from zero_pad
+            grad_output = grad_x_padded[:, :, 1:]
+        else:
+            raise NotImplementedError
 
         return grad_output
 
@@ -68,8 +80,9 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                 r_w_bias, r_r_bias,
                 mask, dropout_prob,
                 incremental, incremental_cache,
-                double_precision):
+                double_precision, add_position):
         """
+        :param add_position: bool
         :param double_precision: ops at float64, only for debugging
         :param ctx: context object to stash information for backward
         :param inputs: input hidden states [len_q x batch_size x hidden]
@@ -180,13 +193,13 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             matmul_bd = torch.baddbmm(matmul_bd, rr_head_q.transpose(0, 1), r_head_k.transpose(0, 1).transpose(1, 2),
                                       out=matmul_bd, beta=0.0, alpha=scale_t[0])
         else:
-            matmul_bd = torch.matmul(rr_head_q.transpose(0, 1), r_head_k.transpose(0, 1).transpose(1, 2))\
+            matmul_bd = torch.matmul(rr_head_q.transpose(0, 1), r_head_k.transpose(0, 1).transpose(1, 2)) \
                 .mul_(scale_t[0])
 
         # shift so that the relative positions are aligned
         # the first element will have 0 -1 ... -n relative positions compared to other elements
         # the last element will have  n-1 n-2 ...  0
-        matmul_bd = RelativeShift.forward(matmul_bd)
+        matmul_bd = RelativeShift.forward(matmul_bd, True, False)
 
         # if len_r is longer than len_k, then we need to take the first len_k positions only
         matmul_bd = matmul_bd[:, :, :len_k]
@@ -229,9 +242,29 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # GEMM: Per batch: ( len_q x seql_k ) x ( seql_k x head_dim ) = (len_q x head_dim)
         matmul2_results = torch.empty((dropout_results.size(1), dropout_results.size(0), values.size(2)),
                                       dtype=dropout_results.dtype, device=queries.device).transpose(1, 0)
-        matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1), out=matmul2_results)
+        torch.bmm(dropout_results, values.transpose(0, 1), out=matmul2_results)
         matmul2_results = matmul2_results.transpose(0, 1).contiguous().view(inputs.size(0), inputs.size(1),
                                                                             inputs.size(2))
+
+        # if add_position:
+        #     # matmul3 batched GEMMs
+        #     # input1: [bsz*heads, len_q, len_q] > [len_q, BH, len_q]
+        #     # input2: [len_q len_q head_dim]  > [len_q, len_q, head_dim]
+        #     # output: [len_q BH len_q head_dim]
+        #     # input2: [bsz*heads, len_k, head_dim]
+        #     matmul3_results = torch.empty((dropout_results.size(1), dropout_results.size(0), values.size(2)),
+        #                                   dtype=dropout_results.dtype, device=queries.device).transpose(1, 0)
+
+        """
+        0 -1 -2 -3 -4 -5
+        1 0 -1 -2 -3 -4
+        2 1 0 -1 -2 -3
+        3 2 1 0 -1 -2
+        4 3 2 1 0 -1
+        5 4 3 2 1 0
+        """
+        # else:
+        #     matmul3_results = None
 
         # Output Linear GEMM
         # Input1: (activations) [len_q, bsz, embed_dim=heads*head_dim]
@@ -260,6 +293,8 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                               dropout_mask,
                               dropout_prob_t)
 
+        ctx.add_position = add_position
+
         coverage = softmax_results
 
         return outputs.detach(), coverage
@@ -275,18 +310,18 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         :return:
         """
         heads_t, \
-            scale_t, \
-            matmul2_results, \
-            dropout_results, \
-            softmax_results, \
-            input_lin_results, pos_lin_results, \
-            rw_head_q, rr_head_q, \
-            inputs, pos, r_head_k, \
-            input_weights, pos_weights, \
-            output_weights, \
-            r_w_bias, r_r_bias, \
-            dropout_mask, \
-            dropout_prob_t = ctx.saved_tensors
+        scale_t, \
+        matmul2_results, \
+        dropout_results, \
+        softmax_results, \
+        input_lin_results, pos_lin_results, \
+        rw_head_q, rr_head_q, \
+        inputs, pos, r_head_k, \
+        input_weights, pos_weights, \
+        output_weights, \
+        r_w_bias, r_r_bias, \
+        dropout_mask, \
+        dropout_prob_t = ctx.saved_tensors
 
         head_dim = inputs.size(2) // heads_t[0]
         len_q, bsz = inputs.size(0), inputs.size(1)
@@ -369,7 +404,8 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             grad_cut = matmul_bd_grads.new_zeros((matmul_bd_grads.size(0), matmul_bd_grads.size(1), len_r - len_q))
             matmul_bd_grads = torch.cat([matmul_bd_grads, grad_cut], dim=-1)
 
-        matmul_bd_grads = RelativeShift.backward(matmul_bd_grads)  # backprop through the shifting
+        # backprop through the shifting
+        matmul_bd_grads = RelativeShift.backward(matmul_bd_grads, True, False)
 
         # Matmul1 - DGRAD1
         # Input1: (matmul_bd_grads)  [bsz*heads, len_q, seql_k]
@@ -438,8 +474,8 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         pos_bias_grads = torch.sum(r_head_k_grad, 0)
 
         return input_grads, None, None, None, None, input_weight_grads, output_weight_grads, pos_weight_grads, \
-            input_bias_grads, output_bias_grads, pos_bias_grads, r_w_bias_grads, r_r_bias_grads, \
-            None, None, None, None, None
+               input_bias_grads, output_bias_grads, pos_bias_grads, r_w_bias_grads, r_r_bias_grads, \
+               None, None, None, None, None, None
 
 
 relative_self_attn_func = RelativeSelfAttnFunc.apply
