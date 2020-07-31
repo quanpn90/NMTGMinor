@@ -26,6 +26,9 @@ def make_parser(parser):
     parser.add_argument('-memory_profiling', action="store_true",
                         help='Analyze memory consumption for the model')
 
+    parser.add_argument('-bayes_by_backprop', action='store_true',
+                        help="""Using Bayes-By-Backprop models in training""")
+
     # MODEL UTIL
     parser.add_argument('-save_model', default='model',
                         help="""Model filename (the model will be saved as
@@ -99,13 +102,16 @@ def make_parser(parser):
     parser.add_argument('-death_rate', type=float, default=0.0,
                         help='Stochastic layer death rate')
     parser.add_argument('-activation_layer', default='linear_relu_linear', type=str,
-                        help='The activation layer in each transformer block linear_relu_linear|linear_swish_linear|maxout')
+                        help='The activation layer in each transformer block '
+                             'linear_relu_linear|linear_swish_linear|maxout')
     parser.add_argument('-time', default='positional_encoding', type=str,
                         help='Type of time representation positional_encoding|gru|lstm')
     parser.add_argument('-version', type=float, default=1.0,
-                        help='Transformer version. 1.0 = Google type | 2.0 is different')
+                        help='Deprecated.')
     parser.add_argument('-residual_type', default='regular',
                         help='Type of residual type. regular|gated')
+    parser.add_argument('-adaptive', type=str, default='shared',
+                        help='Universal adaptive layer. universal=UniversalTF|shared=factorized|unshared')
     # Optimization options
     parser.add_argument('-encoder_type', default='text',
                         help="Type of encoder to use. Options are [text|img].")
@@ -221,14 +227,7 @@ def make_parser(parser):
                         help='Set the model into the experimental mode (trying unverified features)')
     parser.add_argument('-join_embedding', action='store_true',
                         help='Jointly train the embedding of encoder and decoder in one weight')
-    parser.add_argument('-pre_word_vecs_enc',
-                        help="""If a valid path is specified, then this will load
-                        pretrained word embeddings on the encoder side.
-                        See README for specific formatting instructions.""")
-    parser.add_argument('-pre_word_vecs_dec',
-                        help="""If a valid path is specified, then this will load
-                        pretrained word embeddings on the decoder side.
-                        See README for specific formatting instructions.""")
+
 
     # GPU
     parser.add_argument('-gpus', default=[], nargs='+', type=int,
@@ -250,6 +249,8 @@ def make_parser(parser):
                         help="Save every this interval.")
     parser.add_argument('-copy_generator', action='store_true',
                         help='Use the copy_generator')
+    parser.add_argument('-verbose', action='store_true',
+                        help='Show more information about training (for Nerds)')
 
     # for FUSION
     parser.add_argument('-lm_checkpoint', default='', type=str,

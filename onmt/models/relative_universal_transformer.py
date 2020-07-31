@@ -59,6 +59,7 @@ class RelativeUniversalTransformerEncoder(TransformerEncoder):
         self.max_pos_length = opt.max_pos_length
         self.universal_layer = None
         self.unidirectional = opt.unidirectional
+        self.adaptive_type = opt.adaptive
 
         # build_modules will be called from the inherited constructor
         super(RelativeUniversalTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type,
@@ -310,7 +311,7 @@ class RelativeUniversalTransformerDecoder(TransformerDecoder):
             input_ = input
         """ Embedding: batch_size x 1 x d_model """
         check = input_.gt(self.word_lut.num_embeddings)
-        emb = self.word_lut(input_)
+        emb = self.word_lut(input)
 
         """ Adding positional encoding """
         emb = emb * math.sqrt(self.model_size)
@@ -357,25 +358,29 @@ class RelativeUniversalTransformerDecoder(TransformerDecoder):
 
         len_tgt = input.size(1)
         mask_tgt = torch.triu(
-            emb.new_ones(len_tgt, len_tgt), diagonal=1).byte().unsqueeze(0)
+            emb.new_ones(len_tgt, len_tgt), diagonal=1).byte()
         # # only get the final step of the mask during decoding (because the input of the network is only the last step)
-        mask_tgt = mask_tgt[:, -1, :].unsqueeze(1)
+        # mask_tgt = mask_tgt[-1].unsqueeze(0)
         # mask_tgt = None
         mask_tgt = mask_tgt.bool()
 
         output = emb.contiguous()
 
+        pos = torch.arange(len_tgt - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+        time_encoding = self.positional_encoder(pos, bsz=input.size(0))
+        # time_encoding = time_encoding[-1].unsqueeze(0)
+
         for i in range(self.layers):
-            buffer = buffers[i] if i in buffers else None
+            # buffer = buffers[i] if i in buffers else None
             layer_tensor = torch.LongTensor([i]).to(output.device)
             layer_embedding = self.layer_embeddings(layer_tensor)
-            assert (output.size(0) == 1)
+            # assert (output.size(0) == 1)
 
-            output, coverage, buffer = self.universal_layer(output, time_embedding, layer_embedding, context,
-                                                            mask_tgt, mask_src,
-                                                            incremental=True, incremental_cache=buffer)
+            output, coverage, _ = self.universal_layer(output, context, time_encoding, layer_embedding,
+                                                            mask_tgt, mask_src)
 
-            decoder_state.update_attention_buffer(buffer, i)
+            # decoder_state.update_attention_buffer(buffer, i)
+        output = output[-1:]
 
         output = self.postprocess_layer(output)
 

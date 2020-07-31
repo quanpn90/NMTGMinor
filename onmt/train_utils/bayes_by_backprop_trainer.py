@@ -19,6 +19,7 @@ from onmt.model_factory import build_model, build_language_model, optimize_model
 from onmt.model_factory import init_model_parameters
 from onmt.train_utils.stats import Logger
 from onmt.utils import checkpoint_paths, normalize_gradients
+from .trainer import BaseTrainer
 
 
 def varname(p):
@@ -28,138 +29,47 @@ def varname(p):
             return m.group(1)
 
 
-class BaseTrainer(object):
+class BayesianTrainer(BaseTrainer):
 
-    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt):
+    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt, setup_optimizer=True):
+        super().__init__(model, loss_function, train_data, valid_data, dicts, opt)
 
-        self.model = model
-        self.train_data = train_data
-        self.valid_data = valid_data
+        if self.cuda:
+            torch.cuda.set_device(self.opt.gpus[0])
+            if self.opt.seed >= 0:
+                torch.manual_seed(self.opt.seed)
+            self.loss_function = self.loss_function.cuda()
+            self.model = self.model.cuda()
 
-        self.dicts = dicts
-        self.opt = opt
-        self.cuda = (len(opt.gpus) >= 1 and opt.gpus[0] >= 0)
+        if setup_optimizer:
 
-        self.loss_function = loss_function
-        self.start_time = 0
+            self.optim = onmt.Optim(opt)
+            self.optim.set_parameters(self.model.parameters())
 
-        self.additional_data = []
-        self.additional_data_ratio = []
+            if not self.opt.fp16:
+                opt_level = "O0"
+                keep_batchnorm_fp32 = False
+            elif self.opt.fp16_mixed:
+                opt_level = "O1"
+                keep_batchnorm_fp32 = None
+            else:
+                opt_level = "O2"
+                keep_batchnorm_fp32 = False
 
-    def add_additional_data(self, d, ratio):
-        self.additional_data = d
-        if ratio == "-1":
-            self.additional_data_ratio = [1] * (len(self.additional_data + 1))
-        else:
-            self.additional_data_ratio = [int(s) for s in ratio.split(";")]
-            assert (len(self.additional_data_ratio) == len(self.additional_data) + 1)
-
-    def run(self, *args, **kwargs):
-
-        raise NotImplementedError
-
-    def eval(self, data):
-
-        raise NotImplementedError
-
-    def load_encoder_weight(self, checkpoint_file):
-
-        print("Loading pretrained models from %s" % checkpoint_file)
-        checkpoint = torch.load(checkpoint_file, map_location=lambda storage, loc: storage)
-
-        pretrained_model = build_model(checkpoint['opt'], checkpoint['dicts'])
-        pretrained_model.load_state_dict(checkpoint['model'])
-
-        print("Loading pretrained encoder weights ...")
-        pretrained_model.encoder.language_embedding = None
-        enc_language_embedding = self.model.encoder.language_embedding
-        self.model.encoder.language_embedding = None
-        encoder_state_dict = pretrained_model.encoder.state_dict()
-
-        self.model.encoder.load_state_dict(encoder_state_dict)
-        self.model.encoder.language_embedding = enc_language_embedding
-        return
-
-    def load_decoder_weight(self, checkpoint_file):
-
-        print("Loading pretrained models from %s" % checkpoint_file)
-        checkpoint = torch.load(checkpoint_file, map_location=lambda storage, loc: storage)
-        chkpoint_dict = checkpoint['dicts']
-
-        pretrained_model = build_model(checkpoint['opt'], chkpoint_dict)
-        pretrained_model.load_state_dict(checkpoint['model'])
-
-        print("Loading pretrained decoder weights ...")
-        # first we have to remove the embeddings which probably have difference size ...
-        pretrained_word_emb = pretrained_model.decoder.word_lut
-        pretrained_model.decoder.word_lut = None
-        pretrained_lang_emb = pretrained_model.decoder.language_embeddings
-        pretrained_model.decoder.language_embeddings = None
-
-        # actually we assume that two decoders have the same language embeddings... 
-        untrained_word_emb = self.model.decoder.word_lut
-        self.model.decoder.word_lut = None
-        untrained_lang_emb = self.model.decoder.language_embeddings
-        self.model.decoder.language_embeddings = None
-
-        decoder_state_dict = pretrained_model.decoder.state_dict()
-        self.model.decoder.load_state_dict(decoder_state_dict)
-
-        # now we load the embeddings ....
-        n_copies = 0
-        for token in self.dicts['tgt'].labelToIdx:
-
-            untrained_id = self.dicts['tgt'].labelToIdx[token]
-
-            if token in chkpoint_dict['tgt'].labelToIdx:
-                pretrained_id = chkpoint_dict['tgt'].labelToIdx[token]
-                untrained_word_emb.weight.data[untrained_id].copy_(pretrained_word_emb.weight.data[pretrained_id])
-
-                self.model.generator[0].linear.bias.data[untrained_id].copy_(pretrained_model
-                                                                             .generator[0].linear.bias.data[
-                                                                                 pretrained_id])
-                n_copies += 1
-
-        print("Copied embedding for %d words" % n_copies)
-        self.model.decoder.word_lut = untrained_word_emb
-
-        # now we load the language embeddings ...
-        if pretrained_lang_emb and untrained_lang_emb and 'langs' in chkpoint_dict:
-            for lang in self.dicts['langs']:
-
-                untrained_id = self.dicts['langs'][lang]
-                if lang in chkpoint_dict['langs']:
-                    pretrained_id = chkpoint_dict['langs'][lang]
-                    untrained_lang_emb.weight.data[untrained_id].copy_(pretrained_lang_emb.weight.data[pretrained_id])
-
-        self.model.decoder.language_embeddings = untrained_lang_emb
-
-    def _get_grads(self):
-        grads = []
-        for name, p in self.model.named_parameters():
-            if not p.requires_grad:
-                continue
-            if p.grad is None:
-                raise RuntimeError('Model parameter did not receive gradient: ' + name + '. '
-                                                                                         'Use the param in the forward pass or set requires_grad=False.' +
-                                   ' If you are using Stochastic model + fp16 - '
-                                   'try to increase the number of minibatches' +
-                                   ' each update to avoid uninitialized gradients.')
-            grads.append(p.grad.data)
-        return grads
-
-    def _get_flat_grads(self, out=None):
-        grads = self._get_grads()
-        if out is None:
-            grads_size = sum(g.numel() for g in grads)
-            out = grads[0].new(
-                grads_size).zero_()
-        offset = 0
-        for g in grads:
-            numel = g.numel()
-            out[offset:offset + numel].copy_(g.view(-1))
-            offset += numel
-        return out[:offset]
+            if self.cuda:
+                self.model, self.optim.optimizer = amp.initialize(self.model,
+                                                                  self.optim.optimizer,
+                                                                  opt_level=opt_level,
+                                                                  keep_batchnorm_fp32=keep_batchnorm_fp32,
+                                                                  loss_scale="dynamic",
+                                                                  verbosity=1 if self.opt.verbose else 0)
+        # An ugly hack to switch between align right and align left
+        if hasattr(self.model, 'relative'):
+            if self.model.relative:
+                self.train_data.src_align_right = True
+                self.train_data.tgt_align_right = False
+                self.valid_data.src_align_right = True
+                self.valid_data.tgt_align_right = False
 
     def warm_up(self):
         """
@@ -200,7 +110,11 @@ class BaseTrainer(object):
 
             loss_dict = self.loss_function(outputs, targets, model=self.model)
             loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-            full_loss = loss
+
+            log_prior = self.model.log_prior()
+            log_variational_posterior = self.model.log_variational_posterior()
+
+            full_loss = loss + log_variational_posterior - log_prior
 
             if opt.mirror_loss:
                 rev_loss = loss_dict['rev_loss']
@@ -261,49 +175,6 @@ class BaseTrainer(object):
             if hasattr(torch.cuda, 'memory_summary'):
                 print(torch.cuda.memory_summary())
             exit()
-
-
-class XETrainer(BaseTrainer):
-
-    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt, setup_optimizer=True):
-        super().__init__(model, loss_function, train_data, valid_data, dicts, opt)
-
-        if self.cuda:
-            torch.cuda.set_device(self.opt.gpus[0])
-            if self.opt.seed >= 0:
-                torch.manual_seed(self.opt.seed)
-            self.loss_function = self.loss_function.cuda()
-            self.model = self.model.cuda()
-
-        if setup_optimizer:
-
-            self.optim = onmt.Optim(opt)
-            self.optim.set_parameters(self.model.parameters())
-
-            if not self.opt.fp16:
-                opt_level = "O0"
-                keep_batchnorm_fp32 = False
-            elif self.opt.fp16_mixed:
-                opt_level = "O1"
-                keep_batchnorm_fp32 = None
-            else:
-                opt_level = "O2"
-                keep_batchnorm_fp32 = False
-
-            if self.cuda:
-                self.model, self.optim.optimizer = amp.initialize(self.model,
-                                                                  self.optim.optimizer,
-                                                                  opt_level=opt_level,
-                                                                  keep_batchnorm_fp32=keep_batchnorm_fp32,
-                                                                  loss_scale="dynamic",
-                                                                  verbosity=1 if self.opt.verbose else 0)
-        # An ugly hack to switch between align right and align left
-        if hasattr(self.model, 'relative'):
-            if self.model.relative:
-                self.train_data.src_align_right = True
-                self.train_data.tgt_align_right = False
-                self.valid_data.src_align_right = True
-                self.valid_data.tgt_align_right = False
 
     def save(self, epoch, valid_ppl, itr=None):
 
@@ -430,7 +301,10 @@ class XETrainer(BaseTrainer):
         total_non_pads = 0
         report_loss, report_tgt_words = 0, 0
         report_src_words = 0
+        report_sents = 0
         report_rec_loss, report_rev_loss, report_mirror_loss = 0, 0, 0
+        report_log_prior = 0
+        report_log_variational_posterior = 0
         start = time.time()
         n_samples = len(epoch_iterator)
 
@@ -451,18 +325,6 @@ class XETrainer(BaseTrainer):
 
             curriculum = (epoch < opt.curriculum)
 
-            # if (len(self.additional_data) > 0 and
-            #         i % self.additional_data_ratio[0] == 0):
-            #     for j in range(len(self.additional_data)):
-            #         for k in range(self.additional_data_ratio[j + 1]):
-            #             if self.additional_data_iteration[j] == len(self.additional_data[j]):
-            #                 self.additional_data_iteration[j] = 0
-            #                 self.additional_data[j].shuffle()
-            #                 self.additional_batch_order[j] = self.additional_data[j].create_order()
-            #
-            #             batches.append(self.additional_data[j].next()[0])
-            #             self.additional_data_iteration[j] += 1
-
             # for b in range(len(batches)):
             batch = next(epoch_iterator)
             batch = rewrap(batch)
@@ -470,12 +332,6 @@ class XETrainer(BaseTrainer):
 
             if self.cuda:
                 batch.cuda(fp16=self.opt.fp16 and not self.opt.fp16_mixed)
-
-            # if opt.streaming:
-            #     if train_data.is_new_stream():
-            #         streaming_state = self.model.init_stream()
-            # else:
-            #     streaming_state = None
 
             oom = False
             try:
@@ -494,7 +350,11 @@ class XETrainer(BaseTrainer):
                 loss_dict = self.loss_function(outputs, targets, model=self.model)
                 loss_data = loss_dict['data']
                 loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-                full_loss = loss
+                log_prior = self.model.log_prior()
+                log_variational_posterior = self.model.log_variational_posterior()
+
+                full_loss = loss + log_variational_posterior - log_prior
+                # print(log_variational_posterior, log_prior)
 
                 if opt.mirror_loss:
                     rev_loss = loss_dict['rev_loss']
@@ -602,8 +462,11 @@ class XETrainer(BaseTrainer):
 
                 num_words = tgt_size
                 report_loss += loss_data
+                report_log_prior += log_prior.item()
+                report_log_variational_posterior += log_variational_posterior.item()
                 report_tgt_words += num_words
                 report_src_words += src_size
+                report_sents += 1
                 total_loss += loss_data
                 total_words += num_words
                 total_tokens += batch.get('target_output').nelement()
@@ -623,6 +486,9 @@ class XETrainer(BaseTrainer):
                                   (epoch, i + 1, len(data_iterator),
                                    math.exp(report_loss / report_tgt_words)))
 
+                    kl_div = report_log_variational_posterior - report_log_prior
+                    log_string += ("KL q||p: %6.2f ; " % (kl_div / report_sents))
+
                     if opt.reconstruct:
                         rec_ppl = math.exp(report_rec_loss / report_src_words.item())
                         log_string += (" rec_ppl: %6.2f ; " % rec_ppl)
@@ -637,7 +503,7 @@ class XETrainer(BaseTrainer):
                                    (optim.getLearningRate(),
                                     optim._step))
 
-                    log_string += ("%5.0f src tok/s; %5.0f tgt tok/s; " %
+                    log_string += ("%5.0f src/s; %5.0f tgt/s; " %
                                    (report_src_words / (time.time() - start),
                                     report_tgt_words / (time.time() - start)))
 
@@ -648,7 +514,9 @@ class XETrainer(BaseTrainer):
 
                     report_loss = 0
                     report_tgt_words, report_src_words = 0, 0
+                    report_sents = 0
                     report_rec_loss, report_rev_loss, report_mirror_loss = 0, 0, 0
+                    report_log_prior, report_log_variational_posterior = 0, 0
                     start = time.time()
 
                 i = i + 1
@@ -683,16 +551,9 @@ class XETrainer(BaseTrainer):
                 opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
 
                 resume = True
-                if len(self.additional_data) > 0:
-                    if 'additional_batch_order' in checkpoint:
-                        self.additional_batch_order = checkpoint['additional_batch_order']
-                        self.additional_data_iteration = checkpoint['additional_data_iteration']
-                    else:
-                        self.init_additional_data()
             else:
                 itr_progress = None
                 resume = False
-                self.init_additional_data()
 
             del checkpoint['model']
             del checkpoint['optim']
@@ -702,7 +563,6 @@ class XETrainer(BaseTrainer):
             print('Initializing model parameters')
             init_model_parameters(model, opt)
             resume = False
-            self.init_additional_data()
 
         if opt.load_encoder_from:
             self.load_encoder_weight(opt.load_encoder_from)
@@ -737,10 +597,3 @@ class XETrainer(BaseTrainer):
             itr_progress = None
             resume = False
 
-    def init_additional_data(self):
-        self.additional_batch_order = []
-        self.additional_data_iteration = []
-        for i in range(len(self.additional_data)):
-            self.additional_data_iteration.append(0)
-            self.additional_data[i].shuffle()
-            self.additional_batch_order.append(self.additional_data[i].create_order())

@@ -20,8 +20,6 @@ class Generator(nn.Module):
         
         self.linear.bias.data.zero_()
 
-
-    # def forward(self, input, log_softmax=True):
     def forward(self, output_dicts):
         """
         :param output_dicts: dictionary contains the outputs from the decoder
@@ -36,7 +34,6 @@ class Generator(nn.Module):
             logits = self.linear(input).float()
         else:
             normalized_weights = F.normalize(self.linear.weight, dim=-1)
-            # normalized_bias = F.normalize(self.linear.bias, dim=-1)
             normalized_bias = self.linear.bias
             logits = F.linear(input, normalized_weights, normalized_bias)
 

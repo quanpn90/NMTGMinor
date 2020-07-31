@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import onmt
 from onmt.models.transformers import TransformerEncoder, TransformerDecoder, Transformer, MixedEncoder
+from onmt.models.relative_transformer import RelativeTransformerEncoder, RelativeTransformerDecoder, \
+            RelativeTransformer
 from onmt.models.transformer_layers import PositionalEncoding
 from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, RelativeTransformer
 from onmt.modules.copy_generator import CopyGenerator
@@ -100,9 +102,6 @@ def build_tm_model(opt, dicts):
 
     elif opt.model == 'relative_transformer':
 
-        from onmt.models.relative_transformer import RelativeTransformerEncoder, RelativeTransformerDecoder, \
-            RelativeTransformer
-
         if opt.encoder_type == "text":
             encoder = RelativeTransformerEncoder(opt, embedding_src, None,
                                                  opt.encoder_type, language_embeddings=language_embeddings)
@@ -172,7 +171,7 @@ def build_tm_model(opt, dicts):
         decoder = RelativeUniversalTransformerDecoder(opt, embedding_tgt, None,
                                                       language_embeddings=language_embeddings)
 
-        model = Transformer(encoder, decoder, generator, mirror=opt.mirror_loss)
+        model = RelativeTransformer(encoder, decoder, generator, mirror=opt.mirror_loss)
 
     elif opt.model == 'relative_unified_transformer':
         from onmt.models.relative_unified_transformer import RelativeUnifiedTransformer
@@ -221,7 +220,8 @@ def init_model_parameters(model, opt):
             nn.init.normal_(weight, 0.0, init_std)
 
     def init_embed(weight):
-        nn.init.uniform_(weight, -0.01, 0.01)
+        # nn.init.uniform_(weight, -0.01, 0.01)
+        nn.init.normal_(weight, 0.0, 0.02)
 
     def init_bias(bias):
         # nn.init.constant_(bias, 0.0)

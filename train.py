@@ -9,6 +9,7 @@ import time, datetime
 from onmt.train_utils.trainer import XETrainer
 from onmt.modules.loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.model_factory import build_model, optimize_model
+from onmt.bayesian_factory import build_model as build_bayesian_model
 from options import make_parser
 from collections import defaultdict
 import os
@@ -290,7 +291,10 @@ def main():
     print('* Building model...')
 
     if not opt.fusion:
-        model = build_model(opt, dicts)
+        if opt.bayes_by_backprop:
+            model = build_bayesian_model(opt, dicts)
+        else:
+            model = build_model(opt, dicts)
 
         """ Building the loss function """
         if opt.ctc_loss != 0:
@@ -321,6 +325,11 @@ def main():
 
     if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
         raise NotImplementedError("Multi-GPU training is not supported at the moment.")
+    if opt.bayes_by_backprop:
+
+        from onmt.train_utils.bayes_by_backprop_trainer import BayesianTrainer
+        trainer = BayesianTrainer(model, loss_function, train_data, valid_data, dicts, opt)
+
     else:
         trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
 

@@ -350,10 +350,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
             death_r = (l + 1.0) / self.layers * self.death_rate
 
             if not self.reversible:
-                # block = RelativeTransformerDecoderLayer(self.n_heads, self.model_size,
-                #                                         self.dropout, self.inner_size, self.attn_dropout,
-                #                                         variational=self.variational_dropout, death_rate=death_r)
-                block = RelativeTransformerDecoderLayer(self.opt)
+                block = RelativeTransformerDecoderLayer(self.opt, death_rate=death_r)
             else:
                 block = ReversibleTransformerDecoderLayer(self.opt, death_rate=death_r)
 
