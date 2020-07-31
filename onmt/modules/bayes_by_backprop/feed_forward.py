@@ -50,7 +50,7 @@ class PositionWiseFeedForward(nn.Module):
         self.reset_parameters()
         try:
             from apex.mlp.mlp import mlp_function
-            self.optimized = 1
+            self.optimized = 2
             self.fast_mlp_func = mlp_function
         except ModuleNotFoundError as e:
             self.optimized = 2
@@ -85,7 +85,7 @@ class PositionWiseFeedForward(nn.Module):
             return_log_prob=(self.training or calculate_log_probs))
 
         if self.optimized == 2 or not input.is_cuda:
-            hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)
+            hidden = F.linear(input, in_proj_weight, in_proj_bias)
             hidden = F.relu(hidden, inplace=True)
             if self.variational:
                 hidden = variational_dropout(hidden, p=self.dropout, training=self.training)

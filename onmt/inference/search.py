@@ -94,7 +94,7 @@ class BeamSearch(Search):
 
         # torch.div(self.indices_buf, vocab_size, out=self.beams_buf)
         # beams_buf helps us know where the origin of each
-        self.beams_buf = torch.div(self.indices_buf, vocab_size)
+        self.beams_buf = torch.true_divide(self.indices_buf, vocab_size).long()
 
         # indices: the word indices in the vocabulary
         self.indices_buf.fmod_(vocab_size)
