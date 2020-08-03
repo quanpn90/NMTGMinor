@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import onmt
 
 from onmt.models.transformer_layers import PrePostProcessing, MultiHeadAttention, Linear
@@ -17,6 +18,79 @@ from onmt.modules.optimized.encdec_attention import EncdecMultiheadAttn
 from onmt.modules.optimized.feed_forward import PositionWiseFeedForward
 
 
+class LIDFeedForward(nn.Module):
+
+    def __init__(self, input_size, hidden_size, bottleneck_size, output_size, n_hidden=2, dropout=0.0):
+        """
+        :param input_size:
+        :param hidden_size:
+        :param bottleneck_size:
+        :param output_size:
+        :param n_hidden: number of hidden states between first hidden and the bottleneck
+        """
+        super().__init__()
+        self.input_size = input_size
+        self.dropout = dropout
+        self.linear_in = nn.Linear(input_size, hidden_size)
+        self.hiddens = nn.ModuleList()
+        for i in range(n_hidden):
+            self.hiddens.append(nn.Linear(hidden_size, hidden_size))
+
+        self.bottleneck_in = nn.Linear(hidden_size, bottleneck_size)
+        self.bottleneck_out = nn.Linear(bottleneck_size, hidden_size)
+        self.last_linear = nn.Linear(hidden_size, output_size)
+
+        try:
+            from apex.mlp.mlp import mlp_function
+            self.optimized = 1
+            self.fast_mlp_func = mlp_function
+        except ModuleNotFoundError as e:
+            self.optimized = 2
+
+    def forward(self, input):
+        """
+        :param input: Input should have size [len x bsz x input_size]
+        :return:
+        """
+        assert self.input_size == input.size(-1)
+
+        if self.optimized == 1:
+            weights = [self.linear_in.weight]
+            biases = [self.linear_in.bias]
+            for i in range(len(self.hiddens)):
+                weights.append(self.hiddens[i].weight)
+                biases.append(self.hiddens[i].bias)
+            weights.append(self.bottleneck_in.weight)
+            biases.append(self.bottleneck_in.bias)
+
+            seq_len, bsz, inp_size = input.size(0), input.size(1), input.size(2)
+            hidden = self.fast_mlp_func(True, 1, input.view(seq_len * bsz, -1), *weights, *biases)
+
+            bottleneck = F.relu(hidden)
+            bottleneck = F.dropout(bottleneck, p=self.dropout, training=self.training)
+
+            weights = [self.bottleneck_out.weight, self.last_linear.weight]
+            biases = [self.bottleneck_out.bias, self.last_linear.bias]
+
+            logits = self.fast_mlp_func(True, 1, bottleneck, *weights, *biases)
+
+            logits = logits.view(seq_len, bsz, -1)
+            bottleneck = bottleneck.view(seq_len, bsz, -1)
+        else:
+            hidden = F.relu(self.linear_in(input))
+
+            for i in range(len(self.hiddens)):
+                hidden = F.relu(self.hiddens[i](hidden))
+
+            bottleneck = F.relu(self.bottleneck_in(hidden))
+
+            hidden = F.relu(self.bottleneck_out(F.dropout(bottleneck, p=self.dropout, training=self.training)))
+
+            logits = self.last_linear(hidden)
+
+        return logits, bottleneck
+
+
 class RelativeTransformerEncoderLayer(nn.Module):
     # def __init__(self, h, d_model, p, d_ff, attn_p=0.1, variational=False, death_rate=0.0, **kwargs):
     def __init__(self, opt, death_rate=0.0, **kwargs):
@@ -32,18 +106,10 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                  variational=self.variational)
         d_head = opt.model_size // opt.n_heads
-        if not self.fast_self_attention:
-            self.multihead = RelPartialLearnableMultiHeadAttn(opt.n_heads, opt.model_size,
-                                                              d_head, dropatt=opt.attn_dropout)
-        else:
-            self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+        self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
-        if not opt.fast_feed_forward:
-            feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
-            self.feedforward = Bottle(feedforward)
-        else:
-            self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                       variational=self.variational)
+        self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                   variational=self.variational)
 
     def forward(self, input, pos_emb, attn_mask, incremental=False, incremental_cache=None, mems=None):
 
@@ -62,12 +128,8 @@ class RelativeTransformerEncoderLayer(nn.Module):
                 mems = None
 
             query = self.preprocess_attn(input)
-            if not self.fast_self_attention:
-                out, _, incremental_cache = self.multihead(query, pos_emb, attn_mask=attn_mask, mems=mems,
-                                                           incremental=incremental, incremental_cache=incremental_cache)
-            else:
-                out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
-                                        incremental=incremental, incremental_cache=incremental_cache)
+            out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
+                                    incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -112,10 +174,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
             self.postprocess_src_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                           variational=self.variational)
 
-            if opt.fast_xattention:
-                self.multihead_src = EncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout)
-            else:
-                self.multihead_src = MultiHeadAttention(opt.n_heads, opt.model_size, attn_p=opt.attn_dropout, share=2)
+            self.multihead_src = EncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout)
 
         self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
@@ -123,21 +182,20 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
         d_head = opt.model_size // opt.n_heads
 
-        if not self.fast_self_attention:
-            self.multihead_tgt = RelPartialLearnableMultiHeadAttn(opt.n_heads, opt.model_size, d_head,
-                                                                  dropatt=opt.attn_dropout)
-        else:
-            self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+        self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
-        if not opt.fast_feed_forward:
-            feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
-            self.feedforward = Bottle(feedforward)
-        else:
-            self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                       variational=self.variational)
+        self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                   variational=self.variational)
 
-    # def forward(self, input, context, pos_emb, r_w_bias, r_r_bias, mask_tgt, mask_src):
-    def forward(self, input, context, pos_emb, mask_tgt, mask_src,
+        self.lfv_multilingual = opt.lfv_multilingual
+        if opt.lfv_multilingual:
+            self.lid_net = LIDFeedForward(opt.model_size, 2 * opt.model_size, opt.bottleneck_size,
+                                          opt.n_languages, dropout=opt.dropout)
+            self.lfv_mapper = nn.Linear(opt.bottleneck_size, opt.model_size)
+        else:
+            self.lid_net = None
+
+    def forward(self, input, context, pos_emb, lfv=None, mask_tgt=None, mask_src=None,
                 incremental=False, incremental_cache=None, reuse_source=True, mems=None):
 
         """ Self attention layer
@@ -158,15 +216,15 @@ class RelativeTransformerDecoderLayer(nn.Module):
             else:
                 mems = None
 
+            if lfv is not None:
+                # multiply the input with the bottleneck lfv features from the LID network
+                # print(lfv.size())
+                input = torch.mul(torch.sigmoid(self.lfv_mapper(lfv)), input)
+
             query = self.preprocess_attn(input)
 
-            if self.fast_self_attention:
-                out, _ = self.multihead_tgt(query, pos_emb, None, mask_tgt, mems=mems,
-                                            incremental=incremental, incremental_cache=incremental_cache)
-            else:
-                out, _, incremental_cache = self.multihead_tgt(query, pos_emb, attn_mask=mask_tgt, mems=mems,
-                                                               incremental=incremental,
-                                                               incremental_cache=incremental_cache)
+            out, _ = self.multihead_tgt(query, pos_emb, None, mask_tgt, mems=mems,
+                                        incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -188,6 +246,11 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 if self.training and self.death_rate > 0:
                     out = out / (1 - self.death_rate)
 
+                if self.lid_net is not None:
+                    lid_logits, lfv = self.lid_net(out)
+                else:
+                    lid_logits, lfv = None, None
+
                 input = self.postprocess_src_attn(out, input)
             else:
                 coverage = None
@@ -204,5 +267,10 @@ class RelativeTransformerDecoderLayer(nn.Module):
             input = self.postprocess_ffn(out, input)
         else:
             coverage = None
+            lid_logits = None
+            lfv = None
+
+        if self.lfv_multilingual:
+            return input, coverage, incremental_cache, lid_logits, lfv
 
         return input, coverage, incremental_cache

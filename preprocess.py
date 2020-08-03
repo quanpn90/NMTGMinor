@@ -624,21 +624,21 @@ def main():
                                                fp16=opt.fp16, reshape=(opt.reshape_speech == 1),
                                                asr_format=opt.asr_format)
 
-        n_samples = len(src_data)
-        if n_input_files == 1:
-            # For single-file cases we only need to have 1 language per file
-            # which will be broadcasted
-            src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
-            tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]])]
-        else:
-            # each sample will have a different language id
-            src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
-            tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
+            n_samples = len(src_data)
+            if n_input_files == 1:
+                # For single-file cases we only need to have 1 language per file
+                # which will be broadcasted
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]])]
+            else:
+                # each sample will have a different language id
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
 
-        valid['src'] += src_data
-        valid['tgt'] += tgt_data
-        valid['src_lang'] += src_lang_data
-        valid['tgt_lang'] += tgt_lang_data
+            valid['src'] += src_data
+            valid['tgt'] += tgt_data
+            valid['src_lang'] += src_lang_data
+            valid['tgt_lang'] += tgt_lang_data
 
     else:
         print('Preparing training translation model...')

@@ -114,7 +114,7 @@ class BayesianTrainer(BaseTrainer):
             log_prior = self.model.log_prior()
             log_variational_posterior = self.model.log_variational_posterior()
 
-            full_loss = loss + log_variational_posterior - log_prior
+            full_loss = loss + (log_variational_posterior - log_prior)
 
             if opt.mirror_loss:
                 rev_loss = loss_dict['rev_loss']
@@ -309,6 +309,7 @@ class BayesianTrainer(BaseTrainer):
         n_samples = len(epoch_iterator)
 
         counter = 0
+        update_counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
 
@@ -324,8 +325,6 @@ class BayesianTrainer(BaseTrainer):
         while not data_iterator.end_of_epoch():
 
             curriculum = (epoch < opt.curriculum)
-
-            # for b in range(len(batches)):
             batch = next(epoch_iterator)
             batch = rewrap(batch)
             grad_scaler = self.opt.batch_size_words if self.opt.update_frequency > 1 else batch.tgt_size
@@ -353,7 +352,17 @@ class BayesianTrainer(BaseTrainer):
                 log_prior = self.model.log_prior()
                 log_variational_posterior = self.model.log_variational_posterior()
 
-                full_loss = loss + log_variational_posterior - log_prior
+                # the coeff starts off at 1 for each epoch
+                # from BBB paper: The first mini batches in each epoch have large KL coeff
+                # # the later minibatches are influenced by the data
+                # denom = math.pow(1.5, min(32, update_counter))
+
+                # min_coeff = 1 / (self.opt.model_size ** 2)
+                # kl_coeff = max(1 / denom, min_coeff)
+                kl_coeff = 1 / (batch.tgt_size * opt.update_frequency)
+                # kl_coeff = 1 / (self.opt.model_size ** 2)
+                # kl_coeff = 1
+                full_loss = loss + kl_coeff * (log_variational_posterior - log_prior)
                 # print(log_variational_posterior, log_prior)
 
                 if opt.mirror_loss:
@@ -451,6 +460,7 @@ class BayesianTrainer(BaseTrainer):
                     num_accumulated_words = 0
                     num_accumulated_sents = 0
                     num_updates = self.optim._step
+                    update_counter += 1
                     if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every:
                         valid_loss = self.eval(self.valid_data)
                         valid_ppl = math.exp(min(valid_loss, 100))
@@ -596,4 +606,3 @@ class BayesianTrainer(BaseTrainer):
             self.save(epoch, valid_ppl)
             itr_progress = None
             resume = False
-

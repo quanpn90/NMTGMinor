@@ -5,15 +5,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 from ..optimized.encdec_attention_func import encdec_attn_func
 from .gaussian import Gaussian, ScaleMixtureGaussian
-
-if hasattr(torch._C, '_jit_set_profiling_executor'):
-    torch._C._jit_set_profiling_executor(False)
-if hasattr(torch._C, '_jit_set_profiling_mode'):
-    torch._C._jit_set_profiling_mode(False)
-
-PI = 0.5
-SIGMA_1 = torch.cuda.FloatTensor([math.exp(-0)])
-SIGMA_2 = torch.cuda.FloatTensor([math.exp(-6)])
+from .utils import flatten_list, unflatten
 
 
 class EncdecMultiheadAttn(nn.Module):
@@ -36,22 +28,25 @@ class EncdecMultiheadAttn(nn.Module):
         self.log_variational_posterior = 0
 
         # Q linear mapping weight
-        self.in_proj_weight_q_mu = Parameter(torch.Tensor(embed_dim, embed_dim))
-        self.in_proj_weight_q_rho = Parameter(torch.Tensor(embed_dim, embed_dim))
-        self.in_proj_weight_q = Gaussian(self.in_proj_weight_q_mu, self.in_proj_weight_q_rho)
-        self.in_proj_weight_q_prior = ScaleMixtureGaussian(PI, SIGMA_1, SIGMA_2)
+
+        in_proj_weight_q_mu = Parameter(torch.Tensor(embed_dim, embed_dim))
+        in_proj_weight_q_rho = Parameter(torch.Tensor(embed_dim, embed_dim))
 
         # KV Linear mapping weight
-        self.in_proj_weight_kv_mu = Parameter(torch.Tensor(2 * embed_dim, embed_dim))
-        self.in_proj_weight_kv_rho = Parameter(torch.Tensor(2 * embed_dim, embed_dim))
-        self.in_proj_weight_kv = Gaussian(self.in_proj_weight_kv_mu, self.in_proj_weight_kv_rho)
-        self.in_proj_weight_kv_prior = ScaleMixtureGaussian(PI, SIGMA_1, SIGMA_2)
+        in_proj_weight_kv_mu = Parameter(torch.Tensor(2 * embed_dim, embed_dim))
+        in_proj_weight_kv_rho = Parameter(torch.Tensor(2 * embed_dim, embed_dim))
 
         # Output linear mapping weight
-        self.out_proj_weight_mu = Parameter(torch.Tensor(embed_dim, embed_dim))
-        self.out_proj_weight_rho = Parameter(torch.Tensor(embed_dim, embed_dim))
-        self.out_proj_weight = Gaussian(self.out_proj_weight_mu, self.in_proj_weight_q_rho)
-        self.out_proj_weight_prior = ScaleMixtureGaussian(PI, SIGMA_1, SIGMA_2)
+        out_proj_weight_mu = Parameter(torch.Tensor(embed_dim, embed_dim))
+        out_proj_weight_rho = Parameter(torch.Tensor(embed_dim, embed_dim))
+
+        self.mu, self.indices, self.shapes = flatten_list([in_proj_weight_q_mu, in_proj_weight_kv_mu, out_proj_weight_mu])
+        self.mu = Parameter(self.mu)
+        self.rho, _, _ = flatten_list([in_proj_weight_q_rho, in_proj_weight_kv_rho, out_proj_weight_rho])
+        self.rho = Parameter(self.rho)
+
+        self.weight = Gaussian(self.mu, self.rho)
+        self.weight_prior = ScaleMixtureGaussian()
 
         self.attn_func = encdec_attn_func
 
@@ -70,18 +65,16 @@ class EncdecMultiheadAttn(nn.Module):
         # We initialize μ with a Gaussian around 0
         # (just as we would initialize standard weights of a neural network)
         std_ = math.sqrt(2.0 / (self.embed_dim + self.embed_dim))
-        nn.init.normal_(self.in_proj_weight_q_mu, 0.0, std_)
-        nn.init.normal_(self.in_proj_weight_kv_mu, 0.0, std_)
-        nn.init.normal_(self.out_proj_weight_mu, 0.0, std_)
+        nn.init.normal_(self.mu, 0.0, std_)
 
         # It is important to initialize ρ (and hence σ) to a small value, otherwise learning might not work properly.
-        nn.init.uniform_(self.in_proj_weight_q_rho, -5, -4)
-        nn.init.uniform_(self.in_proj_weight_kv_rho, -5, -4)
-        nn.init.uniform_(self.out_proj_weight_rho, -5, -4)
+        nn.init.normal_(self.rho, -7, 0.1)
 
     def forward(self, query, key, value, attn_mask=None, incremental=False, incremental_cache=None,
                 sample=False, calculate_log_probs=False):
 
+        calculate_log_probs = calculate_log_probs or self.training
+        sample = sample or self.training
         assert value is key, "ERROR: Keys and values must be the same."
 
         is_training = self.training
@@ -90,15 +83,19 @@ class EncdecMultiheadAttn(nn.Module):
 
         # (MCMC)
         # Sample the weights from the variational posterior distribution q(w)
-        in_proj_weight_q, in_proj_weight_q_logprob = self.in_proj_weight_q.sample(
-            stochastic=(self.training or sample),
-            return_log_prob=(self.training or calculate_log_probs))
-        in_proj_weight_kv, in_proj_weight_kv_logprob = self.in_proj_weight_kv.sample(
-            stochastic=(self.training or sample),
-            return_log_prob=(self.training or calculate_log_probs))
-        out_proj_weight, out_proj_weight_logprob = self.out_proj_weight.sample(
-            stochastic=(self.training or sample),
-            return_log_prob=(self.training or calculate_log_probs))
+        sampled_weights, log_variational_posterior = \
+            self.weight.sample(stochastic=sample, return_log_prob=calculate_log_probs)
+
+        in_proj_weight_q, in_proj_weight_kv, out_proj_weight = unflatten(sampled_weights, self.indices, self.shapes)
+        # in_proj_weight_q, in_proj_weight_q_logprob = self.in_proj_weight_q.sample(
+        #     stochastic=(self.training or sample),
+        #     return_log_prob=(self.training or calculate_log_probs))
+        # in_proj_weight_kv, in_proj_weight_kv_logprob = self.in_proj_weight_kv.sample(
+        #     stochastic=(self.training or sample),
+        #     return_log_prob=(self.training or calculate_log_probs))
+        # out_proj_weight, out_proj_weight_logprob = self.out_proj_weight.sample(
+        #     stochastic=(self.training or sample),
+        #     return_log_prob=(self.training or calculate_log_probs))
 
         # Perform forward with the sampled weights
         if self.optimized == 1 and (self.training and not incremental) and len_key <= 1024 and query.is_cuda:
@@ -107,7 +104,8 @@ class EncdecMultiheadAttn(nn.Module):
                     attn_mask = attn_mask.squeeze(1)
                 attn_mask = attn_mask.byte()
 
-            outputs = self.attn_func_fast(time_masking, is_training, self.num_heads, query, key,
+            outputs = self.attn_func_fast(time_masking, is_training, self.num_heads,
+                                          query.type_as(in_proj_weight_q), key.type_as(in_proj_weight_q),
                                           in_proj_weight_q, in_proj_weight_kv, out_proj_weight,
                                           attn_mask, self.dropout)
 
@@ -121,12 +119,9 @@ class EncdecMultiheadAttn(nn.Module):
                                                 out_proj_weight, attn_mask, self.dropout,
                                                 incremental, incremental_cache)
 
-        # KL Divergence between prior and (variational) posterior
-        self.log_variational_posterior = in_proj_weight_q_logprob + \
-                                         in_proj_weight_kv_logprob + \
-                                         out_proj_weight_logprob
-        self.log_prior = self.in_proj_weight_q_prior.log_prob(in_proj_weight_q) + \
-                         self.in_proj_weight_kv_prior.log_prob(in_proj_weight_kv) + \
-                         self.out_proj_weight_prior.log_prob(out_proj_weight)
+        if calculate_log_probs:
+            # KL Divergence between prior and (variational) posterior
+            self.log_variational_posterior = log_variational_posterior
+            self.log_prior = self.weight_prior.log_prob(sampled_weights)
 
         return outputs, coverage

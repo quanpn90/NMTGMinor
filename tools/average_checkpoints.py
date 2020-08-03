@@ -28,8 +28,6 @@ def main():
     
     opt.cuda = opt.gpu > -1
     
-    
-    
     if opt.cuda:
         torch.cuda.set_device(opt.gpu)
     

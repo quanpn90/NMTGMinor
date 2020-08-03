@@ -17,3 +17,7 @@ max_position_length = 8192
 torch_version = float(torch.__version__[:3])
 double_precision = False
 
+neg_log_sigma1 = 0
+neg_log_sigma2 = 4
+prior_pi = 0.5
+

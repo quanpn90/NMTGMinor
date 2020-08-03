@@ -619,18 +619,19 @@ class Transformer(NMTModel):
         streaming_state = decoder_output['streaming_state']
         output = decoder_output['hidden']
 
-        output_dict = defaultdict(lambda: None)
+        # build the output dict based on decoder output
+        output_dict = defaultdict(lambda: None, decoder_output)
         output_dict['hidden'] = output
         output_dict['context'] = context
         output_dict['src_mask'] = encoder_output['src_mask']
         output_dict['src'] = src
         output_dict['target_mask'] = target_mask
         output_dict['streaming_state'] = streaming_state
+        # output_dict['lid_logits'] = decoder_output['lid_logits']
 
         # final layer: computing softmax
         logprobs = self.generator[0](output_dict)
         output_dict['logprobs'] = logprobs
-
 
         # Mirror network: reverse the target sequence and perform backward language model
         if mirror:
@@ -774,6 +775,7 @@ class Transformer(NMTModel):
     def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True, **kwargs):
         """
         Generate a new decoder state based on the batch input
+        :param buffering:
         :param streaming:
         :param type:
         :param batch: Batch object (may not contain target during decoding)
@@ -837,15 +839,6 @@ class TransformerDecodingState(DecoderState):
             self.input_seq = None
             self.src_mask = None
             self.tgt_lang = tgt_lang
-
-            # if tgt_atb is not None:
-            #     self.use_attribute = True
-            #     self.tgt_atb = tgt_atb
-            #     # self.tgt_atb = tgt_atb.repeat(beam_size)  # size: Bxb
-            #     for i in self.tgt_atb:
-            #         self.tgt_atb[i] = self.tgt_atb[i].repeat(beam_size)
-            # else:
-            #     self.tgt_atb = None
 
         elif type == 2:
             bsz = src.size(1)  # src is T x B

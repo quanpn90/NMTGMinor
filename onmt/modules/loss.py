@@ -97,6 +97,13 @@ class NMTLossFunc(CrossEntropyLossBase):
         self.confidence = 1.0 - label_smoothing
         self.label_smoothing = label_smoothing
         self.mirror = mirror
+        self.extra_modules = nn.ModuleDict()
+
+    def add_loss_function(self, loss_function, name):
+        self.extra_modules[name] = loss_function
+
+    def get_loss_function(self, name):
+        return self.extra_modules[name] if name in self.extra_modules else None
 
     def forward(self, model_outputs, targets, model=None, backward=False, normalizer=1, **kwargs):
         """

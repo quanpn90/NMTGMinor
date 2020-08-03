@@ -1,3 +1,7 @@
+import torch.nn as nn
+import torch
+
+
 #  Positional Embedding with discrete inputs
 class SinusoidalPositionalEmbedding(nn.Module):
     def __init__(self, demb):

@@ -28,6 +28,12 @@ def make_parser(parser):
 
     parser.add_argument('-bayes_by_backprop', action='store_true',
                         help="""Using Bayes-By-Backprop models in training""")
+    parser.add_argument('-neg_log_sigma1', type=float, default=0,
+                        help='Coefficient for the KL divergence term')
+    parser.add_argument('-neg_log_sigma2', type=float, default=6,
+                        help='Coefficient for the KL divergence term')
+    parser.add_argument('-prior_pi', type=float, default=0.5,
+                        help='Coefficient for the KL divergence term')
 
     # MODEL UTIL
     parser.add_argument('-save_model', default='model',
@@ -55,21 +61,19 @@ def make_parser(parser):
                         help='Number of layers in the LSTM encoder if different')
     parser.add_argument('-max_pos_length', type=int, default=128,
                         help='Maximum distance length for relative self-attention')
-    parser.add_argument('-word_vec_size', type=int, default=512,
-                        help='Word embedding sizes')
     parser.add_argument('-learnable_position_encoding', action='store_true',
                         help="""Use embeddings as learnable position encoding.""")
     parser.add_argument('-fix_norm_output_embedding', action='store_true',
                         help="""Normalize the output embedding""")
 
-    parser.add_argument('-double_position', action='store_true',
-                        help="""Using double position encodings (absolute and relative)""")
     parser.add_argument('-asynchronous', action='store_true',
                         help="""Different attention values for past and future""")
     parser.add_argument('-unidirectional', action='store_true',
                         help="""Unidirectional encoder""")
     parser.add_argument('-reconstruct', action='store_true',
                         help='Apply reconstruction with an additional decoder')
+    parser.add_argument('-mirror_loss', action='store_true',
+                        help='Using mirror loss')
 
     parser.add_argument('-universal', action='store_true',
                         help='Using one layer universally (recurrent)')
@@ -123,12 +127,7 @@ def make_parser(parser):
                         help='Maximum batch size in word dimension')
     parser.add_argument('-batch_size_sents', type=int, default=128,
                         help='Maximum number of sentences in a batch')
-    parser.add_argument('-bidirectional', action='store_true',
-                        help='Bidirectional attention (for unified transformer)')
-    parser.add_argument('-ctc_loss', type=float, default=0.0,
-                        help='CTC Loss as additional loss function with this weight')
-    parser.add_argument('-mirror_loss', action='store_true',
-                        help='Using mirror loss')
+
     parser.add_argument('-batch_size_update', type=int, default=-1,
                         help='Maximum number of words per update')
     parser.add_argument('-update_frequency', type=int, default=1,
@@ -167,16 +166,7 @@ def make_parser(parser):
                         help='Label smoothing value for loss functions.')
     parser.add_argument('-scheduled_sampling_rate', type=float, default=0.0,
                         help='Scheduled sampling rate.')
-    parser.add_argument('-fast_xentropy', action="store_true",
-                        help="""Fast cross entropy loss""")
-    parser.add_argument('-fast_xattention', action="store_true",
-                        help="""Fast cross attention between encoder decoder""")
-    parser.add_argument('-fast_self_attention', action="store_true",
-                        help="""Fast self attention between encoder decoder""")
-    parser.add_argument('-fast_feed_forward', action="store_true",
-                        help="""Fast cross attention between encoder decoder""")
-    parser.add_argument('-overclocking', action="store_true",
-                        help="""Fast cross attention between encoder decoder""")
+
 
     parser.add_argument('-curriculum', type=int, default=-1,
                         help="""For this many epochs, order the minibatches based
@@ -251,6 +241,17 @@ def make_parser(parser):
                         help='Use the copy_generator')
     parser.add_argument('-verbose', action='store_true',
                         help='Show more information about training (for Nerds)')
+    # FAST IMPLEMENTATION
+    parser.add_argument('-fast_xentropy', action="store_true",
+                        help="""Fast cross entropy loss""")
+    parser.add_argument('-fast_xattention', action="store_true",
+                        help="""Fast cross attention between encoder decoder""")
+    parser.add_argument('-fast_self_attention', action="store_true",
+                        help="""Fast self attention between encoder decoder""")
+    parser.add_argument('-fast_feed_forward', action="store_true",
+                        help="""Fast cross attention between encoder decoder""")
+    parser.add_argument('-overclocking', action="store_true",
+                        help="""Fast cross attention between encoder decoder""")
 
     # for FUSION
     parser.add_argument('-lm_checkpoint', default='', type=str,
@@ -273,18 +274,24 @@ def make_parser(parser):
                         help='Use CNN for downsampling instead of reshaping')
     parser.add_argument('-zero_encoder', action='store_true',
                         help='Zero-out encoders during training')
+    parser.add_argument('-ctc_loss', type=float, default=0.0,
+                        help='CTC Loss as additional loss function with this weight')
+    parser.add_argument('-lfv_multilingual', action='store_true',
+                        help='Use multilingual language identifier to get LFV for each language')
+    parser.add_argument('-bottleneck_size', type=int, default=64,
+                        help="Bottleneck size for the LFV vector).")
 
     # for Reformer
-    parser.add_argument('-lsh_src_attention', action='store_true',
-                        help='Using LSH for source attention')
-    parser.add_argument('-chunk_length', type=int, default=32,
-                        help="Length of chunk which attends to itself in LSHSelfAttention.")
-    parser.add_argument('-lsh_num_chunks_after', type=int, default=0,
-                        help="Length of chunk which attends to itself in LSHSelfAttention.")
-    parser.add_argument('-lsh_num_chunks_before', type=int, default=1,
-                        help="Length of chunk which attends to itself in LSHSelfAttention.")
-    parser.add_argument('-num_hashes', type=int, default=4,
-                        help="Number of hasing rounds.")
+    # parser.add_argument('-lsh_src_attention', action='store_true',
+    #                     help='Using LSH for source attention')
+    # parser.add_argument('-chunk_length', type=int, default=32,
+    #                     help="Length of chunk which attends to itself in LSHSelfAttention.")
+    # parser.add_argument('-lsh_num_chunks_after', type=int, default=0,
+    #                     help="Length of chunk which attends to itself in LSHSelfAttention.")
+    # parser.add_argument('-lsh_num_chunks_before', type=int, default=1,
+    #                     help="Length of chunk which attends to itself in LSHSelfAttention.")
+    # parser.add_argument('-num_hashes', type=int, default=4,
+    #                     help="Number of hasing rounds.")
 
     # for Reversible Transformer
     parser.add_argument('-src_reversible', action='store_true',

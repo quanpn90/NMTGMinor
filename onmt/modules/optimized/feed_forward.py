@@ -56,7 +56,7 @@ class PositionWiseFeedForward(nn.Module):
             hidden = F.linear(hidden, self.out_proj_weight, self.out_proj_bias)
         else:
             # Apex MLP does not support dropout so instead we use dropconnect
-            # Theoretically they should be the same ^^
+            # Theoretically they should be yield similar results
             weights = [F.dropout(self.in_proj_weight, p=self.dropout, training=self.training),
                        F.dropout(self.out_proj_weight, p=self.dropout, training=self.training)]
             biases = [F.dropout(self.in_proj_bias, p=self.dropout, training=self.training),

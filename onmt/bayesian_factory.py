@@ -36,6 +36,10 @@ def build_model(opt, dicts):
 
 
 def build_tm_model(opt, dicts):
+    onmt.constants.neg_log_sigma1 = opt.neg_log_sigma1
+    onmt.constants.neg_log_sigma2 = opt.neg_log_sigma2
+    onmt.constants.prior_pi = opt.prior_pi
+
     # BUILD POSITIONAL ENCODING
     if opt.time == 'positional_encoding':
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)

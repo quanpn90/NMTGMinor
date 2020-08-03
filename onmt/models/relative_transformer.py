@@ -53,7 +53,6 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
     def __init__(self, opt, dicts, positional_encoder, encoder_type='text', language_embeddings=None):
         self.death_rate = opt.death_rate
-        self.double_position = opt.double_position
         self.learnable_position_encoding = opt.learnable_position_encoding
         self.layer_modules = list()
         self.asynchronous = opt.asynchronous
@@ -172,17 +171,6 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
             emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
 
-            if self.double_position:
-                assert input_pos is not None
-                # flatten
-                src_len, bsz = input_pos.size(0), input_pos.size(1)
-                input_pos_ = input_pos.contiguous().view(-1).type_as(emb)
-                abs_pos = self.positional_encoder(input_pos_)
-                abs_pos = abs_pos.squeeze(1).view(src_len, bsz, -1)
-
-            else:
-                abs_pos = None
-
             """ Adding language embeddings """
             if self.use_language_embedding:
                 assert self.language_embedding is not None
@@ -246,10 +234,6 @@ class RelativeTransformerEncoder(TransformerEncoder):
         """ Scale the emb by sqrt(d_model) """
         emb = emb * math.sqrt(self.model_size)
 
-        if self.double_position and abs_pos is not None:
-            # adding position encoding
-            emb = emb + abs_pos
-
         """ Adding positional encoding """
         qlen = input.size(0)
         klen = qlen + mem_len
@@ -312,7 +296,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
     def __init__(self, opt, dicts, positional_encoder, language_embeddings=None, ignore_source=False):
 
         self.death_rate = opt.death_rate
-        self.double_position = opt.double_position
         self.max_memory_size = opt.max_memory_size
         self.stream_context = opt.stream_context
         self.extra_context_size = opt.extra_context_size
@@ -552,14 +535,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
             mems = None
             extra_context = None
 
-        if self.double_position:
-            assert input_pos is not None
-            tgt_len, bsz = input_pos.size(0), input_pos.size(1)
-            input_pos_ = input_pos.view(-1).type_as(emb)
-            abs_pos = self.positional_encoder(input_pos_).squeeze(1).view(tgt_len, bsz, -1)
-
-            emb = emb + abs_pos
-
         if self.use_language_embedding:
             lang_emb = self.language_embeddings(input_lang)  # B x H or 1 x H
             if self.language_embedding_type == 'sum':
@@ -718,14 +693,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
         klen = input.size(0)
         # emb = self.word_lut(input) * math.sqrt(self.model_size)
 
-        if self.double_position:
-            input_pos = torch.arange(input.size(0), dtype=emb.dtype, device=emb.device)
-            input_pos = input_pos.unsqueeze(1).repeat(1, input.size(1))
-            tgt_len, bsz = input_pos.size(0), input_pos.size(1)
-            input_pos_ = input_pos.view(-1).type_as(emb)
-            abs_pos = self.positional_encoder(input_pos_).squeeze(1).view(tgt_len, bsz, -1)
-            emb = emb + abs_pos[-1:, :, :]
-
         if self.use_language_embedding:
             lang_emb = self.language_embeddings(lang)  # B x H
 
@@ -768,7 +735,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
                     long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
                     mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
             else:
-
                 mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
         else:
             mask_src = None

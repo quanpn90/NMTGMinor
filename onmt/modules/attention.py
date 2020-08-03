@@ -88,8 +88,8 @@ class MultiHeadAttention(nn.Module):
             proj_query = self.fc_query(query)  # batch_size x len_query x h*d_head
 
             if incremental and ('c_k' in incremental_cache and 'c_v' in incremental_cache):
-                    proj_key = incremental_cache['c_k']
-                    proj_value = incremental_cache['c_v']
+                proj_key = incremental_cache['c_k']
+                proj_value = incremental_cache['c_v']
             else:
                 shared_kv = group_linear([self.fc_key.function.linear, self.fc_value.function.linear], key)
                 proj_key, proj_value = shared_kv.chunk(2, dim=-1)

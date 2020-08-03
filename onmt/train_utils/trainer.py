@@ -213,6 +213,13 @@ class BaseTrainer(object):
                 rec_loss = rec_loss
                 full_loss = full_loss + rec_loss
 
+            if opt.lfv_multilingual:
+                lid_logits = outputs['lid_logits']
+                lid_labels = batch.get('target_lang')
+                lid_loss_function = self.loss_function.get_loss_function('lid_loss')
+                lid_loss = lid_loss_function(lid_logits, lid_labels)
+                full_loss = full_loss + lid_loss
+
             optimizer = self.optim.optimizer
 
             if self.opt.memory_profiling:
@@ -267,6 +274,11 @@ class XETrainer(BaseTrainer):
 
     def __init__(self, model, loss_function, train_data, valid_data, dicts, opt, setup_optimizer=True):
         super().__init__(model, loss_function, train_data, valid_data, dicts, opt)
+
+        if opt.lfv_multilingual:
+            from onmt.models.speech_recognizer.lid_loss import CrossEntropyLIDLoss
+            lid_loss = CrossEntropyLIDLoss(opt.n_languages, opt.label_smoothing, opt.fast_xentropy)
+            self.loss_function.add_loss_function(lid_loss, 'lid_loss')
 
         if self.cuda:
             torch.cuda.set_device(self.opt.gpus[0])
@@ -515,6 +527,13 @@ class XETrainer(BaseTrainer):
                     rec_loss_data = loss_dict['rec_loss_data']
                 else:
                     rec_loss_data = None
+
+                if opt.lfv_multilingual:
+                    lid_logits = outputs['lid_logits']
+                    lid_labels = batch.get('target_lang')
+                    lid_loss_function = self.loss_function.get_loss_function('lid_loss')
+                    lid_loss = lid_loss_function(lid_logits, lid_labels)
+                    full_loss = full_loss + lid_loss
 
                 optimizer = self.optim.optimizer
 

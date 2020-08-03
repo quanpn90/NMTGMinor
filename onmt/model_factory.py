@@ -24,6 +24,12 @@ def build_model(opt, dicts):
     onmt.constants.version = 1.0
     onmt.constants.attention_out = opt.attention_out
     onmt.constants.residual_type = opt.residual_type
+    opt.n_languages = len(dicts['langs'])
+
+    if opt.bayes_by_backprop:
+        from onmt.bayesian_factory import build_model as build_bayesian_model
+        model = build_bayesian_model(opt, dicts)
+        return model
 
     if not opt.fusion:
         model = build_tm_model(opt, dicts)
@@ -79,7 +85,17 @@ def build_tm_model(opt, dicts):
     if opt.ctc_loss != 0:
         generators.append(onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size() + 1))
 
-    if opt.model in ['transformer', 'stochastic_transformer']:
+    if opt.model in ['speech_transformer']:
+        onmt.constants.init_value = opt.param_init
+        from onmt.models.speech_recognizer.relative_transformer import \
+            SpeechTransformerEncoder, SpeechTransformerDecoder
+
+        encoder = SpeechTransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
+        decoder = SpeechTransformerDecoder(opt, embedding_tgt, positional_encoder,
+                                           language_embeddings=language_embeddings)
+        model = Transformer(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss)
+
+    elif opt.model in ['transformer', 'stochastic_transformer']:
         onmt.constants.init_value = opt.param_init
 
         if opt.encoder_type == "text":

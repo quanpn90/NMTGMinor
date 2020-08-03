@@ -361,7 +361,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         return output_dict
 
-    def step(self, input, decoder_state):
+    def step(self, input, decoder_state, **kwargs):
         """
         Inputs Shapes:
             input: (Variable) batch_size x len_tgt (wanna tranpose)
