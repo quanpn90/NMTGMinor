@@ -125,12 +125,15 @@ def main():
         print(' * number of training sentences. %d' % len(dataset['train']['src']))
         print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
 
-    elif opt.data_format == 'mmem':
+    elif opt.data_format in ['scp', 'scpmem', 'mmem']:
         print("Loading memory mapped data files ....")
         start = time.time()
         from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
+        from onmt.data.scp_dataset import SCPIndexDataset
 
         dicts = torch.load(opt.data + ".dict.pt")
+        if opt.data_format in ['scp', 'scpmem']:
+            audio_data = torch.load(opt.data + ".scp_path.pt")
 
         # allocate languages if not
         if 'langs' not in dicts:
@@ -139,7 +142,10 @@ def main():
             print(dicts['langs'])
 
         train_path = opt.data + '.train'
-        train_src = MMapIndexedDataset(train_path + '.src')
+        if opt.data_format in ['scp', 'scpmem']:
+            train_src = SCPIndexDataset(audio_data['train'], concat=opt.concat)
+        else:
+            train_src = MMapIndexedDataset(train_path + '.src')
         train_tgt = MMapIndexedDataset(train_path + '.tgt')
 
         # check the lang files if they exist (in the case of multi-lingual models)
@@ -189,7 +195,10 @@ def main():
                                             upsampling=opt.upsampling)
 
         valid_path = opt.data + '.valid'
-        valid_src = MMapIndexedDataset(valid_path + '.src')
+        if opt.data_format in ['scp', 'scpmem']:
+            valid_src = SCPIndexDataset(audio_data['valid'], concat=opt.concat)
+        else:
+            valid_src = MMapIndexedDataset(valid_path + '.src')
         valid_tgt = MMapIndexedDataset(valid_path + '.tgt')
 
         if os.path.exists(valid_path + '.src_lang.bin'):
@@ -216,7 +225,7 @@ def main():
                                       valid_src_sizes, valid_tgt_sizes,
                                       valid_src_langs, valid_tgt_langs,
                                       batch_size_words=opt.batch_size_words,
-                                      data_type="text", sorting=True,
+                                      data_type=data_type, sorting=True,
                                       batch_size_sents=opt.batch_size_sents,
                                       src_align_right=opt.src_align_right,
                                       cleaning=True, verbose=True, debug=True)
@@ -225,7 +234,7 @@ def main():
             valid_data = onmt.StreamDataset(valid_src, valid_tgt,
                                             valid_src_langs, valid_tgt_langs,
                                             batch_size_words=opt.batch_size_words,
-                                            data_type="text", sorting=True,
+                                            data_type=data_type, sorting=True,
                                             batch_size_sents=opt.batch_size_sents)
 
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))

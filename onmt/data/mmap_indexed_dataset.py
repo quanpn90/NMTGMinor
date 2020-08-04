@@ -97,7 +97,6 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
             return _Writer()
 
         def __init__(self, path):
-            # print("hello " + path)
             with open(path, 'rb') as stream:
                 magic_test = stream.read(9)
                 assert self._HDR_MAGIC == magic_test, (

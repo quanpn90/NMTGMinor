@@ -248,6 +248,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
 
         e_length = expected_length(self.layers, 0.0)
         self.opt.ignore_source = self.ignore_source
+        opt = self.opt
         if self.reversible:
             print("* Transformer Reversible Decoder with Relative Attention with %.2f layers" % e_length)
         else:
@@ -259,8 +260,12 @@ class SpeechTransformerDecoder(TransformerDecoder):
             # linearly decay the death rate
             death_r = 0.0
 
+            from .relative_transformer_layers import LIDFeedForward
+            lid_network = LIDFeedForward(opt.model_size, 2 * opt.model_size, opt.bottleneck_size,
+                                          opt.n_languages, dropout=opt.dropout)
+
             if not self.reversible:
-                block = RelativeTransformerDecoderLayer(self.opt, death_rate=death_r)
+                block = RelativeTransformerDecoderLayer(self.opt, death_rate=death_r, lid_net=lid_network)
             else:
                 block = ReversibleTransformerDecoderLayer(self.opt, death_rate=death_r)
 

@@ -11,25 +11,27 @@ class Augmenter(object):
     (Only vertical and horizontal masking)
     """
 
-    def __init__(self, F=16, mf=2, T=64, max_t=0.2, mt=2):
+    def __init__(self, F=16, mf=2, T=64, max_t=0.2, mt=2,
+                 input_size=40, concat=4):
 
         self.F = F
         self.mf = mf
         self.T = T
         self.max_t = max_t
         self.mt = mt
+        self.input_size = input_size
+        self.concat = concat
 
     def augment(self, tensor):
 
         feat_size = tensor.size(1)
         original_len = tensor.size(0)
-        # because log mel has 40 features
-        reshape_size = feat_size / 40
+        reshape_size = feat_size / self.input_size
 
         tensor = tensor.float()
         # First we have to upsample the tensor (if it was downsampled during preprocessing)
         #         # Copy to a new storage because otherwise it is zeroed permanently`
-        tensor_ = tensor.view(-1, 40).new(*tensor.size()).copy_(tensor)
+        tensor_ = tensor.view(-1, self.input_size).new(*tensor.size()).copy_(tensor)
 
         for _ in range(self.mf):
 

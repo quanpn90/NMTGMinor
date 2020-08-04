@@ -5,6 +5,7 @@ import torch
 import subprocess
 import time, datetime
 from onmt.data.binarizer import Binarizer
+from onmt.data.binarizer import SpeechBinarizer
 
 from onmt.data.indexed_dataset import IndexedDatasetBuilder
 
@@ -249,138 +250,46 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
     return src, tgt, src_sizes, tgt_sizes
 
 
-def make_asr_data(src_file, tgt_file, tgt_dicts, max_src_length=64, max_tgt_length=64,
-                  input_type='word', stride=1, concat=1, prev_context=0, fp16=False, reshape=True, asr_format="h5"):
+def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
+                  max_src_length=64, max_tgt_length=64, add_bos=True, data_type='int64', num_workers=1, verbose=False,
+                  input_type='word', stride=1, concat=4, prev_context=0, fp16=False, reshape=True,
+                  asr_format="h5", output_format="raw"):
     src, tgt = [], []
-    # sizes = []
     src_sizes = []
     tgt_sizes = []
     count, ignored = 0, 0
     n_unk_words = 0
 
-    print('Processing %s & %s ...' % (src_file, tgt_file))
+    print('[INFO] Processing %s  ...' % src_file)
 
-    if asr_format == "h5":
-        file_idx = -1;
-        if src_file[-2:] == "h5":
-            srcf = h5.File(src_file, 'r')
-        else:
-            file_idx = 0
-            srcf = h5.File(src_file + "." + str(file_idx) + ".h5", 'r')
-    elif asr_format == "scp":
-        import kaldiio
-        from kaldiio import ReadHelper
-        audio_data = iter(ReadHelper('scp:' + src_file))
+    src, src_sizes = SpeechBinarizer.binarize_file(src_file, input_format=asr_format,
+                                                   output_format=output_format, concat=concat,
+                                                   stride=stride, fp16=fp16, prev_context=prev_context)
 
-    tgtf = open(tgt_file)
+    if add_bos:
+        tgt_bos_word = onmt.constants.BOS_WORD
+    else:
+        tgt_bos_word = None
 
-    index = 0
+    print("[INFO] Binarizing file %s ..." % tgt_file)
+    binarized_tgt = Binarizer.binarize_file(tgt_file, tgt_dicts, tokenizer,
+                                            bos_word=tgt_bos_word, eos_word=onmt.constants.EOS_WORD,
+                                            data_type=data_type,
+                                            num_workers=num_workers, verbose=verbose)
 
-    s_prev_context = []
-    t_prev_context = []
+    tgt = binarized_tgt['data']
+    tgt_sizes = binarized_tgt['sizes']
 
-    while True:
-        tline = tgtf.readline()
-        # normal end of file
-        if tline == "":
-            break
+    ignored = 0
 
-        if asr_format == "h5":
-            if str(index) in srcf:
-                feature_vectors = np.array(srcf[str(index)])
-            elif file_idx != -1:
-                srcf.close()
-                file_idx += 1
-                srcf = h5.File(src_file + "." + str(file_idx) + ".h5", 'r')
-                feature_vectors = np.array(srcf[str(index)])
-            else:
-                print("No feature vector for index:", index, file=sys.stderr)
-                exit(-1)
-        elif asr_format == "scp":
-            _, feature_vectors = next(audio_data)
-
-        if stride == 1:
-            sline = torch.from_numpy(feature_vectors)
-        else:
-            sline = torch.from_numpy(feature_vectors[0::opt.stride])
-
-        if reshape:
-            if concat != 1:
-                add = (concat - sline.size()[0] % concat) % concat
-                z = torch.FloatTensor(add, sline.size()[1]).zero_()
-                sline = torch.cat((sline, z), 0)
-                sline = sline.reshape((int(sline.size()[0] / concat), sline.size()[1] * concat))
-        index += 1
-
-        tline = tline.strip()
-
-        if prev_context > 0:
-            print("Multiple ASR context isn't supported at the moment   ")
-            raise NotImplementedError
-
-            # s_prev_context.append(sline)
-            # t_prev_context.append(tline)
-            # for i in range(1,prev_context+1):
-            #     if i < len(s_prev_context):
-            #         sline = torch.cat((torch.cat((s_prev_context[-i-1],torch.zeros(1,sline.size()[1]))),sline))
-            #         tline = t_prev_context[-i-1]+" # "+tline
-            # if len(s_prev_context) > prev_context:
-            #     s_prev_context = s_prev_context[-1*prev_context:]
-            #     t_prev_context = t_prev_context[-1*prev_context:]
-
-        # source and/or target are empty
-        if tline == "":
-            print('WARNING: ignoring an empty line (' + str(count + 1) + ')')
-            continue
-
-        if input_type == 'word':
-            tgt_words = tline.split()
-        elif input_type == 'char':
-            tgt_words = split_line_by_char(tline)
-
-        if len(tgt_words) <= max_tgt_length - 2 and sline.size(0) <= max_src_length:
-
-            # Check truncation condition.
-            if opt.tgt_seq_length_trunc != 0:
-                tgt_words = tgt_words[:opt.tgt_seq_length_trunc]
-
-            if fp16:
-                sline = sline.half()
-            src += [sline]
-
-            tgt_tensor = tgt_dicts.convertToIdx(tgt_words,
-                                                onmt.constants.UNK_WORD,
-                                                onmt.constants.BOS_WORD,
-                                                onmt.constants.EOS_WORD)
-            tgt += [tgt_tensor]
-            src_sizes += [len(sline)]
-            tgt_sizes += [len(tgt_words)]
-
-            unks = tgt_tensor.eq(onmt.constants.UNK).sum().item()
-            n_unk_words += unks
-
-            if unks > 0:
-                if "<unk>" not in tline:
-                    print("DEBUGGING: This line contains UNK: %s" % tline)
-
-        else:
-            ignored += 1
-
-        count += 1
-
-        if count % opt.report_every == 0:
-            print('... %d sentences prepared' % count)
-    if asr_format == "h5":
-        srcf.close()
-    tgtf.close()
-
-    print('Total number of unk words: %d' % n_unk_words)
+    if len(src_sizes) != len(tgt_sizes):
+        print("Warning: data size mismatched.")
 
     print(('Prepared %d sentences ' +
            '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
           (len(src), ignored, max_src_length, max_tgt_length))
 
-    return src, tgt
+    return src, tgt, src_sizes, tgt_sizes
 
 
 def main():
@@ -443,34 +352,105 @@ def main():
 
     elif opt.asr:
         print('Preparing training acoustic model ...')
+
+        src_input_files = opt.train_src.split("|")
+        tgt_input_files = opt.train_tgt.split("|")
+
+        src_langs = opt.train_src_lang.split("|")
+        tgt_langs = opt.train_tgt_lang.split("|")
+
+        assert len(src_input_files) == len(src_langs)
+        assert len(src_input_files) == len(tgt_input_files)
+        assert len(tgt_input_files) == len(tgt_langs)
+
+        n_input_files = len(src_input_files)
+
         train = dict()
-        train['src'], train['tgt'] = make_asr_data(opt.train_src, opt.train_tgt,
-                                                   dicts['tgt'],
-                                                   max_src_length=opt.src_seq_length,
-                                                   max_tgt_length=opt.tgt_seq_length,
-                                                   input_type=opt.input_type,
-                                                   stride=opt.stride, concat=opt.concat,
-                                                   prev_context=opt.previous_context,
-                                                   fp16=opt.fp16, reshape=(opt.reshape_speech == 1),
-                                                   asr_format=opt.asr_format)
+        train['src'], train['tgt'] = list(), list()
+        train['src_sizes'], train['tgt_sizes'] = list(), list()
+        train['src_lang'], train['tgt_lang'] = list(), list()
+
+        for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
+            src_data, tgt_data, src_sizes, tgt_sizes = make_asr_data(src_file, tgt_file,
+                                                                     dicts['tgt'], tokenizer,
+                                                                     max_src_length=opt.src_seq_length,
+                                                                     max_tgt_length=opt.tgt_seq_length,
+                                                                     input_type=opt.input_type,
+                                                                     stride=opt.stride, concat=opt.concat,
+                                                                     prev_context=opt.previous_context,
+                                                                     fp16=opt.fp16,
+                                                                     asr_format=opt.asr_format,
+                                                                     output_format=opt.format)
+
+            n_samples = len(src_data)
+            if n_input_files == 1:
+                # For single-file cases we only need to have 1 language per file
+                # which will be broadcasted
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]])]
+            else:
+                # each sample will have a different language id
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
+
+            train['src'] += src_data
+            train['tgt'] += tgt_data
+            train['src_sizes'] += src_sizes
+            train['tgt_sizes'] += tgt_sizes
+            train['src_lang'] += src_lang_data
+            train['tgt_lang'] += tgt_lang_data
+        # train = dict()
+        # train['src'], train['tgt'] =
 
         print('Preparing validation ...')
+
+        src_input_files = opt.valid_src.split("|")
+        tgt_input_files = opt.valid_tgt.split("|")
+
+        src_langs = opt.valid_src_lang.split("|")
+        tgt_langs = opt.valid_tgt_lang.split("|")
+
+        assert len(src_input_files) == len(src_langs)
+        assert len(src_input_files) == len(tgt_input_files)
+        assert len(tgt_input_files) == len(tgt_langs)
+
+        n_input_files = len(src_input_files)
+
         valid = dict()
-        valid['src'], valid['tgt'] = make_asr_data(opt.valid_src, opt.valid_tgt,
-                                                   dicts['tgt'],
-                                                   max_src_length=max(1024, opt.src_seq_length),
-                                                   max_tgt_length=max(1024, opt.tgt_seq_length),
-                                                   input_type=opt.input_type,
-                                                   stride=opt.stride, concat=opt.concat,
-                                                   prev_context=opt.previous_context,
-                                                   fp16=opt.fp16, reshape=(opt.reshape_speech == 1),
-                                                   asr_format=opt.asr_format)
+        valid['src'], valid['tgt'] = list(), list()
+        valid['src_sizes'], valid['tgt_sizes'] = list(), list()
+        valid['src_lang'], valid['tgt_lang'] = list(), list()
 
-        train['src_sizes'] = None
-        train['tgt_sizes'] = None
-        valid['src_sizes'] = None
-        valid['tgt_sizes'] = None
+        for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
 
+            src_data, tgt_data, src_sizes, tgt_sizes = make_asr_data(src_file, tgt_file,
+                                                                     dicts['tgt'], tokenizer,
+                                                                     max_src_length=max(1024, opt.src_seq_length),
+                                                                     max_tgt_length=max(1024, opt.tgt_seq_length),
+                                                                     input_type=opt.input_type,
+                                                                     stride=opt.stride, concat=opt.concat,
+                                                                     prev_context=opt.previous_context,
+                                                                     fp16=opt.fp16,
+                                                                     asr_format=opt.asr_format,
+                                                                     output_format=opt.format)
+
+            n_samples = len(src_data)
+            if n_input_files == 1:
+                # For single-file cases we only need to have 1 language per file
+                # which will be broadcasted
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]])]
+            else:
+                # each sample will have a different language id
+                src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
+                tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
+
+            valid['src'] += src_data
+            valid['tgt'] += tgt_data
+            valid['src_sizes'] += src_sizes
+            valid['tgt_sizes'] += tgt_sizes
+            valid['src_lang'] += src_lang_data
+            valid['tgt_lang'] += tgt_lang_data
     else:
 
         src_input_files = opt.train_src.split("|")
@@ -584,6 +564,7 @@ def main():
     if opt.format in ['raw', 'bin']:
 
         print('Saving data to \'' + opt.save_data + '.train.pt\'...')
+
         save_data = {'dicts': dicts,
                      'type': opt.src_type,
                      'train': train,
@@ -591,25 +572,16 @@ def main():
         torch.save(save_data, opt.save_data + '.train.pt')
         print("Done")
 
-    elif opt.format in ['scpmem']:
-
-        assert opt.asr
-        print("ASR data format is required for this memory indexed format")
-        raise NotImplementedError
-
-    elif opt.format in ['mmap', 'mmem']:
-        print('Saving data to memory indexed data files')
+    elif opt.format in ['scp', 'scpmem']:
+        print('Saving target data to memory indexed data files. Source data is stored only as scp path.')
         from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
 
-        if opt.asr:
-            print("ASR data format isn't compatible with memory indexed format")
-            raise AssertionError
+        assert opt.asr, "ASR data format is required for this memory indexed format"
 
-        # save dicts in this format
         torch.save(dicts, opt.save_data + '.dict.pt')
 
         # binarize the training set first
-        for set_ in ['src', 'tgt', 'src_lang', 'tgt_lang']:
+        for set_ in ['tgt', 'src_lang', 'tgt_lang']:
             if train[set_] is None:
                 continue
 
@@ -617,9 +589,6 @@ def main():
                 dtype = np.int64
             else:
                 dtype = np.int32
-
-            if set_ == 'src' and opt.asr:
-                dtype = np.double
 
             train_data = MMapIndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set_, dtype=dtype)
 
@@ -633,9 +602,6 @@ def main():
 
             if valid[set_] is None:
                 continue
-
-            if set_ == 'src' and opt.asr:
-                dtype = np.double
 
             valid_data = MMapIndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set_, dtype=dtype)
 
@@ -663,6 +629,73 @@ def main():
             else:
                 print("Validation %s not found " % set_)
 
+        # Finally save the audio path
+        save_data = {'train': train['src'],
+                     'valid': valid['src']}
+
+        torch.save(save_data, opt.save_data + '.scp_path.pt')
+
+        print("Done")
+
+    elif opt.format in ['mmap', 'mmem']:
+        print('Saving data to memory indexed data files')
+        from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
+
+        if opt.asr:
+            print("ASR data format isn't compatible with memory indexed format")
+            raise AssertionError
+
+        # save dicts in this format
+        torch.save(dicts, opt.save_data + '.dict.pt')
+
+        # binarize the training set first
+        for set_ in ['src', 'tgt', 'src_lang', 'tgt_lang']:
+            if train[set_] is None:
+                continue
+
+            if opt.data_type == 'int64':
+                dtype = np.int64
+            else:
+                dtype = np.int32
+
+            train_data = MMapIndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set_, dtype=dtype)
+
+            # add item from training data to the indexed data
+            for tensor in train[set_]:
+                train_data.add_item(tensor)
+
+            train_data.finalize(opt.save_data + ".train.%s.idx" % set_)
+
+            del train_data
+
+            if valid[set_] is None:
+                continue
+
+            valid_data = MMapIndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set_, dtype=dtype)
+
+            # add item from training data to the indexed data
+            for tensor in valid[set_]:
+                valid_data.add_item(tensor)
+
+            valid_data.finalize(opt.save_data + ".valid.%s.idx" % set_)
+
+            del valid_data
+
+        for set_ in ['src_sizes', 'tgt_sizes']:
+
+            if train[set_] is not None:
+
+                np_array = np.asarray(train[set_])
+                np.save(opt.save_data + ".train.%s.npy" % set_, np_array)
+            else:
+                print("Training %s not found " % set_)
+
+            if valid[set_] is not None:
+
+                np_array = np.asarray(valid[set_])
+                np.save(opt.save_data + ".valid.%s.npy" % set_, np_array)
+            else:
+                print("Validation %s not found " % set_)
 
     else:
         raise NotImplementedError

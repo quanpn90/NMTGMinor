@@ -53,6 +53,7 @@ class LIDFeedForward(nn.Module):
         :return:
         """
         assert self.input_size == input.size(-1)
+        input = input.detach()
 
         if self.optimized == 1:
             weights = [self.linear_in.weight]
@@ -158,7 +159,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
     # def __init__(self, h, d_model, p,    d_ff, attn_p=0.1, version=1.0, ignore_source=False,
     #              variational=False, death_rate=0.0):
-    def __init__(self, opt, death_rate=0.0):
+    def __init__(self, opt, death_rate=0.0, lid_net=None):
         super(RelativeTransformerDecoderLayer, self).__init__()
         self.ignore_source = opt.ignore_source
         self.variational = opt.variational_dropout
@@ -189,11 +190,11 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
         self.lfv_multilingual = opt.lfv_multilingual
         if opt.lfv_multilingual:
-            self.lid_net = LIDFeedForward(opt.model_size, 2 * opt.model_size, opt.bottleneck_size,
-                                          opt.n_languages, dropout=opt.dropout)
+            self.lid_net = lid_net
             self.lfv_mapper = nn.Linear(opt.bottleneck_size, opt.model_size)
         else:
             self.lid_net = None
+            self.lfv_mapper = None
 
     def forward(self, input, context, pos_emb, lfv=None, mask_tgt=None, mask_src=None,
                 incremental=False, incremental_cache=None, reuse_source=True, mems=None):
@@ -219,7 +220,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
             if lfv is not None:
                 # multiply the input with the bottleneck lfv features from the LID network
                 # print(lfv.size())
-                input = torch.mul(torch.sigmoid(self.lfv_mapper(lfv)), input)
+                input = torch.mul(torch.tanh(self.lfv_mapper(lfv)), input)
 
             query = self.preprocess_attn(input)
 

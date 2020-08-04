@@ -221,7 +221,7 @@ class Dataset(torch.utils.data.Dataset):
     def __init__(self, src_data, tgt_data,
                  src_sizes=None, tgt_sizes=None,
                  src_langs=None, tgt_langs=None,
-                 batch_size_words=2048,
+                 batch_size_words=16384,
                  data_type="text", batch_size_sents=128,
                  multiplier=1, sorting=False,
                  augment=False,

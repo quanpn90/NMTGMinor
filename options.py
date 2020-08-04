@@ -265,6 +265,10 @@ def make_parser(parser):
     # for Speech
     parser.add_argument('-reshape_speech', type=int, default=0,
                         help="Reshaping the speech data (0 is ignored, done at preprocessing).")
+    parser.add_argument('-concat', type=int, default=4,
+                        help="Concatenate frames to downsample.")
+    parser.add_argument('-input_feature_size', type=int, default=40,
+                        help="Input feature size.")
     parser.add_argument('-augment_speech', action='store_true',
                         help='Use f/t augmentation for speech')
     parser.add_argument('-upsampling', action='store_true',
@@ -414,5 +418,11 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'fast_feed_forward'):
         opt.fast_feed_forward = False
+
+    if not hasattr(opt, 'concat'):
+        opt.concat = 4
+
+    if not hasattr(opt, 'input_feature_size'):
+        opt.input_feature_size = 40
 
     return opt
