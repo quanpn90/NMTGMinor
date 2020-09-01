@@ -449,6 +449,7 @@ class XETrainer(BaseTrainer):
         counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
+        grad_scaler = -1
 
         nan = False
         nan_counter = 0
@@ -478,7 +479,8 @@ class XETrainer(BaseTrainer):
             # for b in range(len(batches)):
             batch = next(epoch_iterator)
             batch = rewrap(batch)
-            grad_scaler = self.opt.batch_size_words if self.opt.update_frequency > 1 else batch.tgt_size
+            if grad_scaler == -1 :
+                grad_scaler = self.opt.batch_size_words if self.opt.update_frequency > 1 else batch.tgt_size
 
             if self.cuda:
                 batch.cuda(fp16=self.opt.fp16 and not self.opt.fp16_mixed)
@@ -609,6 +611,7 @@ class XETrainer(BaseTrainer):
                     counter = 0
                     num_accumulated_words = 0
                     num_accumulated_sents = 0
+                    grad_scaler = -1
                     num_updates = self.optim._step
                     if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every:
                         valid_loss = self.eval(self.valid_data)

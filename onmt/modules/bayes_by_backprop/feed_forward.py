@@ -42,7 +42,7 @@ class PositionWiseFeedForward(nn.Module):
 
         mu, self.indices, self.shapes = \
             flatten_list([in_proj_weight_mu, out_proj_weight_mu, in_proj_bias_mu, out_proj_bias_mu])
-        rho, _, _ = flatten_list([in_proj_weight_mu, out_proj_weight_mu, in_proj_bias_mu, out_proj_bias_mu])
+        rho, _, _ = flatten_list([in_proj_weight_rho, out_proj_weight_rho, in_proj_bias_rho, out_proj_bias_rho])
         self.mu = Parameter(mu)
         self.rho = Parameter(rho)
         self.weight = Gaussian(self.mu, self.rho)

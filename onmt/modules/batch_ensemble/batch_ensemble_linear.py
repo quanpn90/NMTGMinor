@@ -74,17 +74,17 @@ class BatchEnsembleLinearFunction(torch.autograd.Function):
         x_s, x_mm, x_r = BatchEnsembleMM.forward(x, weight, bias, ensemble_r, ensemble_s)
 
         output = x_s
-        ctx.save_for_backward(x, weight, bias, ensemble_r, ensemble_s, x_mm, x_rr)
+        ctx.save_for_backward(x, weight, bias, ensemble_r, ensemble_s, x_mm, x_r)
 
         return output
 
     @staticmethod
     def backward(ctx, grad_output):
 
-        x, weight, bias, ensemble_r, ensemble_s, x_mm, x_rr = ctx.saved_tensors
+        x, weight, bias, ensemble_r, ensemble_s, x_mm, x_r = ctx.saved_tensors
 
         grad_x, grad_weight, grad_bias, grad_ensemble_r, grad_ensemble_s = \
-            BatchEnsembleMM.backward(grad_output, x, weight, bias, ensemble_r, ensemble_s, x_mm, x_rr)
+            BatchEnsembleMM.backward(grad_output, x, x_r, x_mm, weight, ensemble_r, ensemble_s)
 
         return grad_x, grad_weight, grad_bias, grad_ensemble_r, grad_ensemble_s
 
@@ -102,13 +102,18 @@ class BatchEnsembleLinear(torch.nn.Module):
         self.r = torch.nn.Parameter(torch.Tensor(ensemble, input_size))
         self.s = torch.nn.Parameter(torch.Tensor(ensemble, output_size))
 
+        self.reset_parameters()
+
     def reset_parameters(self):
         torch.nn.init.xavier_normal_(self.weight)
-        torch.nn.init.constant_(self.bias)
+        torch.nn.init.constant_(self.bias, 0.0)
 
         # for batch ensemble we init r_i and s_i with random sign vectors
-        self.r.bernoulli_(0.5).mul_(-2).add_(1)
-        self.s.bernoulli_(0.5).mul_(-2).add_(1)
+        with torch.no_grad():
+            self.r.bernoulli_(0.5).mul_(-2).add_(1)
+            self.s.bernoulli_(0.5).mul_(-2).add_(1)
+        # torch.nn.init.normal_(self.r, 0.0, 0.01)
+        # torch.nn.init.normal_(self.s, 0.0, 0.01)
 
     def forward(self, input):
 
@@ -118,15 +123,18 @@ class BatchEnsembleLinear(torch.nn.Module):
         if self.training:
             if len(input.shape) == 3:
                 len_x, bsz, hin = input.size(0), input.size(1), input.size(2)
-                rand_indices = torch.randint(0, ensemble, (bsz,), device=input.device, dtype=torch.long)
-                r = torch.index_select(self.r, rand_indices, dim=0)
-                s = torch.index_select(self.s, rand_indices, dim=0)
-                return BatchEnsembleLinear.apply(input, self.weight, self.bias, r, s)
+                # rand_indices = torch.randint(0, ensemble, (bsz,), device=input.device, dtype=torch.long)
+                with torch.no_grad():
+                    indices = torch.arange(0, bsz, device=input.device, dtype=torch.long)
+                    indices = torch.remainder(indices, ensemble)
+                r = torch.index_select(self.r, 0, indices)
+                s = torch.index_select(self.s, 0, indices)
+                return BatchEnsembleLinearFunction.apply(input, self.weight, self.bias, r, s)
             if len(input.shape) == 2:
                 bsz, hin = input.size(0), input.size(1)
                 rand_indices = torch.randint(0, ensemble, (bsz,), device=input.device, dtype=torch.long)
-                r = torch.index_select(self.r, rand_indices, dim=0)
-                s = torch.index_select(self.s, rand_indices, dim=0)
+                r = torch.index_select(self.r, 0, rand_indices)
+                s = torch.index_select(self.s, 0, rand_indices)
                 return torch.mul(F.linear(torch.mul(input, r), weight, bias), s)
 
         # during eval we have to repeat the dimensions ensemble times
@@ -157,3 +165,24 @@ class BatchEnsembleLinear(torch.nn.Module):
                 output = output.view(ensemble, bsz, -1)
                 output = torch.mean(output, dim=0)
                 return output
+
+
+if __name__ == "__main__":
+
+    bsz = 16
+    seq_len = 6
+    input_size = 16
+    output_size = 32
+    ensemble = 72
+
+    model = BatchEnsembleLinear(input_size, output_size, ensemble)
+
+    input = torch.randn((seq_len, bsz, input_size), requires_grad=True)
+    print(input)
+
+    model = model.double().cuda()
+
+    input = input.double().cuda()
+
+    print("Gradchecking ...")
+    torch.autograd.gradcheck(model, input)

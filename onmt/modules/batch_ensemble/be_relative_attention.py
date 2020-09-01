@@ -1,5 +1,78 @@
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
+from torch.nn import Parameter
+import math
+
+
+class BatchEnsembleMM(object):
+
+    @staticmethod
+    def forward(x, weight, bias, ensemble_r, ensemble_s):
+        """
+        :param x: [T x B x H]
+        :param weight: [H_out x H]
+        :param bias: [H_out]
+        :param ensemble_r: [B x H]
+        :param ensemble_s: [B x H_out]
+        :return:
+        """
+        bsz, len_x, hin = x.size(1), x.size(0), x.size(2)
+        hout = weight.size(0)
+
+        assert bsz == ensemble_s.size(0)
+        # assert ensemble * bsz_per_ensemble == bsz, "Mini-batch must divide evenly to the ensembles"
+
+        # element-wise [T x B x H] \times [B x H]
+        x_r = torch.mul(x, ensemble_r)
+
+        # GEMM No Bias. Otherwise use addmm
+        x_mm = torch.mm(x_r.view(-1, hin), weight.transpose(0, 1))
+        x_mm = x_mm.view(len_x, bsz, hout)
+
+        # element-wise [T x B x Hout] \times [B x Hout]
+        x_s = torch.mul(x_mm, ensemble_s)
+
+        # add bias
+        x_s = torch.add(x_s, bias)
+
+        # we need to store the intermediate results for the backward pass
+        return x_s, x_mm, x_r
+
+    # maybe we need some allocated memory as well
+    @staticmethod
+    def backward(grad_y, x, x_r, x_mm, weight, ensemble_r, ensemble_s, need_grad_x=True):
+        bsz, len_x, hin = x.size(1), x.size(0), x.size(2)
+        hout = x_mm.size(-1)
+
+        grad_bias = grad_y
+        grad_s = grad_y
+
+        # backprop through the last element-wise multiplication
+        grad_ensemble_s = torch.mul(grad_s, x_mm)
+        grad_ensemble_s = torch.sum(grad_ensemble_s, dim=0)
+
+        # backprop through the MM
+        grad_mm = torch.mul(grad_s, ensemble_s)
+        grad_mm = grad_mm.view(-1, hout)
+        grad_r = torch.mm(grad_mm, weight).view(len_x, bsz, hin)
+        # GEMM: [hout x bsz] \times [bsz x hin]
+        grad_weight = torch.mm(grad_mm.transpose(0, 1), x_r.view(-1, hin))
+
+        # back prop through the first element-wise multiplication
+        # element-wise [len_x, bsz, hin] \cdot [bsz, hin]
+        if need_grad_x :
+            grad_x = torch.mul(grad_r, ensemble_r)
+        else:
+            grad_x = None
+        # grad ensemble r
+        grad_ensemble_r = torch.mul(grad_r, x)
+        grad_ensemble_r = torch.sum(grad_ensemble_r, dim=0)
+
+        return grad_x, grad_weight, grad_bias, grad_ensemble_r, grad_ensemble_s
+
+
+mm = BatchEnsembleMM
 
 
 class RelativeShiftFunction(torch.autograd.Function):
@@ -77,12 +150,12 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
     def forward(ctx, inputs, pos, use_time_mask, is_training, heads,
                 input_weights, output_weights, pos_weights,
                 input_biases, output_biases, pos_biases,
+                r_i, s_i, r_o, s_o, r_p, s_p,
                 r_w_bias, r_r_bias,
                 mask, dropout_prob,
                 incremental, incremental_cache,
-                double_precision, add_position):
+                double_precision):
         """
-        :param add_position: bool
         :param double_precision: ops at float64, only for debugging
         :param ctx: context object to stash information for backward
         :param inputs: input hidden states [len_q x batch_size x hidden]
@@ -118,35 +191,25 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         if pos.size(1) == 1:
             pos = pos.repeat(1, bsz, 1)  # to T x B x H
 
-        # Input Linear GEMM
-        # input1: (activations) [len_q, bsz, hidden]
-        # input2: (weights)     [hidden*3 (3072), hidden (1024)] (transpose [0,1])
-        # output:               [len_q, bsz, hidden*3]
-        # GEMM: ( (len_q*bsz) x embed_dim ) x ( embed_dim x embed_dim*3 ) = (len_q*bsz x embed_dim*3)
-        input_lin_results = torch.addmm(input_biases,
-                                        inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
-                                        input_weights.transpose(0, 1),
-                                        beta=1., alpha=1.)
+        # # Input Linear GEMM
+        # # input1: (activations) [len_q, bsz, hidden]
+        # # input2: (weights)     [hidden*3 (3072), hidden (1024)] (transpose [0,1])
+        # # output:               [len_q, bsz, hidden*3]
+        # # GEMM: ( (len_q*bsz) x embed_dim ) x ( embed_dim x embed_dim*3 ) = (len_q*bsz x embed_dim*3)
+        qkv, qkv_mm, qkv_r = mm.forward(inputs, input_weights, input_biases, r_i, s_i)
 
-        input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), input_weights.size(0))
-
-        pos_lin_results = torch.addmm(pos_biases,
-                                      pos.view(pos.size(0) * pos.size(1), pos.size(2)),
-                                      pos_weights.transpose(0, 1),
-                                      beta=1., alpha=1.)
-
-        pos_lin_results = pos_lin_results.view(pos.size(0), pos.size(1), pos_weights.size(0))
+        rpos, rpos_mm, rpos_r = mm.forward(pos, pos_weights, pos_biases, r_p, s_p)
 
         # Slice out q,k,v from one big Input Linear outuput (should only impact meta data, no copies!)
         # Sequences and heads are combined to make the batch of the Batched GEMM
         # input_lin_results: [len_q, bsz, heads(16), 3, head_dim(64)]
         # input_lin_results: [len_q, batches=bsz*heads, 3, head_dim]
-        input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1) * heads, 3, head_dim)
-        queries = input_lin_results[:, :, 0, :]
-        keys = input_lin_results[:, :, 1, :]
-        values = input_lin_results[:, :, 2, :]
+        qkv = qkv.view(inputs.size(0), inputs.size(1) * heads, 3, head_dim)
+        queries = qkv[:, :, 0, :]
+        keys = qkv[:, :, 1, :]
+        values = qkv[:, :, 2, :]
 
-        r_head_k = pos_lin_results.view(pos.size(0), bsz * heads, head_dim)  # T x BxH x D
+        r_head_k = rpos.view(pos.size(0), bsz * heads, head_dim)  # T x BxH x D
 
         if incremental:
             # We have to change the heads x head_dim first and then concat to the T dim
@@ -164,6 +227,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                 incremental_cache['v'] = values
             keys = keys.view(-1, bsz * heads, head_dim)
             values = values.view(-1, bsz * heads, head_dim)
+
         # Relative Attention from here:
         # r_w_bias size: head * head_dim
         rw_head_q = queries.view(len_q, bsz, heads, head_dim) + r_w_bias  #
@@ -245,56 +309,40 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         matmul2_results = matmul2_results.transpose(0, 1).contiguous().view(inputs.size(0), inputs.size(1),
                                                                             inputs.size(2))
 
-        # if add_position:
-        #     # matmul3 batched GEMMs
-        #     # input1: [bsz*heads, len_q, len_q] > [len_q, BH, len_q]
-        #     # input2: [len_q len_q head_dim]  > [len_q, len_q, head_dim]
-        #     # output: [len_q BH len_q head_dim]
-        #     # input2: [bsz*heads, len_k, head_dim]
-        #     matmul3_results = torch.empty((dropout_results.size(1), dropout_results.size(0), values.size(2)),
-        #                                   dtype=dropout_results.dtype, device=queries.device).transpose(1, 0)
-
-        """
-        0 -1 -2 -3 -4 -5
-        1 0 -1 -2 -3 -4
-        2 1 0 -1 -2 -3
-        3 2 1 0 -1 -2
-        4 3 2 1 0 -1
-        5 4 3 2 1 0
-        """
-        # else:
-        #     matmul3_results = None
-
         # Output Linear GEMM
         # Input1: (activations) [len_q, bsz, embed_dim=heads*head_dim]
         # Input2: (weights)     [ embed_dim, embed_dim ] transpose(0,1)
         # Output:               [ len_q, bsz, embed_dim ]
         # GEMM: ( len_q*bsz x embed_dim ) x ( embed_dim x embed_dim ) = ( len_q*bsz x embed_dim )
-        outputs = torch.addmm(output_biases,
-                              matmul2_results.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
-                              output_weights.transpose(0, 1),
-                              beta=1., alpha=1.)
-
-        outputs = outputs.view(inputs.size(0), inputs.size(1), output_weights.size(0))
+        # outputs = torch.addmm(output_biases,
+        #                       matmul2_results.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
+        #                       output_weights.transpose(0, 1),
+        #                       beta=1., alpha=1.)
+        #
+        # outputs = outputs.view(inputs.size(0), inputs.size(1), output_weights.size(0))
+        o_input = matmul2_results
+        o, o_mm, o_r = mm.forward(o_input, output_weights, output_biases, r_o, s_o)
+        outputs = o
 
         ctx.save_for_backward(heads_t,
                               scale_t,
                               matmul2_results,  #
                               dropout_results,
                               softmax_results,
-                              input_lin_results,
-                              pos_lin_results,
+                              qkv, qkv_mm, qkv_r,
+                              rpos_r, rpos_mm,
+                              o_mm, o_r,
                               rw_head_q, rr_head_q,
                               inputs, pos, r_head_k,
-                              input_weights, pos_weights,
-                              output_weights,
+                              input_weights, pos_weights, output_weights,
+                              r_i, s_i, r_p, s_p, r_o, s_o,
                               r_w_bias, r_r_bias,
                               dropout_mask,
                               dropout_prob_t)
 
-        ctx.add_position = add_position
 
-        coverage = softmax_results
+        with torch.no_grad():
+            coverage = softmax_results.new(*softmax_results.size()).copy_(softmax_results)
 
         return outputs.detach(), coverage
         # return outputs.detach()
@@ -313,11 +361,13 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             matmul2_results, \
             dropout_results, \
             softmax_results, \
-            input_lin_results, pos_lin_results, \
+            qkv, qkv_mm, qkv_r, \
+            rpos_r, rpos_mm, \
+            o_mm, o_r, \
             rw_head_q, rr_head_q, \
             inputs, pos, r_head_k, \
-            input_weights, pos_weights, \
-            output_weights, \
+            input_weights, pos_weights, output_weights, \
+            r_i, s_i, r_p, s_p, r_o, s_o, \
             r_w_bias, r_r_bias, \
             dropout_mask, \
             dropout_prob_t = ctx.saved_tensors
@@ -329,37 +379,26 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # Slice out q,k,v from one big Input Linear outuput (should only impact meta data, no copies!)
         # input_lin_results: [len_q, bsz, heads(16), 3, head_dim(64)]
         # input_lin_results: [len_q, batches=bsz*heads, 3, head_dim]
-        input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1) * heads_t[0], 3, head_dim)
-        queries = input_lin_results[:, :, 0, :]
-        keys = input_lin_results[:, :, 1, :]
-        values = input_lin_results[:, :, 2, :]
+        qkv = qkv.view(inputs.size(0), inputs.size(1) * heads_t[0], 3, head_dim)
+        queries = qkv[:, :, 0, :]
+        keys = qkv[:, :, 1, :]
+        values = qkv[:, :, 2, :]
 
         # The tensor is declared before hand to properly slice out query, key, and value grads.
-        input_lin_results_grads = torch.empty_like(input_lin_results)
-        queries_grads = input_lin_results_grads[:, :, 0, :]
-        keys_grads = input_lin_results_grads[:, :, 1, :]
-        values_grads = input_lin_results_grads[:, :, 2, :]
+        qkv_grads = torch.empty_like(qkv)
+        queries_grads = qkv_grads[:, :, 0, :]
+        keys_grads = qkv_grads[:, :, 1, :]
+        values_grads = qkv_grads[:, :, 2, :]
 
-        # Output Linear GEMM - DGRAD
-        # Input1: (data grads)  [len_q, bsz, embed_dim=heads*head_dim]
-        # Input2: (weights)     [ embed_dim, embed_dim ]
-        # Output:               [ len_q, bsz, embed_dim ]
-        # GEMM: ( len_q*bsz x embed_dim ) x ( embed_dim x embed_dim ) = ( len_q*bsz x embed_dim )
-        output_lin_grads = torch.mm(
-            output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), output_weights)
-        output_lin_grads = output_lin_grads.view(output_grads.size(0), output_grads.size(1), output_weights.size(1))
-        # Output Linear GEMM - WGRAD
-        # Input1: (data grads)  [len_q*bsz, embed_dim=heads*head_dim] transpose(0,1)
-        # Input2: (activations) [len_q*bsz, embed_dim ]
-        # Output:               [ len_q, bsz, embed_dim ]
-        # GEMM: ( embed_dim x len_q*bsz ) x ( len_q*bsz x embed_dim ) = ( embed_dim x embed_dim )
-        output_weight_grads = torch.mm(
-            output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)).transpose(0, 1),
-            matmul2_results.view(matmul2_results.size(0) * matmul2_results.size(1), matmul2_results.size(2)))
-        output_lin_grads = output_lin_grads.view(inputs.size(0), inputs.size(1) * heads_t[0], head_dim).transpose(0, 1)
+        # Output Linear Projection
+        o_input = matmul2_results
 
-        output_bias_grads = torch.sum(
-            output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), 0)
+        output_lin_grads, output_weights_grads, output_biases_grads, r_o_grads, s_o_grads \
+            = mm.backward(output_grads, o_input, o_r, o_mm, output_weights, r_o, s_o)
+        # print("OK")
+
+        output_lin_grads = output_lin_grads.view(output_grads.size(0), output_grads.size(1) * heads_t[0],
+                                                 head_dim).transpose(0, 1)
 
         # Matmul2 - DGRAD1
         # Input1: (data grads)  [len_q, bsz*heads, head_dim] transpose(0,1)
@@ -373,6 +412,8 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # Output:               [bsz*heads, len_q, seql_k]
         # GEMM: Per batch: ( len_q x head_dim ) x ( head_dim x seql_k ) = ( len_q x seql_k )
         torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
+
+        # print("Reached here")
 
         # Mask and Scaling for Dropout (not a publically documented op)
         if dropout_prob_t[0] > 0.0:
@@ -442,39 +483,124 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                       rr_head_q.transpose(0, 1), out=r_head_k_grad.transpose(0, 1), beta=0.0, alpha=scale_t[0])
         # r_head_k_grad = torch.matmul(matmul_bd_grads.transpose(1, 2), rr_head_q.transpose(0, 1))
 
-        r_head_k_grad = r_head_k_grad.view(len_r, bsz, heads_t[0], head_dim).view(len_r * bsz, heads_t[0] * head_dim)
+        r_head_k_grad = r_head_k_grad.view(len_r, bsz, heads_t[0] * head_dim)
         # Input Linear GEMM - DGRAD
         # input1: (data grads) [len_q, bsz, 3*embed_dim(3072)]
         # input2: (weights)    [embed_dim*3 (3072), embed_dim (1024)]
         # output:              [len_q, bsz, embed_dim]
         # GEMM: ( (len_q*bsz) x 3*embed_dim ) x ( 3*embed_dim x embed_dim ) = (len_q*bsz x embed_dim)
-        input_lin_results_grads = input_lin_results_grads.view(inputs.size(0) * inputs.size(1),
-                                                               heads_t[0] * 3 * head_dim)
-        input_grads = torch.mm(input_lin_results_grads, input_weights)
-        input_grads = input_grads.view(inputs.size(0), inputs.size(1), inputs.size(2))
-        # Input Linear GEMM - WGRAD
-        # input1: (data grads)  [len_q*bsz, 3*embed_dim(3072)]
-        # input2: (activations) [len_q*bsz, embed_dim(1024)]
-        # output:               [3*embed_dim, embed_dim]
-        # GEMM: ( 3*embed_dim x len_q*bsz ) x ( len_q*bsz x embed_dim ) = (3*embed_dim x embed_dim)
-        input_weight_grads = torch.mm(input_lin_results_grads.transpose(0, 1),
-                                      inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)))
+        qkv_grads = qkv_grads.view(inputs.size(0), inputs.size(1), heads_t[0] * 3 * head_dim)
 
-        input_bias_grads = torch.sum(input_lin_results_grads, 0)
+        input_grads, input_weights_grads, input_biases_grads, r_i_grads, s_i_grads = \
+            mm.backward(qkv_grads, inputs, qkv_r, qkv_mm, input_weights, r_i, s_i)
 
-        # Input Linear GEMM - WGRAD
-        # input1: r_head_k_grad  [len_q*bsz, embed_dim]
-        # input2: (pos)          [len_q*bsz, embed_dim]
-        # output:               [3*embed_dim, embed_dim]
-        # GEMM: ( 3*embed_dim x len_q*bsz ) x ( len_q*bsz x embed_dim ) = (3*embed_dim x embed_dim)
-        pos_weight_grads = torch.mm(r_head_k_grad.transpose(0, 1),
-                                    pos.view(pos.size(0) * pos.size(1), pos.size(2)))
+        _, pos_weights_grads, pos_biases_grads, r_p_grads, s_p_grads = \
+            mm.backward(r_head_k_grad, pos, rpos_r, rpos_mm, pos_weights, r_p, s_p, need_grad_x=False)
 
-        pos_bias_grads = torch.sum(r_head_k_grad, 0)
-
-        return input_grads, None, None, None, None, input_weight_grads, output_weight_grads, pos_weight_grads, \
-               input_bias_grads, output_bias_grads, pos_bias_grads, r_w_bias_grads, r_r_bias_grads, \
-               None, None, None, None, None, None
+        return input_grads, None, None, None, None, \
+               input_weights_grads, output_weights_grads, pos_weights_grads, \
+               input_biases_grads, output_biases_grads, pos_biases_grads, \
+               r_i_grads, s_i_grads, r_o_grads, s_o_grads, r_p_grads, s_p_grads, \
+               r_w_bias_grads, r_r_bias_grads, \
+               None, None, None, None, None
 
 
 relative_self_attn_func = RelativeSelfAttnFunc.apply
+
+
+if __name__ == "__main__":
+    bsz = 4
+    seq_len_q = 4
+    seq_len_kv = 7
+    embed_dim = 32
+    n_heads = 4
+    output_size = 32
+    ensemble = 7
+
+
+    class TestNetwork(nn.Module):
+
+        def __init__(self):
+            super(TestNetwork, self).__init__()
+            self.func = relative_self_attn_func
+
+            self.n_heads = n_heads
+
+        def forward(self, q, r, input_weights, output_weights, pos_weights,
+                    input_biases, output_biases, pos_biases,
+                    r_i, s_i, r_o, s_o, r_p, s_p,
+                    r_w_bias, r_r_bias):
+
+            use_time_mask = False
+            mask = None
+            is_training = True
+            incremental = False
+            incremental_cache = None
+            double_precision = True
+            dropout_prob = 0.0
+            heads = self.n_heads
+
+            output, coverage = self.func(q, r, use_time_mask, is_training, heads,
+                                         input_weights, output_weights, pos_weights,
+                                         input_biases, output_biases, pos_biases,
+                                         r_i, s_i, r_o, s_o, r_p, s_p,
+                                         r_w_bias, r_r_bias,
+                                         mask, dropout_prob,
+                                         incremental, incremental_cache, double_precision)
+
+            return output
+
+
+    r_w_bias = nn.Parameter(torch.Tensor(n_heads, embed_dim//n_heads)).double().cuda()
+    r_r_bias = nn.Parameter(torch.Tensor(n_heads, embed_dim//n_heads)).double().cuda()
+
+    in_proj_weight = Parameter(torch.Tensor(3 * embed_dim, embed_dim)).double().cuda()
+    pos_proj_weight = Parameter(torch.Tensor(embed_dim, embed_dim)).double().cuda()
+    out_proj_weight = Parameter(torch.Tensor(embed_dim, embed_dim)).double().cuda()
+
+    in_proj_bias = Parameter(torch.Tensor(3 * embed_dim)).double().cuda()
+    pos_proj_bias = Parameter(torch.Tensor(embed_dim)).double().cuda()
+    out_proj_bias = Parameter(torch.Tensor(embed_dim)).double().cuda()
+
+    r_i = torch.nn.Parameter(torch.Tensor(bsz, embed_dim)).double().cuda()
+    s_i = torch.nn.Parameter(torch.Tensor(bsz, 3 * embed_dim)).double().cuda()
+    r_p = torch.nn.Parameter(torch.Tensor(bsz, embed_dim)).double().cuda()
+    s_p = torch.nn.Parameter(torch.Tensor(bsz, embed_dim)).double().cuda()
+    r_o = torch.nn.Parameter(torch.Tensor(bsz, embed_dim)).double().cuda()
+    s_o = torch.nn.Parameter(torch.Tensor(bsz, embed_dim)).double().cuda()
+
+    std_ = math.sqrt(2.0 / (embed_dim + embed_dim))
+    nn.init.normal_(in_proj_weight, 0.0, std_)
+    nn.init.normal_(pos_proj_weight, 0.0, std_)
+    nn.init.normal_(out_proj_weight, 0.0, std_)
+    nn.init.normal_(r_w_bias, 0.0, std_)
+    nn.init.normal_(r_r_bias, 0.0, std_)
+
+    torch.nn.init.constant_(in_proj_bias, 0.0)
+    torch.nn.init.constant_(out_proj_bias, 0.0)
+    torch.nn.init.constant_(pos_proj_bias, 0.0)
+
+    with torch.no_grad():
+        r_i.bernoulli_(0.5).mul_(-2).add_(1)
+        s_i.bernoulli_(0.5).mul_(-2).add_(1)
+        r_p.bernoulli_(0.5).mul_(-2).add_(1)
+        s_p.bernoulli_(0.5).mul_(-2).add_(1)
+        r_o.bernoulli_(0.5).mul_(-2).add_(1)
+        s_o.bernoulli_(0.5).mul_(-2).add_(1)
+
+    model = TestNetwork()
+
+    q = torch.randn((seq_len_q, bsz, embed_dim), requires_grad=True)
+    r = torch.randn((seq_len_kv, bsz, embed_dim), requires_grad=False)
+
+    model = model.double().cuda()
+
+    q = q.double().cuda()
+    r = r.double().cuda()
+
+    print("Gradchecking ...")
+    torch.autograd.gradcheck(model, (q, r, in_proj_weight, out_proj_weight, pos_proj_weight,
+                                     in_proj_bias, out_proj_bias, pos_proj_bias,
+                                     r_i, s_i, r_o, s_o, r_p, s_p,
+                                     r_w_bias, r_r_bias))
+    print("Gradcheck successful!!!")

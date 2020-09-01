@@ -178,7 +178,8 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
         tline = tgtf.readline()
 
         # normal end of file
-        if tline == "": break
+        if tline == "":
+            break
         tline = tline.strip()
         # source and/or target are empty
         if tline == "":
@@ -262,9 +263,13 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
 
     print('[INFO] Processing %s  ...' % src_file)
 
-    src, src_sizes = SpeechBinarizer.binarize_file(src_file, input_format=asr_format,
-                                                   output_format=output_format, concat=concat,
-                                                   stride=stride, fp16=fp16, prev_context=prev_context)
+    binarized_src = SpeechBinarizer.binarize_file(src_file, input_format=asr_format,
+                                                  output_format=output_format, concat=concat,
+                                                  stride=stride, fp16=fp16, prev_context=prev_context,
+                                                  num_workers=1)
+
+    src = binarized_src['data']
+    src_sizes = binarized_src['sizes']
 
     if add_bos:
         tgt_bos_word = onmt.constants.BOS_WORD
@@ -380,7 +385,8 @@ def main():
                                                                      prev_context=opt.previous_context,
                                                                      fp16=opt.fp16,
                                                                      asr_format=opt.asr_format,
-                                                                     output_format=opt.format)
+                                                                     output_format=opt.format,
+                                                                     num_workers=opt.num_threads)
 
             n_samples = len(src_data)
             if n_input_files == 1:
@@ -703,13 +709,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-def safe_readline(f):
-    pos = f.tell()
-    while True:
-        try:
-            return f.readline()
-        except UnicodeDecodeError:
-            pos -= 1
-            f.seek(pos)  # search where this character begins

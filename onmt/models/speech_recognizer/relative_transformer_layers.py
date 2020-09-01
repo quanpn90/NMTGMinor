@@ -217,7 +217,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
             else:
                 mems = None
 
-            if lfv is not None:
+            if lfv is not None and self.lfv_multilingual:
                 # multiply the input with the bottleneck lfv features from the LID network
                 # print(lfv.size())
                 input = torch.mul(torch.tanh(self.lfv_mapper(lfv)), input)

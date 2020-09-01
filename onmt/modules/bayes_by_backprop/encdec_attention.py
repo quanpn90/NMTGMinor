@@ -29,18 +29,19 @@ class EncdecMultiheadAttn(nn.Module):
 
         # Q linear mapping weight
 
-        in_proj_weight_q_mu = Parameter(torch.Tensor(embed_dim, embed_dim))
-        in_proj_weight_q_rho = Parameter(torch.Tensor(embed_dim, embed_dim))
+        in_proj_weight_q_mu = torch.Tensor(embed_dim, embed_dim)
+        in_proj_weight_q_rho = torch.Tensor(embed_dim, embed_dim)
 
         # KV Linear mapping weight
-        in_proj_weight_kv_mu = Parameter(torch.Tensor(2 * embed_dim, embed_dim))
-        in_proj_weight_kv_rho = Parameter(torch.Tensor(2 * embed_dim, embed_dim))
+        in_proj_weight_kv_mu = torch.Tensor(2 * embed_dim, embed_dim)
+        in_proj_weight_kv_rho = torch.Tensor(2 * embed_dim, embed_dim)
 
         # Output linear mapping weight
-        out_proj_weight_mu = Parameter(torch.Tensor(embed_dim, embed_dim))
-        out_proj_weight_rho = Parameter(torch.Tensor(embed_dim, embed_dim))
+        out_proj_weight_mu = torch.Tensor(embed_dim, embed_dim)
+        out_proj_weight_rho = torch.Tensor(embed_dim, embed_dim)
 
-        self.mu, self.indices, self.shapes = flatten_list([in_proj_weight_q_mu, in_proj_weight_kv_mu, out_proj_weight_mu])
+        self.mu, self.indices, self.shapes = \
+            flatten_list([in_proj_weight_q_mu, in_proj_weight_kv_mu, out_proj_weight_mu])
         self.mu = Parameter(self.mu)
         self.rho, _, _ = flatten_list([in_proj_weight_q_rho, in_proj_weight_kv_rho, out_proj_weight_rho])
         self.rho = Parameter(self.rho)
@@ -87,15 +88,6 @@ class EncdecMultiheadAttn(nn.Module):
             self.weight.sample(stochastic=sample, return_log_prob=calculate_log_probs)
 
         in_proj_weight_q, in_proj_weight_kv, out_proj_weight = unflatten(sampled_weights, self.indices, self.shapes)
-        # in_proj_weight_q, in_proj_weight_q_logprob = self.in_proj_weight_q.sample(
-        #     stochastic=(self.training or sample),
-        #     return_log_prob=(self.training or calculate_log_probs))
-        # in_proj_weight_kv, in_proj_weight_kv_logprob = self.in_proj_weight_kv.sample(
-        #     stochastic=(self.training or sample),
-        #     return_log_prob=(self.training or calculate_log_probs))
-        # out_proj_weight, out_proj_weight_logprob = self.out_proj_weight.sample(
-        #     stochastic=(self.training or sample),
-        #     return_log_prob=(self.training or calculate_log_probs))
 
         # Perform forward with the sampled weights
         if self.optimized == 1 and (self.training and not incremental) and len_key <= 1024 and query.is_cuda:

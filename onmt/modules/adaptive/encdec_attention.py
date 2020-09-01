@@ -17,12 +17,13 @@ class EncdecMultiheadAttn(nn.Module):
     See "Attention Is All You Need" for more details.
     """
 
-    def __init__(self, num_heads, embed_dim, attn_drop=0.):
+    def __init__(self, num_heads, embed_dim, attn_drop=0., n_ensemble=1):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.dropout = attn_drop
         self.head_dim = embed_dim // num_heads
+        self.n_ensemble = n_ensemble
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
         self.bias = False
         self.scaling = self.head_dim ** -0.5  # this value is hardcoded in the "fast" implementation
@@ -37,6 +38,10 @@ class EncdecMultiheadAttn(nn.Module):
         self.in_proj_bias_kv = None
         self.out_proj_bias = None
 
+        # batch_ensemble weights
+        self.be_r = Parameter(torch.Tensor(embed_dim))
+        self.be_s = Parameter(torch.Tensor())
+
         self.attn_func = encdec_attn_func
 
         self.reset_parameters()
@@ -44,7 +49,7 @@ class EncdecMultiheadAttn(nn.Module):
             # the fast one requires apex and does not work with incremental so careful
             from apex.contrib.multihead_attn.fast_encdec_multihead_attn_func import fast_encdec_attn_func
             self.attn_func_fast = fast_encdec_attn_func
-            self.optimized = 1
+            self.optimized = 2
 
         except ModuleNotFoundError as e:
             # print(e)
@@ -52,7 +57,7 @@ class EncdecMultiheadAttn(nn.Module):
             self.optimized = 2
             self.attn_func_fast = None
 
-    def reset_parameters(self, init='normal'):
+    def reset_parameters(self):
         # nn.init.xavier_uniform_(self.in_proj_weight_q)
         # in_proj_weight_kv has shape [2 * hidden, hidden] but it should be
         # initialized like a [hidden, hidden] matrix.
@@ -60,16 +65,13 @@ class EncdecMultiheadAttn(nn.Module):
         # therefore xavier_uniform gain should be set to sqrt(1.5).
         # nn.init.xavier_uniform_(self.in_proj_weight_kv, gain=math.sqrt(1.5))
         # nn.init.xavier_uniform_(self.out_proj_weight)
-        if init == 'normal':  # xavier normal
-            std_ = math.sqrt(2.0 / (self.embed_dim + self.embed_dim))
-            nn.init.normal_(self.in_proj_weight_q, 0.0, std_)
-            nn.init.normal_(self.in_proj_weight_kv, 0.0, std_)
-            nn.init.normal_(self.out_proj_weight, 0.0, std_)
-        else:  # xavier uniform
-            std_ = math.sqrt(6.0 / (self.embed_dim + self.embed_dim))
-            nn.init.uniform_(self.in_proj_weight_q, -std_, std_)
-            nn.init.uniform_(self.in_proj_weight_kv, -std_, std_)
-            nn.init.uniform_(self.out_proj_weight, -std_, std_)
+        std_ = math.sqrt(2.0 / (self.embed_dim + self.embed_dim))
+        nn.init.normal_(self.in_proj_weight_q, 0.0, std_)
+        nn.init.normal_(self.in_proj_weight_kv, 0.0, std_)
+        nn.init.normal_(self.out_proj_weight, 0.0, std_)
+
+        nn.init.normal_(self.be_r, 0.0, std_)
+        nn.init.normal_(self.be_s, 0.0, std_)
 
     def forward(self, query, key, value, attn_mask=None, incremental=False, incremental_cache=None):
 

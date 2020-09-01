@@ -121,6 +121,8 @@ def make_parser(parser):
                         help="Type of encoder to use. Options are [text|img].")
     parser.add_argument('-input_size', type=int, default=2048,
                         help='Size of input features')
+    parser.add_argument('-init', default='normal',
+                        help="How to init the weight. normal or uniform/xavier.")
     parser.add_argument('-init_embedding', default='normal',
                         help="How to init the embedding matrices. Xavier or Normal.")
     parser.add_argument('-batch_size_words', type=int, default=2048,
@@ -424,5 +426,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'input_feature_size'):
         opt.input_feature_size = 40
+
+    if not hasattr(opt, 'bayes_by_backprop'):
+        opt.bayes_by_backprop = False
 
     return opt

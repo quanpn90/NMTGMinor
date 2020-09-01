@@ -5,6 +5,10 @@ import numpy as np
 
 
 class SCPIndexDataset(torch.utils.data.Dataset):
+    """
+    This dataset simply stores a list of paths to ark matrices
+    The __get__ function uses load_mat from kaldiio to read the ark matrices for retrieval
+    """
 
     def __init__(self, scp_path_list, concat=4):
         """

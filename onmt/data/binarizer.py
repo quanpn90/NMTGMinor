@@ -11,6 +11,7 @@ import torch.multiprocessing as mp
 import torch
 import onmt
 import numpy as np
+from .audio_utils import ArkLoader
 
 
 class SpeechBinarizer:
@@ -19,36 +20,17 @@ class SpeechBinarizer:
         pass
 
     @staticmethod
-    def binarize_file(filename, input_format='scp', output_format='raw',
-                      prev_context=0, concat=4, stride=1, fp16=False):
-        # if output_format is scp, we only read the length for sorting
+    def binarize_h5_file(filename, output_format='raw',
+                         prev_context=0, concat=4, stride=1, fp16=False):
 
-        if output_format == 'scp':
-            assert input_format in ['kaldi', 'scp']
-
-        if input_format == "h5":
-            file_idx = -1;
-            if filename[-2:] == "h5":
-                srcf = h5.File(filename, 'r')
-            else:
-                file_idx = 0
-                srcf = h5.File(filename + "." + str(file_idx) + ".h5", 'r')
-        elif input_format in ["kaldi", "scp"]:
-            import kaldiio
-            from kaldiio import load_scp, load_mat
-            # audio_data = iter(ReadHelper('scp:' + filename))
-            # data_file = open(filename)
-            data = kaldiio.load_scp(filename)
-            data_keys = list(data.keys())
-            data_paths = list(data._dict.values())
-
-        data = list()
-        # we don't need the
-        lengths = list()
-        index = 0
+        file_idx = -1;
+        if filename[-2:] == "h5":
+            srcf = h5.File(filename, 'r')
+        else:
+            file_idx = 0
+            srcf = h5.File(filename + "." + str(file_idx) + ".h5", 'r')
 
         while True:
-
             if input_format == "h5":
                 if str(index) in srcf:
                     feature_vector = np.array(srcf[str(index)])
@@ -61,60 +43,158 @@ class SpeechBinarizer:
                     print("No feature vector for index:", index, file=sys.stderr)
                     break
 
-            elif input_format in ["scp", "kaldi"]:
-                if index >= len(data_keys):
+        raise NotImplementedError
+
+    @staticmethod
+    # def binarize_file(filename, input_format='scp', output_format='raw',
+    #                   prev_context=0, concat=4, stride=1, fp16=False):
+    def binarize_file_single_thread(filename, ark_loader, offset=0, end=-1, worker_id=0, input_format='scp', output_format='raw',
+                                    prev_context=0, concat=4, stride=1, fp16=False):
+        # if output_format is scp, we only read the length for sorting
+
+        if output_format == 'scp':
+            assert input_format in ['kaldi', 'scp']
+
+        from kaldiio import load_scp, load_mat
+        # audio_data = iter(ReadHelper('scp:' + filename))
+        # data_file = open(filename)
+        # data = load_scp(filename)
+        # data_keys = list(data.keys())
+        # data_paths = list(data._dict.values())
+
+        result = dict()
+        data = list()
+        lengths = list()
+        index = 0
+
+        with open(filename, 'r', encoding='utf-8') as f:
+            f.seek(offset)
+
+            line = safe_readline(f)
+
+            while line:
+                if 0 < end < f.tell():
                     break
-                # _, feature_vector = next(audio_data)
-                # key = data_keys[index]
-                path = data_paths[index]
-                feature_vector = load_mat(path)
-            else:
-                print("Wrong input format %s" % input_format)
-                raise NotImplementedError
 
-            # feature_vector.setflags(write=True)
-            if stride == 1:
-                feature_vector = torch.from_numpy(feature_vector)
-            else:
-                feature_vector = torch.from_numpy(feature_vector[0::opt.stride])
+                parts = line.split()
+                path = parts[1]
+                key = parts[0]
 
-            if concat > 1:
-                add = (concat - feature_vector.size()[0] % concat) % concat
-                z = torch.FloatTensor(add, feature_vector.size()[1]).zero_()
-                feature_vector = torch.cat((feature_vector, z), 0)
-                feature_vector = feature_vector.reshape((int(feature_vector.size()[0] / concat),
-                                                         feature_vector.size()[1] * concat))
+                # path = data_paths[index]
+                # feature_vector = load_mat(path)
+                feature_vector = ark_loader.load_mat(path)
 
-            if prev_context > 0:
-                print("Multiple ASR context isn't supported at the moment   ")
-                raise NotImplementedError
+                # feature_vector.setflags(write=True)
+                if stride == 1:
+                    feature_vector = torch.from_numpy(feature_vector)
+                else:
+                    feature_vector = torch.from_numpy(feature_vector[0::opt.stride])
 
-                # s_prev_context.append(feature_vector)
-                # t_prev_context.append(tline)
-                # for i in range(1,prev_context+1):
-                #     if i < len(s_prev_context):
-                #         feature_vector = torch.cat((torch.cat((s_prev_context[-i-1],
-                #         torch.zeros(1,feature_vector.size()[1]))),feature_vector))
-                #         tline = t_prev_context[-i-1]+" # "+tline
-                # if len(s_prev_context) > prev_context:
-                #     s_prev_context = s_prev_context[-1*prev_context:]
-                #     t_prev_context = t_prev_context[-1*prev_context:]
+                if concat > 1:
+                    add = (concat - feature_vector.size()[0] % concat) % concat
+                    z = torch.FloatTensor(add, feature_vector.size()[1]).zero_()
+                    feature_vector = torch.cat((feature_vector, z), 0)
+                    feature_vector = feature_vector.reshape((int(feature_vector.size()[0] / concat),
+                                                             feature_vector.size()[1] * concat))
 
-            if fp16:
-                feature_vector = feature_vector.half()
+                if prev_context > 0:
+                    print("Multiple ASR context isn't supported at the moment   ")
+                    raise NotImplementedError
 
-            if output_format not in ['scp', 'scpmem']:
-                data.append(feature_vector)
-            else:
-                data.append(path)
-            lengths.append(feature_vector.size(0))
+                    # s_prev_context.append(feature_vector)
+                    # t_prev_context.append(tline)
+                    # for i in range(1,prev_context+1):
+                    #     if i < len(s_prev_context):
+                    #         feature_vector = torch.cat((torch.cat((s_prev_context[-i-1],
+                    #         torch.zeros(1,feature_vector.size()[1]))),feature_vector))
+                    #         tline = t_prev_context[-i-1]+" # "+tline
+                    # if len(s_prev_context) > prev_context:
+                    #     s_prev_context = s_prev_context[-1*prev_context:]
+                    #     t_prev_context = t_prev_context[-1*prev_context:]
 
-            if (index+1) % 100000 == 0:
-                print("[INFO] Processed %d audio utterances." % index+1)
+                if fp16:
+                    feature_vector = feature_vector.half()
 
-            index = index + 1
+                if output_format not in ['scp', 'scpmem']:
+                    data.append(feature_vector.numpy())  # convert to numpy for serialization
+                else:
+                    data.append(path)
 
-        return data, lengths
+                lengths.append(feature_vector.size(0))
+
+                line = f.readline()
+
+                if (index + 1) % 100000 == 0:
+                    print("[INFO] Thread %d Processed %d audio utterances." % (worker_id, index + 1))
+
+                index = index + 1
+
+        result['data'] = data
+        result['sizes'] = lengths
+        result['id'] = worker_id
+        result['total'] = len(lengths)
+
+        return result
+
+    @staticmethod
+    def binarize_file(filename, input_format='scp', output_format='raw',
+                      prev_context=0, concat=4, stride=1, fp16=False, num_workers=1):
+
+        if input_format == 'h5':
+            return SpeechBinarizer.binarize_h5_file(filename, output_format, prev_context, concat,
+                                                    stride, fp16)
+
+        result = dict()
+
+        for i in range(num_workers):
+            result[i] = dict()
+
+        final_result = dict()
+
+        def merge_result(bin_result):
+            result[bin_result['id']]['data'] = bin_result['data']
+            result[bin_result['id']]['sizes'] = bin_result['sizes']
+
+        offsets = Binarizer.find_offsets(filename, num_workers)
+
+        ark_loaders = dict()
+        for i in range(num_workers):
+            ark_loaders[i] = ArkLoader()
+
+        if num_workers > 1:
+
+            pool = mp.Pool(processes=num_workers)
+            mp_results = []
+
+            for worker_id in range(num_workers):
+                mp_results.append(pool.apply_async(
+                    SpeechBinarizer.binarize_file_single_thread,
+                    args=(filename, ark_loaders[worker_id], offsets[worker_id], offsets[worker_id + 1], worker_id,
+                          input_format, output_format, prev_context, concat, stride, fp16),
+                ))
+
+            pool.close()
+            pool.join()
+
+            for r in mp_results:
+                merge_result(r.get())
+
+        else:
+            sp_result = SpeechBinarizer.binarize_file_single_thread(filename, ark_loaders[0], offsets[0], offsets[1], 0,
+                                                                    input_format='scp', output_format=output_format,
+                                                                    prev_context=prev_context, concat=concat,
+                                                                    stride=stride, fp16=fp16)
+            merge_result(sp_result)
+
+        final_result['data'] = list()
+        final_result['sizes'] = list()
+
+        # put the data into the list according the worker indices
+        for idx in range(num_workers):
+            final_result['data'] += result[idx]['data']
+            final_result['sizes'] += result[idx]['sizes']
+
+        return final_result
 
 
 class Binarizer:
@@ -217,7 +297,7 @@ class Binarizer:
                     Binarizer.binarize_file_single_thread,
                     args=(filename, tokenizer, vocab, worker_id, bos_word, eos_word,
                           offsets[worker_id], offsets[worker_id + 1], data_type, verbose),
-                    ))
+                ))
 
             pool.close()
             pool.join()

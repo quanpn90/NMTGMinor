@@ -67,82 +67,45 @@ class SpeechTransformerEncoder(TransformerEncoder):
 
     def forward(self, input, input_pos=None, input_lang=None, streaming=False, **kwargs):
         """
-        Inputs Shapes:
-            input: batch_size x src_len (wanna tranpose)
-        Outputs Shapes:
-            out: batch_size x src_len x d_model
-            mask_src
+        :param input: [B x T x Input_Size]
+        :param input_pos: [B x T] positions
+        :param input_lang: [B] language ids of each sample
+        :param streaming: connect different segments in transformer-xl style
+        :param kwargs:
+        :return:
         """
 
-        """ Embedding: batch_size x src_len x d_model """
-        if self.input_type == "text":
-            bsz_first_input = input
-            input = input.transpose(0, 1)
-            # mask_src = input.eq(onmt.constants.PAD).unsqueeze(1)  # batch_size x src_len x 1 for broadcasting
-
-            dec_attn_mask = bsz_first_input.eq(onmt.constants.PAD).unsqueeze(1)
-
-            if streaming:
-                streaming_state = kwargs.get('streaming_state', None)
-                mems = streaming_state.src_mems
-                # mem_len = streaming_state.src_mems[0].size(0)
-                # mem_len = streaming_state.prev_src_mem_size
-                mem_len = mems[0].size(0) if mems is not None else 0
-                input_length = kwargs.get('src_lengths', None)
-                streaming_state = kwargs.get('streaming_state', None)
-                mask_src = self.create_stream_mask(input, input_length, mem_len)
-                mask_src = mask_src.unsqueeze(2)
-            else:
-                mem_len = 0
-                mask_src = input.eq(onmt.constants.PAD).unsqueeze(0)  # batch_size x src_len x 1 for broadcasting
-                mems = None
-
-            emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
-
-            """ Adding language embeddings """
-            if self.use_language_embedding:
-                assert self.language_embedding is not None
-                # There is no "unsqueeze" here because the input is T x B x H and lang_emb is B x H
-                if self.language_embedding_type in ['sum', 'all_sum']:
-                    lang_emb = self.language_embedding(input_lang)
-                    # print(lang_emb.size(), emb.size())
-                    emb = emb + lang_emb.unsqueeze(0)
-
+        if not self.cnn_downsampling:
+            mask_src = input.narrow(2, 0, 1).squeeze(2).transpose(0, 1).eq(onmt.constants.PAD).unsqueeze(0)
+            dec_attn_mask = input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
+            input = input.narrow(2, 1, input.size(2) - 1)
+            emb = self.audio_trans(input.contiguous().view(-1, input.size(2))).view(input.size(0),
+                                                                                    input.size(1), -1)
+            emb = emb.type_as(input)
         else:
-            if streaming:
-                raise NotImplementedError
+            long_mask = input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
+            input = input.narrow(2, 1, input.size(2) - 1)
 
-            if not self.cnn_downsampling:
-                mask_src = input.narrow(2, 0, 1).squeeze(2).transpose(0, 1).eq(onmt.constants.PAD).unsqueeze(0)
-                dec_attn_mask = input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
-                input = input.narrow(2, 1, input.size(2) - 1)
-                emb = self.audio_trans(input.contiguous().view(-1, input.size(2))).view(input.size(0),
-                                                                                        input.size(1), -1)
-                emb = emb.type_as(input)
-            else:
-                long_mask = input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
-                input = input.narrow(2, 1, input.size(2) - 1)
+            # first resizing to fit the CNN format
+            input = input.view(input.size(0), input.size(1), -1, self.channels)
+            input = input.permute(0, 3, 1, 2)
 
-                # first resizing to fit the CNN format
-                input = input.view(input.size(0), input.size(1), -1, self.channels)
-                input = input.permute(0, 3, 1, 2)
+            input = self.audio_trans(input)
+            input = input.permute(0, 2, 1, 3).contiguous()
+            input = input.view(input.size(0), input.size(1), -1)
+            # print(input.size())
+            input = self.linear_trans(input)
 
-                input = self.audio_trans(input)
-                input = input.permute(0, 2, 1, 3).contiguous()
-                input = input.view(input.size(0), input.size(1), -1)
-                # print(input.size())
-                input = self.linear_trans(input)
+            mask_src = long_mask[:, 0:input.size(1) * 4:4].transpose().unsqueeze(0)
+            dec_attn_mask = long_mask[:, 0:input.size(1) * 4:4].unsqueeze(1)
+            # the size seems to be B x T ?
+            emb = input
 
-                mask_src = long_mask[:, 0:input.size(1) * 4:4].transpose().unsqueeze(0)
-                dec_attn_mask = long_mask[:, 0:input.size(1) * 4:4].unsqueeze(1)
-                # the size seems to be B x T ?
-                emb = input
-
-            emb = emb.transpose(0, 1)
-            input = input.transpose(0, 1)
-            abs_pos = None
-            mem_len = 0
-            mems = None
+        emb = emb.transpose(0, 1)
+        input = input.transpose(0, 1)
+        abs_pos = None
+        mem_len = 0
+        mems = None
 
         if self.unidirectional:
             qlen = input.size(0)
@@ -173,7 +136,7 @@ class SpeechTransformerEncoder(TransformerEncoder):
             pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
 
         # pos_emb has size 2T+1 x 1 x H
-        pos_emb = self.positional_encoder(pos, bsz=input.size(1) if self.fast_self_attn else None)
+        pos_emb = self.positional_encoder(pos, bsz=input.size(1))
 
         if self.learnable_position_encoding:
             raise NotImplementedError
@@ -252,7 +215,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
         if self.reversible:
             print("* Transformer Reversible Decoder with Relative Attention with %.2f layers" % e_length)
         else:
-            print("* Transformer Decoder with Relative Attention with %.2f layers" % e_length)
+            print("* Speech Transformer Decoder with Relative Attention with %.2f layers" % e_length)
 
         self.layer_modules = nn.ModuleList()
 
@@ -328,31 +291,25 @@ class SpeechTransformerDecoder(TransformerDecoder):
 
         qlen = input.size(0)
         klen = qlen + mem_len
-        # preparing self-attention mask. The input is either left or right aligned
+        # preparing self-attention mask. The input must be left-aligned
 
         dec_attn_mask = torch.triu(
             emb.new_ones(qlen, klen), diagonal=1 + mem_len).byte()[:, :, None]
-        # pad_mask = input.eq(onmt.constants.PAD).byte()  # L x B
-        #
-        # dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
-        # dec_attn_mask = dec_attn_mask.gt(0)
+
         dec_attn_mask = dec_attn_mask.bool()
 
         pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
 
-        pos_emb = self.positional_encoder(pos, bsz=input.size(1) if self.fast_self_attn else None)
+        pos_emb = self.positional_encoder(pos, bsz=input.size(1))
         output = self.preprocess_layer(emb.contiguous())
         pos_emb = self.preprocess_layer(pos_emb)
 
         lfv_vector, lid_logits = None, list()
 
         for i, layer in enumerate(self.layer_modules):
-            # batch_size x src_len x d_model output, coverage = layer(output, context, pos_emb, self.r_w_bias,
-            # self.r_r_bias, dec_attn_mask, mask_src)
             if self.lfv_multilingual:
                 output, coverage, _, lid_logits_, lfv_vector = \
                     layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src, None)
-                # print(lid_logits_.size(), lfv_vector.size())
                 lid_logits.append(lid_logits_)
             else:
                 output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src, None)
@@ -376,11 +333,9 @@ class SpeechTransformerDecoder(TransformerDecoder):
             coverage: batch_size x len_tgt x src_len
 
         """
-
         context = decoder_state.context
         buffers = decoder_state.attention_buffers
         lang = decoder_state.tgt_lang
-        mask_src = decoder_state.src_mask
         buffering = decoder_state.buffering
 
         if decoder_state.concat_input_seq:
@@ -432,12 +387,9 @@ class SpeechTransformerDecoder(TransformerDecoder):
         pos_emb = self.positional_encoder(pos)
 
         dec_attn_mask = torch.triu(
-            emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]
+            emb.new_ones(klen, klen), diagonal=1 + mlen).byte()  # [:, :, None]
 
-        # pad_mask = input.eq(onmt.constants.PAD).byte()  # L x B
-
-        # dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
-        # dec_attn_mask = dec_attn_mask.gt(0)
+        dec_attn_mask = dec_attn_mask[-1].unsqueeze(0)
 
         if onmt.constants.torch_version >= 1.2:
             dec_attn_mask = dec_attn_mask.bool()
@@ -457,31 +409,23 @@ class SpeechTransformerDecoder(TransformerDecoder):
 
         output = emb.contiguous()
 
-        if self.reversible:
-            output_1, output_2 = output, output
+        lfv_vector, lid_logits = None, list()
 
         for i, layer in enumerate(self.layer_modules):
             buffer = buffers[i] if i in buffers else None
 
-            if self.reversible:
-                if buffering:
-                    output_1, output_2, coverage, buffer = layer(output_1, output_2, pos_emb, context,
-                                                                 dec_attn_mask, mask_src, incremental=True,
-                                                                 incremental_cache=buffer)
-                    decoder_state.update_attention_buffer(buffer, i)
-                else:
-                    output_1, output_2, coverage, _ = layer(output_1, output_2, pos_emb, context,
-                                                            dec_attn_mask, mask_src)
+            if buffering:
+                # print("DEBUGGING BUFFERING")
+                output, coverage, buffer = layer(output, context, pos_emb, None, dec_attn_mask, mask_src,
+                                                 incremental=True, incremental_cache=buffer)
+                decoder_state.update_attention_buffer(buffer, i)
             else:
-                if buffering:
-                    output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, mask_src,
-                                                     incremental=True, incremental_cache=buffer)
-                    decoder_state.update_attention_buffer(buffer, i)
+                if self.lfv_multilingual:
+                    output, coverage, _, lid_logits_, lfv_vector = \
+                        layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src, None)
+                    lid_logits.append(lid_logits_)
                 else:
-                    output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src)
-
-        if self.reversible:
-            output = output_1 + output_2
+                    output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src)
 
         # normalize and take the last time step
         output = self.postprocess_layer(output)

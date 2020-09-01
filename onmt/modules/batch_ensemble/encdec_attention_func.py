@@ -1,11 +1,13 @@
 import torch
 import torch.nn.functional as F
 from onmt.constants import double_precision
+from .batch_ensemble_linear import BatchEnsembleMMNoBias
 
 
-class EncdecAttnFunc(torch.autograd.Function):
+class EnsembleEncdecAttnFunc(torch.autograd.Function):
     @staticmethod
     def forward(ctx, use_time_mask, is_training, heads, inputs_q, inputs_kv,
+                ensemble_r_q, ensemble_s_q, ensemble_r_kv, ensemble_s_kv, ensemble_r_o, ensemble_k_o,
                 input_weights_q, input_weights_kv, output_weights,
                 mask, dropout_prob,
                 incremental, incremental_cache):
@@ -17,25 +19,25 @@ class EncdecAttnFunc(torch.autograd.Function):
 
         bsz, len_q, len_k = inputs_q.size(1), inputs_q.size(0), inputs_kv.size(0)
 
-        # TODO: add incremental cache
+        n_ensemble, h_size = ensemble_r_q.size(0)
+        bsz_per_n_ensemble = bsz // n_ensemble
+        if bsz_per_n_ensemble == 0:
+            bsz_per_n_ensemble = 1
+            ensemble_r_kv = ensemble_r_kv[bsz:]
+            ensemble_s_kv = ensemble_s_kv[bsz:]
+            ensemble_r_q = ensemble_r_q[bsz:]
+            ensemble_s_q = ensemble_s_q[bsz:]
+            ensemble_r_o = ensemble_r_o[bsz:]
+            ensemble_s_o = ensemble_s_o[bsz:]
 
-        # Input Linear GEMM Q
-        # input1: (activations) [seql_q, bsz, embed_dim(1024)]
-        # input2: (weights)     [embed_dim (1024), embed_dim (1024)] (transpose [0,1])
-        # output:               [seql_q, bsz, embed_dim]
-        # GEMM: ( (seql_q*seqs) x embed_dim ) x ( embed_dim x embed_dim ) = (seql_q*seqs x embed_dim)
-        input_lin_q_results = torch.mm(inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
-                                       input_weights_q.transpose(0, 1))
-        input_lin_q_results = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1), input_weights_q.size(0))
-        queries = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1) * heads, head_dim)
-        # Input Linear GEMM KV
-        # input1: (activations) [seql_k, bsz, embed_dim(1024)]
-        # input2: (weights)     [embed_dim*2 (2048), embed_dim (1024)] (transpose [0,1])
-        # output:               [seql_k, bsz, embed_dim*2]
-        # GEMM: ( (seql_k*seqs) x embed_dim ) x ( embed_dim x embed_dim*2 ) = (seql_k*seqs x embed_dim*2)
+        ensemble_t = torch.tensor([n_ensemble])
 
-        # Slice out k,v from one big Input Linear outuput (should only impact meta data, no copies!)
-        # Sequences and heads are combined to make the batch of the Batched GEMM
+        # BatchEnsemble GEMM for query
+        input_lin_q_results, input_lin_q_mm, input_lin_q_r = \
+            BatchEnsembleMMNoBias.forward(inputs_q, input_weights_q,
+                                          ensemble_r_q, ensemble_s_q, bsz_per_n_ensemble)
+
+        queries = input_lin_q_results.view(bsz, len_q * heads, head_dim)
 
         if incremental and ('c_k' in incremental_cache and 'c_v' in incremental_cache):
             keys = incremental_cache['c_k']
@@ -44,11 +46,12 @@ class EncdecAttnFunc(torch.autograd.Function):
             values = values.view(len_k, bsz * heads, head_dim)
             input_lin_kv_results = torch.stack([keys, values], dim=-2)
         else:
-            input_lin_kv_results = torch.mm(inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)),
-                                            input_weights_kv.transpose(0, 1))
-            input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1),
-                                                             input_weights_kv.size(0))
-            input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1) * heads, 2, head_dim)
+            # BatchEnsemble GEMM for keys and values
+            input_lin_kv_results, input_lin_kv_mm, input_lin_kv_r = \
+                BatchEnsembleMMNoBias.forward(inputs_kv, input_weights_kv,
+                                              ensemble_r_kv, ensemble_s_kv, bsz_per_n_ensemble)
+
+            input_lin_kv_results = input_lin_kv_results.view(bsz, len_k * heads, 2, head_dim)
             keys = input_lin_kv_results[:, :, 0, :]
             values = input_lin_kv_results[:, :, 1, :]
             if incremental:
@@ -61,10 +64,7 @@ class EncdecAttnFunc(torch.autograd.Function):
                 keys = keys.view(len_k, bsz * heads, head_dim)
                 values = values.view(len_k, bsz * heads, head_dim)
 
-        # Matmul1 Batched GEMMs
-        # The output tensor is specified prior to the Batch GEMM because baddbmm requires its specification
-        # baddbmm is used to apply the scale parameter via the Batched GEMM's alpha parameter instead of
-        # a separate elementwise operation.
+        # Matmul1 Batched GEMMs as normal
         # Input1: (Queries) [seql_q, seqs*heads, head_dim] transpose(0,1)
         # Input2: (Keys)    [seql_k, seqs*heads, head_dim] transpose(0,1)
         # output:           [seqs*heads, seql_q, seql_k]
@@ -96,9 +96,8 @@ class EncdecAttnFunc(torch.autograd.Function):
             matmul1_results = matmul1_results.masked_fill_(mask, float('-inf'))
             matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
 
-        dtype_ = torch.float64 if double_precision else torch.float32
+        dtype_ = torch.float64
         softmax_results = F.softmax(matmul1_results, dim=-1, dtype=dtype_).type_as(matmul1_results)
-        # softmax_results = F.softmax(matmul1_results.float(), dim=-1).type_as(matmul1_results)
 
         # Dropout - is not executed for inference
         if is_training:
@@ -107,10 +106,7 @@ class EncdecAttnFunc(torch.autograd.Function):
             dropout_results = softmax_results
             dropout_mask = null_tensor
 
-        # Matmul2 Batched GEMMs
-        # The output tensor specification is needed here to specify the non-standard output.
-        # Given that pytorch cannot currently perform autograd with an output tensor specified,
-        # this requires a backward pass specified.
+        # Matmul2 Batched GEMMs as normal
         # Input1: from_softmax [seqs*heads, seql_q, seql_k]
         # Input2: (values)     [seql_v, seqs*heads, head_dim] transpose(0,1)
         # Output:              [seql_q, seqs*heads, head_dim] transpose(0,1)
@@ -118,7 +114,7 @@ class EncdecAttnFunc(torch.autograd.Function):
         if queries.is_cuda:
             matmul2_results = torch.empty((dropout_results.size(1), dropout_results.size(0), values.size(2)),
                                           dtype=dropout_results.dtype, device=dropout_results.device).transpose(1, 0)
-            matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1), out=matmul2_results)
+            torch.bmm(dropout_results, values.transpose(0, 1), out=matmul2_results)
         else:
             matmul2_results = torch.matmul(dropout_results, values.transpose(0, 1))
         matmul2_results = matmul2_results.transpose(0, 1).contiguous().view(inputs_q.size(0), inputs_q.size(1),
@@ -129,24 +125,26 @@ class EncdecAttnFunc(torch.autograd.Function):
         # Input2: (weights)     [ embed_dim, embed_dim ] transpose(0,1)
         # Output:               [ seql_q, seqs, embed_dim ]
         # GEMM: ( seql_q*seqs x embed_dim ) x ( embed_dim x embed_dim ) = ( seql_q*seqs x embed_dim )
-        outputs = torch.mm(matmul2_results.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
-                           output_weights.transpose(0, 1))
-        outputs = outputs.view(inputs_q.size(0), inputs_q.size(1), output_weights.size(0))
+        outputs, outputs_mm, outputs_r = BatchEnsembleMMNoBias.forward(matmul2_results.view(bsz, len_q, h_size),
+                                                                       output_weights,
+                                                                       ensemble_r_o, ensemble_s_o, bsz_per_n_ensemble)
 
         ctx.save_for_backward(heads_t,
                               scale_t,
                               matmul2_results,
                               dropout_results,
                               softmax_results,
-                              input_lin_q_results,
-                              input_lin_kv_results,
+                              input_lin_q_results, input_lin_q_mm, input_lin_q_r,
+                              input_lin_kv_results, input_lin_kv_mm, input_lin_kv_r,
+                              outputs_mm, outputs_r,
                               inputs_q,
                               inputs_kv,
-                              input_weights_q,
-                              input_weights_kv,
-                              output_weights,
+                              input_weights_q, ensemble_r_q, ensemble_s_q,
+                              input_weights_kv, ensemble_r_v, ensemble_s_kv,
+                              output_weights, ensemble_r_o, ensemble_s_o,
                               dropout_mask,
-                              dropout_prob_t)
+                              dropout_prob_t,
+                              ensemble_t)
 
         return outputs.detach(), softmax_results.detach()
 
@@ -154,13 +152,17 @@ class EncdecAttnFunc(torch.autograd.Function):
     def backward(ctx, output_grads, softmax_grads):
 
         heads_t, scale_t, matmul2_results, dropout_results, softmax_results \
-            , input_lin_q_results, input_lin_kv_results \
+            , input_lin_q_results, input_lin_q_mm, input_lin_q_r \
+            , input_lin_kv_results, input_lin_kv_mm, input_lin_kv_r \
             , inputs_q, inputs_kv \
-            , input_weights_q, input_weights_kv, output_weights \
-            , dropout_mask, dropout_prob_t \
+            , input_weights_q, ensemble_r_q, ensemble_s_q \
+            , input_weights_kv, ensemble_r_v, ensemble_s_kv \
+            , output_weights, ensemble_r_o, ensemble_s_o \
+            , dropout_mask, dropout_prob_t, ensemble_t \
             = ctx.saved_tensors
 
         head_dim = inputs_q.size(2) // heads_t[0]
+        bsz, len_q, hsize = inputs_q.size(1), inputs_q.size(0), inputs_q.size(2)
 
         # Slice out k,v from one big Input Linear output (should only impact meta data, no copies!)
         # Batch sizes and heads are combined to make the batch of the Batched GEMM
@@ -210,7 +212,7 @@ class EncdecAttnFunc(torch.autograd.Function):
         # Input2: (activations) [seql_k, seqs*heads, head_dim] transpose(0,1).transpose(1,2)
         # Output:               [seqs*heads, seql_q, seql_k]
         # GEMM: Per batch: ( seql_q x head_dim ) x ( head_dim x seql_k ) = ( seql_q x seql_k )
-        values_grads = torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
+        torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
 
         # Mask and Scaling for Dropout (not a publically documented op)
         dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))

@@ -268,7 +268,6 @@ def init_model_parameters(model, opt):
                 nn.init.normal_(m.weight, 1.0, init_std)
             if hasattr(m, 'bias') and m.bias is not None:
                 init_bias(m.bias)
-
         elif classname.find('RelativeTransformerEncoder') != -1:
             if hasattr(m, 'r_emb'):
                 init_weight(m.r_emb)
@@ -292,6 +291,12 @@ def init_model_parameters(model, opt):
                 init_weight(m.r_w_bias)
             if hasattr(m, 'r_r_bias'):
                 init_weight(m.r_r_bias)
+        elif classname.find('EncdecMultiheadAttn') != -1:
+            m.reset_parameters(init=opt.init)
+        elif classname.find('RelativeSelfMultiheadAttn') != -1:
+            m.reset_parameters(init=opt.init)
+        elif classname.find('PositionWiseFeedForward') != -1:
+            m.reset_parameters(init=opt.init)
 
     model.apply(weights_init)
 

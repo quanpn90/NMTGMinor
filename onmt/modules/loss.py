@@ -203,20 +203,6 @@ class NMTLossFunc(CrossEntropyLossBase):
         # return loss, loss_data, None
         return output_dict
 
-        #
-
-        # targets = targets.view(-1)
-        # if mask is not None and logprobs.dim() < 3:
-        #     """ We remove all positions with PAD """
-        #     flattened_mask = mask.view(-1)
-        #
-        #     non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
-        #
-        #     clean_targets = targets.index_select(0, non_pad_indices)
-        #
-        # else:
-        #     clean_targets = targets
-
 
 class CTCLossFunc(_Loss):
     """
