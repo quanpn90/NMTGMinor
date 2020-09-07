@@ -55,10 +55,8 @@ class SpeechBinarizer:
         if output_format == 'scp':
             assert input_format in ['kaldi', 'scp']
 
-        from kaldiio import load_scp, load_mat
         # audio_data = iter(ReadHelper('scp:' + filename))
         # data_file = open(filename)
-        # data = load_scp(filename)
         # data_keys = list(data.keys())
         # data_paths = list(data._dict.values())
 
@@ -80,8 +78,7 @@ class SpeechBinarizer:
                 path = parts[1]
                 key = parts[0]
 
-                # path = data_paths[index]
-                # feature_vector = load_mat(path)
+                # read numpy array from the ark here
                 feature_vector = ark_loader.load_mat(path)
 
                 # feature_vector.setflags(write=True)
@@ -193,6 +190,10 @@ class SpeechBinarizer:
         for idx in range(num_workers):
             final_result['data'] += result[idx]['data']
             final_result['sizes'] += result[idx]['sizes']
+
+        # remember to close the workers when its done
+        for i in range(num_workers):
+            ark_loaders[i].close()
 
         return final_result
 

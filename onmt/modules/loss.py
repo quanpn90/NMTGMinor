@@ -122,9 +122,6 @@ class NMTLossFunc(CrossEntropyLossBase):
         # the model no longer outputs logprobs, only logits
         logits = model_outputs['logprobs']
         mirror = self.mirror
-        #
-        # if not self.fast_nll:
-        #     logprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
 
         if mirror:
             reverse_outputs = model_outputs['reverse_hidden']

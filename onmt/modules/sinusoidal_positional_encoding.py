@@ -14,7 +14,7 @@ class SinusoidalPositionalEmbedding(nn.Module):
 
     def forward(self, pos_seq, sin_first=True, bsz=None):
         """
-        :param bsz:
+        :param bsz: integer to repeat
         :param pos_seq: sequences of RELATIVE position indices (can be negative for future)
         :param sin_first: in Attention is all you need paper, sin is first then cosin
         """

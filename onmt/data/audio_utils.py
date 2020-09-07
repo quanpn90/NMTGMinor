@@ -313,25 +313,34 @@ def read_kaldi(fd, endian='<', return_size=False):
 
 class ArkLoader(object):
 
-    def __init__(self):
+    def __init__(self, fastest=True):
 
         self.current_ark = None
         self.reader = None
+        self.readers = dict()
+        self.fastest = fastest
 
     def load_mat(self, ark_name, endian='<', as_bytes=False):
         assert endian in ('<', '>'), endian
         ark, offset, slices = _parse_arkpath(ark_name)
 
-        if self.current_ark != ark:
-            if self.reader is not None:
-                self.reader.close()
-            self.reader = open_like_kaldi(ark, 'rb')
+        if not self.fastest:
+            if self.current_ark != ark:
+                if self.reader is not None:
+                    self.reader.close()
+                self.reader = open_like_kaldi(ark, 'rb')
+                self.current_ark = ark
 
-        return self.read_mat(offset, slices, endian=endian, as_bytes=as_bytes)
+            return self.read_mat(self.reader, offset, slices, endian=endian, as_bytes=as_bytes)
 
-    def read_mat(self, offset, slices, endian='<', as_bytes=False):
+        else:
+            if ark not in self.readers:
+                self.readers[ark] = open_like_kaldi(ark, 'rb')
 
-        fd = self.reader
+            fd = self.readers[ark]
+            return self.read_mat(fd, offset, slices, endian=endian, as_bytes=as_bytes)
+
+    def read_mat(self, fd, offset, slices, endian='<', as_bytes=False):
 
         if offset is not None:
             fd.seek(offset)
@@ -347,4 +356,12 @@ class ArkLoader(object):
                 array = array[slices]
 
         return array
+
+    def close(self):
+
+        if self.reader is not None:
+            self.reader.close()
+
+        for k in self.readers:
+            self.readers[k].close()
 

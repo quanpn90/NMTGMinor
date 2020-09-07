@@ -80,7 +80,8 @@ class Optim(object):
                     print("Note: AMSGRAD is not compatible with Fused Adam")
                 self.optimizer = apex.optimizers.FusedAdam(self.params, lr=self.lr,
                                                            betas=(self.beta1, self.beta2), eps=1e-9,
-                                                           weight_decay=self.weight_decay, amsgrad=False)
+                                                           weight_decay=self.weight_decay, amsgrad=False,
+                                                           set_grad_none=False)
             except RuntimeError:
                 fast_adam = False
 

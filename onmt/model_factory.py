@@ -93,7 +93,20 @@ def build_tm_model(opt, dicts):
         encoder = SpeechTransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
         decoder = SpeechTransformerDecoder(opt, embedding_tgt, positional_encoder,
                                            language_embeddings=language_embeddings)
-        model = Transformer(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss)
+        model = RelativeTransformer(encoder, decoder, nn.ModuleList(generators),
+                                    None, None,mirror=opt.mirror_loss)
+
+    elif opt.model in ['multilingual_translator', 'translator']:
+        onmt.constants.init_value = opt.param_init
+        from onmt.models.multilingual_translator.relative_transformer import \
+            RelativeTransformerEncoder, RelativeTransformerDecoder
+
+        encoder = RelativeTransformerEncoder(opt, embedding_src, None,
+                                             opt.encoder_type, language_embeddings=language_embeddings)
+        decoder = RelativeTransformerDecoder(opt, embedding_tgt, None, language_embeddings=language_embeddings)
+
+        model = RelativeTransformer(encoder, decoder, nn.ModuleList(generators),
+                                    None, None, mirror=opt.mirror_loss)
 
     elif opt.model in ['transformer', 'stochastic_transformer']:
         onmt.constants.init_value = opt.param_init
@@ -117,6 +130,8 @@ def build_tm_model(opt, dicts):
         model = Transformer(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss)
 
     elif opt.model == 'relative_transformer':
+        from onmt.models.relative_transformer import \
+            RelativeTransformerEncoder, RelativeTransformerDecoder
 
         if opt.encoder_type == "text":
             encoder = RelativeTransformerEncoder(opt, embedding_src, None,
@@ -235,13 +250,20 @@ def init_model_parameters(model, opt):
         else:
             nn.init.normal_(weight, 0.0, init_std)
 
-    def init_embed(weight):
-        # nn.init.uniform_(weight, -0.01, 0.01)
-        nn.init.normal_(weight, 0.0, 0.02)
+    def init_embed(weight, padding_idx=0):
+
+        std_ = opt.model_size ** -0.5
+        if opt.init_embedding == 'normal':
+            nn.init.normal_(weight, 0.0, std_)
+        else:
+            nn.init.uniform_(weight, -std_, std_)
+
+        # for some reason normalizing the weights at fp16 doesnt work when setting the padding to 0
+        if not opt.fix_norm_output_embedding:
+            nn.init.constant_(weight[padding_idx], 0)
 
     def init_bias(bias):
-        # nn.init.constant_(bias, 0.0)
-        nn.init.normal_(bias, 0.0, init_std)
+        nn.init.constant_(bias, 0.0)
 
     def weights_init(m):
         classname = m.__class__.__name__
@@ -257,12 +279,10 @@ def init_model_parameters(model, opt):
                 if m.no_need_to_initialize:
                     initialize = False
             if initialize:
-                if opt.init_embedding == 'normal':
-                    if hasattr(m, 'weight'):
-                        init_weight(m.weight)
-                elif opt.init_embedding in ['uniform', 'xavier']:
-                    if hasattr(m, 'weight'):
-                        init_embed(m.weight)
+                if hasattr(m, 'weight') and hasattr(m, 'padding_idx'):
+                    init_embed(m.weight, m.padding_idx)
+            # nn.init.constant_(m.weight[m.padding_idx], 0.0)
+
         elif classname.find('LayerNorm') != -1 or classname.find('FusedLayerNorm') != -1:
             if hasattr(m, 'weight'):
                 nn.init.normal_(m.weight, 1.0, init_std)

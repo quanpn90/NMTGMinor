@@ -58,11 +58,7 @@ class SpeechTransformerEncoder(TransformerEncoder):
             # linearly decay the death rate
             death_r = (_l + 1.0) / self.layers * self.death_rate
 
-            if not self.reversible:
-                block = RelativeTransformerEncoderLayer(self.opt, death_rate=death_r)
-            else:
-                block = ReversibleTransformerEncoderLayer(self.opt, death_rate=death_r)
-
+            block = RelativeTransformerEncoderLayer(self.opt, death_rate=death_r)
             self.layer_modules.append(block)
 
     def forward(self, input, input_pos=None, input_lang=None, streaming=False, **kwargs):
@@ -212,10 +208,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
         e_length = expected_length(self.layers, 0.0)
         self.opt.ignore_source = self.ignore_source
         opt = self.opt
-        if self.reversible:
-            print("* Transformer Reversible Decoder with Relative Attention with %.2f layers" % e_length)
-        else:
-            print("* Speech Transformer Decoder with Relative Attention with %.2f layers" % e_length)
+        print("* Speech Transformer Decoder with Relative Attention with %.2f layers" % e_length)
 
         self.layer_modules = nn.ModuleList()
 
@@ -227,10 +220,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
             lid_network = LIDFeedForward(opt.model_size, 2 * opt.model_size, opt.bottleneck_size,
                                           opt.n_languages, dropout=opt.dropout)
 
-            if not self.reversible:
-                block = RelativeTransformerDecoderLayer(self.opt, death_rate=death_r, lid_net=lid_network)
-            else:
-                block = ReversibleTransformerDecoderLayer(self.opt, death_rate=death_r)
+            block = RelativeTransformerDecoderLayer(self.opt, death_rate=death_r, lid_net=lid_network)
 
             self.layer_modules.append(block)
 

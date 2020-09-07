@@ -11,6 +11,10 @@ from onmt.data.indexed_dataset import IndexedDatasetBuilder
 
 import h5py as h5
 import numpy as np
+import warnings
+
+warnings.filterwarnings("ignore", category=UserWarning)
+
 
 parser = argparse.ArgumentParser(description='preprocess.py')
 onmt.markdown.add_md_help_argument(parser)
@@ -263,7 +267,6 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
     n_unk_words = 0
 
     print('[INFO] Processing %s  ...' % src_file)
-
     binarized_src = SpeechBinarizer.binarize_file(src_file, input_format=asr_format,
                                                   output_format=output_format, concat=concat,
                                                   stride=stride, fp16=fp16, prev_context=prev_context,

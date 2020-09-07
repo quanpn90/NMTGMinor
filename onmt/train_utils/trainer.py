@@ -191,7 +191,7 @@ class BaseTrainer(object):
 
         try:
             targets = batch.get('target_output')
-            tgt_mask = targets.data.ne(onmt.constants.PAD)
+            tgt_mask = None
             outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                  zero_encoder=opt.zero_encoder,
                                  mirror=opt.mirror_loss, streaming_state=streaming_state)
@@ -247,11 +247,19 @@ class BaseTrainer(object):
                 with amp.scale_loss(full_loss, optimizer) as scaled_loss:
                     scaled_loss.backward()
             else:
-                loss.backward()
+                loss.div_(batch.tgt_size).backward()
 
             if self.opt.memory_profiling:
                 print('========= after backward =========')
                 reporter.report(verbose=True)
+
+            # self.model.zero_grad()
+            self.optim.zero_grad()
+            self.optim.step()
+
+            for group in optimizer.param_groups:
+                if 'step' in group:
+                    group['step'] = 0
 
         except RuntimeError as e:
             if 'out of memory' in str(e):
@@ -479,7 +487,7 @@ class XETrainer(BaseTrainer):
             # for b in range(len(batches)):
             batch = next(epoch_iterator)
             batch = rewrap(batch)
-            if grad_scaler == -1 :
+            if grad_scaler == -1:
                 grad_scaler = self.opt.batch_size_words if self.opt.update_frequency > 1 else batch.tgt_size
 
             if self.cuda:
@@ -496,7 +504,7 @@ class XETrainer(BaseTrainer):
                 # outputs is a dictionary containing keys/values necessary for loss function
                 # can be flexibly controlled within models for easier extensibility
                 targets = batch.get('target_output')
-                tgt_mask = targets.data.ne(onmt.constants.PAD)
+                tgt_mask = targets.ne(onmt.constants.PAD)
                 outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                      zero_encoder=opt.zero_encoder,
                                      mirror=opt.mirror_loss, streaming_state=streaming_state)

@@ -365,7 +365,7 @@ class TransformerDecoder(nn.Module):
                 raise NotImplementedError
         return emb
 
-    def forward(self, input, context, src, input_lang=None, **kwargs):
+    def forward(self, input, context, src, tgt_lang=None, **kwargs):
         """
         Inputs Shapes:
             input: (Variable) batch_size x len_tgt (to be transposed)
@@ -379,7 +379,7 @@ class TransformerDecoder(nn.Module):
 
         """ Embedding: batch_size x len_tgt x d_model """
 
-        emb = self.process_embedding(input, input_lang)
+        emb = self.process_embedding(input, tgt_lang)
 
         if context is not None:
             if self.encoder_type == "audio":
@@ -611,8 +611,9 @@ class Transformer(NMTModel):
         if zero_encoder:
             context.zero_()
 
-        decoder_output = self.decoder(tgt, context, src, input_lang=tgt_lang, input_pos=tgt_pos, streaming=streaming,
-                                      src_lengths=src_lengths, tgt_lengths=tgt_lengths, streaming_state=streaming_state)
+        decoder_output = self.decoder(tgt, context, src, tgt_lang=tgt_lang, input_pos=tgt_pos, streaming=streaming,
+                                      src_lengths=src_lengths, tgt_lengths=tgt_lengths,
+                                      streaming_state=streaming_state)
 
         # update the streaming state again
         decoder_output = defaultdict(lambda: None, decoder_output)
@@ -644,7 +645,7 @@ class Transformer(NMTModel):
             tgt_reverse_input = tgt_reverse_input.transpose(0, 1)
             # perform an additional backward pass
             reverse_decoder_output = self.mirror_decoder(tgt_reverse_input, context, src,
-                                                         input_lang=tgt_lang, input_pos=tgt_pos)
+                                                         tgt_lang=tgt_lang, input_pos=tgt_pos)
 
             reverse_decoder_output['src'] = src
             reverse_decoder_output['context'] = context
@@ -669,7 +670,7 @@ class Transformer(NMTModel):
 
             src_input = src_input.transpose(0, 1)
             rec_context = self.rec_linear(output_dict['hidden'])  # T x B x H
-            rec_decoder_output = self.rec_decoder(src_input, rec_context, tgt, input_lang=src_lang, input_pos=src_pos)
+            rec_decoder_output = self.rec_decoder(src_input, rec_context, tgt, tgt_lang=src_lang, input_pos=src_pos)
             rec_output = rec_decoder_output['hidden']
             rec_logprobs = self.rec_generator[0](rec_decoder_output)
 
@@ -713,7 +714,7 @@ class Transformer(NMTModel):
         gold_scores = context.new(batch_size).zero_()
         gold_words = 0
         allgold_scores = list()
-        decoder_output = self.decoder(tgt_input, context, src, input_lang=tgt_lang, input_pos=tgt_pos)['hidden']
+        decoder_output = self.decoder(tgt_input, context, src, tgt_lang=tgt_lang, input_pos=tgt_pos)['hidden']
 
         output = decoder_output
 

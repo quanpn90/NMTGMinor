@@ -63,6 +63,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
         self.reversible = opt.src_reversible
         self.n_heads = opt.n_heads
         self.fast_self_attn = opt.fast_self_attention
+        self.add_position_encoding = opt.add_position_encoding
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type,
@@ -308,6 +309,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
                                                          language_embeddings,
                                                          ignore_source,
                                                          allocate_positions=False)
+
         self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
         # Parameters for the position biases - deprecated. kept for backward compatibility
@@ -381,39 +383,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
                     mask = torch.cat([prev_mask, current_mask], dim=0)
                 else:
                     mask = current_mask
-
-        # elif self.stream_context == 'local_xl':
-        #     # Local extra context: only attends to the aligned context + extra mem
-        #     # This mode ensures that all target sentences have the same memory, not uneven like "global"
-        #
-        #     for (src_length, tgt_length) in zip(src_lengths, tgt_lengths):
-        #
-        #         # First: we read the existing mask to know where we are
-        #         if mask is None:
-        #             prev_src_length = 0
-        #             prev_tgt_length = 0
-        #         else:
-        #             prev_src_length, prev_tgt_length = mask.size(1), mask.size(0)
-        #
-        #             # current tgt sent attend to only current src sent
-        #             if prev_src_length > 0:
-        #                 current_mask = torch.cat([input.new_ones(tgt_length, prev_src_length - extra_context_length),
-        #                                           input.new_zeros(tgt_length, src_length + extra_context_length)], dim=-1)
-        #             else:
-        #                 current_mask = input.new_zeros(tgt_length, src_length + extra_context_length)
-        #
-        #                 # the previous target cannot attend to the current source
-        #                 if prev_tgt_length > 0:
-        #                     prev_mask = input.new_ones(prev_tgt_length, src_length)
-        #                     prev_mask = torch.cat([mask, prev_mask], dim=-1)
-        #                 else:
-        #                     prev_mask = None
-        #
-        #                 # the output mask has two parts: the prev and the current
-        #                 if prev_mask is not None:
-        #                     mask = torch.cat([prev_mask, current_mask], dim=0)
-        #                 else:
-        #                     mask = current_mask
 
         elif self.stream_context in ['local', 'limited']:
             # Local context: only attends to the aligned context
@@ -502,7 +471,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
     # TODO: merging forward_stream and forward
     # TODO: write a step function for encoder
 
-    def forward(self, input, context, src, input_pos=None, input_lang=None, streaming=False, **kwargs):
+    def forward(self, input, context, src, input_pos=None, tgt_lang=None, streaming=False, **kwargs):
         """
                 Inputs Shapes:
                     input: (Variable) batch_size x len_tgt (wanna tranpose)
@@ -536,7 +505,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
             extra_context = None
 
         if self.use_language_embedding:
-            lang_emb = self.language_embeddings(input_lang)  # B x H or 1 x H
+            lang_emb = self.language_embeddings(tgt_lang)  # B x H or 1 x H
             if self.language_embedding_type == 'sum':
                 emb = emb + lang_emb
             elif self.language_embedding_type == 'concat':
@@ -593,7 +562,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
             hids = [output]
             if extra_context is not None:
                 context = torch.cat([extra_context, context], dim=0)
-                # print(context.size(), context_attn_mask.size())
 
         pos_emb = self.preprocess_layer(pos_emb)
 
@@ -610,12 +578,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
                 # self.r_r_bias, dec_attn_mask, mask_src)
                 mems_i = mems[i] if mems is not None and streaming and \
                                     self.stream_context in ['local', 'global'] and self.max_memory_size > 0 else None
-                # if streaming:
-                #     buffer = streaming_state.tgt_buffer[i]
-                #     output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, context_attn_mask,
-                #                                      incremental=True, incremental_cache=buffer, reuse_source=False)
-                #     streaming_state.tgt_buffer[i] = buffer
-                # else:
 
                 output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src, mems=mems_i)
                 if streaming:
@@ -900,7 +862,8 @@ class RelativeTransformer(Transformer):
             # if the previous stream is None (the first segment in the stream)
             # then proceed normally like normal translation
             # init a new stream state
-            streaming_state = self.init_stream()
+            # if streaming:
+            streaming_state = self.init_stream() if streaming else None
 
             encoder_output = self.encoder(src_transposed, input_pos=src_pos,
                                           input_lang=src_lang, src_lengths=src_lengths,
@@ -967,7 +930,7 @@ class RelativeTransformer(Transformer):
         output_dict['src'] = decoder_state.src.transpose(0, 1)
 
         log_prob = self.generator[0](output_dict).squeeze(0)
-        log_prob = F.log_softmax(log_prob, dim=-1, dtype=torch.float32)
+        log_prob = F.log_softmax(log_prob.float(), dim=-1)
 
         coverage = output_dict['coverage']
         last_coverage = coverage[:, -1, :].squeeze(1)

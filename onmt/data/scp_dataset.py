@@ -2,6 +2,7 @@ import torch
 from kaldiio import load_mat
 from functools import lru_cache
 import numpy as np
+from .audio_utils import _parse_arkpath, ArkLoader
 
 
 class SCPIndexDataset(torch.utils.data.Dataset):
@@ -18,6 +19,7 @@ class SCPIndexDataset(torch.utils.data.Dataset):
         self._sizes = len(self.scp_path_list)
         self._dtype = torch.float32
         self.concat = concat
+        self.reader = ArkLoader()
 
     @property
     def dtype(self):
@@ -34,7 +36,7 @@ class SCPIndexDataset(torch.utils.data.Dataset):
     @lru_cache(maxsize=8)
     def __getitem__(self, i):
         scp_path = self.scp_path_list[i]
-        mat = load_mat(scp_path)
+        mat = self.reader.load_mat(scp_path)
 
         feature_vector = torch.from_numpy(mat)
         concat = self.concat

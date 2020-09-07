@@ -31,7 +31,7 @@ class Generator(nn.Module):
         target_mask = output_dicts['target_mask']
 
         if not fix_norm:
-            logits = self.linear(input).float()
+            logits = self.linear(input)
         else:
             normalized_weights = F.normalize(self.linear.weight, dim=-1)
             normalized_bias = self.linear.bias

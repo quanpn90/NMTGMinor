@@ -94,7 +94,8 @@ def collect_fn(src_data, tgt_data,
                src_lang_data, tgt_lang_data,
                src_align_right, tgt_align_right,
                src_type='text',
-               augmenter=None, upsampling=False):
+               augmenter=None, upsampling=False,
+               bilingual=False):
     tensors = dict()
     if src_data is not None:
         tensors['source'], tensors['source_pos'], src_lengths = merge_data(src_data, align_right=src_align_right,
@@ -468,10 +469,16 @@ class Dataset(torch.utils.data.Dataset):
         if self.tgt:
             tgt_data = [sample['tgt'] for sample in samples]
 
-        if self.src_langs is not None:
-            src_lang_data = [sample['src_lang'] for sample in samples]  # should be a tensor [0]
-        if self.tgt_langs is not None:
-            tgt_lang_data = [sample['tgt_lang'] for sample in samples]  # should be a tensor [1]
+        if self.bilingual:
+            if self.src_langs is not None:
+                src_lang_data = [self.src_langs[0]]  # should be a tensor [0]
+            if self.tgt_langs is not None:
+                tgt_lang_data = [self.tgt_langs[0]]  # should be a tensor [1]
+        else:
+            if self.src_langs is not None:
+                src_lang_data = [sample['src_lang'] for sample in samples]  # should be a tensor [0]
+            if self.tgt_langs is not None:
+                tgt_lang_data = [sample['tgt_lang'] for sample in samples]  # should be a tensor [1]
 
         batch = collect_fn(src_data, tgt_data=tgt_data,
                            src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,

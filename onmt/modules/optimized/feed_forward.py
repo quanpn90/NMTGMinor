@@ -30,12 +30,12 @@ class PositionWiseFeedForward(nn.Module):
 
         self.reset_parameters()
         self.optimized = 2
-        try:
-            from apex.mlp.mlp import mlp_function
-            self.optimized = 1
-            self.fast_mlp_func = mlp_function
-        except ModuleNotFoundError as e:
-            self.optimized = 2
+        # try:
+        #     from apex.mlp.mlp import mlp_function
+        #     self.optimized = 1
+        #     self.fast_mlp_func = mlp_function
+        # except ModuleNotFoundError as e:
+        #     self.optimized = 1
 
     def reset_parameters(self, init='normal'):
         if init == 'normal':
@@ -53,7 +53,7 @@ class PositionWiseFeedForward(nn.Module):
         nn.init.constant_(self.in_proj_bias, 0.0)
         nn.init.constant_(self.out_proj_bias, 0.0)
 
-    def forward(self, input):
+    def forward(self, input, *args):
 
         if self.optimized == 2 or not input.is_cuda:
             hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)

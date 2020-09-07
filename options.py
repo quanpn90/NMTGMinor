@@ -13,6 +13,10 @@ def make_parser(parser):
                         help='Default data format: raw')
     parser.add_argument('-data_ratio', required=False, default='1',
                         help='ratio how to use the data and additiona data  e.g. 1;2;2; default 1;1;1;1;...')
+
+    parser.add_argument('-multi_dataset', action='store_true',
+                        help='Reading multiple datasets (sharing the same dictionary)')
+
     parser.add_argument('-patch_vocab_multiplier', type=int, default=1,
                         help='Pad vocab so that the size divides by this multiplier')
     parser.add_argument('-src_align_right', action="store_true",
@@ -219,7 +223,10 @@ def make_parser(parser):
                         help='Set the model into the experimental mode (trying unverified features)')
     parser.add_argument('-join_embedding', action='store_true',
                         help='Jointly train the embedding of encoder and decoder in one weight')
-
+    parser.add_argument('-add_position_encoding', action='store_true',
+                        help='Adding pos encodings to embedding (like Transformer)')
+    parser.add_argument('-batch_ensemble', type=int, default=0,
+                        help='To use batch ensemble algorithm')
 
     # GPU
     parser.add_argument('-gpus', default=[], nargs='+', type=int,
@@ -287,6 +294,12 @@ def make_parser(parser):
     parser.add_argument('-bottleneck_size', type=int, default=64,
                         help="Bottleneck size for the LFV vector).")
 
+    parser.add_argument('-multilingual_factorized_weights', action='store_true',
+                        help='Use multilingual language identifier to get LFV for each language')
+    parser.add_argument('-mfw_rank', type=int, default=1,
+                        help="Bottleneck size for the LFV vector).")
+
+
     # for Reformer
     # parser.add_argument('-lsh_src_attention', action='store_true',
     #                     help='Using LSH for source attention')
@@ -326,7 +339,7 @@ def backward_compatible(opt):
         opt.input_size = 40
 
     if not hasattr(opt, 'init_embedding'):
-        opt.init_embedding = 'xavier'
+        opt.init_embedding = 'normal'
 
     if not hasattr(opt, 'ctc_loss'):
         opt.ctc_loss = 0
@@ -429,5 +442,20 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'bayes_by_backprop'):
         opt.bayes_by_backprop = False
+
+    if not hasattr(opt, 'add_position_encoding'):
+        opt.add_position_encoding = False
+
+    if not hasattr(opt, 'batch_ensemble'):
+        opt.batch_ensemble = 0
+
+    if not hasattr(opt, 'multilingual_factorized_weights'):
+        opt.multilingual_factorized_weights = False
+
+    if not hasattr(opt, 'mfw_rank'):
+        opt.mfw_rank = 1
+
+    if not hasattr(opt, 'lfv_multilingual'):
+        opt.lfv_multilingual = False
 
     return opt
