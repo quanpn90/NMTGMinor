@@ -357,7 +357,7 @@ def save_dataset(path, data, format, dicts, src_type):
 
             if data[set_] is not None:
 
-                np_array = np.asarray(train[set_])
+                np_array = np.asarray(data[set_])
                 np.save(os.path.join(path, "data.%s.npy") % set_, np_array)
             else:
                 print("Training %s not found " % set_)

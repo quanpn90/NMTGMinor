@@ -44,8 +44,6 @@ torch.manual_seed(opt.seed)
 
 def main():
 
-    print("HELLO")
-
     if not opt.multi_dataset:
         if opt.data_format in ['bin', 'raw']:
             start = time.time()
@@ -378,6 +376,9 @@ def main():
                 else:
                     raise NotImplementedError
 
+        train_data = train_sets
+        valid_data = valid_sets
+
     if opt.load_from:
         checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
         print("* Loading dictionaries from the checkpoint")
@@ -431,16 +432,13 @@ def main():
     if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
         raise NotImplementedError("Multi-GPU training is not supported at the moment.")
 
-    if not opt.multi_dataset:
-        if opt.bayes_by_backprop:
+    if opt.bayes_by_backprop:
 
-            from onmt.train_utils.bayes_by_backprop_trainer import BayesianTrainer
-            trainer = BayesianTrainer(model, loss_function, train_data, valid_data, dicts, opt)
+        from onmt.train_utils.bayes_by_backprop_trainer import BayesianTrainer
+        trainer = BayesianTrainer(model, loss_function, train_data, valid_data, dicts, opt)
 
-        else:
-            trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
     else:
-        raise NotImplementedError
+        trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
 
     trainer.run(checkpoint=checkpoint)
 

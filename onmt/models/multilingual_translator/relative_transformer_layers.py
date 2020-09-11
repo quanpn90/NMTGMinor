@@ -9,6 +9,8 @@ from onmt.modules.optimized.feed_forward import PositionWiseFeedForward
 # from onmt.modules.batch_ensemble.be_encdec_attention import BEEncdecMultiheadAttn
 # from onmt.modules.batch_ensemble.be_relative_attention import BERelativeSelfMultiheadAttn
 from onmt.modules.multilingual_factorized.linear import MFWPositionWiseFeedForward
+from onmt.modules.multilingual_factorized.encdec_attention import MFWEncdecMultiheadAttn
+from onmt.modules.multilingual_factorized.relative_attention import MFWRelativeSelfMultiheadAttn
 
 
 class RelativeTransformerEncoderLayer(nn.Module):
@@ -33,10 +35,15 @@ class RelativeTransformerEncoderLayer(nn.Module):
             self.feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                           variational=self.variational,
                                                           n_languages=opt.n_languages, rank=opt.mfw_rank)
+
+            self.multihead = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
+                                                          n_languages=opt.n_languages, rank=opt.mfw_rank)
+
         else:
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                        variational=self.variational)
-        self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+
+            self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
     def forward(self, input, pos_emb, attn_mask, incremental=False, incremental_cache=None, mems=None,
                 src_lang=None):
@@ -52,8 +59,12 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
             query = self.preprocess_attn(input)
 
-            out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
-                                    incremental=incremental, incremental_cache=incremental_cache)
+            if self.mfw:
+                out, _ = self.multihead(query, pos_emb, src_lang, attn_mask, None, mems=mems,
+                                        incremental=incremental, incremental_cache=incremental_cache)
+            else:
+                out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
+                                        incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -101,7 +112,11 @@ class RelativeTransformerDecoderLayer(nn.Module):
             #                                                ensemble=self.batch_ensemble)
             # else:
 
-        self.multihead_src = EncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout)
+            if not self.mfw:
+                self.multihead_src = EncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout)
+            else:
+                self.multihead_src = MFWEncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout,
+                                                            n_languages=opt.n_languages, rank=opt.mfw_rank)
 
         self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
@@ -109,16 +124,19 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
         d_head = opt.model_size // opt.n_heads
 
-        self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
-
         if self.mfw:
             self.feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                           variational=self.variational,
                                                           n_languages=opt.n_languages, rank=opt.mfw_rank)
+
+            self.multihead_tgt = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
+                                                              n_languages=opt.n_languages, rank=opt.mfw_rank)
         else:
 
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                        variational=self.variational)
+
+            self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
     def forward(self, input, context, pos_emb, mask_tgt, mask_src,
                 src_lang=None, tgt_lang=None,
@@ -144,8 +162,12 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
             query = self.preprocess_attn(input)
 
-            out, _ = self.multihead_tgt(query, pos_emb, None, mask_tgt, mems=mems,
-                                        incremental=incremental, incremental_cache=incremental_cache)
+            if self.mfw:
+                out, _ = self.multihead_tgt(query, pos_emb, tgt_lang, None, mask_tgt, mems=mems,
+                                            incremental=incremental, incremental_cache=incremental_cache)
+            else:
+                out, _ = self.multihead_tgt(query, pos_emb, None, mask_tgt, mems=mems,
+                                            incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -159,9 +181,15 @@ class RelativeTransformerDecoderLayer(nn.Module):
             if not self.ignore_source:
                 query = self.preprocess_src_attn(input)
                 incremental_source = incremental and reuse_source
-                out, coverage = self.multihead_src(query, context, context, mask_src,
-                                                   incremental=incremental_source,
-                                                   incremental_cache=incremental_cache)
+
+                if self.mfw:
+                    out, coverage = self.multihead_src(query, context, context, src_lang, tgt_lang, mask_src,
+                                                       incremental=incremental_source,
+                                                       incremental_cache=incremental_cache)
+                else:
+                    out, coverage = self.multihead_src(query, context, context, mask_src,
+                                                       incremental=incremental_source,
+                                                       incremental_cache=incremental_cache)
 
                 # rescaling before residual
                 if self.training and self.death_rate > 0:

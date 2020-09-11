@@ -210,7 +210,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         extra_context = None
 
         if self.use_language_embedding:
-            lang_emb = self.language_embeddings(input_lang)  # B x H or 1 x H
+            lang_emb = self.language_embeddings(tgt_lang)  # B x H or 1 x H
             if self.language_embedding_type == 'sum':
                 emb = emb + lang_emb
             elif self.language_embedding_type == 'concat':
@@ -279,7 +279,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         context = decoder_state.context
         buffers = decoder_state.attention_buffers
         lang = decoder_state.tgt_lang
-        mask_src = decoder_state.src_mask
+        src_lang = decoder_state.src_lang
         buffering = decoder_state.buffering
 
         if decoder_state.concat_input_seq:
@@ -373,11 +373,12 @@ class RelativeTransformerDecoder(TransformerDecoder):
             else:
                 if buffering:
                     output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, mask_src,
-                                                     tgt_lang=lang,
+                                                     tgt_lang=lang, src_lang=src_lang,
                                                      incremental=True, incremental_cache=buffer)
                     decoder_state.update_attention_buffer(buffer, i)
                 else:
-                    output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src, tgt_lang=lang)
+                    output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                                                src_lang=src_lang, tgt_lang=lang)
 
         # normalize and take the last time step
         output = self.postprocess_layer(output)

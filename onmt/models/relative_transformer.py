@@ -627,7 +627,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
         context = decoder_state.context
         buffers = decoder_state.attention_buffers
         lang = decoder_state.tgt_lang
-        mask_src = decoder_state.src_mask
         buffering = decoder_state.buffering
 
         if decoder_state.concat_input_seq:
@@ -871,12 +870,12 @@ class RelativeTransformer(Transformer):
 
             if streaming:
                 decoder_state = StreamDecodingState(src, tgt_lang, encoder_output['context'],
-                                                    encoder_output['src_mask'],
+                                                    src_lang,
                                                     beam_size=beam_size, model_size=self.model_size, type=type,
                                                     cloning=True, streaming_state=streaming_state)
             else:
                 decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'],
-                                                         encoder_output['src_mask'],
+                                                         src_lang,
                                                          beam_size=beam_size, model_size=self.model_size, type=type)
         else:
             streaming_state = previous_decoding_state.streaming_state

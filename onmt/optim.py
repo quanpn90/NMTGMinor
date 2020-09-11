@@ -190,6 +190,12 @@ class Optim(object):
     def getLearningRate(self):
         return self.lr
 
+    def reset(self):
+        self._step = 0
+        for group in self.optimizer.param_groups:
+            if 'step' in group:
+                group['step'] = 0
+
     def state_dict(self):
         state_dict = self.optimizer.state_dict()
         state_dict['_step'] = self._step

@@ -14,6 +14,7 @@ import onmt
 import onmt.markdown
 import onmt.modules
 from onmt.data.data_iterator import DataIterator
+from onmt.data.multidata_iterator import MultiDataIterator
 from onmt.data.dataset import rewrap
 from onmt.model_factory import build_model, build_language_model, optimize_model
 from onmt.model_factory import init_model_parameters
@@ -26,6 +27,21 @@ def varname(p):
         m = re.search(r'\bvarname\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)', line)
         if m:
             return m.group(1)
+
+
+def generate_data_iterator(dataset, seed, num_workers=1, epoch=1., buffer_size=0):
+
+    # check if dataset is a list:
+    if isinstance(dataset, list):
+        # this is a multidataset
+        data_iterator = MultiDataIterator(dataset, seed=seed, num_workers=num_workers,
+                                          epoch=epoch, buffer_size=buffer_size)
+    else:
+
+        data_iterator = DataIterator(dataset, dataset.collater, dataset.batches, seed=seed,
+                                     num_workers=num_workers, epoch=epoch, buffer_size=buffer_size)
+
+    return data_iterator
 
 
 class BaseTrainer(object):
@@ -170,7 +186,8 @@ class BaseTrainer(object):
             from pytorch_memlab import MemReporter
             reporter = MemReporter()
 
-        batch = self.train_data.get_largest_batch()
+        batch = self.train_data[0].get_largest_batch() if isinstance(self.train_data, list) \
+            else self.train_data.get_largest_batch()
         opt = self.opt
 
         if self.cuda:
@@ -256,10 +273,10 @@ class BaseTrainer(object):
             # self.model.zero_grad()
             self.optim.zero_grad()
             self.optim.step()
-
-            for group in optimizer.param_groups:
-                if 'step' in group:
-                    group['step'] = 0
+            self.optim.reset()
+            # for group in optimizer.param_groups:
+            #     if 'step' in group:
+            #         group['step'] = 0
 
         except RuntimeError as e:
             if 'out of memory' in str(e):
@@ -268,7 +285,7 @@ class BaseTrainer(object):
                 raise e
 
         if oom:
-            print("* Warning: out-of-memory in warming up. This is due to the largest batch is too big for the GPU")
+            print("* Warning: out-of-memory in warming up. This is due to the largest batch is too big for the GPU.")
         else:
             print("* Warming up successuflly.")
 
@@ -368,8 +385,11 @@ class XETrainer(BaseTrainer):
         total_words = 0
         opt = self.opt
 
-        data_iterator = DataIterator(data, data.collater, data.batches, seed=self.opt.seed,
-                                     num_workers=opt.num_workers, epoch=1, buffer_size=opt.buffer_size)
+        # the data iterator creates an epoch iterator
+        # data_iterator = DataIterator(data, data.collater, data.batches, seed=self.opt.seed,
+        #                              num_workers=opt.num_workers, epoch=1, buffer_size=opt.buffer_size)
+        data_iterator = generate_data_iterator(data, seed=self.opt.seed,
+                                               num_workers=opt.num_workers, epoch=1, buffer_size=opt.buffer_size)
         epoch_iterator = data_iterator.next_epoch_itr(False, pin_memory=False)
 
         self.model.eval()
@@ -438,8 +458,12 @@ class XETrainer(BaseTrainer):
         self.model.reset_states()
 
         dataset = train_data
-        data_iterator = DataIterator(dataset, dataset.collater, dataset.batches, seed=self.opt.seed,
-                                     num_workers=opt.num_workers, epoch=epoch, buffer_size=opt.buffer_size)
+
+        # data iterator: object that controls the
+        # data_iterator = DataIterator(dataset, dataset.collater, dataset.batches, seed=self.opt.seed,
+        #                              num_workers=opt.num_workers, epoch=epoch, buffer_size=opt.buffer_size)
+        data_iterator = generate_data_iterator(dataset, seed=self.opt.seed, num_workers=opt.num_workers,
+                                               epoch=epoch, buffer_size=opt.buffer_size)
 
         if resume:
             data_iterator.load_state_dict(itr_progress)
@@ -467,22 +491,11 @@ class XETrainer(BaseTrainer):
         else:
             streaming_state = None
 
-        i = data_iterator.iterations_in_epoch
+        i = data_iterator.iterations_in_epoch if not isinstance(train_data, list) else epoch_iterator.n_yielded
+
         while not data_iterator.end_of_epoch():
 
             curriculum = (epoch < opt.curriculum)
-
-            # if (len(self.additional_data) > 0 and
-            #         i % self.additional_data_ratio[0] == 0):
-            #     for j in range(len(self.additional_data)):
-            #         for k in range(self.additional_data_ratio[j + 1]):
-            #             if self.additional_data_iteration[j] == len(self.additional_data[j]):
-            #                 self.additional_data_iteration[j] = 0
-            #                 self.additional_data[j].shuffle()
-            #                 self.additional_batch_order[j] = self.additional_data[j].create_order()
-            #
-            #             batches.append(self.additional_data[j].next()[0])
-            #             self.additional_data_iteration[j] += 1
 
             # for b in range(len(batches)):
             batch = next(epoch_iterator)

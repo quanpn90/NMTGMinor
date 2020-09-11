@@ -128,11 +128,11 @@ class MultilingualLinear(torch.nn.Module):
             torch.nn.init.xavier_uniform_(self.weight)
 
         # for batch ensemble we init r_i and s_i with random sign vectors
-        with torch.no_grad():
-            self.r.bernoulli_(0.5).mul_(-2).add_(1)
-            self.s.bernoulli_(0.5).mul_(-2).add_(1)
-        # torch.nn.init.normal_(self.r, 0.0, 0.02)
-        # torch.nn.init.normal_(self.s, 0.0, 0.02)
+        # with torch.no_grad():
+        #     self.r.bernoulli_(0.5).mul_(-2).add_(1)  # -1 1 -1 1
+        #     self.s.bernoulli_(0.5).mul_(-2).add_(1)
+        torch.nn.init.normal_(self.r, 0.0, 0.1)
+        torch.nn.init.normal_(self.s, 0.0, 0.1)
 
     def forward(self, input, indices=None):
         """
@@ -150,25 +150,25 @@ class MultilingualLinear(torch.nn.Module):
             # weight_mask = torch.bmm(s.unsqueeze(-1), r.unsqueeze(1))
             weight_mask = torch.bmm(r.unsqueeze(-1), s.unsqueeze(1))
             weight_mask = torch.sum(weight_mask, dim=0)
-            weight_ = self.weight * weight_mask
+            weight_ = self.weight + weight_mask
             input = F.linear(input, weight_.t(), self.bias)
             return input
         else:
             print(indices.size(), input.size())
             raise NotImplementedError
 
-        if len(indices.shape) == 1:
-            r = torch.index_select(self.r, 0, indices)
-            s = torch.index_select(self.s, 0, indices)
-        else:
-            print("T x B language factors not implemented atm.")
-            raise NotImplementedError
-
-        input = torch.mul(input.unsqueeze(2), r)
-        input = F.linear(input, self.weight)
-        input = torch.mul(input, s)
-        input = torch.sum(input, dim=2).add(self.bias)
-        return input
+        # if len(indices.shape) == 1:
+        #     r = torch.index_select(self.r, 0, indices)
+        #     s = torch.index_select(self.s, 0, indices)
+        # else:
+        #     print("T x B language factors not implemented atm.")
+        #     raise NotImplementedError
+        #
+        # input = torch.mul(input.unsqueeze(2), r)
+        # input = F.linear(input, self.weight)
+        # input = torch.mul(input, s)
+        # input = torch.sum(input, dim=2).add(self.bias)
+        # return input
         # return BatchEnsembleLinearFunction.apply(input, self.weight, self.bias, r, s)
 
 

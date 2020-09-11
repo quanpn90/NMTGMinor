@@ -438,7 +438,7 @@ class TransformerDecoder(nn.Module):
         context = decoder_state.context
         buffers = decoder_state.attention_buffers
         lang = decoder_state.tgt_lang
-        mask_src = decoder_state.src_mask
+        # mask_src = decoder_state.src_mask
 
         if decoder_state.concat_input_seq:
             if decoder_state.input_seq is None:
@@ -484,21 +484,20 @@ class TransformerDecoder(nn.Module):
 
         # batch_size x 1 x len_src
         if context is not None:
-            if mask_src is None:
-                if self.encoder_type == "audio":
-                    if src.data.dim() == 3:
-                        if self.encoder_cnn_downsampling:
-                            long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
-                            mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
-                        else:
-                            mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
-                    elif self.encoder_cnn_downsampling:
-                        long_mask = src.eq(onmt.constants.PAD)
+            if self.encoder_type == "audio":
+                if src.data.dim() == 3:
+                    if self.encoder_cnn_downsampling:
+                        long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
                         mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
                     else:
-                        mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
+                        mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
+                elif self.encoder_cnn_downsampling:
+                    long_mask = src.eq(onmt.constants.PAD)
+                    mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
                 else:
                     mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
+            else:
+                mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
         else:
             mask_src = None
 
@@ -611,7 +610,8 @@ class Transformer(NMTModel):
         if zero_encoder:
             context.zero_()
 
-        decoder_output = self.decoder(tgt, context, src, tgt_lang=tgt_lang, input_pos=tgt_pos, streaming=streaming,
+        decoder_output = self.decoder(tgt, context, src,
+                                      src_lang=src_lang, tgt_lang=tgt_lang, input_pos=tgt_pos, streaming=streaming,
                                       src_lengths=src_lengths, tgt_lengths=tgt_lengths,
                                       streaming_state=streaming_state)
 
@@ -644,7 +644,7 @@ class Transformer(NMTModel):
 
             tgt_reverse_input = tgt_reverse_input.transpose(0, 1)
             # perform an additional backward pass
-            reverse_decoder_output = self.mirror_decoder(tgt_reverse_input, context, src,
+            reverse_decoder_output = self.mirror_decoder(tgt_reverse_input, context, src, src_lang=src_lang,
                                                          tgt_lang=tgt_lang, input_pos=tgt_pos)
 
             reverse_decoder_output['src'] = src
@@ -792,7 +792,7 @@ class Transformer(NMTModel):
         src_transposed = src.transpose(0, 1)
 
         encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
-        decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], encoder_output['src_mask'],
+        decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], src_lang,
                                                  beam_size=beam_size, model_size=self.model_size,
                                                  type=type, buffering=buffering)
 
@@ -809,8 +809,20 @@ class Transformer(NMTModel):
 
 class TransformerDecodingState(DecoderState):
 
-    def __init__(self, src, tgt_lang, context, src_mask, beam_size=1, model_size=512, type=2,
+    def __init__(self, src, tgt_lang, context, src_lang, beam_size=1, model_size=512, type=2,
                  cloning=True, buffering=False):
+
+        """
+        :param src:
+        :param tgt_lang:
+        :param context:
+        :param src_lang:
+        :param beam_size:
+        :param model_size:
+        :param type: Type 1 is for old translation code. Type 2 is for fast buffering. (Type 2 default).
+        :param cloning:
+        :param buffering:
+        """
 
         self.beam_size = beam_size
         self.model_size = model_size
@@ -838,7 +850,7 @@ class TransformerDecodingState(DecoderState):
                 self.context = None
 
             self.input_seq = None
-            self.src_mask = None
+            # self.src_mask = None
             self.tgt_lang = tgt_lang
 
         elif type == 2:
@@ -854,17 +866,18 @@ class TransformerDecodingState(DecoderState):
                 else:
                     self.context = None
 
-                if src_mask is not None:
-                    self.src_mask = src_mask.index_select(0, new_order)
-                else:
-                    self.src_mask = None
+                # if src_mask is not None:
+                #     self.src_mask = src_mask.index_select(0, new_order)
+                # else:
+                #     self.src_mask = None
             else:
                 self.context = context
                 self.src = src
-                self.src_mask = src_mask
+                # self.src_mask = src_mask
 
             self.concat_input_seq = False
             self.tgt_lang = tgt_lang
+            self.src_lang = src_lang
 
         else:
             raise NotImplementedError
@@ -954,8 +967,8 @@ class TransformerDecodingState(DecoderState):
         if self.context is not None:
             self.context = self.context.index_select(1, reorder_state)
 
-        if self.src_mask is not None:
-            self.src_mask = self.src_mask.index_select(0, reorder_state)
+        # if self.src_mask is not None:
+        #     self.src_mask = self.src_mask.index_select(0, reorder_state)
         self.src = self.src.index_select(1, reorder_state)
 
         for l in self.attention_buffers:
