@@ -23,19 +23,19 @@ class MFWEncdecMultiheadAttn(nn.Module):
         self.scaling = self.head_dim ** -0.5  # this value is hardcoded in the "fast" implementation
 
         self.in_proj_weight_q = Parameter(torch.Tensor(embed_dim, embed_dim))
-        self.in_proj_weight_kv = Parameter(torch.Tensor(embed_dim, 2 * embed_dim))
+        self.in_proj_weight_kv = Parameter(torch.Tensor(2 * embed_dim, embed_dim))
         self.out_proj_weight = Parameter(torch.Tensor(embed_dim, embed_dim))
-
-        # self.in_proj_bias_q = Parameter(torch.Tensor(embed_dim))
-        # self.in_proj_bias_kv = Parameter(torch.Tensor(2 * embed_dim))
-        # self.out_proj_bias = Parameter(torch.Tensor(embed_dim))
 
         self.r_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
         self.s_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-        self.r_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-        self.s_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, 2 * embed_dim))
+        self.r_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, 2 * embed_dim))
+        self.s_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
         self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
         self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+
+        self.in_proj_bias_q = None
+        self.in_proj_bias_kv = None
+        self.out_proj_bias = None
 
         self.attn_func = encdec_attn_func
 
@@ -92,10 +92,10 @@ class MFWEncdecMultiheadAttn(nn.Module):
 
         if indices.size(0) == 1 and len(indices.shape) == 1:
             r_q = torch.index_select(self.r_q, 0, indices).squeeze(0)
-            s_q = torch.index_select(self.s_q, 0, indices).squeeze(0)
-            r_kv = torch.index_select(self.r_kv, 0,  src_indices).squeeze(0)
+            s_q = torch.index_select(self.s_q, 0, src_indices).squeeze(0)
+            r_kv = torch.index_select(self.r_kv, 0,  indices).squeeze(0)
             s_kv = torch.index_select(self.s_kv, 0, src_indices).squeeze(0)
-            r_o = torch.index_select(self.r_o, 0, src_indices).squeeze(0)
+            r_o = torch.index_select(self.r_o, 0, indices).squeeze(0)
             s_o = torch.index_select(self.s_o, 0, src_indices).squeeze(0)
         else:
             print(indices.size(), input.size())
@@ -107,9 +107,9 @@ class MFWEncdecMultiheadAttn(nn.Module):
         time_masking = False
         len_key = key.size(0)
 
-        in_proj_weight_q = self.in_proj_weight_q # + torch.bmm(r_q.unsqueeze(-1), s_q.unsqueeze(1)).sum(dim=0)
-        in_proj_weight_kv = self.in_proj_weight_kv # + torch.bmm(r_kv.unsqueeze(-1), s_kv.unsqueeze(1)).sum(dim=0)
-        out_proj_weight = self.out_proj_weight # + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+        in_proj_weight_q = self.in_proj_weight_q + torch.bmm(r_q.unsqueeze(-1), s_q.unsqueeze(1)).sum(dim=0)
+        in_proj_weight_kv = self.in_proj_weight_kv + torch.bmm(r_kv.unsqueeze(-1), s_kv.unsqueeze(1)).sum(dim=0)
+        out_proj_weight = self.out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
 
         if self.optimized == 1 and (self.training and not incremental) and len_key <= 1024 and query.is_cuda:
             if attn_mask is not None:
@@ -118,7 +118,7 @@ class MFWEncdecMultiheadAttn(nn.Module):
                 attn_mask = attn_mask.byte()
 
             outputs = self.attn_func_fast(time_masking, is_training, self.num_heads, query, key,
-                                          in_proj_weight_q.t(), in_proj_weight_kv.t(), out_proj_weight.t(),
+                                          in_proj_weight_q, in_proj_weight_kv, out_proj_weight,
                                           attn_mask, self.dropout)
 
             coverage = None
@@ -127,8 +127,8 @@ class MFWEncdecMultiheadAttn(nn.Module):
         else:
             outputs, coverage, = self.attn_func(time_masking, is_training,
                                                 self.num_heads, query, key,
-                                                in_proj_weight_q.t(), in_proj_weight_kv.t(),
-                                                out_proj_weight.t(), attn_mask, self.dropout,
+                                                in_proj_weight_q, in_proj_weight_kv,
+                                                out_proj_weight, attn_mask, self.dropout,
                                                 incremental, incremental_cache)
 
         # TODO: add incremental cache
