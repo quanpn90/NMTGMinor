@@ -1,76 +1,60 @@
 """NCE Implementation from https://github.com/Stonesjtu/Pytorch-NCE"""
 
-from math import isclose
-
+import math
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 
-class AliasMultinomial(torch.nn.Module):
-    ''' Alias sampling method to speedup multinomial sampling
-    The alias method treats multinomial sampling as a combination of uniform sampling and
-    bernoulli sampling. It achieves significant acceleration when repeatedly sampling from
-    the saved multinomial distribution.
-    Attributes:
-        - probs: the probability density of desired multinomial distribution
-    Refs:
-        - https://hips.seas.harvard.edu/blog/2013/03/03/the-alias-method-efficient-sampling-with-many-discrete-outcomes/
-    '''
-    def __init__(self, probs):
-        super(AliasMultinomial, self).__init__()
+class NCELoss(_Loss):
 
-        assert isclose(probs.sum().item(), 1), 'The noise distribution must sum to 1'
-        cpu_probs = probs.cpu()
-        K = len(probs)
+    def __init__(self, output_size, noise_ratio=32, logz=9, label_smoothing=0.0):
+        super(NCELoss, self).__init__()
+        self.output_size = output_size
+        self.noise_ratio = noise_ratio
+        self.padding_idx = onmt.constants.PAD
+        self.smoothing_value = label_smoothing / (noise_ratio+1)
+        self.confidence = 1.0 - label_smoothing
+        self.label_smoothing = label_smoothing
 
-        # such a name helps to avoid the namespace check for nn.Module
-        self_prob = [0] * K
-        self_alias = [0] * K
+    def forward(self, model_outputs, targets, **kwargs):
 
-        # Sort the data into the outcomes with probabilities
-        # that are larger and smaller than 1/K.
-        smaller = []
-        larger = []
-        for idx, prob in enumerate(cpu_probs):
-            self_prob[idx] = K*prob
-            if self_prob[idx] < 1.0:
-                smaller.append(idx)
-            else:
-                larger.append(idx)
+        scores_model_target = model_outputs['scores_model_target'].float()
+        scores_model_noise = model_outputs['scores_model_noise'].float()
+        logprob_noise_target, logprob_noise_noise = \
+            model_outputs['logprob_noise_target'], model_outputs['logprob_noise_noise']
 
-        # Loop though and create little binary mixtures that
-        # appropriately allocate the larger outcomes over the
-        # overall uniform mixture.
-        while len(smaller) > 0 and len(larger) > 0:
-            small = smaller.pop()
-            large = larger.pop()
+        # remove masking
+        gtruth = targets.view(-1)
+        non_pad_mask = gtruth.ne(self.padding_idx)
+        non_pad_indices = torch.nonzero(non_pad_mask).squeeze(1)
+        scores_model_target = scores_model_target.index_select(0, non_pad_indices)  # bsz x 1
+        scores_model_noise = scores_model_noise.index_select(0, non_pad_indices)  # bsz x K
+        logprob_noise_target = logprob_noise_target.index_select(0, non_pad_indices)  # bsz x 1
+        logprob_noise_noise = logprob_noise_noise.index_select(0, non_pad_indices)  # bsz x K
 
-            self_alias[small] = large
-            self_prob[large] = (self_prob[large] - 1.0) + self_prob[small]
+        logit_model = torch.cat([scores_model_target, scores_model_noise], dim=1) - self.logz
+        logit_noise = torch.cat([logprob_noise_target, logprob_noise_noise], dim=1)
 
-            if self_prob[large] < 1.0:
-                smaller.append(large)
-            else:
-                larger.append(large)
+        # prob_noise = logprob_noise.exp()
+        # logtrue = logprob.exp() / (prob_noise + self.noise_ratio * prob_noise)
+        # logtrue = torch.log(logtrue)  # bsz x [K + 1]
+        logit_true = logit_model - logit_noise - math.log(self.noise_ratio)
 
-        for last_one in smaller+larger:
-            self_prob[last_one] = 1
+        # e^-x = e(-log_model + logit_noise + math.log(noise))
+        # 1 / p_model  * p_noise * K
 
-        self.register_buffer('prob', torch.Tensor(self_prob))
-        self.register_buffer('alias', torch.LongTensor(self_alias))
+        # e^-x + 1 = ( p_model + k p_noise ) / p_model
 
-    def draw(self, *size):
-        """Draw N samples from multinomial
-        Args:
-            - size: the output size of samples
-        """
-        max_value = self.alias.size(0)
+        label = torch.zeros_like(logit_true).add_(self.smoothing_value)
+        label[:, 0].fill_(self.confidence)
 
-        kk = self.alias.new(*size).random_(0, max_value).long().view(-1)
-        prob = self.prob[kk]
-        alias = self.alias[kk]
-        # b is whether a random number is greater than q
-        b = torch.bernoulli(prob).long()
-        oq = kk.mul(b)
-        oj = alias.mul(1 - b)
+        loss = F.binary_cross_entropy_with_logits(logit_true, label, None, pos_weight=None, reduction='sum')
 
-        return (oq + oj).view(size)
+        loss_data = loss.data.item()
+
+        output_dict = {"loss": loss, "data": loss_data}
+
+        return output_dict
+
+

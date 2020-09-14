@@ -928,7 +928,7 @@ class RelativeTransformer(Transformer):
         output_dict = self.decoder.step(input_t, decoder_state, streaming=streaming)
         output_dict['src'] = decoder_state.src.transpose(0, 1)
 
-        log_prob = self.generator[0](output_dict).squeeze(0)
+        log_prob = self.generator[0](output_dict)['logits'].squeeze(0)
         log_prob = F.log_softmax(log_prob.float(), dim=-1)
 
         coverage = output_dict['coverage']

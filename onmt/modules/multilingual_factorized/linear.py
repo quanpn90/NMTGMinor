@@ -142,6 +142,7 @@ class MultilingualLinear(torch.nn.Module):
         """
         n_factors = self.r.size(0)
         bsz = input.size(1)
+        seq_len = input.size(0)
 
         if indices.size(0) == 1 and len(indices.shape) == 1:
             r = torch.index_select(self.r, 0, indices).squeeze(0)
@@ -152,6 +153,8 @@ class MultilingualLinear(torch.nn.Module):
             weight_mask = torch.sum(weight_mask, dim=0)
             weight_ = self.weight + weight_mask
             input = F.linear(input, weight_.t(), self.bias)
+            # input = torch.addmm(self.bias, input.view(-1, input.size(-1)), weight_)
+            # input = input.view(seq_len, bsz, input.size(-1))
             return input
         else:
             print(indices.size(), input.size())

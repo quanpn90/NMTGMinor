@@ -631,7 +631,7 @@ class Transformer(NMTModel):
         # output_dict['lid_logits'] = decoder_output['lid_logits']
 
         # final layer: computing softmax
-        logprobs = self.generator[0](output_dict)
+        logprobs = self.generator[0](output_dict)['logits']
         output_dict['logprobs'] = logprobs
 
         # Mirror network: reverse the target sequence and perform backward language model
@@ -651,7 +651,7 @@ class Transformer(NMTModel):
             reverse_decoder_output['context'] = context
             reverse_decoder_output['target_mask'] = target_mask
 
-            reverse_logprobs = self.mirror_generator[0](reverse_decoder_output)
+            reverse_logprobs = self.mirror_generator[0](reverse_decoder_output)['logits']
 
             output_dict['reverse_target'] = tgt_reverse_output
             output_dict['reverse_hidden'] = reverse_decoder_output['hidden']
@@ -672,7 +672,7 @@ class Transformer(NMTModel):
             rec_context = self.rec_linear(output_dict['hidden'])  # T x B x H
             rec_decoder_output = self.rec_decoder(src_input, rec_context, tgt, tgt_lang=src_lang, input_pos=src_pos)
             rec_output = rec_decoder_output['hidden']
-            rec_logprobs = self.rec_generator[0](rec_decoder_output)
+            rec_logprobs = self.rec_generator[0](rec_decoder_output)['logits']
 
             output_dict['rec_logprobs'] = rec_logprobs
             output_dict['rec_hidden'] = rec_output
@@ -714,7 +714,8 @@ class Transformer(NMTModel):
         gold_scores = context.new(batch_size).zero_()
         gold_words = 0
         allgold_scores = list()
-        decoder_output = self.decoder(tgt_input, context, src, tgt_lang=tgt_lang, input_pos=tgt_pos)['hidden']
+        decoder_output = self.decoder(tgt_input, context, src, tgt_lang=tgt_lang, src_lang=src_lang,
+                                      input_pos=tgt_pos)['hidden']
 
         output = decoder_output
 
@@ -730,9 +731,9 @@ class Transformer(NMTModel):
             dec_out['context'] = context
 
             if isinstance(self.generator, nn.ModuleList):
-                gen_t = self.generator[0](dec_out)
+                gen_t = self.generator[0](dec_out)['logits']
             else:
-                gen_t = self.generator(dec_out)
+                gen_t = self.generator(dec_out)['logits']
             gen_t = F.log_softmax(gen_t, dim=-1, dtype=torch.float32)
             gen_t = gen_t.squeeze(0)
             tgt_t = tgt_t.unsqueeze(1)
@@ -762,7 +763,7 @@ class Transformer(NMTModel):
         output_dict['src'] = decoder_state.src.transpose(0, 1)
 
         # squeeze to remove the time step dimension
-        log_prob = self.generator[0](output_dict).squeeze(0)
+        log_prob = self.generator[0](output_dict)['logits'].squeeze(0)
         log_prob = F.log_softmax(log_prob, dim=-1, dtype=torch.float32)
 
         coverage = output_dict['coverage']

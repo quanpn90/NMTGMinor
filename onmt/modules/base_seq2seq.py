@@ -39,7 +39,8 @@ class Generator(nn.Module):
 
         # softmax will be done at the loss function
         # output = F.log_softmax(logits, dim=-1, dtype=torch.float32)
-        return logits
+        output_dicts['logits'] = logits
+        return output_dicts
         
 
 class NMTModel(nn.Module):

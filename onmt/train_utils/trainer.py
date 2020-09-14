@@ -570,6 +570,10 @@ class XETrainer(BaseTrainer):
                 else:
                     full_loss.backward()
 
+                # if use NCE, then make a copy of the hidden layer, and then compute perplexity
+
+                del outputs
+
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     print('| WARNING: ran out of memory on GPU , skipping batch')
