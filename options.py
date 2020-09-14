@@ -72,6 +72,9 @@ def make_parser(parser):
 
     parser.add_argument('-asynchronous', action='store_true',
                         help="""Different attention values for past and future""")
+    parser.add_argument('-nce_noise', type=int, default=0,
+                        help="""Use noise contrastive estimation for the output layer. 
+                        Default=0 (full softmax), increase to 100 to use 100 noise samples.""")
     parser.add_argument('-unidirectional', action='store_true',
                         help="""Unidirectional encoder""")
     parser.add_argument('-reconstruct', action='store_true',
@@ -457,5 +460,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'lfv_multilingual'):
         opt.lfv_multilingual = False
+
+    if not hasattr(opt, 'nce_noise'):
+        opt.nce_noise = 0
 
     return opt

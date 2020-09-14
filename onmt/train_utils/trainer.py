@@ -211,7 +211,8 @@ class BaseTrainer(object):
             tgt_mask = None
             outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                  zero_encoder=opt.zero_encoder,
-                                 mirror=opt.mirror_loss, streaming_state=streaming_state)
+                                 mirror=opt.mirror_loss, streaming_state=streaming_state,
+                                 nce=opt.nce)
 
             outputs['tgt_mask'] = tgt_mask
 
@@ -424,7 +425,7 @@ class XETrainer(BaseTrainer):
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.constants.PAD)
                 outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                     mirror=opt.mirror_loss, streaming_state=streaming_state)
+                                     mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce)
 
                 if opt.streaming:
                     streaming_state = outputs['streaming_state']
@@ -520,7 +521,8 @@ class XETrainer(BaseTrainer):
                 tgt_mask = targets.ne(onmt.constants.PAD)
                 outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                      zero_encoder=opt.zero_encoder,
-                                     mirror=opt.mirror_loss, streaming_state=streaming_state)
+                                     mirror=opt.mirror_loss, streaming_state=streaming_state,
+                                     nce=opt.nce)
 
                 batch_size = batch.size
 

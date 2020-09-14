@@ -570,8 +570,9 @@ class Transformer(NMTModel):
         return
 
     def forward(self, batch, target_mask=None, streaming=False, zero_encoder=False,
-                mirror=False, streaming_state=None):
+                mirror=False, streaming_state=None, nce=False):
         """
+        :param nce: use noise contrastive estimation
         :param streaming_state:
         :param streaming:
         :param mirror: if using mirror network for future anticipation
@@ -628,11 +629,15 @@ class Transformer(NMTModel):
         output_dict['src'] = src
         output_dict['target_mask'] = target_mask
         output_dict['streaming_state'] = streaming_state
+        output_dict['target'] = batch.get('target_output')
         # output_dict['lid_logits'] = decoder_output['lid_logits']
 
         # final layer: computing softmax
-        logprobs = self.generator[0](output_dict)['logits']
-        output_dict['logprobs'] = logprobs
+        if self.training and nce:
+            output_dict = self.generator[0](output_dict)
+        else:
+            logprobs = self.generator[0](output_dict)['logits']
+            output_dict['logprobs'] = logprobs
 
         # Mirror network: reverse the target sequence and perform backward language model
         if mirror:

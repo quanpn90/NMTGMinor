@@ -407,6 +407,10 @@ def main():
             loss_function = NMTAndCTCLossFunc(dicts['tgt'].size(),
                                               label_smoothing=opt.label_smoothing,
                                               ctc_weight=opt.ctc_loss)
+        elif opt.nce:
+            from onmt.modules.nce.nce_loss import NCELoss
+            loss_function = NCELoss(opt.model_size, dicts['tgt'].size(), noise_ratio=opt.nce_noise,
+                                    logz=9, label_smoothing=opt.label_smoothing)
         else:
             loss_function = NMTLossFunc(opt.model_size, dicts['tgt'].size(),
                                         label_smoothing=opt.label_smoothing,

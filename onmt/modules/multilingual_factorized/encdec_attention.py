@@ -111,13 +111,15 @@ class MFWEncdecMultiheadAttn(nn.Module):
         in_proj_weight_kv = self.in_proj_weight_kv + torch.bmm(r_kv.unsqueeze(-1), s_kv.unsqueeze(1)).sum(dim=0)
         out_proj_weight = self.out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
 
-        if self.optimized == 1 and (self.training and not incremental) and len_key <= 1024 and query.is_cuda:
+        if self.optimized == 1 and (self.training and not incremental) and len_key <= 1024 \
+                and query.is_cuda and in_proj_weight_q.dtype == torch.half:
             if attn_mask is not None:
                 if attn_mask.dim() == 3:
                     attn_mask = attn_mask.squeeze(1)
                 attn_mask = attn_mask.byte()
 
-            outputs = self.attn_func_fast(time_masking, is_training, self.num_heads, query, key,
+            outputs = self.attn_func_fast(time_masking, is_training, self.num_heads,
+                                          query.type_as(in_proj_weight_q), key.type_as(in_proj_weight_q),
                                           in_proj_weight_q, in_proj_weight_kv, out_proj_weight,
                                           attn_mask, self.dropout)
 

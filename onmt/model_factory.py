@@ -16,6 +16,7 @@ MAX_LEN = onmt.constants.max_position_length  # This should be the longest sente
 
 
 def build_model(opt, dicts):
+    # adding missing options if the opt was built before. (for loading old models)
     opt = backward_compatible(opt)
 
     onmt.constants.layer_norm = opt.layer_norm
@@ -24,6 +25,8 @@ def build_model(opt, dicts):
     onmt.constants.version = 1.0
     onmt.constants.attention_out = opt.attention_out
     onmt.constants.residual_type = opt.residual_type
+    opt.nce = opt.nce_noise > 0
+
     opt.n_languages = len(dicts['langs'])
 
     if opt.bayes_by_backprop:
@@ -54,8 +57,20 @@ def build_tm_model(opt, dicts):
 
     # BUILD GENERATOR
     if opt.copy_generator:
+        if opt.nce_noise > 0:
+            print("[INFO] Copy generator overrides NCE.")
+            opt.nce = False
+            opt.nce_noise = 0
         generators = [CopyGenerator(opt.model_size, dicts['tgt'].size(),
                                     fix_norm=opt.fix_norm_output_embedding)]
+    elif opt.nce_noise > 0:
+        from onmt.modules.nce.nce_linear import NCELinear
+        from onmt.modules.nce.nce_utils import build_unigram_noise
+        noise_distribution = build_unigram_noise(torch.FloatTensor(list(dicts['tgt'].frequencies.values())))
+
+        generator = NCELinear(opt.model_size, dicts['tgt'].size(), fix_norm=opt.fix_norm_output_embedding,
+                              noise_distribution=noise_distribution, noise_ratio=opt.nce_noise)
+        generators = [generator]
     else:
         generators = [onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size(),
                                                           fix_norm=opt.fix_norm_output_embedding)]
