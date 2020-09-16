@@ -34,10 +34,12 @@ class RelativeTransformerEncoderLayer(nn.Module):
         if self.mfw:
             self.feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                           variational=self.variational,
-                                                          n_languages=opt.n_languages, rank=opt.mfw_rank)
+                                                          n_languages=opt.n_languages, rank=opt.mfw_rank,
+                                                          use_multiplicative=opt.mfw_multiplicative)
 
             self.multihead = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
-                                                          n_languages=opt.n_languages, rank=opt.mfw_rank)
+                                                          n_languages=opt.n_languages, rank=opt.mfw_rank,
+                                                          use_multiplicative=opt.mfw_multiplicative)
 
         else:
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
@@ -116,7 +118,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 self.multihead_src = EncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout)
             else:
                 self.multihead_src = MFWEncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout,
-                                                            n_languages=opt.n_languages, rank=opt.mfw_rank)
+                                                            n_languages=opt.n_languages, rank=opt.mfw_rank,
+                                                            use_multiplicative=opt.mfw_multiplicative)
 
         self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
@@ -127,10 +130,12 @@ class RelativeTransformerDecoderLayer(nn.Module):
         if self.mfw:
             self.feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                           variational=self.variational,
-                                                          n_languages=opt.n_languages, rank=opt.mfw_rank)
+                                                          n_languages=opt.n_languages, rank=opt.mfw_rank,
+                                                          use_multiplicative=opt.mfw_multiplicative)
 
             self.multihead_tgt = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
-                                                              n_languages=opt.n_languages, rank=opt.mfw_rank)
+                                                              n_languages=opt.n_languages, rank=opt.mfw_rank,
+                                                              use_multiplicative=opt.mfw_multiplicative)
         else:
 
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,

@@ -301,7 +301,8 @@ def make_parser(parser):
                         help='Use multilingual language identifier to get LFV for each language')
     parser.add_argument('-mfw_rank', type=int, default=1,
                         help="Bottleneck size for the LFV vector).")
-
+    parser.add_argument('-mfw_multiplicative', action='store_true',
+                        help='Use multilingual language identifier to get LFV for each language')
 
     # for Reformer
     # parser.add_argument('-lsh_src_attention', action='store_true',
@@ -463,5 +464,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'nce_noise'):
         opt.nce_noise = 0
+
+    if not hasattr(opt, 'mfw_multiplicative'):
+        opt.mfw_multiplicative = False
 
     return opt

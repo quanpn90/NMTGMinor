@@ -10,7 +10,7 @@ import onmt
 
 class NCELoss(_Loss):
 
-    def __init__(self, hidden_size, output_size, noise_ratio=256, logz=9, label_smoothing=0.0):
+    def __init__(self, hidden_size, output_size, noise_ratio=256, logz=1, label_smoothing=0.0):
         super(NCELoss, self).__init__()
         self.hidden_size = hidden_size
         self.output_size = output_size
@@ -19,7 +19,7 @@ class NCELoss(_Loss):
         self.smoothing_value = label_smoothing / (self.noise_ratio+1)
         self.confidence = 1.0 - label_smoothing
         self.label_smoothing = label_smoothing
-        self.logz = logz
+        self.logz = 8
 
         try:
             from apex.contrib import xentropy as label_smoothing
@@ -35,7 +35,8 @@ class NCELoss(_Loss):
             scores_model_target = model_outputs['scores_model_target'].float()
             scores_model_noise = model_outputs['scores_model_noise'].float()
             logprob_noise_target, logprob_noise_noise = \
-                model_outputs['logprob_noise_target'], model_outputs['logprob_noise_noise']
+                model_outputs['logprob_noise_target'].float(), \
+                model_outputs['logprob_noise_noise'].float()
 
             # remove masking
             gtruth = targets.view(-1)
@@ -63,6 +64,8 @@ class NCELoss(_Loss):
             label[:, 0].fill_(self.confidence)
 
             loss = F.binary_cross_entropy_with_logits(logit_true, label, None, pos_weight=None, reduction='sum')
+
+            # loss.div_(self.noise_ratio + 1)
 
             loss_data = loss.data.item()
 

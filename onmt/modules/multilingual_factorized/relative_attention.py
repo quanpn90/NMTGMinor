@@ -13,7 +13,7 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
     See "Attention Is All You Need" for more details.
     """
 
-    def __init__(self, embed_dim, num_heads, dropout=0., n_languages=1, rank=1):
+    def __init__(self, embed_dim, num_heads, dropout=0., n_languages=1, rank=1, use_multiplicative=False):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -21,6 +21,7 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         self.head_dim = embed_dim // num_heads
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
         self.bias = True
+        self.use_multiplicative = use_multiplicative
 
         self.in_proj_weight = Parameter(torch.Tensor(embed_dim, 3 * embed_dim))
         self.out_proj_weight = Parameter(torch.Tensor(embed_dim, embed_dim))
@@ -36,6 +37,14 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
         self.r_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
         self.s_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+
+        if use_multiplicative:
+            self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
+            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.rm_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.sm_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
         self.r_w_bias = nn.Parameter(torch.Tensor(self.num_heads, self.head_dim))
         self.r_r_bias = nn.Parameter(torch.Tensor(self.num_heads, self.head_dim))
@@ -73,14 +82,14 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         nn.init.normal_(self.r_o, 0.0, 0.02)
         nn.init.normal_(self.s_o, 0.0, 0.02)
 
-        # with torch.no_grad():
-        #     self.r_i.bernoulli_(0.5).mul_(-2).add_(1)
-        #     self.s_i.bernoulli_(0.5).mul_(-2).add_(1)
-        #     # nn.init.normal_(self.r_i, 0.0, 0.01)
-        #     self.r_o.bernoulli_(0.5).mul_(-2).add_(1)
-        #     self.s_o.bernoulli_(0.5).mul_(-2).add_(1)
-        #     self.r_p.bernoulli_(0.5).mul_(-2).add_(1)
-        #     self.s_p.bernoulli_(0.5).mul_(-2).add_(1)
+        if self.use_multiplicative:
+            with torch.no_grad():
+                self.rm_i.bernoulli_(0.5).mul_(-2).add_(1)
+                self.sm_i.bernoulli_(0.5).mul_(-2).add_(1)
+                self.rm_o.bernoulli_(0.5).mul_(-2).add_(1)
+                self.sm_o.bernoulli_(0.5).mul_(-2).add_(1)
+                self.rm_p.bernoulli_(0.5).mul_(-2).add_(1)
+                self.sm_p.bernoulli_(0.5).mul_(-2).add_(1)
 
     def forward(self, input, pos, indices=None, key_padding_mask=None, attn_mask=None, mems=None,
                 incremental=False, incremental_cache=None):
@@ -96,9 +105,26 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
             print(indices.size(), input.size())
             raise NotImplementedError
 
-        in_proj_weight = self.in_proj_weight + torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
-        pos_proj_weight = self.pos_proj_weight + torch.bmm(r_p.unsqueeze(-1), s_p.unsqueeze(1)).sum(dim=0)
-        out_proj_weight = self.out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+        if self.use_multiplicative:
+            rm_i = torch.index_select(self.rm_i, 0, indices).squeeze(0)
+            sm_i = torch.index_select(self.sm_i, 0, indices).squeeze(0)
+            rm_p = torch.index_select(self.rm_p, 0, indices).squeeze(0)
+            sm_p = torch.index_select(self.sm_p, 0, indices).squeeze(0)
+            rm_o = torch.index_select(self.rm_o, 0, indices).squeeze(0)
+            sm_o = torch.index_select(self.sm_o, 0, indices).squeeze(0)
+
+            in_proj_weight = self.in_proj_weight * torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
+            pos_proj_weight = self.pos_proj_weight * torch.bmm(rm_p.unsqueeze(-1), sm_p.unsqueeze(1)).sum(dim=0)
+            out_proj_weight = self.out_proj_weight * torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+
+        else:
+            in_proj_weight = self.in_proj_weight
+            pos_proj_weight = self.pos_proj_weight
+            out_proj_weight = self.out_proj_weight
+
+        in_proj_weight = in_proj_weight + torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
+        pos_proj_weight = pos_proj_weight + torch.bmm(r_p.unsqueeze(-1), s_p.unsqueeze(1)).sum(dim=0)
+        out_proj_weight = out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
 
         if key_padding_mask is not None:
             assert (attn_mask is None), "ERROR attn_mask and key_padding_mask should not be both defined!"

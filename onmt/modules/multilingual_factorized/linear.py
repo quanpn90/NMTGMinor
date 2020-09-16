@@ -109,15 +109,21 @@ class BatchEnsembleLinearFunction(torch.autograd.Function):
 class MultilingualLinear(torch.nn.Module):
 
     # TODO: write gradcheck testing
-    def __init__(self, input_size, output_size, n_factors=1, rank=1):
+    def __init__(self, input_size, output_size, n_factors=1, rank=1, use_multiplicative=False):
 
         super().__init__()
+
+        self.use_multiplicative = use_multiplicative
 
         self.weight = torch.nn.Parameter(torch.Tensor(input_size, output_size))
         self.bias = torch.nn.Parameter(torch.Tensor(output_size))
 
         self.r = torch.nn.Parameter(torch.Tensor(n_factors, rank, input_size))
         self.s = torch.nn.Parameter(torch.Tensor(n_factors, rank, output_size))
+
+        if use_multiplicative:
+            self.rm = torch.nn.Parameter(torch.Tensor(n_factors, rank, input_size))
+            self.sm = torch.nn.Parameter(torch.Tensor(n_factors, rank, output_size))
 
         self.reset_parameters()
 
@@ -128,9 +134,10 @@ class MultilingualLinear(torch.nn.Module):
             torch.nn.init.xavier_uniform_(self.weight)
 
         # for batch ensemble we init r_i and s_i with random sign vectors
-        # with torch.no_grad():
-        #     self.r.bernoulli_(0.5).mul_(-2).add_(1)  # -1 1 -1 1
-        #     self.s.bernoulli_(0.5).mul_(-2).add_(1)
+        if self.use_multiplicative:
+            with torch.no_grad():
+                self.rm.bernoulli_(0.5).mul_(-2).add_(1)  # -1 1 -1 1
+                self.sm.bernoulli_(0.5).mul_(-2).add_(1)
         torch.nn.init.normal_(self.r, 0.0, 0.1)
         torch.nn.init.normal_(self.s, 0.0, 0.1)
 
@@ -147,11 +154,20 @@ class MultilingualLinear(torch.nn.Module):
         if indices.size(0) == 1 and len(indices.shape) == 1:
             r = torch.index_select(self.r, 0, indices).squeeze(0)
             s = torch.index_select(self.s, 0, indices).squeeze(0)
+
             # weight_mask = torch.sum(torch.einsum('bi,bj->bij', (s, r)), dim=0)
             # weight_mask = torch.bmm(s.unsqueeze(-1), r.unsqueeze(1))
+            if self.use_multiplicative:
+                rm = torch.index_select(self.rm, 0, indices).squeeze(0)
+                sm = torch.index_select(self.sm, 0, indices).squeeze(0)
+                weight_ = self.weight * torch.sum(torch.bmm(rm.unsqueeze(-1), sm.unsqueeze(1)), dim=0)
+            else:
+                weight_ = self.weight
+
             weight_mask = torch.bmm(r.unsqueeze(-1), s.unsqueeze(1))
             weight_mask = torch.sum(weight_mask, dim=0)
-            weight_ = self.weight + weight_mask
+            weight_ = weight_ + weight_mask
+
             input = F.linear(input, weight_.t(), self.bias)
             # input = torch.addmm(self.bias, input.view(-1, input.size(-1)), weight_)
             # input = input.view(seq_len, bsz, input.size(-1))
@@ -182,10 +198,10 @@ class MFWPositionWiseFeedForward(torch.nn.Module):
     """
 
     def __init__(self, model_size, inner_size, dropout=0., variational=False, activation='relu',
-                 n_languages=1, rank=1):
+                 n_languages=1, rank=1, use_multiplicative=False):
         super().__init__()
-        self.input_linear = MultilingualLinear(model_size, inner_size, n_languages, rank)
-        self.output_linear = MultilingualLinear(inner_size, model_size, n_languages, rank)
+        self.input_linear = MultilingualLinear(model_size, inner_size, n_languages, rank, use_multiplicative)
+        self.output_linear = MultilingualLinear(inner_size, model_size, n_languages, rank, use_multiplicative)
         self.variational = variational
         self.dropout = dropout
         self.activation = activation

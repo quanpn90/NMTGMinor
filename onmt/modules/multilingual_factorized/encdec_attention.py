@@ -12,7 +12,7 @@ class MFWEncdecMultiheadAttn(nn.Module):
     See "Attention Is All You Need" for more details.
     """
 
-    def __init__(self, num_heads, embed_dim, attn_drop=0., n_languages=1, rank=1):
+    def __init__(self, num_heads, embed_dim, attn_drop=0., n_languages=1, rank=1, use_multiplicative=False):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -21,6 +21,7 @@ class MFWEncdecMultiheadAttn(nn.Module):
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
         self.bias = False
         self.scaling = self.head_dim ** -0.5  # this value is hardcoded in the "fast" implementation
+        self.use_multiplicative = use_multiplicative
 
         self.in_proj_weight_q = Parameter(torch.Tensor(embed_dim, embed_dim))
         self.in_proj_weight_kv = Parameter(torch.Tensor(2 * embed_dim, embed_dim))
@@ -32,6 +33,14 @@ class MFWEncdecMultiheadAttn(nn.Module):
         self.s_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
         self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
         self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+
+        if use_multiplicative:
+            self.rm_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.sm_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.rm_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, 2 * embed_dim))
+            self.sm_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
         self.in_proj_bias_q = None
         self.in_proj_bias_kv = None
@@ -75,13 +84,14 @@ class MFWEncdecMultiheadAttn(nn.Module):
         nn.init.normal_(self.r_o, 0.0, 0.02)
         nn.init.normal_(self.s_o, 0.0, 0.02)
 
-        # with torch.no_grad():
-        #     self.r_q.bernoulli_(0.5).mul_(-2).add_(1)
-        #     self.s_q.bernoulli_(0.5).mul_(-2).add_(1)
-        #     self.r_kv.bernoulli_(0.5).mul_(-2).add_(1)
-        #     self.s_kv.bernoulli_(0.5).mul_(-2).add_(1)
-        #     self.r_o.bernoulli_(0.5).mul_(-2).add_(1)
-        #     self.s_o.bernoulli_(0.5).mul_(-2).add_(1)
+        if self.use_multiplicative:
+            with torch.no_grad():
+                self.rm_q.bernoulli_(0.5).mul_(-2).add_(1)
+                self.sm_q.bernoulli_(0.5).mul_(-2).add_(1)
+                self.rm_kv.bernoulli_(0.5).mul_(-2).add_(1)
+                self.sm_kv.bernoulli_(0.5).mul_(-2).add_(1)
+                self.rm_o.bernoulli_(0.5).mul_(-2).add_(1)
+                self.sm_o.bernoulli_(0.5).mul_(-2).add_(1)
 
     def forward(self, query, key, value, src_indices=None, tgt_indices=None, attn_mask=None,
                 incremental=False, incremental_cache=None):
@@ -107,9 +117,26 @@ class MFWEncdecMultiheadAttn(nn.Module):
         time_masking = False
         len_key = key.size(0)
 
-        in_proj_weight_q = self.in_proj_weight_q + torch.bmm(r_q.unsqueeze(-1), s_q.unsqueeze(1)).sum(dim=0)
-        in_proj_weight_kv = self.in_proj_weight_kv + torch.bmm(r_kv.unsqueeze(-1), s_kv.unsqueeze(1)).sum(dim=0)
-        out_proj_weight = self.out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+        if self.use_multiplicative:
+            rm_q = torch.index_select(self.rm_q, 0, indices).squeeze(0)
+            sm_q = torch.index_select(self.sm_q, 0, src_indices).squeeze(0)
+            rm_kv = torch.index_select(self.rm_kv, 0, indices).squeeze(0)
+            sm_kv = torch.index_select(self.sm_kv, 0, src_indices).squeeze(0)
+            rm_o = torch.index_select(self.rm_o, 0, indices).squeeze(0)
+            sm_o = torch.index_select(self.sm_o, 0, src_indices).squeeze(0)
+
+            in_proj_weight_q = self.in_proj_weight_q * torch.bmm(rm_q.unsqueeze(-1), sm_q.unsqueeze(1)).sum(dim=0)
+            in_proj_weight_kv = self.in_proj_weight_kv * torch.bmm(rm_kv.unsqueeze(-1), sm_kv.unsqueeze(1)).sum(dim=0)
+            out_proj_weight = self.out_proj_weight * torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+
+        else:
+            in_proj_weight_q = self.in_proj_weight_q
+            in_proj_weight_kv = self.in_proj_weight_kv
+            out_proj_weight = self.out_proj_weight
+
+        in_proj_weight_q = in_proj_weight_q + torch.bmm(r_q.unsqueeze(-1), s_q.unsqueeze(1)).sum(dim=0)
+        in_proj_weight_kv = in_proj_weight_kv + torch.bmm(r_kv.unsqueeze(-1), s_kv.unsqueeze(1)).sum(dim=0)
+        out_proj_weight = out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
 
         if self.optimized == 1 and (self.training and not incremental) and len_key <= 1024 \
                 and query.is_cuda and in_proj_weight_q.dtype == torch.half:
@@ -119,7 +146,7 @@ class MFWEncdecMultiheadAttn(nn.Module):
                 attn_mask = attn_mask.byte()
 
             outputs = self.attn_func_fast(time_masking, is_training, self.num_heads,
-                                          query.type_as(in_proj_weight_q), key.type_as(in_proj_weight_q),
+                                          query, key.type_as(in_proj_weight_q),
                                           in_proj_weight_q, in_proj_weight_kv, out_proj_weight,
                                           attn_mask, self.dropout)
 
