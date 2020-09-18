@@ -7,12 +7,6 @@ def make_parser(parser):
                         help='Path to the *-train.pt file from preprocess.py')
     parser.add_argument('-data_format', required=False, default='raw',
                         help='Default data format: raw')
-    parser.add_argument('-additional_data', required=False, default='none',
-                        help='Path to the *-train.pt file from preprocess.py for addtional data; sepeated by semi-colon')
-    parser.add_argument('-additional_data_format', required=False, default='bin',
-                        help='Default data format: raw')
-    parser.add_argument('-data_ratio', required=False, default='1',
-                        help='ratio how to use the data and additiona data  e.g. 1;2;2; default 1;1;1;1;...')
 
     parser.add_argument('-multi_dataset', action='store_true',
                         help='Reading multiple datasets (sharing the same dictionary)')
@@ -151,8 +145,6 @@ def make_parser(parser):
                         help='Extra context size in transformer Xl')
     parser.add_argument('-epochs', type=int, default=13,
                         help='Number of training epochs')
-    parser.add_argument('-start_epoch', type=int, default=1,
-                        help='The epoch from which to start')
     parser.add_argument('-param_init', type=float, default=0.1,
                         help="""Parameters are initialized over uniform distribution
                         with support (-param_init, param_init)""")
@@ -176,15 +168,12 @@ def make_parser(parser):
     parser.add_argument('-scheduled_sampling_rate', type=float, default=0.0,
                         help='Scheduled sampling rate.')
 
-
     parser.add_argument('-curriculum', type=int, default=-1,
                         help="""For this many epochs, order the minibatches based
                         on source sequence length. Sometimes setting this to 1 will
                         increase convergence speed.""")
     parser.add_argument('-normalize_gradient', action="store_true",
                         help="""Normalize the gradients by number of tokens before updates""")
-    parser.add_argument('-virtual_gpu', type=int, default=1,
-                        help='Number of virtual gpus. The trainer will try to mimic asynchronous multi-gpu training')
     # learning rate
     parser.add_argument('-learning_rate', type=float, default=1.0,
                         help="""Starting learning rate. If adagrad/adadelta/adam is
@@ -238,8 +227,6 @@ def make_parser(parser):
                         help='Use half precision training')
     parser.add_argument('-fp16_mixed', action='store_true',
                         help='Use mixed half precision training. fp16 must be enabled.')
-    parser.add_argument('-fp16_loss_scale', type=float, default=8,
-                        help="""Loss scale for fp16 loss (to avoid overflowing in fp16).""")
     parser.add_argument('-seed', default=-1, type=int,
                         help="Seed for deterministic runs.")
 
@@ -261,8 +248,6 @@ def make_parser(parser):
     parser.add_argument('-fast_self_attention', action="store_true",
                         help="""Fast self attention between encoder decoder""")
     parser.add_argument('-fast_feed_forward', action="store_true",
-                        help="""Fast cross attention between encoder decoder""")
-    parser.add_argument('-overclocking', action="store_true",
                         help="""Fast cross attention between encoder decoder""")
 
     # for FUSION

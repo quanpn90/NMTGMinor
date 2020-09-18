@@ -59,17 +59,6 @@ class BaseTrainer(object):
         self.loss_function = loss_function
         self.start_time = 0
 
-        self.additional_data = []
-        self.additional_data_ratio = []
-
-    def add_additional_data(self, d, ratio):
-        self.additional_data = d
-        if ratio == "-1":
-            self.additional_data_ratio = [1] * (len(self.additional_data + 1))
-        else:
-            self.additional_data_ratio = [int(s) for s in ratio.split(";")]
-            assert (len(self.additional_data_ratio) == len(self.additional_data) + 1)
-
     def run(self, *args, **kwargs):
 
         raise NotImplementedError
@@ -275,9 +264,6 @@ class BaseTrainer(object):
             self.optim.zero_grad()
             self.optim.step()
             self.optim.reset()
-            # for group in optimizer.param_groups:
-            #     if 'step' in group:
-            #         group['step'] = 0
 
         except RuntimeError as e:
             if 'out of memory' in str(e):
@@ -365,8 +351,6 @@ class XETrainer(BaseTrainer):
             'epoch': epoch,
             'itr': itr_state_dict,
             'optim': optim_state_dict,
-            'additional_batch_order': getattr(self, 'additional_batch_order', None),
-            'additional_data_iteration': getattr(self, 'additional_data_iteration', None),
             'amp': amp.state_dict()
         }
 
@@ -729,19 +713,15 @@ class XETrainer(BaseTrainer):
                     itr_progress = checkpoint['itr']
                 else:
                     itr_progress = None
-                opt.start_epoch = int(math.floor(float(checkpoint['epoch'] + 1)))
 
                 resume = True
-                if len(self.additional_data) > 0:
-                    if 'additional_batch_order' in checkpoint:
-                        self.additional_batch_order = checkpoint['additional_batch_order']
-                        self.additional_data_iteration = checkpoint['additional_data_iteration']
-                    else:
-                        self.init_additional_data()
+                start_epoch = checkpoint['epoch'] if 'epoch' in checkpoint else 1
+                if start_epoch is None:
+                    start_epoch = 1
             else:
                 itr_progress = None
                 resume = False
-                self.init_additional_data()
+                start_epoch = 1
 
             del checkpoint['model']
             del checkpoint['optim']
@@ -751,7 +731,7 @@ class XETrainer(BaseTrainer):
             print('Initializing model parameters')
             init_model_parameters(model, opt)
             resume = False
-            self.init_additional_data()
+            start_epoch = 1
 
         if opt.load_encoder_from:
             self.load_encoder_weight(opt.load_encoder_from)
@@ -769,7 +749,7 @@ class XETrainer(BaseTrainer):
 
         self.start_time = time.time()
 
-        for epoch in range(opt.start_epoch, opt.start_epoch + opt.epochs):
+        for epoch in range(start_epoch, start_epoch + opt.epochs):
             print('')
 
             #  (1) train for one epoch on the training set
@@ -786,10 +766,4 @@ class XETrainer(BaseTrainer):
             itr_progress = None
             resume = False
 
-    def init_additional_data(self):
-        self.additional_batch_order = []
-        self.additional_data_iteration = []
-        for i in range(len(self.additional_data)):
-            self.additional_data_iteration.append(0)
-            self.additional_data[i].shuffle()
-            self.additional_batch_order.append(self.additional_data[i].create_order())
+

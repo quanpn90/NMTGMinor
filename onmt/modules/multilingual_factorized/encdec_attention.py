@@ -55,8 +55,6 @@ class MFWEncdecMultiheadAttn(nn.Module):
             self.optimized = 1
 
         except ModuleNotFoundError as e:
-            # print(e)
-            # print("Cannot use fast self-attention implementation")
             self.optimized = 2
             self.attn_func_fast = None
 

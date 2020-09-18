@@ -83,9 +83,11 @@ class SpeechTransformerEncoder(TransformerEncoder):
             input = input.narrow(2, 1, input.size(2) - 1)
 
             # first resizing to fit the CNN format
+            # note that this is actually conv2d so channel=1, f=40
             input = input.view(input.size(0), input.size(1), -1, self.channels)
-            input = input.permute(0, 3, 1, 2)
+            input = input.permute(0, 3, 1, 2)  # [bsz, channels, time, f]
 
+            # apply CNN
             input = self.audio_trans(input)
             input = input.permute(0, 2, 1, 3).contiguous()
             input = input.view(input.size(0), input.size(1), -1)

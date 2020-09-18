@@ -433,7 +433,7 @@ def main():
     n_params = sum([p.nelement() for p in model.parameters()])
     print('* number of parameters: %d' % n_params)
 
-    if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
+    if len(opt.gpus) > 1:
         raise NotImplementedError("Multi-GPU training is not supported at the moment.")
 
     if opt.bayes_by_backprop:
