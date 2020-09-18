@@ -284,7 +284,7 @@ class Dataset(torch.utils.data.Dataset):
         # Processing data sizes
         if self.src is not None:
             if src_sizes is not None:
-                self.src_sizes = src_sizes
+                self.src_sizes = np.asarray(src_sizes)
             else:
                 self.src_sizes = np.asarray([data.size(0) for data in self.src])
         else:
@@ -292,7 +292,7 @@ class Dataset(torch.utils.data.Dataset):
 
         if self.tgt is not None:
             if tgt_sizes is not None:
-                self.tgt_sizes = tgt_sizes
+                self.tgt_sizes = np.asarray(tgt_sizes)
             else:
                 self.tgt_sizes = np.asarray([data.size(0) for data in self.tgt])
         else:

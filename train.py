@@ -41,6 +41,18 @@ if torch.cuda.is_available() and not opt.gpus:
 
 torch.manual_seed(opt.seed)
 
+def numpy_to_torch(tensor_list):
+
+    out_list = list()
+
+    for tensor in tensor_list:
+        if isinstance(tensor, np.ndarray):
+            out_list.append(torch.from_numpy(tensor))
+        else:
+            out_list.append(tensor)
+
+    return out_list
+
 
 def main():
 
@@ -78,8 +90,8 @@ def main():
                 train_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
             if not opt.streaming:
-                train_data = onmt.Dataset(train_dict['src'], train_dict['tgt'],
-                                          None, None,
+                train_data = onmt.Dataset(numpy_to_torch(train_dict['src']), numpy_to_torch(train_dict['tgt']),
+                                          train_dict['src_sizes'], train_dict['tgt_sizes'],
                                           train_src_langs, train_tgt_langs,
                                           batch_size_words=opt.batch_size_words,
                                           data_type=dataset.get("type", "text"), sorting=True,
@@ -111,15 +123,15 @@ def main():
                 valid_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
             if not opt.streaming:
-                valid_data = onmt.Dataset(valid_dict['src'], valid_dict['tgt'],
-                                          None, None,
+                valid_data = onmt.Dataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
+                                          valid_dict['src_sizes'], valid_dict['tgt_sizes'],
                                           valid_src_langs, valid_tgt_langs,
                                           batch_size_words=opt.batch_size_words,
                                           data_type=dataset.get("type", "text"), sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
                                           upsampling=opt.upsampling)
             else:
-                valid_data = onmt.StreamDataset(valid_dict['src'], valid_dict['tgt'],
+                valid_data = onmt.StreamDataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
                                                 valid_src_langs, valid_tgt_langs,
                                                 batch_size_words=opt.batch_size_words,
                                                 data_type=dataset.get("type", "text"), sorting=True,

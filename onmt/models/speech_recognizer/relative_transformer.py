@@ -94,8 +94,9 @@ class SpeechTransformerEncoder(TransformerEncoder):
             # print(input.size())
             input = self.linear_trans(input)
 
-            mask_src = long_mask[:, 0:input.size(1) * 4:4].transpose().unsqueeze(0)
+            #mask_src = long_mask[:, 0:input.size(1) * 4:4].transpose().unsqueeze(0)
             dec_attn_mask = long_mask[:, 0:input.size(1) * 4:4].unsqueeze(1)
+            mask_src = long_mask[:, 0:input.size(1) * 4:4].transpose(0, 1).unsqueeze(0)
             # the size seems to be B x T ?
             emb = input
 
