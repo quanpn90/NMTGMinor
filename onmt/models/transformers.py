@@ -448,7 +448,7 @@ class TransformerDecoder(nn.Module):
                 decoder_state.input_seq = torch.cat([decoder_state.input_seq, input], 0)
             input = decoder_state.input_seq.transpose(0, 1)
 
-            src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
+        src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
 
         if input.size(1) > 1:
             input_ = input[:, -1].unsqueeze(1)
