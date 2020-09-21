@@ -31,6 +31,7 @@ print(opt)
 onmt.constants.weight_norm = opt.weight_norm
 onmt.constants.checkpointing = opt.checkpointing
 onmt.constants.max_position_length = opt.max_position_length
+onmt.constants.fused_ffn = opt.fused_ffn
 
 # Use static dropout if checkpointing > 0
 if opt.checkpointing > 0:

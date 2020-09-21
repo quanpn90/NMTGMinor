@@ -9,6 +9,13 @@
           </advancedOptions>
         </fileTransfer>
       </webServer>
+      <webServer id="abb833cc-712b-4b3d-9200-0ee789af8dca" name="rg3hpc.ira.uka.de" url="http://http://rg3hpc1.ira.uka.de">
+        <fileTransfer accessType="SFTP" host="rg3hpc1.ira.uka.de" port="22" sshConfigId="5d2f3f1f-29af-4318-9946-7b0089099775" sshConfig="pquan@rg3hpc1.ira.uka.de:22 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
     </option>
   </component>
 </project>

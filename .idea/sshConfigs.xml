@@ -3,6 +3,7 @@
   <component name="SshConfigs">
     <configs>
       <sshConfig authType="PASSWORD" host="rg3hpc1" id="73665ea0-750a-4485-a837-763d82ab21d8" port="22" nameFormat="DESCRIPTIVE" username="pquan" />
+      <sshConfig authType="PASSWORD" host="rg3hpc1.ira.uka.de" id="5d2f3f1f-29af-4318-9946-7b0089099775" port="22" nameFormat="DESCRIPTIVE" username="pquan" />
     </configs>
   </component>
 </project>

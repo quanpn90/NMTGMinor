@@ -249,6 +249,10 @@ def make_parser(parser):
                         help="""Fast self attention between encoder decoder""")
     parser.add_argument('-fast_feed_forward', action="store_true",
                         help="""Fast cross attention between encoder decoder""")
+    parser.add_argument('-macaron', action='store_true',
+                        help='Macaron style network with 2 FFN per block.')
+    parser.add_argument('-fused_ffn', action="store_true",
+                        help="""Fast feedforward""")
 
     # for FUSION
     parser.add_argument('-lm_checkpoint', default='', type=str,
@@ -281,6 +285,8 @@ def make_parser(parser):
                         help='Use multilingual language identifier to get LFV for each language')
     parser.add_argument('-bottleneck_size', type=int, default=64,
                         help="Bottleneck size for the LFV vector).")
+    parser.add_argument('-conv_kernel', type=int, default=31,
+                        help="Kernels for convolution in conformer).")
 
     parser.add_argument('-multilingual_factorized_weights', action='store_true',
                         help='Use multilingual language identifier to get LFV for each language')
@@ -423,6 +429,9 @@ def backward_compatible(opt):
     if not hasattr(opt, 'fast_feed_forward'):
         opt.fast_feed_forward = False
 
+    if not hasattr(opt, 'fused_ffn'):
+        opt.fused_ffn = False
+
     if not hasattr(opt, 'concat'):
         opt.concat = 4
 
@@ -452,5 +461,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'mfw_multiplicative'):
         opt.mfw_multiplicative = False
+
+    if not hasattr(opt, 'macaron'):
+        opt.macaron = False
 
     return opt

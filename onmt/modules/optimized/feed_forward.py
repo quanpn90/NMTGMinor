@@ -5,6 +5,7 @@ from torch import nn
 from torch.nn import Parameter
 import torch.nn.functional as F
 from onmt.modules.dropout import variational_dropout
+import onmt
 
 
 class PositionWiseFeedForward(nn.Module):
@@ -30,12 +31,14 @@ class PositionWiseFeedForward(nn.Module):
 
         self.reset_parameters()
         self.optimized = 2
-        # try:
-        #     from apex.mlp.mlp import mlp_function
-        #     self.optimized = 1
-        #     self.fast_mlp_func = mlp_function
-        # except ModuleNotFoundError as e:
-        #     self.optimized = 1
+
+        if onmt.constants.fused_ffn:
+            try:
+                from apex.mlp.mlp import mlp_function
+                self.optimized = 1
+                self.fast_mlp_func = mlp_function
+            except ModuleNotFoundError as e:
+                self.optimized = 1
 
     def reset_parameters(self, init='normal'):
         if init == 'normal':

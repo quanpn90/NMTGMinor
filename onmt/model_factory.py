@@ -100,12 +100,18 @@ def build_tm_model(opt, dicts):
     if opt.ctc_loss != 0:
         generators.append(onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size() + 1))
 
-    if opt.model in ['speech_transformer']:
+    if opt.model in ['conformer', 'speech_transformer']:
         onmt.constants.init_value = opt.param_init
         from onmt.models.speech_recognizer.relative_transformer import \
             SpeechTransformerEncoder, SpeechTransformerDecoder
 
-        encoder = SpeechTransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
+        if opt.model == 'conformer':
+            from onmt.models.speech_recognizer.conformer import ConformerEncoder
+            opt.cnn_downsampling = True  # force this bool to have masking at decoder to be corrected
+            encoder = ConformerEncoder(opt, None, None, 'audio')
+        else:
+            encoder = SpeechTransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
+
         decoder = SpeechTransformerDecoder(opt, embedding_tgt, positional_encoder,
                                            language_embeddings=language_embeddings)
         model = RelativeTransformer(encoder, decoder, nn.ModuleList(generators),

@@ -4,144 +4,10 @@ import torch.nn.init as init
 import torch.nn.functional as F
 import math
 
-
-class Conv2dSubsampling(nn.Module):
-
-    def __init__(self, input_dim, output_dim, dropout=0.0):
-        """
-        :param input_dim: the log mel feature (normally 40)
-        :param output_dim: network size (512)
-        :param dropout: dropout rate
-        """
-        
-        super(Conv2dSubsampling, self).__init__()
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-
-        # first conv is nn.Conv2d(1, output_dim, 3, 2)
-        # secnd conv is nn.Conv2d(output_dim, odin, 3, 2)
-        self.in_conv_weight = nn.Parameter(torch.Tensor(1, output_dim, 3, 3))
-        self.in_conv_bias = nn.Parameter(torch.Tensor(output_dim))
-        self.in_stride = 2
-
-        self.out_conv_weight = nn.Parameter(torch.Tensor(output_dim, output_dim, 3, 3))
-        self.out_conv_bias = nn.Parameter(torch.Tensor(output_dim))
-        self.out_stride = 2
-
-        cnn_feature_size = output_dim * (((input_dim - 1) // 2 - 1) // 2)
-        self.out_weight = nn.Parameter(torch.Tensor(output_dim, cnn_feature_size))
-        self.out_bias = nn.Parameter(torch.Tensor(output_dim))
-
-        self.dropout = dropout
-
-        self.reset_parameters()
-
-    def reset_parameters(self):
-
-        nn.init.kaiming_uniform_(self.in_conv_weight, a=math.sqrt(5))
-        nn.init.kaiming_uniform_(self.out_conv_weight, a=math.sqrt(5))
-
-        fan_in, _ = init._calculate_fan_in_and_fan_out(self.in_conv_weight)
-        bound = 1 / math.sqrt(fan_in)
-        init.uniform_(self.in_conv_bias, -bound, bound)
-
-        fan_in, _ = init._calculate_fan_in_and_fan_out(self.out_conv_weight)
-        bound = 1 / math.sqrt(fan_in)
-        init.uniform_(self.out_conv_bias, -bound, bound)
-
-        std_ = math.sqrt(2.0 / (self.output_dim + self.output_dim))
-        nn.init.normal_(self.out_weight, 0.0, std_)
-        nn.init.constant_(self.out_bias, 0.)
-
-        return
-
-    def forward(self, input, input_mask):
-        """
-        :param input: [bsz x seq_len x input_size]
-        :param input_mask: [bsz x seq_len]
-        :return:
-        """
-
-        input = input.unsqueeze(1)  # [bsz x 1 x seq_len x input_size]
-
-        # padding = 0, dilation = 1, groups = 1
-        input = F.conv2d(input, self.in_conv_weight, self.in_conv_bias, self.in_stride, 0, 1, 1)
-        input = F.relu(input)
-
-        input = F.conv2d(input, self.out_conv_weight, self.out_conv_bias, self.out_stride, 0, 1, 1)
-        input = F.relu(input)
-
-        b, c, t, f = input.size()
-        input = input.transpose(1, 2).contiguous().view(b, t, c * f)
-
-        input = F.linear(input, self.out_weight, self.out_bias)
-        input = F.dropout(input, p=self.dropout, training=self.training)
-
-        mask = input_mask[:, :-2:2][:, :-2:2]
-
-        return input, mask
-
-
-class ConformerConvBlock(nn.Module):
-
-    def __init__(self, channels, kernel_size, activation=nn.ReLU(), bias=True):
-
-        super(ConformerConvBlock, self).__init__()
-
-        assert (kernel_size - 1) % 2 == 0
-
-        self.in_pointwise_weight = nn.Parameter(torch.Tensor(2 * channels, channels, 1))
-        self.in_pointwise_bias = nn.Parameter(torch.Tensor(2 * channels))
-
-        self.depthwise_weight = nn.Parameter(torch.Tensor(channels, channels // channels, kernel_size))
-        self.depthwise_bias = nn.Parameter(torch.Tensor(channels))
-        self.padding = (kernel_size - 1) // 2
-        self.groups = channels
-
-        self.norm = nn.BatchNorm1d(channels)
-        self.out_pointwise_weight = nn.Parameter(torch.Tensor(channels, channels, 1))
-        self.out_pointwise_bias = nn.Parameter(torch.Tensor(channels))
-
-        self.activation = activation
-        self.reset_parameters()
-
-    def reset_parameters(self):
-
-        nn.init.kaiming_uniform_(self.in_pointwise_weight, a=math.sqrt(5))
-        nn.init.kaiming_uniform_(self.depthwise_weight, a=math.sqrt(5))
-        nn.init.kaiming_uniform_(self.out_pointwise_weight, a=math.sqrt(5))
-
-        fan_in, _ = init._calculate_fan_in_and_fan_out(self.in_pointwise_weight)
-        bound = 1 / math.sqrt(fan_in)
-        init.uniform_(self.in_pointwise_bias, -bound, bound)
-
-        fan_in, _ = init._calculate_fan_in_and_fan_out(self.depthwise_weight)
-        bound = 1 / math.sqrt(fan_in)
-        init.uniform_(self.depthwise_bias, -bound, bound)
-
-        fan_in, _ = init._calculate_fan_in_and_fan_out(self.out_pointwise_weight)
-        bound = 1 / math.sqrt(fan_in)
-        init.uniform_(self.out_pointwise_bias, -bound, bound)
-
-    def forward(self, x):
-        """
-        :param x: [seq_len x bsz x hidden_size]
-        :return:
-        """
-
-        x = x.transpose(0, 1).transpose(1, 2)  # to [bsz x hidden_size x seq_len]
-
-        x = F.conv1d(x, self.in_pointwise_weight, self.in_pointwise_bias, 1, 0, 1, 1)
-        x = F.glu(x, dim=1)
-
-        x = F.conv1d(x, self.depthwise_weight, self.depthwise_bias, 1, self.padding, 1, self.groups)
-        x = self.activation(x)
-
-        x = F.conv1d(x, self.out_pointwise_weight, self.out_pointwise_bias, 1, 0, 1, 1)
-
-        x = x.transpose(1, 2).transpose(0, 1)  # back to [seq_len x bsz x hidden_size]
-
-        return x
+from onmt.modules.optimized.relative_self_attention import RelativeSelfMultiheadAttn
+from onmt.modules.optimized.feed_forward import PositionWiseFeedForward
+from onmt.modules.dropout import variational_dropout
+from onmt.modules.convolution import ConformerConvBlock
 
 
 class ConformerEncoderLayer(nn.Module):
@@ -153,6 +19,96 @@ class ConformerEncoderLayer(nn.Module):
         # FFN -> SelfAttention -> Conv -> FFN
         # PreNorm
         self.opt = opt
+        self.variational = opt.variational_dropout
+        self.death_rate = death_rate
+        self.dropout = dropout
+        self.ffn_scale = 0.5
+
+        self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+        self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                  variational=self.variational)
+
+        self.attn = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+
+        self.preprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+
+        self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                       variational=self.variational)
+
+        self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+
+        self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                   variational=self.variational)
+
+        # there is batch norm inside convolution already
+        # so no need for layer norm?
+        self.preprocess_conv = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+        self.postprocess_conv = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                  variational=self.variational)
+        self.conv = ConformerConvBlock(opt.model_size, opt.conv_kernel)
+
+    def forward(self, input, pos_emb, attn_mask, incremental=False, incremental_cache=None, mems=None,
+                src_lang=None):
+
+        assert incremental is False
+        assert incremental_cache is None
+
+        coin = True
+        if self.training and self.death_rate > 0:
+            coin = (torch.rand(1)[0].item() >= self.death_rate)
+
+        if coin:
+            out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang)
+
+            out.mul_(self.ffn_scale)
+
+            if self.training and self.death_rate > 0:
+                out = out / (1 - self.death_rate)
+
+            if not self.variational:
+                out = F.dropout(out, p=self.dropout, training=self.training)
+            else:
+                out = variational_dropout(out, p=self.dropout, training=self.training)
+
+            input = input + out
+
+            # convolution
+            conv_input = self.preprocess_conv(input)
+            out = self.conv(conv_input)
+
+            if self.training and self.death_rate > 0:
+                out = out / (1 - self.death_rate)
+
+            input = self.postprocess_conv(out, input)
+
+            # attention
+            attn_input = self.preprocess_attn(input)
+            out, _ = self.attn(attn_input, pos_emb, attn_mask, None)
+
+            if self.training and self.death_rate > 0:
+                out = out / (1 - self.death_rate)
+
+            input = self.postprocess_attn(out, input)
+
+            # last ffn
+            out = self.feedforward(self.preprocess_ffn(input), src_lang)
+
+            out.mul_(self.ffn_scale)
+
+            if self.training and self.death_rate > 0:
+                out = out / (1 - self.death_rate)
+
+            if not self.variational:
+                out = F.dropout(out, p=self.dropout, training=self.training)
+            else:
+                out = variational_dropout(out, p=self.dropout, training=self.training)
+
+            input = input + out
+
+            return input
+
+        return input
+
 
 
 
