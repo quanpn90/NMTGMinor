@@ -153,6 +153,13 @@ class Translator(object):
     # Combine distributions from different models
     def _combine_outputs(self, outputs):
 
+        sizes = [output_.size(-1) for output_ in outputs.values()]
+        min_size = min(sizes)
+
+        for key in outputs:
+            outputs[key] = outputs[key][:, :min_size]
+        # outputs = resized_outputs
+
         if len(outputs) == 1:
             return outputs[0]
 

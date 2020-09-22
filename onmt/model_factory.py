@@ -27,6 +27,8 @@ def build_model(opt, dicts):
     onmt.constants.residual_type = opt.residual_type
     opt.nce = opt.nce_noise > 0
 
+    if 'langs' not in dicts:
+        dicts['langs'] = {'src': 0, 'tgt': 1}
     opt.n_languages = len(dicts['langs'])
 
     if opt.bayes_by_backprop:

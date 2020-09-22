@@ -466,6 +466,9 @@ class FastTranslator(Translator):
 
         out = self._combine_outputs(outs)
         attn = self._combine_attention(attns)
+
+        if self.vocab_size > out.size(-1):
+            self.vocab_size = out.size(-13)
         # attn = attn[:, -1, :] # I dont know what this line means
         attn = None # lol this is never used probably
 

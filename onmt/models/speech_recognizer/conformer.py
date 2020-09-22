@@ -67,7 +67,7 @@ class ConformerEncoder(TransformerEncoder):
 
         # first subsampling
         emb, _ = self.audio_trans(input, long_mask)
-        mask_src = long_mask[:, 0:input.size(1) * 4:4].unsqueeze(1)
+        mask_src = long_mask[:, 0:emb.size(1) * 4:4].transpose(0, 1).unsqueeze(0)
         dec_attn_mask = None
 
         emb = emb.transpose(0, 1)
