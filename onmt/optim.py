@@ -115,6 +115,7 @@ class Optim(object):
             self.init_lr = self.lr
         self.lr = self.init_lr
         self._step = 0
+        self._first_step = 0
         if self.update_method == 'noam2':
             self._step = opt.warmup_steps
         if self.update_method == 'cosine':
@@ -126,7 +127,7 @@ class Optim(object):
         self.amsgrad = opt.amsgrad
         self.max_steps = opt.max_steps
 
-    def step(self, grad_denom=None):
+    def step(self, grad_denom=None, warmup=False):
 
         "Normalize gradients by batch size"
         self.normalize_grad(denom=grad_denom)
@@ -191,10 +192,10 @@ class Optim(object):
         return self.lr
 
     def reset(self):
-        self._step = 0
+        self._step = self._first_step
         for group in self.optimizer.param_groups:
             if 'step' in group:
-                group['step'] = 0
+                group['step'] = self._first_step
 
     def state_dict(self):
         state_dict = self.optimizer.state_dict()
@@ -203,6 +204,8 @@ class Optim(object):
 
     def load_state_dict(self, state_dict):
         self._step = state_dict['_step']
+        self._first_step = self._step
+        print("* Loading from step %d " % self._step)
 
         state_dict.pop('_step', None)
         self.optimizer.load_state_dict(state_dict)

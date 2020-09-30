@@ -31,7 +31,6 @@ print(opt)
 onmt.constants.weight_norm = opt.weight_norm
 onmt.constants.checkpointing = opt.checkpointing
 onmt.constants.max_position_length = opt.max_position_length
-onmt.constants.fused_ffn = opt.fused_ffn
 
 # Use static dropout if checkpointing > 0
 if opt.checkpointing > 0:
@@ -301,7 +300,7 @@ def main():
                 from onmt.data.scp_dataset import SCPIndexDataset
 
                 if opt.data_format in ['scp', 'scpmem']:
-                    audio_data = torch.load(os.path.join(data_dir, data.scp_path.pt))
+                    audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
                     src_data = SCPIndexDataset(audio_data, concat=opt.concat)
                 else:
                     src_data = MMapIndexedDataset(os.path.join(data_dir, "data.src"))
@@ -353,7 +352,7 @@ def main():
             elif opt.data_format in ['scp', 'scpmem', 'mmem']:
 
                 if opt.data_format in ['scp', 'scpmem']:
-                    audio_data = torch.load(os.path.join(data_dir, data.scp_path.pt))
+                    audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
                     src_data = SCPIndexDataset(audio_data, concat=opt.concat)
                 else:
                     src_data = MMapIndexedDataset(os.path.join(data_dir, "data.src"))

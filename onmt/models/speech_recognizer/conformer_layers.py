@@ -56,14 +56,15 @@ class ConformerEncoderLayer(nn.Module):
         coin = True
         if self.training and self.death_rate > 0:
             coin = (torch.rand(1)[0].item() >= self.death_rate)
+            ffn_scale = self.ffn_scale / (1 - self.death_rate)
+
+        else:
+            ffn_scale = self.ffn_scale
 
         if coin:
             out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang)
 
-            out.mul_(self.ffn_scale)
-
-            if self.training and self.death_rate > 0:
-                out = out / (1 - self.death_rate)
+            out = out * ffn_scale
 
             if not self.variational:
                 out = F.dropout(out, p=self.dropout, training=self.training)
@@ -93,10 +94,7 @@ class ConformerEncoderLayer(nn.Module):
             # last ffn
             out = self.feedforward(self.preprocess_ffn(input), src_lang)
 
-            out.mul_(self.ffn_scale)
-
-            if self.training and self.death_rate > 0:
-                out = out / (1 - self.death_rate)
+            out = out * ffn_scale
 
             if not self.variational:
                 out = F.dropout(out, p=self.dropout, training=self.training)

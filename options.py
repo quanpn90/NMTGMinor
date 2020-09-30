@@ -465,4 +465,7 @@ def backward_compatible(opt):
     if not hasattr(opt, 'macaron'):
         opt.macaron = False
 
+    if not hasattr(opt, 'fused_ffn'):
+        opt.fused_ffn = False
+
     return opt

@@ -40,6 +40,7 @@ class SCPIndexDataset(torch.utils.data.Dataset):
 
         feature_vector = torch.from_numpy(mat)
         concat = self.concat
+
         if concat > 1:
             add = (concat - feature_vector.size()[0] % concat) % concat
             z = torch.FloatTensor(add, feature_vector.size()[1]).zero_()

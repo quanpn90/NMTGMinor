@@ -14,7 +14,6 @@ from onmt.modules.dropout import variational_dropout
 
 
 class RelativeTransformerEncoderLayer(nn.Module):
-    # def __init__(self, h, d_model, p, d_ff, attn_p=0.1, variational=False, death_rate=0.0, **kwargs):
     def __init__(self, opt, death_rate=0.0, **kwargs):
         super(RelativeTransformerEncoderLayer, self).__init__()
         self.variational = opt.variational_dropout
@@ -225,6 +224,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
                     out = F.dropout(out, p=self.dropout, training=self.training)
                 else:
                     out = variational_dropout(out, p=self.dropout, training=self.training)
+
                 input = input + self.ffn_scale * out
 
             query = self.preprocess_attn(input)

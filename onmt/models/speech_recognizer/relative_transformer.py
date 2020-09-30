@@ -33,6 +33,8 @@ class SpeechTransformerEncoder(TransformerEncoder):
         self.n_heads = opt.n_heads
         self.fast_self_attn = opt.fast_self_attention
 
+        # TODO: multilingual factored networks
+
         # build_modules will be called from the inherited constructor
         super().__init__(opt, dicts, positional_encoder, encoder_type, language_embeddings)
 
@@ -91,7 +93,6 @@ class SpeechTransformerEncoder(TransformerEncoder):
             input = self.audio_trans(input)
             input = input.permute(0, 2, 1, 3).contiguous()
             input = input.view(input.size(0), input.size(1), -1)
-            # print(input.size())
             input = self.linear_trans(input)
             dec_attn_mask = long_mask[:, 0:input.size(1) * 4:4].unsqueeze(1)
             mask_src = long_mask[:, 0:input.size(1) * 4:4].transpose(0, 1).unsqueeze(0)
@@ -160,7 +161,7 @@ class SpeechTransformerEncoder(TransformerEncoder):
                 # src_len x batch_size x d_model
 
                 mems_i = mems[i] if mems is not None and streaming and self.max_memory_size > 0 else None
-                context = layer(context, pos_emb, mask_src, mems=mems_i)
+                context = layer(context, pos_emb, mask_src, mems=mems_i, src_lang=input_lang)
 
                 if streaming:
                     hids.append(context)
@@ -232,7 +233,8 @@ class SpeechTransformerDecoder(TransformerDecoder):
     # TODO: merging forward_stream and forward
     # TODO: write a step function for encoder
 
-    def forward(self, input, context, src, input_pos=None, src_lang=None, tgt_lang=None, streaming=False, **kwargs):
+    def forward(self, input, context, src, input_pos=None,
+                src_lang=None, tgt_lang=None, streaming=False, **kwargs):
         """
                 Inputs Shapes:
                     input: (Variable) batch_size x len_tgt (wanna tranpose)
@@ -301,10 +303,12 @@ class SpeechTransformerDecoder(TransformerDecoder):
         for i, layer in enumerate(self.layer_modules):
             if self.lfv_multilingual:
                 output, coverage, _, lid_logits_, lfv_vector = \
-                    layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src, None)
+                    layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
+                          src_lang=src_lang, tgt_lang=tgt_lang)
                 lid_logits.append(lid_logits_)
             else:
-                output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src, None)
+                output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
+                                            src_lang=src_lang, tgt_lang=tgt_lang)
 
         output = self.postprocess_layer(output)
 
@@ -328,7 +332,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
         context = decoder_state.context
         buffers = decoder_state.attention_buffers
         lang = decoder_state.tgt_lang
-        # print(lang)
+        src_lang = decoder_state.src_lang
         buffering = decoder_state.buffering
 
         if decoder_state.concat_input_seq:
@@ -356,20 +360,20 @@ class SpeechTransformerDecoder(TransformerDecoder):
         klen = input.size(0)
         # emb = self.word_lut(input) * math.sqrt(self.model_size)
 
-        # if self.use_language_embedding:
-        lang_emb = self.language_embeddings(lang)  # B x H
+        if self.use_language_embedding:
+            lang_emb = self.language_embeddings(lang)  # B x H
 
-        if self.language_embedding_type in ['sum', 'all_sum']:
-            emb = emb + lang_emb
-            # elif self.language_embedding_type == 'concat':
-            #     if input.size(0) == 1:
-            #         emb[0] = lang_emb
-            #
-            #     lang_emb = lang_emb.unsqueeze(0).expand_as(emb)
-            #     concat_emb = torch.cat([emb, lang_emb], dim=-1)
-            #     emb = torch.relu(self.projector(concat_emb))
-            # else:
-            #     raise NotImplementedError
+            if self.language_embedding_type in ['sum', 'all_sum']:
+                emb = emb + lang_emb
+            elif self.language_embedding_type == 'concat':
+                if input.size(0) == 1:
+                    emb[0] = lang_emb
+
+                lang_emb = lang_emb.unsqueeze(0).expand_as(emb)
+                concat_emb = torch.cat([emb, lang_emb], dim=-1)
+                emb = torch.relu(self.projector(concat_emb))
+            else:
+                raise NotImplementedError
 
         # prepare position encoding
         qlen = emb.size(0)
@@ -410,15 +414,18 @@ class SpeechTransformerDecoder(TransformerDecoder):
             if buffering:
                 # print("DEBUGGING BUFFERING")
                 output, coverage, buffer = layer(output, context, pos_emb, None, dec_attn_mask, mask_src,
+                                                 tgt_lang=lang, src_lang=src_lang,
                                                  incremental=True, incremental_cache=buffer)
                 decoder_state.update_attention_buffer(buffer, i)
             else:
                 if self.lfv_multilingual:
                     output, coverage, _, lid_logits_, lfv_vector = \
-                        layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src, None)
+                        layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
+                              tgt_lang=lang, src_lang=src_lang)
                     lid_logits.append(lid_logits_)
                 else:
-                    output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src)
+                    output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
+                                                tgt_lang=lang, src_lang=src_lang)
 
         # normalize and take the last time step
         output = self.postprocess_layer(output)

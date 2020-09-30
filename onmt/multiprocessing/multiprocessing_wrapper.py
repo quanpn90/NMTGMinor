@@ -26,12 +26,16 @@ from torch.serialization import default_restore_location
 """
 An utility function to send the data to the GPU
 """
+
+
 def prepare_sample(sample, device=None):
-    
-    for i, t in enumerate(sample):
-        sample[i] = Variable(t.cuda(device=device))
-    
-    return sample
+
+    # TODO: sample is a Batch object. This function probably 
+    pass
+    # for i, t in enumerate(sample):
+    #     sample[i] = Variable(t.cuda(device=device))
+    #
+    # return sample
 
 def aggregate_loss(losses):
     
@@ -51,6 +55,7 @@ def aggregate_logging_outputs(logging_outputs):
             output['tgt_size'] += log['tgt_size']
         
     return output
+
 
 class MultiprocessingRunner(MultiprocessingEventLoop):
     """Main class for multi-GPU training.

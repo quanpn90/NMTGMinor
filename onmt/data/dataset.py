@@ -356,6 +356,7 @@ class Dataset(torch.utils.data.Dataset):
                                       self.max_src_len, self.max_tgt_len, self.cleaning)
 
         # the second to last mini-batch is likely the largest
+        # (the last one can be the remnant after grouping samples which has less than max size)
         self.largest_batch_id = len(self.batches) - 2
 
         self.num_batches = len(self.batches)

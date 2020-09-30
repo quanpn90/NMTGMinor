@@ -260,10 +260,10 @@ class BaseTrainer(object):
                 print('========= after backward =========')
                 reporter.report(verbose=True)
 
-            # self.model.zero_grad()
+            self.model.zero_grad()
             self.optim.zero_grad()
-            self.optim.step()
-            self.optim.reset()
+            # self.optim.step()
+            # self.optim.reset()
 
         except RuntimeError as e:
             if 'out of memory' in str(e):
@@ -700,6 +700,7 @@ class XETrainer(BaseTrainer):
             prec_opt = checkpoint['opt'] if 'opt' in checkpoint else None
 
             if not opt.reset_optim:
+                print("* Loading optimizer states ... ")
                 self.optim.load_state_dict(checkpoint['optim'])
                 if prec_opt is not None and hasattr(prec_opt, "fp16_mixed"):
                     # Only load amp information if the mode is the same
@@ -743,9 +744,9 @@ class XETrainer(BaseTrainer):
         if self.cuda:
             self.warm_up()
 
-        valid_loss = self.eval(self.valid_data)
-        valid_ppl = math.exp(min(valid_loss, 100))
-        print('Validation perplexity: %g' % valid_ppl)
+            valid_loss = self.eval(self.valid_data)
+            valid_ppl = math.exp(min(valid_loss, 100))
+            print('Validation perplexity: %g' % valid_ppl)
 
         self.start_time = time.time()
 

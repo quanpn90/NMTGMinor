@@ -88,6 +88,7 @@ class SpeechBinarizer:
                     feature_vector = torch.from_numpy(feature_vector[0::opt.stride])
 
                 if concat > 1:
+                    print('concatenating ...')
                     add = (concat - feature_vector.size()[0] % concat) % concat
                     z = torch.FloatTensor(add, feature_vector.size()[1]).zero_()
                     feature_vector = torch.cat((feature_vector, z), 0)
@@ -190,7 +191,13 @@ class SpeechBinarizer:
         for idx in range(num_workers):
 
             for j in range(len(result[idx]['data'])):
-                final_result['data'].append(torch.from_numpy(result[idx]['data'][j]))
+                x = result[idx]['data'][j]
+
+                # if we store the numpy array, then convert to torch
+                # otherwise, x is the scp path to the matrix
+                if isinstance(x, np.ndarray):
+                    x = torch.from_numpy(x)
+                final_result['data'].append(x)
             final_result['sizes'] += result[idx]['sizes']
 
         # remember to close the workers when its done
@@ -292,6 +299,7 @@ class Binarizer:
         offsets = Binarizer.find_offsets(filename, num_workers)
 
         if num_workers > 1:
+
             pool = mp.Pool(processes=num_workers)
             mp_results = []
 

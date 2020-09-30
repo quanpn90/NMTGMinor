@@ -71,8 +71,10 @@ parser.add_argument('-src_vocab_size', type=int, default=9999999,
                     help="Size of the source vocabulary")
 parser.add_argument('-tgt_vocab_size', type=int, default=9999999,
                     help="Size of the target vocabulary")
-parser.add_argument('-src_vocab',
 
+parser.add_argument('-load_dict',
+                    help="Path to an existing source vocabulary")
+parser.add_argument('-src_vocab',
                     help="Path to an existing source vocabulary")
 parser.add_argument('-tgt_vocab',
                     help="Path to an existing target vocabulary")
@@ -420,19 +422,40 @@ def main():
     langs = (src_langs + tgt_langs)
     langs = list(set(langs))
 
-    dicts['langs'] = dict()
+    if opt.load_dict is not None:
+        loaded_dict = torch.load(opt.load_dict)
 
-    for lang in langs:
-        idx = len(dicts['langs'])
-        dicts['langs'][lang] = idx
+        new_languages = list()
+        for lang in langs:
+            if lang not in loaded_dict['langs']:
+                new_languages.append(lang)
 
-    print(dicts['langs'])
+        dicts['langs'] = loaded_dict['langs']
+        print("Loaded dictionary for languages: ", dicts['langs'])
+        if len(new_languages) > 0:
+            for lang in new_languages:
+                idx = len(dicts['langs'])
+                dicts['langs'][lang] = idx
+            print("Added new languages: ", new_languages)
+
+        # dicts['tgt'] = loaded_dict['tgt']
+        # dicts['src'] = loaded_dict['src'] if 'src' in loaded_dict else None
+    else:
+        dicts['langs'] = dict()
+
+        for lang in langs:
+            idx = len(dicts['langs'])
+            dicts['langs'][lang] = idx
+
+        print(dicts['langs'])
 
     start = time.time()
 
     src_train_files = opt.train_src.split("|")
     tgt_train_files = opt.train_tgt.split("|")
     # for ASR and LM we only need to build vocab for the 'target' language
+
+    # TODO: adding new words to the existing dictionary in case loading from previously created dict
     if opt.asr or opt.lm:
         dicts['tgt'] = init_vocab('target', tgt_train_files, opt.tgt_vocab,
                                   opt.tgt_vocab_size, tokenizer, num_workers=opt.num_threads)

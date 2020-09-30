@@ -364,4 +364,3 @@ class ArkLoader(object):
 
         for k in self.readers:
             self.readers[k].close()
-

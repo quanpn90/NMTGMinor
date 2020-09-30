@@ -88,37 +88,45 @@ class ConformerConvBlock(nn.Module):
 
         assert (kernel_size - 1) % 2 == 0
 
-        self.in_pointwise_weight = nn.Parameter(torch.Tensor(2 * channels, channels, 1))
-        self.in_pointwise_bias = nn.Parameter(torch.Tensor(2 * channels))
+        self.pointwise_conv1 = nn.Conv1d(channels, 2*channels, kernel_size=1, stride=1, padding=0, bias=False)
+        self.depthwise_conv = nn.Conv1d(channels, channels, kernel_size, stride=1,
+                                        padding=(kernel_size - 1) // 2, groups=channels, bias=False)
 
-        self.depthwise_weight = nn.Parameter(torch.Tensor(channels, channels // channels, kernel_size))
-        self.depthwise_bias = nn.Parameter(torch.Tensor(channels))
-        self.padding = (kernel_size - 1) // 2
-        self.groups = channels
-
-        self.norm = nn.BatchNorm1d(channels)
-        self.out_pointwise_weight = nn.Parameter(torch.Tensor(channels, channels, 1))
-        self.out_pointwise_bias = nn.Parameter(torch.Tensor(channels))
-
+        self.batch_norm = nn.BatchNorm1d(channels)
+        self.pointwise_conv2 = nn.Conv1d(channels, channels, kernel_size=1, stride=1, padding=0, bias=False)
         self.activation = activation
-        self.reset_parameters()
 
-    def reset_parameters(self):
-        nn.init.kaiming_uniform_(self.in_pointwise_weight, a=math.sqrt(5))
-        nn.init.kaiming_uniform_(self.depthwise_weight, a=math.sqrt(5))
-        nn.init.kaiming_uniform_(self.out_pointwise_weight, a=math.sqrt(5))
+        # self.in_pointwise_weight = nn.Conv1d(channels, 2*channels, kernel_size=1, stride=1, padding=0, bias=False)
+        # self.in_pointwise_bias = nn.Parameter(torch.Tensor(2 * channels))
+        #
+        # self.depthwise_weight = nn.Parameter(torch.Tensor(channels, channels // channels, kernel_size))
+        # self.depthwise_bias = nn.Parameter(torch.Tensor(channels))
+        # self.padding = (kernel_size - 1) // 2
+        # self.groups = channels
+        #
+        # # self.norm = nn.BatchNorm1d(channels)
+        # self.out_pointwise_weight = nn.Parameter(torch.Tensor(channels, channels, 1))
+        # self.out_pointwise_bias = nn.Parameter(torch.Tensor(channels))
+        #
+        # self.activation = activation
+        # self.reset_parameters()
 
-        fan_in, _ = init._calculate_fan_in_and_fan_out(self.in_pointwise_weight)
-        bound = 1 / math.sqrt(fan_in)
-        init.uniform_(self.in_pointwise_bias, -bound, bound)
-
-        fan_in, _ = init._calculate_fan_in_and_fan_out(self.depthwise_weight)
-        bound = 1 / math.sqrt(fan_in)
-        init.uniform_(self.depthwise_bias, -bound, bound)
-
-        fan_in, _ = init._calculate_fan_in_and_fan_out(self.out_pointwise_weight)
-        bound = 1 / math.sqrt(fan_in)
-        init.uniform_(self.out_pointwise_bias, -bound, bound)
+    # def reset_parameters(self):
+    #     nn.init.kaiming_uniform_(self.in_pointwise_weight, a=math.sqrt(5))
+    #     nn.init.kaiming_uniform_(self.depthwise_weight, a=math.sqrt(5))
+    #     nn.init.kaiming_uniform_(self.out_pointwise_weight, a=math.sqrt(5))
+    #
+    #     fan_in, _ = init._calculate_fan_in_and_fan_out(self.in_pointwise_weight)
+    #     bound = 1 / math.sqrt(fan_in)
+    #     init.uniform_(self.in_pointwise_bias, -bound, bound)
+    #
+    #     fan_in, _ = init._calculate_fan_in_and_fan_out(self.depthwise_weight)
+    #     bound = 1 / math.sqrt(fan_in)
+    #     init.uniform_(self.depthwise_bias, -bound, bound)
+    #
+    #     fan_in, _ = init._calculate_fan_in_and_fan_out(self.out_pointwise_weight)
+    #     bound = 1 / math.sqrt(fan_in)
+    #     init.uniform_(self.out_pointwise_bias, -bound, bound)
 
     def forward(self, x):
         """
@@ -128,13 +136,21 @@ class ConformerConvBlock(nn.Module):
 
         x = x.transpose(0, 1).transpose(1, 2)  # to [bsz x hidden_size x seq_len]
 
-        x = F.conv1d(x, self.in_pointwise_weight, self.in_pointwise_bias, 1, 0, 1, 1)
+        x = self.pointwise_conv1(x)
         x = F.glu(x, dim=1)
 
-        x = F.conv1d(x, self.depthwise_weight, self.depthwise_bias, 1, self.padding, 1, self.groups)
-        x = self.activation(self.norm(x))
+        x = self.depthwise_conv(x)
+        x = self.activation(self.batch_norm(x))
 
-        x = F.conv1d(x, self.out_pointwise_weight, self.out_pointwise_bias, 1, 0, 1, 1)
+        x = self.pointwise_conv2(x)
+
+        # x = F.conv1d(x, self.in_pointwise_weight, self.in_pointwise_bias, 1, 0, 1, 1)
+        # x = F.glu(x, dim=1)
+        #
+        # x = F.conv1d(x, self.depthwise_weight, self.depthwise_bias, 1, self.padding, 1, self.groups)
+        # x = self.activation(x)
+        #
+        # x = F.conv1d(x, self.out_pointwise_weight, self.out_pointwise_bias, 1, 0, 1, 1)
 
         x = x.transpose(1, 2).transpose(0, 1)  # back to [seq_len x bsz x hidden_size]
 

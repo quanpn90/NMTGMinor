@@ -25,6 +25,7 @@ def build_model(opt, dicts):
     onmt.constants.version = 1.0
     onmt.constants.attention_out = opt.attention_out
     onmt.constants.residual_type = opt.residual_type
+    onmt.constants.fused_ffn = opt.fused_ffn
     opt.nce = opt.nce_noise > 0
 
     if 'langs' not in dicts:
