@@ -12,6 +12,7 @@ from threading import Thread
 
 import numpy as np
 import torch
+from onmt.data.dataset import rewrap
 
 from onmt.data import data_utils
 
@@ -121,7 +122,8 @@ dataset (~torch.utils.data.Dataset)
 
 class DataIterator(EpochBatchIterating):
 
-    def __init__(self, dataset, collate_fn, batch_sampler, seed=1, num_workers=0, epoch=1, buffer_size=0, timeout=0):
+    def __init__(self, dataset, collate_fn, batch_sampler, seed=1, num_workers=0,
+                 epoch=1, buffer_size=0, timeout=0, num_shards=1, shard_id=0):
         """
         :param dataset:
         :param collate_fn:
@@ -131,6 +133,8 @@ class DataIterator(EpochBatchIterating):
         :param epoch:
         :param buffer_size:
         :param timeout:
+        :param shard_id:
+        :param num_shards:
         """
         assert isinstance(dataset, torch.utils.data.Dataset)
 
@@ -142,6 +146,9 @@ class DataIterator(EpochBatchIterating):
         self.epoch = max(epoch, 1)
         self.buffer_size = buffer_size
         self.timeout = timeout
+
+        self.shard_id = shard_id
+        self.num_shards = num_shards
 
         self.shuffle = True
         self._cur_epoch_itr = None
@@ -240,7 +247,9 @@ class DataIterator(EpochBatchIterating):
         else:
             batches = self.frozen_batches
 
-        batches = list(ShardedIterator(batches, 1, 0, fill_value=None))
+        #
+        num_shards = self.num_shards
+        batches = list(ShardedIterator(batches, num_shards, self.shard_id, fill_value=None))
 
         if offset > 0 and offset >= len(batches):
             return None
@@ -281,8 +290,8 @@ class ShardedIterator(CountingIterator):
 
     def __init__(self, iterable, num_shards, shard_id, fill_value=None):
 
-        assert num_shards == 1
-        assert shard_id == 0
+        # assert num_shards == 1
+        # assert shard_id == 0
 
         if shard_id < 0 or shard_id >= num_shards:
             raise ValueError('shard_id must be between 0 and num_shards')

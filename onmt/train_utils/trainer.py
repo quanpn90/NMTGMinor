@@ -292,6 +292,8 @@ class XETrainer(BaseTrainer):
             lid_loss = CrossEntropyLIDLoss(opt.n_languages, opt.label_smoothing, opt.fast_xentropy)
             self.loss_function.add_loss_function(lid_loss, 'lid_loss')
 
+        self.n_gpus = len(self.opt.gpus)
+
         if self.cuda:
             torch.cuda.set_device(self.opt.gpus[0])
             if self.opt.seed >= 0:
@@ -396,7 +398,8 @@ class XETrainer(BaseTrainer):
             while not data_iterator.end_of_epoch():
                 # batch = data.next()[0]
                 batch = next(epoch_iterator)
-
+                if isinstance(batch, list):
+                    batch = batch[0]
                 batch = rewrap(batch)
 
                 if self.cuda:
@@ -482,8 +485,11 @@ class XETrainer(BaseTrainer):
 
             curriculum = (epoch < opt.curriculum)
 
-            # for b in range(len(batches)):
+            # this batch generator is not very clean atm
+            # TODO: move everything to the multiGPU trainer
             batch = next(epoch_iterator)
+            if isinstance(batch, list) and self.n_gpus == 1:
+                batch = batch[0]
             batch = rewrap(batch)
             if grad_scaler == -1:
                 grad_scaler = self.opt.batch_size_words if self.opt.update_frequency > 1 else batch.tgt_size
@@ -555,8 +561,6 @@ class XETrainer(BaseTrainer):
                         scaled_loss.backward()
                 else:
                     full_loss.backward()
-
-                # if use NCE, then make a copy of the hidden layer, and then compute perplexity
 
                 del outputs
 

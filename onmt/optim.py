@@ -135,10 +135,14 @@ class Optim(object):
         "Compute gradients norm."
         # grad_norm = clip_grad_norm(self.params, self.max_grad_norm).item()
 
-        "Automatically scale learning rate over learning period"
-        self._step += 1
-        if 'noam' in self.update_method or 'cosine' in self.update_method:
-            self.updateLearningRate()
+        overflow = False
+        if self.optimizer._amp_stash.already_patched:
+            overflow = True
+        "Automatically scale learning rate over learning period if not overflow"
+        if not overflow:
+            self._step += 1
+            if 'noam' in self.update_method or 'cosine' in self.update_method:
+                self.updateLearningRate()
         self.optimizer.step()
 
         # return grad_norm
