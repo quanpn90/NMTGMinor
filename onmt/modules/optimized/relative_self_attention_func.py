@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+import apex.amp as amp
 
 
 class RelativeShiftFunction(torch.autograd.Function):
@@ -24,7 +25,7 @@ class RelativeShift(object):
     @staticmethod
     def forward(x, batch_first, emb_last):
         assert len(x.shape) == 3, "Input must have 3 dimensions B x len_q x len_r or len_q x len_r x demb!"
-        assert (batch_first or emb_last) and not(batch_first and emb_last), \
+        assert (batch_first or emb_last) and not (batch_first and emb_last), \
             "Batch first and Embedding last must be mutually exclusive"
 
         if batch_first:
@@ -309,18 +310,18 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         :return:
         """
         heads_t, \
-            scale_t, \
-            matmul2_results, \
-            dropout_results, \
-            softmax_results, \
-            input_lin_results, pos_lin_results, \
-            rw_head_q, rr_head_q, \
-            inputs, pos, r_head_k, \
-            input_weights, pos_weights, \
-            output_weights, \
-            r_w_bias, r_r_bias, \
-            dropout_mask, \
-            dropout_prob_t = ctx.saved_tensors
+        scale_t, \
+        matmul2_results, \
+        dropout_results, \
+        softmax_results, \
+        input_lin_results, pos_lin_results, \
+        rw_head_q, rr_head_q, \
+        inputs, pos, r_head_k, \
+        input_weights, pos_weights, \
+        output_weights, \
+        r_w_bias, r_r_bias, \
+        dropout_mask, \
+        dropout_prob_t = ctx.saved_tensors
 
         head_dim = inputs.size(2) // heads_t[0]
         len_q, bsz = inputs.size(0), inputs.size(1)
@@ -477,4 +478,19 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                None, None, None, None, None, None
 
 
-relative_self_attn_func = RelativeSelfAttnFunc.apply
+@amp.half_function
+def relative_self_attn_func(input, pos, use_mask, is_training, num_heads,
+                            in_proj_weight, out_proj_weight, pos_proj_weight,
+                            in_proj_bias, out_proj_bias, pos_proj_bias,
+                            r_w_bias, r_r_bias,
+                            mask, dropout,
+                            incremental, incremental_cache, something, another):
+
+    output, coverage = RelativeSelfAttnFunc.apply(input, pos, use_mask, is_training, num_heads,
+                                                  in_proj_weight, out_proj_weight, pos_proj_weight,
+                                                  in_proj_bias, out_proj_bias, pos_proj_bias,
+                                                  r_w_bias, r_r_bias,
+                                                  mask, dropout,
+                                                  incremental, incremental_cache, something, another)
+
+    return output, coverage

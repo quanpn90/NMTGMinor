@@ -73,15 +73,6 @@ class ConformerEncoderLayer(nn.Module):
 
             input = input + out
 
-            # convolution
-            conv_input = self.preprocess_conv(input)
-            out = self.conv(conv_input)
-
-            if self.training and self.death_rate > 0:
-                out = out / (1 - self.death_rate)
-
-            input = self.postprocess_conv(out, input)
-
             # attention
             attn_input = self.preprocess_attn(input)
             out, _ = self.attn(attn_input, pos_emb, attn_mask, None)
@@ -90,6 +81,15 @@ class ConformerEncoderLayer(nn.Module):
                 out = out / (1 - self.death_rate)
 
             input = self.postprocess_attn(out, input)
+
+            # convolution
+            conv_input = self.preprocess_conv(input)
+            out = self.conv(conv_input)
+
+            if self.training and self.death_rate > 0:
+                out = out / (1 - self.death_rate)
+
+            input = self.postprocess_conv(out, input)
 
             # last ffn
             out = self.feedforward(self.preprocess_ffn(input), src_lang)

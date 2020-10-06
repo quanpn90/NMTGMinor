@@ -465,7 +465,7 @@ class FastTranslator(Translator):
             attns[i] = decoder_output['coverage']
 
         out = self._combine_outputs(outs)
-        attn = self._combine_attention(attns)
+        # attn = self._combine_attention(attns)
 
         if self.vocab_size > out.size(-1):
             self.vocab_size = out.size(-13)

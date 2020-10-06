@@ -312,6 +312,9 @@ def make_parser(parser):
                         help='Using reversible models for encoder')
     parser.add_argument('-tgt_reversible', action='store_true',
                         help='Using reversible models for decoder')
+
+    parser.add_argument('-debugging', action='store_true',
+                        help='Using reversible models for decoder')
     return parser
 
 

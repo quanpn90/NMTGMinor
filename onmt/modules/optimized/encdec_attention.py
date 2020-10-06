@@ -43,7 +43,9 @@ class EncdecMultiheadAttn(nn.Module):
         try:
             # the fast one requires apex and does not work with incremental so careful
             from apex.contrib.multihead_attn.fast_encdec_multihead_attn_func import fast_encdec_attn_func
-            self.attn_func_fast = fast_encdec_attn_func
+            from .encdec_attention_func import fast_self_attn_func
+
+            self.attn_func_fast = fast_self_attn_func
             self.optimized = 1
 
         except ModuleNotFoundError as e:
@@ -86,7 +88,8 @@ class EncdecMultiheadAttn(nn.Module):
                 attn_mask = attn_mask.byte()
 
             outputs = self.attn_func_fast(time_masking, is_training, self.num_heads, query, key,
-                                          self.in_proj_weight_q, self.in_proj_weight_kv, self.out_proj_weight,
+                                          self.in_proj_weight_q, self.in_proj_weight_kv,
+                                          self.out_proj_weight,
                                           attn_mask, self.dropout)
 
             coverage = None

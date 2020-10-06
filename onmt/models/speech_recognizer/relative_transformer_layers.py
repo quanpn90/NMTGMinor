@@ -102,7 +102,6 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.variational = opt.variational_dropout
         self.death_rate = death_rate
         self.fast_self_attention = opt.fast_self_attention
-        self.mfw = opt.multilingual_factorized_weights
 
         self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
@@ -112,23 +111,12 @@ class RelativeTransformerEncoderLayer(nn.Module):
                                                  variational=self.variational)
         d_head = opt.model_size // opt.n_heads
 
-        if not self.mfw:
-            self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+        self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
-            self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                       variational=self.variational)
-        else:
-            self.feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                          variational=self.variational,
-                                                          n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                          use_multiplicative=opt.mfw_multiplicative)
+        self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                   variational=self.variational)
 
-            self.multihead = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
-                                                          n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                          use_multiplicative=opt.mfw_multiplicative)
-
-    def forward(self, input, pos_emb, attn_mask, incremental=False, incremental_cache=None, mems=None,
-                src_lang=None):
+    def forward(self, input, pos_emb, attn_mask, src_lang=None, incremental=False, incremental_cache=None, mems=None):
 
         if incremental and incremental_cache is None:
             incremental_cache = dict()
@@ -145,12 +133,9 @@ class RelativeTransformerEncoderLayer(nn.Module):
                 mems = None
 
             query = self.preprocess_attn(input)
-            if self.mfw:
-                out, _ = self.multihead(query, pos_emb, src_lang, attn_mask, None, mems=mems,
-                                        incremental=incremental, incremental_cache=incremental_cache)
-            else:
-                out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
-                                        incremental=incremental, incremental_cache=incremental_cache)
+
+            out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
+                                    incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -161,7 +146,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
             """ Feed forward layer 
                 layernorm > ffn > dropout > residual
             """
-            out = self.feedforward(self.preprocess_ffn(input), src_lang)
+            out = self.feedforward(self.preprocess_ffn(input))
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -279,7 +264,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 incremental_source = incremental and reuse_source
 
                 if self.mfw:
-                    out, coverage = self.multihead_src(query, context, context, src_lang, tgt_lang, mask_src,
+                    out, coverage = self.multihead_src(query, context, context, tgt_lang, tgt_lang, mask_src,
                                                        incremental=incremental_source,
                                                        incremental_cache=incremental_cache)
                 else:

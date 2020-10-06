@@ -98,7 +98,8 @@ def main():
                                           batch_size_sents=opt.batch_size_sents,
                                           multiplier=opt.batch_size_multiplier,
                                           augment=opt.augment_speech,
-                                          upsampling=opt.upsampling)
+                                          upsampling=opt.upsampling,
+                                          num_split=len(opt.gpus))
             else:
                 train_data = onmt.StreamDataset(train_dict['src'], train_dict['tgt'],
                                                 train_src_langs, train_tgt_langs,
@@ -129,7 +130,8 @@ def main():
                                           batch_size_words=opt.batch_size_words,
                                           data_type=dataset.get("type", "text"), sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
-                                          upsampling=opt.upsampling)
+                                          upsampling=opt.upsampling,
+                                          num_split=len(opt.gpus))
             else:
                 valid_data = onmt.StreamDataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
                                                 valid_src_langs, valid_tgt_langs,
@@ -200,7 +202,8 @@ def main():
                                           multiplier=opt.batch_size_multiplier,
                                           src_align_right=opt.src_align_right,
                                           upsampling=opt.upsampling,
-                                          cleaning=True, verbose=True)
+                                          cleaning=True, verbose=True,
+                                          num_split=len(opt.gpus))
             else:
                 train_data = onmt.StreamDataset(train_src,
                                                 train_tgt,
@@ -245,7 +248,8 @@ def main():
                                           data_type=data_type, sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
                                           src_align_right=opt.src_align_right,
-                                          cleaning=True, verbose=True, debug=True)
+                                          cleaning=True, verbose=True, debug=True,
+                                          num_split=len(opt.gpus))
             else:
                 # for validation data, we have to go through sentences (very slow but to ensure correctness)
                 valid_data = onmt.StreamDataset(valid_src, valid_tgt,
@@ -332,7 +336,8 @@ def main():
                                               multiplier=opt.batch_size_multiplier,
                                               src_align_right=opt.src_align_right,
                                               upsampling=opt.upsampling,
-                                              cleaning=True, verbose=True)
+                                              cleaning=True, verbose=True,
+                                              num_split=len(opt.gpus))
 
                     train_sets.append(train_data)
 
@@ -381,7 +386,8 @@ def main():
                                               data_type=data_type, sorting=True,
                                               batch_size_sents=opt.batch_size_sents,
                                               src_align_right=opt.src_align_right,
-                                              cleaning=True, verbose=True, debug=True)
+                                              cleaning=True, verbose=True, debug=True,
+                                              num_split=len(opt.gpus))
 
                     valid_sets.append(valid_data)
 
@@ -445,16 +451,17 @@ def main():
     n_params = sum([p.nelement() for p in model.parameters()])
     print('* number of parameters: %d' % n_params)
 
-    if len(opt.gpus) > 1:
-        raise NotImplementedError("Multi-GPU training is not supported at the moment.")
+    if not opt.debugging and len(opt.gpus) == 1:
+        if opt.bayes_by_backprop:
 
-    if opt.bayes_by_backprop:
+            from onmt.train_utils.bayes_by_backprop_trainer import BayesianTrainer
+            trainer = BayesianTrainer(model, loss_function, train_data, valid_data, dicts, opt)
 
-        from onmt.train_utils.bayes_by_backprop_trainer import BayesianTrainer
-        trainer = BayesianTrainer(model, loss_function, train_data, valid_data, dicts, opt)
-
+        else:
+            trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
     else:
-        trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
+        from onmt.train_utils.new_trainer import Trainer
+        trainer = Trainer(model, loss_function, train_data, valid_data, dicts, opt)
 
     trainer.run(checkpoint=checkpoint)
 

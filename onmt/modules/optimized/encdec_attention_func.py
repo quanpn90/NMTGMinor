@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 from onmt.constants import double_precision
+import apex.amp as amp
 
 
 class EncdecAttnFunc(torch.autograd.Function):
@@ -272,4 +273,33 @@ class EncdecAttnFunc(torch.autograd.Function):
             , None, None, None, None
 
 
-encdec_attn_func = EncdecAttnFunc.apply
+@amp.half_function
+def encdec_attn_func(time_masking, is_training,
+                     num_heads, query, key,
+                     in_proj_weight_q, in_proj_weight_kv,
+                     out_proj_weight, attn_mask, dropout,
+                     incremental, incremental_cache):
+    output, coverage = EncdecAttnFunc.apply(time_masking, is_training,
+                                            num_heads, query, key,
+                                            in_proj_weight_q, in_proj_weight_kv,
+                                            out_proj_weight, attn_mask, dropout,
+                                            incremental, incremental_cache)
+
+    return output, coverage
+
+
+@amp.half_function
+def fast_self_attn_func(time_masking, is_training, num_heads, query, key,
+                        in_proj_weight_q, in_proj_weight_kv,
+                        out_proj_weight,
+                        attn_mask, dropout):
+
+    try:
+        from apex.contrib.multihead_attn.fast_encdec_multihead_attn_func import fast_encdec_attn_func
+    except ModuleNotFoundError as e:
+        print("Cannot use fast self-attention implementation")
+
+    return fast_encdec_attn_func(time_masking, is_training, num_heads, query, key,
+                                 in_proj_weight_q, in_proj_weight_kv,
+                                 out_proj_weight,
+                                 attn_mask, dropout)

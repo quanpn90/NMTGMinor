@@ -3,7 +3,7 @@
 #
 # This source code is licensed under the license found in the LICENSE file in
 # the root directory of this source tree. An additional grant of patent rights
-# can be found in the PATENTS file in the same directory.
+# can be found in the PATENTS file in the same directory.ncc
 #
 
 """
@@ -15,13 +15,17 @@ import math
 import torch
 import logging
 import sys
+import os
 
 import onmt
 from onmt.multiprocessing.multiprocessing_event_loop import MultiprocessingEventLoop, Future
 import onmt.multiprocessing.nccl as nccl
-from onmt.utils import torch_persistent_save
+from onmt.data.dataset import rewrap
+# from onmt.utils import torch_persistent_save
 from torch.serialization import default_restore_location
 from apex import amp
+from onmt.utils import checkpoint_paths, normalize_gradients
+from apex.parallel import DistributedDataParallel
 
 
 """
@@ -48,17 +52,35 @@ def aggregate_loss(losses):
 
 def aggregate_logging_outputs(logging_outputs):
     
-    output = {}
+    output = dict()
     
     output['src_size'] = 0
     output['tgt_size'] = 0
+    output['rev_loss_data'] = 0
+    output['mirror_loss_data'] = 0
+    output['rec_loss_data'] = 0
+    output['loss'] = 0
+    output['batch_size'] = 0
     
     for log in logging_outputs:
-        if 'src_size' in log:
-            output['src_size'] += log['src_size']
-        if 'tgt_size' in log:
-            output['tgt_size'] += log['tgt_size']
-        
+        # if 'src_size' in log:
+        #     output['src_size'] += log['src_size']
+        # if 'tgt_size' in log:
+        #     output['tgt_size'] += log['tgt_size']
+        #
+        # output['loss'] += log['loss']
+        # output['rev_loss_data'] += log['rev_loss_data']
+        # output['mirror_loss_data'] += log['mirror_loss_data']
+        # output['rec_loss_data'] += log['rec_loss_data']
+        for key in log:
+            if log[key] is not None:
+                if key in output:
+                    output[key] += log[key]
+                else:
+                    output[key] = log[key]
+
+        # TODO: language detection loss
+
     return output
 
 
@@ -85,23 +107,23 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
             
         print("Initializing multi-gpu training with %d devices" % self.num_replicas)
             
-        model = model.share_memory()    
+        model = model.share_memory()
         nccl_uid = nccl.get_unique_id()
         self.loss_function = loss_function
         
         Future.gen_list([
             self.call_async(rank, '_async_init', args=opt, model=model,
-                            loss_function=loss_function, nccl_uid=nccl_uid, opt=opt)
+                            loss_function=loss_function, nccl_uid=nccl_uid )
             for rank in range(self.num_replicas)
         ])
         
         self._grads_initialized = False
         
-        self.initialize_gradients()
+        # self.initialize_gradients()
         
         self.set_seed(opt.seed)
         
-    def _async_init(self, rank, device_id, args, model, loss_function, nccl_uid):
+    def _async_init(self, rank, device_id, args, model, loss_function, nccl_uid ):
         """Initialize child processes."""
         self.args = args
         self.rank = rank
@@ -111,6 +133,10 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
 
         # initialize NCCL
         nccl.initialize(self.num_replicas, nccl_uid, device_id)
+        os.environ['MASTER_ADDR'] = '127.0.0.1'
+        os.environ['MASTER_PORT'] = '29500'
+        torch.distributed.init_process_group(backend='nccl', rank=rank, world_size=self.num_replicas,
+                                             init_method='env://')
 
         # copy model and loss_function to current device
         self.model = model.cuda()
@@ -136,12 +162,15 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
                                                           opt_level=opt_level,
                                                           keep_batchnorm_fp32=keep_batchnorm_fp32,
                                                           loss_scale="dynamic",
-                                                          verbosity=1 if self.opt.verbose else 0)
-        
+                                                          verbosity=1 if self.args.verbose else 0)
+
+        # self.model = DistributedDataParallel(self.model)
         self.loss = None
-        self._max_bsz_seen = 0    
+        self._max_bsz_seen = 0
+        self.nan_counter = 0
+        self.streaming_state = None
     
-        print("GPU %d initialized successfully" % device_id)
+        print("GPU %d initialized successfully" % device_id, flush=True)
     
     def _build_optimizer(self):
         
@@ -190,39 +219,37 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         
         model_state_dict = self.model.state_dict()
         optim_state_dict = self.optim.state_dict()
+        amp_state_dict = amp.state_dict()
         
-        return model_state_dict, optim_state_dict
+        return model_state_dict, optim_state_dict, amp_state_dict
         
-    def load_checkpoint(self, filename):
+    def load_optim_state_dict(self, optim_state_dict):
         """Load a checkpoint into the model replicas in each process."""
         results = Future.gen_list([
-            self.call_async(rank, '_async_load_checkpoint', filename=filename)
+            self.call_async(rank, '_async_load_optim_state_dict', optim_state_dict=optim_state_dict)
             for rank in range(self.num_replicas)
         ])
         
         return results[0]
 
-    def _async_load_checkpoint(self, rank, device_id, filename):
+    def _async_load_optim_state_dict(self, rank, device_id, optim_state_dict):
         # todo: write the correct load function
 
-        checkpoint = torch.load(
-            filename,
-            map_location=lambda s, l: default_restore_location(s, 'cuda:{}'.format(device_id))
-        )
-        
+        # checkpoint = torch.load(
+        #     filename,
+        #     map_location=lambda s, l: default_restore_location(s, 'cuda:{}'.format(device_id))
+        # )
+        #
+        # try:
+        #     self.model.load_state_dict(checkpoint['model'])
+        # except:
+        #     raise Exception('Cannot load model parameters from checkpoint, '
+        #                     'please ensure that the architectures match')
+        #
         try:
-            self.model.load_state_dict(checkpoint['model'])
+            self.optim.load_state_dict(optim_state_dict)
         except:
-            raise Exception('Cannot load model parameters from checkpoint, '
-                            'please ensure that the architectures match')
-        
-        try:
-            self.optimizer.load_state_dict(checkpoint['optim'])
-        except:
-            raise Exception('Cannot load optimizer parameters for some reason.')    
-        
-        del checkpoint['model']
-        del checkpoint['optim']    
+            raise Exception('Cannot load optimizer parameters for some reason.')
             
         return checkpoint
 
@@ -235,11 +262,31 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
     def _async_set_seed(self, rank, device_id, seed):
         torch.manual_seed(seed)
 
+    def forward(self, samples, eval=False, backward=True):
+
+        self._scatter_samples(samples, replace_empty_samples=False)
+
+        # call the async forward function
+        losses, logging_outputs, ooms = Future.gen_tuple_list([
+            self.call_async(rank, '_async_forward', eval=eval, backward=backward)
+            for rank in range(self.num_replicas)
+        ])
+
+        logging_output = aggregate_logging_outputs(logging_outputs)
+        # loss = aggregate_loss(losses)
+
+        logging_output['oom'] = sum(ooms)
+        # logging_output['loss'] = loss
+
+        return logging_output
+
     def _async_forward(self, rank, device_id, eval=False, backward=False):
         if eval:
             self.model.eval()
+            self.loss_function.eval()
         else:
             self.model.train()
+            self.loss_function.train()
 
         opt = self.args
 
@@ -249,13 +296,13 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         else:
             streaming_state = None
 
-        logging_output, loss_data, oom = {}, 0, False
+        logging_output, loss_data, oom = {}, 0, 0
         logging_output['src_size'] = 0
         logging_output['tgt_size'] = 0
-        if self._sample is not None:
+        if self._batch is not None:
             try:
+                batch = self._batch
                 # calculate loss and sample size
-                #~ self.loss, sample_size, logging_output = self.loss_function(self.model, self._sample)
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.constants.PAD)
                 outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
@@ -277,8 +324,7 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
                     full_loss = full_loss + rev_loss + mirror_loss
                     mirror_loss_data = loss_dict['mirror_loss'].item()
                 else:
-                    rev_loss = None
-                    rev_loss_data = None
+                    rev_loss_data = 0
                     mirror_loss_data = 0
 
                 # reconstruction loss
@@ -288,7 +334,7 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
                     full_loss = full_loss + rec_loss
                     rec_loss_data = loss_dict['rec_loss_data']
                 else:
-                    rec_loss_data = None
+                    rec_loss_data = 0
 
                 if opt.lfv_multilingual:
                     lid_logits = outputs['lid_logits']
@@ -297,16 +343,40 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
                     lid_loss = lid_loss_function(lid_logits, lid_labels)
                     full_loss = full_loss + lid_loss
 
-                grad_scaler = min(opt.batch_size_words, 16384) if opt.update_frequency > 1 else batch.tgt_size
+                # When the batch size is large, each gradient step is very easy to explode on fp16
+                # Normalizing the loss to grad scaler ensures this will not happen
+                self.grad_scaler = 1 if opt.update_frequency > 1 else batch.tgt_size
 
                 if backward:
                     optimizer = self.optim.optimizer
-                    full_loss.div_(grad_scaler)
+                    full_loss.div_(self.grad_scaler)
                     with amp.scale_loss(full_loss, optimizer) as scaled_loss:
                         scaled_loss.backward()
                     del full_loss
 
                 self.loss = loss_data
+
+                if loss != loss:
+                    # catching NAN problem
+                    oom = True
+                    self.model.zero_grad()
+                    self.optim.zero_grad()
+                    self.nan_counter = self.nan_counter + 1
+                    print("Warning!!! Loss is Nan")
+                    if self.nan_counter >= 15:
+                        raise ValueError("Training stopped because of multiple NaN occurence. "
+                                         "For ASR, using the Relative Transformer is more stable and recommended.")
+
+                    # reset data to avoid messing with other processes
+                    logging_output['src_size'] = 0
+                    logging_output['tgt_size'] = 0
+                    logging_output['rev_loss_data'] = 0
+                    logging_output['mirror_loss_data'] = 0
+                    logging_output['rec_loss_data'] = 0
+                    logging_output['loss'] = 0
+                    logging_output['batch_size'] = 0
+                else:
+                    self.nan_counter = 0
 
                 logging_output['src_size'] = batch.src_size
                 logging_output['tgt_size'] = batch.tgt_size
@@ -314,14 +384,27 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
                 logging_output['mirror_loss_data'] = mirror_loss_data
                 logging_output['rec_loss_data'] = rec_loss_data
                 logging_output['loss'] = loss_data
+                logging_output['batch_size'] = batch.size
 
             except RuntimeError as e:
                 if not eval and 'out of memory' in str(e):
                     print('| WARNING: ran out of memory on GPU #{}, skipping batch'.format(device_id))
                     sys.stdout.flush()
-                    oom = True
+                    oom = 1
                     if hasattr(torch.cuda, 'empty_cache'):
                         torch.cuda.empty_cache()
+
+                    logging_output['src_size'] = 0
+                    logging_output['tgt_size'] = 0
+                    logging_output['rev_loss_data'] = 0
+                    logging_output['mirror_loss_data'] = 0
+                    logging_output['rec_loss_data'] = 0
+                    logging_output['loss'] = 0
+                    logging_output['batch_size'] = 0
+
+                    # TODO: keep streaming state in self if ever use streaming again
+                    # if opt.streaming:  # reset stream in this case ...
+                    #     streaming_state = self.model.init_stream()
                 else:
                     raise e
                     
@@ -332,8 +415,10 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
     def update_parameters(self, grad_denom=1):
 
         """ When we update parameters, all replicas update at the same time"""
+        self.check_global_overflow()
+
         Future.gen_tuple_list([
-            self.call_async(rank, '_async_update', grad_denom=grad_denom)
+            self.call_async(rank, '_async_update', grad_denom=grad_denom, is_global_overflow=False)
             for rank in range(self.num_replicas)
         ])
 
@@ -344,53 +429,70 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
             for rank in range(self.num_replicas)
         ])
 
-        global_flows = sum(local_over_flows)
+        # global_flows = sum(local_over_flows)
 
-        return global_flows > 0
+        return False
 
-    def _async_local_overflow(self):
+    def _async_local_overflow(self, rank, device_id):
 
         if not self.args.fp16:
             return 0
 
         local_overflow = 0
-        if self.optim.optimizer._amp_stash.already_patched:
+        optimizer = self.optim.optimizer
+        if optimizer._amp_stash.already_patched:
+
+            # I am not sure which grad is zero, fp32 or fp16?
+            optimizer.zero_grad()
+            self.optim.step()  # make a fake step and reset grad to zero ...
             local_overflow = 1
 
-        return local_overflow
+        return [local_overflow]
 
     def _async_update(self, rank, device_id, grad_denom, is_global_overflow):
 
+        # if is_global_overflow:
+        # def patch_step(opt):
+        #     """this function is copied from apex"""
+        #     opt_step = opt.step
+        #
+        #     def skip_step(closure=None):
+        #         if closure is not None:
+        #             raise RuntimeError("Currently, Amp does not support closure use with optimizers.")
+        #         #logger.info(f"Device[{self.gpu_rank}] Gradient overflow. Skipping step. "
+        #         #            "(This is from hack-for-optimizer-sync)")
+        #         if hasattr(opt._amp_stash, "all_fp32_from_fp16_params"):
+        #             # Clear the master grads that wouldn't be zeroed by model.zero_grad()
+        #             for param in opt._amp_stash.all_fp32_from_fp16_params:
+        #                 param.grad = None
+        #         if hasattr(opt, "most_recent_scale"):
+        #             opt.most_recent_scale = 1.0
+        #             opt.scale_set_by_backward = False
+        #         opt.step = opt_step
+        #         opt._amp_stash.already_patched = False
+        #
+        #     return skip_step
+        #
+        # # since there is someone in the GPU pool gets overflow, we need to skip one step and keep going
+        # if not self.optim.optimizer._amp_stash.already_patched:
+        #     patch_step(self.optim.optimizer)
+        #     self.dummy = 'dummy'
+        # else:
         # is it possible to run out of memory in this case ? ...
 
-        if is_global_overflow:
-            def patch_step(opt):
-                """this function is copied from apex"""
-                opt_step = opt.step
-
-                def skip_step(closure=None):
-                    if closure is not None:
-                        raise RuntimeError("Currently, Amp does not support closure use with optimizers.")
-                    #logger.info(f"Device[{self.gpu_rank}] Gradient overflow. Skipping step. "
-                    #            "(This is from hack-for-optimizer-sync)")
-                    if hasattr(opt._amp_stash, "all_fp32_from_fp16_params"):
-                        # Clear the master grads that wouldn't be zeroed by model.zero_grad()
-                        for param in opt._amp_stash.all_fp32_from_fp16_params:
-                            param.grad = None
-                    if hasattr(opt, "most_recent_scale"):
-                        opt.most_recent_scale = 1.0
-                        opt.scale_set_by_backward = False
-                    opt.step = opt_step
-                    opt._amp_stash.already_patched = False
-
-                return skip_step
-
-            # since there is someone
-            if not self.optim.optimizer._amp_stash.already_patched:
-                patch_step(self.optim.optimizer)
-        else:
+        if self.num_replicas > 1:
             self._all_reduce_and_rescale_grads(grad_denom=grad_denom)
-            self.optimizer.step()
+
+        # for param in amp.master_params(optimizer):
+        #     param.grad.div_(iters_to_accumulate)
+
+        normalize_gradients(amp.master_params(self.optim.optimizer), grad_denom * self.args.update_frequency)
+
+        if self.args.max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), self.opt.max_grad_norm)
+
+        self.optim.step()
+
         return [0]
         
     def zero_grad(self):
@@ -401,63 +503,39 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         ])
         
     def _async_zero_grad(self, rank, device_id):
-        
-        self.optimizer.zero_grad()  
+
+        self.model.zero_grad()
+        self.optim.zero_grad()
         return [0]
-        
-    def step(self, samples, eval=False):
-        
-        self._scatter_samples(samples,replace_empty_samples=False)
-        
-        # call the async forward function
-        losses, logging_outputs, ooms = Future.gen_tuple_list([
-            self.call_async(rank, '_async_forward', eval=eval)
-            for rank in range(self.num_replicas)
-        ])
-        
-        logging_output = aggregate_logging_outputs(logging_outputs)
-        loss = aggregate_loss(losses)
-        
-        logging_output['oom'] = sum(ooms)
-        logging_output['loss'] = loss
-        
-        return logging_output
-
-    def create_iterator(self):
-
-        """
-        N processes create N data iterators. Each of them
-        :return:
-        """
-
-        pass
 
     def _scatter_samples(self, batches, replace_empty_samples=False):
         """Split and distribute a sample across GPUs."""
         if not replace_empty_samples:
             # pad with None until its size is equal to the number of replicas
-            batches = batches + [None]*(self.num_replicas - len(samples))
+            batches = batches + [None]*(self.num_replicas - len(batches))
         else:
             # pad by cycling through the given samples
             batches = list(islice(cycle(batches), self.num_replicas))
 
-        assert len(samples) == self.num_replicas
+        assert len(batches) == self.num_replicas
 
         Future.gen_list([
-            self.call_async(rank, '_async_prepare_sample', batch=batches[rank])
+            self.call_async(rank, '_async_prepare_batch', batch=batches[rank])
             for rank in range(self.num_replicas)
         ])
 
     def _async_prepare_batch(self, rank, device_id, batch):
         if batch is None:
-            self._sample = None
+            self._batch = None
         else:
             self._batch = prepare_sample(batch, fp16=self.args.fp16 and not self.args.fp16_mixed, device=device_id)
 
             size = self._batch.src_size + self._batch.tgt_size
-            if size > self._max_bsz_seen:
-                self._max_bsz_seen = size
-                torch.cuda.empty_cache()  # reset cache to avoid random out of memory
+            # if size > self._max_bsz_seen:
+            #     self._max_bsz_seen = size
+            #     torch.cuda.empty_cache()  # reset cache to avoid random out of memory
+
+        return [0]
 
     def initialize_gradients(self):
     
@@ -484,9 +562,14 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
         return [0]
 
     def _all_reduce_and_rescale_grads(self, grad_denom=1, buffer_size=1048576000):
-        """All-reduce and rescale gradients in chunks of the specified size."""
-        grads = [p.grad.data for p in self.model.parameters() if p.requires_grad]
+    # def _all_reduce_and_rescale_grads(self, grad_denom=1, buffer_size=2**28):
+        """All-reduce and rescale the fp32 gradients in chunks of the specified size."""
+        # grads = [p.grad.data for p in amp.master_params(self.optim.optimizer) if p.requires_grad and p.grad is not None]
+        grads = [p.grad.data for p in self.model.parameters() if p.requires_grad and p.grad is not None]
         # sys.stdout.flush()
+        if len(grads) == 0:
+            return
+
         buffer_t = grads[0].new(math.ceil(buffer_size / grads[0].element_size())).zero_()
         buffer = []
 
@@ -499,7 +582,7 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
                 offset += numel
             # all-reduce and rescale
             nccl.all_reduce(buffer_t[:offset])
-            
+
             if grad_denom > 1:
                 buffer_t.div_(grad_denom)
             # copy all-reduced buffer back into grads
@@ -527,5 +610,4 @@ class MultiprocessingRunner(MultiprocessingEventLoop):
                 filled += sz
         if len(buffer) > 0:
             all_reduce_buffer()
-        
-    
+

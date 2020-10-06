@@ -31,8 +31,16 @@ class ConformerEncoder(TransformerEncoder):
         # learnable position encoding
         self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
 
-        self.audio_trans = Conv2dSubsampling(opt.input_size, opt.model_size)
-        self.linear_trans = None
+        # self.audio_trans = Conv2dSubsampling(opt.input_size, opt.model_size)
+        channels = self.channels
+        feature_size = opt.input_size
+        cnn = [nn.Conv2d(channels, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(32),
+               nn.Conv2d(32, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(32)]
+
+        feat_size = (((feature_size // channels) - 3) // 4) * 32
+        # cnn.append()
+        self.audio_trans = nn.Sequential(*cnn)
+        self.linear_trans = nn.Linear(feat_size, self.model_size)
 
         self.d_head = self.model_size // self.n_heads
 
@@ -66,9 +74,17 @@ class ConformerEncoder(TransformerEncoder):
         input = input.narrow(2, 1, input.size(2) - 1)
 
         # first subsampling
-        emb, _ = self.audio_trans(input, long_mask)
+        input = input.view(input.size(0), input.size(1), -1, self.channels)
+        input = input.permute(0, 3, 1, 2)  # [bsz, channels, time, f]
+        input = self.audio_trans(input)
+        input = input.permute(0, 2, 1, 3).contiguous()
+        input = input.view(input.size(0), input.size(1), -1)
+        input = self.linear_trans(input)
+        emb = input
+
         mask_src = long_mask[:, 0:emb.size(1) * 4:4].transpose(0, 1).unsqueeze(0)
         dec_attn_mask = None
+
 
         emb = emb.transpose(0, 1)
         input = input.transpose(0, 1)

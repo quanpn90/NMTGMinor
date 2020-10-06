@@ -21,6 +21,8 @@ from onmt.model_factory import init_model_parameters
 from onmt.train_utils.stats import Logger
 from onmt.utils import checkpoint_paths, normalize_gradients
 
+from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
+
 
 def varname(p):
     for line in inspect.getframeinfo(inspect.currentframe().f_back)[3]:
@@ -101,7 +103,7 @@ class BaseTrainer(object):
         pretrained_lang_emb = pretrained_model.decoder.language_embeddings
         pretrained_model.decoder.language_embeddings = None
 
-        # actually we assume that two decoders have the same language embeddings... 
+        # actually we assume that two decoders have the same language embeddings...
         untrained_word_emb = self.model.decoder.word_lut
         self.model.decoder.word_lut = None
         untrained_lang_emb = self.model.decoder.language_embeddings

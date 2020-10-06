@@ -88,12 +88,12 @@ class ConformerConvBlock(nn.Module):
 
         assert (kernel_size - 1) % 2 == 0
 
-        self.pointwise_conv1 = nn.Conv1d(channels, 2*channels, kernel_size=1, stride=1, padding=0, bias=False)
+        self.pointwise_conv1 = nn.Conv1d(channels, 2*channels, kernel_size=1, stride=1, padding=0, bias=bias)
         self.depthwise_conv = nn.Conv1d(channels, channels, kernel_size, stride=1,
-                                        padding=(kernel_size - 1) // 2, groups=channels, bias=False)
+                                        padding=(kernel_size - 1) // 2, groups=channels, bias=bias)
 
         self.batch_norm = nn.BatchNorm1d(channels)
-        self.pointwise_conv2 = nn.Conv1d(channels, channels, kernel_size=1, stride=1, padding=0, bias=False)
+        self.pointwise_conv2 = nn.Conv1d(channels, channels, kernel_size=1, stride=1, padding=0, bias=bias)
         self.activation = activation
 
         # self.in_pointwise_weight = nn.Conv1d(channels, 2*channels, kernel_size=1, stride=1, padding=0, bias=False)

@@ -14,8 +14,16 @@ from onmt.utils import flip, expected_length
 from collections import defaultdict
 import math
 import sys
+from torch.utils.checkpoint import checkpoint
 
 torch.set_printoptions(threshold=500000)
+
+
+def create_forward_function(module):
+    def forward_pass(*inputs):
+        return module(*inputs)
+
+    return forward_pass
 
 
 class SpeechTransformerEncoder(TransformerEncoder):
@@ -32,6 +40,7 @@ class SpeechTransformerEncoder(TransformerEncoder):
         self.reversible = opt.src_reversible
         self.n_heads = opt.n_heads
         self.fast_self_attn = opt.fast_self_attention
+        self.checkpointing = opt.checkpointing
 
         # TODO: multilingual factored networks
 
@@ -161,7 +170,14 @@ class SpeechTransformerEncoder(TransformerEncoder):
                 # src_len x batch_size x d_model
 
                 mems_i = mems[i] if mems is not None and streaming and self.max_memory_size > 0 else None
-                context = layer(context, pos_emb, mask_src, mems=mems_i, src_lang=input_lang)
+
+                if self.checkpointing == 0:
+                    context = layer(context, pos_emb, mask_src, mems=mems_i, src_lang=input_lang)
+                else:
+                    incremental = False
+                    incremental_cache = None
+
+                    context = checkpoint(create_forward_function(layer), context, pos_emb, mask_src, input_lang)
 
                 if streaming:
                     hids.append(context)
@@ -220,7 +236,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
 
             from .relative_transformer_layers import LIDFeedForward
             lid_network = LIDFeedForward(opt.model_size, 2 * opt.model_size, opt.bottleneck_size,
-                                          opt.n_languages, dropout=opt.dropout)
+                                         opt.n_languages, dropout=opt.dropout)
 
             block = RelativeTransformerDecoderLayer(self.opt, death_rate=death_r, lid_net=lid_network)
 
