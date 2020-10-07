@@ -17,15 +17,13 @@ from collections import defaultdict
 import os
 import numpy as np
 
-parser = argparse.ArgumentParser(description='train.py')
+parser = argparse.ArgumentParser(description='train_distributed.py')
 onmt.markdown.add_md_help_argument(parser)
 
 # Please look at the options file to see the options regarding models and data
 parser = make_parser(parser)
 
 opt = parser.parse_args()
-
-print(opt)
 
 # An ugly hack to have weight norm on / off
 onmt.constants.weight_norm = opt.weight_norm
@@ -40,7 +38,6 @@ if torch.cuda.is_available() and not opt.gpus:
     print("WARNING: You have a CUDA device, should run with -gpus 0")
 
 torch.manual_seed(opt.seed)
-
 
 def numpy_to_torch(tensor_list):
 
@@ -418,62 +415,15 @@ def main():
         print(' * vocabulary size. target = %d' %
               (dicts['tgt'].size()))
 
-    print('* Building model...')
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '8888'
 
-    if not opt.fusion:
-        if opt.bayes_by_backprop:
-            model = build_bayesian_model(opt, dicts)
-        else:
-            model = build_model(opt, dicts)
-
-        """ Building the loss function """
-        if opt.ctc_loss != 0:
-            loss_function = NMTAndCTCLossFunc(dicts['tgt'].size(),
-                                              label_smoothing=opt.label_smoothing,
-                                              ctc_weight=opt.ctc_loss)
-        elif opt.nce:
-            from onmt.modules.nce.nce_loss import NCELoss
-            loss_function = NCELoss(opt.model_size, dicts['tgt'].size(), noise_ratio=opt.nce_noise,
-                                    logz=9, label_smoothing=opt.label_smoothing)
-        else:
-            loss_function = NMTLossFunc(opt.model_size, dicts['tgt'].size(),
-                                        label_smoothing=opt.label_smoothing,
-                                        mirror=opt.mirror_loss,
-                                        fast_xentropy=opt.fast_xentropy)
-
-        # This function replaces modules with the more optimized counterparts so that it can run faster
-        # Currently exp with LayerNorm
-        if not opt.memory_profiling:
-            optimize_model(model)
-
-    else:
-        from onmt.model_factory import build_fusion
-        from onmt.modules.loss import FusionLoss
-
-        model = build_fusion(opt, dicts)
-
-        loss_function = FusionLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
-
-    n_params = sum([p.nelement() for p in model.parameters()])
-    print('* number of parameters: %d' % n_params)
-
-    # We need to initialize the model parameters before sending out to distributed
-    print('Initializing model parameters')
-    init_model_parameters(model, opt)
-
-    if not opt.debugging and len(opt.gpus) == 1:
-        if opt.bayes_by_backprop:
-
-            from onmt.train_utils.bayes_by_backprop_trainer import BayesianTrainer
-            trainer = BayesianTrainer(model, loss_function, train_data, valid_data, dicts, opt)
-        else:
-            trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
-
-        trainer.run(checkpoint=checkpoint)
-    else:
-        raise NotImplementedError
-
-
+    # spawn N processes for N gpus
+    # each process has a different trainer
+    # torch.multiprocessing.spawn(run_process, nprocs=len(opt.gpus),
+    #                             args=(model, loss_function, train_data, valid_data, dicts, opt))
+    torch.multiprocessing.spawn(run_process, nprocs=len(opt.gpus),
+                                args=(train_data, valid_data, dicts, opt, checkpoint))
 
 
 if __name__ == "__main__":

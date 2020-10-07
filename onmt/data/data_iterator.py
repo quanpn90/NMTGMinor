@@ -249,7 +249,7 @@ class DataIterator(EpochBatchIterating):
 
         #
         num_shards = self.num_shards
-        batches = list(ShardedIterator(batches, num_shards, self.shard_id, fill_value=None))
+        batches = list(ShardedIterator(batches, num_shards, self.shard_id, fill_value=[]))
 
         if offset > 0 and offset >= len(batches):
             return None
@@ -273,6 +273,7 @@ class DataIterator(EpochBatchIterating):
 
         # Wrap with CoutingIterator
         itr = CountingIterator(itr, start=offset)
+
         return itr
 
 

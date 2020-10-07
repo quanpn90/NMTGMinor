@@ -9,7 +9,5 @@ from onmt.Dict import Dict as Dict
 from onmt.inference.Beam import Beam
 from onmt.data.tokenizer import Tokenizer
 
-import onmt.multiprocessing
-
 # For flake8 compatibility.
 __all__ = [onmt.constants, Translator, Rescorer, OnlineTranslator, Dataset, StreamDataset, Optim, Dict, Beam, Tokenizer]

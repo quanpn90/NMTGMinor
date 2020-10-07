@@ -32,11 +32,11 @@ class SinusoidalPositionalEmbedding(nn.Module):
 
     def forward(self, pos_seq, sin_first=True, bsz=None):
         """
-        :param bsz:
+        :param bsz: integer to repeat
         :param pos_seq: sequences of RELATIVE position indices (can be negative for future)
         :param sin_first: in Attention is all you need paper, sin is first then cosin
         """
-        sinusoid_inp = torch.ger(pos_seq, self.inv_freq)
+        sinusoid_inp = torch.ger(pos_seq, self.inv_freq.type_as(pos_seq))
 
         if sin_first:
             pos_emb = torch.cat([sinusoid_inp.sin(), sinusoid_inp.cos()], dim=-1)

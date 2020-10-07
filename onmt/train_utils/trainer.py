@@ -21,8 +21,6 @@ from onmt.model_factory import init_model_parameters
 from onmt.train_utils.stats import Logger
 from onmt.utils import checkpoint_paths, normalize_gradients
 
-from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
-
 
 def varname(p):
     for line in inspect.getframeinfo(inspect.currentframe().f_back)[3]:
@@ -446,10 +444,6 @@ class XETrainer(BaseTrainer):
         self.model.reset_states()
 
         dataset = train_data
-
-        # data iterator: object that controls the
-        # data_iterator = DataIterator(dataset, dataset.collater, dataset.batches, seed=self.opt.seed,
-        #                              num_workers=opt.num_workers, epoch=epoch, buffer_size=opt.buffer_size)
         data_iterator = generate_data_iterator(dataset, seed=self.opt.seed, num_workers=opt.num_workers,
                                                epoch=epoch, buffer_size=opt.buffer_size)
 

@@ -9,6 +9,7 @@ from onmt.speech.Augmenter import Augmenter
 from onmt.modules.dropout import switchout
 import numpy as np
 from .batch_utils import allocate_batch
+import random
 
 """
 Data management for sequence-to-sequence models
@@ -358,16 +359,27 @@ class Dataset(torch.utils.data.Dataset):
                                       batch_size_words, batch_size_sents, self.multiplier,
                                       self.max_src_len, self.max_tgt_len, self.cleaning)
 
+        # when we need the number of batches divide evenly to the number of split:
+        # randomly repeating samples into the batches until reaching the divisor.
+        temp_length = len(self.batches)
+        while True:
+            if len(self.batches) % self.num_split == 0:
+                break
+            else:
+                sample = self.batches[random.randint(0, temp_length)]
+                self.batches.append(sample)
+
         # the second to last mini-batch is likely the largest
         # (the last one can be the remnant after grouping samples which has less than max size)
-        self.largest_batch_id = len(self.batches) - 2
-
+        self.largest_batch_id = temp_length - 2
         self.num_batches = len(self.batches)
+        assert self.num_batches % self.num_split == 0
 
         self.cur_index = 0
         self.batchOrder = None
 
-        if augment:
+        if augment:  # for Spectral Augmentation
+            # TODO: add a different class spectral augmentation later
             self.augmenter = Augmenter()
         else:
             self.augmenter = None
@@ -464,48 +476,44 @@ class Dataset(torch.utils.data.Dataset):
         :return: batch
         """
 
-        split_size = math.ceil(len(collected_samples) / self.num_split)
-        sample_list = [collected_samples[i:i+split_size]
-                       for i in range(0, len(collected_samples), split_size)]
+        # In case the iterator gives an empty list
+        if len(collected_samples) == 0:
+            return None
 
-        batches = list()
+        samples = collected_samples
 
-        for samples in sample_list:
+        src_data, tgt_data = None, None
+        src_lang_data, tgt_lang_data = None, None
 
-            src_data, tgt_data = None, None
-            src_lang_data, tgt_lang_data = None, None
+        if self.src:
+            src_data = [sample['src'] for sample in samples]
 
-            if self.src:
-                src_data = [sample['src'] for sample in samples]
+        if self.tgt:
+            tgt_data = [sample['tgt'] for sample in samples]
 
-            if self.tgt:
-                tgt_data = [sample['tgt'] for sample in samples]
+        if self.bilingual:
+            if self.src_langs is not None:
+                src_lang_data = [self.src_langs[0]]  # should be a tensor [0]
+            if self.tgt_langs is not None:
+                tgt_lang_data = [self.tgt_langs[0]]  # should be a tensor [1]
+        else:
+            if self.src_langs is not None:
+                src_lang_data = [sample['src_lang'] for sample in samples]  # should be a tensor [0]
+            if self.tgt_langs is not None:
+                tgt_lang_data = [sample['tgt_lang'] for sample in samples]  # should be a tensor [1]
 
-            if self.bilingual:
-                if self.src_langs is not None:
-                    src_lang_data = [self.src_langs[0]]  # should be a tensor [0]
-                if self.tgt_langs is not None:
-                    tgt_lang_data = [self.tgt_langs[0]]  # should be a tensor [1]
-            else:
-                if self.src_langs is not None:
-                    src_lang_data = [sample['src_lang'] for sample in samples]  # should be a tensor [0]
-                if self.tgt_langs is not None:
-                    tgt_lang_data = [sample['tgt_lang'] for sample in samples]  # should be a tensor [1]
+        batch = collect_fn(src_data, tgt_data=tgt_data,
+                           src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
+                           src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
+                           src_type=self._type,
+                           augmenter=self.augmenter, upsampling=self.upsampling)
 
-            batch = collect_fn(src_data, tgt_data=tgt_data,
-                               src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
-                               src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
-                               src_type=self._type,
-                               augmenter=self.augmenter, upsampling=self.upsampling)
-
-            batches.append(batch)
-
-        return batches
+        return batch
 
     def __len__(self):
         return self.full_size
 
-    # genereate a new batch - order (static)
+    # generate a new batch - order (static)
     def create_order(self, random=True):
 
         if random:

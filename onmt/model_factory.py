@@ -408,7 +408,7 @@ def build_fusion(opt, dicts):
     return model
 
 
-def optimize_model(model):
+def optimize_model(model, distributed=False):
     """
     Used to potentially upgrade the components with more optimized counterparts in the future
     """
@@ -435,4 +435,26 @@ def optimize_model(model):
             for n, ch in m.named_children():
                 replace_layer_norm(ch, n)
 
+    def sync_batch_norm(m, name):
+
+        replacable = True
+
+        try:
+            import importlib
+            from apex.normalization.fused_layer_norm import FusedLayerNorm
+            fused_layer_norm_cuda = importlib.import_module("fused_layer_norm_cuda")
+        except ModuleNotFoundError:
+            replacable = False
+
+        if replacable:
+            for attr_str in dir(m):
+                target_attr = getattr(m, attr_str)
+                if type(target_attr) == torch.nn.BatchNorm1d or type(target_attr) == torch.nn.BatchNorm2d:
+                    setattr(m, attr_str, apex.parallel.convert_syncbn_model(target_attr))
+            for n, ch in m.named_children():
+                sync_batch_norm(ch, n)
+
     replace_layer_norm(model, "Transformer")
+
+    if distributed:
+        sync_batch_norm(model, "Transformer")
