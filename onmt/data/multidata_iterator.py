@@ -114,14 +114,15 @@ class MultiDataIterator(EpochBatchIterating):
 
     # each dataset = dataiterator > generate 1 epoch iterator
     # this class gen
-    def __init__(self, datasets, seed=1., num_workers=0, epoch=1, buffer_size=0, timeout=0, round_robin=True):
+    def __init__(self, datasets, seed=1., num_workers=0, epoch=1, buffer_size=0,
+                 timeout=0, round_robin=True, num_shards=1, shard_id=0):
 
         self.datasets = datasets
         self.data_iterators = list()
         for dataset in datasets:
             self.data_iterators.append(DataIterator(dataset, dataset.collater, dataset.batches, seed=seed,
                                                     num_workers=num_workers, epoch=epoch, buffer_size=buffer_size,
-                                                    timeout=timeout))
+                                                    timeout=timeout, num_shards=num_shards, shard_id=shard_id))
 
         self.shuffle = True
         self._cur_epoch_itr = None

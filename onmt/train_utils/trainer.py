@@ -374,16 +374,14 @@ class XETrainer(BaseTrainer):
         total_words = 0
         opt = self.opt
 
-        # the data iterator creates an epoch iterator
-        # data_iterator = DataIterator(data, data.collater, data.batches, seed=self.opt.seed,
-        #                              num_workers=opt.num_workers, epoch=1, buffer_size=opt.buffer_size)
-        data_iterator = generate_data_iterator(data, seed=self.opt.seed,
-                                               num_workers=opt.num_workers, epoch=1, buffer_size=opt.buffer_size)
-        epoch_iterator = data_iterator.next_epoch_itr(False, pin_memory=False)
-
         self.model.eval()
         self.loss_function.eval()
         self.model.reset_states()
+
+        # the data iterator creates an epoch iterator
+        data_iterator = generate_data_iterator(data, seed=self.opt.seed,
+                                               num_workers=opt.num_workers, epoch=1, buffer_size=opt.buffer_size)
+        epoch_iterator = data_iterator.next_epoch_itr(False, pin_memory=False)
 
         if opt.streaming:
             streaming_state = self.model.init_stream()
@@ -488,13 +486,12 @@ class XETrainer(BaseTrainer):
             curriculum = (epoch < opt.curriculum)
 
             # this batch generator is not very clean atm
-            # TODO: move everything to the multiGPU trainer
             batch = next(epoch_iterator)
             if isinstance(batch, list) and self.n_gpus == 1:
                 batch = batch[0]
             batch = rewrap(batch)
             if grad_scaler == -1:
-                grad_scaler = self.opt.batch_size_words if self.opt.update_frequency > 1 else batch.tgt_size
+                grad_scaler = 1  # if self.opt.update_frequency > 1 else batch.tgt_size
 
             if self.cuda:
                 batch.cuda(fp16=self.opt.fp16 and not self.opt.fp16_mixed)
@@ -532,7 +529,6 @@ class XETrainer(BaseTrainer):
                     full_loss = full_loss + rev_loss + mirror_loss
                     mirror_loss_data = loss_dict['mirror_loss'].item()
                 else:
-                    rev_loss = None
                     rev_loss_data = None
                     mirror_loss_data = 0
 

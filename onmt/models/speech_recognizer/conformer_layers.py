@@ -8,11 +8,12 @@ from onmt.modules.optimized.relative_self_attention import RelativeSelfMultihead
 from onmt.modules.optimized.feed_forward import PositionWiseFeedForward
 from onmt.modules.dropout import variational_dropout
 from onmt.modules.convolution import ConformerConvBlock
+from onmt.models.transformer_layers import PrePostProcessing
 
 
 class ConformerEncoderLayer(nn.Module):
     
-    def __init__(self, opt):
+    def __init__(self, opt, death_rate=0.0):
         
         super(ConformerEncoderLayer, self).__init__()
 
@@ -21,7 +22,7 @@ class ConformerEncoderLayer(nn.Module):
         self.opt = opt
         self.variational = opt.variational_dropout
         self.death_rate = death_rate
-        self.dropout = dropout
+        self.dropout = opt.dropout
         self.ffn_scale = 0.5
 
         self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')

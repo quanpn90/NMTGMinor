@@ -92,7 +92,7 @@ class ConformerConvBlock(nn.Module):
         self.depthwise_conv = nn.Conv1d(channels, channels, kernel_size, stride=1,
                                         padding=(kernel_size - 1) // 2, groups=channels, bias=bias)
 
-        self.batch_norm = nn.BatchNorm1d(channels)
+        # self.batch_norm = nn.BatchNorm1d(channels)
         self.pointwise_conv2 = nn.Conv1d(channels, channels, kernel_size=1, stride=1, padding=0, bias=bias)
         self.activation = activation
 
@@ -104,14 +104,22 @@ class ConformerConvBlock(nn.Module):
         # self.padding = (kernel_size - 1) // 2
         # self.groups = channels
         #
-        # # self.norm = nn.BatchNorm1d(channels)
+        self.norm = nn.BatchNorm1d(channels)
         # self.out_pointwise_weight = nn.Parameter(torch.Tensor(channels, channels, 1))
         # self.out_pointwise_bias = nn.Parameter(torch.Tensor(channels))
         #
         # self.activation = activation
-        # self.reset_parameters()
+        self.reset_parameters()
 
-    # def reset_parameters(self):
+    def reset_parameters(self):
+
+        nn.init.kaiming_normal_(self.pointwise_conv1.weight, nonlinearity='relu')
+        nn.init.kaiming_normal_(self.depthwise_conv.weight, nonlinearity='relu')
+        nn.init.kaiming_normal_(self.pointwise_conv2.weight, nonlinearity='relu')
+
+        nn.init.constant_(self.pointwise_conv1.bias, 0)
+        nn.init.constant_(self.pointwise_conv2.bias, 0)
+        nn.init.constant_(self.depthwise_conv.bias, 0)
     #     nn.init.kaiming_uniform_(self.in_pointwise_weight, a=math.sqrt(5))
     #     nn.init.kaiming_uniform_(self.depthwise_weight, a=math.sqrt(5))
     #     nn.init.kaiming_uniform_(self.out_pointwise_weight, a=math.sqrt(5))
@@ -140,7 +148,7 @@ class ConformerConvBlock(nn.Module):
         x = F.glu(x, dim=1)
 
         x = self.depthwise_conv(x)
-        x = self.activation(self.batch_norm(x))
+        x = self.activation(self.norm(x))
 
         x = self.pointwise_conv2(x)
 

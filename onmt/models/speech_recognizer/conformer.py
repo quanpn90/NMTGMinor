@@ -9,6 +9,7 @@ from onmt.modules.base_seq2seq import NMTModel, Reconstructor, DecoderState
 from onmt.modules.convolution import Conv2dSubsampling
 from onmt.models.transformer_layers import PrePostProcessing
 from .relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
+from .conformer_layers import ConformerEncoderLayer
 from onmt.utils import flip, expected_length
 from collections import defaultdict
 import math
@@ -28,7 +29,7 @@ class ConformerEncoder(TransformerEncoder):
         # build_modules will be called from the inherited constructor
         super().__init__(opt, dicts, positional_encoder, encoder_type, language_embeddings)
 
-        # learnable position encoding
+        # position encoding sin/cos
         self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
 
         # self.audio_trans = Conv2dSubsampling(opt.input_size, opt.model_size)
@@ -36,6 +37,11 @@ class ConformerEncoder(TransformerEncoder):
         feature_size = opt.input_size
         cnn = [nn.Conv2d(channels, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(32),
                nn.Conv2d(32, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(32)]
+        # cnn = [nn.Conv2d(channels, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True),
+        #        nn.Conv2d(32, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True)]
+
+        nn.init.kaiming_normal_(cnn[0].weight, nonlinearity="relu")
+        nn.init.kaiming_normal_(cnn[3].weight, nonlinearity="relu")
 
         feat_size = (((feature_size // channels) - 3) // 4) * 32
         # cnn.append()
@@ -57,7 +63,7 @@ class ConformerEncoder(TransformerEncoder):
             # linearly decay the death rate
             death_r = (_l + 1.0) / self.layers * self.death_rate
 
-            block = RelativeTransformerEncoderLayer(self.opt, death_rate=death_r)
+            block = ConformerEncoderLayer(self.opt, death_rate=death_r)
             self.layer_modules.append(block)
 
     def forward(self, input, input_pos=None, input_lang=None, streaming=False, **kwargs):
@@ -85,7 +91,6 @@ class ConformerEncoder(TransformerEncoder):
         mask_src = long_mask[:, 0:emb.size(1) * 4:4].transpose(0, 1).unsqueeze(0)
         dec_attn_mask = None
 
-
         emb = emb.transpose(0, 1)
         input = input.transpose(0, 1)
         mem_len = 0
@@ -107,7 +112,7 @@ class ConformerEncoder(TransformerEncoder):
             mask_src = mask_src.bool()
 
         """ Scale the emb by sqrt(d_model) """
-        emb = emb * math.sqrt(self.model_size)
+        # emb = emb * math.sqrt(self.model_size)
 
         """ Adding positional encoding """
         qlen = input.size(0)

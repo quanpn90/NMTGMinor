@@ -241,6 +241,17 @@ class Optim(object):
             if not fast_adam:
                 self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
                                             weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+        elif self.method in ['novograd']:
+            try:
+                import apex
+                if self.amsgrad:
+                    print("Note: AMSGRAD is not compatible with Fused Novograd")
+                self.optimizer = apex.optimizers.FusedNovoGrad(self.params, lr=self.lr,
+                                                               betas=(self.beta1, self.beta2), eps=1e-9,
+                                                               weight_decay=self.weight_decay, amsgrad=False,
+                                                               set_grad_none=False)
+            except RuntimeError as e:
+                raise e
         else:
             raise RuntimeError("Invalid optim method: " + self.method)
 
@@ -263,8 +274,6 @@ class Optim(object):
             self.eta_min = 0.0
             self.max_step = opt.max_step if hasattr(opt, 'max_step') else 33333
             self.init_lr = self.lr
-            # optim.lr_scheduler.CosineAnnealingLR(optimizer,
-            #                                                       opt.max_step, eta_min=0.0)
         else:
             self.init_lr = self.lr
         self.lr = self.init_lr

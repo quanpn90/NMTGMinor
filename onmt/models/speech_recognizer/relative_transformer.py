@@ -171,7 +171,7 @@ class SpeechTransformerEncoder(TransformerEncoder):
 
                 mems_i = mems[i] if mems is not None and streaming and self.max_memory_size > 0 else None
 
-                if self.checkpointing == 0:
+                if self.checkpointing == 0 or self.training is False:
                     context = layer(context, pos_emb, mask_src, mems=mems_i, src_lang=input_lang)
                 else:
                     incremental = False

@@ -133,8 +133,8 @@ class DataIterator(EpochBatchIterating):
         :param epoch:
         :param buffer_size:
         :param timeout:
-        :param shard_id:
-        :param num_shards:
+        :param shard_id: equivalent with rank
+        :param num_shards: equivalent with world size
         """
         assert isinstance(dataset, torch.utils.data.Dataset)
 
