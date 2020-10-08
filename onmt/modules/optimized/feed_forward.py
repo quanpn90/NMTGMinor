@@ -41,10 +41,10 @@ class PositionWiseFeedForward(nn.Module):
         if onmt.constants.fused_ffn:
             try:
                 from apex.mlp.mlp import mlp_function
-                self.optimized = 1
+                self.optimized = 2
                 self.fast_mlp_func = mlp_function
             except ModuleNotFoundError as e:
-                self.optimized = 1
+                self.optimized = 2
 
     def reset_parameters(self, init='normal'):
         if init == 'normal':
@@ -75,7 +75,7 @@ class PositionWiseFeedForward(nn.Module):
             hidden = F.linear(hidden, self.out_proj_weight, self.out_proj_bias)
         else:
             # Apex MLP does not support dropout so instead we use dropconnect
-            # Theoretically they should be yield similar results
+            # Theoretically they should yield similar results
             weights = [F.dropout(self.in_proj_weight, p=self.dropout, training=self.training),
                        self.out_proj_weight]
             biases = [F.dropout(self.in_proj_bias, p=self.dropout, training=self.training),
