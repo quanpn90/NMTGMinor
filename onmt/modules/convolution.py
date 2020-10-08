@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as F
 import math
+from onmt.modules.optimized.swish import FastSwish
 
 
 class Conv2dSubsampling(nn.Module):
@@ -83,7 +84,7 @@ class Conv2dSubsampling(nn.Module):
 
 class ConformerConvBlock(nn.Module):
 
-    def __init__(self, channels, kernel_size, activation=nn.ReLU(), bias=True):
+    def __init__(self, channels, kernel_size, activation="relu", bias=True):
         super(ConformerConvBlock, self).__init__()
 
         assert (kernel_size - 1) % 2 == 0
@@ -94,7 +95,11 @@ class ConformerConvBlock(nn.Module):
 
         self.norm = nn.BatchNorm1d(channels)
         self.pointwise_conv2 = nn.Conv1d(channels, channels, kernel_size=1, stride=1, padding=0, bias=bias)
-        self.activation = activation
+
+        if activation == 'relu':
+            self.activation = nn.ReLU()
+        elif activation == 'swish':
+            self.activation = FastSwish()
 
         # self.in_pointwise_weight = nn.Conv1d(channels, 2*channels, kernel_size=1, stride=1, padding=0, bias=False)
         # self.in_pointwise_bias = nn.Parameter(torch.Tensor(2 * channels))
@@ -113,13 +118,13 @@ class ConformerConvBlock(nn.Module):
 
     def reset_parameters(self):
 
-        nn.init.kaiming_normal_(self.pointwise_conv1.weight, nonlinearity='relu')
-        nn.init.kaiming_normal_(self.depthwise_conv.weight, nonlinearity='relu')
-        nn.init.kaiming_normal_(self.pointwise_conv2.weight, nonlinearity='relu')
+        nn.init.kaiming_normal_(self.pointwise_conv1.weight)
+        nn.init.kaiming_normal_(self.depthwise_conv.weight)
+        nn.init.kaiming_normal_(self.pointwise_conv2.weight)
 
-        nn.init.constant_(self.pointwise_conv1.bias, 0)
-        nn.init.constant_(self.pointwise_conv2.bias, 0)
-        nn.init.constant_(self.depthwise_conv.bias, 0)
+        # nn.init.constant_(self.pointwise_conv1.bias, 0)
+        # nn.init.constant_(self.pointwise_conv2.bias, 0)
+        # nn.init.constant_(self.depthwise_conv.bias, 0)
     #     nn.init.kaiming_uniform_(self.in_pointwise_weight, a=math.sqrt(5))
     #     nn.init.kaiming_uniform_(self.depthwise_weight, a=math.sqrt(5))
     #     nn.init.kaiming_uniform_(self.out_pointwise_weight, a=math.sqrt(5))

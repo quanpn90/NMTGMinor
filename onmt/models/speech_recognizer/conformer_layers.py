@@ -34,19 +34,19 @@ class ConformerEncoderLayer(nn.Module):
         self.preprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
 
         self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                       variational=self.variational)
+                                                       variational=self.variational, activation='swish')
 
         self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
 
         self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                   variational=self.variational)
+                                                   variational=self.variational, activation='swish')
 
         # there is batch norm inside convolution already
         # so no need for layer norm?
         self.preprocess_conv = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_conv = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                   variational=self.variational)
-        self.conv = ConformerConvBlock(opt.model_size, opt.conv_kernel)
+        self.conv = ConformerConvBlock(opt.model_size, opt.conv_kernel, activation='swish')
 
     def forward(self, input, pos_emb, attn_mask, incremental=False, incremental_cache=None, mems=None,
                 src_lang=None):

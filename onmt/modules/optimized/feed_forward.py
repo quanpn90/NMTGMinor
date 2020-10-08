@@ -6,6 +6,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 from onmt.modules.dropout import variational_dropout
 import onmt
+from .swish import FastSwish
 
 
 class PositionWiseFeedForward(nn.Module):
@@ -22,6 +23,11 @@ class PositionWiseFeedForward(nn.Module):
         self.bias = True
         self.variational = variational
         self.activation = activation
+
+        if self.activation == 'relu':
+            self.function = nn.ReLU(True)  # True for inplace
+        elif self.activation == 'swish':
+            self.function = FastSwish()
 
         self.in_proj_weight = Parameter(torch.Tensor(inner_size, model_size))
         self.out_proj_weight = Parameter(torch.Tensor(model_size, inner_size))
@@ -60,7 +66,8 @@ class PositionWiseFeedForward(nn.Module):
 
         if self.optimized == 2 or not input.is_cuda:
             hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)
-            hidden = F.relu(hidden, inplace=True)
+            # hidden = F.relu(hidden, inplace=True)
+            hidden = self.function(hidden)
             if self.variational:
                 hidden = variational_dropout(hidden, p=self.dropout, training=self.training)
             else:
