@@ -92,7 +92,7 @@ class ConformerConvBlock(nn.Module):
         self.depthwise_conv = nn.Conv1d(channels, channels, kernel_size, stride=1,
                                         padding=(kernel_size - 1) // 2, groups=channels, bias=bias)
 
-        # self.batch_norm = nn.BatchNorm1d(channels)
+        self.norm = nn.BatchNorm1d(channels)
         self.pointwise_conv2 = nn.Conv1d(channels, channels, kernel_size=1, stride=1, padding=0, bias=bias)
         self.activation = activation
 
@@ -104,7 +104,7 @@ class ConformerConvBlock(nn.Module):
         # self.padding = (kernel_size - 1) // 2
         # self.groups = channels
         #
-        self.norm = nn.BatchNorm1d(channels)
+
         # self.out_pointwise_weight = nn.Parameter(torch.Tensor(channels, channels, 1))
         # self.out_pointwise_bias = nn.Parameter(torch.Tensor(channels))
         #

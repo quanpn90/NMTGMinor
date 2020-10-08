@@ -39,6 +39,7 @@ if torch.cuda.is_available() and not opt.gpus:
 
 torch.manual_seed(opt.seed)
 
+
 def numpy_to_torch(tensor_list):
 
     out_list = list()
@@ -420,8 +421,6 @@ def main():
 
     # spawn N processes for N gpus
     # each process has a different trainer
-    # torch.multiprocessing.spawn(run_process, nprocs=len(opt.gpus),
-    #                             args=(model, loss_function, train_data, valid_data, dicts, opt))
     torch.multiprocessing.spawn(run_process, nprocs=len(opt.gpus),
                                 args=(train_data, valid_data, dicts, opt, checkpoint))
 

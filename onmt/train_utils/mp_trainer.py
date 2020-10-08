@@ -39,7 +39,13 @@ def varname(p):
 
 
 def prepare_sample(batch, device=None, fp16=False):
-    # TODO: sample is a Batch object. This function probably
+    """
+    Put minibatch on the corresponding GPU
+    :param batch:
+    :param device:
+    :param fp16:
+    :return:
+    """
     if isinstance(batch, list):
         batch = batch[0]
     batch = rewrap(batch)
@@ -125,7 +131,6 @@ def all_reduce_and_rescale_tensors(tensors, rescale_denom,
 
 class Trainer(object):
 
-    # def __init__(self, model, device, loss_function, train_data, valid_data, dicts, opt, setup_optimizer=True):
     def __init__(self, device, train_data, valid_data, dicts, opt, setup_optimizer=True):
         """
         :param model:
@@ -180,7 +185,8 @@ class Trainer(object):
 
         torch.manual_seed(self.opt.seed)
 
-        # create model here
+        # note: we must start creating models after ccreating the processes
+        # for some reason passing a pre-created model to a process creates a "pickle" error
         if not opt.fusion:
 
             if self.is_main():
@@ -205,7 +211,8 @@ class Trainer(object):
             # This function replaces modules with the more optimized counterparts so that it can run faster
             # Currently exp with LayerNorm
             if not opt.memory_profiling:
-                optimize_model(model, distributed=True)
+                # distributed is required to convert BatchNorm to SyncBatchNorm for DDP
+                optimize_model(model, distributed=(self.world_size > 1))
 
         init_model_parameters(model, opt)
         self.model = model
@@ -218,10 +225,10 @@ class Trainer(object):
             self.model = self.model.cuda(device=self.device)
 
             # Ensure that the distributed copies have the same initial parameters
+            # Manual seed may not work the same for different GPU models.
             if self.world_size > 1:
                 params = [p for p in self.model.parameters()]
 
-                tensor = torch.zeros(1)
                 with torch.no_grad():
                     if not self.is_main():
                         for p in params:
@@ -263,9 +270,11 @@ class Trainer(object):
             # wrap the model into DDP after initializing by amp
             if self.world_size > 1:
                 """
-                delay_allreduce is required to avoid 
+                delay_allreduce is required to avoid allreduce error during backward pass
                 """
                 self.model = DDP(self.model, delay_allreduce=True)
+
+                # torch DDP is more likely to work with the official amp autocast
                 # self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[self.rank],
                 #                                                        output_device=self.rank,
                 #                                                        find_unused_parameters=True)
@@ -279,6 +288,7 @@ class Trainer(object):
     def print(self, *content, flush=False):
         """
         A helper function to print only on the main process
+        :param flush:
         :param content:
         :return:
         """
@@ -472,7 +482,7 @@ class Trainer(object):
             print("* Warning: out-of-memory in warming up. This is due to the largest batch is too big for the GPU.",
                   flush=True)
         else:
-            print("* Warming up successuflly.", flush=True)
+            print("* Warming up successfully.", flush=True)
 
         if self.opt.memory_profiling:
             if hasattr(torch.cuda, 'memory_summary'):
@@ -767,7 +777,7 @@ class Trainer(object):
                 report_rev_loss.add_(rev_loss_data)
                 report_mirror_loss.add_(mirror_loss_data)
 
-            # control the index a little bit to ensure
+            # control the index a little bit to ensure the log is always printed
             if i == 0 or ((i+1) % opt.log_interval < self.world_size):
 
                 dist.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
@@ -818,11 +828,11 @@ class Trainer(object):
     def run(self, checkpoint=None):
 
         opt = self.opt
-        # model = self.model
-        # optim = self.optim
 
         if checkpoint is not None:
             raise NotImplementedError
+
+            # TODO: have loading checkpoints for each process
 
             self.model.load_state_dict(checkpoint['model'])
             prec_opt = checkpoint['opt'] if 'opt' in checkpoint else None

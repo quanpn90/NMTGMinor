@@ -417,7 +417,6 @@ def optimize_model(model, distributed=False):
 
         replacable = True
         try:
-            # from apex.normalization.fused_layer_norm import FusedLayerNorm
             import importlib
             from apex.normalization.fused_layer_norm import FusedLayerNorm
             fused_layer_norm_cuda = importlib.import_module("fused_layer_norm_cuda")
@@ -447,6 +446,7 @@ def optimize_model(model, distributed=False):
             replacable = False
 
         if replacable:
+            import apex
             for attr_str in dir(m):
                 target_attr = getattr(m, attr_str)
                 if type(target_attr) == torch.nn.BatchNorm1d or type(target_attr) == torch.nn.BatchNorm2d:
@@ -458,3 +458,4 @@ def optimize_model(model, distributed=False):
 
     if distributed:
         sync_batch_norm(model, "Transformer")
+
