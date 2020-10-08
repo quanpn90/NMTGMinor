@@ -13,7 +13,7 @@ def swish(x):
         x = SwishFunction.apply(x)
 
     except ModuleNotFoundError as e:
-        x = x * F.silu(x)
+        x = x * F.sigmoid(x)
 
     return x
 
@@ -30,4 +30,4 @@ class FastSwish(torch.nn.Module):
         if x.is_cuda:
             return swish(x)
         else:
-            return F.silu(x)
+            return x * F.sigmoid(x)
