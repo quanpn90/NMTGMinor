@@ -88,6 +88,8 @@ class RelativeTransformerEncoder(TransformerEncoder):
                 emb = emb + lang_emb.unsqueeze(0)
 
         if self.unidirectional:
+            print("Unidirectional speech encoder is not supported.")
+            raise NotImplementedError
             qlen = input.size(0)
             klen = qlen + mem_len
             attn_mask_src = torch.triu(

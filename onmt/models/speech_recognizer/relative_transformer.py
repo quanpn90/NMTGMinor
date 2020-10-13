@@ -41,6 +41,7 @@ class SpeechTransformerEncoder(TransformerEncoder):
         self.n_heads = opt.n_heads
         self.fast_self_attn = opt.fast_self_attention
         self.checkpointing = opt.checkpointing
+        self.no_emb_scale = opt.no_emb_scale
 
         # TODO: multilingual factored networks
 
@@ -130,7 +131,8 @@ class SpeechTransformerEncoder(TransformerEncoder):
             mask_src = mask_src.bool()
 
         """ Scale the emb by sqrt(d_model) """
-        emb = emb * math.sqrt(self.model_size)
+        if not self.no_emb_scale:
+            emb = emb * math.sqrt(self.model_size)
 
         """ Adding positional encoding """
         qlen = input.size(0)

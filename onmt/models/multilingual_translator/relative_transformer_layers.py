@@ -72,21 +72,20 @@ class RelativeTransformerEncoderLayer(nn.Module):
         coin = True
         if self.training and self.death_rate > 0:
             coin = (torch.rand(1)[0].item() >= self.death_rate)
+            ffn_scale = self.ffn_scale / (1 - self.death_rate)
+        else:
+            ffn_scale = self.ffn_scale
 
         if coin:
             if self.macaron:
                 out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang)
 
-                if self.training and self.death_rate > 0:
-                    out = out / (1 - self.death_rate)
+                if ffn_scale != 1:
+                    out = out * ffn_scale
 
-                if not self.variational:
-                    out = F.dropout(out, p=self.dropout, training=self.training)
-                else:
-                    out = variational_dropout(out, p=self.dropout, training=self.training)
+                input = self.postprocess_mcr_ffn(out, input)
 
-                input = input + self.ffn_scale * out
-
+            # self-attention block
             query = self.preprocess_attn(input)
 
             if self.mfw:
@@ -107,15 +106,10 @@ class RelativeTransformerEncoderLayer(nn.Module):
             """
             out = self.feedforward(self.preprocess_ffn(input), src_lang)
 
-            # rescaling before residual
-            if self.training and self.death_rate > 0:
-                out = out / (1 - self.death_rate)
+            if ffn_scale != 1:
+                out = out * ffn_scale
 
-            if not self.variational:
-                out = F.dropout(out, p=self.dropout, training=self.training)
-            else:
-                out = variational_dropout(out, p=self.dropout, training=self.training)
-            input = input + self.ffn_scale * out
+            input = self.postprocess_ffn(out, input)
 
         if incremental:
             return input, incremental_cache

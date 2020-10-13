@@ -213,6 +213,7 @@ class Trainer(object):
             if not opt.memory_profiling:
                 # distributed is required to convert BatchNorm to SyncBatchNorm for DDP
                 optimize_model(model, distributed=(self.world_size > 1))
+                # optimize_model(model)
 
         init_model_parameters(model, opt)
         self.model = model
@@ -272,7 +273,7 @@ class Trainer(object):
                 """
                 delay_allreduce is required to avoid allreduce error during backward pass
                 """
-                self.model = DDP(self.model, delay_allreduce=True)
+                self.model = DDP(self.model, delay_allreduce=True, gradient_average=False)
 
                 # torch DDP is more likely to work with the official amp autocast
                 # self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[self.rank],
@@ -609,7 +610,7 @@ class Trainer(object):
         report_src_words = zero_tensor()
         report_rec_loss, report_rev_loss, report_mirror_loss = zero_tensor(), zero_tensor(), zero_tensor()
         start = time.time()
-        n_samples = len(epoch_iterator)
+        n_samples = len(data_iterator)
 
         counter = 0
         num_accumulated_words = zero_tensor()
@@ -649,6 +650,10 @@ class Trainer(object):
             try:
                 # outputs is a dictionary containing keys/values necessary for loss function
                 # can be flexibly controlled within models for easier extensibility
+                counter = counter + 1
+                # reduction_disabled = False if counter >= opt.update_frequency or i == (n_samples-1) else True
+                # self.model.require_backward_grad_sync = not reduction_disabled
+
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.constants.PAD)
                 outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
@@ -696,11 +701,9 @@ class Trainer(object):
                 # Normalizing the loss to grad scaler ensures this will not happen
                 full_loss.div_(grad_scaler)
 
-                if self.cuda:
-                    with amp.scale_loss(full_loss, optimizer) as scaled_loss:
-                        scaled_loss.backward()
-                else:
-                    full_loss.backward()
+                # reduction_disabled = False
+                with amp.scale_loss(full_loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
 
                 del outputs
 
@@ -712,11 +715,12 @@ class Trainer(object):
                     loss = 0
                     if opt.streaming:  # reset stream in this case ...
                         streaming_state = self.model.init_stream()
+                    raise e
                 else:
                     raise e
 
             batch_size = batch.size
-            counter = counter + 1
+
             src_size = batch.src_size
             tgt_size = batch.tgt_size
             num_accumulated_words.add_(tgt_size)
@@ -726,39 +730,39 @@ class Trainer(object):
             update_flag = False
             if counter >= opt.update_frequency:
                 update_flag = True
-            elif i == n_samples:  # update for the last minibatch
+            elif i == n_samples - 1:  # update for the last minibatch
                 update_flag = True
 
             if update_flag:
                 # accumulated gradient case, in this case the update frequency
                 dist.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
 
-                if (counter == 1 and self.opt.update_frequency != 1) or counter > 1:
-                    grad_denom = 1 / grad_scaler
-                    if self.opt.normalize_gradient:
-                        grad_denom = num_accumulated_words.item() * grad_denom
-                    else:
-                        grad_denom = 1
-                    # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
-                    normalize_gradients(amp.master_params(optimizer), grad_denom)
-                    # Update the parameters.
+                # if (counter == 1 and self.opt.update_frequency != 1) or counter > 1:
+                grad_denom = 1 / grad_scaler
+                if self.opt.normalize_gradient:
+                    grad_denom = num_accumulated_words.item() * grad_denom
+                else:
+                    grad_denom = 1
+                # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
+                normalize_gradients(amp.master_params(optimizer), grad_denom)
+                # Update the parameters.
 
-                    self.optim.step()
-                    self.optim.zero_grad()
-                    self.model.zero_grad()
-                    counter = 0
-                    num_accumulated_words.zero_()
-                    num_accumulated_sents.zero_()
+                self.optim.step()
+                self.optim.zero_grad()
+                self.model.zero_grad()
+                counter = 0
+                num_accumulated_words.zero_()
+                num_accumulated_sents.zero_()
 
-                    num_updates = self.optim._step
-                    if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every:
-                        valid_loss = self.eval(self.valid_data)
-                        valid_ppl = math.exp(min(valid_loss, 100))
+                num_updates = self.optim._step
+                if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every:
+                    valid_loss = self.eval(self.valid_data)
+                    valid_ppl = math.exp(min(valid_loss, 100))
 
-                        if self.is_main():
-                            print('Validation perplexity: %g' % valid_ppl)
-                            ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
-                            self.save(ep, valid_ppl, itr=data_iterator)
+                    if self.is_main():
+                        print('Validation perplexity: %g' % valid_ppl)
+                        ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
+                        self.save(ep, valid_ppl, itr=data_iterator)
 
             num_words = tgt_size
             report_loss.add_(loss_data)
@@ -782,6 +786,7 @@ class Trainer(object):
 
                 dist.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
                 dist.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
+                dist.all_reduce(report_src_words, op=dist.ReduceOp.SUM, group=self.group)
 
                 if self.is_main():
                     log_string = ("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; " %
@@ -820,7 +825,6 @@ class Trainer(object):
 
             # increase i by world size
             i = i + self.world_size
-            counter = counter + 1
 
         return total_loss / total_words
 

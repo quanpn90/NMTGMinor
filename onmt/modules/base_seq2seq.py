@@ -75,6 +75,24 @@ class NMTModel(nn.Module):
         """
         override this method to have back-compatibility
         """
+        # for dataparallel: the model becomes a "module" of a DDP wrapper
+        # and the state_dict from DDP doesn't revert to a normal model for non-DDP
+        ddp = True
+
+        # first, check if all entries start with "module" or not
+        for entry in state_dict:
+            if not entry.startswith('module'):
+                ddp = False
+                break
+
+        # if this is ddp, then reconvert the state dict name
+        if ddp:
+            new_state_dict = dict()
+            for entry in state_dict:
+                entry_ = entry[len("module."):]
+                new_state_dict[entry_] = state_dict[entry]
+
+            state_dict = new_state_dict
         
         def condition(param_name):
             # don't load these buffers (more like a bug)

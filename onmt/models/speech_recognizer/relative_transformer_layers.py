@@ -102,28 +102,65 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.variational = opt.variational_dropout
         self.death_rate = death_rate
         self.fast_self_attention = opt.fast_self_attention
+        self.macaron = opt.macaron
+        self.ffn_scale = 0.5 if self.macaron else 1
+        self.dynamic_conv = opt.dynamic_conv
+        self.depthwise_conv = opt.depthwise_conv
+        self.no_self_attention = opt.no_self_attention
+        self.no_skip_scale = opt.no_skip_scale
 
-        self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
-        self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
-                                                  variational=self.variational)
         self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                  variational=self.variational)
         d_head = opt.model_size // opt.n_heads
 
-        self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+        if self.dynamic_conv:
+            from onmt.modules.convolution import DynamicConvolution
+            self.preprocess_dconv = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+            self.postprocess_dconv = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                      variational=self.variational)
+            self.dynamic_conv_layer = DynamicConvolution(opt.model_size, opt.conv_kernel,
+                                                         weight_softmax=True, num_heads=opt.n_heads,
+                                                         weight_dropout=opt.attn_dropout, bias=True)
+
+        if self.depthwise_conv:
+            from onmt.modules.convolution import ConformerConvBlock
+            self.preprocess_dconv = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+            self.postprocess_dconv = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                       variational=self.variational)
+            self.conv_layer = ConformerConvBlock(opt.model_size, opt.conv_kernel,bias=True)
+
+        if self.macaron:
+            self.preprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+            self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                         variational=self.variational)
+
+            self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                               variational=self.variational, activation=opt.activation)
+
+        if not self.no_self_attention:
+            self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+            self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                      variational=self.variational)
+            self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
         self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                   variational=self.variational)
+                                                   variational=self.variational, activation=opt.activation)
 
     def forward(self, input, pos_emb, attn_mask, src_lang=None, incremental=False, incremental_cache=None, mems=None):
 
         if incremental and incremental_cache is None:
             incremental_cache = dict()
 
+        skip_scale = 1 / (1 - self.death_rate) if self.death_rate > 0 and self.training \
+                                                  and not self.no_skip_scale else 1.0
+
         coin = True
         if self.training and self.death_rate > 0:
             coin = (torch.rand(1)[0].item() >= self.death_rate)
+            ffn_scale = self.ffn_scale * skip_scale
+        else:
+            ffn_scale = self.ffn_scale
 
         if coin:
 
@@ -132,16 +169,55 @@ class RelativeTransformerEncoderLayer(nn.Module):
             else:
                 mems = None
 
-            query = self.preprocess_attn(input)
+            if self.macaron:
+                out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang)
 
-            out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
-                                    incremental=incremental, incremental_cache=incremental_cache)
+                if ffn_scale != 1:
+                    out = out * ffn_scale
 
-            # rescaling before residual
-            if self.training and self.death_rate > 0:
-                out = out / (1 - self.death_rate)
+                input = self.postprocess_mcr_ffn(out, input)
 
-            input = self.postprocess_attn(out, input)
+            # dynamic-convolution layer
+            if self.dynamic_conv:
+                # attn_mask should be T x B ?
+                out = self.preprocess_dconv(input)
+
+                pad_mask = attn_mask.squeeze(0).unsqueeze(-1)
+                pad_mask = torch.logical_not(pad_mask)
+                # input = input.masked_fill(pad_mask, 0)
+                out = self.dynamic_conv_layer(out, pad_mask)
+
+                # rescaling before residual
+                if skip_scale != 1:
+                    out = out * skip_scale
+
+                input = self.postprocess_dconv(out, input)
+
+            # self-attention layer
+            if not self.no_self_attention:
+                query = self.preprocess_attn(input)
+
+                out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
+                                        incremental=incremental, incremental_cache=incremental_cache)
+
+                # rescaling before residual
+                if skip_scale != 1:
+                    out = out * skip_scale
+
+                input = self.postprocess_attn(out, input)
+
+            # depth-wise convolution (like conformer)
+            if self.depthwise_conv:
+                out = self.preprocess_dconv(input)
+                pad_mask = attn_mask.squeeze(0).unsqueeze(-1)
+                out = out.masked_fill(pad_mask, 0)
+                out = self.conv_layer(out)
+
+                # rescaling before residual
+                if skip_scale != 1:
+                    out = out * skip_scale
+
+                input = self.postprocess_dconv(out, input)
 
             """ Feed forward layer 
                 layernorm > ffn > dropout > residual
@@ -149,8 +225,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
             out = self.feedforward(self.preprocess_ffn(input))
 
             # rescaling before residual
-            if self.training and self.death_rate > 0:
-                out = out / (1 - self.death_rate)
+            out = out * ffn_scale if ffn_scale != 1 else out
 
             input = self.postprocess_ffn(out, input)
 
@@ -168,6 +243,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.variational = opt.variational_dropout
         self.death_rate = death_rate
         self.mfw = opt.multilingual_factorized_weights
+        self.macaron = opt.macaron
+        self.ffn_scale = 0.5 if self.macaron else 1
 
         self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
@@ -195,7 +272,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
             self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                       variational=self.variational)
+                                                       variational=self.variational, activation=opt.activation)
         else:
             self.feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                           variational=self.variational,

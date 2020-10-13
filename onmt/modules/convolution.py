@@ -4,6 +4,125 @@ import torch.nn.init as init
 import torch.nn.functional as F
 import math
 from onmt.modules.optimized.swish import FastSwish
+from apex import amp
+
+try:
+    import dynamic_conv_cuda
+except Exception as e:
+    dynamic_conv_cuda = None
+
+
+class DynamicConvFunction(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, x, weights, padding_l):
+        ctx.padding_l = padding_l
+        if dynamic_conv_cuda is None:
+            print("Dynamic Convolution is not compiled for CUDA yet.")
+            raise NotImplementedError
+        outputs = dynamic_conv_cuda.forward(x, weights, padding_l)
+        variables = [x, weights]
+        ctx.save_for_backward(*variables)
+        return outputs[0]
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        outputs = dynamic_conv_cuda.backward(
+                grad_output.contiguous(),
+                ctx.padding_l,
+                *ctx.saved_tensors)
+        grad_input, grad_weights = outputs
+        return grad_input, grad_weights, None
+
+
+@amp.half_function
+def dynamic_convolution(input, weights, padding_l):
+
+    return DynamicConvFunction.apply(input, weights, padding_l)
+
+
+class DynamicConvolution(torch.nn.Module):
+
+    def __init__(self, input_size,  kernel_size=1,
+            weight_softmax=False,
+            num_heads=1,
+            weight_dropout=0.,
+            bias=True,
+            renorm_padding=False,
+            query_size=None,
+
+    ):
+        super(DynamicConvolution, self).__init__()
+
+        self.query_size = input_size if query_size is None else query_size
+        self.kernel_size = kernel_size
+        # self.padding_l = padding_l
+        self.padding_l = kernel_size // 2 if kernel_size % 2 == 1 \
+            else ((kernel_size - 1) // 2, kernel_size // 2)
+
+        self.num_heads = num_heads
+        self.weight_softmax = weight_softmax
+        self.weight_dropout = weight_dropout
+        self.renorm_padding = renorm_padding
+        self.bias = bias
+
+        self.input_linear = nn.Linear(input_size, input_size * 2, bias)
+        self.output_linear = nn.Linear(input_size, input_size, bias)
+
+        self.weight_linear = nn.Linear(input_size, num_heads * kernel_size, bias)
+        if bias:
+            self.conv_bias = nn.Parameter(torch.Tensor(input_size))
+        else:
+            self.conv_bias = None
+        self.reset_parameters()
+
+    def reset_parameters(self, init='normal'):
+
+        if init == 'normal':
+            nn.init.xavier_normal_(self.input_linear.weight)
+            nn.init.xavier_normal_(self.weight_linear.weight)
+            nn.init.xavier_normal_(self.output_linear.weight)
+        else:
+            nn.init.xavier_uniform_(self.input_linear.weight)
+            nn.init.xavier_uniform_(self.weight_linear.weight)
+            nn.init.xavier_uniform_(self.output_linear.weight)
+
+        if self.conv_bias is not None:
+            nn.init.constant_(self.conv_bias, 0.)
+            nn.init.constant_(self.weight_linear.bias, 0.)
+            nn.init.constant_(self.input_linear.bias, 0.)
+            nn.init.constant_(self.output_linear.bias, 0.)
+
+    def forward(self, x, pad_mask=None):
+
+        x = F.glu(self.input_linear(x))
+
+        T, B, C = x.size()
+
+        K, H = self.kernel_size, self.num_heads
+
+        weight = self.weight_linear(x).view(T, B, H, K)
+
+        if self.weight_softmax:
+            weight = F.softmax(weight, dim=-1)
+
+        weight = F.dropout(weight, p=self.weight_dropout, training=self.training)
+
+        # [seq_len x batch_size x heads x kernel_size] -> [batch_size x heads x kernel_size x seq_len]
+        weight = weight.permute(1, 2, 3, 0).contiguous()
+
+        if pad_mask is not None:
+            x = x.masked_fill(pad_mask, 0)
+
+        x = x.permute(1, 2, 0).contiguous()
+        x = dynamic_convolution(x, weight, self.padding_l).permute(2, 0, 1)
+
+        if self.conv_bias is not None:
+            x = x + self.conv_bias.view(1, 1, -1)
+
+        x = self.output_linear(x)
+
+        return x
 
 
 class Conv2dSubsampling(nn.Module):
@@ -116,15 +235,20 @@ class ConformerConvBlock(nn.Module):
         # self.activation = activation
         self.reset_parameters()
 
-    def reset_parameters(self):
+    def reset_parameters(self, init='normal'):
 
-        nn.init.kaiming_normal_(self.pointwise_conv1.weight)
-        nn.init.kaiming_normal_(self.depthwise_conv.weight)
-        nn.init.kaiming_normal_(self.pointwise_conv2.weight)
+        if init == 'normal':
+            nn.init.kaiming_normal_(self.pointwise_conv1.weight)
+            nn.init.kaiming_normal_(self.depthwise_conv.weight)
+            nn.init.kaiming_normal_(self.pointwise_conv2.weight)
+        else:
+            nn.init.kaiming_uniform_(self.pointwise_conv1.weight)
+            nn.init.kaiming_uniform_(self.depthwise_conv.weight)
+            nn.init.kaiming_uniform_(self.pointwise_conv2.weight)
 
-        # nn.init.constant_(self.pointwise_conv1.bias, 0)
-        # nn.init.constant_(self.pointwise_conv2.bias, 0)
-        # nn.init.constant_(self.depthwise_conv.bias, 0)
+        nn.init.constant_(self.pointwise_conv1.bias, 0)
+        nn.init.constant_(self.pointwise_conv2.bias, 0)
+        nn.init.constant_(self.depthwise_conv.bias, 0)
     #     nn.init.kaiming_uniform_(self.in_pointwise_weight, a=math.sqrt(5))
     #     nn.init.kaiming_uniform_(self.depthwise_weight, a=math.sqrt(5))
     #     nn.init.kaiming_uniform_(self.out_pointwise_weight, a=math.sqrt(5))

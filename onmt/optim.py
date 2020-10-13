@@ -299,8 +299,8 @@ class Optim(object):
         # grad_norm = clip_grad_norm(self.params, self.max_grad_norm).item()
 
         overflow = False
-        if self.optimizer._amp_stash.already_patched:
-            overflow = True
+        # if self.optimizer._amp_stash.already_patched:
+        #     overflow = True
         "Automatically scale learning rate over learning period if not overflow"
         if not overflow:
             self._step += 1

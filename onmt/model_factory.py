@@ -292,10 +292,12 @@ def init_model_parameters(model, opt):
     def weights_init(m):
         classname = m.__class__.__name__
         if classname.find('Linear') != -1:
-            if hasattr(m, 'weight') and m.weight is not None:
-                init_weight(m.weight)
-            if hasattr(m, 'bias') and m.bias is not None:
-                init_bias(m.bias)
+            # if hasattr(m, 'weight') and m.weight is not None:
+            #     init_weight(m.weight)
+            # if hasattr(m, 'bias') and m.bias is not None:
+            #     init_bias(m.bias)
+            pass
+
         elif classname.find('Embedding') != -1:
 
             initialize = True
@@ -305,7 +307,6 @@ def init_model_parameters(model, opt):
             if initialize:
                 if hasattr(m, 'weight') and hasattr(m, 'padding_idx'):
                     init_embed(m.weight, m.padding_idx)
-            # nn.init.constant_(m.weight[m.padding_idx], 0.0)
 
         elif classname.find('LayerNorm') != -1 or classname.find('FusedLayerNorm') != -1:
             if hasattr(m, 'weight'):

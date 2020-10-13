@@ -305,6 +305,7 @@ class XETrainer(BaseTrainer):
 
             self.optim = onmt.Optim(opt)
             self.optim.set_parameters(self.model.parameters())
+            print("[INFO] Optimizer: ", self.optim.optimizer)
 
             if not self.opt.fp16:
                 opt_level = "O0"

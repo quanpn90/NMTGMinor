@@ -109,6 +109,9 @@ def make_parser(parser):
     parser.add_argument('-activation_layer', default='linear_relu_linear', type=str,
                         help='The activation layer in each transformer block '
                              'linear_relu_linear|linear_swish_linear|maxout')
+    parser.add_argument('-activation', default='relu', type=str,
+                        help='The activation layer in each transformer block '
+                             'relu|silu|swish')
     parser.add_argument('-time', default='positional_encoding', type=str,
                         help='Type of time representation positional_encoding|gru|lstm')
     parser.add_argument('-version', type=float, default=1.0,
@@ -287,6 +290,16 @@ def make_parser(parser):
                         help="Bottleneck size for the LFV vector).")
     parser.add_argument('-conv_kernel', type=int, default=31,
                         help="Kernels for convolution in conformer).")
+    parser.add_argument('-dynamic_conv', action='store_true',
+                        help="Use an additional layer of dynamic convolution).")
+    parser.add_argument('-depthwise_conv', action='store_true',
+                        help="Use an additional layer of dynamic convolution).")
+    parser.add_argument('-no_self_attention', action='store_true',
+                        help="Disable self attention in encoder).")
+    parser.add_argument('-no_emb_scale', action='store_true',
+                        help="Disable self attention in encoder).")
+    parser.add_argument('-no_skip_scale', action='store_true',
+                        help="Disable self attention in encoder).")
 
     parser.add_argument('-multilingual_factorized_weights', action='store_true',
                         help='Use multilingual language identifier to get LFV for each language')
@@ -468,7 +481,25 @@ def backward_compatible(opt):
     if not hasattr(opt, 'macaron'):
         opt.macaron = False
 
+    if not hasattr(opt, 'activation'):
+        opt.activation = 'relu'
+
     if not hasattr(opt, 'fused_ffn'):
         opt.fused_ffn = False
+
+    if not hasattr(opt, 'dynamic_conv'):
+        opt.dynamic_conv = False
+
+    if not hasattr(opt, 'depthwise_conv'):
+        opt.dynamic_conv = False
+
+    if not hasattr(opt, 'no_self_attention'):
+        opt.no_self_attention = False
+
+    if not hasattr(opt, 'no_emb_scale'):
+        opt.no_self_attention = False
+
+    if not hasattr(opt, 'no_skip_scale'):
+        opt.no_skip_scale = False
 
     return opt

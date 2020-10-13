@@ -111,9 +111,6 @@ class ConformerEncoder(TransformerEncoder):
         if onmt.constants.torch_version >= 1.2:
             mask_src = mask_src.bool()
 
-        """ Scale the emb by sqrt(d_model) """
-        # emb = emb * math.sqrt(self.model_size)
-
         """ Adding positional encoding """
         qlen = input.size(0)
         klen = qlen + mem_len
