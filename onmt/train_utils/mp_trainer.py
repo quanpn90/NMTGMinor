@@ -651,8 +651,8 @@ class Trainer(object):
                 # outputs is a dictionary containing keys/values necessary for loss function
                 # can be flexibly controlled within models for easier extensibility
                 counter = counter + 1
-                # reduction_disabled = False if counter >= opt.update_frequency or i == (n_samples-1) else True
-                # self.model.require_backward_grad_sync = not reduction_disabled
+                reduction_disabled = False if counter >= opt.update_frequency or i == (n_samples-1) else True
+                self.model.require_backward_grad_sync = not reduction_disabled
 
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.constants.PAD)
@@ -701,8 +701,7 @@ class Trainer(object):
                 # Normalizing the loss to grad scaler ensures this will not happen
                 full_loss.div_(grad_scaler)
 
-                # reduction_disabled = False
-                with amp.scale_loss(full_loss, optimizer) as scaled_loss:
+                with amp.scale_loss(full_loss, optimizer, delay_unscale=reduction_disabled) as scaled_loss:
                     scaled_loss.backward()
 
                 del outputs
