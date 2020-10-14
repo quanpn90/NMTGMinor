@@ -207,6 +207,7 @@ def main():
                                           batch_size_sents=opt.batch_size_sents,
                                           multiplier=opt.batch_size_multiplier,
                                           src_align_right=opt.src_align_right,
+                                          augment=opt.augment_speech,
                                           upsampling=opt.upsampling,
                                           cleaning=True, verbose=True,
                                           num_split=len(opt.gpus))
@@ -340,6 +341,7 @@ def main():
                                               batch_size_sents=opt.batch_size_sents,
                                               multiplier=opt.batch_size_multiplier,
                                               src_align_right=opt.src_align_right,
+                                              augment=opt.augment_speech,
                                               upsampling=opt.upsampling,
                                               cleaning=True, verbose=True,
                                               num_split=len(opt.gpus))
