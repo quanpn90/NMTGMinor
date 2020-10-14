@@ -11,7 +11,7 @@ import torch
 import copy
 import sys
 from apex import amp
-from apex.parallel import DistributedDataParallel as DDP
+# from apex.parallel import DistributedDataParallel as DDP
 
 import onmt
 import onmt.markdown
@@ -27,6 +27,8 @@ from onmt.utils import checkpoint_paths, normalize_gradients
 from onmt.model_factory import build_model, optimize_model, init_model_parameters
 import torch.distributed as dist
 import warnings
+from torch.cuda.amp import autocast
+
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -250,35 +252,36 @@ class Trainer(object):
             if self.is_main():
                 print("[INFO] Optimizer: ", self.optim.optimizer)
 
-            if not self.opt.fp16:
-                opt_level = "O0"
-                keep_batchnorm_fp32 = False
-            elif self.opt.fp16_mixed:
-                opt_level = "O1"
-                keep_batchnorm_fp32 = None
-            else:
-                opt_level = "O2"
-                keep_batchnorm_fp32 = False
-
-            if self.cuda:
-                self.model, self.optim.optimizer = amp.initialize(self.model,
-                                                                  self.optim.optimizer,
-                                                                  opt_level=opt_level,
-                                                                  keep_batchnorm_fp32=keep_batchnorm_fp32,
-                                                                  loss_scale="dynamic",
-                                                                  verbosity=1 if self.opt.verbose else 0)
+            # if not self.opt.fp16:
+            #     opt_level = "O0"
+            #     keep_batchnorm_fp32 = False
+            # elif self.opt.fp16_mixed:
+            #     opt_level = "O1"
+            #     keep_batchnorm_fp32 = None
+            # else:
+            #     opt_level = "O2"
+            #     keep_batchnorm_fp32 = False
+            #
+            # if self.cuda:
+            #     self.model, self.optim.optimizer = amp.initialize(self.model,
+            #                                                       self.optim.optimizer,
+            #                                                       opt_level=opt_level,
+            #                                                       keep_batchnorm_fp32=keep_batchnorm_fp32,
+            #                                                       loss_scale="dynamic",
+            #                                                       verbosity=1 if self.opt.verbose else 0)
 
             # wrap the model into DDP after initializing by amp
             if self.world_size > 1:
                 """
                 delay_allreduce is required to avoid allreduce error during backward pass
                 """
-                self.model = DDP(self.model, delay_allreduce=True, gradient_average=False)
+                # self.model = DDP(self.model, delay_allreduce=True, gradient_average=False)
 
                 # torch DDP is more likely to work with the official amp autocast
-                # self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[self.rank],
-                #                                                        output_device=self.rank,
-                #                                                        find_unused_parameters=True)
+                self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[self.rank],
+                                                                       output_device=self.rank,
+                                                                       find_unused_parameters=True)
+            self.grad_scaler = torch.cuda.amp.GradScaler()
 
         print("[INFO] Process %d ready." % self.rank, flush=True)
 
@@ -386,7 +389,7 @@ class Trainer(object):
         opt = self.opt
 
         if self.cuda:
-            batch.cuda(fp16=self.opt.fp16 and not self.opt.fp16_mixed)
+            batch.cuda(fp16=False)
 
         self.model.train()
         self.loss_function.train()
@@ -403,42 +406,43 @@ class Trainer(object):
             streaming_state = None
 
         try:
-            targets = batch.get('target_output')
-            tgt_mask = None
-            outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                 zero_encoder=opt.zero_encoder,
-                                 mirror=opt.mirror_loss, streaming_state=streaming_state,
-                                 nce=opt.nce)
+            with autocast():
+                targets = batch.get('target_output')
+                tgt_mask = None
+                outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                                     zero_encoder=opt.zero_encoder,
+                                     mirror=opt.mirror_loss, streaming_state=streaming_state,
+                                     nce=opt.nce)
 
-            outputs['tgt_mask'] = tgt_mask
+                outputs['tgt_mask'] = tgt_mask
 
-            loss_dict = self.loss_function(outputs, targets, model=self.model)
-            loss_data = loss_dict['data']
-            loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-            full_loss = loss
+                loss_dict = self.loss_function(outputs, targets, model=self.model)
+                loss_data = loss_dict['data']
+                loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
+                full_loss = loss
 
-            if opt.mirror_loss:
-                rev_loss = loss_dict['rev_loss']
-                mirror_loss = loss_dict['mirror_loss']
-                full_loss = full_loss + rev_loss + mirror_loss
+                if opt.mirror_loss:
+                    rev_loss = loss_dict['rev_loss']
+                    mirror_loss = loss_dict['mirror_loss']
+                    full_loss = full_loss + rev_loss + mirror_loss
 
-            # reconstruction loss
-            if opt.reconstruct:
-                rec_loss = loss_dict['rec_loss']
-                rec_loss = rec_loss
-                full_loss = full_loss + rec_loss
+                # reconstruction loss
+                if opt.reconstruct:
+                    rec_loss = loss_dict['rec_loss']
+                    rec_loss = rec_loss
+                    full_loss = full_loss + rec_loss
 
-            if opt.lfv_multilingual:
-                lid_logits = outputs['lid_logits']
-                lid_labels = batch.get('target_lang')
-                lid_loss_function = self.loss_function.get_loss_function('lid_loss')
-                lid_loss = lid_loss_function(lid_logits, lid_labels)
-                full_loss = full_loss + lid_loss
+                if opt.lfv_multilingual:
+                    lid_logits = outputs['lid_logits']
+                    lid_labels = batch.get('target_lang')
+                    lid_loss_function = self.loss_function.get_loss_function('lid_loss')
+                    lid_loss = lid_loss_function(lid_logits, lid_labels)
+                    full_loss = full_loss + lid_loss
 
-            optimizer = self.optim.optimizer
+                optimizer = self.optim.optimizer
 
-            if self.opt.memory_profiling:
-                reporter.report(verbose=True)
+                if self.opt.memory_profiling:
+                    reporter.report(verbose=True)
 
                 # for obj in gc.get_objects():
                 #     try:
@@ -458,11 +462,7 @@ class Trainer(object):
                 # print(torch.cuda.memory_summary())
                 # exit()
 
-            if self.cuda:
-                with amp.scale_loss(full_loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
-            else:
-                loss.div_(batch.tgt_size).backward()
+            self.grad_scaler.scale(full_loss).backward()
 
             if self.opt.memory_profiling:
                 print('========= after backward =========')
@@ -554,24 +554,25 @@ class Trainer(object):
             streaming_state = None
 
         with torch.no_grad():
-            while not data_iterator.end_of_epoch():
-                samples = next(epoch_iterator)
+            with autocast():
+                while not data_iterator.end_of_epoch():
+                    samples = next(epoch_iterator)
 
-                if samples:
-                    batch = prepare_sample(samples, device=self.device, fp16=self.opt.fp16 and not self.opt.fp16_mixed)
+                    if samples:
+                        batch = prepare_sample(samples, device=self.device, fp16=False)
 
-                    targets = batch.get('target_output')
-                    tgt_mask = targets.ne(onmt.constants.PAD)
-                    outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                         mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce)
+                        targets = batch.get('target_output')
+                        tgt_mask = targets.ne(onmt.constants.PAD)
+                        outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                                             mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce)
 
-                    outputs['tgt_mask'] = tgt_mask
-                    loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True)
-                    loss_data = loss_dict['data']
+                        outputs['tgt_mask'] = tgt_mask
+                        loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True)
+                        loss_data = loss_dict['data']
 
-                    total_loss.add_(loss_data)
-                    total_words.add_(batch.tgt_size)
-                    i = i + 1
+                        total_loss.add_(loss_data)
+                        total_words.add_(batch.tgt_size)
+                        i = i + 1
 
         # allreduce the total loss and total words from other processes
         dist.all_reduce(total_loss, op=dist.ReduceOp.SUM, group=self.group)
@@ -636,7 +637,7 @@ class Trainer(object):
             # TODO: move everything to the multiGPU trainer
             samples = next(epoch_iterator)
 
-            batch = prepare_sample(samples, device=self.device, fp16=self.opt.fp16 and not self.opt.fp16_mixed)
+            batch = prepare_sample(samples, device=self.device, fp16=False)
 
             if opt.streaming:
                 if train_data.is_new_stream():
@@ -654,55 +655,55 @@ class Trainer(object):
                 reduction_disabled = False if counter >= opt.update_frequency or i == (n_samples-1) else True
                 self.model.require_backward_grad_sync = not reduction_disabled
 
-                targets = batch.get('target_output')
-                tgt_mask = targets.ne(onmt.constants.PAD)
-                outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                     zero_encoder=opt.zero_encoder,
-                                     mirror=opt.mirror_loss, streaming_state=streaming_state,
-                                     nce=opt.nce)
+                with autocast():
+                    targets = batch.get('target_output')
+                    tgt_mask = targets.ne(onmt.constants.PAD)
+                    outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                                         zero_encoder=opt.zero_encoder,
+                                         mirror=opt.mirror_loss, streaming_state=streaming_state,
+                                         nce=opt.nce)
 
-                batch_size = batch.size
-                outputs['tgt_mask'] = tgt_mask
+                    batch_size = batch.size
+                    outputs['tgt_mask'] = tgt_mask
 
-                loss_dict = self.loss_function(outputs, targets, model=self.model)
-                loss_data = loss_dict['data']
-                loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-                full_loss = loss
+                    loss_dict = self.loss_function(outputs, targets, model=self.model)
+                    loss_data = loss_dict['data']
+                    loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
+                    full_loss = loss
 
-                if opt.mirror_loss:
-                    rev_loss = loss_dict['rev_loss']
-                    rev_loss_data = loss_dict['rev_loss_data']
-                    mirror_loss = loss_dict['mirror_loss']
-                    full_loss = full_loss + rev_loss + mirror_loss
-                    mirror_loss_data = loss_dict['mirror_loss'].item()
-                else:
-                    rev_loss_data = None
-                    mirror_loss_data = 0
+                    if opt.mirror_loss:
+                        rev_loss = loss_dict['rev_loss']
+                        rev_loss_data = loss_dict['rev_loss_data']
+                        mirror_loss = loss_dict['mirror_loss']
+                        full_loss = full_loss + rev_loss + mirror_loss
+                        mirror_loss_data = loss_dict['mirror_loss'].item()
+                    else:
+                        rev_loss_data = None
+                        mirror_loss_data = 0
 
-                # reconstruction loss
-                if opt.reconstruct:
-                    rec_loss = loss_dict['rec_loss']
-                    rec_loss = rec_loss
-                    full_loss = full_loss + rec_loss
-                    rec_loss_data = loss_dict['rec_loss_data']
-                else:
-                    rec_loss_data = None
+                    # reconstruction loss
+                    if opt.reconstruct:
+                        rec_loss = loss_dict['rec_loss']
+                        rec_loss = rec_loss
+                        full_loss = full_loss + rec_loss
+                        rec_loss_data = loss_dict['rec_loss_data']
+                    else:
+                        rec_loss_data = None
 
-                if opt.lfv_multilingual:
-                    lid_logits = outputs['lid_logits']
-                    lid_labels = batch.get('target_lang')
-                    lid_loss_function = self.loss_function.get_loss_function('lid_loss')
-                    lid_loss = lid_loss_function(lid_logits, lid_labels)
-                    full_loss = full_loss + lid_loss
+                    if opt.lfv_multilingual:
+                        lid_logits = outputs['lid_logits']
+                        lid_labels = batch.get('target_lang')
+                        lid_loss_function = self.loss_function.get_loss_function('lid_loss')
+                        lid_loss = lid_loss_function(lid_logits, lid_labels)
+                        full_loss = full_loss + lid_loss
 
-                optimizer = self.optim.optimizer
+                    optimizer = self.optim.optimizer
 
-                # When the batch size is large, each gradient step is very easy to explode on fp16
-                # Normalizing the loss to grad scaler ensures this will not happen
-                full_loss.div_(grad_scaler)
+                    # When the batch size is large, each gradient step is very easy to explode on fp16
+                    # Normalizing the loss to grad scaler ensures this will not happen
+                    full_loss.div_(grad_scaler)
 
-                with amp.scale_loss(full_loss, optimizer, delay_unscale=reduction_disabled) as scaled_loss:
-                    scaled_loss.backward()
+                self.grad_scaler.scale(full_loss).backward()
 
                 del outputs
 
@@ -743,10 +744,14 @@ class Trainer(object):
                 else:
                     grad_denom = 1
                 # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
-                normalize_gradients(amp.master_params(optimizer), grad_denom)
-                # Update the parameters.
+                self.grad_scaler.unscale_(self.optim.optimizer)
 
-                self.optim.step()
+                normalize_gradients(self.model.parameters(), grad_denom)
+                # Update the parameters.
+                if self.opt.max_grad_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.opt.max_grad_norm)
+                self.optim.step(scaler=self.grad_scaler)
+                self.grad_scaler.update()
                 self.optim.zero_grad()
                 self.model.zero_grad()
                 counter = 0

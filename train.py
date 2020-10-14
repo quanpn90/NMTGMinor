@@ -209,6 +209,7 @@ def main():
                                           batch_size_sents=opt.batch_size_sents,
                                           multiplier=opt.batch_size_multiplier,
                                           src_align_right=opt.src_align_right,
+                                          augment=opt.augment_speech,
                                           upsampling=opt.upsampling,
                                           cleaning=True, verbose=True,
                                           num_split=len(opt.gpus))
@@ -256,6 +257,7 @@ def main():
                                           data_type=data_type, sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
                                           src_align_right=opt.src_align_right,
+                                          augment=opt.augment_speech,
                                           cleaning=True, verbose=True, debug=True)
             else:
                 # for validation data, we have to go through sentences (very slow but to ensure correctness)

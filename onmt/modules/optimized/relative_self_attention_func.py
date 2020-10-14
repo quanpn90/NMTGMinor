@@ -1,11 +1,13 @@
 import torch
 import torch.nn.functional as F
 import apex.amp as amp
+from torch.cuda.amp import custom_fwd, custom_bwd
 
 
 class RelativeShiftFunction(torch.autograd.Function):
 
     @staticmethod
+    @custom_fwd
     def forward(ctx, x, batch_first, emb_last):
         assert len(x.shape) == 3, "Input must have 3 dimensions B x len_q x len_r!"
 
@@ -14,6 +16,7 @@ class RelativeShiftFunction(torch.autograd.Function):
         return RelativeShift.forward(x, batch_first, emb_last)
 
     @staticmethod
+    @custom_bwd
     def backward(ctx, grad_x):
         batch_first = ctx.batch_first
         emb_last = ctx.emb_last
@@ -75,6 +78,7 @@ class RelativeShift(object):
 
 class RelativeSelfAttnFunc(torch.autograd.Function):
     @staticmethod
+    @custom_fwd(cast_inputs=torch.float16)
     def forward(ctx, inputs, pos, use_time_mask, is_training, heads,
                 input_weights, output_weights, pos_weights,
                 input_biases, output_biases, pos_biases,
@@ -128,6 +132,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                                         inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
                                         input_weights.transpose(0, 1),
                                         beta=1., alpha=1.)
+
 
         input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), input_weights.size(0))
 
@@ -298,9 +303,9 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         coverage = softmax_results
 
         return outputs.detach(), coverage
-        # return outputs.detach()
 
     @staticmethod
+    @custom_bwd
     def backward(ctx, output_grads, softmax_grads):
         # def backward(ctx, output_grads):
         """

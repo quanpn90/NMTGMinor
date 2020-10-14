@@ -25,9 +25,9 @@ class PositionWiseFeedForward(nn.Module):
         self.activation = activation
 
         if self.activation == 'relu':
-            self.function = nn.ReLU(True)  # True for inplace
+            self.function = F.relu  # True for inplace
         elif self.activation == 'swish':
-            self.function = FastSwish()
+            self.function = F.silu
 
         self.in_proj_weight = Parameter(torch.Tensor(inner_size, model_size))
         self.out_proj_weight = Parameter(torch.Tensor(model_size, inner_size))
@@ -38,13 +38,13 @@ class PositionWiseFeedForward(nn.Module):
         self.reset_parameters()
         self.optimized = 2
 
-        if onmt.constants.fused_ffn:
-            try:
-                from apex.mlp.mlp import mlp_function
-                self.optimized = 2
-                self.fast_mlp_func = mlp_function
-            except ModuleNotFoundError as e:
-                self.optimized = 2
+        # if onmt.constants.fused_ffn:
+        #     try:
+        #         from apex.mlp.mlp import mlp_function
+        #         self.optimized = 2
+        #         self.fast_mlp_func = mlp_function
+        #     except ModuleNotFoundError as e:
+        #         self.optimized = 2
 
     def reset_parameters(self, init='normal'):
         if init == 'normal':
@@ -52,8 +52,6 @@ class PositionWiseFeedForward(nn.Module):
             nn.init.normal_(self.in_proj_weight, 0.0, std_)
             nn.init.normal_(self.out_proj_weight, 0.0, std_)
 
-            # nn.init.normal_(self.in_proj_bias, 0.0, 0.02)
-            # nn.init.normal_(self.out_proj_bias, 0.0, 0.02)
         else:
             std_ = math.sqrt(6.0 / (self.model_size + self.inner_size))
             nn.init.uniform_(self.in_proj_weight, -std_, std_)
@@ -67,7 +65,11 @@ class PositionWiseFeedForward(nn.Module):
         if self.optimized == 2 or not input.is_cuda:
             hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)
             # hidden = F.relu(hidden, inplace=True)
-            hidden = self.function(hidden)
+            try:
+                hidden = self.function(hidden, inplace=True)
+            except Exception as e:
+                hidden = self.function(hidden)
+
             if self.variational:
                 hidden = variational_dropout(hidden, p=self.dropout, training=self.training)
             else:

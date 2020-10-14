@@ -226,7 +226,7 @@ class Optim(object):
             self.optimizer = optim.SGD(self.params, lr=self.lr, weight_decay=self.weight_decay, momentum=0.0)
         elif self.method in ['adam', 'fused_adam']:
 
-            fast_adam = True
+            fast_adam = False
             try:
                 import apex
                 if self.amsgrad:
@@ -290,7 +290,7 @@ class Optim(object):
         self.amsgrad = opt.amsgrad
         self.max_steps = opt.max_steps
 
-    def step(self, grad_denom=None, warmup=False):
+    def step(self, scaler=None, grad_denom=None, warmup=False):
 
         "Normalize gradients by batch size"
         self.normalize_grad(denom=grad_denom)
@@ -299,15 +299,16 @@ class Optim(object):
         # grad_norm = clip_grad_norm(self.params, self.max_grad_norm).item()
 
         overflow = False
-        # if self.optimizer._amp_stash.already_patched:
-        #     overflow = True
         "Automatically scale learning rate over learning period if not overflow"
         if not overflow:
             self._step += 1
             if 'noam' in self.update_method or 'cosine' in self.update_method:
                 self.updateLearningRate()
 
-        self.optimizer.step()
+        if scaler is not None:
+            scaler.step(self.optimizer)
+        else:
+            self.optimizer.step()
 
         # return grad_norm
 

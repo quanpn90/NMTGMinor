@@ -4,7 +4,6 @@ import torch.nn.init as init
 import torch.nn.utils.weight_norm as WeightNorm
 import onmt
 import torch.nn.functional as F
-from onmt.modules.swish import Swish
 from onmt.modules.dropout import VariationalDropout
 
 
@@ -114,7 +113,7 @@ class FeedForwardSwish(nn.Module):
 
     def forward(self, input):
 
-        out = self.swish(self.fc_1(input))
+        out = F.silu(self.fc_1(input))
         out = self.dropout(out)
         out = self.fc_2(out)
         return out

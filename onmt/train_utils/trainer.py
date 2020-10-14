@@ -8,7 +8,7 @@ import os
 import re
 import time
 import torch
-from apex import amp
+# from apex import amp
 
 import onmt
 import onmt.markdown
@@ -20,6 +20,7 @@ from onmt.model_factory import build_model, build_language_model, optimize_model
 from onmt.model_factory import init_model_parameters
 from onmt.train_utils.stats import Logger
 from onmt.utils import checkpoint_paths, normalize_gradients
+from torch.cuda.amp import autocast
 
 
 def varname(p):
@@ -139,33 +140,6 @@ class BaseTrainer(object):
 
         self.model.decoder.language_embeddings = untrained_lang_emb
 
-    def _get_grads(self):
-        grads = []
-        for name, p in self.model.named_parameters():
-            if not p.requires_grad:
-                continue
-            if p.grad is None:
-                raise RuntimeError('Model parameter did not receive gradient: ' + name + '. '
-                                                                                         'Use the param in the forward pass or set requires_grad=False.' +
-                                   ' If you are using Stochastic model + fp16 - '
-                                   'try to increase the number of minibatches' +
-                                   ' each update to avoid uninitialized gradients.')
-            grads.append(p.grad.data)
-        return grads
-
-    def _get_flat_grads(self, out=None):
-        grads = self._get_grads()
-        if out is None:
-            grads_size = sum(g.numel() for g in grads)
-            out = grads[0].new(
-                grads_size).zero_()
-        offset = 0
-        for g in grads:
-            numel = g.numel()
-            out[offset:offset + numel].copy_(g.view(-1))
-            offset += numel
-        return out[:offset]
-
     def warm_up(self):
         """
         Warmup the memory allocator, by attempting to fit the largest batch
@@ -180,7 +154,7 @@ class BaseTrainer(object):
         opt = self.opt
 
         if self.cuda:
-            batch.cuda(fp16=self.opt.fp16 and not self.opt.fp16_mixed)
+            batch.cuda(fp16=False)
 
         self.model.train()
         self.model.zero_grad()
@@ -196,41 +170,42 @@ class BaseTrainer(object):
             streaming_state = None
 
         try:
-            targets = batch.get('target_output')
-            tgt_mask = None
-            outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                 zero_encoder=opt.zero_encoder,
-                                 mirror=opt.mirror_loss, streaming_state=streaming_state,
-                                 nce=opt.nce)
+            with autocast():
+                targets = batch.get('target_output')
+                tgt_mask = None
+                outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                                     zero_encoder=opt.zero_encoder,
+                                     mirror=opt.mirror_loss, streaming_state=streaming_state,
+                                     nce=opt.nce)
 
-            outputs['tgt_mask'] = tgt_mask
+                outputs['tgt_mask'] = tgt_mask
 
-            loss_dict = self.loss_function(outputs, targets, model=self.model)
-            loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-            full_loss = loss
+                loss_dict = self.loss_function(outputs, targets, model=self.model)
+                loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
+                full_loss = loss
 
-            if opt.mirror_loss:
-                rev_loss = loss_dict['rev_loss']
-                mirror_loss = loss_dict['mirror_loss']
-                full_loss = full_loss + rev_loss + mirror_loss
+                if opt.mirror_loss:
+                    rev_loss = loss_dict['rev_loss']
+                    mirror_loss = loss_dict['mirror_loss']
+                    full_loss = full_loss + rev_loss + mirror_loss
 
-            # reconstruction loss
-            if opt.reconstruct:
-                rec_loss = loss_dict['rec_loss']
-                rec_loss = rec_loss
-                full_loss = full_loss + rec_loss
+                # reconstruction loss
+                if opt.reconstruct:
+                    rec_loss = loss_dict['rec_loss']
+                    rec_loss = rec_loss
+                    full_loss = full_loss + rec_loss
 
-            if opt.lfv_multilingual:
-                lid_logits = outputs['lid_logits']
-                lid_labels = batch.get('target_lang')
-                lid_loss_function = self.loss_function.get_loss_function('lid_loss')
-                lid_loss = lid_loss_function(lid_logits, lid_labels)
-                full_loss = full_loss + lid_loss
+                if opt.lfv_multilingual:
+                    lid_logits = outputs['lid_logits']
+                    lid_labels = batch.get('target_lang')
+                    lid_loss_function = self.loss_function.get_loss_function('lid_loss')
+                    lid_loss = lid_loss_function(lid_logits, lid_labels)
+                    full_loss = full_loss + lid_loss
 
-            optimizer = self.optim.optimizer
+                optimizer = self.optim.optimizer
 
-            if self.opt.memory_profiling:
-                reporter.report(verbose=True)
+                if self.opt.memory_profiling:
+                    reporter.report(verbose=True)
 
                 # for obj in gc.get_objects():
                 #     try:
@@ -249,12 +224,13 @@ class BaseTrainer(object):
                 # print("Memory profiling complete.")
                 # print(torch.cuda.memory_summary())
                 # exit()
+                self.grad_scaler.scale(full_loss).backward()
 
-            if self.cuda:
-                with amp.scale_loss(full_loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
-            else:
-                loss.div_(batch.tgt_size).backward()
+                # if self.cuda:
+                #     with amp.scale_loss(full_loss, optimizer) as scaled_loss:
+                #         scaled_loss.backward()
+                # else:
+                #     loss.div_(batch.tgt_size).backward()
 
             if self.opt.memory_profiling:
                 print('========= after backward =========')
@@ -307,23 +283,25 @@ class XETrainer(BaseTrainer):
             self.optim.set_parameters(self.model.parameters())
             print("[INFO] Optimizer: ", self.optim.optimizer)
 
-            if not self.opt.fp16:
-                opt_level = "O0"
-                keep_batchnorm_fp32 = False
-            elif self.opt.fp16_mixed:
-                opt_level = "O1"
-                keep_batchnorm_fp32 = None
-            else:
-                opt_level = "O2"
-                keep_batchnorm_fp32 = False
+            # if not self.opt.fp16:
+            #     opt_level = "O0"
+            #     keep_batchnorm_fp32 = False
+            # elif self.opt.fp16_mixed:
+            #     opt_level = "O1"
+            #     keep_batchnorm_fp32 = None
+            # else:
+            #     opt_level = "O2"
+            #     keep_batchnorm_fp32 = False
+            #
+            # if self.cuda:
+            #     self.model, self.optim.optimizer = amp.initialize(self.model,
+            #                                                       self.optim.optimizer,
+            #                                                       opt_level=opt_level,
+            #                                                       keep_batchnorm_fp32=keep_batchnorm_fp32,
+            #                                                       loss_scale="dynamic",
+            #                                                       verbosity=1 if self.opt.verbose else 0)
+        self.grad_scaler = torch.cuda.amp.GradScaler()
 
-            if self.cuda:
-                self.model, self.optim.optimizer = amp.initialize(self.model,
-                                                                  self.optim.optimizer,
-                                                                  opt_level=opt_level,
-                                                                  keep_batchnorm_fp32=keep_batchnorm_fp32,
-                                                                  loss_scale="dynamic",
-                                                                  verbosity=1 if self.opt.verbose else 0)
         # An ugly hack to switch between align right and align left
         if hasattr(self.model, 'relative'):
             if self.model.relative:
@@ -354,7 +332,7 @@ class XETrainer(BaseTrainer):
             'epoch': epoch,
             'itr': itr_state_dict,
             'optim': optim_state_dict,
-            'amp': amp.state_dict()
+            'amp': None
         }
 
         file_name = '%s_ppl_%.6f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
@@ -402,25 +380,26 @@ class XETrainer(BaseTrainer):
                 batch = rewrap(batch)
 
                 if self.cuda:
-                    batch.cuda(fp16=self.opt.fp16 and not self.opt.fp16_mixed)
+                    batch.cuda(fp16=False)
 
                 """ outputs can be either 
                         hidden states from decoder or
                         prob distribution from decoder generator
                 """
-                targets = batch.get('target_output')
-                tgt_mask = targets.ne(onmt.constants.PAD)
-                outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                     mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce)
+                with autocast():
+                    targets = batch.get('target_output')
+                    tgt_mask = targets.ne(onmt.constants.PAD)
+                    outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                                         mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce)
 
-                if opt.streaming:
-                    streaming_state = outputs['streaming_state']
+                    if opt.streaming:
+                        streaming_state = outputs['streaming_state']
 
-                outputs['tgt_mask'] = tgt_mask
+                    outputs['tgt_mask'] = tgt_mask
 
-                loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True)
+                    loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True)
 
-                loss_data = loss_dict['data']
+                    loss_data = loss_dict['data']
 
                 total_loss += loss_data
                 total_words += batch.tgt_size
@@ -489,7 +468,7 @@ class XETrainer(BaseTrainer):
                 grad_scaler = 1  # if self.opt.update_frequency > 1 else batch.tgt_size
 
             if self.cuda:
-                batch.cuda(fp16=self.opt.fp16 and not self.opt.fp16_mixed)
+                batch.cuda(fp16=False)
 
             # if opt.streaming:
             #     if train_data.is_new_stream():
@@ -501,59 +480,61 @@ class XETrainer(BaseTrainer):
             try:
                 # outputs is a dictionary containing keys/values necessary for loss function
                 # can be flexibly controlled within models for easier extensibility
-                targets = batch.get('target_output')
-                tgt_mask = targets.ne(onmt.constants.PAD)
-                outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                     zero_encoder=opt.zero_encoder,
-                                     mirror=opt.mirror_loss, streaming_state=streaming_state,
-                                     nce=opt.nce)
+                with autocast():
+                    targets = batch.get('target_output')
+                    tgt_mask = targets.ne(onmt.constants.PAD)
+                    outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                                         zero_encoder=opt.zero_encoder,
+                                         mirror=opt.mirror_loss, streaming_state=streaming_state,
+                                         nce=opt.nce)
 
-                batch_size = batch.size
+                    batch_size = batch.size
 
-                outputs['tgt_mask'] = tgt_mask
+                    outputs['tgt_mask'] = tgt_mask
 
-                loss_dict = self.loss_function(outputs, targets, model=self.model)
-                loss_data = loss_dict['data']
-                loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-                full_loss = loss
+                    loss_dict = self.loss_function(outputs, targets, model=self.model)
+                    loss_data = loss_dict['data']
+                    loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
+                    full_loss = loss
 
-                if opt.mirror_loss:
-                    rev_loss = loss_dict['rev_loss']
-                    rev_loss_data = loss_dict['rev_loss_data']
-                    mirror_loss = loss_dict['mirror_loss']
-                    full_loss = full_loss + rev_loss + mirror_loss
-                    mirror_loss_data = loss_dict['mirror_loss'].item()
-                else:
-                    rev_loss_data = None
-                    mirror_loss_data = 0
+                    if opt.mirror_loss:
+                        rev_loss = loss_dict['rev_loss']
+                        rev_loss_data = loss_dict['rev_loss_data']
+                        mirror_loss = loss_dict['mirror_loss']
+                        full_loss = full_loss + rev_loss + mirror_loss
+                        mirror_loss_data = loss_dict['mirror_loss'].item()
+                    else:
+                        rev_loss_data = None
+                        mirror_loss_data = 0
 
-                # reconstruction loss
-                if opt.reconstruct:
-                    rec_loss = loss_dict['rec_loss']
-                    rec_loss = rec_loss
-                    full_loss = full_loss + rec_loss
-                    rec_loss_data = loss_dict['rec_loss_data']
-                else:
-                    rec_loss_data = None
+                    # reconstruction loss
+                    if opt.reconstruct:
+                        rec_loss = loss_dict['rec_loss']
+                        rec_loss = rec_loss
+                        full_loss = full_loss + rec_loss
+                        rec_loss_data = loss_dict['rec_loss_data']
+                    else:
+                        rec_loss_data = None
 
-                if opt.lfv_multilingual:
-                    lid_logits = outputs['lid_logits']
-                    lid_labels = batch.get('target_lang')
-                    lid_loss_function = self.loss_function.get_loss_function('lid_loss')
-                    lid_loss = lid_loss_function(lid_logits, lid_labels)
-                    full_loss = full_loss + lid_loss
+                    if opt.lfv_multilingual:
+                        lid_logits = outputs['lid_logits']
+                        lid_labels = batch.get('target_lang')
+                        lid_loss_function = self.loss_function.get_loss_function('lid_loss')
+                        lid_loss = lid_loss_function(lid_logits, lid_labels)
+                        full_loss = full_loss + lid_loss
 
-                optimizer = self.optim.optimizer
+                    optimizer = self.optim.optimizer
 
-                # When the batch size is large, each gradient step is very easy to explode on fp16
-                # Normalizing the loss to grad scaler ensures this will not happen
-                full_loss.div_(grad_scaler)
+                    # When the batch size is large, each gradient step is very easy to explode on fp16
+                    # Normalizing the loss to grad scaler ensures this will not happen
+                    full_loss.div_(grad_scaler)
 
-                if self.cuda:
-                    with amp.scale_loss(full_loss, optimizer) as scaled_loss:
-                        scaled_loss.backward()
-                else:
-                    full_loss.backward()
+                # if self.cuda:
+                #     with amp.scale_loss(full_loss, optimizer) as scaled_loss:
+                #         scaled_loss.backward()
+                # else:
+                #     full_loss.backward()
+                self.grad_scaler.scale(full_loss).backward()
 
                 del outputs
 
@@ -609,11 +590,14 @@ class XETrainer(BaseTrainer):
                     else:
                         grad_denom = 1
                     # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
-                    normalize_gradients(amp.master_params(optimizer), grad_denom)
+                    self.grad_scaler.unscale_(self.optim.optimizer)
+
+                    normalize_gradients(self.model.parameters(), grad_denom)
                     # Update the parameters.
                     if self.opt.max_grad_norm > 0:
-                        torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), self.opt.max_grad_norm)
-                    self.optim.step()
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.opt.max_grad_norm)
+                    self.optim.step(scaler=self.grad_scaler)
+                    self.grad_scaler.update()
                     self.optim.zero_grad()
                     self.model.zero_grad()
                     counter = 0
@@ -699,12 +683,12 @@ class XETrainer(BaseTrainer):
             if not opt.reset_optim:
                 print("* Loading optimizer states ... ")
                 self.optim.load_state_dict(checkpoint['optim'])
-                if prec_opt is not None and hasattr(prec_opt, "fp16_mixed"):
-                    # Only load amp information if the mode is the same
-                    # Maybe its better to change between optimization mode?
-                    if opt.fp16_mixed == prec_opt.fp16_mixed and opt.fp16 == prec_opt.fp16:
-                        if 'amp' in checkpoint:
-                            amp.load_state_dict(checkpoint['amp'])
+                # if prec_opt is not None and hasattr(prec_opt, "fp16_mixed"):
+                #     # Only load amp information if the mode is the same
+                #     # Maybe its better to change between optimization mode?
+                #     if opt.fp16_mixed == prec_opt.fp16_mixed and opt.fp16 == prec_opt.fp16:
+                #         if 'amp' in checkpoint:
+                #             amp.load_state_dict(checkpoint['amp'])
 
                 # Only load the progress when we use the same optimizer
                 if 'itr' in checkpoint:

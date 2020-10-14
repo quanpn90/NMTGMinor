@@ -2,10 +2,12 @@ import torch
 import torch.nn.functional as F
 from onmt.constants import double_precision
 import apex.amp as amp
+from torch.cuda.amp import custom_fwd, custom_bwd
 
 
 class EncdecAttnFunc(torch.autograd.Function):
     @staticmethod
+    @custom_fwd
     def forward(ctx, use_time_mask, is_training, heads, inputs_q, inputs_kv,
                 input_weights_q, input_weights_kv, output_weights,
                 mask, dropout_prob,
@@ -152,6 +154,7 @@ class EncdecAttnFunc(torch.autograd.Function):
         return outputs.detach(), softmax_results.detach()
 
     @staticmethod
+    @custom_bwd
     def backward(ctx, output_grads, softmax_grads):
 
         heads_t, scale_t, matmul2_results, dropout_results, softmax_results \

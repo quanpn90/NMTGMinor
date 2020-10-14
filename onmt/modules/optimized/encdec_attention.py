@@ -42,10 +42,10 @@ class EncdecMultiheadAttn(nn.Module):
         self.reset_parameters()
         try:
             # the fast one requires apex and does not work with incremental so careful
-            from apex.contrib.multihead_attn.fast_encdec_multihead_attn_func import fast_encdec_attn_func
-            from .encdec_attention_func import fast_self_attn_func
+            from .encdec_attention_func_fused import fast_encdec_attn_func
+            # from .encdec_attention_func import fast_self_attn_func
 
-            self.attn_func_fast = fast_self_attn_func
+            self.attn_func_fast = fast_encdec_attn_func
             self.optimized = 1
 
         except ModuleNotFoundError as e:

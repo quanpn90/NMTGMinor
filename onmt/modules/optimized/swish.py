@@ -6,14 +6,12 @@ from apex import amp
 @amp.half_function
 def swish(x):
 
-    fast = True
-
     try:
         from swish_torch import SwishFunction
         x = SwishFunction.apply(x)
 
     except ModuleNotFoundError as e:
-        x = x * F.sigmoid(x)
+        x = x * F.silu(x)
 
     return x
 

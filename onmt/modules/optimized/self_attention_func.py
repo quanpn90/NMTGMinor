@@ -1,10 +1,12 @@
 import torch
 import torch.nn.functional as F
 from onmt.constants import double_precision
+from torch.cuda.amp import custom_fwd, custom_bwd
 
 
 class SelfAttnFunc(torch.autograd.Function):
     @staticmethod
+    @custom_fwd
     def forward(ctx, use_time_mask, is_training, heads, inputs,
                 input_weights, output_weights,
                 input_biases, output_biases,
@@ -141,6 +143,7 @@ class SelfAttnFunc(torch.autograd.Function):
         return outputs.detach(), softmax_results.detach()
 
     @staticmethod
+    @custom_fwd
     def backward(ctx, output_grads, softmax_grads):
         heads_t, \
             scale_t, \

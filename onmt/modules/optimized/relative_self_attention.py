@@ -4,6 +4,7 @@ import torch
 from torch import nn
 from torch.nn import Parameter
 import torch.nn.functional as F
+from torch.cuda.amp import autocast
 
 from .relative_self_attention_func import relative_self_attn_func
 
