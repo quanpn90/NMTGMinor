@@ -210,6 +210,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
             if self.depthwise_conv:
                 out = self.preprocess_dconv(input)
                 pad_mask = attn_mask.squeeze(0).unsqueeze(-1)
+                pad_mask = torch.logical_not(pad_mask)
                 out = out.masked_fill(pad_mask, 0)
                 out = self.conv_layer(out)
 

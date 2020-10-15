@@ -8,6 +8,9 @@ from onmt.model_factory import build_model
 import torch.nn.functional as F
 from onmt.inference.search import BeamSearch, DiverseBeamSearch
 from onmt.inference.translator import Translator
+import warnings
+
+warnings.filterwarnings("ignore", category=UserWarning)
 
 model_list = ['transformer', 'stochastic_transformer']
 

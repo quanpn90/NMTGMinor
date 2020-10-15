@@ -491,13 +491,13 @@ def backward_compatible(opt):
         opt.dynamic_conv = False
 
     if not hasattr(opt, 'depthwise_conv'):
-        opt.dynamic_conv = False
+        opt.depthwise_conv = False
 
     if not hasattr(opt, 'no_self_attention'):
         opt.no_self_attention = False
 
     if not hasattr(opt, 'no_emb_scale'):
-        opt.no_self_attention = False
+        opt.no_emb_scale = False
 
     if not hasattr(opt, 'no_skip_scale'):
         opt.no_skip_scale = False
