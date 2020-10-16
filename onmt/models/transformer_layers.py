@@ -18,6 +18,7 @@ from onmt.modules.optimized.encdec_attention import EncdecMultiheadAttn
 from onmt.modules.optimized.self_attention import SelfMultiheadAttn
 from onmt.modules.optimized.feed_forward import PositionWiseFeedForward
 from collections import defaultdict
+from onmt.modules.layer_norm import LayerNorm
 
 
 class PrePostProcessing(nn.Module):
@@ -44,7 +45,7 @@ class PrePostProcessing(nn.Module):
             self.k = nn.Parameter(torch.ones(1))
 
         if 'n' in self.steps:
-            ln = nn.LayerNorm((self.d_model,), elementwise_affine=elementwise_affine)
+            ln = LayerNorm((self.d_model,), elementwise_affine=elementwise_affine)
             self.layer_norm = Bottle(ln)
         if 'd' in self.steps:
             if variational:

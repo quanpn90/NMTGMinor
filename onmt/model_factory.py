@@ -415,7 +415,7 @@ def build_fusion(opt, dicts):
     return model
 
 
-def optimize_model(model):
+def optimize_model(model, fp16=True):
     """
     Used to potentially upgrade the components with more optimized counterparts in the future
     """
@@ -442,4 +442,20 @@ def optimize_model(model):
             for n, ch in m.named_children():
                 replace_layer_norm(ch, n)
 
+    def safe_batch_norm(m, name):
+        for attr_str in dir(m):
+            target_attr = getattr(m, attr_str)
+            if type(target_attr) == torch.nn.BatchNorm2d or type(target_attr) == torch.nn.BatchNorm1d:
+
+                if fp16:
+                    target_attr.eps = 1e-4  # tiny value for fp16 according to AllenNLP
+
+                setattr(m, attr_str, target_attr)
+                # setattr(m, attr_str, FusedLayerNorm(target_attr.normalized_shape,
+                #                                     eps=target_attr.eps,
+                #                                     elementwise_affine=target_attr.elementwise_affine))
+
     replace_layer_norm(model, "Transformer")
+
+    if fp16:
+        safe_batch_norm(model, "Transformer")

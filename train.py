@@ -450,7 +450,7 @@ def main():
         # This function replaces modules with the more optimized counterparts so that it can run faster
         # Currently exp with LayerNorm
         if not opt.memory_profiling:
-            optimize_model(model)
+            optimize_model(model, fp16=opt.fp16)
 
     else:
         from onmt.model_factory import build_fusion
