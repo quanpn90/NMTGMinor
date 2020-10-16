@@ -411,16 +411,17 @@ def main():
     # Put the vocab mask from dicts to the datasets
     for data in [train_data, valid_data]:
         if isinstance(data, list):
-            for data_ in data:
-                data_.vocab_mask = dicts['tgt'].vocab_mask
+            for i, data_ in enumerate(data):
+                data_.set_mask(dicts['tgt'].vocab_mask)
+                data[i] = data_
         else:
-            data.vocab_mask = dicts['tgt'].vocab_mask
+            data.set_mask(dicts['tgt'].vocab_mask)
 
     if "src" in dicts:
         print(' * vocabulary size. source = %d; target = %d' %
               (dicts['src'].size(), dicts['tgt'].size()))
     else:
-        print(' * vocabulary size. target = %d' %
+        print('[INFO] vocabulary size. target = %d' %
               (dicts['tgt'].size()))
 
     print('* Building model...')

@@ -389,6 +389,9 @@ class Dataset(torch.utils.data.Dataset):
 
         pass
 
+    def set_mask(self, vocab_mask):
+        self.vocab_mask = vocab_mask
+
     def get_largest_batch(self):
 
         return self.get_batch(self.largest_batch_id)
@@ -501,7 +504,7 @@ class Dataset(torch.utils.data.Dataset):
                                src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
                                src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
                                src_type=self._type,
-                               augmenter=self.augmenter, upsampling=self.upsampling)
+                               augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask)
 
             batches.append(batch)
 

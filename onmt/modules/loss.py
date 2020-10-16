@@ -10,6 +10,23 @@ import onmt.modules
 from onmt.utils import flip
 
 
+def tiny_value_of_dtype(dtype: torch.dtype):
+    """
+    Returns a moderately tiny value for a given PyTorch data type that is used to avoid numerical
+    issues such as division by zero.
+    This is different from `info_value_of_dtype(dtype).tiny` because it causes some NaN bugs.
+    Only supports floating point dtypes.
+    """
+    if not dtype.is_floating_point:
+        raise TypeError("Only supports floating point dtypes.")
+    if dtype == torch.float or dtype == torch.double:
+        return 1e-13
+    elif dtype == torch.half:
+        return 1e-4
+    else:
+        raise TypeError("Does not support dtype " + str(dtype))
+
+
 class CrossEntropyLossBase(_Loss):
     """
     Class for managing efficient loss computation.
@@ -51,12 +68,12 @@ class CrossEntropyLossBase(_Loss):
         """
         label_smoothing = self.label_smoothing if self.training else 0.0
 
-        # if vocab_mask is not None:
-        #     if vocab_mask.any():
-        #         print("masking unwanted stuff ...")
-        #         while vocab.dim() < logits.dim():
-        #             vocab_mask = vocab_mask.unsqueeze(0)
-        #         logits.masked_fill_(vocab_mask, torch.finfo(logits).min)
+        if vocab_mask is not None:
+            if vocab_mask.any():
+                vocab_mask = vocab_mask.to(logits.device)
+                while vocab_mask.dim() < logits.dim():
+                    vocab_mask = vocab_mask.unsqueeze(0)
+                logits = logits.float() + (~vocab_mask + tiny_value_of_dtype(logits.dtype)).log()
 
         gtruth = targets.view(-1)  # B*T
         logits = logits.view(-1, logits.size(-1))  # B*T x V
@@ -140,7 +157,7 @@ class NMTLossFunc(CrossEntropyLossBase):
             reverse_targets = model_outputs['reverse_target']
             alpha = 1.0
 
-        loss, loss_data = self._compute_loss(logits, targets)
+        loss, loss_data = self._compute_loss(logits, targets, vocab_mask=vocab_mask)
 
         total_loss = loss
 
