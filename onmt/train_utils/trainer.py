@@ -207,7 +207,7 @@ class BaseTrainer(object):
 
             outputs['tgt_mask'] = tgt_mask
 
-            loss_dict = self.loss_function(outputs, targets, model=self.model)
+            loss_dict = self.loss_function(outputs, targets, model=self.model, vocab_mask=batch.vocab_mask)
             loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
             full_loss = loss
 
@@ -419,7 +419,8 @@ class XETrainer(BaseTrainer):
 
                 outputs['tgt_mask'] = tgt_mask
 
-                loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True)
+                loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True,
+                                               vocab_mask=batch.vocab_mask)
 
                 loss_data = loss_dict['data']
 
@@ -469,7 +470,7 @@ class XETrainer(BaseTrainer):
         counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
-        grad_scaler = -1
+        grad_scaler = 1
 
         nan = False
         nan_counter = 0
@@ -490,8 +491,6 @@ class XETrainer(BaseTrainer):
             if isinstance(batch, list) and self.n_gpus == 1:
                 batch = batch[0]
             batch = rewrap(batch)
-            if grad_scaler == -1:
-                grad_scaler = 1  # if self.opt.update_frequency > 1 else batch.tgt_size
 
             if self.cuda:
                 batch.cuda(fp16=self.opt.fp16 and not self.opt.fp16_mixed)
@@ -517,7 +516,7 @@ class XETrainer(BaseTrainer):
 
                 outputs['tgt_mask'] = tgt_mask
 
-                loss_dict = self.loss_function(outputs, targets, model=self.model)
+                loss_dict = self.loss_function(outputs, targets, model=self.model, vocab_mask=batch.vocab_mask)
                 loss_data = loss_dict['data']
                 loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
                 full_loss = loss
@@ -607,12 +606,9 @@ class XETrainer(BaseTrainer):
 
                 if update_flag:
                     # accumulated gradient case, in this case the update frequency
-                    if (counter == 1 and self.opt.update_frequency != 1) or counter > 1:
-                        grad_denom = 1 / grad_scaler
-                        if self.opt.normalize_gradient:
-                            grad_denom = num_accumulated_words * grad_denom
-                    else:
-                        grad_denom = 1
+                    grad_denom = 1 / grad_scaler
+                    if self.opt.normalize_gradient:
+                        grad_denom = num_accumulated_words * grad_denom
                     # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
                     normalize_gradients(amp.master_params(optimizer), grad_denom)
                     # Update the parameters.
@@ -624,7 +620,6 @@ class XETrainer(BaseTrainer):
                     counter = 0
                     num_accumulated_words = 0
                     num_accumulated_sents = 0
-                    grad_scaler = -1
                     num_updates = self.optim._step
                     if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every:
                         valid_loss = self.eval(self.valid_data)

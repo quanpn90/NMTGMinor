@@ -42,15 +42,25 @@ class CrossEntropyLossBase(_Loss):
         else:
             self.softmax_xentropy = None
 
-    def _compute_loss(self, logits, targets):
+    def _compute_loss(self, logits, targets, vocab_mask=None):
         """
         :param logits: T x B x V or B x T x V tensor (output of decoder)
         :param targets: T x B x V or B x T target tensor
+        :param vocab_mask V: bool tensor or None
         :return:
         """
+        label_smoothing = self.label_smoothing if self.training else 0.0
+
+        # if vocab_mask is not None:
+        #     if vocab_mask.any():
+        #         print("masking unwanted stuff ...")
+        #         while vocab.dim() < logits.dim():
+        #             vocab_mask = vocab_mask.unsqueeze(0)
+        #         logits.masked_fill_(vocab_mask, torch.finfo(logits).min)
+
         gtruth = targets.view(-1)  # B*T
         logits = logits.view(-1, logits.size(-1))  # B*T x V
-        label_smoothing = self.label_smoothing if self.training else 0.0
+
         eps_i = self.smoothing_value if self.training else 0.0
 
         if not self.fast_xentropy:
@@ -105,17 +115,16 @@ class NMTLossFunc(CrossEntropyLossBase):
     def get_loss_function(self, name):
         return self.extra_modules[name] if name in self.extra_modules else None
 
-    def forward(self, model_outputs, targets, model=None, backward=False, normalizer=1, **kwargs):
+    def forward(self, model_outputs, targets, model=None, vocab_mask=None, **kwargs):
         """
         Compute the loss. Subclass must define this method.
         Args:
+            :param vocab_mask:
             :param model_outputs:  a dictionary containing the predictive output from the model.
                                                       time x batch x vocab_size
                                                    or time x batch x hidden_size
             :param targets: the validate target to compare output with. time x batch
             :param model: passing the model in for necessary components
-            :param backward: to control if we should perform backward pass (to free the graph) or not
-            :param normalizer:the denominator of the loss before backward
         """
 
         outputs = model_outputs['hidden']
@@ -189,9 +198,6 @@ class NMTLossFunc(CrossEntropyLossBase):
             total_loss = total_loss + rec_loss
         else:
             rec_loss, rec_loss_data = None, None
-
-        if backward:
-            total_loss.div(normalizer).backward()
 
         output_dict = {"loss": loss, "data": loss_data,
                        "rev_loss": rev_loss, "rev_loss_data": rev_loss_data, "mirror_loss": mirror_loss,

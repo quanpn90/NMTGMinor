@@ -95,7 +95,8 @@ def collect_fn(src_data, tgt_data,
                src_align_right, tgt_align_right,
                src_type='text',
                augmenter=None, upsampling=False,
-               bilingual=False):
+               bilingual=False, vocab_mask=None):
+
     tensors = dict()
     if src_data is not None:
         tensors['source'], tensors['source_pos'], src_lengths = merge_data(src_data, align_right=src_align_right,
@@ -130,6 +131,8 @@ def collect_fn(src_data, tgt_data,
     if tgt_lang_data is not None:
         tensors['target_lang'] = torch.cat(tgt_lang_data).long()
 
+    tensors['vocab_mask'] = vocab_mask
+
     return LightBatch(tensors)
 
 
@@ -153,6 +156,7 @@ class Batch(object):
         self.src_lengths = tensors['src_lengths']
         self.tgt_lengths = tensors['tgt_lengths']
         self.has_target = True if self.tensors['target'] is not None else False
+        self.vocab_mask = tensors['vocab_mask']
 
     def get(self, name):
         if name in self.tensors:
@@ -268,6 +272,7 @@ class Dataset(torch.utils.data.Dataset):
         self.cleaning = cleaning
         self.debug = debug
         self.num_split = num_split
+        self.vocab_mask = None
 
         if self.max_src_len is None:
             if self._type == 'text':
@@ -453,7 +458,7 @@ class Dataset(torch.utils.data.Dataset):
                                   src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
                                   src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
                                   src_type=self._type,
-                                  augmenter=self.augmenter, upsampling=self.upsampling)
+                                  augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask)
                        )
         return batch
 

@@ -41,6 +41,7 @@ if torch.cuda.is_available() and not opt.gpus:
 
 torch.manual_seed(opt.seed)
 
+
 def numpy_to_torch(tensor_list):
 
     out_list = list()
@@ -406,6 +407,14 @@ def main():
     else:
         dicts['tgt'].patch(opt.patch_vocab_multiplier)
         checkpoint = None
+
+    # Put the vocab mask from dicts to the datasets
+    for data in [train_data, valid_data]:
+        if isinstance(data, list):
+            for data_ in data:
+                data_.vocab_mask = dicts['tgt'].vocab_mask
+        else:
+            data.vocab_mask = dicts['tgt'].vocab_mask
 
     if "src" in dicts:
         print(' * vocabulary size. source = %d; target = %d' %

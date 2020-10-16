@@ -13,6 +13,7 @@ class Dict(object):
         self.labelToIdx = {}
         self.frequencies = {}
         self.lower = lower
+        self.vocab_mask = None
 
         # Special entries will not be pruned.
         self.special = []
@@ -200,10 +201,8 @@ class Dict(object):
     # But who knows?
     def patch(self, multiplier=8):
 
-        # self.idxToLabel = {}
-        # self.labelToIdx = {}
-        # self.frequencies = {}
         size = self.size()
+        original_size = size
 
         # number of words to be patched
         n_words = (math.ceil(size / multiplier) * multiplier) - size
@@ -220,6 +219,11 @@ class Dict(object):
                     self.add(random_string)
                     self.frequencies[random_string] = 0
                     break
+
+        # All elements should be false (so masked_fill_ won't touch)
+        # The new elements added should be True
+        self.vocab_mask = torch.BoolTensor(self.size()).fill_(True)
+        self.vocab_mask.narrow(0, 0, original_size).fill_(False)
 
         print("Vocabulary size after patching: %d" % self.size())
 
