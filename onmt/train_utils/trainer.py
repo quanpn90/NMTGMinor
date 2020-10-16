@@ -332,7 +332,8 @@ class XETrainer(BaseTrainer):
             'epoch': epoch,
             'itr': itr_state_dict,
             'optim': optim_state_dict,
-            'amp': None
+            'amp': None,
+            'scaler': self.grad_scaler.state_dict()
         }
 
         file_name = '%s_ppl_%.6f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)

@@ -12,7 +12,7 @@ class Augmenter(object):
     """
 
     def __init__(self, F=16, mf=2, T=64, max_t=0.2, mt=2,
-                 input_size=40, concat=4):
+                 input_size=40, concat=4, overwrite=True):
 
         self.F = F
         self.mf = mf
@@ -21,6 +21,7 @@ class Augmenter(object):
         self.mt = mt
         self.input_size = input_size
         self.concat = concat
+        self.overwrite = overwrite
 
     def augment(self, tensor):
 
@@ -29,9 +30,16 @@ class Augmenter(object):
         reshape_size = feat_size / self.input_size
 
         tensor = tensor.float()
+
         # First we have to upsample the tensor (if it was downsampled during preprocessing)
-        #         # Copy to a new storage because otherwise it is zeroed permanently`
-        tensor_ = tensor.view(-1, self.input_size).new(*tensor.size()).copy_(tensor)
+
+        # Overwritting is used mostly for scp dataset, when we re-read inputs from disk
+        # The data stored in memory is modified in-place
+        if self.overwrite:
+            tensor_ = tensor.view(-1, self.input_size)
+        else:
+            # Copy to a new storage because otherwise it is zeroed permanently`
+            tensor_ = tensor.view(-1, self.input_size).new(*tensor.size()).copy_(tensor)
 
         for _ in range(self.mf):
 

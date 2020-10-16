@@ -268,11 +268,24 @@ def init_model_parameters(model, opt):
     # opt.init something ...
 
     def init_weight(weight):
-        if len(weight.shape) == 2:
-            std_ = math.sqrt(2.0 / (weight.shape[0] + weight.shape[1]))
-            nn.init.normal_(weight, 0.0, std_)
+
+        if opt.init == 'normal':
+            if len(weight.shape) == 2:
+                std_ = math.sqrt(2.0 / (weight.shape[0] + weight.shape[1]))
+                nn.init.normal_(weight, 0.0, std_)
+            else:
+                nn.init.normal_(weight, 0.0, init_std)
         else:
-            nn.init.normal_(weight, 0.0, init_std)
+            if len(weight.shape) == 2:
+                nn.init.xavier_uniform_(weight)
+            else:
+                nn.init.uniform_(weight, -init_std, init_std)
+
+    def init_conv_weight(weight):
+        if opt.init == 'normal':
+            nn.init.kaiming_normal_(weight)
+        else:
+            nn.init.kaiming_uniform_(weight)
 
     def init_embed(weight, padding_idx=0):
 
@@ -292,11 +305,16 @@ def init_model_parameters(model, opt):
     def weights_init(m):
         classname = m.__class__.__name__
         if classname.find('Linear') != -1:
-            # if hasattr(m, 'weight') and m.weight is not None:
-            #     init_weight(m.weight)
-            # if hasattr(m, 'bias') and m.bias is not None:
-            #     init_bias(m.bias)
-            pass
+            if hasattr(m, 'weight') and m.weight is not None:
+                init_weight(m.weight)
+            if hasattr(m, 'bias') and m.bias is not None:
+                init_bias(m.bias)
+
+        if classname.find('Conv') != -1:
+            if hasattr(m, 'weight') and m.weight is not None:
+                init_conv_weight(m.weight)
+            if hasattr(m, 'bias') and m.bias is not None:
+                init_bias(m.bias)
 
         elif classname.find('Embedding') != -1:
 
@@ -309,10 +327,11 @@ def init_model_parameters(model, opt):
                     init_embed(m.weight, m.padding_idx)
 
         elif classname.find('LayerNorm') != -1 or classname.find('FusedLayerNorm') != -1:
-            if hasattr(m, 'weight'):
-                nn.init.normal_(m.weight, 1.0, init_std)
-            if hasattr(m, 'bias') and m.bias is not None:
-                init_bias(m.bias)
+            # if hasattr(m, 'weight'):
+            #     nn.init.normal_(m.weight, 1.0, init_std)
+            # if hasattr(m, 'bias') and m.bias is not None:
+            #     init_bias(m.bias)
+            pass
         elif classname.find('RelativeTransformerEncoder') != -1:
             if hasattr(m, 'r_emb'):
                 init_weight(m.r_emb)
