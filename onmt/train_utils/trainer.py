@@ -444,7 +444,9 @@ class XETrainer(BaseTrainer):
         counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
-        grad_scaler = -1
+
+        # I found using this grad scaler can help mitigate NaN problems
+        grad_scaler = 4096
 
         nan = False
         nan_counter = 0
@@ -465,8 +467,6 @@ class XETrainer(BaseTrainer):
             if isinstance(batch, list) and self.n_gpus == 1:
                 batch = batch[0]
             batch = rewrap(batch)
-            if grad_scaler == -1:
-                grad_scaler = 1  # if self.opt.update_frequency > 1 else batch.tgt_size
 
             if self.cuda:
                 batch.cuda(fp16=False)
@@ -604,7 +604,6 @@ class XETrainer(BaseTrainer):
                     counter = 0
                     num_accumulated_words = 0
                     num_accumulated_sents = 0
-                    grad_scaler = -1
                     num_updates = self.optim._step
                     if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every:
                         valid_loss = self.eval(self.valid_data)
