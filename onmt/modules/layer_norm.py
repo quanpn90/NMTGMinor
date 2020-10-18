@@ -129,7 +129,8 @@ class LayerNorm(torch.nn.Module):
 
     def forward(self, input):
 
-        eps = tiny_value_of_dtype(input.dtype)
+        # eps = tiny_value_of_dtype(input.dtype)
+        eps = self.eps
 
         if not input.is_cuda or not self.fused:
             return F.layer_norm(

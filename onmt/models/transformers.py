@@ -100,11 +100,15 @@ class TransformerEncoder(nn.Module):
                 torch.nn.init.xavier_uniform_(self.audio_trans.weight)
             else:
                 channels = self.channels
-                cnn = [nn.Conv2d(channels, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(32),
-                       nn.Conv2d(32, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(32)]
+
+                if not opt.no_batch_norm:
+                    cnn = [nn.Conv2d(channels, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(32),
+                           nn.Conv2d(32, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(32)]
+                else:
+                    cnn = [nn.Conv2d(channels, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True),
+                           nn.Conv2d(32, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True)]
 
                 feat_size = (((feature_size // channels) - 3) // 4) * 32
-                # cnn.append()
                 self.audio_trans = nn.Sequential(*cnn)
                 self.linear_trans = nn.Linear(feat_size, self.model_size)
                 # assert self.model_size == feat_size, \
@@ -112,12 +116,6 @@ class TransformerEncoder(nn.Module):
         else:
             self.word_lut = embedding
 
-        # if opt.time == 'positional_encoding':
-        #     self.time_transformer = positional_encoder
-        # elif opt.time == 'gru':
-        #     self.time_transformer = nn.GRU(self.model_size, self.model_size, 1, batch_first=True)
-        # elif opt.time == 'lstm':
-        #     self.time_transformer = nn.LSTM(self.model_size, self.model_size, 1, batch_first=True)
         self.time_transformer = positional_encoder
         self.language_embedding = language_embeddings
 
@@ -146,9 +144,6 @@ class TransformerEncoder(nn.Module):
 
             if not self.lsh_src_attention:
                 if not self.reversible:
-                    # block = EncoderLayer(self.n_heads, self.model_size,
-                    #                      self.dropout, self.inner_size, self.attn_dropout,
-                    #                      variational=self.varitional_dropout, death_rate=death_r)
                     block = EncoderLayer(self.opt, death_rate=death_r)
                 else:
                     block = ReversibleTransformerEncoderLayer(self.opt, death_rate=death_r)

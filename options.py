@@ -287,6 +287,8 @@ def make_parser(parser):
                         help="Bottleneck size for the LFV vector).")
     parser.add_argument('-conv_kernel', type=int, default=31,
                         help="Kernels for convolution in conformer).")
+    parser.add_argument('-no_batch_norm', action='store_true',
+                        help="Remove Batch Norm to avoid NaN errors that can happen with spec augmentation.).")
 
     parser.add_argument('-multilingual_factorized_weights', action='store_true',
                         help='Use multilingual language identifier to get LFV for each language')
@@ -470,5 +472,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'fused_ffn'):
         opt.fused_ffn = False
+
+    if not hasattr(opt, 'no_batch_norm'):
+        opt.no_batch_norm = False
 
     return opt

@@ -11,7 +11,7 @@ class Augmenter(object):
     (Only vertical and horizontal masking)
     """
 
-    def __init__(self, F=16, mf=2, T=64, max_t=0.2, mt=2,
+    def __init__(self, F=7, mf=2, T=64, max_t=0.2, mt=2,
                  input_size=40, concat=4):
 
         self.F = F
@@ -47,6 +47,9 @@ class Augmenter(object):
             t = int(random.uniform(0.0, self.T))
 
             t = min(t, int(self.max_t * original_len))
+
+            if original_len - t < 0:
+                continue
 
             t_0 = int(random.uniform(0.0, original_len - t - 1))
 
