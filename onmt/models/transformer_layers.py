@@ -45,7 +45,7 @@ class PrePostProcessing(nn.Module):
             self.k = nn.Parameter(torch.ones(1))
 
         if 'n' in self.steps:
-            ln = LayerNorm((self.d_model,), elementwise_affine=elementwise_affine)
+            ln = nn.LayerNorm((self.d_model,), elementwise_affine=elementwise_affine)
             self.layer_norm = Bottle(ln)
         if 'd' in self.steps:
             if variational:

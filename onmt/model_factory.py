@@ -318,7 +318,7 @@ def init_model_parameters(model, opt):
                 if opt.init == 'normal':
                     nn.init.normal_(m.weight, 1.0, init_std)
                 else:
-                    nn.init.normal_(m.weight, 1.0 - init_std, 1.0 + init_std)
+                    nn.init.uniform_(m.weight, 1.0 - init_std, 1.0 + init_std)
             if hasattr(m, 'bias') and m.bias is not None:
                 init_bias(m.bias)
             pass

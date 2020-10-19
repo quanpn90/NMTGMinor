@@ -16,7 +16,7 @@ class MultiEpochIterator(object):
     # this class stores N epoch iterators for N datasets
     # init is called at the beginning of the epoch
 
-    def __init__(self, iterators, round_robin=True):
+    def __init__(self, iterators, round_robin=False):
         """
         :param iterators: a list of CountingIterators
         :param round_robin: if the data is sampled iteratively 1 to N or randomly
@@ -26,14 +26,16 @@ class MultiEpochIterator(object):
         self.round_robin = round_robin
         self.n_iterators = len(iterators)
         # self.total = sum([len(iterator) for iterator in self.iterators])
-        self.totals = [len(iterator) for iterator in self.iterators]
-        self.total = sum(self.totals)
+        self.sizes = [len(iterator) for iterator in self.iterators]
+        self.total = sum(self.sizes)
         self.itr = iter(self)
 
         if self.round_robin:
             self.itr_indices = torch.arange(self.n_iterators)
         else:
-            self.itr_indices = torch.randperm(self.n_iterators)
+            # self.itr_indices = torch.randperm(self.n_iterators)
+            with torch.no_grad():
+                self.itr_indices = torch.Tensor(self.sizes).div(self.total)
 
         self.idx = -1
         self.n_yielded = 0
@@ -60,19 +62,38 @@ class MultiEpochIterator(object):
             if self.n_yielded >= self.total:
                 return
 
-            self.idx = self.idx + 1
-            if self.idx >= self.n_iterators:
-                self.idx = 0
+            if self.round_robin:
+                self.idx = self.idx + 1
+                if self.idx >= self.n_iterators:
+                    self.idx = 0
 
-            cur_iterator = self.iterators[self.itr_indices[self.idx]]
+                cur_iterator = self.iterators[self.itr_indices[self.idx]]
 
-            # if the current iterator is not exhausted, then yield
-            # otherwise go to the next one
-            if cur_iterator.has_next():
-                self.n_yielded += 1
-                yield next(cur_iterator)
+                # if the current iterator is not exhausted, then yield
+                # otherwise go to the next one
+                if cur_iterator.has_next():
+                    self.n_yielded += 1
+                    yield next(cur_iterator)
+                else:
+                    continue
             else:
-                continue
+                # sample randomly from the iterators
+                # large datasets will be likely to generate more samples
+                # smaller datasets will be less likely
+                # but averaging-out, the model is more balanced than round-robin
+                sampled_itr = torch.multinomial(self.itr_indices, 1).unsqueeze(-1).item()
+
+                # if the current iterator is not exhausted, then yield
+                # otherwise resample
+                cur_iterator = self.iterators[sampled_itr]
+                if cur_iterator.has_next():
+                    self.n_yielded += 1
+                    yield next(cur_iterator)
+                else:
+                    # zero-out that index to avoid sampling into the same empty iterator
+                    with torch.no_grad():
+                        self.itr_indices[sampled_itr].zero_()
+                    continue
 
     def __next__(self):
 
@@ -115,7 +136,7 @@ class MultiDataIterator(EpochBatchIterating):
     # each dataset = dataiterator > generate 1 epoch iterator
     # this class gen
     def __init__(self, datasets, seed=1., num_workers=0, epoch=1, buffer_size=0,
-                 timeout=0, round_robin=True, num_shards=1, shard_id=0):
+                 timeout=0, round_robin=False, num_shards=1, shard_id=0):
 
         self.datasets = datasets
         self.data_iterators = list()
