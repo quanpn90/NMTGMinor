@@ -68,12 +68,12 @@ class CrossEntropyLossBase(_Loss):
         """
         label_smoothing = self.label_smoothing if self.training else 0.0
 
-        if vocab_mask is not None:
-            if vocab_mask.any():
-                vocab_mask = vocab_mask.to(logits.device)
-                while vocab_mask.dim() < logits.dim():
-                    vocab_mask = vocab_mask.unsqueeze(0)
-                logits = logits.float() + (~vocab_mask + tiny_value_of_dtype(logits.dtype)).log()
+        # if vocab_mask is not None:
+        #     if vocab_mask.any():
+        #         vocab_mask = vocab_mask.to(logits.device)
+        #         while vocab_mask.dim() < logits.dim():
+        #             vocab_mask = vocab_mask.unsqueeze(0)
+        #         logits = logits.float() + (~vocab_mask + tiny_value_of_dtype(logits.dtype)).log()
 
         gtruth = targets.view(-1)  # B*T
         logits = logits.view(-1, logits.size(-1))  # B*T x V

@@ -99,7 +99,7 @@ class TransformerEncoder(nn.Module):
                 self.audio_trans = nn.Linear(feature_size, self.model_size)
                 torch.nn.init.xavier_uniform_(self.audio_trans.weight)
             else:
-                channels = self.channels
+                channels = self.channels  # should be 1
 
                 if not opt.no_batch_norm:
                     cnn = [nn.Conv2d(channels, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(32),
