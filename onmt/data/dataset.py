@@ -414,6 +414,8 @@ class Dataset(torch.utils.data.Dataset):
             if self.tgt_langs is not None:
                 tgt_lang = self.tgt_langs[index]
 
+        # move augmenter here?
+
         sample = {
             'src': self.src[index] if self.src is not None else None,
             'tgt': self.tgt[index] if self.tgt is not None else None,

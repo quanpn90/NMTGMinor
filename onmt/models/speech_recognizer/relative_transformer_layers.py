@@ -20,6 +20,7 @@ from onmt.modules.optimized.feed_forward import PositionWiseFeedForward
 from onmt.modules.multilingual_factorized.linear import MFWPositionWiseFeedForward
 from onmt.modules.multilingual_factorized.encdec_attention import MFWEncdecMultiheadAttn
 from onmt.modules.multilingual_factorized.relative_attention import MFWRelativeSelfMultiheadAttn
+from onmt.modules.convolution import ConformerConvBlock
 
 
 class LIDFeedForward(nn.Module):
@@ -102,6 +103,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.variational = opt.variational_dropout
         self.death_rate = death_rate
         self.fast_self_attention = opt.fast_self_attention
+        self.depthwise_conv = opt.depthwise_conv
 
         self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
@@ -115,6 +117,14 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
         self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                    variational=self.variational)
+
+        if self.depthwise_conv:
+            self.preprocess_conv = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+            self.postprocess_conv = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                      variational=self.variational)
+            self.depthwise_conv = ConformerConvBlock(opt.model_size, opt.conv_kernel, bias=True)
+        else:
+            self.depthwise_conv = None
 
     def forward(self, input, pos_emb, attn_mask, src_lang=None, incremental=False, incremental_cache=None, mems=None):
 
@@ -132,6 +142,10 @@ class RelativeTransformerEncoderLayer(nn.Module):
             else:
                 mems = None
 
+            """
+            Self-attention block
+            """
+
             query = self.preprocess_attn(input)
 
             out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
@@ -143,8 +157,20 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
             input = self.postprocess_attn(out, input)
 
-            """ Feed forward layer 
-                layernorm > ffn > dropout > residual
+            """
+            Convolution block
+            """
+            if self.depthwise_conv:
+                out = self.depthwise_conv(self.preprocess_conv(input))
+
+                # rescaling before residual
+                if self.training and self.death_rate > 0:
+                    out = out / (1 - self.death_rate)
+
+                input = self.postprocess_conv(out, input)
+
+            """ 
+            Feed forward layer 
             """
             out = self.feedforward(self.preprocess_ffn(input))
 
@@ -155,7 +181,6 @@ class RelativeTransformerEncoderLayer(nn.Module):
             input = self.postprocess_ffn(out, input)
 
             # checking for inf/nan which can happen randomly in fp16 ...
-            #
             if torch.isinf(input).any() or torch.isnan(input).any():
                 clamp_value = torch.finfo(input.dtype).max - 1000
                 input.clamp_(min=-clamp_value, max=clamp_value)

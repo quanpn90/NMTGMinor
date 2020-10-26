@@ -289,6 +289,8 @@ def make_parser(parser):
                         help="Kernels for convolution in conformer).")
     parser.add_argument('-no_batch_norm', action='store_true',
                         help="Remove Batch Norm to avoid NaN errors that can happen with spec augmentation.).")
+    parser.add_argument('-depthwise_conv', action='store_true',
+                        help='Use depthwise convolution in the encoder block')
 
     parser.add_argument('-multilingual_factorized_weights', action='store_true',
                         help='Use multilingual language identifier to get LFV for each language')
@@ -469,6 +471,9 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'macaron'):
         opt.macaron = False
+
+    if not hasattr(opt, 'depthwise_conv'):
+        opt.depthwise_conv = False
 
     if not hasattr(opt, 'fused_ffn'):
         opt.fused_ffn = False
