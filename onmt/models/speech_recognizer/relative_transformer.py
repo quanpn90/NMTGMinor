@@ -41,6 +41,7 @@ class SpeechTransformerEncoder(TransformerEncoder):
         self.n_heads = opt.n_heads
         self.fast_self_attn = opt.fast_self_attention
         self.checkpointing = opt.checkpointing
+        self.mpw = opt.multilingual_partitioned_weights
 
         # TODO: multilingual factored networks
 
@@ -159,6 +160,10 @@ class SpeechTransformerEncoder(TransformerEncoder):
 
         pos_emb = self.preprocess_layer(pos_emb)
 
+        if self.mpw:
+            input_lang = self.factor_embeddings(input_lang) .squeeze(0)
+            assert input_lang.ndim == 1
+
         if self.reversible:
             context = torch.cat([context, context], dim=-1)
 
@@ -207,6 +212,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
         self.n_heads = opt.n_heads
         self.fast_self_attn = opt.fast_self_attention
         self.lfv_multilingual = opt.lfv_multilingual
+        self.mpw = opt.multilingual_partitioned_weights
 
         # build_modules will be called from the inherited constructor
         super().__init__(opt, dicts, positional_encoder, language_embeddings,
@@ -315,6 +321,11 @@ class SpeechTransformerDecoder(TransformerDecoder):
         pos_emb = self.preprocess_layer(pos_emb)
 
         lfv_vector, lid_logits = None, list()
+
+        if self.mpw:
+            src_lang = self.factor_embeddings(src_lang).squeeze(0)
+            tgt_lang = self.factor_embeddings(tgt_lang).squeeze(0)
+            assert src_lang.ndim == 1 and tgt_lang.ndim == 1
 
         for i, layer in enumerate(self.layer_modules):
             if self.lfv_multilingual:

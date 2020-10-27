@@ -1,10 +1,11 @@
+import math
+import torch
 import torch.optim as optim
+from apex.multi_tensor_apply import multi_tensor_applier
 from torch.optim.optimizer import Optimizer
-import torch, math
 
 
 class FusedAdam(torch.optim.Optimizer):
-
     """Implements Adam algorithm. Currently GPU-only.
        Requires Apex to be installed via
     ``python setup.py install --cuda_ext --cpp_ext``.
@@ -68,7 +69,7 @@ class FusedAdam(torch.optim.Optimizer):
             loss = closure()
 
         if grads is None:
-            grads_group = [None]*len(self.param_groups)
+            grads_group = [None] * len(self.param_groups)
         # backward compatibility
         # assuming a list/generator of parameter means single group
         elif isinstance(grads, types.GeneratorType):
@@ -79,7 +80,7 @@ class FusedAdam(torch.optim.Optimizer):
             grads_group = grads
 
         if output_params is None:
-            output_params_group = [None]*len(self.param_groups)
+            output_params_group = [None] * len(self.param_groups)
         elif isinstance(output_params, types.GeneratorType):
             output_params_group = [output_params]
         elif type(output_params[0]) != list:
@@ -88,15 +89,15 @@ class FusedAdam(torch.optim.Optimizer):
             output_params_group = output_params
 
         if grad_norms is None:
-            grad_norms = [None]*len(self.param_groups)
+            grad_norms = [None] * len(self.param_groups)
 
         for group, grads_this_group, output_params_this_group, \
             grad_norm in zip(self.param_groups, grads_group,
                              output_params_group, grad_norms):
             if grads_this_group is None:
-                grads_this_group = [None]*len(group['params'])
+                grads_this_group = [None] * len(group['params'])
             if output_params_this_group is None:
-                output_params_this_group = [None]*len(group['params'])
+                output_params_this_group = [None] * len(group['params'])
 
             # compute combined scale factor for this group
             combined_scale = scale
@@ -138,7 +139,7 @@ class FusedAdam(torch.optim.Optimizer):
                 state['step'] += 1
 
                 out_p = torch.tensor([], dtype=torch.float) if output_param \
-                    is None else output_param
+                                                               is None else output_param
                 fused_adam_cuda.adam(p.data,
                                      out_p,
                                      exp_avg,
@@ -153,6 +154,155 @@ class FusedAdam(torch.optim.Optimizer):
                                      self.eps_mode,
                                      bias_correction,
                                      group['weight_decay'])
+        return loss
+
+
+class FusedNovoGrad(torch.optim.Optimizer):
+
+    def __init__(self, params, lr=1e-3, bias_correction=True,
+                 betas=(0.9, 0.999), eps=1e-8, weight_decay=0.,
+                 amsgrad=False, reg_inside_moment=False,
+                 grad_averaging=True, norm_type=2, init_zero=False,
+                 set_grad_none=True):
+        if amsgrad:
+            raise RuntimeError('FusedNovoGrad does not support the AMSGrad variant.')
+        defaults = dict(lr=lr, bias_correction=bias_correction,
+                        betas=betas, eps=eps, weight_decay=weight_decay,
+                        grad_averaging=grad_averaging, norm_type=norm_type,
+                        init_zero=init_zero)
+        super(FusedNovoGrad, self).__init__(params, defaults)
+        if multi_tensor_applier.available:
+            import amp_C
+            # Skip buffer
+            self._dummy_overflow_buf = torch.cuda.IntTensor([0])
+            self.multi_tensor_novograd = amp_C.multi_tensor_novograd
+        else:
+            raise RuntimeError('apex.optimizers.FusedNovoGrad requires cuda extensions')
+
+        self.moment_mode = 0 if reg_inside_moment else 1
+        self.set_grad_none = set_grad_none
+
+    def zero_grad(self):
+        if self.set_grad_none:
+            for group in self.param_groups:
+                for p in group['params']:
+                    p.grad = None
+        else:
+            super(FusedNovoGrad, self).zero_grad()
+
+    def load_state_dict(self, state_dict):
+        super(FusedNovoGrad, self).load_state_dict(state_dict)
+        # in case exp_avg_sq is not on the same device as params, move it there
+        for group in self.param_groups:
+            if len(group['params']) > 0:
+                if 'exp_avg_sq' in group:
+                    group['exp_avg_sq'][0] = group['exp_avg_sq'][0].to(group['params'][0].device)
+                    group['exp_avg_sq'][1] = group['exp_avg_sq'][1].to(group['params'][0].device)
+
+    def step(self, closure=None):
+        """Performs a single optimization step.
+
+            Arguments:
+                closure (callable, optional): A closure that reevaluates the model
+                    and returns the loss.
+            """
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        for group in self.param_groups:
+            bias_correction = 1 if group['bias_correction'] else 0
+            beta1, beta2 = group['betas']
+            grad_averaging = 1 if group['grad_averaging'] else 0
+
+            # assume same step across group now to simplify things
+            # per parameter step can be easily support by making it tensor, or pass list into kernel
+            if 'step' in group:
+                group['step'] += 1
+            else:
+                group['step'] = 1
+
+            # create lists for multi-tensor apply
+            g_16, p_16, m_16 = [], [], []
+            g_32, p_32, m_32 = [], [], []
+
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                if p.grad.data.is_sparse:
+                    raise RuntimeError(
+                        'FusedNovoGrad does not support sparse gradients, please consider SparseAdam instead')
+
+                state = self.state[p]
+                # State initialization
+                if len(state) == 0:
+                    # Exponential moving average of gradient values
+                    state['exp_avg'] = torch.zeros_like(p.data)
+
+                if p.dtype == torch.float16:
+                    g_16.append(p.grad.data)
+                    p_16.append(p.data)
+                    m_16.append(state['exp_avg'])
+                elif p.dtype == torch.float32:
+                    g_32.append(p.grad.data)
+                    p_32.append(p.data)
+                    m_32.append(state['exp_avg'])
+                else:
+                    raise RuntimeError('FusedNovoGrad only support fp16 and fp32.')
+
+            # we store per weight norm as one tensor for one group/precision combination
+            # different from optim.Adam, we store norm here(not ^2) so we can unify calculation for norm types
+            if 'exp_avg_sq' not in group:
+                group['exp_avg_sq'] = [None, None]
+                if group['init_zero']:
+                    group['exp_avg_sq'][0] = torch.cuda.FloatTensor(len(g_16)).contiguous().fill_(0)
+                    group['exp_avg_sq'][1] = torch.cuda.FloatTensor(len(g_32)).contiguous().fill_(0)
+                else:  # init with first step norm, so first blend have no effect
+                    if group['norm_type'] == 0:
+                        v_16 = [torch.max(torch.abs(g.to(torch.float32))).item() for g in g_16]
+                        v_32 = [torch.max(torch.abs(g)).item() for g in g_32]
+                    elif group['norm_type'] == 2:
+                        v_16 = [torch.sum(torch.pow(g.to(torch.float32), 2)).sqrt().item() for g in g_16]
+                        v_32 = [torch.sum(torch.pow(g, 2)).sqrt().item() for g in g_32]
+                    else:
+                        raise RuntimeError('FusedNovoGrad only support l2/inf norm now.')
+                    group['exp_avg_sq'][0] = torch.cuda.FloatTensor(v_16)
+                    group['exp_avg_sq'][1] = torch.cuda.FloatTensor(v_32)
+            else:
+                assert (len(g_16) == group['exp_avg_sq'][0].numel())
+                assert (len(g_32) == group['exp_avg_sq'][1].numel())
+
+            if len(g_16) > 0:
+                multi_tensor_applier(self.multi_tensor_novograd,
+                                     self._dummy_overflow_buf,
+                                     [g_16, p_16, m_16],
+                                     group['exp_avg_sq'][0],
+                                     group['lr'],
+                                     beta1,
+                                     beta2,
+                                     group['eps'],
+                                     group['step'],
+                                     bias_correction,
+                                     group['weight_decay'],
+                                     grad_averaging,
+                                     self.moment_mode,
+                                     group['norm_type'])
+            if len(g_32) > 0:
+                multi_tensor_applier(self.multi_tensor_novograd,
+                                     self._dummy_overflow_buf,
+                                     [g_32, p_32, m_32],
+                                     group['exp_avg_sq'][1],
+                                     group['lr'],
+                                     beta1,
+                                     beta2,
+                                     group['eps'],
+                                     group['step'],
+                                     bias_correction,
+                                     group['weight_decay'],
+                                     grad_averaging,
+                                     self.moment_mode,
+                                     group['norm_type'])
+
         return loss
 
 
@@ -246,10 +396,10 @@ class Optim(object):
                 import apex
                 if self.amsgrad:
                     print("Note: AMSGRAD is not compatible with Fused Novograd")
-                self.optimizer = apex.optimizers.FusedNovoGrad(self.params, lr=self.lr,
-                                                               betas=(self.beta1, self.beta2), eps=1e-9,
-                                                               weight_decay=self.weight_decay, amsgrad=False,
-                                                               set_grad_none=False)
+                self.optimizer = FusedNovoGrad(self.params, lr=self.lr,
+                                               betas=(self.beta1, self.beta2), eps=1e-9,
+                                               weight_decay=self.weight_decay, amsgrad=False,
+                                               set_grad_none=False)
             except RuntimeError as e:
                 raise e
         else:
@@ -341,7 +491,7 @@ class Optim(object):
             #
             # self.scheduler.step(self._step)
             self.lr = self.min_lr + 0.5 * (self.init_lr - self.min_lr) * \
-                (1 + math.cos((self._step / self.max_step) * math.pi))
+                      (1 + math.cos((self._step / self.max_step) * math.pi))
             self.optimizer.param_groups[0]['lr'] = self.lr
             # self.lr = self.optimizer.param_groups[0]['lr']
             # self.lr = self.min_lr + (self.init_lr - self.min_lr) * \

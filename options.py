@@ -293,11 +293,16 @@ def make_parser(parser):
                         help='Use depthwise convolution in the encoder block')
 
     parser.add_argument('-multilingual_factorized_weights', action='store_true',
-                        help='Use multilingual language identifier to get LFV for each language')
+                        help='Factorize the weights in the model for multilingual')
     parser.add_argument('-mfw_rank', type=int, default=1,
-                        help="Bottleneck size for the LFV vector).")
+                        help="Rank of the mfw vectors.")
     parser.add_argument('-mfw_multiplicative', action='store_true',
-                        help='Use multilingual language identifier to get LFV for each language')
+                        help='Use another multiplicative weights W = W^ * M + A')
+
+    parser.add_argument('-multilingual_partitioned_weights', action='store_true',
+                        help='Partition the weights in the multilingual models')
+    parser.add_argument('-mpw_factor_size', type=int, default=8,
+                        help="Size of the language factor vector")
 
     # for Reformer
     # parser.add_argument('-lsh_src_attention', action='store_true',
@@ -480,5 +485,11 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'no_batch_norm'):
         opt.no_batch_norm = False
+
+    if not hasattr(opt, 'multilingual_partitioned_weights'):
+        opt.multilingual_partitioned_weights = False
+
+    if not hasattr(opt, 'mpw_factor_size'):
+        opt.mpw_factor_size = 1
 
     return opt

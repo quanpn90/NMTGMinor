@@ -118,7 +118,16 @@ def build_tm_model(opt, dicts):
         decoder = SpeechTransformerDecoder(opt, embedding_tgt, positional_encoder,
                                            language_embeddings=language_embeddings)
         model = RelativeTransformer(encoder, decoder, nn.ModuleList(generators),
-                                    None, None,mirror=opt.mirror_loss)
+                                    None, None, mirror=opt.mirror_loss)
+
+        # If we use the multilingual model and weights are partitioned:
+        if opt.multilingual_partitioned_weights:
+
+            # this is basically the language embeddings
+            factor_embeddings = nn.Embedding(len(dicts['langs']), opt.mpw_factor_size)
+
+            encoder.factor_embeddings = factor_embeddings
+            decoder.factor_embeddings = factor_embeddings
 
     elif opt.model in ['multilingual_translator', 'translator']:
         onmt.constants.init_value = opt.param_init
@@ -358,6 +367,14 @@ def init_model_parameters(model, opt):
         model.decoder.word_lut.apply(weights_init)
     else:
         model.tgt_embedding.apply(weights_init)
+
+    if opt.multilingual_partitioned_weights:
+        factor_embeddings = model.encoder.factor_embeddings
+
+        # this embedding scheme avoids a large initial perplexity
+        # basically an on-off switch to start with
+        with torch.no_grad():
+            factor_embeddings.weight.bernoulli_(0.5).mul_(-2).add_(1)
 
     return
 
