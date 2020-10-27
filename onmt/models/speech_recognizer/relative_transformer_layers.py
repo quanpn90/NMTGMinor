@@ -104,6 +104,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.death_rate = death_rate
         self.fast_self_attention = opt.fast_self_attention
         self.depthwise_conv = opt.depthwise_conv
+        self.mfw = opt.multilingual_factorized_weights
 
         self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
@@ -117,6 +118,22 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
         self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                    variational=self.variational)
+
+        if self.mfw:
+            self.feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                          variational=self.variational,
+                                                          n_languages=opt.n_languages, rank=opt.mfw_rank,
+                                                          use_multiplicative=opt.mfw_multiplicative)
+
+            self.multihead = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
+                                                          n_languages=opt.n_languages, rank=opt.mfw_rank,
+                                                          use_multiplicative=opt.mfw_multiplicative)
+
+        else:
+            self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                       variational=self.variational)
+
+            self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
         if self.depthwise_conv:
             self.preprocess_conv = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
@@ -148,8 +165,12 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
             query = self.preprocess_attn(input)
 
-            out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
-                                    incremental=incremental, incremental_cache=incremental_cache)
+            if self.mfw:
+                out, _ = self.multihead(query, pos_emb, src_lang, attn_mask, None, mems=mems,
+                                        incremental=incremental, incremental_cache=incremental_cache)
+            else:
+                out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
+                                        incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -172,7 +193,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
             """ 
             Feed forward layer 
             """
-            out = self.feedforward(self.preprocess_ffn(input))
+            out = self.feedforward(self.preprocess_ffn(input), src_lang)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:

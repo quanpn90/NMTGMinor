@@ -152,6 +152,11 @@ class EncoderLayer(nn.Module):
 
             input = self.postprocess_ffn(out, input)
 
+        # checking for inf/nan which can happen randomly in fp16 ...
+        if torch.isinf(input).any() or torch.isnan(input).any():
+            clamp_value = torch.finfo(input.dtype).max - 1000
+            input.clamp_(min=-clamp_value, max=clamp_value)
+
         return input
 
 
@@ -283,6 +288,11 @@ class DecoderLayer(nn.Module):
                 out = out / (1 - self.death_rate)
 
             input = self.postprocess_ffn(out, input)
+
+        # checking for inf/nan which can happen randomly in fp16 ...
+        if torch.isinf(input).any() or torch.isnan(input).any():
+            clamp_value = torch.finfo(input.dtype).max - 1000
+            input.clamp_(min=-clamp_value, max=clamp_value)
 
         return input, coverage, incremental_cache
 
