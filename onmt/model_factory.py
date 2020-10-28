@@ -374,8 +374,8 @@ def init_model_parameters(model, opt):
         # this embedding scheme avoids a large initial perplexity
         # basically an on-off switch to start with
         with torch.no_grad():
-            factor_embeddings.weight.bernoulli_(0.5).mul_(-2).add_(1)
-
+            # factor_embeddings.weight.bernoulli_(0.5).mul_(-2).add_(1)
+            factor_embeddings.weight.uniform_(-0.5, 0.5)
     return
 
 
