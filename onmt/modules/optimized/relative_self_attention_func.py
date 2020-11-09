@@ -225,6 +225,10 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         dtype_ = torch.float64 if double_precision else torch.float32
         softmax_results = F.softmax(attn_score, dim=-1, dtype=dtype_).type_as(attn_score)
 
+        nan_mask = torch.isnan(softmax_results)
+        if nan_mask.any():
+            softmax_results = softmax_results.masked_fill(nan_mask, 0).type_as(softmax_results)
+
         # Dropout - is not executed for inference
         if is_training:
             dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
@@ -290,7 +294,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                               input_weights, pos_weights,
                               output_weights,
                               r_w_bias, r_r_bias,
-                              dropout_mask,
+                              dropout_mask, nan_mask,
                               dropout_prob_t)
 
         ctx.add_position = add_position
@@ -320,7 +324,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         input_weights, pos_weights, \
         output_weights, \
         r_w_bias, r_r_bias, \
-        dropout_mask, \
+        dropout_mask, nan_mask, \
         dropout_prob_t = ctx.saved_tensors
 
         head_dim = inputs.size(2) // heads_t[0]
@@ -383,6 +387,10 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
         # Softmax Grad (not a publically documented op)
         softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
+
+        if nan_mask.any():
+            softmax_grads = softmax_grads.masked_fill(nan_mask, 0)
+
         attn_score_grads = softmax_grads
         # the grads are evenly distributed to AC and BD
         matmul_ac_grads = attn_score_grads

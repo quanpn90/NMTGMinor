@@ -12,7 +12,7 @@ class MPEncdecMultiheadAttn(nn.Module):
     See "Attention Is All You Need" for more details.
     """
 
-    def __init__(self, num_heads, embed_dim, attn_drop=0., factor_size=8):
+    def __init__(self, num_heads, embed_dim, attn_drop=0., factor_size=8, rank_size=-1):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -23,9 +23,18 @@ class MPEncdecMultiheadAttn(nn.Module):
         self.bias = False
         self.scaling = self.head_dim ** -0.5  # this value is hardcoded in the "fast" implementation
 
-        self.in_proj_weight_q = Parameter(torch.Tensor(embed_dim * embed_dim, factor_size))
-        self.in_proj_weight_kv = Parameter(torch.Tensor(2 * embed_dim * embed_dim, factor_size))
-        self.out_proj_weight = Parameter(torch.Tensor(embed_dim * embed_dim, factor_size))
+        if rank_size == -1:
+            rank_size = factor_size
+
+        self.rank_size = rank_size
+
+        # factor size is the size of the language factor
+        # rank size is to reduce the language factor size to a manageable number of parameters
+        self.factor_to_rank = nn.Linear(self.factor_size, self.rank_size)
+
+        self.in_proj_weight_q = Parameter(torch.Tensor(embed_dim * embed_dim, rank_size))
+        self.in_proj_weight_kv = Parameter(torch.Tensor(2 * embed_dim * embed_dim, rank_size))
+        self.out_proj_weight = Parameter(torch.Tensor(embed_dim * embed_dim, rank_size))
 
         self.in_proj_bias_q = None
         self.in_proj_bias_kv = None
@@ -65,6 +74,9 @@ class MPEncdecMultiheadAttn(nn.Module):
         is_training = self.training
         time_masking = False
         len_key = key.size(0)
+
+        # tgt_factor = self.factor_to_rank(tgt_factor)
+        # src_factor = self.factor_to_rank(src_factor)
 
         in_proj_weight_q = torch.mv(self.in_proj_weight_q, tgt_factor).view(self.embed_dim, self.embed_dim)
         in_proj_weight_kv = torch.mv(self.in_proj_weight_kv, src_factor).view(self.embed_dim * 2, self.embed_dim)

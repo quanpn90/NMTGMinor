@@ -303,6 +303,12 @@ def make_parser(parser):
                         help='Partition the weights in the multilingual models')
     parser.add_argument('-mpw_factor_size', type=int, default=8,
                         help="Size of the language factor vector")
+    parser.add_argument('-multilingual_layer_norm', action='store_true',
+                        help='New norm for each language')
+    parser.add_argument('-multilingual_linear_projection', action='store_true',
+                        help='New linear projection for each language')
+    parser.add_argument('-sub_encoder', type=int, default=4,
+                        help='New linear projection for each language')
 
     # for Reformer
     # parser.add_argument('-lsh_src_attention', action='store_true',
@@ -491,5 +497,11 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'mpw_factor_size'):
         opt.mpw_factor_size = 1
+
+    if not hasattr(opt, 'multilingual_layer_norm'):
+        opt.multilingual_layer_norm = False
+
+    if not hasattr(opt, 'multilingual_linear_projection'):
+        opt.multilingual_linear_projection = False
 
     return opt

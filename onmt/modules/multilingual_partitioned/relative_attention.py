@@ -13,13 +13,19 @@ class MPRelativeSelfMultiheadAttn(nn.Module):
     See "Attention Is All You Need" for more details.
     """
 
-    def __init__(self, embed_dim, num_heads, dropout=0., factor_size=8):
+    def __init__(self, embed_dim, num_heads, dropout=0., factor_size=8, rank_size=-1):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.dropout = dropout
         self.head_dim = embed_dim // num_heads
         self.factor_size = factor_size
+        if rank_size == -1:
+            rank_size = factor_size
+
+        self.rank_size = rank_size
+        self.factor_to_rank = nn.Linear(self.factor_size, self.rank_size)
+
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
         self.bias = True
 
@@ -59,6 +65,8 @@ class MPRelativeSelfMultiheadAttn(nn.Module):
 
     def forward(self, input, pos, factor=None, key_padding_mask=None, attn_mask=None, mems=None,
                 incremental=False, incremental_cache=None):
+
+        # factor = self.factor_to_rank(factor)
 
         embed_dim = self.embed_dim
         in_proj_weight = torch.mv(self.in_proj_weight, factor).view(embed_dim * 3, embed_dim)

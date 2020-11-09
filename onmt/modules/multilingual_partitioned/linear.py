@@ -58,7 +58,8 @@ class MPPositionWiseFeedForward(torch.nn.Module):
     Multilingually Partitioned Position Wise Feedforward model
     """
 
-    def __init__(self, model_size, inner_size, dropout=0., variational=False, activation='relu', factor_size=8):
+    def __init__(self, model_size, inner_size, dropout=0., variational=False, activation='relu',
+                 factor_size=8, rank_size=-1):
 
         super().__init__()
         self.input_linear = MPLinear(model_size, inner_size, factor_size)
@@ -66,6 +67,13 @@ class MPPositionWiseFeedForward(torch.nn.Module):
         self.variational = variational
         self.dropout = dropout
         self.activation = activation
+        self.factor_size = factor_size
+
+        if rank_size == -1:
+            rank_size = factor_size
+
+        self.rank_size = rank_size
+        # self.factor_to_rank = nn.Linear(self.factor_size, self.rank_size)
 
         if self.variational:
             from onmt.modules.dropout import variational_dropout
@@ -74,6 +82,8 @@ class MPPositionWiseFeedForward(torch.nn.Module):
             self.dropout_function = F.dropout
 
     def forward(self, hidden, factor):
+
+        # factor = self.factor_to_rank(factor)
 
         hidden = self.input_linear(hidden, factor)
         hidden = F.relu(hidden, inplace=True)

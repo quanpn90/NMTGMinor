@@ -3,9 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import onmt
 
-from onmt.models.transformer_layers import PrePostProcessing, MultiHeadAttention, Linear
+from onmt.models.transformer_layers import MultiHeadAttention, Linear
 from onmt.modules.relative_attention import RelPartialLearnableMultiHeadAttn
 from onmt.modules.optimized.relative_self_attention import RelativeSelfMultiheadAttn
+from onmt.modules.pre_post_processing import PrePostProcessing
 from onmt.utils import flip
 from onmt.modules.bottle import Bottle
 from onmt.modules.linear import XavierLinear as Linear
@@ -110,14 +111,17 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.depthwise_conv = opt.depthwise_conv
         self.mfw = opt.multilingual_factorized_weights
         self.mpw = opt.multilingual_partitioned_weights
+        self.mln = opt.multilingual_layer_norm
 
         if self.mfw:
             assert not self.mpw, "[ERROR] factorized and partitioned weights cannot be used at the same time."
 
-        self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+        self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
+                                                 n_languages=opt.n_languages)
         self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                   variational=self.variational)
-        self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+        self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
+                                                n_languages=opt.n_languages)
         self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                  variational=self.variational)
         d_head = opt.model_size // opt.n_heads
@@ -152,7 +156,8 @@ class RelativeTransformerEncoderLayer(nn.Module):
             self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
         if self.depthwise_conv:
-            self.preprocess_conv = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+            self.preprocess_conv = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
+                                                     n_languages=opt.n_languages)
             self.postprocess_conv = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                       variational=self.variational)
             self.depthwise_conv = ConformerConvBlock(opt.model_size, opt.conv_kernel, bias=True)
@@ -179,7 +184,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
             Self-attention block
             """
 
-            query = self.preprocess_attn(input)
+            query = self.preprocess_attn(input, factor=src_lang)
 
             if self.mfw or self.mpw:
                 out, _ = self.multihead(query, pos_emb, src_lang, attn_mask, None, mems=mems,
@@ -198,7 +203,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
             Convolution block
             """
             if self.depthwise_conv:
-                out = self.depthwise_conv(self.preprocess_conv(input))
+                out = self.depthwise_conv(self.preprocess_conv(input, factor=src_lang))
 
                 # rescaling before residual
                 if self.training and self.death_rate > 0:
@@ -209,7 +214,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
             """ 
             Feed forward layer 
             """
-            out = self.feedforward(self.preprocess_ffn(input), src_lang)
+            out = self.feedforward(self.preprocess_ffn(input, factor=src_lang), src_lang)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -237,13 +242,17 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.death_rate = death_rate
         self.mfw = opt.multilingual_factorized_weights
         self.mpw = opt.multilingual_partitioned_weights
+        self.mln = opt.multilingual_layer_norm
 
-        self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+        self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
+                                                 n_languages=opt.n_languages)
         self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                   variational=self.variational)
 
         if not self.ignore_source:
-            self.preprocess_src_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+            self.preprocess_src_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n',
+                                                         multilingual=self.mln,
+                                                         n_languages=opt.n_languages)
             self.postprocess_src_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                           variational=self.variational)
 
@@ -258,7 +267,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
             else:
                 self.multihead_src = EncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout)
 
-        self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+        self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
+                                                n_languages=opt.n_languages)
         self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                  variational=self.variational)
 
@@ -279,7 +289,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
                                                          factor_size=opt.mpw_factor_size)
 
             self.multihead_tgt = MPRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
-                                                         factor_size=opt.mpw_factor_size)
+                                                             factor_size=opt.mpw_factor_size)
         else:
             self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
@@ -313,7 +323,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
         if coin:
             # input and context should be time first ?
             if mems is not None and mems.size(0) > 0:
-                mems = self.preprocess_attn(mems)
+                mems = self.preprocess_attn(mems, factor=tgt_lang)
             else:
                 mems = None
 
@@ -322,7 +332,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
             #     # print(lfv.size())
             #     input = torch.mul(torch.tanh(self.lfv_mapper(lfv)), input)
 
-            query = self.preprocess_attn(input)
+            query = self.preprocess_attn(input, factor=tgt_lang)
             if self.mfw or self.mpw:
                 out, _ = self.multihead_tgt(query, pos_emb, tgt_lang, None, mask_tgt, mems=mems,
                                             incremental=incremental, incremental_cache=incremental_cache)
@@ -340,7 +350,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 layernorm > attn > dropout > residual
             """
             if not self.ignore_source:
-                query = self.preprocess_src_attn(input)
+                query = self.preprocess_src_attn(input, factor=tgt_lang)
                 incremental_source = incremental and reuse_source
 
                 if self.mfw or self.mpw:
@@ -368,7 +378,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
             """ Feed forward layer 
                 layernorm > ffn > dropout > residual
             """
-            out = self.feedforward(self.preprocess_ffn(input), tgt_lang)
+            out = self.feedforward(self.preprocess_ffn(input, factor=tgt_lang), tgt_lang)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:

@@ -2,13 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from onmt.models.transformer_layers import PositionalEncoding, PrePostProcessing
+from onmt.models.transformer_layers import PositionalEncoding
+from onmt.modules.pre_post_processing import PrePostProcessing
 from onmt.models.transformers import TransformerEncoder, TransformerDecoder, Transformer, TransformerDecodingState
 from onmt.modules.sinusoidal_positional_encoding import SinusoidalPositionalEmbedding
 import onmt
 from onmt.modules.base_seq2seq import NMTModel, Reconstructor, DecoderState
 from onmt.modules.dropout import embedded_dropout
-from onmt.models.transformer_layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
 from .relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
 from onmt.utils import flip, expected_length
 from collections import defaultdict
@@ -42,8 +42,10 @@ class SpeechTransformerEncoder(TransformerEncoder):
         self.fast_self_attn = opt.fast_self_attention
         self.checkpointing = opt.checkpointing
         self.mpw = opt.multilingual_partitioned_weights
+        self.multilingual_linear_projection = opt.multilingual_linear_projection
+        self.mln = opt.multilingual_layer_norm
 
-        # TODO: multilingual factored networks
+        # TODO: multilingually linear transformation
 
         # build_modules will be called from the inherited constructor
         super().__init__(opt, dicts, positional_encoder, encoder_type, language_embeddings)
@@ -56,6 +58,16 @@ class SpeechTransformerEncoder(TransformerEncoder):
             self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
 
         self.d_head = self.model_size // self.n_heads
+
+        if self.multilingual_linear_projection:
+            self.linear_proj = nn.Parameter(torch.Tensor(opt.n_languages, self.model_size, self.model_size))
+
+            std_ = math.sqrt(2.0 / (self.model_size + self.model_size))
+            torch.nn.init.normal_(self.linear_proj, 0.0, std_)
+
+        self.mln = opt.multilingual_layer_norm
+        self.postprocess_layer = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
+                                                   n_languages=opt.n_languages)
 
     def build_modules(self):
 
@@ -161,7 +173,7 @@ class SpeechTransformerEncoder(TransformerEncoder):
         pos_emb = self.preprocess_layer(pos_emb)
 
         if self.mpw:
-            input_lang = self.factor_embeddings(input_lang) .squeeze(0)
+            input_lang = self.factor_embeddings(input_lang).squeeze(0)
             assert input_lang.ndim == 1
 
         if self.reversible:
@@ -188,7 +200,14 @@ class SpeechTransformerEncoder(TransformerEncoder):
                     hids.append(context)
 
         # final layer norm
-        context = self.postprocess_layer(context)
+        context = self.postprocess_layer(context, factor=input_lang)
+
+        if self.multilingual_linear_projection:
+            language_linear_weight_ = torch.index_select(self.linear_proj, 0, input_lang).squeeze(0)
+            # context = F.linear(context, language_linear_weight_)
+            t, b = context.size(0), context.size(1)
+            context = torch.mm(context.view(-1, context.size(-1)), language_linear_weight_)
+            context = context.view(t, b, context.size(-1))
 
         output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask, 'src': input})
 
@@ -223,6 +242,10 @@ class SpeechTransformerDecoder(TransformerDecoder):
         # Parameters for the position biases - deprecated. kept for backward compatibility
         self.r_w_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
         self.r_r_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
+
+        self.mln = opt.multilingual_layer_norm
+        self.postprocess_layer = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
+                                                   n_languages=opt.n_languages)
 
     def renew_buffer(self, new_len):
         return
@@ -337,7 +360,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
                 output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
                                             src_lang=src_lang, tgt_lang=tgt_lang)
 
-        output = self.postprocess_layer(output)
+        output = self.postprocess_layer(output, factor=tgt_lang)
 
         output_dict = {'hidden': output, 'coverage': coverage, 'context': context, 'lid_logits': lid_logits}
         output_dict = defaultdict(lambda: None, output_dict)
@@ -455,7 +478,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
                                                 tgt_lang=lang, src_lang=src_lang)
 
         # normalize and take the last time step
-        output = self.postprocess_layer(output)
+        output = self.postprocess_layer(output, factor=tgt_lang)
         output = output[-1].unsqueeze(0)
 
         output_dict = defaultdict(lambda: None)
