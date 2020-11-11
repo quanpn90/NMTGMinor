@@ -188,7 +188,7 @@ class SpeechLSTMDecoder(nn.Module):
         hid = buffer["hidden_state"]
         cell = buffer["cell_state"]
 
-        buffering = False  # decoder_state.buffering
+        buffering = decoder_state.buffering
 
         if hid is not None:
             hid_cell = (hid, cell)
