@@ -129,6 +129,17 @@ def build_tm_model(opt, dicts):
             encoder.factor_embeddings = factor_embeddings
             decoder.factor_embeddings = factor_embeddings
 
+    elif opt.model == "LSTM":
+        # print("LSTM")
+        onmt.constants.init_value = opt.param_init
+        from onmt.models.speech_recognizer.lstm import SpeechLSTMDecoder, SpeechLSTMEncoder, SpeechLSTMSeq2Seq
+
+        encoder = SpeechLSTMEncoder(opt, None, opt.encoder_type)
+
+        decoder = SpeechLSTMDecoder(opt, embedding_tgt, language_embeddings=language_embeddings)
+
+        model = SpeechLSTMSeq2Seq(encoder, decoder, nn.ModuleList(generators))
+
     elif opt.model in ['multilingual_translator', 'translator']:
         onmt.constants.init_value = opt.param_init
         from onmt.models.multilingual_translator.relative_transformer import \

@@ -3,6 +3,7 @@ import torch.nn as nn
 from .layer_norm import LayerNorm, MultilingualLayerNorm
 import onmt
 from onmt.modules.dropout import VariationalDropout
+from onmt.modules.bottle import Bottle
 
 
 class PrePostProcessing(nn.Module):
@@ -45,10 +46,10 @@ class PrePostProcessing(nn.Module):
 
     def forward(self, tensor, input_tensor=None, mask=None, factor=None):
         """
-        :param tensor:
-        :param input_tensor:
-        :param mask:
-        :param factor:
+        :param tensor: input tensor [BxTxH] or [TxBxH (most likely)]
+        :param input_tensor: previous tensor for residual
+        :param mask: unused
+        :param factor: tensor size 1, for multilingual
         :return:
         """
 
