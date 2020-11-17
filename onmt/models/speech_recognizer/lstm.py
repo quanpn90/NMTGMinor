@@ -37,7 +37,7 @@ class SpeechLSTMEncoder(nn.Module):
         self.input_type = encoder_type
         self.cnn_downsampling = opt.cnn_downsampling
 
-        self.switchout = opt.switchout
+        self.switchout = 0.0  # for speech it has to be
         self.varitional_dropout = opt.variational_dropout
         self.use_language_embedding = opt.use_language_embedding
         self.language_embedding_type = opt.language_embedding_type
@@ -45,9 +45,6 @@ class SpeechLSTMEncoder(nn.Module):
         self.time = opt.time
         self.lsh_src_attention = opt.lsh_src_attention
         self.reversible = opt.src_reversible
-
-        if self.switchout > 0.0:
-            self.word_dropout = 0.0
 
         feature_size = opt.input_size
         self.channels = 1
@@ -155,17 +152,20 @@ class SpeechLSTMDecoder(nn.Module):
 
         self.lstm = nn.LSTM(self.model_size, self.model_size, self.layers, dropout=self.dropout, batch_first=True)
 
-        self.fast_self_attention = opt.fast_self_attention
+        self.fast_xattention = opt.fast_xattention
+        self.n_head = 1  # fixed
+        # also fix attention dropout to 0.0
 
-        if opt.fast_self_attention:
-            self.multihead_tgt = EncdecMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+        if opt.fast_xattention:
+            self.multihead_tgt = EncdecMultiheadAttn(self.n_head, opt.model_size, 0.0)
         else:
-            self.multihead_tgt = MultiHeadAttention(opt.n_heads, opt.model_size, attn_p=opt.attn_dropout, share=3)
+            self.multihead_tgt = MultiHeadAttention(self.n_head, opt.model_size, attn_p=0.0, share=3)
 
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d',
                                                   variational=self.variational_dropout)
 
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
+        self.preprocess_attn = PrePostProcessing(self.model_size, 0, sequence='n')
 
         self.word_lut = embedding
 
@@ -176,6 +176,8 @@ class SpeechLSTMDecoder(nn.Module):
 
         if self.language_embedding_type == 'concat':
             self.projector = nn.Linear(opt.model_size * 2, opt.model_size)
+
+        print("* Create LSTM Decoder with %d layers." % self.layers)
 
     def process_embedding(self, input, input_lang=None):
 
@@ -266,15 +268,19 @@ class SpeechLSTMDecoder(nn.Module):
         decoder_state.update_lstm_buffer(hid_cell)
 
         lt = input_.size(1)
-        attn_mask = mask_src.expand(-1, lt, -1)
-        dec_out = self.postprocess_layer(dec_out)
+        attn_mask = mask_src.expand(-1, lt, -1) if not self.fast_xattention else mask_src.squeeze(1)
+        # dec_out = self.postprocess_layer(dec_out)
 
+        dec_out = self.preprocess_attn(dec_out)
         dec_out = dec_out.transpose(0, 1)
 
         if buffering:
             buffer = attn_buffer[0]
+            if buffer is None:
+                buffer = dict()
+
             output, coverage = self.multihead_tgt(dec_out, context, context, attn_mask,
-                                                          incremental=True, incremental_cache=buffer)
+                                                  incremental=True, incremental_cache=buffer)
             decoder_state.update_attention_buffer(buffer, 0)
         else:
             output, coverage = self.multihead_tgt(dec_out, context, context, attn_mask)
@@ -331,10 +337,11 @@ class SpeechLSTMDecoder(nn.Module):
             dec_out, hid = self.lstm(dec_emb, hid)
 
         lt = dec_seq.size(1)
-        attn_mask = mask_src.expand(-1, lt, -1)
-        dec_out = self.postprocess_layer(dec_out)
-
-        dec_out = dec_out.transpose(0, 1)
+        attn_mask = mask_src.expand(-1, lt, -1) if not self.fast_xattention else mask_src.squeeze(1)
+        # dec_out = self.postprocess_layer(dec_out)
+        dec_out = self.preprocess_attn(dec_out)
+        dec_out = dec_out.transpose(0, 1).contiguous()
+        enc_out = enc_out.contiguous()
         output, coverage = self.multihead_tgt(dec_out, enc_out, enc_out, attn_mask)
         output = (output + dec_out)
         output = self.postprocess_layer(output)
@@ -592,6 +599,17 @@ class LSTMDecodingState(DecoderState):
 
             sent_states.data.copy_(sent_states.data.index_select(1, beam[b].getCurrentOrigin()))
 
+        for l in self.attention_buffers:
+            buffers = self.attention_buffers[l]
+            if buffers is not None:
+                for k in buffers.keys():
+                    buffer_ = buffers[k]
+                    t_, br_, d_ = buffer_.size()
+                    sent_states = buffer_.view(t_, self.beam_size, remaining_sents, d_)[:, :, idx, :]
+
+                    sent_states.data.copy_(sent_states.data.index_select(1, beam[b].getCurrentOrigin()))
+
+
     def prune_complete_beam(self, active_idx, remaining_sents):
 
         model_size = self.model_size
@@ -636,6 +654,12 @@ class LSTMDecodingState(DecoderState):
             buffer = update_active_with_hidden(buffer_)
 
             self.lstm_buffer[l] = buffer
+
+        for l in self.attention_buffers:
+            buffer_ = self.attention_buffers[l]
+            if buffer_ is not None:
+                for k in buffer_.keys():
+                    buffer_[k] = update_active_with_hidden(buffer_[k])
 
     # For the new decoder version only
     def _reorder_incremental_state(self, reorder_state):

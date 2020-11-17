@@ -109,16 +109,22 @@ def build_tm_model(opt, dicts):
             SpeechTransformerEncoder, SpeechTransformerDecoder
 
         if opt.model == 'conformer':
-            from onmt.models.speech_recognizer.conformer import ConformerEncoder
+            from onmt.models.speech_recognizer.conformer import ConformerEncoder, Conformer
+            from onmt.models.speech_recognizer.lstm import SpeechLSTMDecoder
             opt.cnn_downsampling = True  # force this bool to have masking at decoder to be corrected
             encoder = ConformerEncoder(opt, None, None, 'audio')
+
+            decoder = SpeechLSTMDecoder(opt, embedding_tgt, language_embeddings=language_embeddings)
+
+            model = Conformer(encoder, decoder, nn.ModuleList(generators))
+
         else:
             encoder = SpeechTransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
 
-        decoder = SpeechTransformerDecoder(opt, embedding_tgt, positional_encoder,
+            decoder = SpeechTransformerDecoder(opt, embedding_tgt, positional_encoder,
                                            language_embeddings=language_embeddings)
-        model = RelativeTransformer(encoder, decoder, nn.ModuleList(generators),
-                                    None, None, mirror=opt.mirror_loss)
+            model = RelativeTransformer(encoder, decoder, nn.ModuleList(generators),
+                                        None, None, mirror=opt.mirror_loss)
 
         # If we use the multilingual model and weights are partitioned:
         if opt.multilingual_partitioned_weights:

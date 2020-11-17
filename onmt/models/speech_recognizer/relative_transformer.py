@@ -478,7 +478,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
                                                 tgt_lang=lang, src_lang=src_lang)
 
         # normalize and take the last time step
-        output = self.postprocess_layer(output, factor=tgt_lang)
+        output = self.postprocess_layer(output, factor=lang)
         output = output[-1].unsqueeze(0)
 
         output_dict = defaultdict(lambda: None)

@@ -166,7 +166,7 @@ class Batch(object):
 
     def cuda(self, fp16=False, device=None):
         """
-        Send the minibatch data into GPU. Old-fashioned without the 'device' control
+        Send the minibatch data into GPU.
         :param device: default = None (default CUDA device)
         :param fp16:
         :return: None

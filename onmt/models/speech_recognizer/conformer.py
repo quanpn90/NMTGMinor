@@ -5,7 +5,8 @@ import torch.nn.functional as F
 from onmt.models.transformers import TransformerEncoder, TransformerDecoder, Transformer, TransformerDecodingState
 from onmt.modules.sinusoidal_positional_encoding import SinusoidalPositionalEmbedding
 import onmt
-from onmt.modules.base_seq2seq import NMTModel, Reconstructor, DecoderState
+from onmt.modules.base_seq2seq import NMTModel, DecoderState
+from onmt.models.speech_recognizer.lstm import SpeechLSTMDecoder, LSTMDecodingState
 from onmt.modules.convolution import Conv2dSubsampling
 from onmt.models.transformer_layers import PrePostProcessing
 from .relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
@@ -132,8 +133,8 @@ class ConformerEncoder(TransformerEncoder):
 
         context = emb
 
-        # Apply dropout to both context and pos_emb
-        context = self.preprocess_layer(context)
+        # Apply dropout to pos_emb
+        # context = self.preprocess_layer(context)
 
         pos_emb = self.preprocess_layer(pos_emb)
 
@@ -149,3 +150,158 @@ class ConformerEncoder(TransformerEncoder):
 
         return output_dict
 
+
+class Conformer(NMTModel):
+
+    def __init__(self, encoder, decoder, generator=None, rec_decoder=None, rec_generator=None, mirror=False):
+        super().__init__(encoder, decoder, generator, rec_decoder, rec_generator)
+
+        self.model_size = self.decoder.model_size
+        self.tgt_vocab_size = self.decoder.word_lut.weight.size(0)
+        if self.encoder.input_type == 'text':
+            self.src_vocab_size = self.encoder.word_lut.weight.size(0)
+        else:
+            self.src_vocab_size = 0
+
+    def reset_states(self):
+        return
+
+    def forward(self, batch, target_mask=None, streaming=False, zero_encoder=False,
+                mirror=False, streaming_state=None, nce=False):
+
+        src = batch.get('source')
+        tgt = batch.get('target_input')
+        src_pos = batch.get('source_pos')
+        tgt_pos = batch.get('target_pos')
+        src_lang = batch.get('source_lang')
+        tgt_lang = batch.get('target_lang')
+        src_lengths = batch.src_lengths
+        tgt_lengths = batch.tgt_lengths
+
+        org_src = src
+        org_tgt = tgt
+        src = src.transpose(0, 1)  # transpose to have batch first
+        tgt = tgt.transpose(0, 1)
+
+        encoder_output = self.encoder(src)
+        encoder_output = defaultdict(lambda: None, encoder_output)
+
+        context = encoder_output['context']
+
+        if zero_encoder:
+            context.zero_()
+
+        src_mask = encoder_output['src_mask']
+        decoder_output = self.decoder(tgt, context, src,
+                                      tgt_lang=tgt_lang, input_pos=tgt_pos, streaming=streaming,
+                                      src_lengths=src_lengths, tgt_lengths=tgt_lengths,
+                                      streaming_state=streaming_state)
+
+        decoder_output = defaultdict(lambda: None, decoder_output)
+        output = decoder_output['hidden']
+
+        output_dict = defaultdict(lambda: None, decoder_output)
+        output_dict['hidden'] = output
+        output_dict['context'] = context
+        output_dict['src_mask'] = encoder_output['src_mask']
+        output_dict['src'] = src
+        output_dict['target_mask'] = target_mask
+        output_dict['reconstruct'] = None
+        output_dict['target'] = batch.get('target_output')
+
+        if self.training and nce:
+            output_dict = self.generator[0](output_dict)
+        else:
+            logprobs = self.generator[0](output_dict)['logits']
+            output_dict['logprobs'] = logprobs
+
+        return output_dict
+
+    def step(self, input_t, decoder_state):
+
+        output_dict = self.decoder.step(input_t, decoder_state)
+        output_dict['src'] = decoder_state.src.transpose(0, 1)
+
+        # squeeze to remove the time step dimension
+        log_prob = self.generator[0](output_dict)['logits'].squeeze(0)
+        log_prob = F.log_softmax(log_prob, dim=-1, dtype=torch.float32)
+
+        coverage = output_dict['coverage']
+        last_coverage = coverage[:, -1, :].squeeze(1)
+
+        output_dict['log_prob'] = log_prob
+        output_dict['coverage'] = last_coverage
+
+        return output_dict
+
+    def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True, **kwargs):
+        """
+        Generate a new decoder state based on the batch input
+        :param buffering:
+        :param streaming:
+        :param type:
+        :param batch: Batch object (may not contain target during decoding)
+        :param beam_size: Size of beam used in beam search
+        :return:
+        """
+        src = batch.get('source')
+        src_pos = batch.get('source_pos')
+        src_lang = batch.get('source_lang')
+        tgt_lang = batch.get('target_lang')
+
+        # TxB -> BxT
+        src_transposed = src.transpose(0, 1)
+
+        encoder_output = self.encoder(src_transposed)
+        decoder_state = LSTMDecodingState(src, tgt_lang, encoder_output['context'],
+                                                 beam_size=beam_size, model_size=self.model_size,
+                                                 type=type, buffering=buffering)
+
+        return decoder_state
+
+    def decode(self, batch):
+        src = batch.get('source')
+        src_pos = batch.get('source_pos')
+        tgt_input = batch.get('target_input')
+        tgt_output = batch.get('target_output')
+        tgt_pos = batch.get('target_pos')
+        # tgt_atb = batch.get('target_atb')  # a dictionary of attributes
+        src_lang = batch.get('source_lang')
+        tgt_lang = batch.get('target_lang')
+
+        src = src.transpose(0, 1)
+        tgt_input = tgt_input.transpose(0, 1)
+        batch_size = tgt_input.size(0)
+
+        context = self.encoder(src)['context']
+
+        gold_scores = context.new(batch_size).zero_()
+        gold_words = 0
+        allgold_scores = list()
+
+        decoder_output = self.decoder(tgt_input, context, src, tgt_lang=tgt_lang, src_lang=src_lang,
+                                      input_pos=tgt_pos)['hidden']
+
+        output = decoder_output
+
+        for dec_t, tgt_t in zip(output, tgt_output):
+
+            dec_out = defaultdict(lambda: None)
+            dec_out['hidden'] = dec_t.unsqueeze(0)
+            dec_out['src'] = src
+            dec_out['context'] = context
+
+            if isinstance(self.generator, nn.ModuleList):
+                gen_t = self.generator[0](dec_out)['logits']
+            else:
+                gen_t = self.generator(dec_out)['logits']
+            gen_t = F.log_softmax(gen_t, dim=-1, dtype=torch.float32)
+            gen_t = gen_t.squeeze(0)
+            tgt_t = tgt_t.unsqueeze(1)
+            scores = gen_t.gather(1, tgt_t)
+            scores.masked_fill_(tgt_t.eq(onmt.constants.PAD), 0)
+            gold_scores += scores.squeeze(1).type_as(gold_scores)
+            gold_words += tgt_t.ne(onmt.constants.PAD).sum().item()
+            allgold_scores.append(scores.squeeze(1).type_as(gold_scores))
+
+        return gold_words, gold_scores, allgold_scores
