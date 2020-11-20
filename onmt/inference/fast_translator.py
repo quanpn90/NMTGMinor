@@ -49,17 +49,18 @@ class FastTranslator(Translator):
             print('* Current bos id: %d' % self.bos_id, onmt.constants.BOS)
             print('* Using fast beam search implementation')
 
-    def translateBatch(self, batch):
+    def translateBatch(self, batches):
 
         with torch.no_grad():
-            return self._translateBatch(batch)
+            return self._translateBatch(batches)
 
-    def _translateBatch(self, batch):
+    def _translateBatch(self, batches):
 
+        batch = batches[0]
         # Batch size is in different location depending on data.
 
         beam_size = self.opt.beam_size
-        bsz = batch_size =  batch.size
+        bsz = batch_size = batch.size
 
         max_len = self.opt.max_sent_length
 
@@ -68,7 +69,7 @@ class FastTranslator(Translator):
         allgold_scores = []
 
         if batch.has_target:
-            # Use the first model to decode
+            # Use the first model to decode (also batches[0])
             model_ = self.models[0]
 
             gold_words, gold_scores, allgold_scores = model_.decode(batch)
@@ -206,7 +207,8 @@ class FastTranslator(Translator):
         # - expanding the mask over the batch dimension    (B*beam) x len_src
         decoder_states = dict()
         for i in range(self.n_models):
-            decoder_states[i] = self.models[i].create_decoder_state(batch, beam_size, type=2, buffering=self.buffering)
+            decoder_states[i] = self.models[i].create_decoder_state(batches[i], beam_size, type=2,
+                                                                    buffering=self.buffering)
 
         if self.dynamic_max_len:
             src_len = src.size(0)
@@ -476,19 +478,30 @@ class FastTranslator(Translator):
 
     def translate(self, src_data, tgt_data, type='mt'):
         #  (1) convert words to indexes
-        dataset = self.build_data(src_data, tgt_data, type=type)
-        batch = dataset.get_batch(0)
-        if self.cuda:
-            batch.cuda(fp16=self.fp16)
+        if isinstance(src_data[0], list):
+            batches = list()
+            for src_data_ in src_data:
+                dataset = self.build_data(src_data_, tgt_data, type=type)
+                batch = dataset.get_batch(0)
+                batches.append(batch)
+        else:
+            dataset = self.build_data(src_data, tgt_data, type=type)
+            batch = dataset.get_batch(0)  # this dataset has only one mini-batch
+            batches = [batch] * self.n_models
+            src_data = [src_data] * self.n_models
 
-        batch_size = batch.size
+        batch_size = batches[0].size
+        if self.cuda:
+            for i, _ in enumerate(batches):
+                batches[i].cuda(fp16=self.fp16)
 
         #  (2) translate
-        finalized, gold_score, gold_words, allgold_words = self.translateBatch(batch)
+        finalized, gold_score, gold_words, allgold_words = self.translateBatch(batches)
         pred_length = []
 
         #  (3) convert indexes to words
         pred_batch = []
+        src_data = src_data[0]
         for b in range(batch_size):
             pred_batch.append(
                 [self.build_target_tokens(finalized[b][n]['tokens'], src_data[b], None)

@@ -440,15 +440,24 @@ class Translator(object):
         #  (1) convert words to indexes
         # for i in range(19999):
         #     print(32423)
-        dataset = self.build_data(src_data, tgt_data, type="asr")
-        batch = dataset.get_batch(0)  # this dataset has only one mini-batch
+        if isinstance(src_data[0], list):
+            batches = list()
+            for src_data_ in src_data:
+                dataset = self.build_data(src_data_, tgt_data, type="asr")
+                batch = dataset.get_batch(0)
+                batches.append(batch)
+        else:
+            dataset = self.build_data(src_data, tgt_data, type="asr")
+            batch = dataset.get_batch(0)  # this dataset has only one mini-batch
+            batches = [batch] * self.n_models
 
         if self.cuda:
-            batch.cuda(fp16=self.fp16)
-        batch_size = batch.size
+            for i, _ in enumerate(batches):
+                batches[i].cuda(fp16=self.fp16)
+        batch_size = batches[0].size
 
         #  (2) translate
-        pred, pred_score, attn, pred_length, gold_score, gold_words, allgold_words = self.translate_batch(batch)
+        pred, pred_score, attn, pred_length, gold_score, gold_words, allgold_words = self.translate_batch(batches)
 
         #  (3) convert indexes to words
         pred_batch = []

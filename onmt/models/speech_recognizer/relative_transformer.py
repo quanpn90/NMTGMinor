@@ -240,8 +240,8 @@ class SpeechTransformerDecoder(TransformerDecoder):
         self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
         # Parameters for the position biases - deprecated. kept for backward compatibility
-        self.r_w_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
-        self.r_r_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
+        # self.r_w_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
+        # self.r_r_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
 
         self.mln = opt.multilingual_layer_norm
         self.postprocess_layer = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,

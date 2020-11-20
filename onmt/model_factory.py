@@ -452,7 +452,7 @@ def build_fusion(opt, dicts):
     return model
 
 
-def optimize_model(model, fp16=True):
+def optimize_model(model, fp16=True, distributed=False):
     """
     Used to potentially upgrade the components with more optimized counterparts in the future
     """
@@ -494,5 +494,5 @@ def optimize_model(model, fp16=True):
 
     replace_layer_norm(model, "Transformer")
 
-    if fp16:
-        safe_batch_norm(model, "Transformer")
+    # if fp16:
+    #     safe_batch_norm(model, "Transformer")

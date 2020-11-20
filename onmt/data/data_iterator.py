@@ -31,9 +31,10 @@ class CountingIterator(object):
         n (int): number of elements consumed from this iterator
     """
 
-    def __init__(self, iterable, start=None, total=None):
+    def __init__(self, iterable, start=None, total=None, empty=False):
         self.iterable = iterable
         self.itr = iter(self)
+        self.empty = empty
 
         if start is None:
             self.n = getattr(iterable, 'n', 0)
@@ -49,6 +50,8 @@ class CountingIterator(object):
         return self.total
 
     def __iter__(self):
+        if self.empty:
+            return
         for x in self.iterable:
             if self.n >= self.total:
                 return
@@ -56,6 +59,8 @@ class CountingIterator(object):
             yield x
 
     def __next__(self):
+        if self.empty:
+            return None
         return next(self.itr)
 
     def has_next(self):
@@ -123,7 +128,7 @@ dataset (~torch.utils.data.Dataset)
 class DataIterator(EpochBatchIterating):
 
     def __init__(self, dataset, collate_fn, batch_sampler, seed=1, num_workers=0,
-                 epoch=1, buffer_size=0, timeout=0, num_shards=1, shard_id=0):
+                 epoch=1, buffer_size=0, timeout=0, num_shards=1, shard_id=0, fill_value=None):
         """
         :param dataset:
         :param collate_fn:
@@ -154,6 +159,7 @@ class DataIterator(EpochBatchIterating):
         self._cur_epoch_itr = None
         self._next_epoch_itr = None
         self._support_prefetch = False
+        self.fill_value = fill_value
 
     def __len__(self):
         # number of minibatches, or ???
@@ -247,9 +253,15 @@ class DataIterator(EpochBatchIterating):
         else:
             batches = self.frozen_batches
 
-        #
         num_shards = self.num_shards
-        batches = list(ShardedIterator(batches, num_shards, self.shard_id, fill_value=None))
+        batches = list(ShardedIterator(batches, num_shards, self.shard_id, fill_value=batches[0]))
+
+        # catch the exception when the data is so small that one iterator is completely empty
+        if batches[0] is None:
+            empty = True
+            print("This iterator is empty")
+        else:
+            empty = False
 
         if offset > 0 and offset >= len(batches):
             return None
@@ -272,7 +284,7 @@ class DataIterator(EpochBatchIterating):
             itr = BufferedIterator(self.buffer_size, itr)
 
         # Wrap with CoutingIterator
-        itr = CountingIterator(itr, start=offset)
+        itr = CountingIterator(itr, start=offset, empty=empty)
         return itr
 
 

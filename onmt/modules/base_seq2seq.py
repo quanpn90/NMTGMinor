@@ -75,6 +75,8 @@ class NMTModel(nn.Module):
         """
         override this method to have back-compatibility
         """
+
+        model_dict = self.state_dict()
         
         def condition(param_name):
             # don't load these buffers (more like a bug)
@@ -85,6 +87,10 @@ class NMTModel(nn.Module):
                     return False
             if param_name == 'decoder.mask':
                 return False
+            if param_name == 'decoder.r_w_bias' or param_name == 'decoder.r_r_bias':
+                if param_name in model_dict:
+                    return True
+                return False
             
             return True
 
@@ -94,8 +100,6 @@ class NMTModel(nn.Module):
 
         # only load the filtered parameters
         filtered = {k: v for k, v in state_dict.items() if condition(k)}
-
-        model_dict = self.state_dict()
 
         for k, v in model_dict.items():
             if k not in filtered:
