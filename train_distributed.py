@@ -106,7 +106,7 @@ def main():
                                           multiplier=opt.batch_size_multiplier,
                                           augment=opt.augment_speech,
                                           upsampling=opt.upsampling,
-                                          num_split=len(opt.gpus))
+                                          num_split=1)
             else:
                 train_data = onmt.StreamDataset(train_dict['src'], train_dict['tgt'],
                                                 train_src_langs, train_tgt_langs,
@@ -209,7 +209,7 @@ def main():
                                           src_align_right=opt.src_align_right,
                                           upsampling=opt.upsampling,
                                           cleaning=True, verbose=True,
-                                          num_split=len(opt.gpus))
+                                          num_split=1)
             else:
                 train_data = onmt.StreamDataset(train_src,
                                                 train_tgt,
@@ -342,7 +342,7 @@ def main():
                                               src_align_right=opt.src_align_right,
                                               upsampling=opt.upsampling,
                                               cleaning=True, verbose=True,
-                                              num_split=len(opt.gpus))
+                                              num_split=1)
 
                     train_sets.append(train_data)
 

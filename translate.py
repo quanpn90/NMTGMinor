@@ -306,17 +306,19 @@ def main():
 
         # catch the last batch
         if len(src_batches[0]) != 0:
-            print("Batch size:", len(src_batch), len(tgt_batch))
+            print("Batch size:", len(src_batches[0]), len(tgt_batch))
             pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
-                src_batch,
+                src_batches,
                 tgt_batch, type='asr')
             print("Result:", len(pred_batch))
-            count, pred_score, pred_words, gold_score, goldWords = translate_batch(opt, tgtF, count, outF, translator,
-                                                                                   src_batch, tgt_batch, pred_batch,
-                                                                                   pred_score,
-                                                                                   pred_length, gold_score,
-                                                                                   num_gold_words,
-                                                                                   all_gold_scores, opt.input_type)
+            count, pred_score, pred_words, gold_score, goldWords \
+                = translate_batch(opt, tgtF, count, outF, translator,
+                                  src_batches[0], tgt_batch, pred_batch,
+                                  pred_score,
+                                  pred_length, gold_score,
+                                  num_gold_words,
+                                  all_gold_scores, opt.input_type)
+
             pred_score_total += pred_score
             pred_words_total += pred_words
             gold_score_total += gold_score

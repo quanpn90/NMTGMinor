@@ -1,6 +1,8 @@
 import torch
 import torch.nn.functional as F
 import apex.amp as amp
+from torch.cuda.amp import custom_fwd, custom_bwd
+
 
 
 class RelativeShiftFunction(torch.autograd.Function):
@@ -75,6 +77,7 @@ class RelativeShift(object):
 
 class RelativeSelfAttnFunc(torch.autograd.Function):
     @staticmethod
+    @custom_fwd(cast_inputs=torch.float16)
     def forward(ctx, inputs, pos, use_time_mask, is_training, heads,
                 input_weights, output_weights, pos_weights,
                 input_biases, output_biases, pos_biases,
@@ -305,6 +308,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # return outputs.detach()
 
     @staticmethod
+    @custom_bwd
     def backward(ctx, output_grads, softmax_grads):
         # def backward(ctx, output_grads):
         """

@@ -440,7 +440,7 @@ class Optim(object):
         self.amsgrad = opt.amsgrad
         self.max_steps = opt.max_steps
 
-    def step(self, grad_denom=None, warmup=False):
+    def step(self, scaler=None, grad_denom=None, warmup=False):
 
         "Normalize gradients by batch size"
         self.normalize_grad(denom=grad_denom)
@@ -449,7 +449,7 @@ class Optim(object):
         # grad_norm = clip_grad_norm(self.params, self.max_grad_norm).item()
 
         overflow = False
-        if self.optimizer._amp_stash.already_patched:
+        if hasattr(self.optimizer,"_amp_stash.already_patched") and self.optimizer._amp_stash.already_patched:
             overflow = True
         "Automatically scale learning rate over learning period if not overflow"
         if not overflow:
@@ -457,7 +457,11 @@ class Optim(object):
             if 'noam' in self.update_method or 'cosine' in self.update_method:
                 self.updateLearningRate()
 
-        self.optimizer.step()
+        # For
+        if scaler is not None:
+            scaler.step(self.optimizer)
+        else:
+            self.optimizer.step()
 
         # return grad_norm
 

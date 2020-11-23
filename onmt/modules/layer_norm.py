@@ -6,6 +6,8 @@ from torch.nn import init
 from torch.nn import functional as F
 import importlib
 from apex import amp
+from torch.cuda.amp import custom_fwd, custom_bwd
+
 
 global fused_layer_norm_cuda
 fused_layer_norm_cuda = None
@@ -14,6 +16,7 @@ fused_layer_norm_cuda = None
 class FusedLayerNormAffineFunction(torch.autograd.Function):
 
     @staticmethod
+    @custom_fwd(cast_inputs=torch.float16)
     def forward(ctx, input, weight, bias, normalized_shape, eps):
         global fused_layer_norm_cuda
         if fused_layer_norm_cuda is None:
@@ -29,6 +32,7 @@ class FusedLayerNormAffineFunction(torch.autograd.Function):
         return output
 
     @staticmethod
+    @custom_bwd
     def backward(ctx, grad_output):
         input_, weight_, bias_, mean, invvar = ctx.saved_tensors
         grad_input = grad_weight = grad_bias = None
@@ -42,6 +46,7 @@ class FusedLayerNormAffineFunction(torch.autograd.Function):
 class FusedLayerNormFunction(torch.autograd.Function):
 
     @staticmethod
+    @custom_fwd(cast_inputs=torch.float16)
     def forward(ctx, input, normalized_shape, eps):
         global fused_layer_norm_cuda
         if fused_layer_norm_cuda is None:
@@ -55,6 +60,7 @@ class FusedLayerNormFunction(torch.autograd.Function):
         return output
 
     @staticmethod
+    @custom_bwd
     def backward(ctx, grad_output):
         input_, mean, invvar = ctx.saved_tensors
         grad_input = None
