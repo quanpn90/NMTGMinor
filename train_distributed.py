@@ -137,6 +137,7 @@ def main():
                                           batch_size_words=opt.batch_size_words,
                                           data_type=dataset.get("type", "text"), sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
+                                          multiplier=opt.batch_size_multiplier,
                                           upsampling=opt.upsampling)
             else:
                 valid_data = onmt.StreamDataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
@@ -251,6 +252,7 @@ def main():
                                           valid_src_sizes, valid_tgt_sizes,
                                           valid_src_langs, valid_tgt_langs,
                                           batch_size_words=opt.batch_size_words,
+                                          multiplier=opt.batch_size_multiplier,
                                           data_type=data_type, sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
                                           src_align_right=opt.src_align_right,
@@ -388,6 +390,7 @@ def main():
                                               src_sizes, tgt_sizes,
                                               src_lang_data, tgt_lang_data,
                                               batch_size_words=opt.batch_size_words,
+                                              multiplier=opt.batch_size_multiplier,
                                               data_type=data_type, sorting=True,
                                               batch_size_sents=opt.batch_size_sents,
                                               src_align_right=opt.src_align_right,

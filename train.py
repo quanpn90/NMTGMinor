@@ -433,11 +433,12 @@ def main():
             model = build_model(opt, dicts)
 
         """ Building the loss function """
-        if opt.ctc_loss != 0:
-            loss_function = NMTAndCTCLossFunc(dicts['tgt'].size(),
-                                              label_smoothing=opt.label_smoothing,
-                                              ctc_weight=opt.ctc_loss)
-        elif opt.nce:
+        # if opt.ctc_loss != 0:
+        #     pass
+        #     loss_function = NMTAndCTCLossFunc(dicts['tgt'].size(),
+        #                                       label_smoothing=opt.label_smoothing,
+        #                                       ctc_weight=opt.ctc_loss)
+        if opt.nce:
             from onmt.modules.nce.nce_loss import NCELoss
             loss_function = NCELoss(opt.model_size, dicts['tgt'].size(), noise_ratio=opt.nce_noise,
                                     logz=9, label_smoothing=opt.label_smoothing)

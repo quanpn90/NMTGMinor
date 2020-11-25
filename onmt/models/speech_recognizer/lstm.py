@@ -95,6 +95,7 @@ class SpeechLSTMEncoder(nn.Module):
 
         if not self.cnn_downsampling:
             mask_src = input.narrow(2, 0, 1).squeeze(2).gt(onmt.constants.PAD)
+            dec_attn_mask = input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
             input = input.narrow(2, 1, input.size(2) - 1)
             #     print(input.shape)
             emb = self.audio_trans(input.contiguous().view(-1, input.size(2))).view(input.size(0),
@@ -115,6 +116,7 @@ class SpeechLSTMEncoder(nn.Module):
             input = self.linear_trans(input)
 
             mask_src = long_mask[:, 0:input.size(1) * 4:4]
+            dec_attn_mask = ~mask_src
             # the size seems to be B x T ?
             emb = input
 
@@ -127,7 +129,7 @@ class SpeechLSTMEncoder(nn.Module):
         # layer norm
         seq = self.postprocess_layer(seq)
 
-        output_dict = {'context': seq.transpose(0, 1), 'src_mask': mask_src}
+        output_dict = {'context': seq.transpose(0, 1), 'src_mask': dec_attn_mask}
 
         return output_dict
 
@@ -325,8 +327,6 @@ class SpeechLSTMDecoder(nn.Module):
                 mask_src = src.data.eq(onmt.constants.PAD).unsqueeze(1)
         else:
             mask_src = None
-
-        # dec_emb = self.preprocess_layer(dec_emb.transpose(0, 1).contiguous())
 
         if dec_seq.size(0) > 1 and dec_seq.size(1) > 1:
             lengths = dec_seq.gt(onmt.constants.PAD).sum(-1)

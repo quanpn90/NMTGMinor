@@ -541,8 +541,9 @@ class TransformerDecoder(nn.Module):
 class Transformer(NMTModel):
     """Main model in 'Attention is all you need' """
 
-    def __init__(self, encoder, decoder, generator=None, rec_decoder=None, rec_generator=None, mirror=False):
-        super().__init__(encoder, decoder, generator, rec_decoder, rec_generator)
+    def __init__(self, encoder, decoder, generator=None, rec_decoder=None, rec_generator=None,
+                 mirror=False, ctc=False):
+        super().__init__(encoder, decoder, generator, rec_decoder, rec_generator, ctc=ctc)
         self.model_size = self.decoder.model_size
         self.switchout = self.decoder.switchout
         self.tgt_vocab_size = self.decoder.word_lut.weight.size(0)
@@ -560,6 +561,9 @@ class Transformer(NMTModel):
 
         if self.reconstruct:
             self.rec_linear = nn.Linear(decoder.model_size, decoder.model_size)
+
+        if self.ctc:
+            self.ctc_linear = nn.Linear(encoder.model_size, self.tgt_vocab_size)
 
     def reset_states(self):
         return
@@ -680,6 +684,10 @@ class Transformer(NMTModel):
             output_dict['rec_target'] = src_output
         else:
             output_dict['reconstruct'] = False
+
+        # compute the logits for each encoder step
+        if self.ctc:
+            output_dict['encoder_logits'] = self.ctc_linear(output_dict['context'])
 
         return output_dict
 

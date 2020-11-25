@@ -27,6 +27,7 @@ import torch.distributed as dist
 from torch.cuda.amp import autocast
 import warnings
 
+# ignore the pytorch -> numpy conversion warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
@@ -37,18 +38,17 @@ def varname(p):
             return m.group(1)
 
 
-def prepare_sample(batch, device=None, fp16=False):
+def prepare_sample(batch, device=None):
     """
     Put minibatch on the corresponding GPU
     :param batch:
     :param device:
-    :param fp16:
     :return:
     """
     if isinstance(batch, list):
         batch = batch[0]
     batch = rewrap(batch)
-    batch.cuda(fp16=fp16, device=device)
+    batch.cuda(fp16=False, device=device)
 
     return batch
 
@@ -62,7 +62,6 @@ def generate_data_iterator(dataset, rank, world_size, seed,
                                           epoch=epoch, buffer_size=buffer_size,
                                           num_shards=world_size, shard_id=rank)
     else:
-
         data_iterator = DataIterator(dataset, dataset.collater, dataset.batches, seed=seed,
                                      num_workers=num_workers, epoch=epoch, buffer_size=buffer_size,
                                      num_shards=world_size, shard_id=rank)
@@ -95,7 +94,7 @@ def all_reduce_and_rescale_tensors(tensors, rescale_denom,
         offset = 0
         for t in buffer:
             numel = t.numel()
-            buffer_t[offset:offset+numel].copy_(t.view(-1))
+            buffer_t[offset:offset + numel].copy_(t.view(-1))
             offset += numel
 
         # all-reduce and rescale
@@ -106,7 +105,7 @@ def all_reduce_and_rescale_tensors(tensors, rescale_denom,
         offset = 0
         for t in buffer:
             numel = t.numel()
-            t.view(-1).copy_(buffer_t[offset:offset+numel])
+            t.view(-1).copy_(buffer_t[offset:offset + numel])
             offset += numel
 
     with torch.no_grad():
@@ -164,6 +163,7 @@ class Trainer(object):
             self.train_data = train_data
             self.valid_data = valid_data
         else:
+            # Do we really need to deepcopy the data instances (which could cause memory leak easily)
             self.train_data = copy.deepcopy(train_data)
             self.valid_data = copy.deepcopy(valid_data)
 
@@ -188,15 +188,15 @@ class Trainer(object):
         if not opt.fusion:
 
             if self.is_main():
-                print("BUILDING MODEL .... ", flush=True)
+                print("[INFO] Building models .... ", flush=True)
             model = build_model(opt, dicts)
 
             """ Building the loss function """
-            if opt.ctc_loss != 0:
-                loss_function = NMTAndCTCLossFunc(dicts['tgt'].size(),
-                                                  label_smoothing=opt.label_smoothing,
-                                                  ctc_weight=opt.ctc_loss)
-            elif opt.nce:
+            if opt.ctc_loss > 0.0:
+                from onmt.speech.ctc_loss import CTC
+                self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True)
+
+            if opt.nce:
                 from onmt.modules.nce.nce_loss import NCELoss
                 loss_function = NCELoss(opt.model_size, dicts['tgt'].size(), noise_ratio=opt.nce_noise,
                                         logz=9, label_smoothing=opt.label_smoothing)
@@ -222,6 +222,8 @@ class Trainer(object):
 
             self.loss_function = self.loss_function.cuda(device=self.device)
             self.model = self.model.cuda(device=self.device)
+            if opt.ctc_loss > 0.0:
+                self.ctc_loss_function = self.ctc_loss_function.cuda(device=self.device)
 
             # Ensure that the distributed copies have the same initial parameters
             # Manual seed may not work the same for different GPU models.
@@ -230,12 +232,14 @@ class Trainer(object):
 
                 with torch.no_grad():
                     if not self.is_main():
+                        # zero everything except for the main model
                         for p in params:
                             p.zero_()
                     else:
                         for p in params:
                             p.add_(0)
 
+            # run all_reduce to ensure that all models have exactly the same parameters
             if self.world_size > 1:
                 params = [p for p in self.model.parameters()]
                 all_reduce_and_rescale_tensors(params, 1)
@@ -248,28 +252,7 @@ class Trainer(object):
             if self.is_main():
                 print("[INFO] Optimizer: ", self.optim.optimizer)
 
-            # if not self.opt.fp16:
-            #     opt_level = "O0"
-            #     keep_batchnorm_fp32 = False
-            # elif self.opt.fp16_mixed:
-            #     opt_level = "O1"
-            #     keep_batchnorm_fp32 = None
-            # else:
-            #     opt_level = "O2"
-            #     keep_batchnorm_fp32 = False
-            #
-            # if self.cuda:
-            #     self.model, self.optim.optimizer = amp.initialize(self.model,
-            #                                                       self.optim.optimizer,
-            #                                                       opt_level=opt_level,
-            #                                                       keep_batchnorm_fp32=keep_batchnorm_fp32,
-            #                                                       loss_scale="dynamic",
-            #                                                       verbosity=1 if self.opt.verbose else 0)
-
-            # wrap the model into DDP after initializing by amp
             if self.world_size > 1:
-
-                # torch DDP is more likely to work with the official amp autocast
                 # find_unused_parameters may be required for dropped layer (parameters that are not connected to
                 # any particular graph)
                 find_unused_parameters = True if opt.death_rate > 0.0 else False
@@ -386,7 +369,7 @@ class Trainer(object):
         opt = self.opt
 
         if self.cuda:
-            batch.cuda(fp16=self.opt.fp16 and not self.opt.fp16_mixed)
+            batch.cuda(fp16=False)
 
         self.model.train()
         self.loss_function.train()
@@ -417,6 +400,11 @@ class Trainer(object):
                 loss_data = loss_dict['data']
                 loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
                 full_loss = loss
+
+                if opt.ctc_loss > 0.0:
+                    ctc_loss = self.ctc_loss_function(outputs, targets)
+                    ctc_loss_data = ctc_loss.item()
+                    full_loss = full_loss + opt.ctc_loss * ctc_loss
 
                 if opt.mirror_loss:
                     rev_loss = loss_dict['rev_loss']
@@ -482,17 +470,16 @@ class Trainer(object):
                 raise e
 
         if oom:
-            print("* Warning: out-of-memory in warming up. This is due to the largest batch is too big for the GPU.",
+            print("[INFO] Warning: out-of-memory in warming up. "
+                  "This is due to the largest batch is too big for the GPU.",
                   flush=True)
         else:
-            print("* Warming up successfully.", flush=True)
+            self.print("[INFO] Warming up successfully.", flush=True)
 
         if self.opt.memory_profiling:
             if hasattr(torch.cuda, 'memory_summary'):
                 print(torch.cuda.memory_summary())
             exit()
-
-        pass
 
     def save(self, epoch, valid_ppl, itr=None):
 
@@ -531,6 +518,7 @@ class Trainer(object):
             os.remove(save_file)
 
     def eval(self, data):
+        self.print("[INFO] Running cross-entropy evaluation...", flush=True)
         opt = self.opt
         rank = self.device
         world_size = self.world_size
@@ -561,8 +549,7 @@ class Trainer(object):
 
                 if samples:
                     with autocast():
-                        batch = prepare_sample(samples, device=self.device, fp16=self.opt.fp16 and not self.opt.fp16_mixed)
-
+                        batch = prepare_sample(samples, device=self.device)
                         targets = batch.get('target_output')
                         tgt_mask = targets.ne(onmt.constants.PAD)
                         outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
@@ -639,7 +626,7 @@ class Trainer(object):
             # TODO: move everything to the multiGPU trainer
             samples = next(epoch_iterator)
 
-            batch = prepare_sample(samples, device=self.device, fp16=self.opt.fp16 and not self.opt.fp16_mixed)
+            batch = prepare_sample(samples, device=self.device)
 
             if opt.streaming:
                 if train_data.is_new_stream():
@@ -654,7 +641,10 @@ class Trainer(object):
                 # outputs is a dictionary containing keys/values necessary for loss function
                 # can be flexibly controlled within models for easier extensibility
                 counter = counter + 1
-                reduction_disabled = False if counter >= opt.update_frequency or i == (n_samples-1) else True
+                reduction_disabled = False if counter >= opt.update_frequency or i == (n_samples - 1) else True
+
+                # when we dont reach the updating step, we do not need to synchronize the gradients
+                # thus disabling the backward grad sync to improve speed
                 self.model.require_backward_grad_sync = not reduction_disabled
 
                 with autocast():
@@ -673,6 +663,11 @@ class Trainer(object):
                     loss_data = loss_dict['data']
                     loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
                     full_loss = loss
+
+                    if opt.ctc_loss > 0.0:
+                        ctc_loss = self.ctc_loss_function(outputs, targets)
+                        ctc_loss_data = ctc_loss.item()
+                        full_loss = full_loss + opt.ctc_loss * ctc_loss
 
                     if opt.mirror_loss:
                         rev_loss = loss_dict['rev_loss']
@@ -729,7 +724,7 @@ class Trainer(object):
             num_accumulated_words.add_(tgt_size)
             num_accumulated_sents.add_(batch_size)
 
-            #   We only update the parameters after getting gradients from n mini-batches
+            # We only update the parameters after getting gradients from n mini-batches
             update_flag = False
             if counter >= opt.update_frequency:
                 update_flag = True
@@ -795,7 +790,7 @@ class Trainer(object):
                 report_mirror_loss.add_(mirror_loss_data)
 
             # control the index a little bit to ensure the log is always printed
-            if i == 0 or ((i+1) % opt.log_interval < self.world_size):
+            if i == 0 or ((i + 1) % opt.log_interval < self.world_size):
 
                 dist.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
                 dist.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
@@ -833,7 +828,9 @@ class Trainer(object):
                 report_loss.zero_()
                 report_tgt_words.zero_()
                 report_src_words.zero_()
-                report_rec_loss.zero_(); report_rev_loss.zero_(); report_mirror_loss.zero_()
+                report_rec_loss.zero_()
+                report_rev_loss.zero_()
+                report_mirror_loss.zero_()
                 start = time.time()
 
             # increase i by world size
@@ -850,7 +847,6 @@ class Trainer(object):
             raise NotImplementedError
 
             # TODO: have loading checkpoints for each process
-
             self.model.load_state_dict(checkpoint['model'])
             prec_opt = checkpoint['opt'] if 'opt' in checkpoint else None
 
@@ -866,13 +862,6 @@ class Trainer(object):
                     # Maybe its better to change between optimization mode?
                     if 'scaler' in checkpoint:
                         self.grad_scaler.load_state_dict(checkpoint['scaler'])
-                    # if opt.fp16_mixed == prec_opt.fp16_mixed and opt.fp16 == prec_opt.fp16:
-                    #     if 'amp' in checkpoint:
-                    #         try:
-                    #             amp.load_state_dict(checkpoint['amp'])
-                    #         except Exception:
-                    #             # loading the amp state can fail
-                    #             pass
 
                 # Only load the progress when we use the same optimizer
                 if 'itr' in checkpoint:

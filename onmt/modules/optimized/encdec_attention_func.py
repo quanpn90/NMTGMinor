@@ -298,6 +298,7 @@ def fast_encdec_attn_func(time_masking, is_training, num_heads, query, key,
                           attn_mask, dropout):
     try:
         from apex.contrib.multihead_attn.fast_encdec_multihead_attn_func import fast_encdec_attn_func as attn
+        from .encdec_attention_func_fused import fast_encdec_attn_func as attn
     except ModuleNotFoundError as e:
         print("Cannot use fast self-attention implementation")
 

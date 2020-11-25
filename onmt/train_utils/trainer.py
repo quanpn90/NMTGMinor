@@ -211,6 +211,11 @@ class BaseTrainer(object):
             loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
             full_loss = loss
 
+            if opt.ctc_loss > 0.0:
+                ctc_loss = self.ctc_loss_function(outputs, targets)
+                ctc_loss_data = ctc_loss.item()
+                full_loss = full_loss + opt.ctc_loss * ctc_loss
+
             if opt.mirror_loss:
                 rev_loss = loss_dict['rev_loss']
                 mirror_loss = loss_dict['mirror_loss']
@@ -296,12 +301,18 @@ class XETrainer(BaseTrainer):
 
         self.n_gpus = len(self.opt.gpus)
 
+        if opt.ctc_loss != 0:
+            from onmt.speech.ctc_loss import CTC
+            self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True)
+            model.ctc_projection = self.ctc_loss_function.projection
+
         if self.cuda:
             torch.cuda.set_device(self.opt.gpus[0])
             if self.opt.seed >= 0:
                 torch.manual_seed(self.opt.seed)
             self.loss_function = self.loss_function.cuda()
             self.model = self.model.cuda()
+            self.ctc_loss_function = self.ctc_loss_function.cuda()
 
         if setup_optimizer:
 
@@ -520,6 +531,11 @@ class XETrainer(BaseTrainer):
                 loss_data = loss_dict['data']
                 loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
                 full_loss = loss
+
+                if opt.ctc_loss > 0.0:
+                    ctc_loss = self.ctc_loss_function(outputs, targets)
+                    ctc_loss_data = ctc_loss.item()
+                    full_loss = full_loss + opt.ctc_loss * ctc_loss
 
                 if opt.mirror_loss:
                     rev_loss = loss_dict['rev_loss']

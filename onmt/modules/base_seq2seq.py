@@ -45,13 +45,15 @@ class Generator(nn.Module):
 
 class NMTModel(nn.Module):
 
-    def __init__(self, encoder, decoder, generator=None, rec_decoder=None, rec_generator=None, mirror=False):
+    def __init__(self, encoder, decoder, generator=None, rec_decoder=None, rec_generator=None,
+                 mirror=False, ctc=False):
         super(NMTModel, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.generator = generator
         self.rec_decoder = rec_decoder
         self.rec_generator = rec_generator
+        self.ctc = ctc
 
         if self.rec_decoder:
             self.rec_decoder.word_lut.weight = self.encoder.word_lut.weight

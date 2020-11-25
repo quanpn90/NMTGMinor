@@ -116,7 +116,7 @@ def build_tm_model(opt, dicts):
 
             decoder = SpeechLSTMDecoder(opt, embedding_tgt, language_embeddings=language_embeddings)
 
-            model = Conformer(encoder, decoder, nn.ModuleList(generators))
+            model = Conformer(encoder, decoder, nn.ModuleList(generators), ctc=opt.ctc_loss > 0.0)
 
         else:
             encoder = SpeechTransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
@@ -124,7 +124,7 @@ def build_tm_model(opt, dicts):
             decoder = SpeechTransformerDecoder(opt, embedding_tgt, positional_encoder,
                                            language_embeddings=language_embeddings)
             model = RelativeTransformer(encoder, decoder, nn.ModuleList(generators),
-                                        None, None, mirror=opt.mirror_loss)
+                                        None, None, mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
 
         # If we use the multilingual model and weights are partitioned:
         if opt.multilingual_partitioned_weights:
@@ -485,12 +485,9 @@ def optimize_model(model, fp16=True, distributed=False):
             if type(target_attr) == torch.nn.BatchNorm2d or type(target_attr) == torch.nn.BatchNorm1d:
 
                 if fp16:
-                    target_attr.eps = 1e-4  # tiny value for fp16 according to AllenNLP
+                    target_attr.eps = 1e-5  # tiny value for fp16 according to AllenNLP
 
                 setattr(m, attr_str, target_attr)
-                # setattr(m, attr_str, FusedLayerNorm(target_attr.normalized_shape,
-                #                                     eps=target_attr.eps,
-                #                                     elementwise_affine=target_attr.elementwise_affine))
 
     replace_layer_norm(model, "Transformer")
 

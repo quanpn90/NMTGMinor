@@ -153,8 +153,9 @@ class ConformerEncoder(TransformerEncoder):
 
 class Conformer(NMTModel):
 
-    def __init__(self, encoder, decoder, generator=None, rec_decoder=None, rec_generator=None, mirror=False):
-        super().__init__(encoder, decoder, generator, rec_decoder, rec_generator)
+    def __init__(self, encoder, decoder, generator=None, rec_decoder=None, rec_generator=None,
+                 mirror=False, ctc=False):
+        super().__init__(encoder, decoder, generator, rec_decoder, rec_generator, ctc=ctc)
 
         self.model_size = self.decoder.model_size
         self.tgt_vocab_size = self.decoder.word_lut.weight.size(0)
@@ -162,6 +163,9 @@ class Conformer(NMTModel):
             self.src_vocab_size = self.encoder.word_lut.weight.size(0)
         else:
             self.src_vocab_size = 0
+
+        if self.ctc:
+            self.ctc_linear = nn.Linear(encoder.model_size, self.tgt_vocab_size)
 
     def reset_states(self):
         return
@@ -214,6 +218,10 @@ class Conformer(NMTModel):
         else:
             logprobs = self.generator[0](output_dict)['logits']
             output_dict['logprobs'] = logprobs
+
+        # compute the logits for each encoder step
+        if self.ctc:
+            output_dict['encoder_logits'] = self.ctc_linear(output_dict['context'])
 
         return output_dict
 
