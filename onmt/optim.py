@@ -319,14 +319,14 @@ def normalize_gradients(parameters, denom):
         p.grad.data.div_(denom)
 
 
-def detech_nan(parameters):
+def detech_nan_inf(parameters):
     parameters = list(filter(lambda p: p.grad is not None, parameters))
 
     for p in parameters:
-        if torch.equal(p.grad.data, p.grad.data):
-            continue
-        else:
+        if torch.isinf(p.grad.data).any() or torch.isnan(p.grad.data).any():
             return True
+        else:
+            continue
 
     return False
 
@@ -374,7 +374,10 @@ class Optim(object):
         self.params = list(params_)  # careful: params may be a generator
         if self.method == 'sgd':
             self.optimizer = optim.SGD(self.params, lr=self.lr, weight_decay=self.weight_decay, momentum=0.0)
-        elif self.method in ['adam', 'fused_adam']:
+        elif self.method == 'adam':
+            self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                                        weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+        elif self.method in ['fused_adam']:
 
             fast_adam = True
             try:
@@ -449,15 +452,19 @@ class Optim(object):
         # grad_norm = clip_grad_norm(self.params, self.max_grad_norm).item()
 
         overflow = False
-        if hasattr(self.optimizer,"_amp_stash.already_patched") and self.optimizer._amp_stash.already_patched:
+        if hasattr(self.optimizer, "_amp_stash.already_patched") and self.optimizer._amp_stash.already_patched:
             overflow = True
+
+        # if gradients have NaN/inf: return (which will be zeroed afterwards)
+        if detech_nan_inf(self.params):
+            return
+
         "Automatically scale learning rate over learning period if not overflow"
         if not overflow:
             self._step += 1
             if 'noam' in self.update_method or 'cosine' in self.update_method:
                 self.updateLearningRate()
 
-        # For
         if scaler is not None:
             scaler.step(self.optimizer)
         else:

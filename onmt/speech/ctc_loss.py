@@ -30,7 +30,7 @@ class CTC(torch.nn.Module):
 
         if self.ctc_type == "builtin":
             reduction_type = "sum" if reduce else "none"
-            self.ctc_loss = torch.nn.CTCLoss(reduction=reduction_type)
+            self.ctc_loss = torch.nn.CTCLoss(blank=onmt.constants.PAD, reduction=reduction_type, zero_infinity=True)
 
         elif self.ctc_type == "warpctc":
             import warpctc_pytorch as warp_ctc
@@ -88,6 +88,12 @@ class CTC(torch.nn.Module):
             input_lengths = (1 - source_mask).squeeze(1).sum(1)
         else:
             input_lengths = (1 - source_mask).sum(1)
+
+        # print("MAX SOURCE LENGTH", logits.size(0), logits.size())
+        # print(input_lengths)
+
+        # print("MAX LENGTH", targets.size(0), targets.size())
+        # print(target_lengths)
 
         if self.ctc_type == 'builtin':
             targets = targets.transpose(0, 1)

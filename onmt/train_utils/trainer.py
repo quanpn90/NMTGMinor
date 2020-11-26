@@ -304,7 +304,6 @@ class XETrainer(BaseTrainer):
         if opt.ctc_loss != 0:
             from onmt.speech.ctc_loss import CTC
             self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True)
-            model.ctc_projection = self.ctc_loss_function.projection
 
         if self.cuda:
             torch.cuda.set_device(self.opt.gpus[0])
@@ -312,7 +311,8 @@ class XETrainer(BaseTrainer):
                 torch.manual_seed(self.opt.seed)
             self.loss_function = self.loss_function.cuda()
             self.model = self.model.cuda()
-            self.ctc_loss_function = self.ctc_loss_function.cuda()
+            if opt.ctc_loss > 0.0:
+                self.ctc_loss_function = self.ctc_loss_function.cuda()
 
         if setup_optimizer:
 
@@ -474,6 +474,7 @@ class XETrainer(BaseTrainer):
         total_non_pads = 0
         report_loss, report_tgt_words = 0, 0
         report_src_words = 0
+        report_ctc_loss = 0
         report_rec_loss, report_rev_loss, report_mirror_loss = 0, 0, 0
         start = time.time()
         n_samples = len(epoch_iterator)
@@ -536,6 +537,7 @@ class XETrainer(BaseTrainer):
                     ctc_loss = self.ctc_loss_function(outputs, targets)
                     ctc_loss_data = ctc_loss.item()
                     full_loss = full_loss + opt.ctc_loss * ctc_loss
+                    report_ctc_loss += ctc_loss_data
 
                 if opt.mirror_loss:
                     rev_loss = loss_dict['rev_loss']
@@ -687,6 +689,13 @@ class XETrainer(BaseTrainer):
                                    (report_src_words / (time.time() - start),
                                     report_tgt_words / (time.time() - start)))
 
+                    if opt.ctc_loss > 0.0:
+                        # if torch.isinf(report_ctc_loss):
+                        #     report_ctc_loss.zero_()
+                        # dist.all_reduce(report_ctc_loss, op=dist.ReduceOp.SUM, group=self.group)
+                        ctc_loss = report_ctc_loss / report_tgt_words
+                        log_string += (" ctcloss: %8.2f ; " % ctc_loss)
+
                     log_string += ("%s elapsed" %
                                    str(datetime.timedelta(seconds=int(time.time() - self.start_time))))
 
@@ -695,6 +704,7 @@ class XETrainer(BaseTrainer):
                     report_loss = 0
                     report_tgt_words, report_src_words = 0, 0
                     report_rec_loss, report_rev_loss, report_mirror_loss = 0, 0, 0
+                    report_ctc_loss = 0
                     start = time.time()
 
                 i = i + 1

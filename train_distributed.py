@@ -407,6 +407,8 @@ def main():
     if opt.load_from:
         checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
         print("* Loading dictionaries from the checkpoint")
+        del checkpoint['model']
+        del checkpoint['optim']
         dicts = checkpoint['dicts']
     else:
         dicts['tgt'].patch(opt.patch_vocab_multiplier)
@@ -419,8 +421,8 @@ def main():
         print(' * vocabulary size. target = %d' %
               (dicts['tgt'].size()))
 
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '8888'
+    os.environ['MASTER_ADDR'] = opt.master_addr  # default 'localhost'
+    os.environ['MASTER_PORT'] = opt.master_port  # default '8888'
 
     # spawn N processes for N gpus
     # each process has a different trainer

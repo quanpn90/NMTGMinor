@@ -24,6 +24,7 @@ from onmt.train_utils.stats import Logger
 from onmt.utils import checkpoint_paths, normalize_gradients
 from onmt.model_factory import build_model, optimize_model, init_model_parameters
 import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP_model
 from torch.cuda.amp import autocast
 import warnings
 
@@ -211,11 +212,17 @@ class Trainer(object):
             if not opt.memory_profiling:
                 # distributed is required to convert BatchNorm to SyncBatchNorm for DDP
                 optimize_model(model, distributed=(self.world_size > 1))
-                # optimize_model(model)
 
         init_model_parameters(model, opt)
         self.model = model
         self.loss_function = loss_function
+        self.grad_scaler = torch.cuda.amp.GradScaler()
+
+        if opt.load_from:
+            checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
+            self.model.load_state_dict(checkpoint['model'])
+            if 'scaler' in checkpoint and checkpoint['scaler'] is not None:
+                self.grad_scaler.load_state_dict(checkpoint['scaler'])
 
         if self.cuda:
             torch.cuda.set_device(self.device)
@@ -252,16 +259,22 @@ class Trainer(object):
             if self.is_main():
                 print("[INFO] Optimizer: ", self.optim.optimizer)
 
-            if self.world_size > 1:
-                # find_unused_parameters may be required for dropped layer (parameters that are not connected to
-                # any particular graph)
-                find_unused_parameters = True if opt.death_rate > 0.0 else False
+            if opt.load_from:
+                if 'optim' in checkpoint and checkpoint['optim'] is not None and not opt.reset_optim:
+                    self.optim.load_state_dict(checkpoint['optim'])
 
-                self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[self.rank],
-                                                                       output_device=self.rank,
-                                                                       find_unused_parameters=find_unused_parameters)
+        if self.world_size > 1:
+            # find_unused_parameters may be required for dropped layer (parameters that are not connected to
+            # any particular graph)
+            find_unused_parameters = True if opt.death_rate > 0.0 else False
 
-            self.grad_scaler = torch.cuda.amp.GradScaler()
+            self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[self.rank],
+                                                                   output_device=self.rank,
+                                                                   find_unused_parameters=find_unused_parameters)
+
+        # if opt.load_from:
+        #     print("[INFO] Process %d loading parameters..." % self.rank, flush=True)
+
 
         print("[INFO] Process %d ready." % self.rank, flush=True)
 
@@ -487,7 +500,10 @@ class Trainer(object):
         model = self.model
         dicts = self.dicts
 
-        model_state_dict = self.model.state_dict()
+        if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+            model_state_dict = self.model.module.state_dict()
+        else:
+            model_state_dict = self.model.state_dict()
         optim_state_dict = self.optim.state_dict()
 
         if itr:
@@ -597,6 +613,7 @@ class Trainer(object):
         total_tokens, total_loss, total_words = zero_tensor(), zero_tensor(), zero_tensor()
         total_non_pads = zero_tensor()
         report_loss, report_tgt_words = zero_tensor(), zero_tensor()
+        report_ctc_loss = zero_tensor()
         report_src_words = zero_tensor()
         report_rec_loss, report_rev_loss, report_mirror_loss = zero_tensor(), zero_tensor(), zero_tensor()
         start = time.time()
@@ -789,6 +806,9 @@ class Trainer(object):
                 report_rev_loss.add_(rev_loss_data)
                 report_mirror_loss.add_(mirror_loss_data)
 
+            if opt.ctc_loss > 0.0:
+                report_ctc_loss.add_(ctc_loss_data)
+
             # control the index a little bit to ensure the log is always printed
             if i == 0 or ((i + 1) % opt.log_interval < self.world_size):
 
@@ -812,6 +832,13 @@ class Trainer(object):
                         log_string += (" rev_ppl: %6.2f ; " % rev_ppl)
                         log_string += (" mir_loss: %6.2f ; " % (report_mirror_loss / report_tgt_words))
 
+                    if opt.ctc_loss > 0.0:
+                        # if torch.isinf(report_ctc_loss):
+                        #     report_ctc_loss.zero_()
+                        # dist.all_reduce(report_ctc_loss, op=dist.ReduceOp.SUM, group=self.group)
+                        ctc_loss = report_ctc_loss.item() / report_tgt_words.item()
+                        log_string += (" ctcloss: %8.2f ; " % ctc_loss)
+
                     log_string += ("lr: %.7f ; updates: %7d; " %
                                    (self.optim.getLearningRate(),
                                     self.optim._step))
@@ -831,6 +858,7 @@ class Trainer(object):
                 report_rec_loss.zero_()
                 report_rev_loss.zero_()
                 report_mirror_loss.zero_()
+                report_ctc_loss.zero_()
                 start = time.time()
 
             # increase i by world size
@@ -844,24 +872,11 @@ class Trainer(object):
         opt = self.opt
 
         if checkpoint is not None:
-            raise NotImplementedError
 
             # TODO: have loading checkpoints for each process
-            self.model.load_state_dict(checkpoint['model'])
             prec_opt = checkpoint['opt'] if 'opt' in checkpoint else None
 
-            opt.reset_optim = True
-
             if not opt.reset_optim:
-
-                if self.is_main():
-                    print("* Loading optimizer states ... ")
-                self.optim.load_state_dict(checkpoint['optim'])
-                if prec_opt is not None and hasattr(prec_opt, "fp16_mixed"):
-                    # Only load amp information if the mode is the same
-                    # Maybe its better to change between optimization mode?
-                    if 'scaler' in checkpoint:
-                        self.grad_scaler.load_state_dict(checkpoint['scaler'])
 
                 # Only load the progress when we use the same optimizer
                 if 'itr' in checkpoint:
@@ -878,9 +893,8 @@ class Trainer(object):
                 resume = False
                 start_epoch = 1
 
-            del checkpoint['model']
-            optim_state_dict = checkpoint['optim']
-            # del checkpoint['optim']
+            # optim_state_dict = checkpoint['optim']
+            # # del checkpoint['optim']
             del checkpoint
         else:
             itr_progress = None

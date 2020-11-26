@@ -330,6 +330,10 @@ def make_parser(parser):
 
     parser.add_argument('-debugging', action='store_true',
                         help='Using reversible models for decoder')
+    parser.add_argument('-master_addr', default='localhost', type=str,
+                        help="""""")
+    parser.add_argument('-master_port', default='8888', type=str,
+                        help="""""")
     return parser
 
 
