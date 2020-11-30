@@ -79,11 +79,22 @@ class RelativeSelfMultiheadAttn(nn.Module):
 
     def forward(self, input, pos, key_padding_mask=None, attn_mask=None, mems=None,
                 incremental=False, incremental_cache=None):
+        """
+        :param input: [T x B x H]
+        :param pos:
+        :param key_padding_mask: [1 x T x B]
+        :param attn_mask: [T x T]
+        :param mems:
+        :param incremental:
+        :param incremental_cache:
+        :return:
+        """
 
         if key_padding_mask is not None:
             assert (attn_mask is None), "ERROR attn_mask and key_padding_mask should not be both defined!"
             mask = key_padding_mask
             if len(mask.shape) == 3:
+                # [1 x T x B] -> [B x T]
                 mask = mask.squeeze(0).transpose(0, 1)
         elif attn_mask is not None:
             mask = attn_mask

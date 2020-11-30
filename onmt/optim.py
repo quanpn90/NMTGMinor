@@ -408,8 +408,6 @@ class Optim(object):
         else:
             raise RuntimeError("Invalid optim method: " + self.method)
 
-        print(self.optimizer)
-
     def __init__(self, opt):
         self.optimizer = None
         self.params = None
@@ -457,7 +455,8 @@ class Optim(object):
 
         # if gradients have NaN/inf: return (which will be zeroed afterwards)
         if detech_nan_inf(self.params):
-            return
+            if self._step >= 128:
+                return
 
         "Automatically scale learning rate over learning period if not overflow"
         if not overflow:

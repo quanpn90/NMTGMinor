@@ -112,6 +112,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.mfw = opt.multilingual_factorized_weights
         self.mpw = opt.multilingual_partitioned_weights
         self.mln = opt.multilingual_layer_norm
+        self.no_ffn = opt.no_ffn
 
         if self.mfw:
             assert not self.mpw, "[ERROR] factorized and partitioned weights cannot be used at the same time."
@@ -120,38 +121,44 @@ class RelativeTransformerEncoderLayer(nn.Module):
                                                  n_languages=opt.n_languages)
         self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                   variational=self.variational)
-        self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
-                                                n_languages=opt.n_languages)
-        self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
-                                                 variational=self.variational)
+
+        if not self.no_ffn:
+            self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
+                                                    n_languages=opt.n_languages)
+            self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                     variational=self.variational)
         d_head = opt.model_size // opt.n_heads
 
-        self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
-
-        self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                   variational=self.variational)
+        # self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+        #
+        # self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+        #                                            variational=self.variational)
 
         if self.mfw:
-            self.feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                          variational=self.variational,
-                                                          n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                          use_multiplicative=opt.mfw_multiplicative)
+
+            if not self.no_ffn:
+                self.feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                              variational=self.variational,
+                                                              n_languages=opt.n_languages, rank=opt.mfw_rank,
+                                                              use_multiplicative=opt.mfw_multiplicative)
 
             self.multihead = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                           n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                           use_multiplicative=opt.mfw_multiplicative)
 
         elif self.mpw:
-            self.feedforward = MPPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                         variational=self.variational,
-                                                         factor_size=opt.mpw_factor_size)
+            if not self.no_ffn:
+                self.feedforward = MPPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                             variational=self.variational,
+                                                             factor_size=opt.mpw_factor_size)
 
             self.multihead = MPRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                          factor_size=opt.mpw_factor_size)
 
         else:
-            self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                       variational=self.variational)
+            if not self.no_ffn:
+                self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                           variational=self.variational)
 
             self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
@@ -164,7 +171,18 @@ class RelativeTransformerEncoderLayer(nn.Module):
         else:
             self.depthwise_conv = None
 
-    def forward(self, input, pos_emb, attn_mask, src_lang=None, incremental=False, incremental_cache=None, mems=None):
+    def forward(self, input, pos_emb, attn_mask, src_lang=None,
+                incremental=False, incremental_cache=None, mems=None):
+        """
+        :param input: tensor [T x B x H]
+        :param pos_emb: tensor [T x 1 x H]
+        :param attn_mask: tensor [1 x T x B]
+        :param src_lang: tensor [B] or None
+        :param incremental: None
+        :param incremental_cache:
+        :param mems: None
+        :return:
+        """
 
         if incremental and incremental_cache is None:
             incremental_cache = dict()
@@ -203,7 +221,11 @@ class RelativeTransformerEncoderLayer(nn.Module):
             Convolution block
             """
             if self.depthwise_conv:
-                out = self.depthwise_conv(self.preprocess_conv(input, factor=src_lang))
+                if attn_mask is not None and attn_mask.any():
+                    conv_mask = attn_mask.squeeze(0).unsqueeze(-1)
+                else:
+                    conv_mask = None
+                out = self.depthwise_conv(self.preprocess_conv(input, factor=src_lang), pad_mask=conv_mask)
 
                 # rescaling before residual
                 if self.training and self.death_rate > 0:
@@ -214,13 +236,14 @@ class RelativeTransformerEncoderLayer(nn.Module):
             """ 
             Feed forward layer 
             """
-            out = self.feedforward(self.preprocess_ffn(input, factor=src_lang), src_lang)
+            if not self.no_ffn:
+                out = self.feedforward(self.preprocess_ffn(input, factor=src_lang), src_lang)
 
-            # rescaling before residual
-            if self.training and self.death_rate > 0:
-                out = out / (1 - self.death_rate)
+                # rescaling before residual
+                if self.training and self.death_rate > 0:
+                    out = out / (1 - self.death_rate)
 
-            input = self.postprocess_ffn(out, input)
+                input = self.postprocess_ffn(out, input)
 
             # checking for inf/nan which can happen randomly in fp16 ...
             if torch.isinf(input).any() or torch.isnan(input).any():

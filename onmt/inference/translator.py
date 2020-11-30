@@ -287,6 +287,8 @@ class Translator(object):
 
     def translate_batch(self, batch):
 
+        if isinstance(batch, list):
+            batch = batch[0]
         torch.set_grad_enabled(False)
         # Batch size is in different location depending on data.
 
@@ -358,8 +360,6 @@ class Translator(object):
                 out = lm_out
             word_lk = out.view(beam_size, remaining_sents, -1) \
                 .transpose(0, 1).contiguous()
-
-
 
             attn = attn.contiguous().view(beam_size, remaining_sents, -1) \
                 .transpose(0, 1).contiguous()
@@ -437,9 +437,6 @@ class Translator(object):
         return all_hyp, all_scores, all_attn, all_lengths, gold_scores, gold_words, allgold_scores
 
     def translate(self, src_data, tgt_data, type="asr"):
-        #  (1) convert words to indexes
-        # for i in range(19999):
-        #     print(32423)
         if isinstance(src_data[0], list):
             batches = list()
             for src_data_ in src_data:
@@ -460,6 +457,7 @@ class Translator(object):
         pred, pred_score, attn, pred_length, gold_score, gold_words, allgold_words = self.translate_batch(batches)
 
         #  (3) convert indexes to words
+        src_data = src_data[0]
         pred_batch = []
         for b in range(batch_size):
             pred_batch.append(

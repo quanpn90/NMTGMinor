@@ -139,8 +139,7 @@ class SpeechTransformerEncoder(TransformerEncoder):
             # dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
             mask_src = mask_src.gt(0)
 
-        if onmt.constants.torch_version >= 1.2:
-            mask_src = mask_src.bool()
+        mask_src = mask_src.bool()
 
         """ Scale the emb by sqrt(d_model) """
         emb = emb * math.sqrt(self.model_size)
@@ -438,16 +437,23 @@ class SpeechTransformerDecoder(TransformerDecoder):
 
         dec_attn_mask = dec_attn_mask[-1].unsqueeze(0)
 
-        if onmt.constants.torch_version >= 1.2:
-            dec_attn_mask = dec_attn_mask.bool()
+        dec_attn_mask = dec_attn_mask.bool()
 
         if context is not None:
             if self.encoder_type == "audio":
-                if not self.encoder_cnn_downsampling:
-                    mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
-                else:
-                    long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
+                # The "slow" version of translator only keeps the source mask of audio as src
+                # Thats why we need to check if the src has already been narrowed before
+                if src.dim() == 3:
+                    if not self.encoder_cnn_downsampling:
+                        mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
+                    else:
+                        long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
+                        mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
+                elif self.encoder_cnn_downsampling:
+                    long_mask = src.eq(onmt.constants.PAD)
                     mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
+                else:
+                    mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
             else:
 
                 mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)

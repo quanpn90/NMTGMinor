@@ -136,17 +136,24 @@ class ConformerConvBlock(nn.Module):
     #     bound = 1 / math.sqrt(fan_in)
     #     init.uniform_(self.out_pointwise_bias, -bound, bound)
 
-    def forward(self, x):
+    def forward(self, x, pad_mask=None):
         """
+        :param pad_mask: [seq_len x bsz] indicating which element is correct
+        (this should be the same with the attention mask (pad=1, unpad=0)
         :param x: [seq_len x bsz x hidden_size]
         :return:
         """
 
         x = x.transpose(0, 1).transpose(1, 2)  # to [bsz x hidden_size x seq_len]
 
+        # pointwise conv does not need to mask because its elementwise projection
         x = self.pointwise_conv1(x)
         x = F.glu(x, dim=1)
 
+        if pad_mask is not None:
+            pad_mask = pad_mask.transpose(0, 1).transpose(1, 2)
+            # print(x.size(), pad_mask.size())
+            x = x.masked_fill_(pad_mask, 0)
         x = self.depthwise_conv(x)
         x = self.activation(x)
 

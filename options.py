@@ -291,6 +291,8 @@ def make_parser(parser):
                         help="Remove Batch Norm to avoid NaN errors that can happen with spec augmentation.).")
     parser.add_argument('-depthwise_conv', action='store_true',
                         help='Use depthwise convolution in the encoder block')
+    parser.add_argument('-no_ffn', action='store_true',
+                        help='No feedforward network in the speech encoder')
 
     parser.add_argument('-multilingual_factorized_weights', action='store_true',
                         help='Factorize the weights in the model for multilingual')
@@ -495,6 +497,9 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'no_batch_norm'):
         opt.no_batch_norm = False
+
+    if not hasattr(opt, 'no_ffn'):
+        opt.no_ffn = False
 
     if not hasattr(opt, 'multilingual_partitioned_weights'):
         opt.multilingual_partitioned_weights = False

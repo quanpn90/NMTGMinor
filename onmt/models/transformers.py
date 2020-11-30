@@ -480,7 +480,7 @@ class TransformerDecoder(nn.Module):
         # batch_size x 1 x len_src
         if context is not None:
             if self.encoder_type == "audio":
-                if src.data.dim() == 3:
+                if src.dim() == 3:
                     if self.encoder_cnn_downsampling:
                         long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
                         mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
@@ -799,6 +799,7 @@ class Transformer(NMTModel):
         tgt_lang = batch.get('target_lang')
 
         src_transposed = src.transpose(0, 1)
+        print(src.size())
 
         encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
         decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], src_lang,
@@ -846,7 +847,10 @@ class TransformerDecodingState(DecoderState):
 
             if src is not None:
                 if src.dim() == 3:
+                    # print(self.src.size())
                     self.src = src.narrow(2, 0, 1).squeeze(2).repeat(1, beam_size)
+                    # self.src = src.repeat(1, beam_size, 1)
+                    # print(self.src.size())
                     # self.src = src.repeat(1, beam_size, 1) # T x Bb x c
                 else:
                     self.src = src.repeat(1, beam_size)
@@ -859,7 +863,7 @@ class TransformerDecodingState(DecoderState):
                 self.context = None
 
             self.input_seq = None
-            # self.src_mask = None
+            self.src_lang = src_lang
             self.tgt_lang = tgt_lang
 
         elif type == 2:

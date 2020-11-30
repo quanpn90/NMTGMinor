@@ -10,6 +10,7 @@ import time
 import torch
 import copy
 import sys
+import contextlib
 
 import onmt
 import onmt.markdown
@@ -152,11 +153,12 @@ class Trainer(object):
         # in the case of single node distributed, it should equal self.device
         self.rank = self.device
 
-        # make a group to later use with dist.all_reduce
+        # make a group to later use with self.all_reduce
         self.group = dist.group.WORLD
 
         self.print("[INFO] Training Options:", opt)
-        dist.init_process_group(backend='nccl', init_method='env://', world_size=self.world_size, rank=self.rank)
+        if self.world_size > 1:
+            dist.init_process_group(backend='nccl', init_method='env://', world_size=self.world_size, rank=self.rank)
 
         self.model = None
 
@@ -272,15 +274,19 @@ class Trainer(object):
                                                                    output_device=self.rank,
                                                                    find_unused_parameters=find_unused_parameters)
 
-        # if opt.load_from:
-        #     print("[INFO] Process %d loading parameters..." % self.rank, flush=True)
-
-
         print("[INFO] Process %d ready." % self.rank, flush=True)
 
     def is_main(self):
 
         return self.rank == 0
+
+    def all_reduce(self, tensor, **kwargs):
+
+        if self.world_size > 1:
+            dist.all_reduce(tensor, **kwargs)
+
+        # otherwise, do nothing
+        return
 
     def print(self, *content, flush=False):
         """
@@ -580,8 +586,8 @@ class Trainer(object):
                     i = i + 1
 
         # allreduce the total loss and total words from other processes
-        dist.all_reduce(total_loss, op=dist.ReduceOp.SUM, group=self.group)
-        dist.all_reduce(total_words, op=dist.ReduceOp.SUM, group=self.group)
+        self.all_reduce(total_loss, op=dist.ReduceOp.SUM, group=self.group)
+        self.all_reduce(total_words, op=dist.ReduceOp.SUM, group=self.group)
 
         self.model.train()
         self.loss_function.train()
@@ -622,7 +628,7 @@ class Trainer(object):
         counter = 0
         num_accumulated_words = zero_tensor()
         num_accumulated_sents = zero_tensor()
-        grad_scaler = 1
+        grad_div = 1
 
         nan = False
         nan_counter = zero_tensor()
@@ -660,65 +666,70 @@ class Trainer(object):
                 counter = counter + 1
                 reduction_disabled = False if counter >= opt.update_frequency or i == (n_samples - 1) else True
 
-                # when we dont reach the updating step, we do not need to synchronize the gradients
-                # thus disabling the backward grad sync to improve speed
-                self.model.require_backward_grad_sync = not reduction_disabled
-
-                with autocast():
-
-                    targets = batch.get('target_output')
-                    tgt_mask = targets.ne(onmt.constants.PAD)
-                    outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                         zero_encoder=opt.zero_encoder,
-                                         mirror=opt.mirror_loss, streaming_state=streaming_state,
-                                         nce=opt.nce)
-
-                    batch_size = batch.size
-                    outputs['tgt_mask'] = tgt_mask
-
-                    loss_dict = self.loss_function(outputs, targets, model=self.model)
-                    loss_data = loss_dict['data']
-                    loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-                    full_loss = loss
-
-                    if opt.ctc_loss > 0.0:
-                        ctc_loss = self.ctc_loss_function(outputs, targets)
-                        ctc_loss_data = ctc_loss.item()
-                        full_loss = full_loss + opt.ctc_loss * ctc_loss
-
-                    if opt.mirror_loss:
-                        rev_loss = loss_dict['rev_loss']
-                        rev_loss_data = loss_dict['rev_loss_data']
-                        mirror_loss = loss_dict['mirror_loss']
-                        full_loss = full_loss + rev_loss + mirror_loss
-                        mirror_loss_data = loss_dict['mirror_loss'].item()
+                def maybe_no_sync():
+                    if not reduction_disabled and isinstance(self.model, DDP_model):
+                        return self.model.no_sync()
                     else:
-                        rev_loss_data = None
-                        mirror_loss_data = 0
+                        # when we dont reach the updating step, we do not need to synchronize the gradients
+                        # thus disabling the backward grad sync to improve speed
+                        return contextlib.ExitStack()  # dummy contextmanager
 
-                    # reconstruction loss
-                    if opt.reconstruct:
-                        rec_loss = loss_dict['rec_loss']
-                        rec_loss = rec_loss
-                        full_loss = full_loss + rec_loss
-                        rec_loss_data = loss_dict['rec_loss_data']
-                    else:
-                        rec_loss_data = None
+                with maybe_no_sync():
+                    with autocast():
+                        targets = batch.get('target_output')
+                        tgt_mask = targets.ne(onmt.constants.PAD)
+                        outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                                             zero_encoder=opt.zero_encoder,
+                                             mirror=opt.mirror_loss, streaming_state=streaming_state,
+                                             nce=opt.nce)
 
-                    if opt.lfv_multilingual:
-                        lid_logits = outputs['lid_logits']
-                        lid_labels = batch.get('target_lang')
-                        lid_loss_function = self.loss_function.get_loss_function('lid_loss')
-                        lid_loss = lid_loss_function(lid_logits, lid_labels)
-                        full_loss = full_loss + lid_loss
+                        batch_size = batch.size
+                        outputs['tgt_mask'] = tgt_mask
 
-                    optimizer = self.optim.optimizer
+                        loss_dict = self.loss_function(outputs, targets, model=self.model)
+                        loss_data = loss_dict['data']
+                        loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
+                        full_loss = loss
 
-                    # When the batch size is large, each gradient step is very easy to explode on fp16
-                    # Normalizing the loss to grad scaler ensures this will not happen
-                    full_loss.div_(grad_scaler)
+                        if opt.ctc_loss > 0.0:
+                            ctc_loss = self.ctc_loss_function(outputs, targets)
+                            ctc_loss_data = ctc_loss.item()
+                            full_loss = full_loss + opt.ctc_loss * ctc_loss
 
-                self.grad_scaler.scale(full_loss).backward()
+                        if opt.mirror_loss:
+                            rev_loss = loss_dict['rev_loss']
+                            rev_loss_data = loss_dict['rev_loss_data']
+                            mirror_loss = loss_dict['mirror_loss']
+                            full_loss = full_loss + rev_loss + mirror_loss
+                            mirror_loss_data = loss_dict['mirror_loss'].item()
+                        else:
+                            rev_loss_data = None
+                            mirror_loss_data = 0
+
+                        # reconstruction loss
+                        if opt.reconstruct:
+                            rec_loss = loss_dict['rec_loss']
+                            rec_loss = rec_loss
+                            full_loss = full_loss + rec_loss
+                            rec_loss_data = loss_dict['rec_loss_data']
+                        else:
+                            rec_loss_data = None
+
+                        if opt.lfv_multilingual:
+                            lid_logits = outputs['lid_logits']
+                            lid_labels = batch.get('target_lang')
+                            lid_loss_function = self.loss_function.get_loss_function('lid_loss')
+                            lid_loss = lid_loss_function(lid_logits, lid_labels)
+                            full_loss = full_loss + lid_loss
+
+                        optimizer = self.optim.optimizer
+
+                        # When the batch size is large, each gradient step is very easy to explode on fp16
+                        # Normalizing the loss to grad scaler ensures this will not happen
+                        full_loss.div_(grad_div)
+
+                    # grad scaler has to be done outside of the autocast
+                    self.grad_scaler.scale(full_loss).backward()
 
                 del outputs
 
@@ -750,10 +761,9 @@ class Trainer(object):
 
             if update_flag:
                 # accumulated gradient case, in this case the update frequency
-                dist.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
 
-                # if (counter == 1 and self.opt.update_frequency != 1) or counter > 1:
-                grad_denom = 1 / grad_scaler
+                grad_denom = 1.0 / grad_div
 
                 if self.opt.normalize_gradient:
                     grad_denom = num_accumulated_words.item() * grad_denom
@@ -765,15 +775,15 @@ class Trainer(object):
                 grad_denom = grad_denom / self.world_size
 
                 # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
-                self.grad_scaler.unscale_(self.optim.optimizer)
                 normalize_gradients(self.model.parameters(), grad_denom)
 
                 # Update the parameters.
                 if self.opt.max_grad_norm > 0:
+                    self.grad_scaler.unscale_(self.optim.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.opt.max_grad_norm)
                 self.optim.step(scaler=self.grad_scaler)
                 self.grad_scaler.update()
-                self.optim.zero_grad()
+                # self.optim.zero_grad()
                 self.model.zero_grad()
                 counter = 0
                 num_accumulated_words.zero_()
@@ -812,9 +822,9 @@ class Trainer(object):
             # control the index a little bit to ensure the log is always printed
             if i == 0 or ((i + 1) % opt.log_interval < self.world_size):
 
-                dist.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
-                dist.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
-                dist.all_reduce(report_src_words, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(report_src_words, op=dist.ReduceOp.SUM, group=self.group)
 
                 if self.is_main():
                     log_string = ("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; " %
@@ -822,12 +832,12 @@ class Trainer(object):
                                    math.exp(report_loss.item() / report_tgt_words.item())))
 
                     if opt.reconstruct:
-                        dist.all_reduce(report_rec_loss, op=dist.ReduceOp.SUM, group=self.group)
+                        self.all_reduce(report_rec_loss, op=dist.ReduceOp.SUM, group=self.group)
                         rec_ppl = math.exp(report_rec_loss.item() / report_src_words.item())
                         log_string += (" rec_ppl: %6.2f ; " % rec_ppl)
 
                     if opt.mirror_loss:
-                        dist.all_reduce(report_rev_loss, op=dist.ReduceOp.SUM, group=self.group)
+                        self.all_reduce(report_rev_loss, op=dist.ReduceOp.SUM, group=self.group)
                         rev_ppl = math.exp(report_rev_loss.item() / report_tgt_words.item())
                         log_string += (" rev_ppl: %6.2f ; " % rev_ppl)
                         log_string += (" mir_loss: %6.2f ; " % (report_mirror_loss / report_tgt_words))
@@ -835,7 +845,7 @@ class Trainer(object):
                     if opt.ctc_loss > 0.0:
                         # if torch.isinf(report_ctc_loss):
                         #     report_ctc_loss.zero_()
-                        # dist.all_reduce(report_ctc_loss, op=dist.ReduceOp.SUM, group=self.group)
+                        # self.all_reduce(report_ctc_loss, op=dist.ReduceOp.SUM, group=self.group)
                         ctc_loss = report_ctc_loss.item() / report_tgt_words.item()
                         log_string += (" ctcloss: %8.2f ; " % ctc_loss)
 
