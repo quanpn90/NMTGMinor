@@ -38,7 +38,8 @@ class TranslatorParameter(object):
         self.attributes = None
         self.no_bos_gold = False
         self.no_repeat_ngram_size = 0
-        
+        self.no_buffering = False
+        self.src_align_right = False
         self.read_file(filename)
 
     def read_file(self, filename):
