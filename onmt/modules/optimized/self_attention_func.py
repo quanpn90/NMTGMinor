@@ -2,6 +2,18 @@ import torch
 import torch.nn.functional as F
 from onmt.constants import double_precision
 
+try:
+    import apex.amp as amp
+    from apex.amp import half_function
+except ModuleNotFoundError as e:
+    amp = None
+    from .compat import half_function
+
+try:
+    from torch.cuda.amp import custom_fwd, custom_bwd
+except ModuleNotFoundError as e:
+    from .compat import custom_fwd, custom_bwd
+
 
 class SelfAttnFunc(torch.autograd.Function):
     @staticmethod

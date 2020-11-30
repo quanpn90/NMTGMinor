@@ -1,8 +1,18 @@
 import torch
 import torch.nn.functional as F
 from onmt.constants import double_precision
-import apex.amp as amp
-from torch.cuda.amp import custom_fwd, custom_bwd
+
+try:
+    import apex.amp as amp
+    from apex.amp import half_function
+except ModuleNotFoundError as e:
+    amp = None
+    from .compat import half_function
+
+try:
+    from torch.cuda.amp import custom_fwd, custom_bwd
+except ModuleNotFoundError as e:
+    from .compat import custom_fwd, custom_bwd
 
 
 class EncdecAttnFunc(torch.autograd.Function):
@@ -276,7 +286,7 @@ class EncdecAttnFunc(torch.autograd.Function):
             , None, None, None, None
 
 
-@amp.half_function
+@half_function
 def encdec_attn_func(time_masking, is_training,
                      num_heads, query, key,
                      in_proj_weight_q, in_proj_weight_kv,
@@ -291,7 +301,7 @@ def encdec_attn_func(time_masking, is_training,
     return output, coverage
 
 
-@amp.half_function
+@half_function
 def fast_encdec_attn_func(time_masking, is_training, num_heads, query, key,
                           in_proj_weight_q, in_proj_weight_kv,
                           out_proj_weight,

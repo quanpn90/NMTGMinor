@@ -1,6 +1,17 @@
 import torch
-from torch.cuda.amp import custom_fwd, custom_bwd
 import fast_encdec_multihead_attn
+
+try:
+    import apex.amp as amp
+    from apex.amp import half_function
+except ModuleNotFoundError as e:
+    amp = None
+    from .compat import half_function
+
+try:
+    from torch.cuda.amp import custom_fwd, custom_bwd
+except ModuleNotFoundError as e:
+    from .compat import custom_fwd, custom_bwd
 
 
 class FastEncdecAttnFunc(torch.autograd.Function):

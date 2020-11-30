@@ -5,8 +5,18 @@ from torch.nn.parameter import Parameter
 from torch.nn import init
 from torch.nn import functional as F
 import importlib
-from apex import amp
-from torch.cuda.amp import custom_fwd, custom_bwd
+
+try:
+    import apex.amp as amp
+    from apex.amp import half_function
+except ModuleNotFoundError as e:
+    amp = None
+    from .optimized.compat import half_function
+
+try:
+    from torch.cuda.amp import custom_fwd, custom_bwd
+except ModuleNotFoundError as e:
+    from .optimized.compat import custom_fwd, custom_bwd
 
 
 global fused_layer_norm_cuda
@@ -71,12 +81,12 @@ class FusedLayerNormFunction(torch.autograd.Function):
         return grad_input, None, None
 
 
-@amp.half_function
+@half_function
 def fused_layer_norm_affine(input, weight, bias, normalized_shape, eps=1e-6):
     return FusedLayerNormAffineFunction.apply(input, weight, bias, normalized_shape, eps)
 
 
-@amp.half_function
+@half_function
 def fused_layer_norm(input, normalized_shape, eps=1e-6):
     return FusedLayerNormFunction.apply(input, normalized_shape, eps)
 
