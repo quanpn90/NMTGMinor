@@ -454,8 +454,10 @@ class Optim(object):
             overflow = True
 
         # if gradients have NaN/inf: return (which will be zeroed afterwards)
+        # only do that if the scaler is None, i.e no mechanism to detect inf/nan implicitly
+        # for apex amp, only skip if overflow is not detected
         if detech_nan_inf(self.params):
-            if self._step >= 128:
+            if scaler is None and not overflow:
                 return
 
         "Automatically scale learning rate over learning period if not overflow"
