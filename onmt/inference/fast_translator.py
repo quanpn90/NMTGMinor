@@ -478,7 +478,7 @@ class FastTranslator(Translator):
 
     def translate(self, src_data, tgt_data, type='mt'):
         #  (1) convert words to indexes
-        if isinstance(src_data[0], list):
+        if isinstance(src_data[0], list)  and type == 'asr':
             batches = list()
             for src_data_ in src_data:
                 dataset = self.build_data(src_data_, tgt_data, type=type)

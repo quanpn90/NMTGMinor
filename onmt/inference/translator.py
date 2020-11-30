@@ -436,17 +436,18 @@ class Translator(object):
 
         return all_hyp, all_scores, all_attn, all_lengths, gold_scores, gold_words, allgold_scores
 
-    def translate(self, src_data, tgt_data, type="asr"):
-        if isinstance(src_data[0], list):
+    def translate(self, src_data, tgt_data, type="mt"):
+        if isinstance(src_data[0], list) and type == 'asr':
             batches = list()
             for src_data_ in src_data:
-                dataset = self.build_data(src_data_, tgt_data, type="asr")
+                dataset = self.build_data(src_data_, tgt_data, type=type)
                 batch = dataset.get_batch(0)
                 batches.append(batch)
         else:
-            dataset = self.build_data(src_data, tgt_data, type="asr")
+            dataset = self.build_data(src_data, tgt_data, type=type)
             batch = dataset.get_batch(0)  # this dataset has only one mini-batch
             batches = [batch] * self.n_models
+            src_data = [src_data] * self.n_models
 
         if self.cuda:
             for i, _ in enumerate(batches):
