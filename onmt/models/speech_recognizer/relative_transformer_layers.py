@@ -113,6 +113,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.mpw = opt.multilingual_partitioned_weights
         self.mln = opt.multilingual_layer_norm
         self.no_ffn = opt.no_ffn
+        self.weight_drop = opt.weight_drop
 
         if self.mfw:
             assert not self.mpw, "[ERROR] factorized and partitioned weights cannot be used at the same time."
@@ -129,22 +130,19 @@ class RelativeTransformerEncoderLayer(nn.Module):
                                                      variational=self.variational)
         d_head = opt.model_size // opt.n_heads
 
-        # self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
-        #
-        # self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-        #                                            variational=self.variational)
-
         if self.mfw:
 
             if not self.no_ffn:
                 self.feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                               variational=self.variational,
                                                               n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                              use_multiplicative=opt.mfw_multiplicative)
+                                                              use_multiplicative=opt.mfw_multiplicative,
+                                                              weight_drop=self.weight_drop)
 
             self.multihead = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                           n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                          use_multiplicative=opt.mfw_multiplicative)
+                                                          use_multiplicative=opt.mfw_multiplicative,
+                                                          weight_drop=self.weight_drop)
 
         elif self.mpw:
             if not self.no_ffn:
@@ -266,6 +264,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.mfw = opt.multilingual_factorized_weights
         self.mpw = opt.multilingual_partitioned_weights
         self.mln = opt.multilingual_layer_norm
+        self.weight_drop = opt.weight_drop
 
         self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
                                                  n_languages=opt.n_languages)
@@ -282,7 +281,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
             if self.mfw:
                 self.multihead_src = MFWEncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout,
                                                             n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                            use_multiplicative=opt.mfw_multiplicative)
+                                                            use_multiplicative=opt.mfw_multiplicative,
+                                                            weight_drop=self.weight_drop)
             elif self.mpw:
                 self.multihead_src = MPEncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout,
                                                            factor_size=opt.mpw_factor_size)
@@ -301,11 +301,13 @@ class RelativeTransformerDecoderLayer(nn.Module):
             self.feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                           variational=self.variational,
                                                           n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                          use_multiplicative=opt.mfw_multiplicative)
+                                                          use_multiplicative=opt.mfw_multiplicative,
+                                                          weight_drop=self.weight_drop)
 
             self.multihead_tgt = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                               n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                              use_multiplicative=opt.mfw_multiplicative)
+                                                              use_multiplicative=opt.mfw_multiplicative,
+                                                              weight_drop=self.weight_drop)
         elif self.mpw:
             self.feedforward = MPPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                          variational=self.variational,

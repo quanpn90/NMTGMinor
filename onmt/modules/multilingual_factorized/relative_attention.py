@@ -13,7 +13,8 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
     See "Attention Is All You Need" for more details.
     """
 
-    def __init__(self, embed_dim, num_heads, dropout=0., n_languages=1, rank=1, use_multiplicative=False):
+    def __init__(self, embed_dim, num_heads, dropout=0., n_languages=1,
+                 rank=1, use_multiplicative=False, weight_drop=0.0):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -22,6 +23,7 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
         self.bias = True
         self.use_multiplicative = use_multiplicative
+        self.weight_drop = weight_drop
 
         self.in_proj_weight = Parameter(torch.Tensor(embed_dim, 3 * embed_dim))
         self.out_proj_weight = Parameter(torch.Tensor(embed_dim, embed_dim))
@@ -105,6 +107,11 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
             print(indices.size(), input.size())
             raise NotImplementedError
 
+        # weight dropout
+        in_proj_weight = F.dropout(self.in_proj_weight, p=self.dropout, training=self.training)
+        pos_proj_weight = F.dropout(self.pos_proj_weight, p=self.dropout, training=self.training)
+        out_proj_weight = F.dropout(self.out_proj_weight, p=self.dropout, training=self.training)
+
         if self.use_multiplicative:
             rm_i = torch.index_select(self.rm_i, 0, indices).squeeze(0)
             sm_i = torch.index_select(self.sm_i, 0, indices).squeeze(0)
@@ -113,14 +120,9 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
             rm_o = torch.index_select(self.rm_o, 0, indices).squeeze(0)
             sm_o = torch.index_select(self.sm_o, 0, indices).squeeze(0)
 
-            in_proj_weight = self.in_proj_weight * torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
-            pos_proj_weight = self.pos_proj_weight * torch.bmm(rm_p.unsqueeze(-1), sm_p.unsqueeze(1)).sum(dim=0)
-            out_proj_weight = self.out_proj_weight * torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
-
-        else:
-            in_proj_weight = self.in_proj_weight
-            pos_proj_weight = self.pos_proj_weight
-            out_proj_weight = self.out_proj_weight
+            in_proj_weight = in_proj_weight * torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
+            pos_proj_weight = pos_proj_weight * torch.bmm(rm_p.unsqueeze(-1), sm_p.unsqueeze(1)).sum(dim=0)
+            out_proj_weight = out_proj_weight * torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
 
         in_proj_weight = in_proj_weight + torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
         pos_proj_weight = pos_proj_weight + torch.bmm(r_p.unsqueeze(-1), s_p.unsqueeze(1)).sum(dim=0)

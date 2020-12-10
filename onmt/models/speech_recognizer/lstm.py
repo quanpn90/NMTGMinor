@@ -45,6 +45,8 @@ class SpeechLSTMEncoder(nn.Module):
         self.time = opt.time
         self.lsh_src_attention = opt.lsh_src_attention
         self.reversible = opt.src_reversible
+        self.multilingual_factorized_weights = opt.multilingual_factorized_weights
+        self.mfw_rank = opt.mfw_rank
 
         feature_size = opt.input_size
         self.channels = 1
@@ -70,12 +72,18 @@ class SpeechLSTMEncoder(nn.Module):
         self.rnn = nn.LSTM(input_size=self.model_size, hidden_size=self.model_size, num_layers=self.layers,
                            bidirectional=(not self.unidirect), bias=False, dropout=self.dropout, batch_first=True)
 
+        if self.multilingual_factorized_weights:
+            from onmt.modules.weight_control_lstm import WeightFactoredLSTM
+            self.rnn = WeightFactoredLSTM(self.rnn, dropout=opt.weight_drop, n_languages=opt.n_languages,
+                                          rank=self.mfw_rank)
+
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d',
                                                   variational=self.varitional_dropout)
         self.postprocess_layer = PrePostProcessing(self.model_size, 0, sequence='n')
 
-    def rnn_fwd(self, seq, mask, hid):
+    def rnn_fwd(self, seq, mask, hid, src_lang=None):
         """
+        :param src_lang:
         :param seq:
         :param mask:
         :param hid:
@@ -84,25 +92,29 @@ class SpeechLSTMEncoder(nn.Module):
         if mask is not None:
             lengths = mask.sum(-1).float()
             seq = pack_padded_sequence(seq, lengths, batch_first=True, enforce_sorted=False)
-            seq, hid = self.rnn(seq, hid)
+            if self.multilingual_factorized_weights:
+                seq, hid = self.rnn(seq, hid, indices=src_lang)
+            else:
+                seq, hid = self.rnn(seq, hid)
             seq = pad_packed_sequence(seq, batch_first=True)[0]
         else:
-            seq, hid = self.rnn(seq)
+            if self.multilingual_factorized_weights:
+                seq, hid = self.rnn(seq, hid, indices=src_lang)
+            else:
+                seq, hid = self.rnn(seq, hid)
 
         return seq, hid
 
-    def forward(self, input, hid=None):
+    def forward(self, input, input_pos=None, input_lang=None, hid=None, **kwargs):
 
         if not self.cnn_downsampling:
             mask_src = input.narrow(2, 0, 1).squeeze(2).gt(onmt.constants.PAD)
             dec_attn_mask = input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
             input = input.narrow(2, 1, input.size(2) - 1)
-            #     print(input.shape)
             emb = self.audio_trans(input.contiguous().view(-1, input.size(2))).view(input.size(0),
                                                                                     input.size(1), -1)
             emb = emb.type_as(input)
         else:
-            # print(input.narrow(2, 0, 1))
             long_mask = input.narrow(2, 0, 1).squeeze(2).gt(onmt.constants.PAD)
 
             input = input.narrow(2, 1, input.size(2) - 1)
@@ -120,7 +132,7 @@ class SpeechLSTMEncoder(nn.Module):
             # the size seems to be B x T ?
             emb = input
 
-        seq, hid = self.rnn_fwd(emb, mask_src, hid)
+        seq, hid = self.rnn_fwd(emb, mask_src, hid, src_lang=input_lang)
 
         if not self.unidirect:
             hidden_size = seq.size(2) // 2
@@ -149,19 +161,31 @@ class SpeechLSTMDecoder(nn.Module):
         self.attn_dropout = opt.attn_dropout
         self.emb_dropout = opt.emb_dropout
         self.variational_dropout = opt.variational_dropout
-
+        self.multilingual_factorized_weights = opt.multilingual_factorized_weights
+        self.mfw_rank = opt.mfw_rank
         self.encoder_type = opt.encoder_type
+        self.n_languages = opt.n_languages
 
         self.lstm = nn.LSTM(self.model_size, self.model_size, self.layers, dropout=self.dropout, batch_first=True)
+        if self.multilingual_factorized_weights:
+            from onmt.modules.weight_control_lstm import WeightFactoredLSTM
+            self.lstm = WeightFactoredLSTM(self.lstm, dropout=opt.weight_drop, n_languages=opt.n_languages,
+                                           rank=self.mfw_rank)
 
         self.fast_xattention = opt.fast_xattention
-        self.n_head = 1  # fixed
+        self.n_head = 1  # fixed to always use 1 head
         # also fix attention dropout to 0.0
 
-        if opt.fast_xattention:
-            self.multihead_tgt = EncdecMultiheadAttn(self.n_head, opt.model_size, 0.0)
+        if self.multilingual_factorized_weights:
+            self.fast_xattention = True
+            from onmt.modules.multilingual_factorized.encdec_attention import MFWEncdecMultiheadAttn
+            self.multihead_tgt = MFWEncdecMultiheadAttn(self.n_head, opt.model_size, 0.0, n_languages=opt.n_languages,
+                                                        rank=opt.mfw_rank, weight_drop=0.0)
         else:
-            self.multihead_tgt = MultiHeadAttention(self.n_head, opt.model_size, attn_p=0.0, share=3)
+            if opt.fast_xattention:
+                self.multihead_tgt = EncdecMultiheadAttn(self.n_head, opt.model_size, 0.0)
+            else:
+                self.multihead_tgt = MultiHeadAttention(self.n_head, opt.model_size, attn_p=0.0, share=3)
 
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d',
                                                   variational=self.variational_dropout)
@@ -191,6 +215,7 @@ class SpeechLSTMDecoder(nn.Module):
         attn_buffer = decoder_state.attention_buffers
         hid = buffer["hidden_state"]
         cell = buffer["cell_state"]
+        tgt_lang = decoder_state.tgt_lang
 
         buffering = decoder_state.buffering
 
@@ -255,16 +280,18 @@ class SpeechLSTMDecoder(nn.Module):
         else:
             mask_src = None
 
-        if input_.size(0) > 1 and input_.size(1) > 1:
-
-            lengths = input.gt(onmt.constants.PAD).sum(-1)
-
-            dec_in = pack_padded_sequence(dec_emb, lengths, batch_first=True, enforce_sorted=False)
-
-            dec_out, hidden = self.lstm(dec_in, hid_cell)
-            dec_out = pad_packed_sequence(dec_out, batch_first=True)[0]
+        # if input_.size(0) > 1 and input_.size(1) > 1:
+        #
+        #     lengths = input.gt(onmt.constants.PAD).sum(-1)
+        #
+        #     dec_in = pack_padded_sequence(dec_emb, lengths, batch_first=True, enforce_sorted=False)
+        #
+        #     dec_out, hidden = self.lstm(dec_in, hid_cell)
+        #     dec_out = pad_packed_sequence(dec_out, batch_first=True)[0]
+        # else:
+        if self.multilingual_factorized_weights:
+            dec_out, hid_cell = self.lstm(dec_emb, hid_cell, indices=tgt_lang)
         else:
-
             dec_out, hid_cell = self.lstm(dec_emb, hid_cell)
 
         decoder_state.update_lstm_buffer(hid_cell)
@@ -280,12 +307,20 @@ class SpeechLSTMDecoder(nn.Module):
             buffer = attn_buffer[0]
             if buffer is None:
                 buffer = dict()
+            if self.multilingual_factorized_weights:
+                output, coverage = self.multihead_tgt(dec_out, context, context, tgt_lang, tgt_lang, attn_mask,
+                                                      incremental=True, incremental_cache=buffer)
+            else:
+                output, coverage = self.multihead_tgt(dec_out, context, context, attn_mask,
+                                                      incremental=True, incremental_cache=buffer)
 
-            output, coverage = self.multihead_tgt(dec_out, context, context, attn_mask,
-                                                  incremental=True, incremental_cache=buffer)
             decoder_state.update_attention_buffer(buffer, 0)
         else:
-            output, coverage = self.multihead_tgt(dec_out, context, context, attn_mask)
+            if self.multilingual_factorized_weights:
+                output, coverage = self.multihead_tgt(dec_out, context, context, tgt_lang, tgt_lang, attn_mask)
+            else:
+                output, coverage = self.multihead_tgt(dec_out, context, context, attn_mask)
+
         output = (output + dec_out)
         output = self.postprocess_layer(output)
 
@@ -328,11 +363,14 @@ class SpeechLSTMDecoder(nn.Module):
         else:
             mask_src = None
 
-        if dec_seq.size(0) > 1 and dec_seq.size(1) > 1:
-            lengths = dec_seq.gt(onmt.constants.PAD).sum(-1)
-            dec_in = pack_padded_sequence(dec_emb, lengths, batch_first=True, enforce_sorted=False)
-            dec_out, hid = self.lstm(dec_in, hid)
-            dec_out = pad_packed_sequence(dec_out, batch_first=True)[0]
+        # if dec_seq.size(0) > 1 and dec_seq.size(1) > 1:
+        #     lengths = dec_seq.gt(onmt.constants.PAD).sum(-1)
+        #     dec_in = pack_padded_sequence(dec_emb, lengths, batch_first=True, enforce_sorted=False)
+        #     dec_out, hid = self.lstm(dec_in, hid)
+        #     dec_out = pad_packed_sequence(dec_out, batch_first=True)[0]
+        # else:
+        if self.multilingual_factorized_weights:
+            dec_out, hid = self.lstm(dec_emb, hid, indices=tgt_lang)
         else:
             dec_out, hid = self.lstm(dec_emb, hid)
 
@@ -342,7 +380,12 @@ class SpeechLSTMDecoder(nn.Module):
         dec_out = self.preprocess_attn(dec_out)
         dec_out = dec_out.transpose(0, 1).contiguous()
         enc_out = enc_out.contiguous()
-        output, coverage = self.multihead_tgt(dec_out, enc_out, enc_out, attn_mask)
+
+        if self.multilingual_factorized_weights:
+            output, coverage = self.multihead_tgt(dec_out, enc_out, enc_out, tgt_lang, tgt_lang, attn_mask)
+        else:
+            output, coverage = self.multihead_tgt(dec_out, enc_out, enc_out, attn_mask)
+
         output = (output + dec_out)
         output = self.postprocess_layer(output)
 
@@ -352,8 +395,9 @@ class SpeechLSTMDecoder(nn.Module):
 
 class SpeechLSTMSeq2Seq(NMTModel):
 
-    def __init__(self, encoder, decoder, generator=None, rec_decoder=None, rec_generator=None, mirror=False):
-        super().__init__(encoder, decoder, generator, rec_decoder, rec_generator)
+    def __init__(self, encoder, decoder, generator=None, rec_decoder=None, rec_generator=None,
+                 mirror=False, ctc=False):
+        super().__init__(encoder, decoder, generator, rec_decoder, rec_generator, ctc=ctc)
 
         self.model_size = self.decoder.model_size
         self.tgt_vocab_size = self.decoder.word_lut.weight.size(0)
@@ -361,6 +405,9 @@ class SpeechLSTMSeq2Seq(NMTModel):
             self.src_vocab_size = self.encoder.word_lut.weight.size(0)
         else:
             self.src_vocab_size = 0
+
+        if self.ctc:
+            self.ctc_linear = nn.Linear(encoder.model_size, self.tgt_vocab_size)
 
     def reset_states(self):
         return
@@ -382,7 +429,7 @@ class SpeechLSTMSeq2Seq(NMTModel):
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
-        encoder_output = self.encoder(src)
+        encoder_output = self.encoder(src, input_pos=src_pos, input_lang=src_lang, src_lengths=src_lengths)
         encoder_output = defaultdict(lambda: None, encoder_output)
 
         context = encoder_output['context']
@@ -413,6 +460,9 @@ class SpeechLSTMSeq2Seq(NMTModel):
         else:
             logprobs = self.generator[0](output_dict)['logits']
             output_dict['logprobs'] = logprobs
+
+        if self.ctc:
+            output_dict['encoder_logits'] = self.ctc_linear(output_dict['context'])
 
         return output_dict
 
@@ -447,11 +497,12 @@ class SpeechLSTMSeq2Seq(NMTModel):
         src_pos = batch.get('source_pos')
         src_lang = batch.get('source_lang')
         tgt_lang = batch.get('target_lang')
+        src_lengths = batch.src_lengths
 
         # TxB -> BxT
         src_transposed = src.transpose(0, 1)
 
-        encoder_output = self.encoder(src_transposed)
+        encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang, src_lengths=src_lengths)
         decoder_state = LSTMDecodingState(src, tgt_lang, encoder_output['context'],
                                                  beam_size=beam_size, model_size=self.model_size,
                                                  type=type, buffering=buffering)
@@ -608,7 +659,6 @@ class LSTMDecodingState(DecoderState):
                     sent_states = buffer_.view(t_, self.beam_size, remaining_sents, d_)[:, :, idx, :]
 
                     sent_states.data.copy_(sent_states.data.index_select(1, beam[b].getCurrentOrigin()))
-
 
     def prune_complete_beam(self, active_idx, remaining_sents):
 

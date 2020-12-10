@@ -103,7 +103,7 @@ def build_tm_model(opt, dicts):
     if opt.ctc_loss != 0:
         generators.append(onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size() + 1))
 
-    if opt.model in ['conformer', 'speech_transformer']:
+    if opt.model in ['conformer', 'speech_transformer', 'hybrid_transformer']:
         onmt.constants.init_value = opt.param_init
         from onmt.models.speech_recognizer.relative_transformer import \
             SpeechTransformerEncoder, SpeechTransformerDecoder
@@ -117,7 +117,13 @@ def build_tm_model(opt, dicts):
             decoder = SpeechLSTMDecoder(opt, embedding_tgt, language_embeddings=language_embeddings)
 
             model = Conformer(encoder, decoder, nn.ModuleList(generators), ctc=opt.ctc_loss > 0.0)
+        elif opt.model == 'hybrid_transformer':
+            from onmt.models.speech_recognizer.lstm import SpeechLSTMDecoder, SpeechLSTMEncoder, SpeechLSTMSeq2Seq
+            encoder = SpeechTransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
 
+            decoder = SpeechLSTMDecoder(opt, embedding_tgt, language_embeddings=language_embeddings)
+
+            model = SpeechLSTMSeq2Seq(encoder, decoder, nn.ModuleList(generators), ctc=opt.ctc_loss > 0.0)
         else:
             encoder = SpeechTransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
 
@@ -135,7 +141,7 @@ def build_tm_model(opt, dicts):
             encoder.factor_embeddings = factor_embeddings
             decoder.factor_embeddings = factor_embeddings
 
-    elif opt.model == "LSTM":
+    elif opt.model in ["LSTM", 'lstm']:
         # print("LSTM")
         onmt.constants.init_value = opt.param_init
         from onmt.models.speech_recognizer.lstm import SpeechLSTMDecoder, SpeechLSTMEncoder, SpeechLSTMSeq2Seq
@@ -144,7 +150,7 @@ def build_tm_model(opt, dicts):
 
         decoder = SpeechLSTMDecoder(opt, embedding_tgt, language_embeddings=language_embeddings)
 
-        model = SpeechLSTMSeq2Seq(encoder, decoder, nn.ModuleList(generators))
+        model = SpeechLSTMSeq2Seq(encoder, decoder, nn.ModuleList(generators), ctc=opt.ctc_loss > 0.0)
 
     elif opt.model in ['multilingual_translator', 'translator']:
         onmt.constants.init_value = opt.param_init
@@ -489,7 +495,7 @@ def optimize_model(model, fp16=True, distributed=False):
 
                 setattr(m, attr_str, target_attr)
 
-    replace_layer_norm(model, "Transformer")
+    # replace_layer_norm(model, "Transformer")
 
     # if fp16:
     #     safe_batch_norm(model, "Transformer")

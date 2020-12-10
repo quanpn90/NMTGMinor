@@ -268,7 +268,7 @@ class Trainer(object):
         if self.world_size > 1:
             # find_unused_parameters may be required for dropped layer (parameters that are not connected to
             # any particular graph)
-            find_unused_parameters = True if opt.death_rate > 0.0 else False
+            find_unused_parameters = True if opt.death_rate > 0.0 else True
 
             self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[self.rank],
                                                                    output_device=self.rank,

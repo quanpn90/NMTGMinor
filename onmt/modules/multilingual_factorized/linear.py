@@ -108,12 +108,13 @@ class BatchEnsembleLinearFunction(torch.autograd.Function):
 
 class MultilingualLinear(torch.nn.Module):
 
-    # TODO: write gradcheck testing
-    def __init__(self, input_size, output_size, n_factors=1, rank=1, use_multiplicative=False):
+    def __init__(self, input_size, output_size, n_factors=1, rank=1,
+                 use_multiplicative=False, weight_drop=0.0):
 
         super().__init__()
 
         self.use_multiplicative = use_multiplicative
+        self.weight_drop = weight_drop
 
         self.weight = torch.nn.Parameter(torch.Tensor(input_size, output_size))
         self.bias = torch.nn.Parameter(torch.Tensor(output_size))
@@ -151,6 +152,8 @@ class MultilingualLinear(torch.nn.Module):
         bsz = input.size(1)
         seq_len = input.size(0)
 
+        weight_ = F.dropout(self.weight, p=self.weight_drop, training=self.training)
+
         if indices.size(0) == 1 and len(indices.shape) == 1:
             r = torch.index_select(self.r, 0, indices).squeeze(0)
             s = torch.index_select(self.s, 0, indices).squeeze(0)
@@ -160,9 +163,7 @@ class MultilingualLinear(torch.nn.Module):
             if self.use_multiplicative:
                 rm = torch.index_select(self.rm, 0, indices).squeeze(0)
                 sm = torch.index_select(self.sm, 0, indices).squeeze(0)
-                weight_ = self.weight * torch.sum(torch.bmm(rm.unsqueeze(-1), sm.unsqueeze(1)), dim=0)
-            else:
-                weight_ = self.weight
+                weight_ = weight_ * torch.sum(torch.bmm(rm.unsqueeze(-1), sm.unsqueeze(1)), dim=0)
 
             weight_mask = torch.bmm(r.unsqueeze(-1), s.unsqueeze(1))
             weight_mask = torch.sum(weight_mask, dim=0)
@@ -198,14 +199,17 @@ class MFWPositionWiseFeedForward(torch.nn.Module):
     """
 
     def __init__(self, model_size, inner_size, dropout=0., variational=False, activation='relu',
-                 n_languages=1, rank=1, use_multiplicative=False):
+                 n_languages=1, rank=1, use_multiplicative=False, weight_drop=0.0):
         super().__init__()
-        self.input_linear = MultilingualLinear(model_size, inner_size, n_languages, rank, use_multiplicative)
-        self.output_linear = MultilingualLinear(inner_size, model_size, n_languages, rank, use_multiplicative)
+        self.input_linear = MultilingualLinear(model_size, inner_size, n_languages,
+                                               rank, use_multiplicative, weight_drop)
+        self.output_linear = MultilingualLinear(inner_size, model_size, n_languages,
+                                                rank, use_multiplicative, weight_drop)
         self.variational = variational
         self.dropout = dropout
         self.activation = activation
         self.n_languages = n_languages
+        self.weight_drop = weight_drop
 
         if self.variational:
             from onmt.modules.dropout import variational_dropout

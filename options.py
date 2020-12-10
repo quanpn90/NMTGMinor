@@ -311,6 +311,8 @@ def make_parser(parser):
                         help='New linear projection for each language')
     parser.add_argument('-sub_encoder', type=int, default=4,
                         help='New linear projection for each language')
+    parser.add_argument('-weight_drop', type=float, default=0.0,
+                        help='dropout rate for the main weights of the MFW model')
 
     # for Reformer
     # parser.add_argument('-lsh_src_attention', action='store_true',
@@ -512,5 +514,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'multilingual_linear_projection'):
         opt.multilingual_linear_projection = False
+
+    if not hasattr(opt, 'weight_drop'):
+        opt.weight_drop = 0.0
 
     return opt
