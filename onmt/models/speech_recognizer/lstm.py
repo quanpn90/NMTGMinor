@@ -261,6 +261,8 @@ class SpeechLSTMDecoder(nn.Module):
                 dec_emb = torch.relu(self.projector(concat_emb))
             else:
                 raise NotImplementedError
+        else:
+            dec_emb = emb
 
         if context is not None:
             if self.encoder_type == "audio":
@@ -349,6 +351,8 @@ class SpeechLSTMDecoder(nn.Module):
                 dec_emb = torch.relu(self.projector(concat_emb))
             else:
                 raise NotImplementedError
+        else:
+            dec_emb = emb
 
         if enc_out is not None:
             if self.encoder_type == "audio":

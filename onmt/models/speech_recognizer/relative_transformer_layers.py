@@ -114,6 +114,8 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.mln = opt.multilingual_layer_norm
         self.no_ffn = opt.no_ffn
         self.weight_drop = opt.weight_drop
+        self.multilingual_adapter = opt.multilingual_adapter
+        self.adapter_bottleneck_size = opt.adapter_bottleneck_size
 
         if self.mfw:
             assert not self.mpw, "[ERROR] factorized and partitioned weights cannot be used at the same time."
@@ -137,12 +139,14 @@ class RelativeTransformerEncoderLayer(nn.Module):
                                                               variational=self.variational,
                                                               n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                               use_multiplicative=opt.mfw_multiplicative,
-                                                              weight_drop=self.weight_drop)
+                                                              weight_drop=self.weight_drop,
+                                                              mfw_activation=opt.mfw_activation)
 
             self.multihead = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                           n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                           use_multiplicative=opt.mfw_multiplicative,
-                                                          weight_drop=self.weight_drop)
+                                                          weight_drop=self.weight_drop,
+                                                          mfw_activation=opt.mfw_activation)
 
         elif self.mpw:
             if not self.no_ffn:
@@ -168,6 +172,13 @@ class RelativeTransformerEncoderLayer(nn.Module):
             self.depthwise_conv = ConformerConvBlock(opt.model_size, opt.conv_kernel, bias=True)
         else:
             self.depthwise_conv = None
+
+        if self.multilingual_adapter:
+
+            from onmt.modules.multilingual_factorized.multilingual_adapters import MultilingualAdapter
+            self.adapters = MultilingualAdapter(opt.model_size, opt.adapter_bottleneck_size,
+                                                n_languages=opt.n_languages,
+                                                dropout=opt.dropout)
 
     def forward(self, input, pos_emb, attn_mask, src_lang=None,
                 incremental=False, incremental_cache=None, mems=None):
@@ -243,6 +254,9 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
                 input = self.postprocess_ffn(out, input)
 
+            if self.multilingual_adapter:
+                input = self.adapters(input, src_lang)
+
             # checking for inf/nan which can happen randomly in fp16 ...
             if torch.isinf(input).any() or torch.isnan(input).any():
                 clamp_value = torch.finfo(input.dtype).max - 1000
@@ -265,6 +279,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.mpw = opt.multilingual_partitioned_weights
         self.mln = opt.multilingual_layer_norm
         self.weight_drop = opt.weight_drop
+        self.multilingual_adapter = opt.multilingual_adapter
+        self.adapter_bottleneck_size = opt.adapter_bottleneck_size
 
         self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
                                                  n_languages=opt.n_languages)
@@ -282,7 +298,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 self.multihead_src = MFWEncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout,
                                                             n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                             use_multiplicative=opt.mfw_multiplicative,
-                                                            weight_drop=self.weight_drop)
+                                                            weight_drop=self.weight_drop,
+                                                            mfw_activation=opt.mfw_activation)
             elif self.mpw:
                 self.multihead_src = MPEncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout,
                                                            factor_size=opt.mpw_factor_size)
@@ -302,12 +319,14 @@ class RelativeTransformerDecoderLayer(nn.Module):
                                                           variational=self.variational,
                                                           n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                           use_multiplicative=opt.mfw_multiplicative,
-                                                          weight_drop=self.weight_drop)
+                                                          weight_drop=self.weight_drop,
+                                                          mfw_activation=opt.mfw_activation)
 
             self.multihead_tgt = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                               n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                               use_multiplicative=opt.mfw_multiplicative,
-                                                              weight_drop=self.weight_drop)
+                                                              weight_drop=self.weight_drop,
+                                                              mfw_activation=opt.mfw_activation)
         elif self.mpw:
             self.feedforward = MPPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                          variational=self.variational,
@@ -329,6 +348,13 @@ class RelativeTransformerDecoderLayer(nn.Module):
         else:
             self.lid_net = None
             self.lfv_mapper = None
+
+        if self.multilingual_adapter:
+
+            from onmt.modules.multilingual_factorized.multilingual_adapters import MultilingualAdapter
+            self.adapters = MultilingualAdapter(opt.model_size, opt.adapter_bottleneck_size,
+                                                n_languages=opt.n_languages,
+                                                dropout=opt.dropout)
 
     def forward(self, input, context, pos_emb, lfv=None, mask_tgt=None, mask_src=None,
                 src_lang=None, tgt_lang=None,
@@ -410,6 +436,14 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 out = out / (1 - self.death_rate)
 
             input = self.postprocess_ffn(out, input)
+
+            if self.multilingual_adapter:
+                input = self.adapters(input, tgt_lang)
+
+            # checking for inf/nan which can happen randomly in fp16 ...
+            if torch.isinf(input).any() or torch.isnan(input).any():
+                clamp_value = torch.finfo(input.dtype).max - 1000
+                input.clamp_(min=-clamp_value, max=clamp_value)
         else:
             coverage = None
             lid_logits = None

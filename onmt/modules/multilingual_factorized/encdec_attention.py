@@ -13,7 +13,7 @@ class MFWEncdecMultiheadAttn(nn.Module):
     """
 
     def __init__(self, num_heads, embed_dim, attn_drop=0.,
-                 n_languages=1, rank=1, use_multiplicative=False, weight_drop=0.0):
+                 n_languages=1, rank=1, use_multiplicative=False, weight_drop=0.0, mfw_activation="none"):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -37,18 +37,20 @@ class MFWEncdecMultiheadAttn(nn.Module):
         self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
         if use_multiplicative:
-            self.rm_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.sm_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.rm_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, 2 * embed_dim))
-            self.sm_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.ml_rank = 1
+            self.rm_q = torch.nn.Parameter(torch.Tensor(n_languages, self.ml_rank, embed_dim))
+            self.sm_q = torch.nn.Parameter(torch.Tensor(n_languages, self.ml_rank, embed_dim))
+            self.rm_kv = torch.nn.Parameter(torch.Tensor(n_languages, self.ml_rank, 2 * embed_dim))
+            self.sm_kv = torch.nn.Parameter(torch.Tensor(n_languages, self.ml_rank, embed_dim))
+            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, self.ml_rank, embed_dim))
+            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, self.ml_rank, embed_dim))
 
         self.in_proj_bias_q = None
         self.in_proj_bias_kv = None
         self.out_proj_bias = None
 
         self.attn_func = encdec_attn_func
+        self.mfw_activation = mfw_activation.lower()
 
         try:
             # the fast one requires apex and does not work with incremental so careful
@@ -77,14 +79,20 @@ class MFWEncdecMultiheadAttn(nn.Module):
         # torch.nn.init.constant_(self.in_proj_bias_q, 0.0)
         # torch.nn.init.constant_(self.in_proj_bias_kv, 0.0)
         # torch.nn.init.constant_(self.out_proj_bias, 0.0)
-        nn.init.normal_(self.r_q, 0.0, math.sqrt(0.02))
-        nn.init.normal_(self.s_q, 0.0, math.sqrt(0.02))
-        nn.init.normal_(self.r_kv, 0.0, math.sqrt(0.02))
-        nn.init.normal_(self.s_kv, 0.0, math.sqrt(0.02))
-        nn.init.normal_(self.r_o, 0.0, math.sqrt(0.02))
-        nn.init.normal_(self.s_o, 0.0, math.sqrt(0.02))
+        nn.init.normal_(self.r_q, 0.0, 0.02)
+        nn.init.normal_(self.s_q, 0.0, 0.02)
+        nn.init.normal_(self.r_kv, 0.0, 0.02)
+        nn.init.normal_(self.s_kv, 0.0, 0.02)
+        nn.init.normal_(self.r_o, 0.0, 0.02)
+        nn.init.normal_(self.s_o, 0.0, 0.02)
 
         if self.use_multiplicative:
+            # nn.init.normal_(self.rm_q, 0.0, 1)
+            # nn.init.normal_(self.sm_q, 0.0, 1)
+            # nn.init.normal_(self.rm_kv, 0.0, 1)
+            # nn.init.normal_(self.sm_kv, 0.0, 1)
+            # nn.init.normal_(self.rm_o, 0.0, 1)
+            # nn.init.normal_(self.sm_o, 0.0, 1)
             with torch.no_grad():
                 self.rm_q.bernoulli_(0.5).mul_(-2).add_(1)
                 self.sm_q.bernoulli_(0.5).mul_(-2).add_(1)
@@ -140,6 +148,19 @@ class MFWEncdecMultiheadAttn(nn.Module):
         in_proj_weight_q = in_proj_weight_q + torch.bmm(r_q.unsqueeze(-1), s_q.unsqueeze(1)).sum(dim=0)
         in_proj_weight_kv = in_proj_weight_kv + torch.bmm(r_kv.unsqueeze(-1), s_kv.unsqueeze(1)).sum(dim=0)
         out_proj_weight = out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+
+        if self.mfw_activation == "none":
+            in_proj_weight_q = in_proj_weight_q
+        elif self.mfw_activation == "gelu":
+            in_proj_weight_q = F.gelu(in_proj_weight_q)
+            in_proj_weight_kv = F.gelu(in_proj_weight_kv)
+            out_proj_weight = F.gelu(out_proj_weight)
+        elif self.mfw_activation == "silu":
+            in_proj_weight_q = F.silu(in_proj_weight_q)
+            in_proj_weight_kv = F.silu(in_proj_weight_kv)
+            out_proj_weight = F.silu(out_proj_weight)
+        else:
+            raise NotImplementedError
 
         if self.optimized == 1 and (self.training and not incremental) and len_key <= 1024 \
                 and query.is_cuda and in_proj_weight_q.dtype == torch.half:

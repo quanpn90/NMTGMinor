@@ -300,6 +300,9 @@ def make_parser(parser):
                         help="Rank of the mfw vectors.")
     parser.add_argument('-mfw_multiplicative', action='store_true',
                         help='Use another multiplicative weights W = W^ * M + A')
+    parser.add_argument('-mfw_activation', type=str, default="none",
+                        help="Using activation function for the MFW so  W = f(W^ * M + A'). "
+                             "Currently accepting gelu/silu")
 
     parser.add_argument('-multilingual_partitioned_weights', action='store_true',
                         help='Partition the weights in the multilingual models')
@@ -313,6 +316,10 @@ def make_parser(parser):
                         help='New linear projection for each language')
     parser.add_argument('-weight_drop', type=float, default=0.0,
                         help='dropout rate for the main weights of the MFW model')
+    parser.add_argument('-multilingual_adapter', action='store_true',
+                        help='New norm for each language')
+    parser.add_argument('-adapter_bottleneck_size', type=int, default=1024,
+                        help='New norm for each language')
 
     # for Reformer
     # parser.add_argument('-lsh_src_attention', action='store_true',
@@ -517,5 +524,14 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'weight_drop'):
         opt.weight_drop = 0.0
+
+    if not hasattr(opt, 'multilingual_adapter'):
+        opt.multilingual_adapter = False
+
+    if not hasattr(opt, 'adapter_bottleneck_size'):
+        opt.adapter_bottleneck_size = 0.0
+
+    if not hasattr(opt, 'mfw_activation'):
+        opt.mfw_activation = "none"
 
     return opt

@@ -109,7 +109,7 @@ class BatchEnsembleLinearFunction(torch.autograd.Function):
 class MultilingualLinear(torch.nn.Module):
 
     def __init__(self, input_size, output_size, n_factors=1, rank=1,
-                 use_multiplicative=False, weight_drop=0.0):
+                 use_multiplicative=False, weight_drop=0.0, mfw_activation="none"):
 
         super().__init__()
 
@@ -123,10 +123,11 @@ class MultilingualLinear(torch.nn.Module):
         self.s = torch.nn.Parameter(torch.Tensor(n_factors, rank, output_size))
 
         if use_multiplicative:
-            self.rm = torch.nn.Parameter(torch.Tensor(n_factors, rank, input_size))
-            self.sm = torch.nn.Parameter(torch.Tensor(n_factors, rank, output_size))
+            self.rm = torch.nn.Parameter(torch.Tensor(n_factors, 1, input_size))
+            self.sm = torch.nn.Parameter(torch.Tensor(n_factors, 1, output_size))
 
         self.reset_parameters()
+        self.mfw_activation = mfw_activation.lower()
 
     def reset_parameters(self, init='normal'):
         if init == 'normal':
@@ -136,11 +137,14 @@ class MultilingualLinear(torch.nn.Module):
 
         # for batch ensemble we init r_i and s_i with random sign vectors
         if self.use_multiplicative:
+            # torch.nn.init.normal_(self.rm, 0.0, 1)
+            # torch.nn.init.normal_(self.sm, 0.0, 1)
             with torch.no_grad():
                 self.rm.bernoulli_(0.5).mul_(-2).add_(1)  # -1 1 -1 1
                 self.sm.bernoulli_(0.5).mul_(-2).add_(1)
-        torch.nn.init.normal_(self.r, 0.0, 0.1)
-        torch.nn.init.normal_(self.s, 0.0, 0.1)
+
+        torch.nn.init.normal_(self.r, 0.0, 0.02)
+        torch.nn.init.normal_(self.s, 0.0, 0.02)
 
     def forward(self, input, indices=None):
         """
@@ -148,7 +152,7 @@ class MultilingualLinear(torch.nn.Module):
         :param indices: T x B or B
         :return:
         """
-        n_factors = self.r.size(0)
+        # n_factors = self.r.size(0)
         bsz = input.size(1)
         seq_len = input.size(0)
 
@@ -164,6 +168,15 @@ class MultilingualLinear(torch.nn.Module):
                 rm = torch.index_select(self.rm, 0, indices).squeeze(0)
                 sm = torch.index_select(self.sm, 0, indices).squeeze(0)
                 weight_ = weight_ * torch.sum(torch.bmm(rm.unsqueeze(-1), sm.unsqueeze(1)), dim=0)
+
+            if self.mfw_activation == "none":
+                weight_ = weight_
+            elif self.mfw_activation == "gelu":
+                weight_ = F.gelu(weight_)
+            elif self.mfw_activation == "silu":
+                weight_ = F.silu(weight_)
+            else:
+                raise NotImplementedError
 
             weight_mask = torch.bmm(r.unsqueeze(-1), s.unsqueeze(1))
             weight_mask = torch.sum(weight_mask, dim=0)
@@ -199,12 +212,12 @@ class MFWPositionWiseFeedForward(torch.nn.Module):
     """
 
     def __init__(self, model_size, inner_size, dropout=0., variational=False, activation='relu',
-                 n_languages=1, rank=1, use_multiplicative=False, weight_drop=0.0):
+                 n_languages=1, rank=1, use_multiplicative=False, weight_drop=0.0, mfw_activation='none'):
         super().__init__()
         self.input_linear = MultilingualLinear(model_size, inner_size, n_languages,
-                                               rank, use_multiplicative, weight_drop)
+                                               rank, use_multiplicative, weight_drop, mfw_activation=mfw_activation)
         self.output_linear = MultilingualLinear(inner_size, model_size, n_languages,
-                                                rank, use_multiplicative, weight_drop)
+                                                rank, use_multiplicative, weight_drop, mfw_activation=mfw_activation)
         self.variational = variational
         self.dropout = dropout
         self.activation = activation

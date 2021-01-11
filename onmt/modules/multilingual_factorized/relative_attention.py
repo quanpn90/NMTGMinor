@@ -14,7 +14,7 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
     """
 
     def __init__(self, embed_dim, num_heads, dropout=0., n_languages=1,
-                 rank=1, use_multiplicative=False, weight_drop=0.0):
+                 rank=1, use_multiplicative=False, weight_drop=0.0, mfw_activation="none"):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -53,6 +53,7 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
 
         self.reset_parameters()
         self.attn_func = relative_self_attn_func
+        self.mfw_activation = mfw_activation.lower()
 
     def reset_parameters(self, init='normal'):
         # nn.init.xavier_uniform_(self.in_proj_weight, gain=math.sqrt(2))
@@ -85,6 +86,12 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         nn.init.normal_(self.s_o, 0.0, 0.02)
 
         if self.use_multiplicative:
+            # nn.init.normal_(self.rm_i, 0.0, 1)
+            # nn.init.normal_(self.sm_i, 0.0, 1)
+            # nn.init.normal_(self.rm_p, 0.0, 1)
+            # nn.init.normal_(self.sm_p, 0.0, 1)
+            # nn.init.normal_(self.rm_o, 0.0, 1)
+            # nn.init.normal_(self.sm_o, 0.0, 1)
             with torch.no_grad():
                 self.rm_i.bernoulli_(0.5).mul_(-2).add_(1)
                 self.sm_i.bernoulli_(0.5).mul_(-2).add_(1)
@@ -127,6 +134,19 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         in_proj_weight = in_proj_weight + torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
         pos_proj_weight = pos_proj_weight + torch.bmm(r_p.unsqueeze(-1), s_p.unsqueeze(1)).sum(dim=0)
         out_proj_weight = out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+
+        if self.mfw_activation == "none":
+            in_proj_weight = in_proj_weight
+        elif self.mfw_activation == "gelu":
+            in_proj_weight = F.gelu(in_proj_weight)
+            pos_proj_weight = F.gelu(pos_proj_weight)
+            out_proj_weight = F.gelu(out_proj_weight)
+        elif self.mfw_activation == "silu":
+            in_proj_weight = F.silu(in_proj_weight)
+            pos_proj_weight = F.silu(pos_proj_weight)
+            out_proj_weight = F.silu(out_proj_weight)
+        else:
+            raise NotImplementedError
 
         if key_padding_mask is not None:
             assert (attn_mask is None), "ERROR attn_mask and key_padding_mask should not be both defined!"

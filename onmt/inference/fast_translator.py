@@ -239,33 +239,46 @@ class FastTranslator(Translator):
                 lprobs[:, self.eos] = -math.inf
 
             # handle prefix tokens (possibly with different lengths)
-            # if prefix_tokens is not None and step < prefix_tokens.size(1):
-            #     prefix_toks = prefix_tokens[:, step].unsqueeze(-1).repeat(1, beam_size).view(-1)
-            #     prefix_lprobs = lprobs.gather(-1, prefix_toks.unsqueeze(-1))
-            #     prefix_mask = prefix_toks.ne(self.pad)
-            #     lprobs[prefix_mask] = -math.inf
-            #     lprobs[prefix_mask] = lprobs[prefix_mask].scatter_(
-            #         -1, prefix_toks[prefix_mask].unsqueeze(-1), prefix_lprobs
-            #     )
-            #     # if prefix includes eos, then we should make sure tokens and
-            #     # scores are the same across all beams
-            #     eos_mask = prefix_toks.eq(self.eos)
-            #     if eos_mask.any():
-            #         # validate that the first beam matches the prefix
-            #         first_beam = tokens[eos_mask].view(-1, beam_size, tokens.size(-1))[:, 0, 1:step + 1]
-            #         eos_mask_batch_dim = eos_mask.view(-1, beam_size)[:, 0]
-            #         target_prefix = prefix_tokens[eos_mask_batch_dim][:, :step]
-            #         assert (first_beam == target_prefix).all()
-            #
-            #         def replicate_first_beam(tensor, mask):
-            #             tensor = tensor.view(-1, beam_size, tensor.size(-1))
-            #             tensor[mask] = tensor[mask][:, :1, :]
-            #             return tensor.view(-1, tensor.size(-1))
-            #
-            #         # copy tokens, scores and lprobs from the first beam to all beams
-            #         tokens = replicate_first_beam(tokens, eos_mask_batch_dim)
-            #         scores = replicate_first_beam(scores, eos_mask_batch_dim)
-            #         lprobs = replicate_first_beam(lprobs, eos_mask_batch_dim)
+            # here prefix tokens is a list of word-ids
+            if prefix_tokens is not None:
+
+                if step == 0 and bsz == 1:
+                    # run the decoder through the prefix_tokens
+                    # store the scores and store the incremental states
+                    pass
+                else:
+                    prefix_tokens = torch.tensor(prefix_tokens).type_as(tokens)
+
+                    if step < prefix_tokens.size(1) and step < max_len:
+                        prefix_tokens = torch.tensor(prefix_tokens).type_as(tokens)
+                        prefix_toks = prefix_tokens[:, step].unsqueeze(-1).repeat(1, beam_size).view(-1)
+                        prefix_lprobs = lprobs.gather(-1, prefix_toks.unsqueeze(-1))
+                        prefix_mask = prefix_toks.ne(self.pad)
+                        lprobs[prefix_mask] = torch.tensor(-math.inf).to(lprobs)
+
+                        lprobs[prefix_mask] = lprobs[prefix_mask].scatter(
+                            -1, prefix_toks[prefix_mask].unsqueeze(-1), prefix_lprobs[prefix_mask]
+                        )
+
+                        # if prefix includes eos, then we should make sure tokens and
+                        # scores are the same across all beams
+                        eos_mask = prefix_toks.eq(self.eos)
+                        if eos_mask.any():
+                            # validate that the first beam matches the prefix
+                            first_beam = tokens[eos_mask].view(-1, beam_size, tokens.size(-1))[:, 0, 1:step + 1]
+                            eos_mask_batch_dim = eos_mask.view(-1, beam_size)[:, 0]
+                            target_prefix = prefix_tokens[eos_mask_batch_dim][:, :step]
+                            assert (first_beam == target_prefix).all()
+
+                            def replicate_first_beam(tensor, mask):
+                                tensor = tensor.view(-1, beam_size, tensor.size(-1))
+                                tensor[mask] = tensor[mask][:, :1, :]
+                                return tensor.view(-1, tensor.size(-1))
+
+                            # copy tokens, scores and lprobs from the first beam to all beams
+                            tokens = replicate_first_beam(tokens, eos_mask_batch_dim)
+                            scores = replicate_first_beam(scores, eos_mask_batch_dim)
+                            lprobs = replicate_first_beam(lprobs, eos_mask_batch_dim)
 
             if self.no_repeat_ngram_size > 0:
                 # for each beam and batch sentence, generate a list of previous ngrams
@@ -338,7 +351,7 @@ class FastTranslator(Translator):
             assert num_remaining_sent >= 0
             if num_remaining_sent == 0:
                 break
-            assert step < max_len
+            # assert step < max_len
 
             if len(finalized_sents) > 0:
                 new_bsz = bsz - len(finalized_sents)
