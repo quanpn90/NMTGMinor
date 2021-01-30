@@ -239,7 +239,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
         nan_mask = torch.isnan(softmax_results)
         if nan_mask.any():
-            softmax_results = softmax_results.masked_fill(nan_mask, 0).type_as(softmax_results)
+            softmax_results.masked_fill_(nan_mask, 0)
 
         # Dropout - is not executed for inference
         if is_training:
@@ -398,11 +398,11 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         else:
             dropout_grads = matmul2_dgrad1
 
+        # if nan_mask.any():
+        #     softmax_grads.masked_fill_(nan_mask, 0)
+
         # Softmax Grad (not a publically documented op)
         softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
-
-        if nan_mask.any():
-            softmax_grads = softmax_grads.masked_fill(nan_mask, 0)
 
         attn_score_grads = softmax_grads
         # the grads are evenly distributed to AC and BD

@@ -41,6 +41,7 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         self.s_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
         if use_multiplicative:
+            rank = 1
             self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
             self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
             self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
@@ -86,19 +87,19 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         nn.init.normal_(self.s_o, 0.0, 0.02)
 
         if self.use_multiplicative:
-            # nn.init.normal_(self.rm_i, 0.0, 1)
-            # nn.init.normal_(self.sm_i, 0.0, 1)
-            # nn.init.normal_(self.rm_p, 0.0, 1)
-            # nn.init.normal_(self.sm_p, 0.0, 1)
-            # nn.init.normal_(self.rm_o, 0.0, 1)
-            # nn.init.normal_(self.sm_o, 0.0, 1)
-            with torch.no_grad():
-                self.rm_i.bernoulli_(0.5).mul_(-2).add_(1)
-                self.sm_i.bernoulli_(0.5).mul_(-2).add_(1)
-                self.rm_o.bernoulli_(0.5).mul_(-2).add_(1)
-                self.sm_o.bernoulli_(0.5).mul_(-2).add_(1)
-                self.rm_p.bernoulli_(0.5).mul_(-2).add_(1)
-                self.sm_p.bernoulli_(0.5).mul_(-2).add_(1)
+            nn.init.constant_(self.rm_i, 1.0)
+            nn.init.constant_(self.sm_i, 1.0)
+            nn.init.constant_(self.rm_p, 1.0)
+            nn.init.constant_(self.sm_p, 1.0)
+            nn.init.constant_(self.rm_o, 1.0)
+            nn.init.constant_(self.sm_o, 1.0)
+            # with torch.no_grad():
+            #     self.rm_i.bernoulli_(0.5).mul_(-2).add_(1)
+            #     self.sm_i.bernoulli_(0.5).mul_(-2).add_(1)
+            #     self.rm_o.bernoulli_(0.5).mul_(-2).add_(1)
+            #     self.sm_o.bernoulli_(0.5).mul_(-2).add_(1)
+            #     self.rm_p.bernoulli_(0.5).mul_(-2).add_(1)
+            #     self.sm_p.bernoulli_(0.5).mul_(-2).add_(1)
 
     def forward(self, input, pos, indices=None, key_padding_mask=None, attn_mask=None, mems=None,
                 incremental=False, incremental_cache=None):
@@ -126,8 +127,10 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
             sm_p = torch.index_select(self.sm_p, 0, indices).squeeze(0)
             rm_o = torch.index_select(self.rm_o, 0, indices).squeeze(0)
             sm_o = torch.index_select(self.sm_o, 0, indices).squeeze(0)
+            # print(rm_i, sm_i)
 
-            in_proj_weight = in_proj_weight * torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
+            in_scale = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
+            in_proj_weight = in_proj_weight * in_scale
             pos_proj_weight = pos_proj_weight * torch.bmm(rm_p.unsqueeze(-1), sm_p.unsqueeze(1)).sum(dim=0)
             out_proj_weight = out_proj_weight * torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
 

@@ -690,9 +690,6 @@ class XETrainer(BaseTrainer):
                                     report_tgt_words / (time.time() - start)))
 
                     if opt.ctc_loss > 0.0:
-                        # if torch.isinf(report_ctc_loss):
-                        #     report_ctc_loss.zero_()
-                        # dist.all_reduce(report_ctc_loss, op=dist.ReduceOp.SUM, group=self.group)
                         ctc_loss = report_ctc_loss / report_tgt_words
                         log_string += (" ctcloss: %8.2f ; " % ctc_loss)
 
@@ -767,9 +764,9 @@ class XETrainer(BaseTrainer):
         if self.cuda:
             self.warm_up()
 
-            valid_loss = self.eval(self.valid_data)
-            valid_ppl = math.exp(min(valid_loss, 100))
-            print('Validation perplexity: %g' % valid_ppl)
+        valid_loss = self.eval(self.valid_data)
+        valid_ppl = math.exp(min(valid_loss, 100))
+        print('Validation perplexity: %g' % valid_ppl)
 
         self.start_time = time.time()
 

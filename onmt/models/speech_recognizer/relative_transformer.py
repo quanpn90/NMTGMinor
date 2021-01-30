@@ -208,6 +208,10 @@ class SpeechTransformerEncoder(TransformerEncoder):
             context = torch.mm(context.view(-1, context.size(-1)), language_linear_weight_)
             context = context.view(t, b, context.size(-1))
 
+        # nan_mask = torch.logical_or(torch.isnan(context), torch.isinf(context))
+        # if nan_mask.any():
+        #     context.masked_fill_(nan_mask, 0)
+
         output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask, 'src': input})
 
         if streaming:

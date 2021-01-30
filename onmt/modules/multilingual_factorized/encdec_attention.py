@@ -87,19 +87,19 @@ class MFWEncdecMultiheadAttn(nn.Module):
         nn.init.normal_(self.s_o, 0.0, 0.02)
 
         if self.use_multiplicative:
-            # nn.init.normal_(self.rm_q, 0.0, 1)
-            # nn.init.normal_(self.sm_q, 0.0, 1)
-            # nn.init.normal_(self.rm_kv, 0.0, 1)
-            # nn.init.normal_(self.sm_kv, 0.0, 1)
-            # nn.init.normal_(self.rm_o, 0.0, 1)
-            # nn.init.normal_(self.sm_o, 0.0, 1)
-            with torch.no_grad():
-                self.rm_q.bernoulli_(0.5).mul_(-2).add_(1)
-                self.sm_q.bernoulli_(0.5).mul_(-2).add_(1)
-                self.rm_kv.bernoulli_(0.5).mul_(-2).add_(1)
-                self.sm_kv.bernoulli_(0.5).mul_(-2).add_(1)
-                self.rm_o.bernoulli_(0.5).mul_(-2).add_(1)
-                self.sm_o.bernoulli_(0.5).mul_(-2).add_(1)
+            nn.init.constant_(self.rm_q, 1.0)
+            nn.init.constant_(self.sm_q, 1.0)
+            nn.init.constant_(self.rm_kv, 1.0)
+            nn.init.constant_(self.sm_kv, 1.0)
+            nn.init.constant_(self.rm_o, 1.0)
+            nn.init.constant_(self.sm_o, 1.0)
+            # with torch.no_grad():
+            #     self.rm_q.bernoulli_(0.5).mul_(-2).add_(1)
+            #     self.sm_q.bernoulli_(0.5).mul_(-2).add_(1)
+            #     self.rm_kv.bernoulli_(0.5).mul_(-2).add_(1)
+            #     self.sm_kv.bernoulli_(0.5).mul_(-2).add_(1)
+            #     self.rm_o.bernoulli_(0.5).mul_(-2).add_(1)
+            #     self.sm_o.bernoulli_(0.5).mul_(-2).add_(1)
 
     def forward(self, query, key, value, src_indices=None, tgt_indices=None, attn_mask=None,
                 incremental=False, incremental_cache=None):

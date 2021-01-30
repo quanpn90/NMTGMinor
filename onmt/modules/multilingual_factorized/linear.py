@@ -137,11 +137,11 @@ class MultilingualLinear(torch.nn.Module):
 
         # for batch ensemble we init r_i and s_i with random sign vectors
         if self.use_multiplicative:
-            # torch.nn.init.normal_(self.rm, 0.0, 1)
-            # torch.nn.init.normal_(self.sm, 0.0, 1)
-            with torch.no_grad():
-                self.rm.bernoulli_(0.5).mul_(-2).add_(1)  # -1 1 -1 1
-                self.sm.bernoulli_(0.5).mul_(-2).add_(1)
+            torch.nn.init.constant_(self.rm, 1.0)
+            torch.nn.init.constant_(self.sm, 1.0)
+            # with torch.no_grad():
+            #     self.rm.bernoulli_(0.5).mul_(-2).add_(1)  # -1 1 -1 1
+            #     self.sm.bernoulli_(0.5).mul_(-2).add_(1)
 
         torch.nn.init.normal_(self.r, 0.0, 0.02)
         torch.nn.init.normal_(self.s, 0.0, 0.02)
