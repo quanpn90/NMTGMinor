@@ -196,6 +196,8 @@ def make_parser(parser):
                         help="""How many steps before updating the parameters""")
     parser.add_argument('-max_step', type=int, default=40000,
                         help="""How many steps before updating the parameters""")
+    parser.add_argument('-starting_step', type=int, default=-1,
+                        help="""How many steps before updating the parameters""")
     parser.add_argument('-reset_optim', action='store_true',
                         help='Reset the optimizer running variables')
     parser.add_argument('-beta1', type=float, default=0.9,

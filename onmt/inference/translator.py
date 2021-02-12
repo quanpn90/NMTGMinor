@@ -7,8 +7,15 @@ from onmt.model_factory import build_model, build_language_model, optimize_model
 from ae.Autoencoder import Autoencoder
 import torch.nn.functional as F
 import sys
-
+#
+# import torchbackend='fbgemm'
+# # 'fbgemm' for server, 'qnnpack' for mobile
+# my_model.qconfig = torch.quantization.get_default_qconfig(backend)
+# prepare and convert model
+# Set the backend on which the quantized kernels need to be run
+# torch.backends.quantized.engine=# torch.backends.quantized.engine = 'fbgemm'
 model_list = ['transformer', 'stochastic_transformer', 'fusion_network']
+
 
 
 class Translator(object):
@@ -86,6 +93,18 @@ class Translator(object):
                 model = model.cuda()
             else:
                 model = model.cpu()
+
+            if opt.dynamic_quantile == 1:
+
+                engines = torch.backends.quantized.supported_engines
+                if 'fbgemm' in engines:
+                    torch.backends.quantized.engine = 'fbgemm'
+                else:
+                    torch.backends.quantized.engine = 'qnnpack'
+
+                model = torch.quantization.quantize_dynamic(
+                    model, {torch.nn.LSTM, torch.nn.Linear}, dtype=torch.qint8
+                )
 
             model.eval()
 

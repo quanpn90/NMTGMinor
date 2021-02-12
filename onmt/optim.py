@@ -545,3 +545,7 @@ class Optim(object):
 
     def zero_grad(self):
         self.optimizer.zero_grad()
+
+    def set_starting_step(self, step):
+        self._step = step
+        self._first_step = step

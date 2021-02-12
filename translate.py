@@ -103,6 +103,8 @@ parser.add_argument('-src_align_right', action='store_true',
                     help='To normalize the scores based on output length')
 parser.add_argument('-fp16', action='store_true',
                     help='To use floating point 16 in decoding')
+parser.add_argument('-dynamic_quantile', type=int, default=0,
+                    help='To use int8 in decoding (for linear and LSTM layers only).')
 parser.add_argument('-gpu', type=int, default=-1,
                     help="Device to run on")
 parser.add_argument('-fast_translate', action='store_true',

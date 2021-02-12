@@ -40,6 +40,7 @@ class TranslatorParameter(object):
         self.no_repeat_ngram_size = 0
         self.no_buffering = False
         self.src_align_right = False
+        self.dynamic_quantile = 0
         self.read_file(filename)
 
     def read_file(self, filename):
@@ -62,6 +63,8 @@ class TranslatorParameter(object):
                 self.tgt_lang = w[1]
             elif w[0] == "no_repeat_ngram_size":
                 self.no_repeat_ngram_size = int(w[1])
+            elif w[0] == "dynamic_quantile":
+                self.dynamic_quantile = int(w[1])
 
             line = f.readline()
 

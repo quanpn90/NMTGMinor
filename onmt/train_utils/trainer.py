@@ -497,6 +497,7 @@ class XETrainer(BaseTrainer):
         while not data_iterator.end_of_epoch():
 
             curriculum = (epoch < opt.curriculum)
+            i = i + 1
 
             # this batch generator is not very clean atm
             batch = next(epoch_iterator)
@@ -571,6 +572,14 @@ class XETrainer(BaseTrainer):
                 # Normalizing the loss to grad scaler ensures this will not happen
                 full_loss.div_(grad_scaler)
 
+                if loss != loss:
+                    # nan loss
+                    # del full_loss
+                    # del loss
+                    # continue
+                    full_loss.zero_()
+                    loss_data = 0
+
                 if self.cuda:
                     with amp.scale_loss(full_loss, optimizer) as scaled_loss:
                         scaled_loss.backward()
@@ -590,20 +599,20 @@ class XETrainer(BaseTrainer):
                 else:
                     raise e
 
-            if loss != loss:
-                # catching NAN problem
-                oom = True
-                self.model.zero_grad()
-                self.optim.zero_grad()
-                num_accumulated_words = 0
-                num_accumulated_sents = 0
-                nan_counter = nan_counter + 1
-                print("Warning!!! Loss is Nan")
-                if nan_counter >= 15:
-                    raise ValueError("Training stopped because of multiple NaN occurence. "
-                                     "For ASR, using the Relative Transformer is more stable and recommended.")
-            else:
-                nan_counter = 0
+            # if loss != loss:
+            #     # catching NAN problem
+            #     oom = True
+            #     self.model.zero_grad()
+            #     self.optim.zero_grad()
+            #     num_accumulated_words = 0
+            #     num_accumulated_sents = 0
+            #     nan_counter = nan_counter + 1
+            #     print("Warning!!! Loss is Nan")
+            #     if nan_counter >= 15:
+            #         raise ValueError("Training stopped because of multiple NaN occurence. "
+            #                          "For ASR, using the Relative Transformer is more stable and recommended.")
+            # else:
+            #     nan_counter = 0
 
             if not oom:
                 src_size = batch.src_size
@@ -666,9 +675,9 @@ class XETrainer(BaseTrainer):
                     report_rev_loss += rev_loss_data
                     report_mirror_loss += mirror_loss_data
 
-                if i == 0 or (i % opt.log_interval == -1 % opt.log_interval):
+                if i == 1 or (i % opt.log_interval == -1 % opt.log_interval):
                     log_string = ("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; " %
-                                  (epoch, i + 1, len(data_iterator),
+                                  (epoch, i, len(data_iterator),
                                    math.exp(report_loss / report_tgt_words)))
 
                     if opt.reconstruct:
@@ -704,8 +713,6 @@ class XETrainer(BaseTrainer):
                     report_ctc_loss = 0
                     start = time.time()
 
-                i = i + 1
-
         return total_loss / total_words
 
     # def run(self, save_file=None):
@@ -720,7 +727,7 @@ class XETrainer(BaseTrainer):
             prec_opt = checkpoint['opt'] if 'opt' in checkpoint else None
 
             if not opt.reset_optim:
-                print("* Loading optimizer states ... ")
+                print("[INFO] Loading optimizer states ... ")
                 self.optim.load_state_dict(checkpoint['optim'])
                 if prec_opt is not None and hasattr(prec_opt, "fp16_mixed"):
                     # Only load amp information if the mode is the same
@@ -744,6 +751,7 @@ class XETrainer(BaseTrainer):
                 resume = False
                 start_epoch = 1
 
+
             del checkpoint['model']
             del checkpoint['optim']
             del checkpoint
@@ -753,6 +761,10 @@ class XETrainer(BaseTrainer):
             init_model_parameters(model, opt)
             resume = False
             start_epoch = 1
+
+        if opt.starting_step > 0:
+            print("[INFO] Optimizer starting from state %d " % opt.starting_step)
+            self.optim.set_starting_step(opt.starting_step)
 
         if opt.load_encoder_from:
             self.load_encoder_weight(opt.load_encoder_from)
