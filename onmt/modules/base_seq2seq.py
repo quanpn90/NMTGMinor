@@ -108,13 +108,14 @@ class NMTModel(nn.Module):
                 filtered[k] = v
 
         # removing the keys in filtered but not in model dict
-        for k, v in filtered.items():
-            if k not in model_dict:
-                model_dict[k] = v
-                # removed_keys.append(k)
+        if strict:
+            removed_keys = list()
+            for k, v in filtered.items():
+                if k not in model_dict:
+                    removed_keys.append(k)
 
-        # for k in removed_keys:
-        #     filtered.pop(k)
+            for k in removed_keys:
+                filtered.pop(k)
 
         super().load_state_dict(filtered)   
 
