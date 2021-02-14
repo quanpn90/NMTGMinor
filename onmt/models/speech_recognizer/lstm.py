@@ -70,7 +70,7 @@ class SpeechLSTMEncoder(nn.Module):
         self.unidirect = False
 
         self.rnn = nn.LSTM(input_size=self.model_size, hidden_size=self.model_size, num_layers=self.layers,
-                           bidirectional=(not self.unidirect), bias=False, dropout=self.dropout, batch_first=True)
+                           bidirectional=(not self.unidirect), bias=True, dropout=self.dropout, batch_first=True)
 
         if self.multilingual_factorized_weights:
             from onmt.modules.weight_control_lstm import WeightFactoredLSTM

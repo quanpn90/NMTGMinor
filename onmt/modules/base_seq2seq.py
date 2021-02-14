@@ -73,7 +73,7 @@ class NMTModel(nn.Module):
         self.encoder.mark_pretrained()
         self.decoder.mark_pretrained()
         
-    def load_state_dict(self, state_dict, strict=True):
+    def load_state_dict(self, state_dict, strict=False):
         """
         override this method to have back-compatibility
         """
@@ -107,13 +107,15 @@ class NMTModel(nn.Module):
             if k not in filtered:
                 filtered[k] = v
 
-        removed_keys = list()
-        for k, v in filtered.items():
-            if k not in model_dict:
-                removed_keys.append(k)
+        # removing the keys in filtered but not in model dict
+        if strict:
+            removed_keys = list()
+            for k, v in filtered.items():
+                if k not in model_dict:
+                    removed_keys.append(k)
 
-        for k in removed_keys:
-            filtered.pop(k)
+            for k in removed_keys:
+                filtered.pop(k)
 
         super().load_state_dict(filtered)   
 
