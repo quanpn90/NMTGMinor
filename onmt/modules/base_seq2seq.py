@@ -77,8 +77,6 @@ class NMTModel(nn.Module):
         """
         override this method to have back-compatibility
         """
-
-        model_dict = self.state_dict()
         
         def condition(param_name):
             # don't load these buffers (more like a bug)
@@ -99,6 +97,8 @@ class NMTModel(nn.Module):
         # restore old generated if necessary for loading
         if "generator.linear.weight" in state_dict and type(self.generator) is nn.ModuleList:
             self.generator = self.generator[0]
+
+        model_dict = self.state_dict()
 
         # only load the filtered parameters
         filtered = {k: v for k, v in state_dict.items() if condition(k)}
