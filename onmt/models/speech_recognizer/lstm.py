@@ -63,7 +63,6 @@ class SpeechLSTMEncoder(nn.Module):
                    nn.Conv2d(32, 32, kernel_size=(3, 3), stride=2), nn.ReLU(True), nn.BatchNorm2d(32)]
 
             feat_size = (((feature_size // channels) - 3) // 4) * 32
-            # cnn.append()
             self.audio_trans = nn.Sequential(*cnn)
             self.linear_trans = nn.Linear(feat_size, self.model_size)
 
@@ -75,7 +74,8 @@ class SpeechLSTMEncoder(nn.Module):
         if self.multilingual_factorized_weights:
             from onmt.modules.weight_control_lstm import WeightFactoredLSTM
             self.rnn = WeightFactoredLSTM(self.rnn, dropout=opt.weight_drop, n_languages=opt.n_languages,
-                                          rank=self.mfw_rank)
+                                          rank=self.mfw_rank, multiplicative=opt.mfw_multiplicative,
+                                          activation=opt.mfw_activation)
 
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d',
                                                   variational=self.varitional_dropout)

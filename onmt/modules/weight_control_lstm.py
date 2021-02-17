@@ -8,7 +8,7 @@ import math
 
 
 class WeightFactoredLSTM(torch.nn.Module):
-    def __init__(self, module, dropout=0, n_languages=1, rank=1):
+    def __init__(self, module, dropout=0, n_languages=1, rank=1, multiplicative=False, activation='none'):
         """
         :param module: a LSTM module
         :param weights:
@@ -22,6 +22,8 @@ class WeightFactoredLSTM(torch.nn.Module):
         self.dropout = dropout
         self.n_languages = n_languages
         self.rank = rank
+        self.multiplicative = multiplicative
+        self.activation = activation
         self._setup()
 
     def trails_in_the_sky(*args, **kwargs):
@@ -65,6 +67,20 @@ class WeightFactoredLSTM(torch.nn.Module):
 
             setattr(self, name_w + "_s", aux_s)
             setattr(self, name_w + "_r", aux_r)
+            
+            if self.multiplicative:
+                aux_ms = Parameter(torch.Tensor(self.n_languages, 1, w.data.size(0)))
+                aux_mr = Parameter(torch.Tensor(self.n_languages, 1, w.data.size(1)))
+
+                # initialize these weights:
+                if self.activation == 'sigmoid':
+                    raise NotImplementedError
+                else:
+                    nn.init.constant_(aux_ms, 1.0)
+                    nn.init.constant_(aux_mr, 1.0)
+
+                setattr(self, name_w + "_ms", aux_ms)
+                setattr(self, name_w + "_mr", aux_mr)
 
     def _setweights(self, indices):
         for name_w in self.weights:
@@ -75,6 +91,22 @@ class WeightFactoredLSTM(torch.nn.Module):
             s_vector = torch.index_select(aux_s, 0, indices).squeeze(0)
             r_vector = torch.index_select(aux_r, 0, indices).squeeze(0)
             w = torch.nn.functional.dropout(raw_w, p=self.dropout, training=self.training)
+
+            if self.multiplicative:
+                aux_ms = getattr(self, name_w + "_ms")
+                aux_mr = getattr(self, name_w + "_mr")
+                ms_vector = torch.index_select(aux_ms, 0, indices).squeeze(0)
+                mr_vector = torch.index_select(aux_mr, 0, indices).squeeze(0)
+
+                scale = torch.bmm(ms_vector.unsqueeze(-1), mr_vector.unsqueeze(1)).sum(dim=0)
+
+                if self.activation == 'sigmoid':
+                    scale = torch.sigmoid(scale)
+                elif self.activation == 'tanh':
+                    scale = torch.tanh(scale)
+
+                w = w * scale
+
             w = w + torch.bmm(s_vector.unsqueeze(-1), r_vector.unsqueeze(1)).sum(dim=0)
 
             # TODO: adding multiplicative option
