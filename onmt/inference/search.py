@@ -12,10 +12,10 @@ import onmt
 class Search(object):
 
     def __init__(self, tgt_dict):
-        self.pad = onmt.constants.PAD
-        self.unk = onmt.constants.UNK
-        self.eos = onmt.constants.EOS
-        self.bos = onmt.constants.BOS
+        # self.pad = onmt.constants.PAD
+        # self.unk = onmt.constants.UNK
+        # self.eos = onmt.constants.EOS
+        # self.bos = onmt.constants.BOS
         self.vocab_size = tgt_dict.size()
         self.scores_buf = None
         self.indices_buf = None

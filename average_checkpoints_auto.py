@@ -97,7 +97,12 @@ def main():
     # torch.save(best_checkpoint, opt.output + ".top")
 
     model_opt = checkpoint['opt']
+
     dicts = checkpoint['dicts']
+
+    # only create the object
+    model_opt.enc_not_load_state = True
+    model_opt.dec_not_load_state = True
 
     print(model_opt.layers)
 
@@ -115,6 +120,9 @@ def main():
         checkpoint = torch.load(model, map_location=lambda storage, loc: storage)
 
         model_opt = checkpoint['opt']
+
+        model_opt.enc_not_load_state = True
+        model_opt.dec_not_load_state = True
 
         # delete optim information to save GPU memory
         if 'optim' in checkpoint:

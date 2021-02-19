@@ -28,6 +28,54 @@ def build_model(opt, dicts):
     onmt.constants.fused_ffn = opt.fused_ffn
     opt.nce = opt.nce_noise > 0
 
+    # This is related to data preprocessing method，instead of model structure.  roberta.en is different from others
+    if opt.enc_pretrained_model == 'bert':
+        onmt.constants.SRC_PAD = onmt.constants.BERT_PAD
+        onmt.constants.SRC_UNK = onmt.constants.BERT_UNK
+        onmt.constants.SRC_BOS = onmt.constants.BERT_BOS
+        onmt.constants.SRC_EOS = onmt.constants.BERT_EOS
+    elif opt.enc_pretrained_model == 'roberta':
+        onmt.constants.SRC_PAD = onmt.constants.EN_ROBERTA_PAD
+        onmt.constants.SRC_UNK = onmt.constants.EN_ROBERTA_UNK
+        onmt.constants.SRC_BOS = onmt.constants.EN_ROBERTA_BOS
+        onmt.constants.SRC_EOS = onmt.constants.EN_ROBERTA_EOS
+    else:
+        onmt.constants.SRC_PAD = onmt.constants.PAD
+        onmt.constants.SRC_UNK = onmt.constants.UNK
+        onmt.constants.SRC_BOS = onmt.constants.BOS
+        onmt.constants.SRC_EOS = onmt.constants.EOS
+
+    if opt.dec_pretrained_model in ["bert", "roberta"]:
+        onmt.constants.TGT_PAD = onmt.constants.BERT_PAD
+        onmt.constants.TGT_UNK = onmt.constants.BERT_UNK
+        onmt.constants.TGT_BOS = onmt.constants.BERT_BOS
+        onmt.constants.TGT_EOS = onmt.constants.BERT_EOS
+    else:
+        onmt.constants.TGT_PAD = onmt.constants.PAD
+        onmt.constants.TGT_UNK = onmt.constants.UNK
+        onmt.constants.TGT_BOS = onmt.constants.BOS
+        onmt.constants.TGT_EOS = onmt.constants.EOS
+
+    # print("onmt.constants.SRC_PAD_WORD:", onmt.constants.PAD_WORD)
+    # print("onmt.constants.SRC_UNK_WORD:", onmt.constants.UNK_WORD)
+    # print("onmt.constants.SRC_BOS_WORD:", onmt.constants.BOS_WORD)
+    # print("onmt.constants.SRC_EOS_WORD:", onmt.constants.EOS_WORD)
+    #
+    # print("onmt.constants.SRC_PAD:", onmt.constants.SRC_PAD)
+    # print("onmt.constants.SRC_UNK:", onmt.constants.SRC_UNK)
+    # print("onmt.constants.SRC_BOS:", onmt.constants.SRC_BOS)
+    # print("onmt.constants.SRC_EOS:", onmt.constants.SRC_EOS)
+    #
+    # print("onmt.constants.TGT_PAD_WORD:", onmt.constants.PAD_WORD)
+    # print("onmt.constants.TGT_UNK_WORD:", onmt.constants.UNK_WORD)
+    # print("onmt.constants.TGT_BOS_WORD:", onmt.constants.BOS_WORD)
+    # print("onmt.constants.TGT_EOS_WORD:", onmt.constants.EOS_WORD)
+    #
+    # print("onmt.constants.TGT_PAD:", onmt.constants.TGT_PAD)
+    # print("onmt.constants.TGT_UNK:", onmt.constants.TGT_UNK)
+    # print("onmt.constants.TGT_BOS:", onmt.constants.TGT_BOS)
+    # print("onmt.constants.TGT_EOS:", onmt.constants.TGT_EOS)
+
     if 'langs' not in dicts:
         dicts['langs'] = {'src': 0, 'tgt': 1}
     opt.n_languages = len(dicts['langs'])
@@ -79,7 +127,7 @@ def build_tm_model(opt, dicts):
                                                           fix_norm=opt.fix_norm_output_embedding)]
 
     # BUILD EMBEDDINGS
-    if 'src' in dicts:
+    if 'src' in dicts and not opt.enc_pretrained_model:
         embedding_src = nn.Embedding(dicts['src'].size(),
                                      opt.model_size,
                                      padding_idx=onmt.constants.PAD)
@@ -89,10 +137,13 @@ def build_tm_model(opt, dicts):
     if opt.join_embedding and embedding_src is not None:
         embedding_tgt = embedding_src
         print("* Joining the weights of encoder and decoder word embeddings")
-    else:
+    elif not opt.enc_pretrained_model:
         embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                      opt.model_size,
                                      padding_idx=onmt.constants.PAD)
+    else:
+        assert opt.model == "pretrain_transformer"
+        embedding_tgt = None
 
     if opt.use_language_embedding:
         print("* Create language embeddings with %d languages" % len(dicts['langs']))
@@ -281,8 +332,126 @@ def build_tm_model(opt, dicts):
                                   generator, positional_encoder, language_embeddings=language_embeddings,
                                   dictionary=dicts['tgt'])
 
+    elif opt.model == 'pretrain_transformer':
+        from onmt.models.pretrain_transformer import PretrainTransformer
+        print("Use pretrained model {} for encoder".format(opt.enc_pretrained_model))
+        if opt.enc_pretrained_model == "bert":
+            from pretrain_module.configuration_bert import BertConfig
+            from pretrain_module.modeling_bert import BertModel
+
+            enc_bert_config = BertConfig.from_json_file(opt.enc_pretrained_config_dir + "/" + opt.enc_config_name)
+            encoder = BertModel(enc_bert_config,
+                                bert_word_dropout=opt.enc_pretrain_word_dropout,
+                                bert_emb_dropout=opt.enc_pretrain_emb_dropout,
+                                bert_atten_dropout=opt.enc_pretrain_attn_dropout,
+                                bert_hidden_dropout=opt.enc_pretrain_hidden_dropout,
+                                bert_hidden_size=opt.enc_pretrain_hidden_size,
+                                is_decoder=False,
+                                before_plm_output_ln=opt.before_enc_output_ln,
+                                gradient_checkpointing=opt.enc_gradient_checkpointing,
+                                )
+
+        elif opt.enc_pretrained_model == "roberta":
+            from pretrain_module.configuration_roberta import RobertaConfig
+            from pretrain_module.modeling_roberta import RobertaModel
+            enc_roberta_config = RobertaConfig.from_json_file(opt.enc_pretrained_config_dir + "/" + opt.enc_config_name)
+
+            encoder = RobertaModel(enc_roberta_config,
+                                   bert_word_dropout=opt.enc_pretrain_word_dropout,
+                                   bert_emb_dropout=opt.enc_pretrain_emb_dropout,
+                                   bert_atten_dropout=opt.enc_pretrain_attn_dropout,
+                                   bert_hidden_dropout=opt.enc_pretrain_hidden_dropout,
+                                   bert_hidden_size=opt.enc_pretrain_hidden_size,
+                                   is_decoder=False,
+                                   before_plm_output_ln=opt.before_enc_output_ln,
+                                   gradient_checkpointing=opt.enc_gradient_checkpointing,
+                                   )
+        else:
+            print("Warning: only bert and roberta are implemented for encoder")
+            exit(-1)
+
+        if opt.enc_not_load_state:
+            print("Encoder is randomly initialized")
+        else:
+            enc_state_dict_file = opt.enc_pretrained_config_dir + "/" + opt.enc_state_dict
+            print("Loading weights from pretrained:\n", enc_state_dict_file)
+
+            enc_model_state_dict = torch.load(enc_state_dict_file, map_location="cpu")
+
+            encoder.from_pretrained(pretrained_model_name_or_path=opt.enc_pretrained_config_dir,
+                                    model=encoder,
+                                    output_loading_info=True,
+                                    state_dict=enc_model_state_dict,
+                                    model_prefix=opt.enc_pretrained_model
+                                    )
+        if not opt.dec_pretrained_model:
+            print("Decoder is not from pretrained model")
+            decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder,
+                                         language_embeddings=language_embeddings)
+        else:
+            print("Build a pretrained model: {}, for decoder".format(opt.dec_pretrained_model))
+            if opt.dec_pretrained_model == "bert":
+                if opt.enc_pretrained_model != "bert":
+                    from pretrain_module.configuration_bert import BertConfig
+                    from pretrain_module.modeling_bert import BertModel
+                dec_bert_config = BertConfig.from_json_file(opt.dec_pretrained_config_dir + "/" + opt.dec_config_name)
+                decoder = BertModel(dec_bert_config,
+                                    bert_word_dropout=opt.dec_pretrain_word_dropout,
+                                    bert_emb_dropout=opt.dec_pretrain_emb_dropout,
+                                    bert_atten_dropout=opt.dec_pretrain_attn_dropout,
+                                    bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
+                                    bert_hidden_size=opt.dec_pretrain_hidden_size,
+                                    is_decoder=True,
+                                    gradient_checkpointing=opt.dec_gradient_checkpointing,
+                                    )
+
+            elif opt.dec_pretrained_model == "roberta":
+                print("Pretrained model {} is applied to decoder".format(opt.dec_pretrained_model))
+                if opt.enc_pretrained_model != "roberta":
+                    from pretrain_module.configuration_roberta import RobertaConfig
+                    from pretrain_module.modeling_roberta import RobertaModel
+
+                dec_roberta_config = RobertaConfig.from_json_file(opt.dec_pretrained_config_dir + "/" + opt.dec_config_name)
+
+                decoder = RobertaModel(dec_roberta_config,
+                                       bert_word_dropout=opt.dec_pretrain_word_dropout,
+                                       bert_emb_dropout=opt.dec_pretrain_emb_dropout,
+                                       bert_atten_dropout=opt.dec_pretrain_attn_dropout,
+                                       bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
+                                       bert_hidden_size=opt.dec_pretrain_hidden_size,
+                                       is_decoder=True,
+                                       gradient_checkpointing=opt.dec_gradient_checkpointing,
+                                       )
+            else:
+                print("Warning: only bert and roberta are implemented for decoder")
+                exit(-1)
+
+
+            if opt.dec_not_load_state:
+                print("Decoder is randomly initialized")
+            else:
+                dec_state_dict_file = opt.dec_pretrained_config_dir + "/" + opt.dec_state_dict
+                print("Loading weights for decoder from:\n", dec_state_dict_file)
+                dec_model_state_dict = torch.load(dec_state_dict_file, map_location="cpu")
+
+                decoder.from_pretrained(pretrained_model_name_or_path=opt.dec_pretrained_config_dir,
+                                        model=decoder,
+                                        output_loading_info=True,
+                                        state_dict=dec_model_state_dict,
+                                        model_prefix=opt.dec_pretrained_model
+                                        )
+
+        encoder.enc_pretrained_model = opt.enc_pretrained_model
+        decoder.dec_pretrained_model = opt.dec_pretrained_model
+
+        encoder.input_type = opt.encoder_type
+
+        model = PretrainTransformer(encoder, decoder, nn.ModuleList(generators))
     else:
         raise NotImplementedError
+
+
+
 
     if opt.tie_weights:
         print("* Joining the weights of decoder input and output embeddings")
@@ -387,7 +556,8 @@ def init_model_parameters(model, opt):
     model.apply(weights_init)
 
     if hasattr(model, 'decoder'):
-        model.decoder.word_lut.apply(weights_init)
+        if opt.model != "pretrain_transformer":
+            model.decoder.word_lut.apply(weights_init)
     else:
         model.tgt_embedding.apply(weights_init)
 

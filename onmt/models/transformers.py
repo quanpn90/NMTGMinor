@@ -820,7 +820,7 @@ class Transformer(NMTModel):
 class TransformerDecodingState(DecoderState):
 
     def __init__(self, src, tgt_lang, context, src_lang, beam_size=1, model_size=512, type=2,
-                 cloning=True, buffering=False):
+                 cloning=True, buffering=False, src_mask=None, dec_pretrained_model=""):
 
         """
         :param src:
@@ -838,6 +838,7 @@ class TransformerDecodingState(DecoderState):
         self.model_size = model_size
         self.attention_buffers = dict()
         self.buffering = buffering
+        self.dec_pretrained_model = dec_pretrained_model
 
         if type == 1:
             # if audio only take one dimension since only used for mask
@@ -879,10 +880,10 @@ class TransformerDecodingState(DecoderState):
                 else:
                     self.context = None
 
-                # if src_mask is not None:
-                #     self.src_mask = src_mask.index_select(0, new_order)
-                # else:
-                #     self.src_mask = None
+                if src_mask is not None:
+                    self.src_mask = src_mask.index_select(0, new_order)
+                else:
+                    self.src_mask = None
             else:
                 self.context = context
                 self.src = src
@@ -980,8 +981,8 @@ class TransformerDecodingState(DecoderState):
         if self.context is not None:
             self.context = self.context.index_select(1, reorder_state)
 
-        # if self.src_mask is not None:
-        #     self.src_mask = self.src_mask.index_select(0, reorder_state)
+        if self.src_mask is not None:
+            self.src_mask = self.src_mask.index_select(0, reorder_state)
         self.src = self.src.index_select(1, reorder_state)
 
         for l in self.attention_buffers:
@@ -989,4 +990,10 @@ class TransformerDecodingState(DecoderState):
             if buffer_ is not None:
                 for k in buffer_.keys():
                     t_, br_, d_ = buffer_[k].size()
-                    buffer_[k] = buffer_[k].index_select(1, reorder_state)  # 1 for time first
+                    if not self.dec_pretrained_model:
+                        buffer_[k] = buffer_[k].index_select(1, reorder_state)  # 1 for time first
+                    elif self.dec_pretrained_model in ["bert", "roberta"]:
+                        buffer_[k] = buffer_[k].index_select(0, reorder_state)  # 0 for time first
+                    else:
+                        print("Warning: check dec_pretrained_model type")
+                        exit(-1)

@@ -482,7 +482,8 @@ class XETrainer(BaseTrainer):
         counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
-        grad_scaler = 1
+        # grad_scaler = 1
+        grad_scaler = opt.gradient_scaler
 
         nan = False
         nan_counter = 0
@@ -751,14 +752,15 @@ class XETrainer(BaseTrainer):
                 resume = False
                 start_epoch = 1
 
-
             del checkpoint['model']
             del checkpoint['optim']
             del checkpoint
         else:
+            # For pretrain_transformer initialization is done in pretrain_module 
+            if opt.model != "pretrain_transformer":
+                print('Initializing model parameters')
+                init_model_parameters(model, opt)
             itr_progress = None
-            print('Initializing model parameters')
-            init_model_parameters(model, opt)
             resume = False
             start_epoch = 1
 

@@ -172,8 +172,13 @@ def make_parser(parser):
                         help="""For this many epochs, order the minibatches based
                         on source sequence length. Sometimes setting this to 1 will
                         increase convergence speed.""")
+
     parser.add_argument('-normalize_gradient', action="store_true",
                         help="""Normalize the gradients by number of tokens before updates""")
+
+    parser.add_argument('-gradient_scaler', type=int, default=1,
+                        help='avoid gradient overflow with fp16')
+
     # learning rate
     parser.add_argument('-learning_rate', type=float, default=1.0,
                         help="""Starting learning rate. If adagrad/adadelta/adam is
@@ -347,6 +352,68 @@ def make_parser(parser):
                         help="""""")
     parser.add_argument('-master_port', default='8888', type=str,
                         help="""""")
+
+    # For pretraining
+    # encoder
+    parser.add_argument('-enc_pretrained_model', default="", type=str,
+                        help=""" the name of trained model""")
+    parser.add_argument('-enc_pretrain_hidden_size', type=int, default=768,
+                        help='Size of bert hidden')
+
+    parser.add_argument('-enc_pretrained_config_dir', default="", type=str,
+                        help=""" the path to the pretrained Bert model for src language.""")
+    parser.add_argument('-enc_config_name', default="bert_config.json", type=str,
+                        help=""" the name of src pretrained model configuration.""")
+    parser.add_argument('-enc_state_dict', default="", type=str,
+                        help=""" the state_dict of the  pretrained model for src language """)
+    parser.add_argument('-enc_not_load_state', action='store_true',
+                        help='only create a  Bert Object, not load the state from pytorch modle or fituned model for src')
+
+    parser.add_argument('-enc_pretrain_word_dropout', type=float, default=0.0,
+                        help="""word dropout appled on bert""")
+    parser.add_argument('-enc_pretrain_emb_dropout', type=float, default=0.1,
+                        help="""dropout applied on bert embedding""")
+    parser.add_argument('-enc_pretrain_attn_dropout', type=float, default=0.1,
+                        help="""dropout on bert attention, corresponds to attention_probs_dropout_prob""")
+    parser.add_argument('-enc_pretrain_hidden_dropout', type=float, default=0.1,
+                        help="""dropout applied on bert hidden, corresponds to hidden_dropout_prob""")
+
+    parser.add_argument('-enc_gradient_checkpointing', action='store_true',
+                        help='use gradient checkpointing on encdoer')
+
+    parser.add_argument('-before_enc_output_ln', action='store_true',
+                        help='LayersNnormalization before output for plm as encoder')
+
+    # decoder
+    parser.add_argument('-dec_pretrained_model', default="", type=str,
+                        help=""" the name of trained model""")
+    parser.add_argument('-dec_pretrain_hidden_size', type=int, default=768,
+                        help='Size of bert hidden')
+
+    parser.add_argument('-dec_pretrained_config_dir', default="", type=str,
+                        help=""" the path to the pretrained Bert model.""")
+    parser.add_argument('-dec_config_name', default="bert_config.json", type=str,
+                        help=""" the name of tgt pretrained model configuration.""")
+    parser.add_argument('-dec_state_dict', default="", type=str,
+                        help=""" the state_dict of the  pretrained model""")
+    parser.add_argument('-dec_not_load_state', action='store_true',
+                        help='only create a  Bert Object, not load the state from pytorch modle or fituned model for tgt')
+
+
+    parser.add_argument('-dec_pretrain_word_dropout', type=float, default=0.0,
+                        help="""word dropout appled on bert""")
+    parser.add_argument('-dec_pretrain_emb_dropout', type=float, default=0.1,
+                        help="""dropout applied on bert embedding""")
+    parser.add_argument('-dec_pretrain_attn_dropout', type=float, default=0.1,
+                        help="""dropout on bert attention, corresponds to attention_probs_dropout_prob""")
+    parser.add_argument('-dec_pretrain_hidden_dropout', type=float, default=0.1,
+                        help="""dropout applied on bert hidden, corresponds to hidden_dropout_prob""")
+
+    parser.add_argument('-dec_gradient_checkpointing', action='store_true',
+                        help='use gradient checkpointing on decoder')
+
+
+
     return parser
 
 

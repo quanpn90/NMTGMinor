@@ -33,6 +33,8 @@ class Translator(object):
         self.src_lang = opt.src_lang
         self.tgt_lang = opt.tgt_lang
 
+
+
         if self.attributes:
             self.attributes = self.attributes.split("|")
 
@@ -53,6 +55,37 @@ class Translator(object):
                                     map_location=lambda storage, loc: storage)
 
             model_opt = checkpoint['opt']
+            model_opt.enc_not_load_state = True
+            model_opt.dec_not_load_state = True
+
+            if model_opt.enc_pretrained_model == "bert":
+                onmt.constants.SRC_PAD = onmt.constants.BERT_PAD
+                onmt.constants.SRC_BOS = onmt.constants.BERT_BOS
+                onmt.constants.SRC_EOS = onmt.constants.BERT_EOS
+                onmt.constants.SRC_UNK = onmt.constants.BERT_UNK
+            elif model_opt.enc_pretrained_model == "roberta":
+                onmt.constants.SRC_PAD = onmt.constants.EN_ROBERTA_PAD
+                onmt.constants.SRC_BOS = onmt.constants.EN_ROBERTA_BOS
+                onmt.constants.SRC_EOS = onmt.constants.EN_ROBERTA_EOS
+                onmt.constants.SRC_UNK = onmt.constants.EN_ROBERTA_UNK
+            else:
+                onmt.constants.SRC_PAD = onmt.constants.PAD
+                onmt.constants.SRC_BOS = onmt.constants.BOS
+                onmt.constants.SRC_EOS = onmt.constants.EOS
+                onmt.constants.SRC_UNK = onmt.constants.UNK
+
+            # For ZH, bert and roberta share the same vocabulary
+            if model_opt.dec_pretrained_model in ["bert", "roberta"]:
+                onmt.constants.TGT_EOS = onmt.constants.BERT_EOS
+                onmt.constants.TGT_BOS = onmt.constants.BERT_BOS
+                onmt.constants.TGT_PAD = onmt.constants.BERT_PAD
+                onmt.constants.TGT_UNK = onmt.constants.BERT_UNK
+            else:
+                onmt.constants.TGT_BOS = onmt.constants.BOS
+                onmt.constants.TGT_EOS = onmt.constants.EOS
+                onmt.constants.TGT_PAD = onmt.constants.PAD
+                onmt.constants.TGT_UNK = onmt.constants.UNK
+
             dicts = checkpoint['dicts']
 
             if i == 0:
@@ -66,9 +99,10 @@ class Translator(object):
                     self.lang_dict = checkpoint['dicts']['langs']
 
                 else:
-                    self.lang_dict = { 'src': 0, 'tgt': 1}
+                    self.lang_dict = {'src': 0, 'tgt': 1}
 
                 self.bos_id = self.tgt_dict.labelToIdx[self.bos_token]
+
 
             # Build model from the saved option
             # if hasattr(model_opt, 'fusion') and model_opt.fusion == True:
@@ -76,6 +110,8 @@ class Translator(object):
             #     model = build_fusion(model_opt, checkpoint['dicts'])
             # else:
             #     model = build_model(model_opt, checkpoint['dicts'])
+
+
             model = build_model(model_opt, checkpoint['dicts'])
             optimize_model(model)
             model.load_state_dict(checkpoint['model'])
