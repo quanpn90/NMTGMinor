@@ -85,6 +85,25 @@ parser.add_argument('-tgt_seq_length', type=int, default=10000,
 parser.add_argument('-tgt_seq_length_trunc', type=int, default=0,
                     help="Truncate target sequence length.")
 
+# tokens
+parser.add_argument('-src_bos_token', type=str, default="<s>",
+                    help='SRC BOS Token Default is <s>.')
+parser.add_argument('-src_eos_token', type=str, default="</s>",
+                    help='SRC BOS Token. Default is </s>.')
+parser.add_argument('-src_unk_token', type=str, default="<unk>",
+                    help='SRC Unk Token. Default is <unk>.')
+parser.add_argument('-src_pad_token', type=str, default="<blank>",
+                    help='SRC PAD Token. Default is <blank>.')
+
+parser.add_argument('-tgt_bos_token', type=str, default="<s>",
+                    help='TGT BOS Token Default is <s>.')
+parser.add_argument('-tgt_eos_token', type=str, default="</s>",
+                    help='TGT BOS Token. Default is </s>.')
+parser.add_argument('-tgt_unk_token', type=str, default="<unk>",
+                    help='TGT Unk Token. Default is <unk>.')
+parser.add_argument('-tgt_pad_token', type=str, default="<blank>",
+                    help='TGT PAD Token. Default is <blank>.')
+
 parser.add_argument('-shuffle', type=int, default=1,
                     help="Shuffle data")
 
@@ -116,14 +135,21 @@ parser.add_argument('-verbose', action='store_true',
                     help="Print out information during preprocessing")
 
 opt = parser.parse_args()
-
 torch.manual_seed(opt.seed)
 
 
-def make_vocab(filenames, size, tokenizer, num_workers=1):
-    vocab = onmt.Dict([onmt.constants.PAD_WORD, onmt.constants.UNK_WORD,
-                       onmt.constants.BOS_WORD, onmt.constants.EOS_WORD],
-                      lower=opt.lower)
+def make_vocab(name, filenames, size, tokenizer, num_workers=1):
+    if name == "source":
+        vocab = onmt.Dict([opt.src_pad_token, opt.src_unk_token,
+                           opt.src_bos_token, opt.src_eos_token],
+                          lower=opt.lower)
+    elif name == "target":
+        vocab = onmt.Dict([opt.tgt_pad_token, opt.tgt_unk_token,
+                           opt.tgt_bos_token, opt.tgt_eos_token],
+                          lower=opt.lower)
+    else:
+        print("Warning: check the name")
+        exit(-1)
 
     for filename in filenames:
         print("Generating vocabulary from file %s ... " % filename)
@@ -145,15 +171,24 @@ def init_vocab(name, data_files, vocab_file, vocab_size, tokenizer, num_workers=
         if not opt.load_bpe_voc:
             vocab = onmt.Dict()
         else:
-            vocab = onmt.Dict([onmt.constants.PAD_WORD, onmt.constants.UNK_WORD,
-                               onmt.constants.BOS_WORD, onmt.constants.EOS_WORD],
-                              lower=opt.lower)
+            if name == "target":
+                vocab = onmt.Dict([opt.tgt_pad_token, opt.tgt_unk_token,
+                                   opt.tgt_bos_token, opt.tgt_eos_token],
+                                  lower=opt.lower)
+            elif name == "source":
+                vocab = onmt.Dict([opt.src_pad_token, opt.src_unk_token,
+                                   opt.src_bos_token, opt.src_eos_token],
+                                  lower=opt.lower)
+            else:
+                print("Warning: name should be source or target")
+                exit(-1)
+
         vocab.loadFile(vocab_file)
         print('Loaded ' + str(vocab.size()) + ' ' + name + ' words')
 
     if vocab is None:
         print('Building ' + name + ' vocabulary...')
-        gen_word_vocab = make_vocab(data_files, vocab_size, tokenizer, num_workers=num_workers)
+        gen_word_vocab = make_vocab(name, data_files, vocab_size, tokenizer, num_workers=num_workers,)
 
         vocab = gen_word_vocab
 
@@ -174,7 +209,7 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
     print('Processing %s ...' % (tgt_file))
     tgtf = open(tgt_file)
 
-    eos = torch.LongTensor(1).fill_(onmt.constants.EOS)
+    eos = torch.LongTensor(1).fill_(opt.tgt_eos_token)
     # print(eos.size())
     tensors = [eos]
 
@@ -197,9 +232,9 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
             tgt_words = split_line_by_char(tline)
 
         tensor = tgt_dicts.convertToIdx(tgt_words,
-                                        onmt.constants.UNK_WORD,
+                                        opt.tgt_unk_token,
                                         None,
-                                        onmt.constants.EOS_WORD,
+                                        opt.tgt_eos_token,
                                         type=data_type)
         # print(tensor.size())
         tensors.append(tensor)
@@ -230,13 +265,13 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
                                             num_workers=num_workers, verbose=verbose)
 
     if add_bos:
-        tgt_bos_word = onmt.constants.BOS_WORD
+        tgt_bos_word = opt.tgt_bos_token
     else:
         tgt_bos_word = None
 
     print("[INFO] Binarizing file %s ..." % tgt_file)
     binarized_tgt = Binarizer.binarize_file(tgt_file, tgt_dicts, tokenizer,
-                                            bos_word=tgt_bos_word, eos_word=onmt.constants.EOS_WORD,
+                                            bos_word=tgt_bos_word, eos_word=opt.tgt_eos_token,
                                             data_type=data_type,
                                             num_workers=num_workers, verbose=verbose)
 
@@ -276,13 +311,14 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
     src_sizes = binarized_src['sizes']
 
     if add_bos:
-        tgt_bos_word = onmt.constants.BOS_WORD
+        tgt_bos_word = opt.tgt_bos_token
     else:
         tgt_bos_word = None
 
     print("[INFO] Binarizing file %s ..." % tgt_file)
+
     binarized_tgt = Binarizer.binarize_file(tgt_file, tgt_dicts, tokenizer,
-                                            bos_word=tgt_bos_word, eos_word=onmt.constants.EOS_WORD,
+                                            bos_word=tgt_bos_word, eos_word=opt.tgt_eos_token,
                                             data_type=data_type,
                                             num_workers=num_workers, verbose=verbose)
 
