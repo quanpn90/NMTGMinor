@@ -354,16 +354,15 @@ def make_parser(parser):
                         help="""""")
 
     # For pretraining
-    # encoder
+    # pretrained encoder
     parser.add_argument('-enc_pretrained_model', default="", type=str,
                         help=""" the name of trained model""")
     parser.add_argument('-enc_pretrain_hidden_size', type=int, default=768,
                         help='Size of bert hidden')
 
-    parser.add_argument('-enc_pretrained_config_dir', default="", type=str,
-                        help=""" the path to the pretrained Bert model for src language.""")
-    parser.add_argument('-enc_config_name', default="bert_config.json", type=str,
+    parser.add_argument('-enc_config_file', default="path/bert_config.json", type=str,
                         help=""" the name of src pretrained model configuration.""")
+
     parser.add_argument('-enc_state_dict', default="", type=str,
                         help=""" the state_dict of the  pretrained model for src language """)
     parser.add_argument('-enc_not_load_state', action='store_true',
@@ -384,15 +383,14 @@ def make_parser(parser):
     parser.add_argument('-before_enc_output_ln', action='store_true',
                         help='LayersNnormalization before output for plm as encoder')
 
-    # decoder
+    # pretrained decoder
     parser.add_argument('-dec_pretrained_model', default="", type=str,
                         help=""" the name of trained model""")
     parser.add_argument('-dec_pretrain_hidden_size', type=int, default=768,
                         help='Size of bert hidden')
 
-    parser.add_argument('-dec_pretrained_config_dir', default="", type=str,
-                        help=""" the path to the pretrained Bert model.""")
-    parser.add_argument('-dec_config_name', default="bert_config.json", type=str,
+
+    parser.add_argument('-dec_config_file', default="bert_config.json", type=str,
                         help=""" the name of tgt pretrained model configuration.""")
     parser.add_argument('-dec_state_dict', default="", type=str,
                         help=""" the state_dict of the  pretrained model""")
@@ -412,7 +410,24 @@ def make_parser(parser):
     parser.add_argument('-dec_gradient_checkpointing', action='store_true',
                         help='use gradient checkpointing on decoder')
 
+    # special tokens
+    parser.add_argument('-src_pad_word', type=str, default="<blank>",
+                        help='SRC PAD Token. Default is <blank>.')
+    parser.add_argument('-src_unk_word', type=str, default="<unk>",
+                        help='SRC Unk Token. Default is <unk>.')
+    parser.add_argument('-src_bos_word', type=str, default="<s>",
+                        help='SRC BOS Token Default is <s>.')
+    parser.add_argument('-src_eos_word', type=str, default="</s>",
+                        help='SRC BOS Token. Default is </s>.')
 
+    parser.add_argument('-tgt_pad_word', type=str, default="<blank>",
+                        help='SRC PAD Token. Default is <blank>.')
+    parser.add_argument('-tgt_unk_word', type=str, default="<unk>",
+                        help='SRC Unk Token. Default is <unk>.')
+    parser.add_argument('-tgt_bos_word', type=str, default="<s>",
+                        help='SRC BOS Token Default is <s>.')
+    parser.add_argument('-tgt_eos_word', type=str, default="</s>",
+                        help='SRC BOS Token. Default is </s>.')
 
     return parser
 
@@ -602,5 +617,23 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'mfw_activation'):
         opt.mfw_activation = "none"
+
+    if not hasattr(opt, 'src_pad_word'):
+        opt.src_pad_word = '<blank>'
+    if not hasattr(opt, 'src_unk_word'):
+        opt.src_unk_word = '<unk>'
+    if not hasattr(opt, 'src_bos_word'):
+        opt.src_bos_word = '<s>'
+    if not hasattr(opt, 'src_eos_word'):
+        opt.src_eos_word = '</s>'
+
+    if not hasattr(opt, 'tgt_pad_word'):
+        opt.tgt_pad_word = '<blank>'
+    if not hasattr(opt, 'tgt_unk_word'):
+        opt.tgt_unk_word = '<unk>'
+    if not hasattr(opt, 'tgt_bos_word'):
+        opt.tgt_bos_word = '<s>'
+    if not hasattr(opt, 'tgt_eos_word'):
+        opt.tgt_eos_word = '</s>'
 
     return opt

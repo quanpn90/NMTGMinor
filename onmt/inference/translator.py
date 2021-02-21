@@ -7,6 +7,7 @@ from onmt.model_factory import build_model, build_language_model, optimize_model
 from ae.Autoencoder import Autoencoder
 import torch.nn.functional as F
 import sys
+from onmt.constants import add_tokenidx
 #
 # import torchbackend='fbgemm'
 # # 'fbgemm' for server, 'qnnpack' for mobile
@@ -28,7 +29,7 @@ class Translator(object):
         self.start_with_bos = opt.start_with_bos
         self.fp16 = opt.fp16
         self.attributes = opt.attributes  # attributes split by |. for example: de|domain1
-        self.bos_token = opt.bos_token
+        # self.bos_token = opt.bos_token
         self.sampling = opt.sampling
         self.src_lang = opt.src_lang
         self.tgt_lang = opt.tgt_lang
@@ -58,35 +59,11 @@ class Translator(object):
             model_opt.enc_not_load_state = True
             model_opt.dec_not_load_state = True
 
-            if model_opt.enc_pretrained_model == "bert":
-                onmt.constants.SRC_PAD = onmt.constants.BERT_PAD
-                onmt.constants.SRC_BOS = onmt.constants.BERT_BOS
-                onmt.constants.SRC_EOS = onmt.constants.BERT_EOS
-                onmt.constants.SRC_UNK = onmt.constants.BERT_UNK
-            elif model_opt.enc_pretrained_model == "roberta":
-                onmt.constants.SRC_PAD = onmt.constants.EN_ROBERTA_PAD
-                onmt.constants.SRC_BOS = onmt.constants.EN_ROBERTA_BOS
-                onmt.constants.SRC_EOS = onmt.constants.EN_ROBERTA_EOS
-                onmt.constants.SRC_UNK = onmt.constants.EN_ROBERTA_UNK
-            else:
-                onmt.constants.SRC_PAD = onmt.constants.PAD
-                onmt.constants.SRC_BOS = onmt.constants.BOS
-                onmt.constants.SRC_EOS = onmt.constants.EOS
-                onmt.constants.SRC_UNK = onmt.constants.UNK
-
-            # For ZH, bert and roberta share the same vocabulary
-            if model_opt.dec_pretrained_model in ["bert", "roberta"]:
-                onmt.constants.TGT_EOS = onmt.constants.BERT_EOS
-                onmt.constants.TGT_BOS = onmt.constants.BERT_BOS
-                onmt.constants.TGT_PAD = onmt.constants.BERT_PAD
-                onmt.constants.TGT_UNK = onmt.constants.BERT_UNK
-            else:
-                onmt.constants.TGT_BOS = onmt.constants.BOS
-                onmt.constants.TGT_EOS = onmt.constants.EOS
-                onmt.constants.TGT_PAD = onmt.constants.PAD
-                onmt.constants.TGT_UNK = onmt.constants.UNK
-
             dicts = checkpoint['dicts']
+
+            # update special tokens
+            onmt.constants = add_tokenidx(model_opt, onmt.constants, dicts)
+            self.bos_token = model_opt.src_bos_word
 
             if i == 0:
                 if "src" in checkpoint['dicts']:
@@ -403,7 +380,7 @@ class Translator(object):
             # for ensembling models
             out = self._combine_outputs(outs)
             attn = self._combine_attention(attns)
-            # print(attn.shape)
+
             # for lm fusion
             if self.opt.lm:
                 lm_decoder_output = self.lm_model.step(decoder_input.clone(), lm_decoder_states)

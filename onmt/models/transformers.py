@@ -167,7 +167,7 @@ class TransformerEncoder(nn.Module):
 
         """ Embedding: batch_size x len_src x d_model """
         if self.input_type == "text":
-            mask_src = input.eq(onmt.constants.PAD).unsqueeze(1)  # batch_size x 1 x len_src for broadcasting
+            mask_src = input.eq(onmt.constants.SRC_PAD).unsqueeze(1)  # batch_size x 1 x len_src for broadcasting
 
             # apply switchout
             # if self.switchout > 0 and self.training:
@@ -177,13 +177,13 @@ class TransformerEncoder(nn.Module):
             emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         else:
             if not self.cnn_downsampling:
-                mask_src = input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
+                mask_src = input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.SRC_PAD).unsqueeze(1)
                 input = input.narrow(2, 1, input.size(2) - 1)
                 emb = self.audio_trans(input.contiguous().view(-1, input.size(2))).view(input.size(0),
                                                                                         input.size(1), -1)
                 emb = emb.type_as(input)
             else:
-                long_mask = input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
+                long_mask = input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.SRC_PAD)
                 input = input.narrow(2, 1, input.size(2) - 1)
 
                 # first resizing to fit the CNN format
@@ -193,7 +193,6 @@ class TransformerEncoder(nn.Module):
                 input = self.audio_trans(input)
                 input = input.permute(0, 2, 1, 3).contiguous()
                 input = input.view(input.size(0), input.size(1), -1)
-                # print(input.size())
                 input = self.linear_trans(input)
 
                 mask_src = long_mask[:, 0:input.size(1) * 4:4].unsqueeze(1)
@@ -379,13 +378,13 @@ class TransformerDecoder(nn.Module):
         if context is not None:
             if self.encoder_type == "audio":
                 if not self.encoder_cnn_downsampling:
-                    mask_src = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
+                    mask_src = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.SRC_PAD).unsqueeze(1)
                 else:
-                    long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
+                    long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.SRC_PAD)
                     mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
             else:
 
-                mask_src = src.data.eq(onmt.constants.PAD).unsqueeze(1)
+                mask_src = src.data.eq(onmt.constants.SRC_PAD).unsqueeze(1)
         else:
             mask_src = None
 
@@ -482,17 +481,17 @@ class TransformerDecoder(nn.Module):
             if self.encoder_type == "audio":
                 if src.dim() == 3:
                     if self.encoder_cnn_downsampling:
-                        long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
+                        long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.SRC_PAD)
                         mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
                     else:
-                        mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
+                        mask_src = src.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.SRC_PAD).unsqueeze(1)
                 elif self.encoder_cnn_downsampling:
-                    long_mask = src.eq(onmt.constants.PAD)
+                    long_mask = src.eq(onmt.constants.SRC_PAD)
                     mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
                 else:
-                    mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
+                    mask_src = src.eq(onmt.constants.SRC_PAD).unsqueeze(1)
             else:
-                mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
+                mask_src = src.eq(onmt.constants.SRC_PAD).unsqueeze(1)
         else:
             mask_src = None
 
@@ -746,9 +745,9 @@ class Transformer(NMTModel):
             gen_t = gen_t.squeeze(0)
             tgt_t = tgt_t.unsqueeze(1)
             scores = gen_t.gather(1, tgt_t)
-            scores.masked_fill_(tgt_t.eq(onmt.constants.PAD), 0)
+            scores.masked_fill_(tgt_t.eq(onmt.constants.TGT_PAD), 0)
             gold_scores += scores.squeeze(1).type_as(gold_scores)
-            gold_words += tgt_t.ne(onmt.constants.PAD).sum().item()
+            gold_words += tgt_t.ne(onmt.constants.TGT_PAD).sum().item()
             allgold_scores.append(scores.squeeze(1).type_as(gold_scores))
 
         return gold_words, gold_scores, allgold_scores
@@ -799,8 +798,6 @@ class Transformer(NMTModel):
         tgt_lang = batch.get('target_lang')
 
         src_transposed = src.transpose(0, 1)
-        print(src.size())
-
         encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
         decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], src_lang,
                                                  beam_size=beam_size, model_size=self.model_size,

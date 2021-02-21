@@ -27,7 +27,7 @@ import torch.nn.functional as F
 from .configuration_roberta import RobertaConfig
 from .file_utils import add_code_sample_docstrings, add_start_docstrings, add_start_docstrings_to_callable
 from .modeling_bert import BertEmbeddings, BertLayerNorm, BertModel, BertPreTrainedModel, gelu
-from .modeling_outputs import MaskedLMOutput
+# from .modeling_outputs import MaskedLMOutput
 
 
 logger = logging.getLogger(__name__)
@@ -233,117 +233,117 @@ class RobertaModel(BertModel):
         self.embeddings.word_embeddings = value
 
 
-@add_start_docstrings("""RoBERTa Model with a `language modeling` head on top. """, ROBERTA_START_DOCSTRING)
-class RobertaForMaskedLM(BertPreTrainedModel):
-    config_class = RobertaConfig
-    base_model_prefix = "roberta"
+# @add_start_docstrings("""RoBERTa Model with a `language modeling` head on top. """, ROBERTA_START_DOCSTRING)
+# class RobertaForMaskedLM(BertPreTrainedModel):
+#     config_class = RobertaConfig
+#     base_model_prefix = "roberta"
+#
+#     def __init__(self, config):
+#         super().__init__(config)
+#
+#         self.roberta = RobertaModel(config)
+#         self.lm_head = RobertaLMHead(config)
+#
+#         self.init_weights()
+#
+#     def get_output_embeddings(self):
+#         return self.lm_head.decoder
+#
+#     @add_start_docstrings_to_callable(ROBERTA_INPUTS_DOCSTRING.format("(batch_size, sequence_length)"))
+#     @add_code_sample_docstrings(
+#         tokenizer_class=_TOKENIZER_FOR_DOC,
+#         checkpoint="roberta-base",
+#         output_type=MaskedLMOutput,
+#         config_class=_CONFIG_FOR_DOC,
+#     )
+#     def forward(
+#         self,
+#         input_ids=None,
+#         attention_mask=None,
+#         token_type_ids=None,
+#         position_ids=None,
+#         head_mask=None,
+#         inputs_embeds=None,
+#         labels=None,
+#         output_attentions=None,
+#         output_hidden_states=None,
+#         return_dict=None,
+#         **kwargs
+#     ):
+#         r"""
+#         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`, defaults to :obj:`None`):
+#             Labels for computing the masked language modeling loss.
+#             Indices should be in ``[-100, 0, ..., config.vocab_size]`` (see ``input_ids`` docstring)
+#             Tokens with indices set to ``-100`` are ignored (masked), the loss is only computed for the tokens with labels
+#             in ``[0, ..., config.vocab_size]``
+#         kwargs (:obj:`Dict[str, any]`, optional, defaults to `{}`):
+#             Used to hide legacy arguments that have been deprecated.
+#         """
+#         if "masked_lm_labels" in kwargs:
+#             warnings.warn(
+#                 "The `masked_lm_labels` argument is deprecated and will be removed in a future version, use `labels` instead.",
+#                 FutureWarning,
+#             )
+#             labels = kwargs.pop("masked_lm_labels")
+#         assert kwargs == {}, f"Unexpected keyword arguments: {list(kwargs.keys())}."
+#         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+#
+#         outputs = self.roberta(
+#             input_ids,
+#             attention_mask=attention_mask,
+#             token_type_ids=token_type_ids,
+#             position_ids=position_ids,
+#             head_mask=head_mask,
+#             inputs_embeds=inputs_embeds,
+#             output_attentions=output_attentions,
+#             output_hidden_states=output_hidden_states,
+#             return_dict=return_dict,
+#         )
+#         sequence_output = outputs[0]
+#         prediction_scores = self.lm_head(sequence_output)
+#
+#         masked_lm_loss = None
+#         if labels is not None:
+#             loss_fct = CrossEntropyLoss()
+#             masked_lm_loss = loss_fct(prediction_scores.view(-1, self.config.vocab_size), labels.view(-1))
+#
+#         if not return_dict:
+#             output = (prediction_scores,) + outputs[2:]
+#             return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
+#
+#         return MaskedLMOutput(
+#             loss=masked_lm_loss,
+#             logits=prediction_scores,
+#             hidden_states=outputs.hidden_states,
+#             attentions=outputs.attentions,
+#         )
+#
 
-    def __init__(self, config):
-        super().__init__(config)
-
-        self.roberta = RobertaModel(config)
-        self.lm_head = RobertaLMHead(config)
-
-        self.init_weights()
-
-    def get_output_embeddings(self):
-        return self.lm_head.decoder
-
-    @add_start_docstrings_to_callable(ROBERTA_INPUTS_DOCSTRING.format("(batch_size, sequence_length)"))
-    @add_code_sample_docstrings(
-        tokenizer_class=_TOKENIZER_FOR_DOC,
-        checkpoint="roberta-base",
-        output_type=MaskedLMOutput,
-        config_class=_CONFIG_FOR_DOC,
-    )
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        token_type_ids=None,
-        position_ids=None,
-        head_mask=None,
-        inputs_embeds=None,
-        labels=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
-        **kwargs
-    ):
-        r"""
-        labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`, defaults to :obj:`None`):
-            Labels for computing the masked language modeling loss.
-            Indices should be in ``[-100, 0, ..., config.vocab_size]`` (see ``input_ids`` docstring)
-            Tokens with indices set to ``-100`` are ignored (masked), the loss is only computed for the tokens with labels
-            in ``[0, ..., config.vocab_size]``
-        kwargs (:obj:`Dict[str, any]`, optional, defaults to `{}`):
-            Used to hide legacy arguments that have been deprecated.
-        """
-        if "masked_lm_labels" in kwargs:
-            warnings.warn(
-                "The `masked_lm_labels` argument is deprecated and will be removed in a future version, use `labels` instead.",
-                FutureWarning,
-            )
-            labels = kwargs.pop("masked_lm_labels")
-        assert kwargs == {}, f"Unexpected keyword arguments: {list(kwargs.keys())}."
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        outputs = self.roberta(
-            input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-        sequence_output = outputs[0]
-        prediction_scores = self.lm_head(sequence_output)
-
-        masked_lm_loss = None
-        if labels is not None:
-            loss_fct = CrossEntropyLoss()
-            masked_lm_loss = loss_fct(prediction_scores.view(-1, self.config.vocab_size), labels.view(-1))
-
-        if not return_dict:
-            output = (prediction_scores,) + outputs[2:]
-            return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
-
-        return MaskedLMOutput(
-            loss=masked_lm_loss,
-            logits=prediction_scores,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )
-
-
-class RobertaLMHead(nn.Module):
-    """Roberta Head for masked language modeling."""
-
-    def __init__(self, config):
-        super().__init__()
-        self.dense = nn.Linear(config.hidden_size, config.hidden_size)
-        self.layer_norm = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-
-        self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-        self.bias = nn.Parameter(torch.zeros(config.vocab_size))
-
-        # Need a link between the two variables so that the bias is correctly resized with `resize_token_embeddings`
-        self.decoder.bias = self.bias
-
-    def forward(self, features, **kwargs):
-        x = self.dense(features)
-        x = gelu(x)
-        x = self.layer_norm(x)
-
-        # project back to size of vocabulary with bias
-        x = self.decoder(x)
-        
-
-        return x
-
+# class RobertaLMHead(nn.Module):
+#     """Roberta Head for masked language modeling."""
+#
+#     def __init__(self, config):
+#         super().__init__()
+#         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
+#         self.layer_norm = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+#
+#         self.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+#         self.bias = nn.Parameter(torch.zeros(config.vocab_size))
+#
+#         # Need a link between the two variables so that the bias is correctly resized with `resize_token_embeddings`
+#         self.decoder.bias = self.bias
+#
+#     def forward(self, features, **kwargs):
+#         x = self.dense(features)
+#         x = gelu(x)
+#         x = self.layer_norm(x)
+#
+#         # project back to size of vocabulary with bias
+#         x = self.decoder(x)
+#
+#
+#         return x
+#
 
 
 def create_position_ids_from_input_ids(input_ids, padding_idx):

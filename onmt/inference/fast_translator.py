@@ -37,12 +37,6 @@ class FastTranslator(Translator):
 
         self.search = BeamSearch(self.tgt_dict)
 
-
-        print("src bos id is %d:; src eos id is %d:;  src pad id is %d: src unk id is: %d"
-              % (self.src_bos, self.src_eos, self.src_pad, self.src_unk))
-        print("tgt bos id is %d:; tgt eos id is %d:;  tgt_pad id is %d: tgt unk id is: %d"
-              % (self.tgt_bos, self.tgt_eos, self.tgt_pad, self.tgt_unk))
-
         self.vocab_size = self.tgt_dict.size()
         self.min_len = 1
         self.normalize_scores = opt.normalize
@@ -65,7 +59,11 @@ class FastTranslator(Translator):
             self.dynamic_max_len_scale = 1.2
 
         if opt.verbose:
-            print('* Current bos id is: %d, default bos id is: %d' % (self.tgt_bos, onmt.constants.BOS))
+            # print('* Current bos id is: %d, default bos id is: %d' % (self.tgt_bos, onmt.constants.BOS))
+            print("src bos id is %d; src eos id is %d;  src pad id is %d; src unk id is %d"
+                  % (self.src_bos, self.src_eos, self.src_pad, self.src_unk))
+            print("tgt bos id is %d; tgt eos id is %d;  tgt_pad id is %d; tgt unk id is %d"
+                  % (self.tgt_bos, self.tgt_eos, self.tgt_pad, self.tgt_unk))
             print('* Using fast beam search implementation')
 
     def translateBatch(self, batches):

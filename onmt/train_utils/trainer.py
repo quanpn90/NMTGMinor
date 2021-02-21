@@ -421,7 +421,7 @@ class XETrainer(BaseTrainer):
                         prob distribution from decoder generator
                 """
                 targets = batch.get('target_output')
-                tgt_mask = targets.ne(onmt.constants.PAD)
+                tgt_mask = targets.ne(onmt.constants.TGT_PAD)
                 outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                      mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce)
 
@@ -520,7 +520,7 @@ class XETrainer(BaseTrainer):
                 # outputs is a dictionary containing keys/values necessary for loss function
                 # can be flexibly controlled within models for easier extensibility
                 targets = batch.get('target_output')
-                tgt_mask = targets.ne(onmt.constants.PAD)
+                tgt_mask = targets.ne(onmt.constants.TGT_PAD)
                 outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                      zero_encoder=opt.zero_encoder,
                                      mirror=opt.mirror_loss, streaming_state=streaming_state,
@@ -665,7 +665,7 @@ class XETrainer(BaseTrainer):
                 total_loss += loss_data
                 total_words += num_words
                 total_tokens += batch.get('target_output').nelement()
-                total_non_pads += batch.get('target_output').ne(onmt.constants.PAD).sum().item()
+                total_non_pads += batch.get('target_output').ne(onmt.constants.TGT_PAD).sum().item()
                 optim = self.optim
                 batch_efficiency = total_non_pads / total_tokens
 

@@ -8,15 +8,8 @@ from collections import defaultdict
 from torch.utils.checkpoint import checkpoint
 
 import onmt
-from onmt.models.transformer_layers import EncoderLayer, DecoderLayer, PositionalEncoding, \
-    PrePostProcessing
 from onmt.modules.base_seq2seq import NMTModel, Reconstructor, DecoderState
 from onmt.models.transformers import TransformerDecodingState
-from onmt.modules.dropout import embedded_dropout, switchout
-from onmt.modules.linear import FeedForward, FeedForwardSwish
-from onmt.reversible_models.transformers import ReversibleTransformerEncoderLayer, ReversibleEncoderFunction, \
-    ReversibleDecoderFunction, ReversibleTransformerDecoderLayer
-from onmt.utils import flip, expected_length
 
 torch_version = float(torch.__version__[:3])
 
@@ -265,9 +258,9 @@ class PretrainTransformer(NMTModel):
             gen_t = gen_t.squeeze(0)
             tgt_t = tgt_t.unsqueeze(1)
             scores = gen_t.gather(1, tgt_t)
-            scores.masked_fill_(tgt_t.eq(onmt.constants.PAD), 0)
+            scores.masked_fill_(tgt_t.eq(onmt.constants.TGT_PAD), 0)
             gold_scores += scores.squeeze(1).type_as(gold_scores)
-            gold_words += tgt_t.ne(onmt.constants.PAD).sum().item()
+            gold_words += tgt_t.ne(onmt.constants.TGT_PAD).sum().item()
             allgold_scores.append(scores.squeeze(1).type_as(gold_scores))
 
         return gold_words, gold_scores, allgold_scores
@@ -339,7 +332,7 @@ class PretrainTransformer(NMTModel):
         if not dec_pretrained_model:
             mask_src = None
         elif dec_pretrained_model in["bert", "roberta"]:
-            mask_src = src_transposed.ne(onmt.constants.PAD).unsqueeze(1)  # batch_size  x 1 x len_src for broadcasting
+            mask_src = src_transposed.ne(onmt.constants.SRC_PAD).unsqueeze(1)  # batch_size  x 1 x len_src for broadcasting
         else:
             print("Warning: unknown dec_pretrained_model")
             raise NotImplementedError
