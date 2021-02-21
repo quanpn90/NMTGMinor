@@ -18,15 +18,9 @@
 
 import copy
 import json
-import logging
 import os
 from typing import Any, Dict, Tuple
-
-#from .file_utils import CONFIG_NAME, cached_path, hf_bucket_url, is_remote_url
-from .file_utils import CONFIG_NAME,  hf_bucket_url, is_remote_url
-
-
-logger = logging.getLogger(__name__)
+from .file_utils import CONFIG_NAME  # hf_bucket_url, is_remote_url
 
 
 class PretrainedConfig(object):
@@ -183,7 +177,7 @@ class PretrainedConfig(object):
             try:
                 setattr(self, key, value)
             except AttributeError as err:
-                logger.error("Can't set {} with value {} for {}".format(key, value, self))
+                print("Can't set {} with value {} for {}".format(key, value, self))
                 raise err
 
     @property
@@ -221,7 +215,7 @@ class PretrainedConfig(object):
         output_config_file = os.path.join(save_directory, CONFIG_NAME)
 
         self.to_json_file(output_config_file, use_diff=True)
-        logger.info("Configuration saved in {}".format(output_config_file))
+        print("Configuration saved in {}".format(output_config_file))
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path: str, **kwargs) -> "PretrainedConfig":
@@ -279,103 +273,6 @@ class PretrainedConfig(object):
         config_dict, kwargs = cls.get_config_dict(pretrained_model_name_or_path, **kwargs)
         return cls.from_dict(config_dict, **kwargs)
 
-    @classmethod
-    def get_config_dict(cls, pretrained_model_name_or_path: str, **kwargs) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        """
-        From a ``pretrained_model_name_or_path``, resolve to a dictionary of parameters, to be used
-        for instantiating a :class:`~transformers.PretrainedConfig` using ``from_dict``.
-        Parameters:
-            pretrained_model_name_or_path (:obj:`str`):
-                The identifier of the pre-trained checkpoint from which we want the dictionary of parameters.
-        Returns:
-            :obj:`Tuple[Dict, Dict]`: The dictionary(ies) that will be used to instantiate the configuration object.
-        """
-        cache_dir = kwargs.pop("cache_dir", None)
-        force_download = kwargs.pop("force_download", False)
-        resume_download = kwargs.pop("resume_download", False)
-        proxies = kwargs.pop("proxies", None)
-        local_files_only = kwargs.pop("local_files_only", False)
-
-        if os.path.isdir(pretrained_model_name_or_path):
-            config_file = os.path.join(pretrained_model_name_or_path, CONFIG_NAME)
-        elif os.path.isfile(pretrained_model_name_or_path) or is_remote_url(pretrained_model_name_or_path):
-            config_file = pretrained_model_name_or_path
-        else:
-            config_file = hf_bucket_url(pretrained_model_name_or_path, filename=CONFIG_NAME, use_cdn=False)
-
-        try:
-            # Load from URL or cache if already cached
-            resolved_config_file = cached_path(
-                config_file,
-                cache_dir=cache_dir,
-                force_download=force_download,
-                proxies=proxies,
-                resume_download=resume_download,
-                local_files_only=local_files_only,
-            )
-            # Load config dict
-            if resolved_config_file is None:
-                raise EnvironmentError
-            config_dict = cls._dict_from_json_file(resolved_config_file)
-
-        except EnvironmentError:
-            msg = (
-                f"Can't load config for '{pretrained_model_name_or_path}'. Make sure that:\n\n"
-                f"- '{pretrained_model_name_or_path}' is a correct model identifier listed on 'https://huggingface.co/models'\n\n"
-                f"- or '{pretrained_model_name_or_path}' is the correct path to a directory containing a {CONFIG_NAME} file\n\n"
-            )
-            raise EnvironmentError(msg)
-
-        except json.JSONDecodeError:
-            msg = (
-                "Couldn't reach server at '{}' to download configuration file or "
-                "configuration file is not a valid JSON file. "
-                "Please check network or file content here: {}.".format(config_file, resolved_config_file)
-            )
-            raise EnvironmentError(msg)
-
-        if resolved_config_file == config_file:
-            logger.info("loading configuration file {}".format(config_file))
-        else:
-            logger.info("loading configuration file {} from cache at {}".format(config_file, resolved_config_file))
-
-        return config_dict, kwargs
-
-    @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any], **kwargs) -> "PretrainedConfig":
-        """
-        Instantiates a :class:`~transformers.PretrainedConfig` from a Python dictionary of parameters.
-        Args:
-            config_dict (:obj:`Dict[str, Any]`):
-                Dictionary that will be used to instantiate the configuration object. Such a dictionary can be
-                retrieved from a pretrained checkpoint by leveraging the
-                :func:`~transformers.PretrainedConfig.get_config_dict` method.
-            kwargs (:obj:`Dict[str, Any]`):
-                Additional parameters from which to initialize the configuration object.
-        Returns:
-            :class:`PretrainedConfig`: The configuration object instantiated from those parameters.
-        """
-        return_unused_kwargs = kwargs.pop("return_unused_kwargs", False)
-
-        config = cls(**config_dict)
-
-        if hasattr(config, "pruned_heads"):
-            config.pruned_heads = dict((int(key), value) for key, value in config.pruned_heads.items())
-
-        # Update config with kwargs if needed
-        to_remove = []
-        for key, value in kwargs.items():
-            if hasattr(config, key):
-                setattr(config, key, value)
-                to_remove.append(key)
-        for key in to_remove:
-            kwargs.pop(key, None)
-
-        logger.info("Model config %s", str(config))
-        if return_unused_kwargs:
-            return config, kwargs
-        else:
-            return config
 
     @classmethod
     def from_json_file(cls, json_file: str) -> "PretrainedConfig":

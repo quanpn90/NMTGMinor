@@ -14,35 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import inspect
 import logging
 import os
 import re
-from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 
 import torch
 from torch import Tensor, device, dtype, nn
-from torch.nn import CrossEntropyLoss
-from torch.nn import functional as F
-
-from .activations import get_activation
 from .configuration_utils import PretrainedConfig
 from .file_utils import (
     DUMMY_INPUTS,
-    TF2_WEIGHTS_NAME,
-    TF_WEIGHTS_NAME,
     WEIGHTS_NAME,
-    ModelOutput,
-    hf_bucket_url,
-    is_remote_url,
-    is_torch_tpu_available,
-    replace_return_docstrings,
+
 )
-from .generation_utils import GenerationMixin
-
-
-logger = logging.getLogger(__name__)
+# from .generation_utils import GenerationMixin
 
 
 try:
@@ -301,8 +286,8 @@ class ModuleUtilsMixin:
 
 
 
-
-class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
+# class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
+class PreTrainedModel(nn.Module, ModuleUtilsMixin):
     r"""
     Base class for all models.
     :class:`~transformers.PreTrainedModel` takes care of storing the configuration of the models and handles methods
@@ -526,7 +511,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
                 Directory to which to save. Will be created if it doesn't exist.
         """
         if os.path.isfile(save_directory):
-            logger.error("Provided path ({}) should be a directory, not a file".format(save_directory))
+            print("Provided path ({}) should be a directory, not a file".format(save_directory))
             return
         os.makedirs(save_directory, exist_ok=True)
 
@@ -551,7 +536,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
             model_to_save.config.save_pretrained(save_directory)
             torch.save(model_to_save.state_dict(), output_model_file)
 
-        logger.info("Model weights saved in {}".format(output_model_file))
+        print("Model weights saved in {}".format(output_model_file))
 
     @classmethod
     def from_pretrained(cls, state_dict, *model_args, **kwargs):

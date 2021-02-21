@@ -16,12 +16,7 @@
 """ RoBERTa configuration """
 
 
-import logging
-
 from .configuration_bert import BertConfig
-
-
-logger = logging.getLogger(__name__)
 
 ROBERTA_PRETRAINED_CONFIG_ARCHIVE_MAP = {
     "roberta-base": "https://s3.amazonaws.com/models.huggingface.co/bert/roberta-base-config.json",
@@ -45,13 +40,6 @@ class RobertaConfig(BertConfig):
         The :class:`~transformers.RobertaConfig` class directly inherits :class:`~transformers.BertConfig`.
         It reuses the same defaults. Please check the parent class for more information.
         Example::
-            >>> from transformers import RobertaConfig, RobertaModel
-            >>> # Initializing a RoBERTa configuration
-            >>> configuration = RobertaConfig()
-            >>> # Initializing a model from the configuration
-            >>> model = RobertaModel(configuration)
-            >>> # Accessing the model configuration
-            >>> configuration = model.config
     """
     model_type = "roberta"
 

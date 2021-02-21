@@ -1,3 +1,5 @@
+import sys
+sys.path.append('/home/dhe/hiwi/Exercises/NMTGMinor/')
 from pytorch_pretrained_bert import BertTokenizer
 import onmt.markdown
 import argparse
