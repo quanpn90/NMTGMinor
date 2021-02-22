@@ -287,7 +287,7 @@ def build_tm_model(opt, dicts):
 
     elif opt.model == 'pretrain_transformer':
         from onmt.models.pretrain_transformer import PretrainTransformer
-        print("Use pretrained model {} for encoder".format(opt.enc_pretrained_model))
+        print("Build a pretrained model {} for encoder".format(opt.enc_pretrained_model))
         if opt.enc_pretrained_model == "bert":
             from pretrain_module.configuration_bert import BertConfig
             from pretrain_module.modeling_bert import BertModel
@@ -340,7 +340,7 @@ def build_tm_model(opt, dicts):
             decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder,
                                          language_embeddings=language_embeddings)
         else:
-            print("Build a pretrained model: {}, for decoder".format(opt.dec_pretrained_model))
+            print("Build a pretrained model {}, for decoder".format(opt.dec_pretrained_model))
             if opt.dec_pretrained_model == "bert":
                 if opt.enc_pretrained_model != "bert":
                     from pretrain_module.configuration_bert import BertConfig
@@ -357,7 +357,6 @@ def build_tm_model(opt, dicts):
                                     )
 
             elif opt.dec_pretrained_model == "roberta":
-                print("Pretrained model {} is applied to decoder".format(opt.dec_pretrained_model))
                 if opt.enc_pretrained_model != "roberta":
                     from pretrain_module.configuration_roberta import RobertaConfig
                     from pretrain_module.modeling_roberta import RobertaModel
