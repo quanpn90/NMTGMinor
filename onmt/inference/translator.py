@@ -63,7 +63,7 @@ class Translator(object):
 
             # update special tokens
             onmt.constants = add_tokenidx(model_opt, onmt.constants, dicts)
-            self.bos_token = model_opt.src_bos_word
+            self.bos_token = model_opt.tgt_bos_word
 
             if i == 0:
                 if "src" in checkpoint['dicts']:

@@ -621,8 +621,6 @@ class BertModel(BertPreTrainedModel):
             self.before_plm_output_ln = BertLayerNorm(self.config.hidden_size, eps=self.config.layer_norm_eps)
         else:
             self.before_plm_output_ln = None
-        
-        # self.pooler = BertPooler(config)
 
         self.init_weights()
 
