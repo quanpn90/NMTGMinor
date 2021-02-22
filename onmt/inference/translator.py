@@ -8,6 +8,8 @@ from ae.Autoencoder import Autoencoder
 import torch.nn.functional as F
 import sys
 from onmt.constants import add_tokenidx
+from options import backward_compatible
+
 #
 # import torchbackend='fbgemm'
 # # 'fbgemm' for server, 'qnnpack' for mobile
@@ -56,8 +58,10 @@ class Translator(object):
                                     map_location=lambda storage, loc: storage)
 
             model_opt = checkpoint['opt']
-            model_opt.enc_not_load_state = True
-            model_opt.dec_not_load_state = True
+            model_opt = backward_compatible(model_opt)
+            if hasattr(model_opt, "enc_not_load_state"):
+                model_opt.enc_not_load_state = True
+                model_opt.dec_not_load_state = True
 
             dicts = checkpoint['dicts']
 

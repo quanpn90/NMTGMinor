@@ -79,10 +79,11 @@ def build_tm_model(opt, dicts):
                                                           fix_norm=opt.fix_norm_output_embedding)]
 
     # BUILD EMBEDDINGS
-    if 'src' in dicts and not opt.enc_pretrained_model:
-        embedding_src = nn.Embedding(dicts['src'].size(),
-                                     opt.model_size,
-                                     padding_idx=opt.src_pad)
+    if 'src' in dicts:
+        if (not hasattr(opt, "enc_pretrained_model")) or (not opt.enc_pretrained_model):
+            embedding_src = nn.Embedding(dicts['src'].size(),
+                                         opt.model_size,
+                                         padding_idx=onmt.constants.SRC_PAD)
     else:
         embedding_src = None
 

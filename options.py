@@ -389,14 +389,12 @@ def make_parser(parser):
     parser.add_argument('-dec_pretrain_hidden_size', type=int, default=768,
                         help='Size of bert hidden')
 
-
     parser.add_argument('-dec_config_file', default="bert_config.json", type=str,
                         help=""" the name of tgt pretrained model configuration.""")
     parser.add_argument('-dec_state_dict', default="", type=str,
                         help=""" the state_dict of the  pretrained model""")
     parser.add_argument('-dec_not_load_state', action='store_true',
                         help='only create a  Bert Object, not load the state from pytorch modle or fituned model for tgt')
-
 
     parser.add_argument('-dec_pretrain_word_dropout', type=float, default=0.0,
                         help="""word dropout appled on bert""")
