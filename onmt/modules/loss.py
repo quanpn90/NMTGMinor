@@ -40,7 +40,7 @@ class CrossEntropyLossBase(_Loss):
     def __init__(self, output_size, label_smoothing, fast_xentropy=False):
         super(CrossEntropyLossBase, self).__init__()
         self.output_size = output_size
-        self.padding_idx = onmt.constants.PAD
+        self.padding_idx = onmt.constants.TGT_PAD
         self.smoothing_value = label_smoothing / (output_size - 2)
         self.confidence = 1.0 - label_smoothing
         self.label_smoothing = label_smoothing
@@ -119,7 +119,7 @@ class NMTLossFunc(CrossEntropyLossBase):
         super(NMTLossFunc, self).__init__(output_size, label_smoothing, fast_xentropy=fast_xentropy)
         self.hidden_size = hidden_size
         self.output_size = output_size
-        self.padding_idx = onmt.constants.PAD
+        self.padding_idx = onmt.constants.TGT_PAD
         self.smoothing_value = label_smoothing / (output_size - 2)
         self.confidence = 1.0 - label_smoothing
         self.label_smoothing = label_smoothing
