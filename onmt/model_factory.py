@@ -287,7 +287,8 @@ def build_tm_model(opt, dicts):
 
     elif opt.model == 'pretrain_transformer':
         from onmt.models.pretrain_transformer import PretrainTransformer
-        print("Build a pretrained model {} for encoder".format(opt.enc_pretrained_model))
+        print()
+        print("* Build {} for encoder".format(opt.enc_pretrained_model))
         if opt.enc_pretrained_model == "bert":
             from pretrain_module.configuration_bert import BertConfig
             from pretrain_module.modeling_bert import BertModel
@@ -324,23 +325,24 @@ def build_tm_model(opt, dicts):
             exit(-1)
 
         if opt.enc_not_load_state:
-            print("Encoder is randomly initialized")
+            if opt.verbose:
+                print("  No weights loading from {} for encoder".format(opt.enc_pretrained_model))
         else:
-            print("Loading weights from pretrained:\n", opt.enc_state_dict)
+            print("  Loading weights for encoder from: \n", opt.enc_state_dict)
 
             enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
 
             encoder.from_pretrained(state_dict=enc_model_state_dict,
                                     model=encoder,
-                                    output_loading_info=True,
+                                    output_loading_info=opt.verbose,
                                     model_prefix=opt.enc_pretrained_model
                                     )
         if not opt.dec_pretrained_model:
-            print("Decoder is not from pretrained model")
+            print(" Decoder is not from pretrained model")
             decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder,
                                          language_embeddings=language_embeddings)
         else:
-            print("Build a pretrained model {}, for decoder".format(opt.dec_pretrained_model))
+            print("* Build {} for decoder".format(opt.dec_pretrained_model))
             if opt.dec_pretrained_model == "bert":
                 if opt.enc_pretrained_model != "bert":
                     from pretrain_module.configuration_bert import BertConfig
@@ -377,14 +379,15 @@ def build_tm_model(opt, dicts):
                 exit(-1)
 
             if opt.dec_not_load_state:
-                print("Decoder is randomly initialized")
+                if opt.verbose:
+                    print("  No weights loading from {} for decoder".format(opt.dec_pretrained_model))
             else:
-                print("Loading weights for decoder from:\n", opt.dec_state_dict)
+                print("  Loading weights for decoder from: \n", opt.dec_state_dict)
                 dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
 
                 decoder.from_pretrained(state_dict=dec_model_state_dict,
                                         model=decoder,
-                                        output_loading_info=True,
+                                        output_loading_info=opt.verbose,
                                         model_prefix=opt.dec_pretrained_model
                                         )
 

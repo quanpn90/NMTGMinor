@@ -36,8 +36,6 @@ class Translator(object):
         self.src_lang = opt.src_lang
         self.tgt_lang = opt.tgt_lang
 
-
-
         if self.attributes:
             self.attributes = self.attributes.split("|")
 
@@ -51,10 +49,8 @@ class Translator(object):
         self.n_models = len(models)
         self._type = 'text'
 
-        for i, model in enumerate(models):
-            if opt.verbose:
-                print('Loading model from %s' % model)
-            checkpoint = torch.load(model,
+        for i, model_path in enumerate(models):
+            checkpoint = torch.load(model_path,
                                     map_location=lambda storage, loc: storage)
 
             model_opt = checkpoint['opt']
@@ -95,6 +91,8 @@ class Translator(object):
 
             model = build_model(model_opt, checkpoint['dicts'])
             optimize_model(model)
+            if opt.verbose:
+                print('Loading model from %s' % model_path)
             model.load_state_dict(checkpoint['model'])
 
             if model_opt.model in model_list:

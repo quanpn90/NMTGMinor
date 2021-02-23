@@ -545,11 +545,6 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
         output_loading_info = kwargs.pop("output_loading_info", False)
         model_prefix = kwargs.pop("model_prefix", False)
 
-        # config = kwargs.pop("config", None)
-        # # Instantiate model.
-        # if model is None:
-        #     model = cls(config, *model_args)
-
         missing_keys = []
         unexpected_keys = []
         error_msgs = []
@@ -589,11 +584,6 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
         # Make sure we are able to load base models as well as derived models (with heads)
         start_prefix = ""
         model_to_load = model
-        # has_prefix_module = any(s.startswith(cls.base_model_prefix) for s in state_dict.keys())
-        # if not hasattr(model, cls.base_model_prefix) and has_prefix_module:
-        #     start_prefix = cls.base_model_prefix + "."
-        # if hasattr(model, cls.base_model_prefix) and not has_prefix_module:
-        #     model_to_load = getattr(model, cls.base_model_prefix)
 
         has_prefix_module = any(s.startswith(model_prefix) for s in state_dict.keys())
 
@@ -617,17 +607,21 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
             for pat in cls.authorized_missing_keys:
                 missing_keys = [k for k in missing_keys if re.search(pat, k) is None]
 
-        if len(missing_keys) > 0:
-            print("Some weights of the model were not initialized from the pretrained model")
-        else:
-            print("All the weights of the model were initialized from the pretrained model")
-
-        if len(unexpected_keys) > 0:
-            print("Some weights of the pretrained model were not used")
-        else:
-            print("All the weights of the pretrained model checkpoint were used")
-
+        if output_loading_info:
+            if len(missing_keys) > 0:
+                print("Some weights of the model were not initialized from the pretrained model")
+                print("missing_keys:", missing_keys)
+            else:
+                print("All the weights of the model were initialized from the pretrained model")
+    
+            if len(unexpected_keys) > 0:
+                print("Some weights of the pretrained model were not used")
+                print("unexpected_keys:", unexpected_keys)
+            else:
+                print("All the weights of the pretrained model checkpoint were used")
+    
         if len(error_msgs) > 0:
+            print("error_msgs:", error_msgs)
             raise RuntimeError('Error(s) in loading state_dict for {}:\n\t{}'.format(
                                model.__class__.__name__, "\n\t".join(error_msgs)))
 
@@ -636,10 +630,5 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
 
         # Set model in evaluation mode to deactivate DropOut modules by default
         model.eval()
-
-        if output_loading_info:
-            print("missing_keys:", missing_keys)
-            print("unexpected_keys:", unexpected_keys)
-            print("error_msgs:", error_msgs)
 
         return model

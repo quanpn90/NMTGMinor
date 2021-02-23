@@ -74,11 +74,9 @@ ACT2FN = {"gelu": gelu, "relu": torch.nn.functional.relu, "swish": swish, "gelu_
 
 try:
     from apex.normalization.fused_layer_norm import FusedLayerNorm as BertLayerNorm
-    print("FusedLayerNorm is available")
 
 except ImportError:
     print("FusedLayerNorm is not available, we use torch.nn.LayerNorm")
-    import torch.nn.LayerNorm as BertLayerNorm
 
 
 class BertEmbeddings(nn.Module):
