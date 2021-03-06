@@ -1,5 +1,3 @@
-import sys
-sys.path.append('/home/dhe/hiwi/Exercises/NMTGMinor/')
 import onmt.markdown
 import argparse
 

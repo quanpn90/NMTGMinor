@@ -1,8 +1,4 @@
-import sys
-sys.path.append('/home/dhe/hiwi/Exercises/NMTGMinor')
-
 import onmt.markdown
-
 import argparse
 from pretrain_module.roberta_tokenization_ch import FullTokenizer
 from transformers import RobertaTokenizer
@@ -15,28 +11,28 @@ parser.add_argument('-src_data', default="",
 parser.add_argument('-tgt_data', default="",
                     help="Path to the target data")
 
+parser.add_argument('-vocab_file_tgt', default="", type=str,
+                    help="""Path of vocab file""")
+
+parser.add_argument('-src_lang', default='en',
+                    help='Source language')
+parser.add_argument('-tgt_lang', default='zh',
+                    help='Target language')
+
 opt = parser.parse_args()
 
-
-
-vocab_file="/project/student_projects2/dhe/BERT/experiments/pytorch_pretrained_models/roberta-base-layer12-zh/bert-base-chinese-vocab.txt"
 
 def tokenize_data(raw_data, tokenizer, lang):
     with open(raw_data, "r", encoding="utf-8") as f_raw:
         tokenized_sents = []
         for line in f_raw:
             sent = line.strip()
-
             tokenized_sent = tokenizer.tokenize(sent)
-
-            # 注意特殊符号前后空格
-            # tgt(zh) 在preprocess 文件中有加开始和结束符号，所以不用在这里加了
             if lang == "en":
                 tokenized_sent.insert(0, "<s>")
                 tokenized_sent.append("</s>")
             elif lang == "zh":
                 tokenized_sent = tokenized_sent
-
 
             tokenized_sents.append(tokenized_sent)
 
@@ -49,20 +45,21 @@ def tokenize_data(raw_data, tokenizer, lang):
 
 
 def main():
-    tokenizer_zh = FullTokenizer(vocab_file)
-    # wordpiece_tokenizer_zh 只是整个tokenization中的一部分， 我们用端到端的tokenizer_zh
-    # wordpiece_tokenizer_zh = tokenizer_zh.wordpiece_tokenizer
-    tokenizer_en = RobertaTokenizer.from_pretrained('roberta-base')
+    src_lang = opt.src_lang
+    tgt_lang = opt.tgt_lang
 
-    src_lang = "en"
-    tgt_lang = "zh"
+    if src_lang == "en":
+        tokenizer_src = RobertaTokenizer.from_pretrained('roberta-base')
+
+    if tgt_lang == "zh":
+        tokenizer_tgt = FullTokenizer(opt.vocab_file_tgt)
 
     if opt.src_data is not "": 
         print("tokenzize src data")
-        tokenize_data(opt.src_data, tokenizer_en, src_lang)
+        tokenize_data(opt.src_data, tokenizer_src, src_lang)
     if opt.tgt_data is not "": 
         print("tokenzize tgt data")
-        tokenize_data(opt.tgt_data, tokenizer_zh, tgt_lang)
+        tokenize_data(opt.tgt_data, tokenizer_tgt, tgt_lang)
 
 
 if __name__ == "__main__":
