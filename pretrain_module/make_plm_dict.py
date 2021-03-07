@@ -29,12 +29,10 @@ def load_vocab(vocab_file, lang):
     idx2word = open(opt.plm_type + "_idx2word."+lang, "w")
     while True:
         word = vocab.readline()
-        # 读到最后一行
+        # the last line
         if not word:
             break
-        # 去掉word 后面原本的换行符
         word = word.strip()
-        # 写入文件在行尾加上换行符
         idx2word.write(str(index) + " " + word + "\n")
         word2idx.write(word + " " + str(index) + "\n")
         index += 1

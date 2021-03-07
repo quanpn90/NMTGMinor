@@ -55,10 +55,8 @@ def main():
         tokenizer_tgt = FullTokenizer(opt.vocab_file_tgt)
 
     if opt.src_data is not "": 
-        print("tokenzize src data")
         tokenize_data(opt.src_data, tokenizer_src, src_lang)
     if opt.tgt_data is not "": 
-        print("tokenzize tgt data")
         tokenize_data(opt.tgt_data, tokenizer_tgt, tgt_lang)
 
 
