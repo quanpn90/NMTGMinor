@@ -14,6 +14,7 @@ from onmt.model_factory import build_model, optimize_model, init_model_parameter
 from onmt.bayesian_factory import build_model as build_bayesian_model
 from options import make_parser
 from collections import defaultdict
+from onmt.constants import add_tokenidx
 import os
 import numpy as np
 
@@ -78,6 +79,7 @@ def main():
             print("Done after %s" % elapse)
 
             dicts = dataset['dicts']
+            onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
 
             # For backward compatibility
             train_dict = defaultdict(lambda: None, dataset['train'])
@@ -157,6 +159,8 @@ def main():
             from onmt.data.scp_dataset import SCPIndexDataset
 
             dicts = torch.load(opt.data + ".dict.pt")
+            onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
+
             if opt.data_format in ['scp', 'scpmem']:
                 audio_data = torch.load(opt.data + ".scp_path.pt")
 
@@ -279,6 +283,7 @@ def main():
         # raise NotImplementedError
 
         dicts = torch.load(opt.data + ".dict.pt")
+        onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
 
         root_dir = os.path.dirname(opt.data)
 

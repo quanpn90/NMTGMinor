@@ -8,6 +8,8 @@ from onmt.models.transformer_layers import PositionalEncoding
 from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, RelativeTransformer
 from onmt.modules.copy_generator import CopyGenerator
 from options import backward_compatible
+from onmt.constants import add_tokenidx
+
 import math
 
 init = torch.nn.init
@@ -47,6 +49,9 @@ def build_model(opt, dicts):
 
 
 def build_tm_model(opt, dicts):
+
+    onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
+
     # BUILD POSITIONAL ENCODING
     if opt.time == 'positional_encoding':
         positional_encoder = PositionalEncoding(opt.model_size, len_max=MAX_LEN)
@@ -93,7 +98,7 @@ def build_tm_model(opt, dicts):
     elif not opt.enc_pretrained_model:
         embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                      opt.model_size,
-                                     padding_idx=opt.tgt_pad)
+                                     padding_idx=onmt.constants.TGT_PAD)
     else:
         assert opt.model == "pretrain_transformer"
         embedding_tgt = None

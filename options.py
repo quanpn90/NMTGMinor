@@ -636,4 +636,9 @@ def backward_compatible(opt):
     if not hasattr(opt, 'tgt_eos_word'):
         opt.tgt_eos_word = '</s>'
 
+    if not hasattr(opt, 'enc_pretrained_model'):
+        opt.enc_pretrained_model = ''
+    if not hasattr(opt, 'dec_pretrained_model'):
+        opt.dec_pretrained_model = ''
+
     return opt
