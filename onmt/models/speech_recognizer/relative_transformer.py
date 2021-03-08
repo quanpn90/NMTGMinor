@@ -266,8 +266,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
             death_r = 0.0
 
             from .relative_transformer_layers import LIDFeedForward
-            lid_network = LIDFeedForward(opt.model_size, 2 * opt.model_size, opt.bottleneck_size,
-                                         opt.n_languages, dropout=opt.dropout)
+            lid_network = None
 
             block = RelativeTransformerDecoderLayer(self.opt, death_rate=death_r, lid_net=lid_network)
 
