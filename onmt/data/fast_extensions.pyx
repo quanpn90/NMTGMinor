@@ -56,7 +56,7 @@ cpdef list fast_batch_allocate(
         tgt_size = tgt_sizes[idx]
 
         if cleaning == 1:
-            if not (0 < src_size < max_src_len and 2 < tgt_size < max_tgt_len):
+            if not (0 < src_size < max_src_len and 0 < tgt_size < max_tgt_len):
                 continue
 
         oversized = _oversized(batch, sent_length, cur_batch_sizes, batch_size_words, batch_size_sents)

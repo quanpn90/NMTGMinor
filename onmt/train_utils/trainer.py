@@ -592,6 +592,9 @@ class XETrainer(BaseTrainer):
                 if 'out of memory' in str(e):
                     print('| WARNING: ran out of memory on GPU , skipping batch')
                     oom = True
+                    for p in self.model.parameters():
+                        if p.grad is not None:
+                            del p.grad  # free some memory
                     torch.cuda.empty_cache()
                     loss = 0
                     if opt.streaming:  # reset stream in this case ...

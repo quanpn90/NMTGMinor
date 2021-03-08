@@ -233,7 +233,6 @@ class SpeechTransformerDecoder(TransformerDecoder):
         self.extra_context_size = opt.extra_context_size
         self.n_heads = opt.n_heads
         self.fast_self_attn = opt.fast_self_attention
-        self.lfv_multilingual = opt.lfv_multilingual
         self.mpw = opt.multilingual_partitioned_weights
 
         # build_modules will be called from the inherited constructor
@@ -354,14 +353,9 @@ class SpeechTransformerDecoder(TransformerDecoder):
             assert src_lang.ndim == 1 and tgt_lang.ndim == 1
 
         for i, layer in enumerate(self.layer_modules):
-            if self.lfv_multilingual:
-                output, coverage, _, lid_logits_, lfv_vector = \
-                    layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
-                          src_lang=src_lang, tgt_lang=tgt_lang)
-                lid_logits.append(lid_logits_)
-            else:
-                output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
-                                            src_lang=src_lang, tgt_lang=tgt_lang)
+
+            output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
+                                        src_lang=src_lang, tgt_lang=tgt_lang)
 
         output = self.postprocess_layer(output, factor=tgt_lang)
 
@@ -478,13 +472,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
                                                  incremental=True, incremental_cache=buffer)
                 decoder_state.update_attention_buffer(buffer, i)
             else:
-                if self.lfv_multilingual:
-                    output, coverage, _, lid_logits_, lfv_vector = \
-                        layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
-                              tgt_lang=lang, src_lang=src_lang)
-                    lid_logits.append(lid_logits_)
-                else:
-                    output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
+                output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
                                                 tgt_lang=lang, src_lang=src_lang)
 
         # normalize and take the last time step

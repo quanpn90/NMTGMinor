@@ -59,6 +59,8 @@ def make_parser(parser):
                         help='Number of layers in the LSTM encoder if different')
     parser.add_argument('-max_pos_length', type=int, default=128,
                         help='Maximum distance length for relative self-attention')
+    parser.add_argument('-max_src_length', type=int, default=2048,
+                        help='Maximum distance length for relative self-attention')
     parser.add_argument('-learnable_position_encoding', action='store_true',
                         help="""Use embeddings as learnable position encoding.""")
     parser.add_argument('-fix_norm_output_embedding', action='store_true',

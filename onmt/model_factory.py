@@ -114,9 +114,13 @@ def build_tm_model(opt, dicts):
             opt.cnn_downsampling = True  # force this bool to have masking at decoder to be corrected
             encoder = ConformerEncoder(opt, None, None, 'audio')
 
-            decoder = SpeechLSTMDecoder(opt, embedding_tgt, language_embeddings=language_embeddings)
+            # decoder = SpeechLSTMDecoder(opt, embedding_tgt, language_embeddings=language_embeddings)
+            decoder = SpeechTransformerDecoder(opt, embedding_tgt, positional_encoder,
+                                               language_embeddings=language_embeddings)
 
-            model = Conformer(encoder, decoder, nn.ModuleList(generators), ctc=opt.ctc_loss > 0.0)
+            # model = Conformer(encoder, decoder, nn.ModuleList(generators), ctc=opt.ctc_loss > 0.0)
+            model = RelativeTransformer(encoder, decoder, nn.ModuleList(generators),
+                                        None, None, mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
         elif opt.model == 'hybrid_transformer':
             from onmt.models.speech_recognizer.lstm import SpeechLSTMDecoder, SpeechLSTMEncoder, SpeechLSTMSeq2Seq
             encoder = SpeechTransformerEncoder(opt, None, positional_encoder, opt.encoder_type)

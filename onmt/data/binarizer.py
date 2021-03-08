@@ -88,7 +88,6 @@ class SpeechBinarizer:
                     feature_vector = torch.from_numpy(feature_vector[0::opt.stride])
 
                 if concat > 1:
-                    print('concatenating ...')
                     add = (concat - feature_vector.size()[0] % concat) % concat
                     z = torch.FloatTensor(add, feature_vector.size()[1]).zero_()
                     feature_vector = torch.cat((feature_vector, z), 0)

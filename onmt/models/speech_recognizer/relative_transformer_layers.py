@@ -30,76 +30,9 @@ from onmt.modules.convolution import ConformerConvBlock
 
 class LIDFeedForward(nn.Module):
 
-    def __init__(self, input_size, hidden_size, bottleneck_size, output_size, n_hidden=2, dropout=0.0):
-        """
-        :param input_size:
-        :param hidden_size:
-        :param bottleneck_size:
-        :param output_size:
-        :param n_hidden: number of hidden states between first hidden and the bottleneck
-        """
+    def __init__(self, *args):
+
         super().__init__()
-        self.input_size = input_size
-        self.dropout = dropout
-        self.linear_in = nn.Linear(input_size, hidden_size)
-        self.hiddens = nn.ModuleList()
-        for i in range(n_hidden):
-            self.hiddens.append(nn.Linear(hidden_size, hidden_size))
-
-        self.bottleneck_in = nn.Linear(hidden_size, bottleneck_size)
-        self.bottleneck_out = nn.Linear(bottleneck_size, hidden_size)
-        self.last_linear = nn.Linear(hidden_size, output_size)
-
-        try:
-            from apex.mlp.mlp import mlp_function
-            self.optimized = 2
-            self.fast_mlp_func = mlp_function
-        except ModuleNotFoundError as e:
-            self.optimized = 2
-
-    def forward(self, input):
-        """
-        :param input: Input should have size [len x bsz x input_size]
-        :return:
-        """
-        assert self.input_size == input.size(-1)
-        input = input.detach()
-
-        if self.optimized == 1:
-            weights = [self.linear_in.weight]
-            biases = [self.linear_in.bias]
-            for i in range(len(self.hiddens)):
-                weights.append(self.hiddens[i].weight)
-                biases.append(self.hiddens[i].bias)
-            weights.append(self.bottleneck_in.weight)
-            biases.append(self.bottleneck_in.bias)
-
-            seq_len, bsz, inp_size = input.size(0), input.size(1), input.size(2)
-            hidden = self.fast_mlp_func(True, 1, input.view(seq_len * bsz, -1), *weights, *biases)
-
-            bottleneck = F.relu(hidden)
-            bottleneck = F.dropout(bottleneck, p=self.dropout, training=self.training)
-
-            weights = [self.bottleneck_out.weight, self.last_linear.weight]
-            biases = [self.bottleneck_out.bias, self.last_linear.bias]
-
-            logits = self.fast_mlp_func(True, 1, bottleneck, *weights, *biases)
-
-            logits = logits.view(seq_len, bsz, -1)
-            bottleneck = bottleneck.view(seq_len, bsz, -1)
-        else:
-            hidden = F.relu(self.linear_in(input))
-
-            for i in range(len(self.hiddens)):
-                hidden = F.relu(self.hiddens[i](hidden))
-
-            bottleneck = F.relu(self.bottleneck_in(hidden))
-
-            hidden = F.relu(self.bottleneck_out(F.dropout(bottleneck, p=self.dropout, training=self.training)))
-
-            logits = self.last_linear(hidden)
-
-        return logits, bottleneck
 
 
 class RelativeTransformerEncoderLayer(nn.Module):
@@ -116,6 +49,22 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.weight_drop = opt.weight_drop
         self.multilingual_adapter = opt.multilingual_adapter
         self.adapter_bottleneck_size = opt.adapter_bottleneck_size
+        self.macaron = opt.macaron
+        self.ffn_scale = 0.5 if self.macaron else 1
+
+        if self.macaron:
+            self.preprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+            self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                         variational=self.variational)
+
+            if self.mfw:
+                self.mcr_feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                                  variational=self.variational,
+                                                                  n_languages=opt.n_languages, rank=opt.mfw_rank,
+                                                                  use_multiplicative=opt.mfw_multiplicative)
+            else:
+                self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                               variational=self.variational)
 
         if self.mfw:
             assert not self.mpw, "[ERROR] factorized and partitioned weights cannot be used at the same time."
@@ -207,6 +156,17 @@ class RelativeTransformerEncoderLayer(nn.Module):
             else:
                 mems = None
 
+            if self.macaron:
+                out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang)
+
+                if self.training and self.death_rate > 0:
+                    # out = out / (1 - self.death_rate)
+                    ffn_scale = self.ffn_scale / (1 - self.death_rate)
+                else:
+                    ffn_scale = self.ffn_scale
+
+                input = self.postprocess_mcr_ffn(out * ffn_scale, input)
+
             """
             Self-attention block
             """
@@ -250,7 +210,12 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
                 # rescaling before residual
                 if self.training and self.death_rate > 0:
-                    out = out / (1 - self.death_rate)
+                    # out = out / (1 - self.death_rate)
+                    ffn_scale = self.ffn_scale / (1 - self.death_rate)
+                else:
+                    ffn_scale = self.ffn_scale
+
+                out = out * ffn_scale
 
                 input = self.postprocess_ffn(out, input)
 
@@ -281,11 +246,27 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.weight_drop = opt.weight_drop
         self.multilingual_adapter = opt.multilingual_adapter
         self.adapter_bottleneck_size = opt.adapter_bottleneck_size
+        self.macaron = opt.macaron
+        self.ffn_scale = 0.5 if self.macaron else 1
 
         self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
                                                  n_languages=opt.n_languages)
         self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
                                                   variational=self.variational)
+
+        if self.macaron:
+            self.preprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
+            self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+                                                         variational=self.variational)
+
+            if self.mfw:
+                self.mcr_feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                                  variational=self.variational,
+                                                                  n_languages=opt.n_languages, rank=opt.mfw_rank,
+                                                                  use_multiplicative=opt.mfw_multiplicative)
+            else:
+                self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                               variational=self.variational)
 
         if not self.ignore_source:
             self.preprocess_src_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n',
@@ -378,10 +359,22 @@ class RelativeTransformerDecoderLayer(nn.Module):
             else:
                 mems = None
 
-            # if lfv is not None and self.lfv_multilingual:
-            #     # multiply the input with the bottleneck lfv features from the LID network
-            #     # print(lfv.size())
-            #     input = torch.mul(torch.tanh(self.lfv_mapper(lfv)), input)
+            if self.macaron:
+                out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang)
+
+                if self.training and self.death_rate > 0:
+                    # out = out / (1 - self.death_rate)
+                    ffn_scale = self.ffn_scale / (1 - self.death_rate)
+                else:
+                    ffn_scale = self.ffn_scale
+
+                # if not self.variational:
+                #     out = F.dropout(out, p=self.dropout, training=self.training)
+                # else:
+                #     out = variational_dropout(out, p=self.dropout, training=self.training)
+                input = self.postprocess_mcr_ffn(out * ffn_scale, input)
+
+                # input = input + ffn_scale * out
 
             query = self.preprocess_attn(input, factor=tgt_lang)
             if self.mfw or self.mpw:
@@ -433,9 +426,12 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
-                out = out / (1 - self.death_rate)
+                # out = out / (1 - self.death_rate)
+                ffn_scale = self.ffn_scale / (1 - self.death_rate)
+            else:
+                ffn_scale = self.ffn_scale
 
-            input = self.postprocess_ffn(out, input)
+            input = self.postprocess_ffn(out * ffn_scale, input)
 
             if self.multilingual_adapter:
                 input = self.adapters(input, tgt_lang)

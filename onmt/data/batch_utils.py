@@ -22,7 +22,7 @@ def _is_oversized(cur_batch, new_sent_size, cur_batch_sizes, batch_size_words, b
 def allocate_batch_slow(indices, lengths,
                         src_sizes, tgt_sizes,
                         batch_size_words, batch_size_sents, batch_size_multiplier,
-                        max_src_len, max_tgt_len, cleaning=True):
+                        max_src_len, max_tgt_len, cleaning=1):
     batches = list()
     batch = list()
     cur_batch_size = 0
@@ -38,8 +38,8 @@ def allocate_batch_slow(indices, lengths,
         src_size = src_sizes[i] if src_sizes is not None else 0
         tgt_size = tgt_sizes[i] if tgt_sizes is not None else 0
 
-        if cleaning:
-            if not (0 < src_size < max_src_len and 2 < tgt_size < max_tgt_len):
+        if cleaning == 1:
+            if not (0 <= src_size < max_src_len and 0 <= tgt_size < max_tgt_len):
                 idx = idx + 1
                 continue
 
@@ -72,7 +72,7 @@ def allocate_batch_slow(indices, lengths,
 def allocate_batch(indices, lengths,
                    src_sizes, tgt_sizes,
                    batch_size_words, batch_size_sents, batch_size_multiplier,
-                   max_src_len, max_tgt_len, cleaning=True):
+                   max_src_len, max_tgt_len, cleaning=1):
 
     try:
         import pyximport
@@ -80,22 +80,26 @@ def allocate_batch(indices, lengths,
     except ModuleNotFoundError as e:
         cython_available = False
 
-    if not cython_available or (tgt_sizes is None or src_sizes is None):
-        return allocate_batch_slow(indices, lengths, src_sizes, tgt_sizes,
-                                   batch_size_words, batch_size_sents, batch_size_multiplier,
-                                   max_src_len, max_tgt_len, cleaning)
-
-    pyximport.install(setup_args={"include_dirs": np.get_include()},
-                      inplace=True)
-    from .fast_extensions import fast_batch_allocate
-
-    cleaning = int(cleaning)
-
-    if isinstance(indices, list):
-        indices = np.asarray(indices)
-    # convert to np int64
-
-    return fast_batch_allocate(indices, lengths,
-                               src_sizes, tgt_sizes,
+    return allocate_batch_slow(indices, lengths, src_sizes, tgt_sizes,
                                batch_size_words, batch_size_sents, batch_size_multiplier,
                                max_src_len, max_tgt_len, cleaning)
+
+    # if not cython_available or (tgt_sizes is None or src_sizes is None):
+    #     return allocate_batch_slow(indices, lengths, src_sizes, tgt_sizes,
+    #                                batch_size_words, batch_size_sents, batch_size_multiplier,
+    #                                max_src_len, max_tgt_len, cleaning)
+
+    # pyximport.install(setup_args={"include_dirs": np.get_include()},
+    #                   inplace=True)
+    # from .fast_extensions import fast_batch_allocate
+    #
+    # cleaning = int(cleaning)
+    #
+    # if isinstance(indices, list):
+    #     indices = np.asarray(indices)
+    # # convert to np int64
+    #
+    # return fast_batch_allocate(indices, lengths,
+    #                            src_sizes, tgt_sizes,
+    #                            batch_size_words, batch_size_sents, batch_size_multiplier,
+    #                            max_src_len, max_tgt_len, cleaning)

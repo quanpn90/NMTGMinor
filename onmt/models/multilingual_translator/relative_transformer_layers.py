@@ -208,11 +208,6 @@ class RelativeTransformerDecoderLayer(nn.Module):
             coin = (torch.rand(1)[0].item() >= self.death_rate)
 
         if coin:
-            # input and context should be time first ?
-            if mems is not None and mems.size(0) > 0:
-                mems = self.preprocess_attn(mems)
-            else:
-                mems = None
 
             if self.macaron:
                 out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang)
@@ -226,6 +221,12 @@ class RelativeTransformerDecoderLayer(nn.Module):
                     out = variational_dropout(out, p=self.dropout, training=self.training)
 
                 input = input + self.ffn_scale * out
+
+            # input and context should be time first ?
+            if mems is not None and mems.size(0) > 0:
+                mems = self.preprocess_attn(mems)
+            else:
+                mems = None
 
             query = self.preprocess_attn(input)
 

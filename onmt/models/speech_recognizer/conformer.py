@@ -90,7 +90,7 @@ class ConformerEncoder(TransformerEncoder):
         emb = input
 
         mask_src = long_mask[:, 0:emb.size(1) * 4:4].transpose(0, 1).unsqueeze(0)
-        dec_attn_mask = None
+        dec_attn_mask = long_mask[:, 0:input.size(1) * 4:4].unsqueeze(1)
 
         emb = emb.transpose(0, 1)
         input = input.transpose(0, 1)
@@ -141,7 +141,7 @@ class ConformerEncoder(TransformerEncoder):
         for i, layer in enumerate(self.layer_modules):
             # src_len x batch_size x d_model
 
-            context = layer(context, pos_emb, mask_src)
+            context = layer(context, pos_emb, mask_src, src_lang=input_lang)
 
         # final layer norm
         context = self.postprocess_layer(context)
@@ -187,7 +187,7 @@ class Conformer(NMTModel):
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
-        encoder_output = self.encoder(src)
+        encoder_output = self.encoder(src, input_lang=src_lang)
         encoder_output = defaultdict(lambda: None, encoder_output)
 
         context = encoder_output['context']
@@ -260,7 +260,7 @@ class Conformer(NMTModel):
         # TxB -> BxT
         src_transposed = src.transpose(0, 1)
 
-        encoder_output = self.encoder(src_transposed)
+        encoder_output = self.encoder(src_transposed, input_lang=src_lang)
         decoder_state = LSTMDecodingState(src, tgt_lang, encoder_output['context'],
                                                  beam_size=beam_size, model_size=self.model_size,
                                                  type=type, buffering=buffering)

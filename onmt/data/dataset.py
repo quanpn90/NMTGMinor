@@ -269,7 +269,7 @@ class Dataset(torch.utils.data.Dataset):
 
         self.max_src_len = kwargs.get('max_src_len', None)
         self.max_tgt_len = kwargs.get('max_tgt_len', 256)
-        self.cleaning = cleaning
+        self.cleaning = int(cleaning)
         self.debug = debug
         self.num_split = num_split
         self.vocab_mask = None
@@ -278,7 +278,8 @@ class Dataset(torch.utils.data.Dataset):
             if self._type == 'text':
                 self.max_src_len = 256
             else:
-                self.max_src_len = 1024
+                # for audio set this to 2048 frames
+                self.max_src_len = 2048
 
         # self.reshape_speech = reshape_speech
         if tgt_data:

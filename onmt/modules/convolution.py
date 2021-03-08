@@ -92,7 +92,7 @@ class ConformerConvBlock(nn.Module):
         self.depthwise_conv = nn.Conv1d(channels, channels, kernel_size, stride=1,
                                         padding=(kernel_size - 1) // 2, groups=channels, bias=bias)
 
-        # self.batch_norm = nn.BatchNorm1d(channels)
+        self.batch_norm = nn.BatchNorm1d(channels)
         self.pointwise_conv2 = nn.Conv1d(channels, channels, kernel_size=1, stride=1, padding=0, bias=bias)
         self.activation = activation
 
@@ -150,12 +150,12 @@ class ConformerConvBlock(nn.Module):
         x = self.pointwise_conv1(x)
         x = F.glu(x, dim=1)
 
-        if pad_mask is not None:
-            pad_mask = pad_mask.transpose(0, 1).transpose(1, 2)
-            # print(x.size(), pad_mask.size())
-            x = x.masked_fill_(pad_mask, 0)
+        # if pad_mask is not None:
+        #     pad_mask = pad_mask.transpose(0, 1).transpose(1, 2)
+        #     # print(x.size(), pad_mask.size())
+        #     x = x.masked_fill_(pad_mask, 0)
         x = self.depthwise_conv(x)
-        x = self.activation(x)
+        x = self.activation(self.batch_norm(x))
 
         x = self.pointwise_conv2(x)
 
