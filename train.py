@@ -7,15 +7,15 @@ import argparse
 import torch
 import time, datetime
 from onmt.train_utils.trainer import XETrainer
-from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
-from onmt.data.scp_dataset import SCPIndexDataset
 from onmt.modules.loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.model_factory import build_model, optimize_model
 from onmt.bayesian_factory import build_model as build_bayesian_model
+from onmt.constants import add_tokenidx
 from options import make_parser
 from collections import defaultdict
 import os
 import numpy as np
+
 
 parser = argparse.ArgumentParser(description='train.py')
 onmt.markdown.add_md_help_argument(parser)
@@ -25,12 +25,12 @@ parser = make_parser(parser)
 
 opt = parser.parse_args()
 
-print(opt)
 
 # An ugly hack to have weight norm on / off
 onmt.constants.weight_norm = opt.weight_norm
 onmt.constants.checkpointing = opt.checkpointing
 onmt.constants.max_position_length = opt.max_position_length
+
 
 # Use static dropout if checkpointing > 0
 if opt.checkpointing > 0:
@@ -426,6 +426,9 @@ def main():
 
     print('* Building model...')
 
+    # update special tokens
+    onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
+
     if not opt.fusion:
         if opt.bayes_by_backprop:
             model = build_bayesian_model(opt, dicts)
@@ -460,6 +463,8 @@ def main():
         model = build_fusion(opt, dicts)
 
         loss_function = FusionLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
+
+    # print(model)
 
     n_params = sum([p.nelement() for p in model.parameters()])
     print('* number of parameters: %d' % n_params)

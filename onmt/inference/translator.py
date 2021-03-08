@@ -7,6 +7,9 @@ from onmt.model_factory import build_model, build_language_model, optimize_model
 from ae.Autoencoder import Autoencoder
 import torch.nn.functional as F
 import sys
+from onmt.constants import add_tokenidx
+from options import backward_compatible
+
 #
 # import torchbackend='fbgemm'
 # # 'fbgemm' for server, 'qnnpack' for mobile
@@ -28,7 +31,7 @@ class Translator(object):
         self.start_with_bos = opt.start_with_bos
         self.fp16 = opt.fp16
         self.attributes = opt.attributes  # attributes split by |. for example: de|domain1
-        self.bos_token = opt.bos_token
+        # self.bos_token = opt.bos_token
         self.sampling = opt.sampling
         self.src_lang = opt.src_lang
         self.tgt_lang = opt.tgt_lang
@@ -46,14 +49,21 @@ class Translator(object):
         self.n_models = len(models)
         self._type = 'text'
 
-        for i, model in enumerate(models):
-            if opt.verbose:
-                print('Loading model from %s' % model)
-            checkpoint = torch.load(model,
+        for i, model_path in enumerate(models):
+            checkpoint = torch.load(model_path,
                                     map_location=lambda storage, loc: storage)
 
             model_opt = checkpoint['opt']
+            model_opt = backward_compatible(model_opt)
+            if hasattr(model_opt, "enc_not_load_state"):
+                model_opt.enc_not_load_state = True
+                model_opt.dec_not_load_state = True
+
             dicts = checkpoint['dicts']
+
+            # update special tokens
+            onmt.constants = add_tokenidx(model_opt, onmt.constants, dicts)
+            self.bos_token = model_opt.tgt_bos_word
 
             if i == 0:
                 if "src" in checkpoint['dicts']:
@@ -66,9 +76,10 @@ class Translator(object):
                     self.lang_dict = checkpoint['dicts']['langs']
 
                 else:
-                    self.lang_dict = { 'src': 0, 'tgt': 1}
+                    self.lang_dict = {'src': 0, 'tgt': 1}
 
                 self.bos_id = self.tgt_dict.labelToIdx[self.bos_token]
+
 
             # Build model from the saved option
             # if hasattr(model_opt, 'fusion') and model_opt.fusion == True:
@@ -76,8 +87,12 @@ class Translator(object):
             #     model = build_fusion(model_opt, checkpoint['dicts'])
             # else:
             #     model = build_model(model_opt, checkpoint['dicts'])
+
+
             model = build_model(model_opt, checkpoint['dicts'])
             optimize_model(model)
+            if opt.verbose:
+                print('Loading model from %s' % model_path)
             model.load_state_dict(checkpoint['model'])
 
             if model_opt.model in model_list:
@@ -367,7 +382,7 @@ class Translator(object):
             # for ensembling models
             out = self._combine_outputs(outs)
             attn = self._combine_attention(attns)
-            # print(attn.shape)
+
             # for lm fusion
             if self.opt.lm:
                 lm_decoder_output = self.lm_model.step(decoder_input.clone(), lm_decoder_states)

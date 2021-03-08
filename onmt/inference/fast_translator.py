@@ -20,10 +20,23 @@ class FastTranslator(Translator):
     def __init__(self, opt):
 
         super().__init__(opt)
+
+        # self.eos = onmt.constants.EOS
+        # self.pad = onmt.constants.PAD
+        # self.bos = self.bos_id
+
+        self.src_bos = onmt.constants.SRC_BOS
+        self.src_eos = onmt.constants.SRC_EOS
+        self.src_pad = onmt.constants.SRC_PAD
+        self.src_unk = onmt.constants.SRC_UNK
+
+        self.tgt_bos = self.bos_id
+        self.tgt_pad = onmt.constants.TGT_PAD
+        self.tgt_eos = onmt.constants.TGT_EOS
+        self.tgt_unk = onmt.constants.TGT_UNK
+
         self.search = BeamSearch(self.tgt_dict)
-        self.eos = onmt.constants.EOS
-        self.pad = onmt.constants.PAD
-        self.bos = self.bos_id
+
         self.vocab_size = self.tgt_dict.size()
         self.min_len = 1
         self.normalize_scores = opt.normalize
@@ -46,7 +59,11 @@ class FastTranslator(Translator):
             self.dynamic_max_len_scale = 1.2
 
         if opt.verbose:
-            print('* Current bos id: %d' % self.bos_id, onmt.constants.BOS)
+            # print('* Current bos id is: %d, default bos id is: %d' % (self.tgt_bos, onmt.constants.BOS))
+            print("src bos id is %d; src eos id is %d;  src pad id is %d; src unk id is %d"
+                  % (self.src_bos, self.src_eos, self.src_pad, self.src_unk))
+            print("tgt bos id is %d; tgt eos id is %d;  tgt_pad id is %d; tgt unk id is %d"
+                  % (self.tgt_bos, self.tgt_eos, self.tgt_pad, self.tgt_unk))
             print('* Using fast beam search implementation')
 
     def translateBatch(self, batches):
@@ -55,7 +72,6 @@ class FastTranslator(Translator):
             return self._translateBatch(batches)
 
     def _translateBatch(self, batches):
-
         batch = batches[0]
         # Batch size is in different location depending on data.
 
@@ -80,13 +96,13 @@ class FastTranslator(Translator):
         src = batch.get('source')
         scores = src.new(bsz * beam_size, max_len + 1).float().fill_(0)
         scores_buf = scores.clone()
-        tokens = src.new(bsz * beam_size, max_len + 2).long().fill_(self.pad)
+        tokens = src.new(bsz * beam_size, max_len + 2).long().fill_(self.tgt_pad)
         tokens_buf = tokens.clone()
-        tokens[:, 0].fill_(self.bos)  # first token is bos
+        tokens[:, 0].fill_(self.tgt_bos)  # first token is bos
         attn, attn_buf = None, None
         nonpad_idxs = None
         src_tokens = src.transpose(0, 1)  # batch x time
-        src_lengths = (src_tokens.ne(self.eos) & src_tokens.ne(self.pad)).long().sum(dim=1)
+        src_lengths = (src_tokens.ne(self.src_eos) & src_tokens.ne(self.src_pad)).long().sum(dim=1)
         blacklist = src_tokens.new_zeros(bsz, beam_size).eq(-1)  # forward and backward-compatible False mask
         prefix_tokens = None
 
@@ -140,8 +156,8 @@ class FastTranslator(Translator):
             # clone relevant token and attention tensors
             tokens_clone = tokens.index_select(0, bbsz_idx)
             tokens_clone = tokens_clone[:, 1:step + 2]  # skip the first index, which is EOS
-            assert not tokens_clone.eq(self.eos).any()
-            tokens_clone[:, step] = self.eos
+            assert not tokens_clone.eq(self.tgt_eos).any()
+            tokens_clone[:, step] = self.tgt_eos
             attn_clone = attn.index_select(0, bbsz_idx)[:, :, 1:step + 2] if attn is not None else None
 
             # compute scores per token position
@@ -226,17 +242,19 @@ class FastTranslator(Translator):
                     decoder_states[i]._reorder_incremental_state(reorder_state)
 
             decode_input = tokens[:, :step + 1]
+
             lprobs, avg_attn_scores = self._decode(decode_input, decoder_states)
             avg_attn_scores = None
 
-            lprobs[:, self.pad] = -math.inf  # never select pad
+            lprobs[:, self.tgt_pad] = -math.inf  # never select pad
 
             # handle min and max length constraints
+
             if step >= max_len:
-                lprobs[:, :self.eos] = -math.inf
-                lprobs[:, self.eos + 1:] = -math.inf
+                lprobs[:, :self.tgt_eos] = -math.inf
+                lprobs[:, self.tgt_eos + 1:] = -math.inf
             elif step < self.min_len:
-                lprobs[:, self.eos] = -math.inf
+                lprobs[:, self.tgt_eos] = -math.inf
 
             # handle prefix tokens (possibly with different lengths)
             # here prefix tokens is a list of word-ids
@@ -253,7 +271,7 @@ class FastTranslator(Translator):
                         prefix_tokens = torch.tensor(prefix_tokens).type_as(tokens)
                         prefix_toks = prefix_tokens[:, step].unsqueeze(-1).repeat(1, beam_size).view(-1)
                         prefix_lprobs = lprobs.gather(-1, prefix_toks.unsqueeze(-1))
-                        prefix_mask = prefix_toks.ne(self.pad)
+                        prefix_mask = prefix_toks.ne(self.tgt_pad)
                         lprobs[prefix_mask] = torch.tensor(-math.inf).to(lprobs)
 
                         lprobs[prefix_mask] = lprobs[prefix_mask].scatter(
@@ -262,7 +280,7 @@ class FastTranslator(Translator):
 
                         # if prefix includes eos, then we should make sure tokens and
                         # scores are the same across all beams
-                        eos_mask = prefix_toks.eq(self.eos)
+                        eos_mask = prefix_toks.eq(self.tgt_eos)
                         if eos_mask.any():
                             # validate that the first beam matches the prefix
                             first_beam = tokens[eos_mask].view(-1, beam_size, tokens.size(-1))[:, 0, 1:step + 1]
@@ -328,7 +346,7 @@ class FastTranslator(Translator):
             cand_bbsz_idx = cand_beams.add(bbsz_offsets)
 
             # finalize hypotheses that end in eos (except for blacklisted ones)
-            eos_mask = cand_indices.eq(self.eos)
+            eos_mask = cand_indices.eq(self.tgt_eos)
             eos_mask[:, :beam_size][blacklist] = 0
 
             # only consider eos when it's among the top beam_size indices
@@ -352,8 +370,8 @@ class FastTranslator(Translator):
             if num_remaining_sent == 0:
                 break
             # assert step < max_len
-
             if len(finalized_sents) > 0:
+
                 new_bsz = bsz - len(finalized_sents)
 
                 # construct batch_idxs which holds indices of batches to keep for the next pass
@@ -387,6 +405,7 @@ class FastTranslator(Translator):
             # blacklisted hypos and values < cand_size indicate candidate
             # active hypos. After this, the min values per row are the top
             # candidate active hypos.
+
             active_mask = buffer('active_mask')
             eos_mask[:, :beam_size] |= blacklist
             torch.add(
@@ -448,6 +467,7 @@ class FastTranslator(Translator):
 
             # swap buffers
             tokens, tokens_buf = tokens_buf, tokens
+
             scores, scores_buf = scores_buf, scores
             if attn is not None:
                 attn, attn_buf = attn_buf, attn

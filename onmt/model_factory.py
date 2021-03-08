@@ -80,19 +80,23 @@ def build_tm_model(opt, dicts):
 
     # BUILD EMBEDDINGS
     if 'src' in dicts:
-        embedding_src = nn.Embedding(dicts['src'].size(),
-                                     opt.model_size,
-                                     padding_idx=onmt.constants.PAD)
+        if (not hasattr(opt, "enc_pretrained_model")) or (not opt.enc_pretrained_model):
+            embedding_src = nn.Embedding(dicts['src'].size(),
+                                         opt.model_size,
+                                         padding_idx=onmt.constants.SRC_PAD)
     else:
         embedding_src = None
 
     if opt.join_embedding and embedding_src is not None:
         embedding_tgt = embedding_src
         print("* Joining the weights of encoder and decoder word embeddings")
-    else:
+    elif not opt.enc_pretrained_model:
         embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                      opt.model_size,
-                                     padding_idx=onmt.constants.PAD)
+                                     padding_idx=opt.tgt_pad)
+    else:
+        assert opt.model == "pretrain_transformer"
+        embedding_tgt = None
 
     if opt.use_language_embedding:
         print("* Create language embeddings with %d languages" % len(dicts['langs']))
@@ -285,6 +289,118 @@ def build_tm_model(opt, dicts):
                                   generator, positional_encoder, language_embeddings=language_embeddings,
                                   dictionary=dicts['tgt'])
 
+    elif opt.model == 'pretrain_transformer':
+        from onmt.models.pretrain_transformer import PretrainTransformer
+        print()
+        print("* Build {} for encoder".format(opt.enc_pretrained_model))
+        if opt.enc_pretrained_model == "bert":
+            from pretrain_module.configuration_bert import BertConfig
+            from pretrain_module.modeling_bert import BertModel
+
+            enc_bert_config = BertConfig.from_json_file(opt.enc_config_file)
+            encoder = BertModel(enc_bert_config,
+                                bert_word_dropout=opt.enc_pretrain_word_dropout,
+                                bert_emb_dropout=opt.enc_pretrain_emb_dropout,
+                                bert_atten_dropout=opt.enc_pretrain_attn_dropout,
+                                bert_hidden_dropout=opt.enc_pretrain_hidden_dropout,
+                                bert_hidden_size=opt.enc_pretrain_hidden_size,
+                                is_decoder=False,
+                                before_plm_output_ln=opt.before_enc_output_ln,
+                                gradient_checkpointing=opt.enc_gradient_checkpointing,
+                                )
+
+        elif opt.enc_pretrained_model == "roberta":
+            from pretrain_module.configuration_roberta import RobertaConfig
+            from pretrain_module.modeling_roberta import RobertaModel
+            enc_roberta_config = RobertaConfig.from_json_file(opt.enc_config_file)
+
+            encoder = RobertaModel(enc_roberta_config,
+                                   bert_word_dropout=opt.enc_pretrain_word_dropout,
+                                   bert_emb_dropout=opt.enc_pretrain_emb_dropout,
+                                   bert_atten_dropout=opt.enc_pretrain_attn_dropout,
+                                   bert_hidden_dropout=opt.enc_pretrain_hidden_dropout,
+                                   bert_hidden_size=opt.enc_pretrain_hidden_size,
+                                   is_decoder=False,
+                                   before_plm_output_ln=opt.before_enc_output_ln,
+                                   gradient_checkpointing=opt.enc_gradient_checkpointing,
+                                   )
+        else:
+            print("Warning: only bert and roberta are implemented for encoder")
+            exit(-1)
+
+        if opt.enc_not_load_state:
+            if opt.verbose:
+                print("  No weights loading from {} for encoder".format(opt.enc_pretrained_model))
+        else:
+            print("  Loading weights for encoder from: \n", opt.enc_state_dict)
+
+            enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+
+            encoder.from_pretrained(state_dict=enc_model_state_dict,
+                                    model=encoder,
+                                    output_loading_info=opt.verbose,
+                                    model_prefix=opt.enc_pretrained_model
+                                    )
+        if not opt.dec_pretrained_model:
+            print(" Decoder is not from pretrained model")
+            decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder,
+                                         language_embeddings=language_embeddings)
+        else:
+            print("* Build {} for decoder".format(opt.dec_pretrained_model))
+            if opt.dec_pretrained_model == "bert":
+                if opt.enc_pretrained_model != "bert":
+                    from pretrain_module.configuration_bert import BertConfig
+                    from pretrain_module.modeling_bert import BertModel
+                dec_bert_config = BertConfig.from_json_file(opt.dec_config_file)
+                decoder = BertModel(dec_bert_config,
+                                    bert_word_dropout=opt.dec_pretrain_word_dropout,
+                                    bert_emb_dropout=opt.dec_pretrain_emb_dropout,
+                                    bert_atten_dropout=opt.dec_pretrain_attn_dropout,
+                                    bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
+                                    bert_hidden_size=opt.dec_pretrain_hidden_size,
+                                    is_decoder=True,
+                                    gradient_checkpointing=opt.dec_gradient_checkpointing,
+                                    )
+
+            elif opt.dec_pretrained_model == "roberta":
+                if opt.enc_pretrained_model != "roberta":
+                    from pretrain_module.configuration_roberta import RobertaConfig
+                    from pretrain_module.modeling_roberta import RobertaModel
+
+                dec_roberta_config = RobertaConfig.from_json_file(opt.dec_config_file)
+
+                decoder = RobertaModel(dec_roberta_config,
+                                       bert_word_dropout=opt.dec_pretrain_word_dropout,
+                                       bert_emb_dropout=opt.dec_pretrain_emb_dropout,
+                                       bert_atten_dropout=opt.dec_pretrain_attn_dropout,
+                                       bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
+                                       bert_hidden_size=opt.dec_pretrain_hidden_size,
+                                       is_decoder=True,
+                                       gradient_checkpointing=opt.dec_gradient_checkpointing,
+                                       )
+            else:
+                print("Warning: only bert and roberta are implemented for decoder")
+                exit(-1)
+
+            if opt.dec_not_load_state:
+                if opt.verbose:
+                    print("  No weights loading from {} for decoder".format(opt.dec_pretrained_model))
+            else:
+                print("  Loading weights for decoder from: \n", opt.dec_state_dict)
+                dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
+
+                decoder.from_pretrained(state_dict=dec_model_state_dict,
+                                        model=decoder,
+                                        output_loading_info=opt.verbose,
+                                        model_prefix=opt.dec_pretrained_model
+                                        )
+
+        encoder.enc_pretrained_model = opt.enc_pretrained_model
+        decoder.dec_pretrained_model = opt.dec_pretrained_model
+
+        encoder.input_type = opt.encoder_type
+
+        model = PretrainTransformer(encoder, decoder, nn.ModuleList(generators))
     else:
         raise NotImplementedError
 
@@ -391,7 +507,8 @@ def init_model_parameters(model, opt):
     model.apply(weights_init)
 
     if hasattr(model, 'decoder'):
-        model.decoder.word_lut.apply(weights_init)
+        if opt.model != "pretrain_transformer":
+            model.decoder.word_lut.apply(weights_init)
     else:
         model.tgt_embedding.apply(weights_init)
 
@@ -420,7 +537,8 @@ def build_language_model(opt, dicts):
 
     embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                  opt.model_size,
-                                 padding_idx=onmt.constants.PAD)
+                                 padding_idx=opt.tgt_pad)
+
     if opt.use_language_embedding:
         print("* Create language embeddings with %d languages" % len(dicts['langs']))
         language_embeddings = nn.Embedding(len(dicts['langs']), opt.model_size)

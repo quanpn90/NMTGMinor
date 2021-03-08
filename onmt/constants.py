@@ -21,3 +21,51 @@ neg_log_sigma1 = 0
 neg_log_sigma2 = 4
 prior_pi = 0.5
 
+
+def add_tokenidx(opt, cons, dicts):
+
+
+    cons.SRC_PAD_WORD = opt.src_pad_word
+    cons.SRC_UNK_WORD = opt.src_unk_word
+    cons.SRC_BOS_WORD = opt.src_bos_word
+    cons.SRC_EOS_WORD = opt.src_eos_word
+
+    cons.TGT_PAD_WORD = opt.tgt_pad_word
+    cons.TGT_UNK_WORD = opt.tgt_unk_word
+    cons.TGT_BOS_WORD = opt.tgt_bos_word
+    cons.TGT_EOS_WORD = opt.tgt_eos_word
+
+    src_dict = dicts['src']
+    cons.SRC_PAD = src_dict.labelToIdx[opt.src_pad_word]
+    cons.SRC_UNK = src_dict.labelToIdx[opt.src_unk_word]
+    cons.SRC_BOS = src_dict.labelToIdx[opt.src_bos_word]
+    cons.SRC_EOS = src_dict.labelToIdx[opt.src_eos_word]
+
+    tgt_dict = dicts['tgt']
+    cons.TGT_PAD = tgt_dict.labelToIdx[opt.tgt_pad_word]
+    cons.TGT_UNK = tgt_dict.labelToIdx[opt.tgt_unk_word]
+    cons.TGT_BOS = tgt_dict.labelToIdx[opt.tgt_bos_word]
+    cons.TGT_EOS = tgt_dict.labelToIdx[opt.tgt_eos_word]
+
+    return cons
+
+# # for Bert, both en and zh; also for roberta zh
+# BERT_PAD = 0
+# BERT_UNK = 100
+# BERT_BOS = 101
+# BERT_EOS = 102
+# BERT_MASK = 103
+#
+#
+# # for Roberta_en
+# EN_ROBERTA_PAD = 1
+# EN_ROBERTA_UNK = 3
+# EN_ROBERTA_BOS = 0
+# EN_ROBERTA_EOS = 2
+#
+#
+# MASK_WORD = '[MASK]'
+# PAD_WORD = '<blank>'
+# UNK_WORD = '<unk>'
+# BOS_WORD = '<s>'
+# EOS_WORD = '</s>'

@@ -73,7 +73,8 @@ def main():
     #
     n_models = len(models)
     #
-    print("Loading main model from %s ..." % models[0])
+
+    # checkpoint for main model
     checkpoint = torch.load(models[0], map_location=lambda storage, loc: storage)
 
     if 'optim' in checkpoint:
@@ -97,12 +98,18 @@ def main():
     # torch.save(best_checkpoint, opt.output + ".top")
 
     model_opt = checkpoint['opt']
+
     dicts = checkpoint['dicts']
+
+    # only create the object
+    model_opt.enc_not_load_state = True
+    model_opt.dec_not_load_state = True
 
     print(model_opt.layers)
 
     main_model = custom_build_model(model_opt, checkpoint['dicts'], lm=opt.lm)
 
+    print("Loading main model from %s ..." % models[0])
     main_model.load_state_dict(checkpoint['model'])
 
     if opt.cuda:
@@ -111,10 +118,13 @@ def main():
     for i in range(1, len(models)):
 
         model = models[i]
-        print("Loading model from %s ..." % models[i])
+        # checkpoint for  models[i])
         checkpoint = torch.load(model, map_location=lambda storage, loc: storage)
 
         model_opt = checkpoint['opt']
+
+        model_opt.enc_not_load_state = True
+        model_opt.dec_not_load_state = True
 
         # delete optim information to save GPU memory
         if 'optim' in checkpoint:
@@ -122,6 +132,7 @@ def main():
 
         current_model = custom_build_model(model_opt, checkpoint['dicts'], lm=opt.lm)
 
+        print("Loading model from %s ..." % models[i])
         current_model.load_state_dict(checkpoint['model'])
 
         if opt.cuda:

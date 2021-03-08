@@ -38,7 +38,8 @@ class Beam(object):
         self.prevKs = []
 
         # The outputs at each time-step.
-        self.nextYs = [self.tt.LongTensor(size).fill_(onmt.constants.PAD)]
+        # self.nextYs = [self.tt.LongTensor(size).fill_(onmt.constants.PAD)]
+        self.nextYs = [self.tt.LongTensor(size).fill_(onmt.constants.TGT_PAD)]
         # self.nextYs[0][0] = onmt.Constants.BOS
         self.nextYs[0][0] = bos_id
 

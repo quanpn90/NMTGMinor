@@ -421,7 +421,7 @@ class XETrainer(BaseTrainer):
                         prob distribution from decoder generator
                 """
                 targets = batch.get('target_output')
-                tgt_mask = targets.ne(onmt.constants.PAD)
+                tgt_mask = targets.ne(onmt.constants.TGT_PAD)
                 outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                      mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce)
 
@@ -482,7 +482,8 @@ class XETrainer(BaseTrainer):
         counter = 0
         num_accumulated_words = 0
         num_accumulated_sents = 0
-        grad_scaler = 1
+        # grad_scaler = 1
+        grad_scaler = opt.gradient_scaler
 
         nan = False
         nan_counter = 0
@@ -519,7 +520,7 @@ class XETrainer(BaseTrainer):
                 # outputs is a dictionary containing keys/values necessary for loss function
                 # can be flexibly controlled within models for easier extensibility
                 targets = batch.get('target_output')
-                tgt_mask = targets.ne(onmt.constants.PAD)
+                tgt_mask = targets.ne(onmt.constants.TGT_PAD)
                 outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                      zero_encoder=opt.zero_encoder,
                                      mirror=opt.mirror_loss, streaming_state=streaming_state,
@@ -667,7 +668,7 @@ class XETrainer(BaseTrainer):
                 total_loss += loss_data
                 total_words += num_words
                 total_tokens += batch.get('target_output').nelement()
-                total_non_pads += batch.get('target_output').ne(onmt.constants.PAD).sum().item()
+                total_non_pads += batch.get('target_output').ne(onmt.constants.TGT_PAD).sum().item()
                 optim = self.optim
                 batch_efficiency = total_non_pads / total_tokens
 
@@ -754,14 +755,15 @@ class XETrainer(BaseTrainer):
                 resume = False
                 start_epoch = 1
 
-
             del checkpoint['model']
             del checkpoint['optim']
             del checkpoint
         else:
+            # For pretrain_transformer initialization is done in pretrain_module 
+            if opt.model != "pretrain_transformer":
+                print('Initializing model parameters')
+                init_model_parameters(model, opt)
             itr_progress = None
-            print('Initializing model parameters')
-            init_model_parameters(model, opt)
             resume = False
             start_epoch = 1
 

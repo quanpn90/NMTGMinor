@@ -130,7 +130,6 @@ class Dict(object):
         Optionally insert `bos_word` at the beginning and `eos_word` at the .
         """
         vec = []
-
         if bos_word is not None:
             vec += [self.lookup(bos_word)]
 
@@ -163,7 +162,6 @@ class Dict(object):
         Optionally insert `bos_word` at the beginning and `eos_word` at the .
         """
         vec = []
-
         if bos_word is not None:
             vec += [self.lookup(bos_word)]
 

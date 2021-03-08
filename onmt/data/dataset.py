@@ -18,7 +18,8 @@ Two basic classes:
 """
 
 
-def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=False, feature_size=40):
+def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=False,
+               feature_size=40, dataname="source"):
     """
             Assembling the individual sequences into one single tensor, included padding
             :param feature_size:
@@ -35,7 +36,13 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
         lengths = [x.size(0) for x in data]
         # positions = [torch.arange(length_) for length_ in lengths]
         max_length = max(lengths)
-        tensor = data[0].new(len(data), max_length).fill_(onmt.constants.PAD)
+        if dataname == "source":
+            tensor = data[0].new(len(data), max_length).fill_(onmt.constants.SRC_PAD)
+        elif dataname == "target":
+            tensor = data[0].new(len(data), max_length).fill_(onmt.constants.TGT_PAD)
+        else:
+            print("Warning: check the dataname")
+            exit(-1)
         pos = None
 
         for i in range(len(data)):
@@ -101,7 +108,8 @@ def collect_fn(src_data, tgt_data,
     if src_data is not None:
         tensors['source'], tensors['source_pos'], src_lengths = merge_data(src_data, align_right=src_align_right,
                                                                            type=src_type, augmenter=augmenter,
-                                                                           upsampling=upsampling, feature_size=40)
+                                                                           upsampling=upsampling, feature_size=40,
+                                                                           dataname="source")
         tensors['src_type'] = src_type
         tensors['source'] = tensors['source'].transpose(0, 1).contiguous()
         if tensors['source_pos'] is not None:
@@ -110,7 +118,7 @@ def collect_fn(src_data, tgt_data,
         tensors['src_size'] = sum(src_lengths)
 
     if tgt_data is not None:
-        target_full, target_pos, tgt_lengths = merge_data(tgt_data, align_right=tgt_align_right)
+        target_full, target_pos, tgt_lengths = merge_data(tgt_data, align_right=tgt_align_right, dataname="target")
         target_full = target_full.t().contiguous()  # transpose BxT to TxB
         tensors['target'] = target_full
         tensors['target_input'] = target_full[:-1]
