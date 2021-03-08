@@ -83,7 +83,24 @@ class BaseTrainer(object):
         self.model.encoder.language_embedding = None
         encoder_state_dict = pretrained_model.encoder.state_dict()
 
-        self.model.encoder.load_state_dict(encoder_state_dict)
+        try:
+            self.model.encoder.load_state_dict(encoder_state_dict)
+        except RuntimeError as e:
+
+            state_dict = self.model.encoder.state_dict()
+
+            # do not load the parameters that have different dimensions
+            removed_keys = list()
+            for key in encoder_state_dict:
+                if key not in state_dict:
+                    removed_keys.append(key)
+
+                if not (encoder_state_dict[key].size() == state_dict[key].size()):
+                    removed_keys.append(key)
+
+            for key in removed_keys:
+                encoder_state_dict.pop(key)
+            self.model.encoder.load_state_dict(encoder_state_dict, strict=False)
         self.model.encoder.language_embedding = enc_language_embedding
         return
 
