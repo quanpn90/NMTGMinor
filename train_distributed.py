@@ -106,7 +106,7 @@ def main():
                                           data_type=dataset.get("type", "text"), sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
                                           multiplier=opt.batch_size_multiplier,
-                                          augment=opt.augment_speech,
+                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
                                           upsampling=opt.upsampling,
                                           num_split=1)
             else:
@@ -140,6 +140,7 @@ def main():
                                           data_type=dataset.get("type", "text"), sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
                                           multiplier=opt.batch_size_multiplier,
+                                          cleaning=True,
                                           upsampling=opt.upsampling)
             else:
                 valid_data = onmt.StreamDataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
@@ -213,6 +214,7 @@ def main():
                                           multiplier=opt.batch_size_multiplier,
                                           src_align_right=opt.src_align_right,
                                           upsampling=opt.upsampling,
+                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
                                           cleaning=True, verbose=True,
                                           num_split=1)
             else:
