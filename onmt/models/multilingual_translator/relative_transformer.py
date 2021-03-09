@@ -11,7 +11,7 @@ from onmt.modules.dropout import embedded_dropout
 from onmt.modules.sinusoidal_positional_encoding import SinusoidalPositionalEmbedding
 from onmt.models.transformer_layers import PrePostProcessing
 from .relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
-
+from onmt.modules.identity import Identity
 from onmt.utils import flip, expected_length
 from collections import defaultdict
 import math
@@ -40,6 +40,9 @@ class RelativeTransformerEncoder(TransformerEncoder):
         else:
             # or using pre-set sinusoidal
             self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
+
+        if opt.rezero:
+            self.postprocess_layer = Identity()
 
         self.d_head = self.model_size // self.n_heads
 
@@ -157,6 +160,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
+        if opt.rezero:
+            self.postprocess_layer = Identity()
 
     def renew_buffer(self, new_len):
         return

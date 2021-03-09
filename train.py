@@ -98,7 +98,7 @@ def main():
                                           data_type=dataset.get("type", "text"), sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
                                           multiplier=opt.batch_size_multiplier,
-                                          augment=opt.augment_speech,
+                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
                                           upsampling=opt.upsampling,
                                           num_split=len(opt.gpus))
             else:
@@ -202,7 +202,7 @@ def main():
                                           batch_size_sents=opt.batch_size_sents,
                                           multiplier=opt.batch_size_multiplier,
                                           src_align_right=opt.src_align_right,
-                                          augment=opt.augment_speech,
+                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
                                           upsampling=opt.upsampling,
                                           cleaning=True, verbose=True,
                                           num_split=len(opt.gpus))
@@ -337,7 +337,7 @@ def main():
                                               batch_size_sents=opt.batch_size_sents,
                                               multiplier=opt.batch_size_multiplier,
                                               src_align_right=opt.src_align_right,
-                                              augment=opt.augment_speech,
+                                              augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
                                               upsampling=opt.upsampling,
                                               cleaning=True, verbose=True,
                                               num_split=len(opt.gpus))
@@ -436,11 +436,6 @@ def main():
             model = build_model(opt, dicts)
 
         """ Building the loss function """
-        # if opt.ctc_loss != 0:
-        #     pass
-        #     loss_function = NMTAndCTCLossFunc(dicts['tgt'].size(),
-        #                                       label_smoothing=opt.label_smoothing,
-        #                                       ctc_weight=opt.ctc_loss)
         if opt.nce:
             from onmt.modules.nce.nce_loss import NCELoss
             loss_function = NCELoss(opt.model_size, dicts['tgt'].size(), noise_ratio=opt.nce_noise,
@@ -464,8 +459,6 @@ def main():
 
         loss_function = FusionLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
 
-    # print(model)
-
     n_params = sum([p.nelement() for p in model.parameters()])
     print('* number of parameters: %d' % n_params)
 
@@ -481,8 +474,6 @@ def main():
         print("MultiGPU is not supported by this train.py. Use train_distributed.py with the same arguments "
               "for MultiGPU training")
         raise NotImplementedError
-        # from onmt.train_utils.new_trainer import Trainer
-        # trainer = Trainer(model, loss_function, train_data, valid_data, dicts, opt)
 
     trainer.run(checkpoint=checkpoint)
 

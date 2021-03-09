@@ -15,6 +15,7 @@ from collections import defaultdict
 import math
 import sys
 from torch.utils.checkpoint import checkpoint
+from onmt.modules.identity import Identity
 
 torch.set_printoptions(threshold=500000)
 
@@ -66,8 +67,12 @@ class SpeechTransformerEncoder(TransformerEncoder):
             torch.nn.init.normal_(self.linear_proj, 0.0, std_)
 
         self.mln = opt.multilingual_layer_norm
-        self.postprocess_layer = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
-                                                   n_languages=opt.n_languages)
+
+        if not opt.rezero:
+            self.postprocess_layer = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
+                                                       n_languages=opt.n_languages)
+        else:
+            self.postprocess_layer = Identity()
 
     def build_modules(self):
 
@@ -246,8 +251,11 @@ class SpeechTransformerDecoder(TransformerDecoder):
         # self.r_r_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
 
         self.mln = opt.multilingual_layer_norm
-        self.postprocess_layer = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
-                                                   n_languages=opt.n_languages)
+        if not opt.rezero:
+            self.postprocess_layer = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
+                                                       n_languages=opt.n_languages)
+        else:
+            self.postprocess_layer = Identity()
 
     def renew_buffer(self, new_len):
         return
@@ -352,7 +360,6 @@ class SpeechTransformerDecoder(TransformerDecoder):
             assert src_lang.ndim == 1 and tgt_lang.ndim == 1
 
         for i, layer in enumerate(self.layer_modules):
-
             output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
                                         src_lang=src_lang, tgt_lang=tgt_lang)
 
@@ -472,7 +479,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
                 decoder_state.update_attention_buffer(buffer, i)
             else:
                 output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
-                                                tgt_lang=lang, src_lang=src_lang)
+                                            tgt_lang=lang, src_lang=src_lang)
 
         # normalize and take the last time step
         output = self.postprocess_layer(output, factor=lang)

@@ -11,6 +11,15 @@ from onmt.modules.multilingual_factorized.linear import MFWPositionWiseFeedForwa
 from onmt.modules.multilingual_factorized.encdec_attention import MFWEncdecMultiheadAttn
 from onmt.modules.multilingual_factorized.relative_attention import MFWRelativeSelfMultiheadAttn
 from onmt.modules.dropout import variational_dropout
+from onmt.modules.identity import Identity
+
+
+def preprocessing(rezero, *args, **kwargs):
+
+    if rezero:
+        return Identity()
+    else:
+        return PrePostProcessing(*args, **kwargs)
 
 
 class RelativeTransformerEncoderLayer(nn.Module):
@@ -24,10 +33,12 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.macaron = opt.macaron
         self.ffn_scale = 0.5 if self.macaron else 1
         self.dropout = opt.dropout
+        self.rezero = opt.rezero
 
         if self.macaron:
-            self.preprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
-            self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+            self.preprocess_mcr_ffn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
+            self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout,
+                                                         sequence='dz' if self.rezero else 'da',
                                                          variational=self.variational)
 
             if self.mfw:
@@ -39,11 +50,11 @@ class RelativeTransformerEncoderLayer(nn.Module):
                 self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                                variational=self.variational)
 
-        self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
-        self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+        self.preprocess_attn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
+        self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='dz' if self.rezero else 'da',
                                                   variational=self.variational)
-        self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+        self.preprocess_ffn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
+        self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='dz' if self.rezero else 'da',
                                                  variational=self.variational)
         d_head = opt.model_size // opt.n_heads
 
@@ -78,14 +89,16 @@ class RelativeTransformerEncoderLayer(nn.Module):
                 out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang)
 
                 if self.training and self.death_rate > 0:
-                    out = out / (1 - self.death_rate)
+                    ffn_scale = self.ffn_scale / (1 - self.death_rate)
+                else:
+                    ffn_scale = self.ffn_scale
 
                 if not self.variational:
                     out = F.dropout(out, p=self.dropout, training=self.training)
                 else:
                     out = variational_dropout(out, p=self.dropout, training=self.training)
 
-                input = input + self.ffn_scale * out
+                input = self.postprocess_mcr_ffn(out * ffn_scale, input)
 
             query = self.preprocess_attn(input)
 
@@ -109,13 +122,16 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
-                out = out / (1 - self.death_rate)
+                ffn_scale = self.ffn_scale / (1 - self.death_rate)
+            else:
+                ffn_scale = self.ffn_scale
 
             if not self.variational:
                 out = F.dropout(out, p=self.dropout, training=self.training)
             else:
                 out = variational_dropout(out, p=self.dropout, training=self.training)
-            input = input + self.ffn_scale * out
+
+            input = self.postprocess_ffn(out * ffn_scale, input)
 
         if incremental:
             return input, incremental_cache
@@ -135,10 +151,12 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.macaron = opt.macaron
         self.ffn_scale = 0.5 if self.macaron else 1
         self.dropout = opt.dropout
+        self.rezero = opt.rezero
 
         if self.macaron:
-            self.preprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
-            self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+            self.preprocess_mcr_ffn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
+            self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout,
+                                                         sequence='dz' if self.rezero else 'da',
                                                          variational=self.variational)
 
             if self.mfw:
@@ -150,18 +168,16 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                                variational=self.variational)
 
-        self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
-        self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+        self.preprocess_attn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
+        self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout,
+                                                  sequence='dz' if self.rezero else 'da',
                                                   variational=self.variational)
 
         if not self.ignore_source:
-            self.preprocess_src_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
-            self.postprocess_src_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+            self.preprocess_src_attn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
+            self.postprocess_src_attn = PrePostProcessing(opt.model_size, opt.dropout,
+                                                          sequence='dz' if self.rezero else 'da',
                                                           variational=self.variational)
-            # if self.batch_ensemble > 0:
-            #     self.multihead_src = BEEncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout,
-            #                                                ensemble=self.batch_ensemble)
-            # else:
 
             if not self.mfw:
                 self.multihead_src = EncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout)
@@ -170,8 +186,9 @@ class RelativeTransformerDecoderLayer(nn.Module):
                                                             n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                             use_multiplicative=opt.mfw_multiplicative)
 
-        self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
-        self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+        self.preprocess_ffn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
+        self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout,
+                                                 sequence='dz' if self.rezero else 'da',
                                                  variational=self.variational)
 
         d_head = opt.model_size // opt.n_heads
@@ -213,14 +230,16 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang)
 
                 if self.training and self.death_rate > 0:
-                    out = out / (1 - self.death_rate)
+                    ffn_scale = self.ffn_scale / (1 - self.death_rate)
+                else:
+                    ffn_scale = self.ffn_scale
 
                 if not self.variational:
                     out = F.dropout(out, p=self.dropout, training=self.training)
                 else:
                     out = variational_dropout(out, p=self.dropout, training=self.training)
 
-                input = input + self.ffn_scale * out
+                input = self.postprocess_mcr_ffn(out * ffn_scale, input)
 
             # input and context should be time first ?
             if mems is not None and mems.size(0) > 0:
@@ -241,7 +260,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
             if self.training and self.death_rate > 0:
                 out = out / (1 - self.death_rate)
 
-            input = self.postprocess_attn(out, input)
+            input = self.postprocess_attn(out, input)\
 
             """ Context Attention layer 
                 layernorm > attn > dropout > residual
@@ -264,6 +283,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
                     out = out / (1 - self.death_rate)
 
                 input = self.postprocess_src_attn(out, input)
+
             else:
                 coverage = None
 
@@ -274,14 +294,17 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
-                out = out / (1 - self.death_rate)
+                ffn_scale = self.ffn_scale / (1 - self.death_rate)
+            else:
+                ffn_scale = self.ffn_scale
 
             if not self.variational:
                 out = F.dropout(out, p=self.dropout, training=self.training)
             else:
                 out = variational_dropout(out, p=self.dropout, training=self.training)
 
-            input = input + self.ffn_scale * out
+            input = self.postprocess_ffn(out * ffn_scale, input)
+
         else:
             coverage = None
 

@@ -429,6 +429,13 @@ def make_parser(parser):
     parser.add_argument('-tgt_eos_word', type=str, default="</s>",
                         help='SRC BOS Token. Default is </s>.')
 
+    parser.add_argument('-rezero', action='store_true',
+                        help='use ReZero residual mechanism')
+    parser.add_argument('-sa_f', type=int, default=8,
+                        help="""word dropout appled on bert""")
+    parser.add_argument('-sa_t', type=int, default=64,
+                        help="""word dropout appled on bert""")
+
     return parser
 
 
@@ -640,5 +647,13 @@ def backward_compatible(opt):
         opt.enc_pretrained_model = ''
     if not hasattr(opt, 'dec_pretrained_model'):
         opt.dec_pretrained_model = ''
+
+    if not hasattr(opt, 'rezero'):
+        opt.rezero = False
+
+    if not hasattr(opt, 'sa_f'):
+        opt.sa_f = 8
+    if not hasattr(opt, 'sa_t'):
+        opt.sa_t = 64
 
     return opt

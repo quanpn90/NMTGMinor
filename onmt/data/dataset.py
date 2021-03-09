@@ -22,6 +22,7 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
                feature_size=40, dataname="source"):
     """
             Assembling the individual sequences into one single tensor, included padding
+            :param dataname:
             :param feature_size:
             :param upsampling:
             :param data: the list of sequences
@@ -242,6 +243,7 @@ class Dataset(torch.utils.data.Dataset):
                  src_align_right=False, tgt_align_right=False,
                  verbose=False, cleaning=False, debug=False,
                  num_split=1,
+                 sa_f=8, sa_t=64,
                  **kwargs):
         """
         :param src_data: List of tensors for the source side (1D for text, 2 or 3Ds for other modalities)
@@ -382,7 +384,7 @@ class Dataset(torch.utils.data.Dataset):
         self.batchOrder = None
 
         if augment:
-            self.augmenter = Augmenter()
+            self.augmenter = Augmenter(F=sa_f, T=sa_t)
         else:
             self.augmenter = None
 

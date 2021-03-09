@@ -21,6 +21,7 @@ class Augmenter(object):
         self.mt = mt
         self.input_size = input_size
         self.concat = concat
+        print("[INFO] Spec-Augmentation with F=%d, T=%d" % (F, T))
 
     def augment(self, tensor):
 

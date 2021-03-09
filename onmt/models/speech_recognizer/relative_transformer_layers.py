@@ -26,13 +26,20 @@ from onmt.modules.multilingual_partitioned.linear import MPPositionWiseFeedForwa
 from onmt.modules.multilingual_partitioned.encdec_attention import MPEncdecMultiheadAttn
 from onmt.modules.multilingual_partitioned.relative_attention import MPRelativeSelfMultiheadAttn
 from onmt.modules.convolution import ConformerConvBlock
+from onmt.modules.identity import Identity
 
 
 class LIDFeedForward(nn.Module):
 
     def __init__(self, *args):
-
         super().__init__()
+
+
+def preprocessing(rezero, *args, **kwargs):
+    if rezero:
+        return Identity()
+    else:
+        return PrePostProcessing(*args, **kwargs)
 
 
 class RelativeTransformerEncoderLayer(nn.Module):
@@ -51,10 +58,13 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.adapter_bottleneck_size = opt.adapter_bottleneck_size
         self.macaron = opt.macaron
         self.ffn_scale = 0.5 if self.macaron else 1
+        self.rezero = opt.rezero
 
         if self.macaron:
-            self.preprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
-            self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+            self.preprocess_mcr_ffn = preprocessing(self.rezero, opt.model_size, opt.dropout,
+                                                    multilingual=self.mln, sequence='n', n_languages=opt.n_languages)
+            self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout,
+                                                         sequence='dz' if self.rezero else 'da',
                                                          variational=self.variational)
 
             if self.mfw:
@@ -69,15 +79,17 @@ class RelativeTransformerEncoderLayer(nn.Module):
         if self.mfw:
             assert not self.mpw, "[ERROR] factorized and partitioned weights cannot be used at the same time."
 
-        self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
-                                                 n_languages=opt.n_languages)
-        self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+        self.preprocess_attn = preprocessing(self.rezero, opt.model_size, opt.dropout,
+                                             multilingual=self.mln, sequence='n', n_languages=opt.n_languages)
+        self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout,
+                                                  sequence='dz' if self.rezero else 'da',
                                                   variational=self.variational)
 
         if not self.no_ffn:
-            self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
-                                                    n_languages=opt.n_languages)
-            self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+            self.preprocess_ffn = preprocessing(self.rezero, opt.model_size, opt.dropout,
+                                                multilingual=self.mln, sequence='n', n_languages=opt.n_languages)
+            self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout,
+                                                     sequence='dz' if self.rezero else 'da',
                                                      variational=self.variational)
         d_head = opt.model_size // opt.n_heads
 
@@ -114,16 +126,16 @@ class RelativeTransformerEncoderLayer(nn.Module):
             self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
         if self.depthwise_conv:
-            self.preprocess_conv = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
-                                                     n_languages=opt.n_languages)
-            self.postprocess_conv = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+            self.preprocess_conv = preprocessing(self.rezero, opt.model_size, opt.dropout,
+                                                 multilingual=self.mln, sequence='n', n_languages=opt.n_languages)
+            self.postprocess_conv = PrePostProcessing(opt.model_size, opt.dropout,
+                                                      sequence='dz' if self.rezero else 'da',
                                                       variational=self.variational)
             self.depthwise_conv = ConformerConvBlock(opt.model_size, opt.conv_kernel, bias=True)
         else:
             self.depthwise_conv = None
 
         if self.multilingual_adapter:
-
             from onmt.modules.multilingual_factorized.multilingual_adapters import MultilingualAdapter
             self.adapters = MultilingualAdapter(opt.model_size, opt.adapter_bottleneck_size,
                                                 n_languages=opt.n_languages,
@@ -170,7 +182,6 @@ class RelativeTransformerEncoderLayer(nn.Module):
             """
             Self-attention block
             """
-
             query = self.preprocess_attn(input, factor=src_lang)
 
             if self.mfw or self.mpw:
@@ -248,15 +259,20 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.adapter_bottleneck_size = opt.adapter_bottleneck_size
         self.macaron = opt.macaron
         self.ffn_scale = 0.5 if self.macaron else 1
+        self.rezero = opt.rezero
 
-        self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
-                                                 n_languages=opt.n_languages)
-        self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+        self.preprocess_attn = preprocessing(self.rezero, opt.model_size, opt.dropout, sequence='n',
+                                             multilingual=self.mln, n_languages=opt.n_languages)
+
+        self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout,
+                                                  sequence='dz' if self.rezero else 'da',
                                                   variational=self.variational)
 
         if self.macaron:
-            self.preprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
-            self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+            self.preprocess_mcr_ffn = preprocessing(self.rezero, opt.model_size, opt.dropout, sequence='n',
+                                                    multilingual=self.mln, n_languages=opt.n_languages)
+            self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout,
+                                                         sequence='dz' if self.rezero else 'da',
                                                          variational=self.variational)
 
             if self.mfw:
@@ -269,10 +285,10 @@ class RelativeTransformerDecoderLayer(nn.Module):
                                                                variational=self.variational)
 
         if not self.ignore_source:
-            self.preprocess_src_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n',
-                                                         multilingual=self.mln,
-                                                         n_languages=opt.n_languages)
-            self.postprocess_src_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+            self.preprocess_src_attn = preprocessing(self.rezero, opt.model_size, opt.dropout, sequence='n',
+                                                     multilingual=self.mln, n_languages=opt.n_languages)
+            self.postprocess_src_attn = PrePostProcessing(opt.model_size, opt.dropout,
+                                                          sequence='dz' if self.rezero else 'da',
                                                           variational=self.variational)
 
             if self.mfw:
@@ -288,9 +304,9 @@ class RelativeTransformerDecoderLayer(nn.Module):
             else:
                 self.multihead_src = EncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout)
 
-        self.preprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
-                                                n_languages=opt.n_languages)
-        self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
+        self.preprocess_ffn = preprocessing(self.rezero, opt.model_size, opt.dropout, sequence='n',
+                                            multilingual=self.mln, n_languages=opt.n_languages)
+        self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout, sequence='dz' if self.rezero else 'da',
                                                  variational=self.variational)
 
         d_head = opt.model_size // opt.n_heads
@@ -331,7 +347,6 @@ class RelativeTransformerDecoderLayer(nn.Module):
             self.lfv_mapper = None
 
         if self.multilingual_adapter:
-
             from onmt.modules.multilingual_factorized.multilingual_adapters import MultilingualAdapter
             self.adapters = MultilingualAdapter(opt.model_size, opt.adapter_bottleneck_size,
                                                 n_languages=opt.n_languages,

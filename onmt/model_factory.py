@@ -439,7 +439,9 @@ def init_model_parameters(model, opt):
 
     def init_embed(weight, padding_idx=0):
 
-        std_ = opt.model_size ** -0.5
+        # std_ = opt.model_size ** -0.5
+        std_ = 0.01
+
         if opt.init_embedding == 'normal':
             nn.init.normal_(weight, 0.0, std_)
         else:

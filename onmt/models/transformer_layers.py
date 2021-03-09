@@ -52,6 +52,9 @@ class PrePostProcessing(nn.Module):
                 self.dropout = VariationalDropout(self.dropout_p, batch_first=False)
             else:
                 self.dropout = nn.Dropout(self.dropout_p)
+        if 'z' in self.steps:
+            # Rezero residual method
+            self.g = nn.Parameter(torch.tensor(0.0))
 
     def forward(self, tensor, input_tensor=None, mask=None):
 
@@ -59,16 +62,17 @@ class PrePostProcessing(nn.Module):
         for step in self.steps:
             if step == 'n':
                 # this cast is needed for O1 and FusedLayerNorm
-                output = self.layer_norm(output.type_as(self.layer_norm.function.weight), mask=mask)
+                output = self.layer_norm(output, mask=mask)
                 output = output
             if step == 'd':
                 output = self.dropout(output)
             if step == 'a':
                 if input_tensor is not None:
-                    if onmt.constants.residual_type != 'gated':
-                        output = output + input_tensor
-                    else:
-                        output = F.relu(self.k) * output + input_tensor
+                    output = output + input_tensor
+            if step == 'z':  # rezero-residual but scaling the output with initially small g
+                output = output * self.g
+                if input_tensor is not None:
+                    output = output + input_tensor
         return output
 
 
