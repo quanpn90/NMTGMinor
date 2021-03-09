@@ -389,7 +389,7 @@ def main():
                                               data_type=data_type, sorting=True,
                                               batch_size_sents=opt.batch_size_sents,
                                               src_align_right=opt.src_align_right,
-                                              cleaning=False, verbose=True, debug=True,
+                                              cleaning=True, verbose=True, debug=True,
                                               num_split=len(opt.gpus))
 
                     valid_sets.append(valid_data)
