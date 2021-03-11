@@ -277,8 +277,12 @@ class Optim(object):
             self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
                                         weight_decay=self.weight_decay, amsgrad=self.amsgrad)
         elif self.method == 'adafactor':
-            self.optimizer = Adafactor(self.params, lr=self.lr, eps=(1e-30, 1e-3), beta1=None,
-                                       weight_decay=self.weight_decay, relative_step=False, scale_parameter=False)
+
+            self.optimizer = Adafactor(self.params, lr=self.lr if self.lr > 0 else None,
+                                       eps=(1e-30, 1e-3), beta1=None,
+                                       weight_decay=self.weight_decay,
+                                       relative_step=False if self.lr > 0 else True,
+                                       scale_parameter=False if self.lr > 0 else True)
         elif self.method in ['fused_adam']:
 
             fast_adam = True
@@ -301,10 +305,10 @@ class Optim(object):
                 import apex
                 if self.amsgrad:
                     print("Note: AMSGRAD is not compatible with Fused Novograd")
-                self.optimizer = FusedNovoGrad(self.params, lr=self.lr,
-                                               betas=(self.beta1, self.beta2), eps=1e-9,
-                                               weight_decay=self.weight_decay, amsgrad=False,
-                                               set_grad_none=False)
+                self.optimizer = apex.optimizers.FusedNovoGrad(self.params, lr=self.lr,
+                                                               betas=(self.beta1, self.beta2), eps=1e-9,
+                                                               weight_decay=self.weight_decay, amsgrad=False,
+                                                               set_grad_none=False)
             except RuntimeError as e:
                 raise e
         else:
@@ -319,17 +323,18 @@ class Optim(object):
         self.update_method = opt.update_method
         self.method = opt.optim
 
-        if 'noam' in self.update_method:
-            self.init_lr = self.model_size ** (-0.5) * self.lr
-        elif 'cosine' in self.update_method:
-            print("* Using Cosine learning rate schedule")
-            self.scheduler = None
-            self.eta_min = 0.0
-            self.max_step = opt.max_step if hasattr(opt, 'max_step') else 33333
-            self.init_lr = self.lr
-        else:
-            self.init_lr = self.lr
-        self.lr = self.init_lr
+        if self.lr > 0:
+            if 'noam' in self.update_method:
+                self.init_lr = self.model_size ** (-0.5) * self.lr
+            elif 'cosine' in self.update_method:
+                print("* Using Cosine learning rate schedule")
+                self.scheduler = None
+                self.eta_min = 0.0
+                self.max_step = opt.max_step if hasattr(opt, 'max_step') else 33333
+                self.init_lr = self.lr
+            else:
+                self.init_lr = self.lr
+            self.lr = self.init_lr
         self._step = 0
         self._first_step = 0
         if self.update_method == 'noam2':
@@ -389,6 +394,8 @@ class Optim(object):
         Decay learning rate if val perf does not improve
         or we hit the start_decay_at limit.
         """
+        if self.lr < 0:
+            return
 
         if self.update_method in ['noam', 'noam2']:
             if self._step <= self.warmup_steps:

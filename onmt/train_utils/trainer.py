@@ -353,6 +353,9 @@ class XETrainer(BaseTrainer):
                                                                   keep_batchnorm_fp32=keep_batchnorm_fp32,
                                                                   loss_scale="dynamic",
                                                                   verbosity=1 if self.opt.verbose else 0)
+
+            print(self.optim.optimizer)
+            
         # An ugly hack to switch between align right and align left
         if hasattr(self.model, 'relative'):
             if self.model.relative:
@@ -614,6 +617,7 @@ class XETrainer(BaseTrainer):
                         if p.grad is not None:
                             del p.grad  # free some memory
                     torch.cuda.empty_cache()
+
                     loss = 0
                     if opt.streaming:  # reset stream in this case ...
                         streaming_state = self.model.init_stream()

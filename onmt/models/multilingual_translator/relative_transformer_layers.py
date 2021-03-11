@@ -39,16 +39,21 @@ class RelativeTransformerEncoderLayer(nn.Module):
             self.preprocess_mcr_ffn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
             self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout,
                                                          sequence='dz' if self.rezero else 'da',
-                                                         variational=self.variational)
+                                                         variational=self.variational,)
 
             if self.mfw:
                 self.mcr_feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                                   variational=self.variational,
                                                                   n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                                  use_multiplicative=opt.mfw_multiplicative)
+                                                                  use_multiplicative=opt.mfw_multiplicative,
+                                                                  no_bias=opt.mfw_no_bias,
+                                                                  activation=opt.ffn_activation,
+                                                                  glu=opt.ffn_glu)
             else:
                 self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                               variational=self.variational)
+                                                               variational=self.variational,
+                                                               activation=opt.ffn_activation,
+                                                               glu=opt.ffn_glu)
 
         self.preprocess_attn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
         self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='dz' if self.rezero else 'da',
@@ -62,15 +67,21 @@ class RelativeTransformerEncoderLayer(nn.Module):
             self.feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                           variational=self.variational,
                                                           n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                          use_multiplicative=opt.mfw_multiplicative)
+                                                          use_multiplicative=opt.mfw_multiplicative,
+                                                          no_bias=opt.mfw_no_bias,
+                                                          activation=opt.ffn_activation,
+                                                          glu=opt.ffn_glu)
 
             self.multihead = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                           n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                          use_multiplicative=opt.mfw_multiplicative)
+                                                          use_multiplicative=opt.mfw_multiplicative,
+                                                          no_bias=opt.mfw_no_bias,)
 
         else:
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                       variational=self.variational)
+                                                       variational=self.variational,
+                                                       activation=opt.ffn_activation,
+                                                       glu=opt.ffn_glu)
 
             self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
@@ -163,10 +174,16 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 self.mcr_feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                                   variational=self.variational,
                                                                   n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                                  use_multiplicative=opt.mfw_multiplicative)
+                                                                  use_multiplicative=opt.mfw_multiplicative,
+                                                                  no_bias=opt.mfw_no_bias,
+                                                                  activation=opt.ffn_activation,
+                                                                  glu=opt.ffn_glu)
+
             else:
                 self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                               variational=self.variational)
+                                                               variational=self.variational,
+                                                               activation=opt.ffn_activation,
+                                                               glu=opt.ffn_glu)
 
         self.preprocess_attn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
         self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout,
@@ -184,7 +201,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
             else:
                 self.multihead_src = MFWEncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout,
                                                             n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                            use_multiplicative=opt.mfw_multiplicative)
+                                                            use_multiplicative=opt.mfw_multiplicative,
+                                                            no_bias=opt.mfw_no_bias,)
 
         self.preprocess_ffn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
         self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout,
@@ -197,15 +215,21 @@ class RelativeTransformerDecoderLayer(nn.Module):
             self.feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                           variational=self.variational,
                                                           n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                          use_multiplicative=opt.mfw_multiplicative)
+                                                          use_multiplicative=opt.mfw_multiplicative,
+                                                          no_bias=opt.mfw_no_bias,
+                                                          activation=opt.ffn_activation,
+                                                          glu=opt.ffn_glu)
 
             self.multihead_tgt = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                               n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                              use_multiplicative=opt.mfw_multiplicative)
+                                                              use_multiplicative=opt.mfw_multiplicative,
+                                                              no_bias=opt.mfw_no_bias,)
         else:
 
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                       variational=self.variational)
+                                                       variational=self.variational,
+                                                       activation=opt.ffn_activation,
+                                                       glu=opt.ffn_glu)
 
             self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 

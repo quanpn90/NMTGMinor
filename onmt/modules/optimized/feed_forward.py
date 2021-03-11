@@ -14,7 +14,8 @@ class PositionWiseFeedForward(nn.Module):
     See "Attention Is All You Need" for more details.
     """
 
-    def __init__(self, model_size, inner_size, dropout=0., variational=False, activation='relu'):
+    def __init__(self, model_size, inner_size, dropout=0., variational=False,
+                 activation='relu', glu=False):
         super().__init__()
         self.model_size = model_size
         self.inner_size = inner_size
@@ -22,11 +23,19 @@ class PositionWiseFeedForward(nn.Module):
         self.bias = True
         self.variational = variational
         self.activation = activation
+        self.glu = glu
 
-        self.in_proj_weight = Parameter(torch.Tensor(inner_size, model_size))
+        if self.activation == 'relu':
+            self.act = nn.ReLU(inplace=True)
+        elif self.activation == 'gelu':
+            self.act = nn.GELU()
+        elif self.activation in ['silu', 'swish']:
+            self.act = nn.SiLU(inplace=True)
+
+        self.in_proj_weight = Parameter(torch.Tensor(inner_size * (2 if glu else 1), model_size))
         self.out_proj_weight = Parameter(torch.Tensor(model_size, inner_size))
 
-        self.in_proj_bias = Parameter(torch.Tensor(inner_size))
+        self.in_proj_bias = Parameter(torch.Tensor(inner_size * (2 if glu else 1)))
         self.out_proj_bias = Parameter(torch.Tensor(model_size))
 
         self.reset_parameters()
@@ -45,9 +54,6 @@ class PositionWiseFeedForward(nn.Module):
             std_ = math.sqrt(2.0 / (self.model_size + self.inner_size))
             nn.init.normal_(self.in_proj_weight, 0.0, std_)
             nn.init.normal_(self.out_proj_weight, 0.0, std_)
-
-            # nn.init.normal_(self.in_proj_bias, 0.0, 0.02)
-            # nn.init.normal_(self.out_proj_bias, 0.0, 0.02)
         else:
             std_ = math.sqrt(6.0 / (self.model_size + self.inner_size))
             nn.init.uniform_(self.in_proj_weight, -std_, std_)
@@ -58,23 +64,37 @@ class PositionWiseFeedForward(nn.Module):
 
     def forward(self, input, *args):
 
-        if self.optimized == 2 or not input.is_cuda:
-            hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)
-            hidden = F.relu(hidden, inplace=True)
-            if self.variational:
-                hidden = variational_dropout(hidden, p=self.dropout, training=self.training)
-            else:
-                hidden = F.dropout(hidden, p=self.dropout, training=self.training)
-            hidden = F.linear(hidden, self.out_proj_weight, self.out_proj_bias)
+        hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)
+
+        if self.glu:
+            hidden, gate = hidden.chunk(2, dim=-1)
+            hidden = self.act(hidden) * gate
         else:
-            # Apex MLP does not support dropout so instead we use dropconnect
-            # Theoretically they should be yield similar results
-            weights = [F.dropout(self.in_proj_weight, p=self.dropout, training=self.training),
-                       self.out_proj_weight]
-            biases = [F.dropout(self.in_proj_bias, p=self.dropout, training=self.training),
-                      self.out_proj_bias]
-            seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
-            hidden = self.fast_mlp_func(True, 1, input.view(seq_len*bsz, -1), *weights, *biases)
-            hidden = hidden.view(seq_len, bsz, hidden_size)
+            hidden = self.act(hidden)
+
+        if self.variational:
+            hidden = variational_dropout(hidden, p=self.dropout, training=self.training)
+        else:
+            hidden = F.dropout(hidden, p=self.dropout, training=self.training)
+        hidden = F.linear(hidden, self.out_proj_weight, self.out_proj_bias)
+
+        # if self.optimized == 2 or not input.is_cuda:
+        #     hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)
+        #     hidden = F.relu(hidden, inplace=True)
+        #     if self.variational:
+        #         hidden = variational_dropout(hidden, p=self.dropout, training=self.training)
+        #     else:
+        #         hidden = F.dropout(hidden, p=self.dropout, training=self.training)
+        #     hidden = F.linear(hidden, self.out_proj_weight, self.out_proj_bias)
+        # else:
+        #     # Apex MLP does not support dropout so instead we use dropconnect
+        #     # Theoretically they should be yield similar results
+        #     weights = [F.dropout(self.in_proj_weight, p=self.dropout, training=self.training),
+        #                self.out_proj_weight]
+        #     biases = [F.dropout(self.in_proj_bias, p=self.dropout, training=self.training),
+        #               self.out_proj_bias]
+        #     seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
+        #     hidden = self.fast_mlp_func(True, 1, input.view(seq_len*bsz, -1), *weights, *biases)
+        #     hidden = hidden.view(seq_len, bsz, hidden_size)
 
         return hidden

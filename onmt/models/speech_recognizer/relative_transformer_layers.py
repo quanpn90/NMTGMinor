@@ -71,10 +71,14 @@ class RelativeTransformerEncoderLayer(nn.Module):
                 self.mcr_feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                                   variational=self.variational,
                                                                   n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                                  use_multiplicative=opt.mfw_multiplicative)
+                                                                  use_multiplicative=opt.mfw_multiplicative,
+                                                                  activation=opt.ffn_activation,
+                                                                  glu=opt.ffn_glu)
             else:
                 self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                               variational=self.variational)
+                                                               variational=self.variational,
+                                                               activation=opt.ffn_activation,
+                                                               glu=opt.ffn_glu)
 
         if self.mfw:
             assert not self.mpw, "[ERROR] factorized and partitioned weights cannot be used at the same time."
@@ -94,14 +98,15 @@ class RelativeTransformerEncoderLayer(nn.Module):
         d_head = opt.model_size // opt.n_heads
 
         if self.mfw:
-
             if not self.no_ffn:
                 self.feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                               variational=self.variational,
                                                               n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                               use_multiplicative=opt.mfw_multiplicative,
                                                               weight_drop=self.weight_drop,
-                                                              mfw_activation=opt.mfw_activation)
+                                                              mfw_activation=opt.mfw_activation,
+                                                              activation=opt.ffn_activation,
+                                                              glu=opt.ffn_glu)
 
             self.multihead = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                           n_languages=opt.n_languages, rank=opt.mfw_rank,
@@ -121,7 +126,9 @@ class RelativeTransformerEncoderLayer(nn.Module):
         else:
             if not self.no_ffn:
                 self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                           variational=self.variational)
+                                                           variational=self.variational,
+                                                           activation=opt.ffn_activation,
+                                                           glu=opt.ffn_glu)
 
             self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
@@ -279,10 +286,14 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 self.mcr_feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                                   variational=self.variational,
                                                                   n_languages=opt.n_languages, rank=opt.mfw_rank,
-                                                                  use_multiplicative=opt.mfw_multiplicative)
+                                                                  use_multiplicative=opt.mfw_multiplicative,
+                                                                  activation=opt.ffn_activation,
+                                                                  glu=opt.ffn_glu)
             else:
                 self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                               variational=self.variational)
+                                                               variational=self.variational,
+                                                               activation=opt.ffn_activation,
+                                                               glu=opt.ffn_glu)
 
         if not self.ignore_source:
             self.preprocess_src_attn = preprocessing(self.rezero, opt.model_size, opt.dropout, sequence='n',
@@ -317,7 +328,9 @@ class RelativeTransformerDecoderLayer(nn.Module):
                                                           n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                           use_multiplicative=opt.mfw_multiplicative,
                                                           weight_drop=self.weight_drop,
-                                                          mfw_activation=opt.mfw_activation)
+                                                          mfw_activation=opt.mfw_activation,
+                                                          activation=opt.ffn_activation,
+                                                          glu=opt.ffn_glu)
 
             self.multihead_tgt = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                               n_languages=opt.n_languages, rank=opt.mfw_rank,
@@ -335,7 +348,9 @@ class RelativeTransformerDecoderLayer(nn.Module):
             self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                       variational=self.variational)
+                                                       variational=self.variational,
+                                                       activation=opt.ffn_activation,
+                                                       glu=opt.ffn_glu)
 
         self.lfv_multilingual = opt.lfv_multilingual
 
@@ -383,10 +398,6 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 else:
                     ffn_scale = self.ffn_scale
 
-                # if not self.variational:
-                #     out = F.dropout(out, p=self.dropout, training=self.training)
-                # else:
-                #     out = variational_dropout(out, p=self.dropout, training=self.training)
                 input = self.postprocess_mcr_ffn(out * ffn_scale, input)
 
                 # input = input + ffn_scale * out

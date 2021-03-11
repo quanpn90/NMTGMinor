@@ -309,6 +309,8 @@ def make_parser(parser):
                         help="Rank of the mfw vectors.")
     parser.add_argument('-mfw_multiplicative', action='store_true',
                         help='Use another multiplicative weights W = W^ * M + A')
+    parser.add_argument('-mfw_no_bias', action='store_true',
+                        help='Use another multiplicative weights W = W^ * M + A')
     parser.add_argument('-mfw_activation', type=str, default="none",
                         help="Using activation function for the MFW so  W = f(W^ * M + A'). "
                              "Currently accepting gelu/silu")
@@ -330,6 +332,12 @@ def make_parser(parser):
     parser.add_argument('-adapter_bottleneck_size', type=int, default=1024,
                         help='New norm for each language')
 
+    parser.add_argument('-ffn_activation', default='relu', type=str,
+                        help='The activation layer in each transformer block '
+                             'relu|gelu|silu|swish')
+
+    parser.add_argument('-ffn_glu', action='store_true',
+                        help='Gated Linear Unit application at the FFN')
     # for Reformer
     # parser.add_argument('-lsh_src_attention', action='store_true',
     #                     help='Using LSH for source attention')
@@ -577,6 +585,9 @@ def backward_compatible(opt):
     if not hasattr(opt, 'mfw_rank'):
         opt.mfw_rank = 1
 
+    if not hasattr(opt, 'mfw_no_bias'):
+        opt.mfw_no_bias = False
+
     if not hasattr(opt, 'lfv_multilingual'):
         opt.lfv_multilingual = False
 
@@ -655,5 +666,11 @@ def backward_compatible(opt):
         opt.sa_f = 8
     if not hasattr(opt, 'sa_t'):
         opt.sa_t = 64
+
+    if not hasattr(opt, 'ffn_activation'):
+        opt.ffn_activation = 'relu'
+
+    if not hasattr(opt, 'ffn_glu'):
+        opt.ffn_glu = False
 
     return opt

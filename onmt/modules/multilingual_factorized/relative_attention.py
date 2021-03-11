@@ -14,7 +14,8 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
     """
 
     def __init__(self, embed_dim, num_heads, dropout=0., n_languages=1,
-                 rank=1, use_multiplicative=False, weight_drop=0.0, mfw_activation="none"):
+                 rank=1, use_multiplicative=False, weight_drop=0.0,
+                 mfw_activation="none", no_bias=False):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -24,6 +25,9 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         self.bias = True
         self.use_multiplicative = use_multiplicative
         self.weight_drop = weight_drop
+        self.no_bias = no_bias
+
+        assert (not self.no_bias) or self.use_multiplicative
 
         self.in_proj_weight = Parameter(torch.Tensor(embed_dim, 3 * embed_dim))
         self.out_proj_weight = Parameter(torch.Tensor(embed_dim, embed_dim))
@@ -33,12 +37,13 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         self.out_proj_bias = Parameter(torch.Tensor(embed_dim))
         self.pos_proj_bias = Parameter(torch.Tensor(embed_dim))
 
-        self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-        self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
-        self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-        self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-        self.r_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-        self.s_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        if not self.no_bias:
+            self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
+            self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.r_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.s_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
         if use_multiplicative:
             rank = 1
@@ -79,12 +84,13 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         nn.init.normal_(self.r_w_bias, 0.0, 0.02)
         nn.init.normal_(self.r_r_bias, 0.0, 0.02)
 
-        nn.init.normal_(self.r_i, 0.0, 0.02)
-        nn.init.normal_(self.s_i, 0.0, 0.02)
-        nn.init.normal_(self.r_p, 0.0, 0.02)
-        nn.init.normal_(self.s_p, 0.0, 0.02)
-        nn.init.normal_(self.r_o, 0.0, 0.02)
-        nn.init.normal_(self.s_o, 0.0, 0.02)
+        if not self.no_bias:
+            nn.init.normal_(self.r_i, 0.0, 0.02)
+            nn.init.normal_(self.s_i, 0.0, 0.02)
+            nn.init.normal_(self.r_p, 0.0, 0.02)
+            nn.init.normal_(self.s_p, 0.0, 0.02)
+            nn.init.normal_(self.r_o, 0.0, 0.02)
+            nn.init.normal_(self.s_o, 0.0, 0.02)
 
         if self.use_multiplicative:
             nn.init.constant_(self.rm_i, 1.0)
@@ -93,27 +99,9 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
             nn.init.constant_(self.sm_p, 1.0)
             nn.init.constant_(self.rm_o, 1.0)
             nn.init.constant_(self.sm_o, 1.0)
-            # with torch.no_grad():
-            #     self.rm_i.bernoulli_(0.5).mul_(-2).add_(1)
-            #     self.sm_i.bernoulli_(0.5).mul_(-2).add_(1)
-            #     self.rm_o.bernoulli_(0.5).mul_(-2).add_(1)
-            #     self.sm_o.bernoulli_(0.5).mul_(-2).add_(1)
-            #     self.rm_p.bernoulli_(0.5).mul_(-2).add_(1)
-            #     self.sm_p.bernoulli_(0.5).mul_(-2).add_(1)
 
     def forward(self, input, pos, indices=None, key_padding_mask=None, attn_mask=None, mems=None,
                 incremental=False, incremental_cache=None):
-
-        if indices.size(0) == 1 and len(indices.shape) == 1:
-            r_i = torch.index_select(self.r_i, 0, indices).squeeze(0)
-            s_i = torch.index_select(self.s_i, 0, indices).squeeze(0)
-            r_p = torch.index_select(self.r_p, 0, indices).squeeze(0)
-            s_p = torch.index_select(self.s_p, 0, indices).squeeze(0)
-            r_o = torch.index_select(self.r_o, 0, indices).squeeze(0)
-            s_o = torch.index_select(self.s_o, 0, indices).squeeze(0)
-        else:
-            print(indices.size(), input.size())
-            raise NotImplementedError
 
         # weight dropout
         in_proj_weight = F.dropout(self.in_proj_weight, p=self.dropout, training=self.training)
@@ -134,9 +122,21 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
             pos_proj_weight = pos_proj_weight * torch.bmm(rm_p.unsqueeze(-1), sm_p.unsqueeze(1)).sum(dim=0)
             out_proj_weight = out_proj_weight * torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
 
-        in_proj_weight = in_proj_weight + torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
-        pos_proj_weight = pos_proj_weight + torch.bmm(r_p.unsqueeze(-1), s_p.unsqueeze(1)).sum(dim=0)
-        out_proj_weight = out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+        if not self.no_bias:
+            if indices.size(0) == 1 and len(indices.shape) == 1:
+                r_i = torch.index_select(self.r_i, 0, indices).squeeze(0)
+                s_i = torch.index_select(self.s_i, 0, indices).squeeze(0)
+                r_p = torch.index_select(self.r_p, 0, indices).squeeze(0)
+                s_p = torch.index_select(self.s_p, 0, indices).squeeze(0)
+                r_o = torch.index_select(self.r_o, 0, indices).squeeze(0)
+                s_o = torch.index_select(self.s_o, 0, indices).squeeze(0)
+            else:
+                print(indices.size(), input.size())
+                raise NotImplementedError
+
+            in_proj_weight = in_proj_weight + torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
+            pos_proj_weight = pos_proj_weight + torch.bmm(r_p.unsqueeze(-1), s_p.unsqueeze(1)).sum(dim=0)
+            out_proj_weight = out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
 
         if self.mfw_activation == "none":
             in_proj_weight = in_proj_weight
