@@ -29,7 +29,7 @@ def tiny_value_of_dtype(dtype: torch.dtype):
 
 class CrossEntropyLossBase(_Loss):
     """
-    Class for managing efficient loss computation.
+    Class for managing  efficient loss computation.
     loss computations
     Users can implement their own loss computation strategy by making
     subclass of this one.

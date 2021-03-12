@@ -41,7 +41,8 @@ class FastTranslator(Translator):
         self.min_len = 1
         self.normalize_scores = opt.normalize
         self.len_penalty = opt.alpha
-        self.buffering = not opt.no_buffering
+        # self.buffering = not opt.no_buffering
+        self.buffering = False  # buffering is currently bugged
 
         if hasattr(opt, 'no_repeat_ngram_size'):
             self.no_repeat_ngram_size = opt.no_repeat_ngram_size
@@ -65,6 +66,30 @@ class FastTranslator(Translator):
             print("tgt bos id is %d; tgt eos id is %d;  tgt_pad id is %d; tgt unk id is %d"
                   % (self.tgt_bos, self.tgt_eos, self.tgt_pad, self.tgt_unk))
             print('* Using fast beam search implementation')
+
+        if opt.vocab_list:
+            word_list = list()
+            for line in open(opt.vocab_list).readlines():
+                word = line.strip()
+                word_list.append(word)
+
+            self.filter = torch.Tensor(self.tgt_dict.size()).zero_()
+            for word_idx in [self.tgt_eos, self.tgt_unk]:
+                self.filter[word_idx] = 1
+
+            for word in word_list:
+                idx = self.tgt_dict.lookup(word)
+                if idx is not None:
+                    self.filter[idx] = 1
+
+            self.filter = self.filter.bool()
+            # print(self.filter)
+            if opt.cuda:
+                self.filter = self.filter.cuda()
+
+            self.use_filter = True
+        else:
+            self.use_filter = False
 
     def translateBatch(self, batches):
 
@@ -246,6 +271,9 @@ class FastTranslator(Translator):
             lprobs, avg_attn_scores = self._decode(decode_input, decoder_states)
             avg_attn_scores = None
 
+            if self.use_filter:
+                # the marked words are 1, so fill the reverse to inf
+                lprobs.masked_fill_(~self.filter.unsqueeze(0), -math.inf)
             lprobs[:, self.tgt_pad] = -math.inf  # never select pad
 
             # handle min and max length constraints

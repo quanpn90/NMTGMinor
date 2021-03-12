@@ -24,6 +24,8 @@ parser.add_argument('-streaming', action="store_true",
                     help="""Use streaming mode (for model with streaming)""")
 parser.add_argument('-lm', required=False,
                     help='Path to language model .pt file. Used for cold fusion')
+parser.add_argument('-vocab_list', default="",
+                    help='A Vocabulary list (1 word per line). Only are these words generated during translation.')
 parser.add_argument('-autoencoder', required=False,
                     help='Path to autoencoder .pt file')
 parser.add_argument('-input_type', default="word",
@@ -36,6 +38,7 @@ parser.add_argument('-tgt_lang', default='tgt',
                     help='Target language')
 parser.add_argument('-attributes', default="",
                     help='Attributes for the decoder. Split them by |   ')
+
 parser.add_argument('-stride', type=int, default=1,
                     help="Stride on input features")
 parser.add_argument('-concat', type=str, default="1",
