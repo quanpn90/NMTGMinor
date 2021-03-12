@@ -835,7 +835,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
 class RelativeTransformer(Transformer):
 
-    def create_decoder_state(self, batch, beam_size=1, type=1, streaming=False, previous_decoding_state=None,
+    def create_decoder_state(self, batch, beam_size=1, type=1,
+                             buffering=True, streaming=False, previous_decoding_state=None,
                              **kwargs):
         """
         Generate a new decoder state based on the batch input
@@ -875,7 +876,7 @@ class RelativeTransformer(Transformer):
                                                     cloning=True, streaming_state=streaming_state)
             else:
                 decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'],
-                                                         src_lang,
+                                                         src_lang, buffering=buffering,
                                                          beam_size=beam_size, model_size=self.model_size, type=type)
         else:
             streaming_state = previous_decoding_state.streaming_state

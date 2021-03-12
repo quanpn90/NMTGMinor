@@ -20,6 +20,7 @@ from onmt.model_factory import build_model, build_language_model, optimize_model
 from onmt.model_factory import init_model_parameters
 from onmt.train_utils.stats import Logger
 from onmt.utils import checkpoint_paths, normalize_gradients
+from onmt.model_factory import freeze_model_specialized_weights, unfreeze_model_speciailized_weights
 
 from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 
@@ -355,7 +356,7 @@ class XETrainer(BaseTrainer):
                                                                   verbosity=1 if self.opt.verbose else 0)
 
             print(self.optim.optimizer)
-            
+
         # An ugly hack to switch between align right and align left
         if hasattr(self.model, 'relative'):
             if self.model.relative:
@@ -619,6 +620,7 @@ class XETrainer(BaseTrainer):
                     torch.cuda.empty_cache()
 
                     loss = 0
+                    loss_data = 0
                     if opt.streaming:  # reset stream in this case ...
                         streaming_state = self.model.init_stream()
                 else:
@@ -669,10 +671,14 @@ class XETrainer(BaseTrainer):
                     self.optim.step()
                     self.optim.zero_grad()
                     self.model.zero_grad()
+
                     counter = 0
                     num_accumulated_words = 0
                     num_accumulated_sents = 0
                     num_updates = self.optim._step
+                    if 0 < opt.freezing_steps < num_updates:
+                        unfreeze_model_speciailized_weights(self.model)
+
                     if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every:
                         valid_loss = self.eval(self.valid_data)
                         valid_ppl = math.exp(min(valid_loss, 100))
@@ -801,6 +807,9 @@ class XETrainer(BaseTrainer):
         # if we are on a GPU: warm up the memory allocator
         if self.cuda:
             self.warm_up()
+
+        if opt.freezing_steps > 0:
+            freeze_model_specialized_weights(self.model)
 
         valid_loss = self.eval(self.valid_data)
         valid_ppl = math.exp(min(valid_loss, 100))

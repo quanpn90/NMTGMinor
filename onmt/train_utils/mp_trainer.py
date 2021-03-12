@@ -268,7 +268,7 @@ class Trainer(object):
         if self.world_size > 1:
             # find_unused_parameters may be required for dropped layer (parameters that are not connected to
             # any particular graph)
-            find_unused_parameters = True if opt.death_rate > 0.0 else True
+            find_unused_parameters = False # if opt.death_rate > 0.0 else True
 
             self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[self.rank],
                                                                    output_device=self.rank,
@@ -737,11 +737,14 @@ class Trainer(object):
                 if 'out of memory' in str(e):
                     print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
                     oom = True
+                    for p in self.model.parameters():
+                        if p.grad is not None:
+                            del p.grad  # free some memory
                     torch.cuda.empty_cache()
                     loss = 0
                     if opt.streaming:  # reset stream in this case ...
                         streaming_state = self.model.init_stream()
-                    raise e
+                    # raise e
                 else:
                     raise e
 

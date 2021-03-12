@@ -16,8 +16,16 @@ from onmt.utils import flip, expected_length
 from collections import defaultdict
 import math
 import sys
+from torch.utils.checkpoint import checkpoint
 
 torch.set_printoptions(threshold=500000)
+
+
+def create_forward_function(module):
+    def forward_pass(*inputs):
+        return module(*inputs)
+
+    return forward_pass
 
 
 class RelativeTransformerEncoder(TransformerEncoder):
@@ -29,6 +37,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
         self.unidirectional = opt.unidirectional
         self.n_heads = opt.n_heads
         self.n_languages = opt.n_languages
+        self.checkpointing = opt.checkpointing
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type,
@@ -134,7 +143,10 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         for i, layer in enumerate(self.layer_modules):
             # src_len x batch_size x d_model
-            context = layer(context, pos_emb, mask_src, src_lang=input_lang)
+            if self.checkpointing == 0 or self.training is False:
+                context = layer(context, pos_emb, mask_src, src_lang=input_lang)
+            else:
+                context = checkpoint(create_forward_function(layer), context, pos_emb, mask_src, input_lang)
 
         # final layer norm
         context = self.postprocess_layer(context)
@@ -150,6 +162,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         self.death_rate = opt.death_rate
         self.n_heads = opt.n_heads
+        self.checkpointing = opt.checkpointing
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerDecoder, self).__init__(opt, dicts,
@@ -254,8 +267,16 @@ class RelativeTransformerDecoder(TransformerDecoder):
         pos_emb = self.preprocess_layer(pos_emb)
 
         for i, layer in enumerate(self.layer_modules):
-            output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src,
-                                        src_lang=src_lang, tgt_lang=tgt_lang)
+
+            if self.checkpointing == 0 or self.training is False:
+
+                output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                                            src_lang=src_lang, tgt_lang=tgt_lang)
+
+            else:
+
+                output, coverage = checkpoint(create_forward_function(layer), output, context, pos_emb, dec_attn_mask,
+                                              mask_src, src_lang, tgt_lang)
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -382,7 +403,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
                                                      incremental=True, incremental_cache=buffer)
                     decoder_state.update_attention_buffer(buffer, i)
                 else:
-                    output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                    output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src,
                                                 src_lang=src_lang, tgt_lang=lang)
 
         # normalize and take the last time step

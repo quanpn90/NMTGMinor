@@ -100,6 +100,42 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
             nn.init.constant_(self.rm_o, 1.0)
             nn.init.constant_(self.sm_o, 1.0)
 
+    def freeze(self):
+
+        if not self.no_bias:
+            self.r_i.requires_grad = False
+            self.s_i.requires_grad = False
+            self.r_p.requires_grad = False
+            self.s_p.requires_grad = False
+            self.r_o.requires_grad = False
+            self.s_o.requires_grad = False
+
+        if self.use_multiplicative:
+            self.rm_i.requires_grad = False
+            self.sm_i.requires_grad = False
+            self.rm_p.requires_grad = False
+            self.sm_p.requires_grad = False
+            self.rm_o.requires_grad = False
+            self.sm_o.requires_grad = False
+
+    def unfreeze(self):
+
+        if not self.no_bias:
+            self.r_i.requires_grad = True
+            self.s_i.requires_grad = True
+            self.r_p.requires_grad = True
+            self.s_p.requires_grad = True
+            self.r_o.requires_grad = True
+            self.s_o.requires_grad = True
+
+        if self.use_multiplicative:
+            self.rm_i.requires_grad = True
+            self.sm_i.requires_grad = True
+            self.rm_p.requires_grad = True
+            self.sm_p.requires_grad = True
+            self.rm_o.requires_grad = True
+            self.sm_o.requires_grad = True
+
     def forward(self, input, pos, indices=None, key_padding_mask=None, attn_mask=None, mems=None,
                 incremental=False, incremental_cache=None):
 

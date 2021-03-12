@@ -3,7 +3,7 @@ import torch.nn as nn
 import onmt
 from onmt.models.transformers import TransformerEncoder, TransformerDecoder, Transformer, MixedEncoder
 from onmt.models.relative_transformer import RelativeTransformerEncoder, RelativeTransformerDecoder, \
-            RelativeTransformer
+    RelativeTransformer
 from onmt.models.transformer_layers import PositionalEncoding
 from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, RelativeTransformer
 from onmt.modules.copy_generator import CopyGenerator
@@ -49,7 +49,6 @@ def build_model(opt, dicts):
 
 
 def build_tm_model(opt, dicts):
-
     onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
 
     # BUILD POSITIONAL ENCODING
@@ -141,13 +140,12 @@ def build_tm_model(opt, dicts):
             encoder = SpeechTransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
 
             decoder = SpeechTransformerDecoder(opt, embedding_tgt, positional_encoder,
-                                           language_embeddings=language_embeddings)
+                                               language_embeddings=language_embeddings)
             model = RelativeTransformer(encoder, decoder, nn.ModuleList(generators),
                                         None, None, mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
 
         # If we use the multilingual model and weights are partitioned:
         if opt.multilingual_partitioned_weights:
-
             # this is basically the language embeddings
             factor_embeddings = nn.Embedding(len(dicts['langs']), opt.mpw_factor_size)
 
@@ -624,7 +622,37 @@ def optimize_model(model, fp16=True, distributed=False):
 
                 setattr(m, attr_str, target_attr)
 
-    # replace_layer_norm(model, "Transformer")
+    replace_layer_norm(model, "Transformer")
 
-    # if fp16:
-    #     safe_batch_norm(model, "Transformer")
+
+def freeze_model_specialized_weights(model):
+    from onmt.modules.multilingual_factorized.linear import MFWPositionWiseFeedForward
+    from onmt.modules.multilingual_factorized.encdec_attention import MFWEncdecMultiheadAttn
+    from onmt.modules.multilingual_factorized.relative_attention import MFWRelativeSelfMultiheadAttn
+
+    def freeze(m):
+        classname = m.__class__.__name__
+
+        if classname in ['MFWPositionWiseFeedForward',
+                         "MFWEncdecMultiheadAttn",
+                         "MFWRelativeSelfMultiheadAttn"]:
+            m.freeze()
+
+    model.apply(freeze)
+
+    return
+
+
+def unfreeze_model_speciailized_weights(model):
+
+    def unfreeze(m):
+        classname = m.__class__.__name__
+
+        if classname in ['MFWPositionWiseFeedForward',
+                         "MFWEncdecMultiheadAttn",
+                         "MFWRelativeSelfMultiheadAttn"]:
+            m.unfreeze()
+
+    model.apply(unfreeze)
+
+    return

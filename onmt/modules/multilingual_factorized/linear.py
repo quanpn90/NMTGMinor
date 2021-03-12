@@ -46,6 +46,26 @@ class MultilingualLinear(torch.nn.Module):
             torch.nn.init.normal_(self.r, 0.0, 0.02)
             torch.nn.init.normal_(self.s, 0.0, 0.02)
 
+    def freeze(self):
+
+        if self.use_multiplicative:
+            self.rm.requires_grad = False
+            self.sm.requires_grad = False
+
+        if not self.no_bias:
+            self.r.requires_grad = False
+            self.s.requires_grad = False
+
+    def unfreeze(self):
+
+        if self.use_multiplicative:
+            self.rm.requires_grad = True
+            self.sm.requires_grad = True
+
+        if not self.no_bias:
+            self.r.requires_grad = True
+            self.s.requires_grad = True
+
     def forward(self, input, indices=None):
         """
         :param input: T x B x H
@@ -129,6 +149,16 @@ class MFWPositionWiseFeedForward(torch.nn.Module):
             self.dropout_function = variational_dropout
         else:
             self.dropout_function = F.dropout
+
+    def freeze(self):
+
+        self.input_linear.freeze()
+        self.output_linear.freeze()
+
+    def unfreeze(self):
+
+        self.input_linear.unfreeze()
+        self.output_linear.unfreeze()
 
     def forward(self, hidden, indices=None):
         """

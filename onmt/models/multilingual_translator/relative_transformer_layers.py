@@ -284,7 +284,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
             if self.training and self.death_rate > 0:
                 out = out / (1 - self.death_rate)
 
-            input = self.postprocess_attn(out, input)\
+            input = self.postprocess_attn(out, input)
 
             """ Context Attention layer 
                 layernorm > attn > dropout > residual
@@ -332,4 +332,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
         else:
             coverage = None
 
-        return input, coverage, incremental_cache
+        if incremental_cache is None:
+            return input, coverage
+        else:
+            return input, coverage, incremental_cache

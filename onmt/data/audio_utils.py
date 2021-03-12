@@ -152,6 +152,9 @@ def read_matrix_or_vector(fd, endian='<', return_size=False):
         if Type == 'FM' or Type == 'FV':
             dtype = endian + 'f'
             bytes_per_sample = 4
+        elif Type == 'HM':
+            dtype = endian + 'e'
+            bytes_per_sample = 2
         elif Type == 'DM' or Type == 'DV':
             dtype = endian + 'd'
             bytes_per_sample = 8

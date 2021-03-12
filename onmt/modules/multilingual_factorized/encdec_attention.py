@@ -98,6 +98,42 @@ class MFWEncdecMultiheadAttn(nn.Module):
             nn.init.constant_(self.rm_o, 1.0)
             nn.init.constant_(self.sm_o, 1.0)
 
+    def freeze(self):
+
+        if not self.no_bias:
+            self.r_q.requires_grad = False
+            self.s_q.requires_grad = False
+            self.r_kv.requires_grad = False
+            self.s_kv.requires_grad = False
+            self.r_o.requires_grad = False
+            self.s_o.requires_grad = False
+
+        if self.use_multiplicative:
+            self.rm_q.requires_grad = False
+            self.sm_q.requires_grad = False
+            self.rm_kv.requires_grad = False
+            self.sm_kv.requires_grad = False
+            self.rm_o.requires_grad = False
+            self.sm_o.requires_grad = False
+
+    def unfreeze(self):
+
+        if not self.no_bias:
+            self.r_q.requires_grad = True
+            self.s_q.requires_grad = True
+            self.r_kv.requires_grad = True
+            self.s_kv.requires_grad = True
+            self.r_o.requires_grad = True
+            self.s_o.requires_grad = True
+
+        if self.use_multiplicative:
+            self.rm_q.requires_grad = True
+            self.sm_q.requires_grad = True
+            self.rm_kv.requires_grad = True
+            self.sm_kv.requires_grad = True
+            self.rm_o.requires_grad = True
+            self.sm_o.requires_grad = True
+
     def forward(self, query, key, value, src_indices=None, tgt_indices=None, attn_mask=None,
                 incremental=False, incremental_cache=None):
 

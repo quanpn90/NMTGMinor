@@ -130,7 +130,7 @@ def make_parser(parser):
                         help="How to init the embedding matrices. Xavier or Normal.")
     parser.add_argument('-batch_size_words', type=int, default=2048,
                         help='Maximum batch size in word dimension')
-    parser.add_argument('-batch_size_sents', type=int, default=128,
+    parser.add_argument('-batch_size_sents', type=int, default=99999999,
                         help='Maximum number of sentences in a batch')
 
     parser.add_argument('-batch_size_update', type=int, default=-1,
@@ -209,7 +209,7 @@ def make_parser(parser):
                         help='Reset the optimizer running variables')
     parser.add_argument('-beta1', type=float, default=0.9,
                         help="""beta_1 value for adam""")
-    parser.add_argument('-beta2', type=float, default=0.98,
+    parser.add_argument('-beta2', type=float, default=0.997,
                         help="""beta_2 value for adam""")
     parser.add_argument('-weight_decay', type=float, default=0.0,
                         help="""weight decay (L2 penalty)""")
@@ -314,6 +314,8 @@ def make_parser(parser):
     parser.add_argument('-mfw_activation', type=str, default="none",
                         help="Using activation function for the MFW so  W = f(W^ * M + A'). "
                              "Currently accepting gelu/silu")
+    parser.add_argument('-freezing_steps', type=int, default=0,
+                        help="Number of steps for freezing the mfw vectors.")
 
     parser.add_argument('-multilingual_partitioned_weights', action='store_true',
                         help='Partition the weights in the multilingual models')
