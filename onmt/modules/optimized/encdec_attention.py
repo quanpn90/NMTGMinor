@@ -92,7 +92,8 @@ class EncdecMultiheadAttn(nn.Module):
                                           self.out_proj_weight,
                                           attn_mask, self.dropout)
 
-            coverage = None
+            coverage = query.new_zeros(1, 1, query.size(0), key.size(0))
+            coverage.requires_grad = True
 
         # during evaluation we use the python binding which is safer ....
         else:

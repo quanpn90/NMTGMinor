@@ -14,7 +14,8 @@ from onmt.utils import flip, expected_length
 from collections import defaultdict
 import math
 import sys
-from torch.utils.checkpoint import checkpoint
+from onmt.modules.checkpoint import checkpoint
+# from torch.utils.checkpoint import checkpoint
 from onmt.modules.identity import Identity
 
 torch.set_printoptions(threshold=500000)

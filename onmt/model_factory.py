@@ -222,23 +222,6 @@ def build_tm_model(opt, dicts):
 
         model = RelativeTransformer(encoder, decoder, generator, rev_decoder, rev_generator, mirror=opt.mirror_loss)
 
-    elif opt.model == 'distance_transformer':
-
-        # from onmt.models.relative_transformer import RelativeTransformerDecoder, RelativeTransformer
-        from onmt.models.distance_transformer import DistanceTransformerEncoder
-
-        if opt.encoder_type == "text":
-            encoder = DistanceTransformerEncoder(opt, embedding_src, None,
-                                                 opt.encoder_type, language_embeddings=language_embeddings)
-        if opt.encoder_type == "audio":
-            # raise NotImplementedError
-            encoder = DistanceTransformerEncoder(opt, None, None, encoder_type=opt.encoder_type,
-                                                 language_embeddings=language_embeddings)
-
-        generator = nn.ModuleList(generators)
-        decoder = DistanceTransformerDecoder(opt, embedding_tgt, None, language_embeddings=language_embeddings)
-        model = Transformer(encoder, decoder, generator, mirror=opt.mirror_loss)
-
     elif opt.model == 'universal_transformer':
         from onmt.models.universal_transformer import UniversalTransformerDecoder, UniversalTransformerEncoder
 
@@ -254,43 +237,6 @@ def build_tm_model(opt, dicts):
                                               language_embeddings=language_embeddings)
 
         model = Transformer(encoder, decoder, generator, mirror=opt.mirror_loss)
-
-    elif opt.model == 'relative_universal_transformer':
-        from onmt.models.relative_universal_transformer import \
-            RelativeUniversalTransformerEncoder, RelativeUniversalTransformerDecoder
-        generator = nn.ModuleList(generators)
-
-        if opt.encoder_type == "text":
-            encoder = RelativeUniversalTransformerEncoder(opt, embedding_src, None,
-                                                          opt.encoder_type, language_embeddings=language_embeddings)
-        elif opt.encoder_type == "audio":
-            encoder = RelativeUniversalTransformerDecoder(opt, None, None, opt.encoder_type)
-
-        decoder = RelativeUniversalTransformerDecoder(opt, embedding_tgt, None,
-                                                      language_embeddings=language_embeddings)
-
-        model = RelativeTransformer(encoder, decoder, generator, mirror=opt.mirror_loss)
-
-    elif opt.model == 'relative_unified_transformer':
-        from onmt.models.relative_unified_transformer import RelativeUnifiedTransformer
-
-        if opt.encoder_type == "audio":
-            raise NotImplementedError
-
-        generator = nn.ModuleList(generators)
-        model = RelativeUnifiedTransformer(opt, embedding_src, embedding_tgt,
-                                           generator, positional_encoder, language_embeddings=language_embeddings)
-
-    elif opt.model == 'memory_transformer':
-        from onmt.models.memory_transformer import MemoryTransformer
-
-        if opt.encoder_type == "audio":
-            raise NotImplementedError
-
-        generator = nn.ModuleList(generators)
-        model = MemoryTransformer(opt, embedding_src, embedding_tgt,
-                                  generator, positional_encoder, language_embeddings=language_embeddings,
-                                  dictionary=dicts['tgt'])
 
     elif opt.model == 'pretrain_transformer':
         from onmt.models.pretrain_transformer import PretrainTransformer
@@ -542,7 +488,7 @@ def build_language_model(opt, dicts):
 
     embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                  opt.model_size,
-                                 padding_idx=opt.tgt_pad)
+                                 padding_idx=onmt.constants.TGT_PAD)
 
     if opt.use_language_embedding:
         print("* Create language embeddings with %d languages" % len(dicts['langs']))
@@ -622,7 +568,7 @@ def optimize_model(model, fp16=True, distributed=False):
 
                 setattr(m, attr_str, target_attr)
 
-    replace_layer_norm(model, "Transformer")
+    # replace_layer_norm(model, "Transformer")
 
 
 def freeze_model_specialized_weights(model):

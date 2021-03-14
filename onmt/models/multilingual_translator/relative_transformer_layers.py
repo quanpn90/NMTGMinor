@@ -85,8 +85,8 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
             self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
-    def forward(self, input, pos_emb, attn_mask, incremental=False, incremental_cache=None, mems=None,
-                src_lang=None):
+    def forward(self, input, pos_emb, attn_mask, src_lang=None,
+                incremental=False, incremental_cache=None, mems=None):
 
         if incremental and incremental_cache is None:
             incremental_cache = dict()
@@ -163,6 +163,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.ffn_scale = 0.5 if self.macaron else 1
         self.dropout = opt.dropout
         self.rezero = opt.rezero
+        self.n_heads = opt.n_heads
 
         if self.macaron:
             self.preprocess_mcr_ffn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
@@ -330,7 +331,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
             input = self.postprocess_ffn(out * ffn_scale, input)
 
         else:
-            coverage = None
+            coverage = input.new_zeros(input.size(1), self.n_heads,
+                                       input.size(0), context.size(0) if context is None else input.size(0))
 
         if incremental_cache is None:
             return input, coverage
