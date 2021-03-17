@@ -14,7 +14,7 @@ class PositionWiseFeedForward(nn.Module):
     See "Attention Is All You Need" for more details.
     """
 
-    def __init__(self, model_size, inner_size, dropout=0., variational=False,
+    def     __init__(self, model_size, inner_size, dropout=0., variational=False,
                  activation='relu', glu=False):
         super().__init__()
         self.model_size = model_size

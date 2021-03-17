@@ -7,7 +7,7 @@ import onmt
 from onmt.modules.base_seq2seq import NMTModel, Reconstructor, DecoderState
 from onmt.modules.dropout import embedded_dropout
 from onmt.models.transformer_layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
-from onmt.models.distance_transformer_layers import DistanceTransformerEncoderLayer, DistanceTransformerDecoderLayer
+from onmt.legacy.old_models.distance_transformer_layers import DistanceTransformerEncoderLayer, DistanceTransformerDecoderLayer
 from onmt.utils import flip, expected_length
 from collections import defaultdict
 import math

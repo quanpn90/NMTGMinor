@@ -7,7 +7,7 @@ import onmt
 from onmt.modules.base_seq2seq import NMTModel, Reconstructor, DecoderState
 from onmt.modules.dropout import embedded_dropout
 from onmt.models.transformer_layers import PrePostProcessing
-from onmt.models.relative_universal_transformer_layers import \
+from onmt.legacy.old_models.relative_universal_transformer_layers import \
     RelativeUniversalEncoderLayer, RelativeUniversalDecoderLayer
 from onmt.utils import flip, expected_length
 from collections import defaultdict

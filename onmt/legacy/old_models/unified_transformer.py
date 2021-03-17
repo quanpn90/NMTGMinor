@@ -5,7 +5,7 @@ from onmt.models.transformers import TransformerEncoder, TransformerDecoder, Tra
 import onmt
 from onmt.modules.dropout import embedded_dropout
 from onmt.models.transformer_layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
-from onmt.models.universal_transformer_layers import UniversalEncoderLayer, UniversalDecoderLayer
+from onmt.legacy.old_models.universal_transformer_layers import UniversalEncoderLayer, UniversalDecoderLayer
 # from onmt.models.relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
 from onmt.utils import flip, expected_length
 from collections import defaultdict

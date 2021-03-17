@@ -61,9 +61,7 @@ class PrePostProcessing(nn.Module):
         output = tensor
         for step in self.steps:
             if step == 'n':
-                # this cast is needed for O1 and FusedLayerNorm
                 output = self.layer_norm(output, mask=mask)
-                output = output
             if step == 'd':
                 output = self.dropout(output)
             if step == 'a':
@@ -74,6 +72,14 @@ class PrePostProcessing(nn.Module):
                 if input_tensor is not None:
                     output = output + input_tensor
         return output
+
+
+def preprocessing(rezero, *args, **kwargs):
+
+    if rezero:
+        return Identity()
+    else:
+        return PrePostProcessing(*args, **kwargs)
 
 
 class EncoderLayer(nn.Module):
@@ -105,6 +111,17 @@ class EncoderLayer(nn.Module):
         self.variational = opt.variational_dropout
         self.death_rate = death_rate
         self.fast_self_attention = opt.fast_self_attention
+        self.macaron = opt.macaron
+        self.ffn_scale = 0.5 if self.macaron else 1
+
+        if self.macaron:
+            self.preprocess_mcr_ffn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
+            self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout,
+                                                         sequence='da', variational=self.variational)
+
+            self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                           variational=self.variational,
+                                                           activation=opt.ffn_activation, glu=opt.ffn_glu)
 
         self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
@@ -125,7 +142,8 @@ class EncoderLayer(nn.Module):
             self.feedforward = Bottle(feedforward)
         else:
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                       variational=self.variational)
+                                                       variational=self.variational,
+                                                       activation=opt.ffn_activation, glu=opt.ffn_glu)
 
     def forward(self, input, attn_mask):
 
@@ -134,10 +152,21 @@ class EncoderLayer(nn.Module):
             coin = (torch.rand(1)[0].item() >= self.death_rate)
 
         if coin:
+            # MCR feedforward
+            if self.macaron:
+                out = self.mcr_feedforward(self.preprocess_mcr_ffn(input))
+
+                if self.training and self.death_rate > 0:
+                    ffn_scale = self.ffn_scale / (1 - self.death_rate)
+                else:
+                    ffn_scale = self.ffn_scale
+
+                input = self.postprocess_mcr_ffn(out * ffn_scale, input)
+
             query = self.preprocess_attn(input)
 
             if self.fast_self_attention:
-                out, _ = self.multihead(query, query, query, attn_mask, None)
+                out, _ = self.multihead(query, None, attn_mask, None)
             else:
                 out, _ = self.multihead(query, query, query, attn_mask)
 
@@ -152,9 +181,11 @@ class EncoderLayer(nn.Module):
             out = self.feedforward(self.preprocess_ffn(input))
 
             if self.training and self.death_rate > 0:
-                out = out / (1 - self.death_rate)
+                ffn_scale = self.ffn_scale / (1 - self.death_rate)
+            else:
+                ffn_scale = self.ffn_scale
 
-            input = self.postprocess_ffn(out, input)
+            input = self.postprocess_ffn(out * ffn_scale, input)
 
         # checking for inf/nan which can happen randomly in fp16 ...
         if torch.isinf(input).any() or torch.isnan(input).any():
@@ -191,15 +222,23 @@ class DecoderLayer(nn.Module):
         coverage: batch_size x len_query x len_key
         
     """
-
-    # def __init__(self, h, d_model, p, d_ff, attn_p=0.1, version=1.0, ignore_source=False,
-    #              variational=False, death_rate=0.0):
     def __init__(self, opt, death_rate=0.0):
         super(DecoderLayer, self).__init__()
         self.ignore_source = opt.ignore_source
         self.variational = opt.variational_dropout
         self.death_rate = death_rate
         self.fast_self_attention = opt.fast_self_attention
+        self.macaron = opt.macaron
+        self.ffn_scale = 0.5 if self.macaron else 1
+
+        if self.macaron:
+            self.preprocess_mcr_ffn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
+            self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout,
+                                                         sequence='da', variational=self.variational)
+
+            self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+                                                           variational=self.variational,
+                                                           activation=opt.ffn_activation, glu=opt.ffn_glu)
 
         self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.postprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='da',
@@ -231,7 +270,8 @@ class DecoderLayer(nn.Module):
             self.feedforward = Bottle(feedforward)
         else:
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                       variational=self.variational)
+                                                       variational=self.variational,
+                                                       activation=opt.ffn_activation, glu=opt.ffn_glu)
 
     def forward(self, input, context, mask_tgt, mask_src,
                 incremental=False, incremental_cache=None, reuse_source=True):
@@ -251,10 +291,21 @@ class DecoderLayer(nn.Module):
 
         if coin:
 
+            # MCR feedforward
+            if self.macaron:
+                out = self.mcr_feedforward(self.preprocess_mcr_ffn(input))
+
+                if self.training and self.death_rate > 0:
+                    ffn_scale = self.ffn_scale / (1 - self.death_rate)
+                else:
+                    ffn_scale = self.ffn_scale
+
+                input = self.postprocess_mcr_ffn(out * ffn_scale, input)
+
             query = self.preprocess_attn(input)
 
             if self.fast_self_attention:
-                out, _, = self.multihead_tgt(query, query, query, None, mask_tgt,
+                out, _, = self.multihead_tgt(query, None, None, mask_tgt,
                                              incremental=incremental,
                                              incremental_cache=incremental_cache)
             else:
@@ -287,11 +338,12 @@ class DecoderLayer(nn.Module):
                 layernorm > ffn > dropout > residual
             """
             out = self.feedforward(self.preprocess_ffn(input))
-
             if self.training and self.death_rate > 0:
-                out = out / (1 - self.death_rate)
+                ffn_scale = self.ffn_scale / (1 - self.death_rate)
+            else:
+                ffn_scale = self.ffn_scale
 
-            input = self.postprocess_ffn(out, input)
+            input = self.postprocess_ffn(out * ffn_scale, input)
 
         # checking for inf/nan which can happen randomly in fp16 ...
         if torch.isinf(input).any() or torch.isnan(input).any():

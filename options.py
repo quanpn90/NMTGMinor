@@ -406,7 +406,8 @@ def make_parser(parser):
     parser.add_argument('-dec_state_dict', default="", type=str,
                         help=""" the state_dict of the  pretrained model""")
     parser.add_argument('-dec_not_load_state', action='store_true',
-                        help='only create a  Bert Object, not load the state from pytorch modle or fituned model for tgt')
+                        help='only create a  Bert Object, not load the state '
+                             'from pytorch modle or fituned model for tgt')
 
     parser.add_argument('-dec_pretrain_word_dropout', type=float, default=0.0,
                         help="""word dropout appled on bert""")
@@ -441,6 +442,14 @@ def make_parser(parser):
 
     parser.add_argument('-rezero', action='store_true',
                         help='use ReZero residual mechanism')
+    parser.add_argument('-absolute_position_encoding', action='store_true',
+                        help='use absolute position encoding for the Translator')
+    parser.add_argument('-decoder_late_emb_scale', action='store_true',
+                        help='only scale the embedding very late at the decoder. This option is here'
+                             'to fix the problem of the multilingual model w/ relative position.')
+    parser.add_argument('-encoder_early_emb_scale', action='store_true',
+                        help='only scale the embedding very late at the decoder. This option is here'
+                             'to fix the problem of the multilingual model w/ relative position.')
     parser.add_argument('-sa_f', type=int, default=8,
                         help="""word dropout appled on bert""")
     parser.add_argument('-sa_t', type=int, default=64,
@@ -674,5 +683,14 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'ffn_glu'):
         opt.ffn_glu = False
+
+    if not hasattr(opt, 'absolute_position_encoding'):
+        opt.absolute_position_encoding = False
+
+    if not hasattr(opt, 'decoder_late_emb_scale'):
+        opt.decoder_late_emb_scale = False
+
+    if not hasattr(opt, 'encoder_early_emb_scale'):
+        opt.encoder_early_emb_scale = False
 
     return opt

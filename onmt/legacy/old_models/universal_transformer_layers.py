@@ -17,7 +17,7 @@ from onmt.modules.dropout import VariationalDropout
 from onmt.modules.optimized.encdec_attention import EncdecMultiheadAttn
 from onmt.modules.optimized.self_attention import SelfMultiheadAttn
 from collections import defaultdict
-from .transformers import PrePostProcessing, EncoderLayer, DecoderLayer
+from onmt.models.transformers import PrePostProcessing, EncoderLayer, DecoderLayer
 
 
 class UniversalEncoderLayer(EncoderLayer):

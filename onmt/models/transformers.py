@@ -142,15 +142,10 @@ class TransformerEncoder(nn.Module):
             # linearly decay the death rate
             death_r = (_l + 1.0) / self.layers * self.death_rate
 
-            if not self.lsh_src_attention:
-                if not self.reversible:
-                    block = EncoderLayer(self.opt, death_rate=death_r)
-                else:
-                    block = ReversibleTransformerEncoderLayer(self.opt, death_rate=death_r)
-
+            if not self.reversible:
+                block = EncoderLayer(self.opt, death_rate=death_r)
             else:
-                from onmt.models.reformer import ReformerEncoderLayer
-                block = ReformerEncoderLayer(self.opt, death_rate=death_r)
+                block = ReversibleTransformerEncoderLayer(self.opt, death_rate=death_r)
 
             self.layer_modules.append(block)
 
@@ -346,12 +341,8 @@ class TransformerDecoder(nn.Module):
         if self.use_language_embedding:
             lang_emb = self.language_embeddings(input_lang)  # B x H or 1 x H
             if self.language_embedding_type == 'sum':
-                emb = emb + lang_emb
+                emb = emb + lang_emb.unsqueeze(1)
             elif self.language_embedding_type == 'concat':
-                # replace the bos embedding with the language
-                bos_emb = lang_emb.expand_as(emb[:, 0, :])
-                emb[:, 0, :] = bos_emb
-
                 lang_emb = lang_emb.unsqueeze(1).expand_as(emb)
                 concat_emb = torch.cat([emb, lang_emb], dim=-1)
                 emb = torch.relu(self.projector(concat_emb))

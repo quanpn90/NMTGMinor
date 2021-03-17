@@ -13,20 +13,6 @@ from onmt.constants import double_precision
 # from apex.normalization.fused_layer_norm     import FusedLayerNorm
 
 
-if hasattr(torch._C, '_jit_set_profiling_executor'):
-    torch._C._jit_set_profiling_executor(False)
-if hasattr(torch._C, '_jit_set_profiling_mode'):
-    torch._C._jit_set_profiling_mode(False)
-
-
-@torch.jit.script
-def jit_dropout_add(x, residual, prob, is_training):
-    # type: (Tensor, Tensor, float, bool) -> Tensor
-    out = F.dropout(x, p=prob, training=True)
-    out = residual + out
-    return out
-
-
 class SelfMultiheadAttn(nn.Module):
     """Multi-headed attention.
 
@@ -59,8 +45,6 @@ class SelfMultiheadAttn(nn.Module):
             self.attn_func_fast = fast_self_attn_func
             self.optimized = 1
         except ModuleNotFoundError as e:
-            # print(e)
-            # print("Cannot use fast self-attention implementation")
             self.optimized = 2
             self.attn_func_fast = None
 
@@ -74,8 +58,8 @@ class SelfMultiheadAttn(nn.Module):
         nn.init.constant_(self.in_proj_bias, 0.)
         nn.init.constant_(self.out_proj_bias, 0.)
 
-    def forward(self, query, key, value, key_padding_mask=None, attn_mask=None,
-                incremental=False, incremental_cache=None):
+    def forward(self, query, pos, key_padding_mask=None, attn_mask=None,
+                incremental=False, incremental_cache=None, **kwargs):
         """Input shape: Time x Batch x Channel
 
         Self-attention can be implemented by passing in the same arguments for
@@ -85,10 +69,8 @@ class SelfMultiheadAttn(nn.Module):
         batch x src_len, where padding elements are indicated by 1s.
         """
         is_training = self.training
-
-        assert key is value
-        assert key is query
-
+        key = query
+        value = query
         len_key = key.size(0)
         input_weights = self.in_proj_weight
 
@@ -114,6 +96,7 @@ class SelfMultiheadAttn(nn.Module):
                                           False, self.dropout)
             coverage = None
         else:
+
             outputs, coverage = self.attn_func(attn_mask is not None, is_training, self.num_heads, query,
                                                input_weights, self.out_proj_weight,
                                                input_bias, self.out_proj_bias,

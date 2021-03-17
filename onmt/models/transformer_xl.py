@@ -11,7 +11,7 @@ from onmt.modules.dropout import embedded_dropout
 from onmt.models.transformer_layers import XavierLinear, MultiHeadAttention, FeedForward, PrePostProcessing
 from onmt.models.transformer_layers import EncoderLayer, DecoderLayer
 from onmt.models.relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
-from onmt.models.unified_transformer import UnifiedTransformer
+from onmt.legacy.old_models.unified_transformer import UnifiedTransformer
 from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, StreamState, \
     StreamDecodingState, RelativeTransformerDecoder
 from onmt.utils import flip, expected_length

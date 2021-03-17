@@ -311,15 +311,10 @@ class SpeechTransformerDecoder(TransformerDecoder):
         extra_context = None
 
         if self.use_language_embedding:
-            # print("Using language embedding")
             lang_emb = self.language_embeddings(tgt_lang)  # B x H or 1 x H
             if self.language_embedding_type == 'sum':
                 emb = emb + lang_emb
             elif self.language_embedding_type == 'concat':
-                # replace the bos embedding with the language
-                bos_emb = lang_emb.expand_as(emb[0])
-                emb[0] = bos_emb
-
                 lang_emb = lang_emb.unsqueeze(0).expand_as(emb)
                 concat_emb = torch.cat([emb, lang_emb], dim=-1)
                 emb = torch.relu(self.projector(concat_emb))

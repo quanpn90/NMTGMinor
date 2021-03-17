@@ -223,7 +223,7 @@ def build_tm_model(opt, dicts):
         model = RelativeTransformer(encoder, decoder, generator, rev_decoder, rev_generator, mirror=opt.mirror_loss)
 
     elif opt.model == 'universal_transformer':
-        from onmt.models.universal_transformer import UniversalTransformerDecoder, UniversalTransformerEncoder
+        from onmt.legacy.old_models.universal_transformer import UniversalTransformerDecoder, UniversalTransformerEncoder
 
         generator = nn.ModuleList(generators)
 
@@ -383,8 +383,7 @@ def init_model_parameters(model, opt):
 
     def init_embed(weight, padding_idx=0):
 
-        # std_ = opt.model_size ** -0.5
-        std_ = 0.01
+        std_ = opt.model_size ** -0.5 if not opt.rezero else 0.01
 
         if opt.init_embedding == 'normal':
             nn.init.normal_(weight, 0.0, std_)
