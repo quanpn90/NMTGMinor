@@ -14,8 +14,8 @@ class PositionWiseFeedForward(nn.Module):
     See "Attention Is All You Need" for more details.
     """
 
-    def     __init__(self, model_size, inner_size, dropout=0., variational=False,
-                 activation='relu', glu=False):
+    def __init__(self, model_size, inner_size, dropout=0., variational=False,
+                 activation='relu', glu=False, weight_drop=0.0):
         super().__init__()
         self.model_size = model_size
         self.inner_size = inner_size
@@ -24,6 +24,7 @@ class PositionWiseFeedForward(nn.Module):
         self.variational = variational
         self.activation = activation
         self.glu = glu
+        self.weight_drop = weight_drop
 
         if self.activation == 'relu':
             self.act = nn.ReLU(inplace=True)

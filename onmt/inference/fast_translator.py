@@ -8,7 +8,7 @@ from onmt.model_factory import build_model
 import torch.nn.functional as F
 from onmt.inference.search import BeamSearch, DiverseBeamSearch
 from onmt.inference.translator import Translator
-
+# buggy lines: 392, 442, 384
 model_list = ['transformer', 'stochastic_transformer']
 
 
@@ -564,16 +564,34 @@ class FastTranslator(Translator):
         pred_batch = []
         src_data = src_data[0]
         for b in range(batch_size):
-            pred_batch.append(
-                [self.build_target_tokens(finalized[b][n]['tokens'], src_data[b], None)
-                 for n in range(self.opt.n_best)]
-            )
+            # print(len(finalized[b]), src_data)
+            # if len(finalized[b]) < self.opt.n_best:
+            #     print(src_data[b])
+
+            # probably when the src is empty so beam search stops immediately
+            if len(finalized[b]) == 0:
+                assert len(src_data[b]) == 0, "The target search result is empty, assuming that the source is empty."
+                pred_batch.append(
+                    [self.build_target_tokens([], src_data[b], None)
+                     for n in range(self.opt.n_best)]
+                )
+            else:
+                pred_batch.append(
+                    [self.build_target_tokens(finalized[b][n]['tokens'], src_data[b], None)
+                     for n in range(self.opt.n_best)]
+                )
         pred_score = []
         for b in range(batch_size):
-            pred_score.append(
-                [torch.FloatTensor([finalized[b][n]['score']])
-                 for n in range(self.opt.n_best)]
-            )
+            if len(finalized[b]) == 0:
+                pred_score.append(
+                    [torch.FloatTensor([0])
+                     for n in range(self.opt.n_best)]
+                )
+            else:
+                pred_score.append(
+                    [torch.FloatTensor([finalized[b][n]['score']])
+                     for n in range(self.opt.n_best)]
+                )
 
         return pred_batch, pred_score, pred_length, gold_score, gold_words, allgold_words
 
