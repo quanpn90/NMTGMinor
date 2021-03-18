@@ -41,6 +41,8 @@ class TranslatorParameter(object):
         self.no_buffering = False
         self.src_align_right = False
         self.dynamic_quantile = 0
+        self.vocab_list = ""
+
         self.read_file(filename)
 
     def read_file(self, filename):

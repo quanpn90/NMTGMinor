@@ -179,7 +179,6 @@ class RelativeTransformerEncoderLayer(nn.Module):
                 out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang)
 
                 if self.training and self.death_rate > 0:
-                    # out = out / (1 - self.death_rate)
                     ffn_scale = self.ffn_scale / (1 - self.death_rate)
                 else:
                     ffn_scale = self.ffn_scale
@@ -228,14 +227,11 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
                 # rescaling before residual
                 if self.training and self.death_rate > 0:
-                    # out = out / (1 - self.death_rate)
                     ffn_scale = self.ffn_scale / (1 - self.death_rate)
                 else:
                     ffn_scale = self.ffn_scale
 
-                out = out * ffn_scale
-
-                input = self.postprocess_ffn(out, input)
+                input = self.postprocess_ffn(out * ffn_scale, input)
 
             if self.multilingual_adapter:
                 input = self.adapters(input, src_lang)
@@ -400,8 +396,6 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
                 input = self.postprocess_mcr_ffn(out * ffn_scale, input)
 
-                # input = input + ffn_scale * out
-
             query = self.preprocess_attn(input, factor=tgt_lang)
             if self.mfw or self.mpw:
                 out, _ = self.multihead_tgt(query, pos_emb, tgt_lang, None, mask_tgt, mems=mems,
@@ -452,7 +446,6 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
-                # out = out / (1 - self.death_rate)
                 ffn_scale = self.ffn_scale / (1 - self.death_rate)
             else:
                 ffn_scale = self.ffn_scale

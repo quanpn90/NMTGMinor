@@ -448,12 +448,14 @@ def make_parser(parser):
                         help='only scale the embedding very late at the decoder. This option is here'
                              'to fix the problem of the multilingual model w/ relative position.')
     parser.add_argument('-encoder_early_emb_scale', action='store_true',
-                        help='only scale the embedding very late at the decoder. This option is here'
+                        help='only scale the embedding early in the encoder. This option is here'
                              'to fix the problem of the multilingual model w/ relative position.')
     parser.add_argument('-sa_f', type=int, default=8,
                         help="""word dropout appled on bert""")
     parser.add_argument('-sa_t', type=int, default=64,
                         help="""word dropout appled on bert""")
+    parser.add_argument('-no_input_scale', action='store_true',
+                        help='Do not scale the embeddings of the speech (the features) before transformer.')
 
     return parser
 
@@ -692,5 +694,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'encoder_early_emb_scale'):
         opt.encoder_early_emb_scale = False
+
+    if not hasattr(opt, 'no_input_scale'):
+        opt.no_input_scale = False
 
     return opt

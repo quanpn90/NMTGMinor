@@ -46,6 +46,7 @@ class SpeechTransformerEncoder(TransformerEncoder):
         self.mpw = opt.multilingual_partitioned_weights
         self.multilingual_linear_projection = opt.multilingual_linear_projection
         self.mln = opt.multilingual_layer_norm
+        self.no_input_scale = opt.no_input_scale
 
         # TODO: multilingually linear transformation
 
@@ -148,7 +149,8 @@ class SpeechTransformerEncoder(TransformerEncoder):
         mask_src = mask_src.bool()
 
         """ Scale the emb by sqrt(d_model) """
-        emb = emb * math.sqrt(self.model_size)
+        if not self.no_input_scale:
+            emb = emb * math.sqrt(self.model_size)
 
         """ Adding positional encoding """
         qlen = input.size(0)
