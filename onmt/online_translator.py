@@ -76,11 +76,9 @@ class OnlineTranslator(object):
         opt = TranslatorParameter(model)
         from onmt.inference.fast_translator import FastTranslator
         self.translator = FastTranslator(opt)
-        # self.translator = onmt.EnsembleTranslator(opt)
 
-    def translate(self,input):
-        predBatch, predScore, predLength, goldScore, numGoldWords, allGoldScores = self.translator.translate([input.split()],[])
+    def translate(self, input):
+        predBatch, predScore, predLength, goldScore, numGoldWords, allGoldScores = \
+            self.translator.translate([input.split()], [])
 
         return " ".join(predBatch[0][0])
-  
-
