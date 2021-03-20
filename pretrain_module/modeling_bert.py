@@ -34,9 +34,6 @@ from .modeling_utils import PreTrainedModel, find_pruneable_heads_and_indices
 import onmt.constants
 from collections import defaultdict
 
-#
-# _CONFIG_FOR_DOC = "BertConfig"
-# _TOKENIZER_FOR_DOC = "BertTokenizer"
 
 BERT_PRETRAINED_MODEL_ARCHIVE_LIST = [
     "bert-base-uncased",
@@ -49,18 +46,6 @@ BERT_PRETRAINED_MODEL_ARCHIVE_LIST = [
     "bert-base-german-cased",
     "bert-large-uncased-whole-word-masking",
     "bert-large-cased-whole-word-masking",
-    "bert-large-uncased-whole-word-masking-finetuned-squad",
-    "bert-large-cased-whole-word-masking-finetuned-squad",
-    "bert-base-cased-finetuned-mrpc",
-    "bert-base-german-dbmdz-cased",
-    "bert-base-german-dbmdz-uncased",
-    "cl-tohoku/bert-base-japanese",
-    "cl-tohoku/bert-base-japanese-whole-word-masking",
-    "cl-tohoku/bert-base-japanese-char",
-    "cl-tohoku/bert-base-japanese-char-whole-word-masking",
-    "TurkuNLP/bert-base-finnish-cased-v1",
-    "TurkuNLP/bert-base-finnish-uncased-v1",
-    "wietsedv/bert-base-dutch-cased",
     # See all BERT models at https://huggingface.co/models?filter=bert
 ]
 
@@ -77,6 +62,7 @@ try:
 
 except ImportError:
     print("FusedLayerNorm is not available, we use torch.nn.LayerNorm")
+    BertLayerNorm = torch.nn.LayerNorm
 
 
 class BertEmbeddings(nn.Module):
@@ -105,10 +91,8 @@ class BertEmbeddings(nn.Module):
         position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
         if token_type_ids is None:
             token_type_ids = torch.zeros_like(input_ids)
-        # by me
-        embed = self.word_embeddings
 
-        # print(embed.weight[onmt.constants.BERT_MASK, :])
+        embed = self.word_embeddings
 
         if self.bert_word_dropout and self.training:
             mask = embed.weight.data.new().resize_((embed.weight.size(0), 1)).bernoulli_(1 - self.bert_word_dropout).\
@@ -172,9 +156,7 @@ class BertSelfAttention(nn.Module):
         self.query = nn.Linear(config.hidden_size, self.all_head_size)
         self.key = nn.Linear(config.hidden_size, self.all_head_size)
         self.value = nn.Linear(config.hidden_size, self.all_head_size)
-
         self.dropout = nn.Dropout(config.bert_atten_dropout)
-        # print("config.bert_atten_dropout", config.bert_atten_dropout)
 
     def transpose_for_scores(self, x):
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -190,7 +172,6 @@ class BertSelfAttention(nn.Module):
         encoder_attention_mask=None,
         output_attentions=False,
     ):
-        # hidden_states = hidden_states.transpose(0,1)
         mixed_query_layer = self.query(hidden_states)
 
         # If this is instantiated as a cross-attention module, the keys
@@ -270,14 +251,14 @@ class BertSelfAttention(nn.Module):
             proj_key = self.key(hidden_states)
             proj_value = self.value(hidden_states)
             if buffer is not None and 'k' in buffer and 'v' in buffer:
-                proj_key = torch.cat([buffer['k'], proj_key], dim=1)  # time second 和之前time_step的进行拼接
+                proj_key = torch.cat([buffer['k'], proj_key], dim=1)  # concat with previous time_step result
                 buffer['k'] = proj_key
                 proj_value = torch.cat([buffer['v'], proj_value], dim=1)  # time second
                 buffer['v'] = proj_value
             else:
                 if buffer is None:
                     buffer = dict()
-                buffer['k'] = proj_key   # step为0
+                buffer['k'] = proj_key
                 buffer['v'] = proj_value
 
         query_layer = self.transpose_for_scores(proj_query)
@@ -304,7 +285,7 @@ class BertSelfAttention(nn.Module):
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
         context_layer = context_layer.view(*new_context_layer_shape)
-        # 感觉如果纯粹的encoder 只会用到tuple的第一个元素，如果连接decoder, 则还需要attention_probs
+
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
         return outputs, buffer
 
@@ -315,7 +296,6 @@ class BertSelfOutput(nn.Module):
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.LayerNorm = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.bert_hidden_dropout)
-        # print("config.bert_hidden_dropout", config.bert_hidden_dropout)
 
     def forward(self, hidden_states, input_tensor):
         hidden_states = self.dense(hidden_states)
@@ -330,7 +310,6 @@ class BertAttention(nn.Module):
 
         self.self = BertSelfAttention(config)
         self.output = BertSelfOutput(config)
-
 
     def forward(
         self,
@@ -358,7 +337,6 @@ class BertAttention(nn.Module):
             output_attentions=False,
             buffer=None
             ):
-        # self_outputs: (context_layer, attention_probs) or （context_layer, ）
 
         self_outputs, buffer = self.self.selfattn_step(
             hidden_states,
@@ -465,7 +443,7 @@ class BertLayer(nn.Module):
             output_attentions=output_attentions,
             buffer=buffer
         )
-        attention_output = self_attention_outputs[0] # context_layer
+        attention_output = self_attention_outputs[0]  # context_layer
         outputs = self_attention_outputs[1:]  # (attention_probs,)add self attentions if we output attention weights
 
         cross_attention_outputs, buffer = self.crossattention.attn_step(
@@ -482,7 +460,7 @@ class BertLayer(nn.Module):
         intermediate_output = self.intermediate(attention_output)
         # 1.dropout(intermediate_output) 2. add(attention_output) 3.LN
         layer_output = self.output(intermediate_output, attention_output)
-        outputs = (layer_output,) + outputs  # 单纯的encoder的时候， outputs是空tuple(), outputs 表示attention
+        outputs = (layer_output,) + outputs
         return outputs, buffer
 
 
@@ -509,7 +487,6 @@ class BertEncoder(nn.Module):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
-            # 默认返回值， 如果config 没有这个属性，默认返回值
             if getattr(self.config, "gradient_checkpointing", False) and self.training:
 
                 def create_custom_forward(module):
@@ -693,7 +670,7 @@ class BertModel(BertPreTrainedModel):
         # attention_probs has shape bsz x n_heads x N x N
         # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
-        head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
+        head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)  # default [None] * n_head
 
         embedding_output = self.embeddings(
             input_ids=input_ids,
@@ -715,17 +692,8 @@ class BertModel(BertPreTrainedModel):
         if self.before_plm_output_ln is not None:
             sequence_output = self.before_plm_output_ln(encoder_outputs[0])
         else:
-            sequence_output = encoder_outputs[0]            
-
-        if not return_dict:
-            return (sequence_output, ) + encoder_outputs[1:]
-
-        return BaseModelOutputWithPooling(
-            last_hidden_state=sequence_output,
-            pooler_output=None,
-            hidden_states=encoder_outputs.hidden_states,
-            attentions=encoder_outputs.attentions,
-        )
+            sequence_output = encoder_outputs[0]
+        return (sequence_output, ) + encoder_outputs[1:]
 
     def step(self, input_ids, decoder_state, streaming=False):
         device = input_ids.device
@@ -737,8 +705,7 @@ class BertModel(BertPreTrainedModel):
         tgt_token_type = input_.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
         data_type = next(self.parameters()).dtype
 
-        src_mask = decoder_state.src_mask.squeeze(1)  # [bsz, all_src_len] 确实要保持src的所有长度，问题是 batch size 要变了
-        # print("src_mask", src_mask.size())
+        src_mask = decoder_state.src_mask.squeeze(1)  # [bsz, all_src_len]
 
         extended_src_mask = self.invert_attention_mask(src_mask)
 
@@ -783,7 +750,6 @@ class BertModel(BertPreTrainedModel):
         output_dict["hidden"] = hidden_states
         # output_dict["coverage"] = buffers[i]
 
-        # return hidden_states, buffers[i]
         return output_dict
 
     def renew_buffer(self, new_len):

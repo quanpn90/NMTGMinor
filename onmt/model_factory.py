@@ -94,7 +94,7 @@ def build_tm_model(opt, dicts):
     if opt.join_embedding and embedding_src is not None:
         embedding_tgt = embedding_src
         print("* Joining the weights of encoder and decoder word embeddings")
-    elif not opt.enc_pretrained_model:
+    elif not opt.dec_pretrained_model:
         embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                      opt.model_size,
                                      padding_idx=onmt.constants.TGT_PAD)
@@ -293,9 +293,10 @@ def build_tm_model(opt, dicts):
                                   dictionary=dicts['tgt'])
 
     elif opt.model == 'pretrain_transformer':
+        assert (opt.enc_pretrained_model or opt.dec_pretrained_model)
         from onmt.models.pretrain_transformer import PretrainTransformer
         print()
-        print("* Build {} for encoder".format(opt.enc_pretrained_model))
+        print("* Build encoder with enc_pretrained_model: {}".format(opt.enc_pretrained_model))
         if opt.enc_pretrained_model == "bert":
             from pretrain_module.configuration_bert import BertConfig
             from pretrain_module.modeling_bert import BertModel
@@ -327,6 +328,9 @@ def build_tm_model(opt, dicts):
                                    before_plm_output_ln=opt.before_enc_output_ln,
                                    gradient_checkpointing=opt.enc_gradient_checkpointing,
                                    )
+        elif not opt.enc_pretrained_model:
+            encoder = TransformerEncoder(opt, embedding_src, positional_encoder,
+                                         opt.encoder_type, language_embeddings=language_embeddings)
         else:
             print("Warning: only bert and roberta are implemented for encoder")
             exit(-1)
@@ -335,6 +339,7 @@ def build_tm_model(opt, dicts):
             if opt.verbose:
                 print("  No weights loading from {} for encoder".format(opt.enc_pretrained_model))
         else:
+            assert opt.enc_pretrained_model
             print("  Loading weights for encoder from: \n", opt.enc_state_dict)
 
             enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
@@ -349,7 +354,7 @@ def build_tm_model(opt, dicts):
             decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder,
                                          language_embeddings=language_embeddings)
         else:
-            print("* Build {} for decoder".format(opt.dec_pretrained_model))
+            print("* Build decoder with dec_pretrained_model is: {}".format(opt.dec_pretrained_model))
             if opt.dec_pretrained_model == "bert":
                 if opt.enc_pretrained_model != "bert":
                     from pretrain_module.configuration_bert import BertConfig
@@ -509,10 +514,19 @@ def init_model_parameters(model, opt):
         elif classname.find('PositionWiseFeedForward') != -1:
             m.reset_parameters(init=opt.init)
 
-    model.apply(weights_init)
+    if opt.model != "pretrain_transformer":
+        print('Initializing entire model parameters')
+        model.apply(weights_init)
+    else:
+        if opt.enc_pretrained_model and not opt.dec_pretrained_model:
+            print('Initializing only decoder parameters')
+            model.decoder.apply(weights_init)
+        if not opt.enc_pretrained_model and opt.dec_pretrained_model:
+            print('Initializing only encoder parameters')
+            model.encoder.apply(weights_init)
 
     if hasattr(model, 'decoder'):
-        if opt.model != "pretrain_transformer":
+        if not opt.dec_pretrained_model:
             model.decoder.word_lut.apply(weights_init)
     else:
         model.tgt_embedding.apply(weights_init)
@@ -542,7 +556,7 @@ def build_language_model(opt, dicts):
 
     embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                  opt.model_size,
-                                 padding_idx=opt.tgt_pad)
+                                 padding_idx=onmt.constants.TGT_PAD)
 
     if opt.use_language_embedding:
         print("* Create language embeddings with %d languages" % len(dicts['langs']))

@@ -628,6 +628,16 @@ class Transformer(NMTModel):
         output_dict['target_mask'] = target_mask
         output_dict['streaming_state'] = streaming_state
         output_dict['target'] = batch.get('target_output')
+
+        # print("context2:", context.size())
+        # print("hidden:", output.size())
+        # print("src_mask:", (encoder_output['src_mask']).size())
+        # print("src:", src.size())
+        # print("target:", (output_dict['target']).size())
+        #
+        # print("target_mask:", target_mask.size())
+        # 10/0
+
         # output_dict['lid_logits'] = decoder_output['lid_logits']
 
         # final layer: computing softmax
