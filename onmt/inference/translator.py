@@ -10,15 +10,7 @@ import sys
 from onmt.constants import add_tokenidx
 from options import backward_compatible
 
-#
-# import torchbackend='fbgemm'
-# # 'fbgemm' for server, 'qnnpack' for mobile
-# my_model.qconfig = torch.quantization.get_default_qconfig(backend)
-# prepare and convert model
-# Set the backend on which the quantized kernels need to be run
-# torch.backends.quantized.engine=# torch.backends.quantized.engine = 'fbgemm'
 model_list = ['transformer', 'stochastic_transformer', 'fusion_network']
-
 
 
 class Translator(object):
@@ -80,15 +72,6 @@ class Translator(object):
 
                 self.bos_id = self.tgt_dict.labelToIdx[self.bos_token]
 
-
-            # Build model from the saved option
-            # if hasattr(model_opt, 'fusion') and model_opt.fusion == True:
-            #     print("* Loading a FUSION model")
-            #     model = build_fusion(model_opt, checkpoint['dicts'])
-            # else:
-            #     model = build_model(model_opt, checkpoint['dicts'])
-
-
             model = build_model(model_opt, checkpoint['dicts'])
             optimize_model(model)
             if opt.verbose:
@@ -115,6 +98,8 @@ class Translator(object):
                 if 'fbgemm' in engines:
                     torch.backends.quantized.engine = 'fbgemm'
                 else:
+                    print("[INFO] fbgemm is not found in the available engines. Possibly the CPU does not support AVX2."
+                          " Quantization is suggested to be set to 0.")
                     torch.backends.quantized.engine = 'qnnpack'
 
                 model = torch.quantization.quantize_dynamic(
@@ -205,8 +190,6 @@ class Translator(object):
                 output += (outputs[i])
 
             output.div_(len(outputs))
-
-            # output = torch.log(output)
             output = F.log_softmax(output, dim=-1)
         elif self.ensemble_op == "mean":
             output = torch.exp(outputs[0])
@@ -216,19 +199,18 @@ class Translator(object):
                 output += torch.exp(outputs[i])
 
             output.div_(len(outputs))
-            # output = torch.log(output)
             output = torch.log(output)
         elif self.ensemble_op == "max":
             output = outputs[0]
 
             for i in range(1, len(outputs)):
-                output = torch.max(output,outputs[i])
+                output = torch.max(output, outputs[i])
 
         elif self.ensemble_op == "min":
             output = outputs[0]
 
             for i in range(1, len(outputs)):
-                output = torch.min(output,outputs[i])
+                output = torch.min(output, outputs[i])
 
         elif self.ensemble_op == 'gmean':
             output = torch.exp(outputs[0])
@@ -388,7 +370,7 @@ class Translator(object):
                 lm_decoder_output = self.lm_model.step(decoder_input.clone(), lm_decoder_states)
 
                 # fusion
-                lm_out =  lm_decoder_output['log_prob']
+                lm_out = lm_decoder_output['log_prob']
                 # out = out + 0.3 * lm_out
 
                 out = lm_out
@@ -523,4 +505,3 @@ class Translator(object):
             )
 
         return pred_batch, pred_score, pred_length, gold_score, gold_words, allgold_words
-

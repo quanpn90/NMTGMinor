@@ -184,9 +184,12 @@ def main():
     elif opt.encoder_type == "audio" and opt.asr_format == "h5":
         in_file = h5.File(opt.src, 'r')
     elif opt.encoder_type == "audio" and opt.asr_format == "scp":
-        import kaldiio
-        from kaldiio import ReadHelper
-        audio_data = iter(ReadHelper('scp:' + opt.src))
+        # import kaldiio
+        # from kaldiio import ReadHelper
+        from onmt.data.audio_utils import ArkLoader
+        audio_data = open(opt.src)
+        scp_reader = ArkLoader()
+        # audio_data = iter(ReadHelper('scp:' + opt.src))
     else:
         in_file = open(opt.src)
 
@@ -233,7 +236,8 @@ def main():
                 i += 1
             elif opt.asr_format == "scp":
                 try:
-                    _, line = next(audio_data)
+                    scp_path = next(audio_data).strip().split()[1]
+                    line = scp_reader.load_mat(scp_path)
                 except StopIteration:
                     break
 
