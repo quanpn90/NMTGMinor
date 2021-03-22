@@ -790,6 +790,8 @@ class Transformer(NMTModel):
 
         src_transposed = src.transpose(0, 1)
         encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
+
+        print("[INFO] create Transformer decoding state with buffering", buffering)
         decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], src_lang,
                                                  beam_size=beam_size, model_size=self.model_size,
                                                  type=type, buffering=buffering)

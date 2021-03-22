@@ -396,14 +396,14 @@ class SpeechTransformerDecoder(TransformerDecoder):
 
         src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
 
-        if buffering:
-            # use the last value of input to continue decoding
-            if input.size(1) > 1:
-                input_ = input[:, -1].unsqueeze(1).transpose(0, 1)
-            else:
-                input_ = input.transpose(0, 1)
-        else:
-            input_ = input.transpose(0, 1)  # from B x T to T x B
+        # if buffering:
+        #     # use the last value of input to continue decoding
+        #     if input.size(1) > 1:
+        #         input_ = input[:, -1].unsqueeze(1).transpose(0, 1)
+        #     else:
+        #         input_ = input.transpose(0, 1)
+        # else:
+        input_ = input.transpose(0, 1)  # from B x T to T x B
 
         """ Embedding: batch_size x 1 x d_model """
         emb = self.word_lut(input_) * math.sqrt(self.model_size)
@@ -431,14 +431,12 @@ class SpeechTransformerDecoder(TransformerDecoder):
         mlen = klen - qlen
 
         pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
-
         pos_emb = self.positional_encoder(pos)
 
         dec_attn_mask = torch.triu(
-            emb.new_ones(klen, klen), diagonal=1 + mlen).byte()  # [:, :, None]
+            emb.new_ones(klen, klen), diagonal=1 + mlen).byte()[:, :, None]  # [:, :, None]
 
-        dec_attn_mask = dec_attn_mask[-1].unsqueeze(0)
-
+        # dec_attn_mask = dec_attn_mask[-1].unsqueeze(0)
         dec_attn_mask = dec_attn_mask.bool()
 
         if context is not None:
@@ -470,7 +468,6 @@ class SpeechTransformerDecoder(TransformerDecoder):
             buffer = buffers[i] if i in buffers else None
 
             if buffering:
-                # print("DEBUGGING BUFFERING")
                 output, coverage, buffer = layer(output, context, pos_emb, None, dec_attn_mask, mask_src,
                                                  tgt_lang=lang, src_lang=src_lang,
                                                  incremental=True, incremental_cache=buffer)

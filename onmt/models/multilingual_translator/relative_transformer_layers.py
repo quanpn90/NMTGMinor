@@ -16,7 +16,6 @@ from onmt.modules.identity import Identity
 
 
 def preprocessing(rezero, *args, **kwargs):
-
     if rezero:
         return Identity()
     else:
@@ -41,7 +40,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
             self.preprocess_mcr_ffn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
             self.postprocess_mcr_ffn = PrePostProcessing(opt.model_size, opt.dropout,
                                                          sequence='dz' if self.rezero else 'da',
-                                                         variational=self.variational,)
+                                                         variational=self.variational, )
 
             if self.mfw:
                 self.mcr_feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
@@ -77,7 +76,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
             self.multihead = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                           n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                           use_multiplicative=opt.mfw_multiplicative,
-                                                          no_bias=opt.mfw_no_bias,)
+                                                          no_bias=opt.mfw_no_bias, )
 
         else:
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
@@ -199,7 +198,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 self.multihead_src = MFWEncdecMultiheadAttn(opt.n_heads, opt.model_size, opt.attn_dropout,
                                                             n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                             use_multiplicative=opt.mfw_multiplicative,
-                                                            no_bias=opt.mfw_no_bias,)
+                                                            no_bias=opt.mfw_no_bias, )
 
         self.preprocess_ffn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
         self.postprocess_ffn = PrePostProcessing(opt.model_size, opt.dropout,
@@ -220,7 +219,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
             self.multihead_tgt = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                               n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                               use_multiplicative=opt.mfw_multiplicative,
-                                                              no_bias=opt.mfw_no_bias,)
+                                                              no_bias=opt.mfw_no_bias, )
         else:
 
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
@@ -271,10 +270,12 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
             if self.mfw:
                 out, _ = self.multihead_tgt(query, pos_emb, tgt_lang, None, mask_tgt, mems=mems,
-                                            incremental=incremental, incremental_cache=incremental_cache)
+                                            incremental=False, incremental_cache=incremental_cache)
+                # incremental=incremental, incremental_cache=incremental_cache)
             else:
                 out, _ = self.multihead_tgt(query, pos_emb, None, mask_tgt, mems=mems,
-                                            incremental=incremental, incremental_cache=incremental_cache)
+                                            incremental=False, incremental_cache=incremental_cache)
+                # incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
@@ -324,7 +325,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
             coverage = input.new_zeros(input.size(1), self.n_heads,
                                        input.size(0), context.size(0) if context is None else input.size(0))
 
-        if incremental_cache is None:
-            return input, coverage
-        else:
-            return input, coverage, incremental_cache
+        # if incremental_cache is None:
+        #     return input, coverage
+        # else:
+        return input, coverage, incremental_cache

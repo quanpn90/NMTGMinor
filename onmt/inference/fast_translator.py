@@ -41,8 +41,8 @@ class FastTranslator(Translator):
         self.min_len = 1
         self.normalize_scores = opt.normalize
         self.len_penalty = opt.alpha
-        # self.buffering = not opt.no_buffering
-        self.buffering = False  # buffering is currently bugged
+        self.buffering = not opt.no_buffering
+        # self.buffering = False  # buffering is currently bugged
 
         if hasattr(opt, 'no_repeat_ngram_size'):
             self.no_repeat_ngram_size = opt.no_repeat_ngram_size
