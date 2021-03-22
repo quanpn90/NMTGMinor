@@ -47,7 +47,7 @@ class CrossEntropyLossBase(_Loss):
 
         # use apex fast entropy implementation
         self.fast_xentropy = fast_xentropy
-        print(self.fast_xentropy)
+
         if self.fast_xentropy:
             try:
                 from apex.contrib import xentropy as label_smoothing
@@ -93,7 +93,6 @@ class CrossEntropyLossBase(_Loss):
             loss_data = loss.data.item()
         else:
             half_to_float = (logits.dtype == torch.half)
-
             loss = self.softmax_xentropy(logits, gtruth, label_smoothing, self.padding_idx, half_to_float)
             loss = loss.sum()
             loss_data = loss.data.item()
