@@ -388,12 +388,15 @@ def init_model_parameters(model, opt):
 
         if opt.init_embedding == 'normal':
             nn.init.normal_(weight, 0.0, std_)
-        else:
+        if opt.init_embedding == 'fixed':
+            nn.init.normal_(weight, 0.0, 0.01)
+        else:  # uni form
             nn.init.uniform_(weight, -std_, std_)
 
+        # don't uncomment the next lines...
         # for some reason normalizing the weights at fp16 doesnt work when setting the padding to 0
-        if not opt.fix_norm_output_embedding:
-            nn.init.constant_(weight[padding_idx], 0)
+        # if not opt.fix_norm_output_embedding:
+        #     nn.init.constant_(weight[padding_idx], 0)
 
     def init_bias(bias):
         nn.init.constant_(bias, 0.0)
