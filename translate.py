@@ -37,7 +37,9 @@ parser.add_argument('-src_lang', default='src',
 parser.add_argument('-tgt_lang', default='tgt',
                     help='Target language')
 parser.add_argument('-attributes', default="",
-                    help='Attributes for the decoder. Split them by |   ')
+                    help='Attributes for the decoder. Split them by | ')
+parser.add_argument('-ensemble_weight', default="",
+                    help='Weight for ensembles. Default as uniform. Split them by | and they will be normalized later')
 
 parser.add_argument('-stride', type=int, default=1,
                     help="Stride on input features")
@@ -122,7 +124,29 @@ parser.add_argument('-dynamic_min_len_scale', type=float, default=0.0,
                     help='Using the fast decoder')
 
 
-def reportScore(name, score_total, words_total):
+def _is_oversized(batch, new_sent_size, batch_size):
+    """
+    Function to see if adding new sentence will make the current batch
+    :param batch:
+    :param new_sent_size:
+    :param batch_size_words:
+    :return:
+    """
+
+    # Always return False if empty
+    if len(batch) == 0:
+        return False
+
+    current_max_length = max([sent.size(0) for sent in batch])
+
+    # Because adding a new sentence will potential enlarge the area of the rectangle, we need to check
+    if max(current_max_length, new_sent_size) * (len(batch) + 1) > batch_size:
+        return True
+
+    return False
+
+
+def report_score(name, score_total, words_total):
     print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (
         name, score_total / (words_total + 1e-9),
         name, math.exp(-score_total / (words_total + 1e-9))))
@@ -134,12 +158,12 @@ def addone(f):
     yield None
 
 
-def lenPenalty(s, l, alpha):
+def len_penalty(s, l, alpha):
     l_term = math.pow(l, alpha)
     return s / l_term
 
 
-def getSentenceFromTokens(tokens, input_type):
+def get_sentence_from_tokens(tokens, input_type):
     if input_type == 'word':
         sent = " ".join(tokens)
     elif input_type == 'char':
@@ -171,10 +195,6 @@ def main():
     count = 0
 
     tgtF = open(opt.tgt) if opt.tgt else None
-    #
-    # if opt.dump_beam != "":
-    #     import json
-    #     translator.initBeamAccum()
 
     in_file = None
 
@@ -213,6 +233,10 @@ def main():
     # Audio processing for the source batch
     if opt.encoder_type == "audio":
 
+        """
+        For Audio we will have to group samples by the total number of frames in the source
+        """
+
         s_prev_context = []
         t_prev_context = []
 
@@ -226,7 +250,7 @@ def main():
 
         assert len(concats) == n_models, "The number of models must match the number of concat configs"
         for j, _ in enumerate(concats):
-            src_batches.append(list())  #
+            src_batches.append(list())  # We assign different inputs for each model in the ensemble
 
         while True:
             if opt.asr_format == "h5":
@@ -238,6 +262,7 @@ def main():
                 try:
                     scp_path = next(audio_data).strip().split()[1]
                     line = scp_reader.load_mat(scp_path)
+
                 except StopIteration:
                     break
 
@@ -246,6 +271,36 @@ def main():
             line = torch.from_numpy(line)
 
             original_line = line
+            src_length = line.size(0)
+
+            """
+            Handling different concatenation size for different models, to make ensembling possible
+            """
+            oversized = False
+
+            if _is_oversized(src_batches[0], src_length, opt.batch_size):
+                # If adding a new sentence will make the batch oversized
+                # Then do translation now, and then free the list
+                print("Batch size:", len(src_batches[0]), len(tgt_batch))
+                pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
+                    src_batches, tgt_batch, type='asr')
+
+                print("Result:", len(pred_batch))
+                count, pred_score, pred_words, gold_score, goldWords = \
+                    translate_batch(opt, tgtF, count, outF, translator,
+                                    src_batches[0], tgt_batch, pred_batch,
+                                    pred_score,
+                                    pred_length, gold_score,
+                                    num_gold_words,
+                                    all_gold_scores, opt.input_type)
+
+                pred_score_total += pred_score
+                pred_words_total += pred_words
+                gold_score_total += gold_score
+                gold_words_total += goldWords
+                src_batch, tgt_batch = [], []
+                for j, _ in enumerate(src_batches):
+                    src_batches[j] = []
 
             for j, concat_ in enumerate(concats):
                 concat = int(concat_)
@@ -266,7 +321,8 @@ def main():
                     if len(s_prev_context) > opt.previous_context:
                         s_prev_context = s_prev_context[-1 * opt.previous_context:]
 
-                src_batches[j] += [line]
+                # src_batches[j] += [line]
+                src_batches[j].append(line)
 
             if tgtF:
                 # ~ tgt_tokens = tgtF.readline().split() if tgtF else None
@@ -287,31 +343,6 @@ def main():
                     raise NotImplementedError("Input type unknown")
 
                 tgt_batch += [tgt_tokens]
-
-            if len(src_batches[0]) < opt.batch_size:
-                continue
-
-            # TODO: if opt.concat is a list
-            print("Batch size:", len(src_batches[0]), len(tgt_batch))
-            pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
-                src_batches, tgt_batch, type='asr')
-
-            print("Result:", len(pred_batch))
-            count, pred_score, pred_words, gold_score, goldWords = \
-                translate_batch(opt, tgtF, count, outF, translator,
-                                src_batches[0], tgt_batch, pred_batch,
-                                pred_score,
-                                pred_length, gold_score,
-                                num_gold_words,
-                                all_gold_scores, opt.input_type)
-
-            pred_score_total += pred_score
-            pred_words_total += pred_words
-            gold_score_total += gold_score
-            gold_words_total += goldWords
-            src_batch, tgt_batch = [], []
-            for j, _ in enumerate(src_batches):
-                src_batches[j] = []
 
         # catch the last batch
         if len(src_batches[0]) != 0:
@@ -387,8 +418,8 @@ def main():
             src_batch, tgt_batch = [], []
 
     if opt.verbose:
-        reportScore('PRED', pred_score_total, pred_words_total)
-        if tgtF: reportScore('GOLD', gold_score_total, gold_words_total)
+        report_score('PRED', pred_score_total, pred_words_total)
+        if tgtF: report_score('GOLD', gold_score_total, gold_words_total)
 
     if tgtF:
         tgtF.close()
@@ -413,7 +444,7 @@ def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch, pr
         for bb, ss, ll in zip(pred_batch, pred_score, pred_length):
             # ~ ss_ = [s_/numpy.maximum(1.,len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
             length = [len(i) for i in [''.join(b_) for b_ in bb]]
-            ss_ = [lenPenalty(s_, max(l_, 1), opt.alpha) for b_, s_, l_ in zip(bb, ss, length)]
+            ss_ = [len_penalty(s_, max(l_, 1), opt.alpha) for b_, s_, l_ in zip(bb, ss, length)]
             ss_origin = [(s_, len(b_)) for b_, s_, l_ in zip(bb, ss, ll)]
             sidx = numpy.argsort(ss_)[::-1]
             # ~ print(ss_, sidx, ss_origin)
@@ -435,12 +466,12 @@ def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch, pr
         count += 1
 
         if not opt.print_nbest:
-            outF.write(getSentenceFromTokens(pred_batch[b][0], input_type) + '\n')
+            outF.write(get_sentence_from_tokens(pred_batch[b][0], input_type) + '\n')
             outF.flush()
         else:
             for n in range(opt.n_best):
                 idx = n
-                output_sent = getSentenceFromTokens(pred_batch[b][idx], input_type)
+                output_sent = get_sentence_from_tokens(pred_batch[b][idx], input_type)
                 out_str = "%s ||| %.4f" % (output_sent, pred_score[b][idx])
                 outF.write(out_str + '\n')
                 outF.flush()
@@ -449,11 +480,11 @@ def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch, pr
             if opt.encoder_type == "text":
                 src_sent = " ".join(src_batch[b])
                 print('SRC %d: %s' % (count, src_sent))
-            print('PRED %d: %s' % (count, getSentenceFromTokens(pred_batch[b][0], input_type)))
+            print('PRED %d: %s' % (count, get_sentence_from_tokens(pred_batch[b][0], input_type)))
             print("PRED SCORE: %.4f" % pred_score[b][0])
 
             if tgtF is not None:
-                tgt_sent = getSentenceFromTokens(tgt_batch[b], input_type)
+                tgt_sent = get_sentence_from_tokens(tgt_batch[b], input_type)
                 if translator.tgt_dict.lower:
                     tgt_sent = tgt_sent.lower()
                 print('GOLD %d: %s ' % (count, tgt_sent))
