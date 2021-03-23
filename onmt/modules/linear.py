@@ -4,7 +4,7 @@ import torch.nn.init as init
 import torch.nn.utils.weight_norm as WeightNorm
 import onmt
 import torch.nn.functional as F
-from onmt.modules.swish import Swish
+# from onmt.modules.swish import Swish
 from onmt.modules.dropout import VariationalDropout
 
 
@@ -105,7 +105,7 @@ class FeedForwardSwish(nn.Module):
         self.d_ff = d_ff
         self.fc_1 = XavierLinear(d_model, d_ff)
         self.fc_2 = XavierLinear(d_ff, d_model)
-        self.swish = Swish()
+        self.swish = torch.nn.SilU()
 
         if variational:
             self.dropout = VariationalDropout(p)

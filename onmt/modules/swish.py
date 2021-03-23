@@ -1,21 +1,56 @@
 import torch
 import torch.nn as nn
 
+try:
+    import apex.amp as amp
+    from apex.amp import half_function
+except (ModuleNotFoundError, ImportError) as e:
+    amp = None
+    from .optimized.compat import half_function
+
+try:
+    from torch.cuda.amp import custom_fwd, custom_bwd
+except (ModuleNotFoundError, ImportError) as e:
+    from .optimized.compat import custom_fwd, custom_bwd
+
+try:
+    from swish_torch._C import swish_forward, swish_backward
+    fast_swish = True
+except (ModuleNotFoundError, ImportError) as e:
+    swish_forward, swish_backward = lambda *args: None, lambda *args: None
+    fast_swish = False
+
 
 class SwishFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, i):
-        result = i * torch.sigmoid(i)
-        ctx.save_for_backward(i)
-        return result
+    @custom_fwd
+    def forward(ctx, inp):
+        ctx.save_for_backward(inp)
+        return swish_forward(inp)
 
     @staticmethod
-    def backward(ctx, grad_output):
-        i = ctx.saved_variables[0]
-        sigmoid_i = torch.sigmoid(i)
-        return grad_output * (sigmoid_i * (1 + i * (1 - sigmoid_i)))
+    @custom_bwd
+    def backward(ctx, grad_out):
+        inp, = ctx.saved_tensors
+        if not ctx.needs_input_grad[0]: return (None,)
+        return swish_backward(inp, grad_out)
 
 
-class Swish(nn.Module):
-    def forward(self, input_tensor):
-        return SwishFunction.apply(input_tensor)
+@half_function
+def fast_silu(input):
+    return SwishFunction.apply(input)
+
+
+class SiLU(nn.Module):
+
+    def __init__(self, inplace=False):
+        
+        super(SiLU, self).__init__()
+        self.inplace = inplace
+
+    def forward(self, input):
+
+        if fast_swish and input.is_cuda:
+            return fast_silu(input)
+        else:
+            return torch.nn.functional.silu(input, inplace=self.inplace)

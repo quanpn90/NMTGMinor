@@ -458,9 +458,6 @@ def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch, pr
                     tgt_sent = tgt_sent.lower()
                 print('GOLD %d: %s ' % (count, tgt_sent))
                 print("GOLD SCORE: %.4f" % gold_score[b])
-                # print("Single GOLD Scores:",end=" ")
-                # for j in range(len(tgt_batch[b])):
-                #     print(all_gold_scores[j][b].item(),end =" ")
                 print()
             if opt.print_nbest:
                 print('\n BEST HYP:')

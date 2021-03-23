@@ -5,6 +5,7 @@ from torch import nn
 from torch.nn import Parameter
 import torch.nn.functional as F
 from onmt.modules.dropout import variational_dropout
+from onmt.modules.swish import SiLU
 import onmt
 
 
@@ -31,7 +32,8 @@ class PositionWiseFeedForward(nn.Module):
         elif self.activation == 'gelu':
             self.act = nn.GELU()
         elif self.activation in ['silu', 'swish']:
-            self.act = nn.SiLU(inplace=True)
+            # self.act = nn.SiLU(inplace=True)
+            self.act = SiLU()
 
         self.in_proj_weight = Parameter(torch.Tensor(inner_size * (2 if glu else 1), model_size))
         self.out_proj_weight = Parameter(torch.Tensor(model_size, inner_size))
