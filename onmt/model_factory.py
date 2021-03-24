@@ -296,7 +296,8 @@ def build_tm_model(opt, dicts):
         assert (opt.enc_pretrained_model or opt.dec_pretrained_model)
         from onmt.models.pretrain_transformer import PretrainTransformer
         print()
-        print("* Build encoder with enc_pretrained_model: {}".format(opt.enc_pretrained_model))
+        if opt.enc_pretrained_model:
+            print("* Build encoder with enc_pretrained_model: {}".format(opt.enc_pretrained_model))
         if opt.enc_pretrained_model == "bert":
             from pretrain_module.configuration_bert import BertConfig
             from pretrain_module.modeling_bert import BertModel
@@ -329,17 +330,17 @@ def build_tm_model(opt, dicts):
                                    gradient_checkpointing=opt.enc_gradient_checkpointing,
                                    )
         elif not opt.enc_pretrained_model:
+            print(" Encoder is not from pretrained model")
             encoder = TransformerEncoder(opt, embedding_src, positional_encoder,
                                          opt.encoder_type, language_embeddings=language_embeddings)
         else:
             print("Warning: only bert and roberta are implemented for encoder")
             exit(-1)
 
-        if opt.enc_not_load_state:
+        if opt.load_from or not opt.enc_state_dict:
             if opt.verbose:
                 print("  No weights loading from {} for encoder".format(opt.enc_pretrained_model))
-        else:
-            assert opt.enc_pretrained_model
+        elif opt.enc_pretrained_model:
             print("  Loading weights for encoder from: \n", opt.enc_state_dict)
 
             enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
@@ -349,59 +350,62 @@ def build_tm_model(opt, dicts):
                                     output_loading_info=opt.verbose,
                                     model_prefix=opt.enc_pretrained_model
                                     )
-        if not opt.dec_pretrained_model:
+
+        if opt.dec_pretrained_model:
+            print("* Build encoder with dec_pretrained_model: {}".format(opt.dec_pretrained_model))
+
+        if opt.dec_pretrained_model == "bert":
+            if opt.enc_pretrained_model != "bert":
+                from pretrain_module.configuration_bert import BertConfig
+                from pretrain_module.modeling_bert import BertModel
+            dec_bert_config = BertConfig.from_json_file(opt.dec_config_file)
+            decoder = BertModel(dec_bert_config,
+                                bert_word_dropout=opt.dec_pretrain_word_dropout,
+                                bert_emb_dropout=opt.dec_pretrain_emb_dropout,
+                                bert_atten_dropout=opt.dec_pretrain_attn_dropout,
+                                bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
+                                bert_hidden_size=opt.dec_pretrain_hidden_size,
+                                is_decoder=True,
+                                gradient_checkpointing=opt.dec_gradient_checkpointing,
+                                )
+
+        elif opt.dec_pretrained_model == "roberta":
+            if opt.enc_pretrained_model != "roberta":
+                from pretrain_module.configuration_roberta import RobertaConfig
+                from pretrain_module.modeling_roberta import RobertaModel
+
+            dec_roberta_config = RobertaConfig.from_json_file(opt.dec_config_file)
+
+            decoder = RobertaModel(dec_roberta_config,
+                                   bert_word_dropout=opt.dec_pretrain_word_dropout,
+                                   bert_emb_dropout=opt.dec_pretrain_emb_dropout,
+                                   bert_atten_dropout=opt.dec_pretrain_attn_dropout,
+                                   bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
+                                   bert_hidden_size=opt.dec_pretrain_hidden_size,
+                                   is_decoder=True,
+                                   gradient_checkpointing=opt.dec_gradient_checkpointing,
+                                   )
+
+        elif not opt.dec_pretrained_model:
             print(" Decoder is not from pretrained model")
             decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder,
                                          language_embeddings=language_embeddings)
         else:
-            print("* Build decoder with dec_pretrained_model is: {}".format(opt.dec_pretrained_model))
-            if opt.dec_pretrained_model == "bert":
-                if opt.enc_pretrained_model != "bert":
-                    from pretrain_module.configuration_bert import BertConfig
-                    from pretrain_module.modeling_bert import BertModel
-                dec_bert_config = BertConfig.from_json_file(opt.dec_config_file)
-                decoder = BertModel(dec_bert_config,
-                                    bert_word_dropout=opt.dec_pretrain_word_dropout,
-                                    bert_emb_dropout=opt.dec_pretrain_emb_dropout,
-                                    bert_atten_dropout=opt.dec_pretrain_attn_dropout,
-                                    bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
-                                    bert_hidden_size=opt.dec_pretrain_hidden_size,
-                                    is_decoder=True,
-                                    gradient_checkpointing=opt.dec_gradient_checkpointing,
+            print("Warning: only bert and roberta are implemented for decoder")
+            exit(-1)
+
+        if opt.load_from or not opt.dec_state_dict:
+            if opt.verbose:
+                print("  No weights loading from {} for decoder".format(opt.dec_pretrained_model))
+        elif opt.enc_pretrained_model:
+            print("  Loading weights for decoder from: \n", opt.dec_state_dict)
+            dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
+
+            decoder.from_pretrained(state_dict=dec_model_state_dict,
+                                    model=decoder,
+                                    output_loading_info=opt.verbose,
+                                    model_prefix=opt.dec_pretrained_model
                                     )
-
-            elif opt.dec_pretrained_model == "roberta":
-                if opt.enc_pretrained_model != "roberta":
-                    from pretrain_module.configuration_roberta import RobertaConfig
-                    from pretrain_module.modeling_roberta import RobertaModel
-
-                dec_roberta_config = RobertaConfig.from_json_file(opt.dec_config_file)
-
-                decoder = RobertaModel(dec_roberta_config,
-                                       bert_word_dropout=opt.dec_pretrain_word_dropout,
-                                       bert_emb_dropout=opt.dec_pretrain_emb_dropout,
-                                       bert_atten_dropout=opt.dec_pretrain_attn_dropout,
-                                       bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
-                                       bert_hidden_size=opt.dec_pretrain_hidden_size,
-                                       is_decoder=True,
-                                       gradient_checkpointing=opt.dec_gradient_checkpointing,
-                                       )
-            else:
-                print("Warning: only bert and roberta are implemented for decoder")
-                exit(-1)
-
-            if opt.dec_not_load_state:
-                if opt.verbose:
-                    print("  No weights loading from {} for decoder".format(opt.dec_pretrained_model))
-            else:
-                print("  Loading weights for decoder from: \n", opt.dec_state_dict)
-                dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
-
-                decoder.from_pretrained(state_dict=dec_model_state_dict,
-                                        model=decoder,
-                                        output_loading_info=opt.verbose,
-                                        model_prefix=opt.dec_pretrained_model
-                                        )
 
         encoder.enc_pretrained_model = opt.enc_pretrained_model
         decoder.dec_pretrained_model = opt.dec_pretrained_model

@@ -377,8 +377,8 @@ def make_parser(parser):
 
     parser.add_argument('-enc_state_dict', default="", type=str,
                         help=""" the state_dict of the  pretrained model for src language """)
-    parser.add_argument('-enc_not_load_state', action='store_true',
-                        help='only create a  Bert Object, not load the state from pytorch modle or fituned model for src')
+    # parser.add_argument('-enc_not_load_state', action='store_true',
+    #                     help='only create a Bert Object, not load the state from pytorch modle or fituned model for src')
 
     parser.add_argument('-enc_pretrain_word_dropout', type=float, default=0.0,
                         help="""word dropout appled on bert""")
@@ -405,8 +405,8 @@ def make_parser(parser):
                         help=""" the name of tgt pretrained model configuration.""")
     parser.add_argument('-dec_state_dict', default="", type=str,
                         help=""" the state_dict of the  pretrained model""")
-    parser.add_argument('-dec_not_load_state', action='store_true',
-                        help='only create a  Bert Object, not load the state from pytorch modle or fituned model for tgt')
+    # parser.add_argument('-dec_not_load_state', action='store_true',
+    #                     help='only create a Bert Object, not load the state from pytorch modle or fituned model for tgt')
 
     parser.add_argument('-dec_pretrain_word_dropout', type=float, default=0.0,
                         help="""word dropout appled on bert""")
