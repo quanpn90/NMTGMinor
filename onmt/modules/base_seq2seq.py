@@ -87,7 +87,7 @@ class NMTModel(nn.Module):
                 return False
             if 'time_transformer' in param_name:
                 if self.encoder is not None:
-                    if self.encoder.enc_pretrained_model or self.encoder.time == 'positional_encoding':
+                    if getattr(self.encoder, "enc_pretrained_model", None) or self.encoder.time == 'positional_encoding':
                         return False
             if param_name == 'decoder.mask':
                 return False
