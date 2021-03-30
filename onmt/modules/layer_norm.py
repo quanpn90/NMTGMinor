@@ -197,16 +197,15 @@ class LayerNorm(torch.nn.Module):
 
     def forward(self, input):
 
-        # eps = tiny_value_of_dtype(input.dtype)
         eps = self.eps
 
         if not input.is_cuda or not self.fused:
             return F.layer_norm(
                 input, self.normalized_shape, self.weight, self.bias, eps)
         if self.elementwise_affine:
-            if self.elementwise_affine:
-                if fast_fused and input.is_cuda:
-                    return fast_layer_norm_affine(input, self.weight, self.bias, self.normalized_shape, eps)
+
+            # if fast_fused and input.is_cuda:
+            #     return fast_layer_norm_affine(input, self.weight, self.bias, self.normalized_shape, eps)
 
             return FusedLayerNormAffineFunction.apply(
                 input, self.weight, self.bias, self.normalized_shape, eps)

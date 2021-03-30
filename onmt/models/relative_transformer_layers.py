@@ -38,6 +38,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
         else:
             self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
+        print (opt.fast_feed_forward)
         if not opt.fast_feed_forward:
             feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
             self.feedforward = Bottle(feedforward)
@@ -103,6 +104,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.variational = opt.variational_dropout
         self.death_rate = death_rate
         self.fast_self_attention = opt.fast_self_attention
+        self.fast_xattention = opt.fast_xattention
         # self.lfv_multilingual = opt.lfv_multilingual
 
         self.preprocess_attn = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
@@ -131,12 +133,14 @@ class RelativeTransformerDecoderLayer(nn.Module):
         else:
             self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
-        if not opt.fast_feed_forward:
-            feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
-            self.feedforward = Bottle(feedforward)
-        else:
-            self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
-                                                       variational=self.variational)
+        # if not opt.fast_feed_forward:
+        #     feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
+        #     self.feedforward = Bottle(feedforward)
+        # else:
+        #     self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
+        #                                                variational=self.variational)
+        feedforward = FeedForward(opt.model_size, opt.inner_size, opt.dropout, variational=self.variational)
+        self.feedforward = Bottle(feedforward)
 
         # if opt.lfv_multilingual:
         #     self.lid_net = lid_net
@@ -170,6 +174,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
             query = self.preprocess_attn(input)
 
             if self.fast_self_attention:
+
                 out, _ = self.multihead_tgt(query, pos_emb, None, mask_tgt, mems=mems,
                                             incremental=incremental, incremental_cache=incremental_cache)
             else:

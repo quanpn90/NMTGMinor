@@ -7,14 +7,17 @@ from multiprocessing import Pool
 
 from translate import main as translate_main
 
+
 def hasopt(opt):
     return ('-' + opt) in sys.argv
+
 
 def popopt(opt):
     # TODO handle different option formats, e.g. --opt or -opt=val
     idx = sys.argv.index('-' + opt)
     sys.argv.pop(idx)
     return sys.argv.pop(idx)
+
 
 def distribute_to_tempfiles(srcfile, n):
     tmpfiles = [tempfile.NamedTemporaryFile('w', encoding='utf8') for _ in range(n)]
@@ -30,6 +33,7 @@ def distribute_to_tempfiles(srcfile, n):
             tf.flush()
 
     return tmpfiles
+
 
 def run_part(args):
     infile, goldfile, outfile, gpu = args

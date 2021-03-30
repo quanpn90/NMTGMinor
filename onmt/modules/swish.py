@@ -50,7 +50,8 @@ class SiLU(nn.Module):
 
     def forward(self, input):
 
-        if fast_swish and input.is_cuda:
+        # maybe only use during training to avoid kernel problem?
+        if fast_swish and input.is_cuda and self.training:
             return fast_silu(input)
         else:
             return torch.nn.functional.silu(input, inplace=self.inplace)

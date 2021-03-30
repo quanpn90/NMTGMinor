@@ -141,6 +141,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                                         input_weights.transpose(0, 1),
                                         beta=1., alpha=1.)
 
+        # reshape [len_q*bsz, embed_dim*3 -> len_q x bsz x embed_dim*3]
         input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), input_weights.size(0))
 
         pos_lin_results = torch.addmm(pos_biases,
@@ -165,8 +166,9 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             # We have to change the heads x head_dim first and then concat to the T dim
             # bsz is changed during translation due to beam search
             # during translation we want to keep the actual T dim in MM as 1 constantly
-            keys = keys.contiguous().view(len_q, bsz, heads * head_dim)
-            values = values.contiguous().view(len_q, bsz, heads * head_dim)
+            keys = keys.reshape(len_q, bsz, heads * head_dim)
+            values = values.reshape(len_q, bsz, heads * head_dim)
+
             if 'k' in incremental_cache and 'v' in incremental_cache:
                 keys = torch.cat([incremental_cache['k'], keys], dim=0)  # time first
                 incremental_cache['k'] = keys
@@ -175,8 +177,11 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             else:
                 incremental_cache['k'] = keys
                 incremental_cache['v'] = values
+
             keys = keys.view(-1, bsz * heads, head_dim)
             values = values.view(-1, bsz * heads, head_dim)
+            # re-update len_k to be the newly
+            len_k = keys.size(0)
         # Relative Attention from here:
         # r_w_bias size: head * head_dim
         rw_head_q = queries.view(len_q, bsz, heads, head_dim) + r_w_bias  #

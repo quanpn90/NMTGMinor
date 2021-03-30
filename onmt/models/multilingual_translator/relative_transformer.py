@@ -333,14 +333,12 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
 
-        # if buffering:
-        #     # use the last value of input to continue decoding
-        #     if input.size(1) > 1:
-        #         input_ = input[:, -1].unsqueeze(1).transpose(0, 1)
-        #     else:
-        #         input_ = input.transpose(0, 1)
-        # else:
-        input_ = input.transpose(0, 1)  # from B x T to T x B
+        if buffering:
+            # use the last value of input to continue decoding
+            input_ = input[:, -1].unsqueeze(1).transpose(0, 1)
+            # input_ = input.transpose(0, 1)
+        else:
+            input_ = input.transpose(0, 1)  # from B x T to T x B
 
         """ Embedding: batch_size x 1 x d_model """
         emb = self.word_lut(input_)
@@ -377,7 +375,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
         dec_attn_mask = torch.triu(
             emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]
 
-        # dec_attn_mask = dec_attn_mask[-1].unsqueeze(0)
         dec_attn_mask = dec_attn_mask.bool()
 
         if context is not None:

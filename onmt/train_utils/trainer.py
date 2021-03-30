@@ -768,15 +768,16 @@ class XETrainer(BaseTrainer):
                             amp.load_state_dict(checkpoint['amp'])
 
                 # Only load the progress when we use the same optimizer
-                if 'itr' in checkpoint:
-                    itr_progress = checkpoint['itr']
-                else:
-                    itr_progress = None
+                # if 'itr' in checkpoint:
+                #     itr_progress = checkpoint['itr']
+                # else:
+                itr_progress = None
 
-                resume = True
+                resume = False
                 start_epoch = checkpoint['epoch'] if 'epoch' in checkpoint else 1
                 if start_epoch is None:
                     start_epoch = 1
+                start_epoch = math.floor(start_epoch)
             else:
                 itr_progress = None
                 resume = False
