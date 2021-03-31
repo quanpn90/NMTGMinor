@@ -228,6 +228,12 @@ def make_parser(parser):
                         help='Adding pos encodings to embedding (like Transformer)')
     parser.add_argument('-batch_ensemble', type=int, default=0,
                         help='To use batch ensemble algorithm')
+    # early stopping
+    parser.add_argument('--early_stopping', '-early_stopping', type=int, default=0,
+                        help='Number of validation steps without improving.')
+    parser.add_argument('--early_stopping_criteria', '-early_stopping_criteria',
+                        nargs="*", default="ppl",
+                        help='Criteria to use for early stopping.')
 
     # GPU
     parser.add_argument('-gpus', default=[], nargs='+', type=int,
@@ -371,15 +377,10 @@ def make_parser(parser):
                         help=""" the name of trained model""")
     parser.add_argument('-enc_pretrain_hidden_size', type=int, default=768,
                         help='Size of bert hidden')
-
     parser.add_argument('-enc_config_file', default="path/bert_config.json", type=str,
                         help=""" the name of src pretrained model configuration.""")
-
     parser.add_argument('-enc_state_dict', default="", type=str,
                         help=""" the state_dict of the  pretrained model for src language """)
-    # parser.add_argument('-enc_not_load_state', action='store_true',
-    #                     help='only create a Bert Object, not load the state from pytorch modle or fituned model for src')
-
     parser.add_argument('-enc_pretrain_word_dropout', type=float, default=0.0,
                         help="""word dropout appled on bert""")
     parser.add_argument('-enc_pretrain_emb_dropout', type=float, default=0.1,
@@ -388,10 +389,8 @@ def make_parser(parser):
                         help="""dropout on bert attention, corresponds to attention_probs_dropout_prob""")
     parser.add_argument('-enc_pretrain_hidden_dropout', type=float, default=0.1,
                         help="""dropout applied on bert hidden, corresponds to hidden_dropout_prob""")
-
     parser.add_argument('-enc_gradient_checkpointing', action='store_true',
                         help='use gradient checkpointing on encdoer')
-
     parser.add_argument('-before_enc_output_ln', action='store_true',
                         help='LayersNnormalization before output for plm as encoder')
 
@@ -405,9 +404,6 @@ def make_parser(parser):
                         help=""" the name of tgt pretrained model configuration.""")
     parser.add_argument('-dec_state_dict', default="", type=str,
                         help=""" the state_dict of the  pretrained model""")
-    # parser.add_argument('-dec_not_load_state', action='store_true',
-    #                     help='only create a Bert Object, not load the state from pytorch modle or fituned model for tgt')
-
     parser.add_argument('-dec_pretrain_word_dropout', type=float, default=0.0,
                         help="""word dropout appled on bert""")
     parser.add_argument('-dec_pretrain_emb_dropout', type=float, default=0.1,
@@ -416,7 +412,6 @@ def make_parser(parser):
                         help="""dropout on bert attention, corresponds to attention_probs_dropout_prob""")
     parser.add_argument('-dec_pretrain_hidden_dropout', type=float, default=0.1,
                         help="""dropout applied on bert hidden, corresponds to hidden_dropout_prob""")
-
     parser.add_argument('-dec_gradient_checkpointing', action='store_true',
                         help='use gradient checkpointing on decoder')
 

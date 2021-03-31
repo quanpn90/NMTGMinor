@@ -49,7 +49,7 @@ def generate_data_iterator(dataset, seed, num_workers=1, epoch=1., buffer_size=0
 
 class BaseTrainer(object):
 
-    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt):
+    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt, earlystopper):
 
         self.model = model
         self.train_data = train_data
@@ -61,6 +61,8 @@ class BaseTrainer(object):
 
         self.loss_function = loss_function
         self.start_time = 0
+
+        self.earlystopper = earlystopper
 
     def run(self, *args, **kwargs):
 
@@ -309,8 +311,8 @@ class BaseTrainer(object):
 
 class XETrainer(BaseTrainer):
 
-    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt, setup_optimizer=True):
-        super().__init__(model, loss_function, train_data, valid_data, dicts, opt)
+    def __init__(self, model, loss_function, train_data, valid_data, dicts, opt, setup_optimizer=True, earlystopper=None):
+        super().__init__(model, loss_function, train_data, valid_data, dicts, opt, earlystopper)
 
         if opt.lfv_multilingual:
             from onmt.models.speech_recognizer.lid_loss import CrossEntropyLIDLoss
@@ -687,6 +689,12 @@ class XETrainer(BaseTrainer):
                         ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
 
                         self.save(ep, valid_ppl, itr=data_iterator)
+                        # Run patience mechanism
+                        if self.earlystopper is not None:
+                            self.earlystopper(valid_ppl, epoch)
+                            # If the patience has reached the limit, stop training
+                            if self.earlystopper.has_stopped():
+                                break
 
                 num_words = tgt_size
                 report_loss += loss_data
@@ -832,5 +840,12 @@ class XETrainer(BaseTrainer):
             self.save(epoch, valid_ppl)
             itr_progress = None
             resume = False
+
+            # Run patience mechanism
+            if self.earlystopper is not None:
+                self.earlystopper(valid_ppl, epoch)
+                # If the patience has reached the limit, stop training
+                if self.earlystopper.has_stopped():
+                    break
 
 

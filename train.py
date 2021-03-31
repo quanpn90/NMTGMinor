@@ -459,17 +459,24 @@ def main():
 
         loss_function = FusionLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
 
+    print(model)
     n_params = sum([p.nelement() for p in model.parameters()])
     print('* number of parameters: %d' % n_params)
+
+    if opt.early_stopping > 0:
+        from onmt.train_utils.earlystopping import EarlyStopping, scorers_from_opts
+        earlystopper = EarlyStopping(opt.early_stopping, scorers=scorers_from_opts(opt))
+    else:
+        earlystopper = None
 
     if not opt.debugging and len(opt.gpus) == 1:
         if opt.bayes_by_backprop:
 
             from onmt.train_utils.bayes_by_backprop_trainer import BayesianTrainer
-            trainer = BayesianTrainer(model, loss_function, train_data, valid_data, dicts, opt)
+            trainer = BayesianTrainer(model, loss_function, train_data, valid_data, dicts, opt, earlystopper=earlystopper)
 
         else:
-            trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
+            trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt, earlystopper=earlystopper)
     else:
         print("MultiGPU is not supported by this train.py. Use train_distributed.py with the same arguments "
               "for MultiGPU training")
