@@ -3,9 +3,9 @@ from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 
 setup(
-    name="mlp_onmt",
+    name="cuda_fused_mlp",
     ext_modules=[
-        CUDAExtension(name='mlp_onmt',
+        CUDAExtension(name='fused_mlp',
                       sources=['mlp.cpp',
                                'mlp_cuda.cu'],
                       extra_compile_args={'cxx': ['-O3'],
