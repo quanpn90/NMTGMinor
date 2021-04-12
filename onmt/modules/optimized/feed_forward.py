@@ -4,16 +4,13 @@ import torch
 from torch import nn
 from torch.nn import Parameter
 import torch.nn.functional as F
-from onmt.modules.dropout import variational_dropout
+from onmt.modules.dropout import variational_dropout, ReLUDropout
 from onmt.modules.swish import SiLU
 import onmt
 
 
 class PositionWiseFeedForward(nn.Module):
-    """Multi-headed attention.
-
-    See "Attention Is All You Need" for more details.
-    """
+    """Two-layer Feed-forward neural network"""
 
     def __init__(self, model_size, inner_size, dropout=0., variational=False,
                  activation='relu', glu=False, weight_drop=0.0):
@@ -28,12 +25,20 @@ class PositionWiseFeedForward(nn.Module):
         self.weight_drop = weight_drop
 
         if self.activation == 'relu':
-            self.act = nn.ReLU(inplace=True)
+            if self.glu:
+                self.act = nn.ReLU(inplace=True)
+            else:
+                self.act = ReLUDropout(p=self.dropout, variational=self.variational, batch_first=False)
         elif self.activation == 'gelu':
             self.act = nn.GELU()
         elif self.activation in ['silu', 'swish']:
-            # self.act = nn.SiLU(inplace=True)
             self.act = SiLU()
+        elif self.activation in ['sigmoid']:
+            if self.glu:
+                self.act = nn.functional.glu
+            else:
+                print("Sigmoid activation function is recommended to be used with -glu")
+                raise NotImplementedError
 
         self.in_proj_weight = Parameter(torch.Tensor(inner_size * (2 if glu else 1), model_size))
         self.out_proj_weight = Parameter(torch.Tensor(model_size, inner_size))
@@ -69,16 +74,19 @@ class PositionWiseFeedForward(nn.Module):
 
         hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)
 
-        if self.glu:
+        if self.glu and self.activation != 'sigmoid':
             hidden, gate = hidden.chunk(2, dim=-1)
             hidden = self.act(hidden) * gate
         else:
             hidden = self.act(hidden)
 
-        if self.variational:
-            hidden = variational_dropout(hidden, p=self.dropout, training=self.training)
-        else:
-            hidden = F.dropout(hidden, p=self.dropout, training=self.training)
+        if not (not self.glu and self.activation == 'relu'):    
+            if self.variational:
+                hidden = variational_dropout(hidden, p=self.dropout, training=self.training,
+                                             inplace=self.activation in ['silu', 'relu', 'swish'])
+            else:
+                hidden = F.dropout(hidden, p=self.dropout, training=self.training,
+                                   inplace=self.activation in ['silu', 'relu', 'swish'])
         hidden = F.linear(hidden, self.out_proj_weight, self.out_proj_bias)
 
         # if self.optimized == 2 or not input.is_cuda:

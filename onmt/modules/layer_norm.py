@@ -30,11 +30,11 @@ try:
     import fast_layer_norm
 
     fast_fused = True
-    print("[INFO] Fast layer norm implementation detected.")
+    # print("[INFO] Fast layer norm implementation detected.")
 except (ModuleNotFoundError, ImportError) as e:
     fast_layer_norm = None
     fast_fused = False
-    print("[INFO] Fast layer norm implementation not found.")
+    # print("[INFO] Fast layer norm implementation not found.")
 
 
 class FastLayerNormFN(torch.autograd.Function):
@@ -204,7 +204,7 @@ class LayerNorm(torch.nn.Module):
                 input, self.normalized_shape, self.weight, self.bias, eps)
         if self.elementwise_affine:
 
-            # if fast_fused and input.is_cuda:
+            # if fast_fused:
             #     return fast_layer_norm_affine(input, self.weight, self.bias, self.normalized_shape, eps)
 
             return FusedLayerNormAffineFunction.apply(

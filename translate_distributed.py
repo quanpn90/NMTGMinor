@@ -1,11 +1,30 @@
 #!/usr/bin/env python
 import sys
+import os
 import tempfile
 from itertools import islice
 from time import time
 from multiprocessing import Pool
 
 from translate import main as translate_main
+from onmt.utils import safe_readline
+
+
+def find_offsets(filename, num_chunks):
+    """
+    :param filename: string
+    :param num_chunks: int
+    :return: a list of offsets (positions to start and stop reading)
+    """
+    with open(filename, 'r', encoding='utf-8') as f:
+        size = os.fstat(f.fileno()).st_size
+        chunk_size = size // num_chunks
+        offsets = [0 for _ in range(num_chunks + 1)]
+        for i in range(1, num_chunks):
+            f.seek(chunk_size * i)
+            safe_readline(f)
+            offsets[i] = f.tell()
+        return offsets
 
 
 def hasopt(opt):
@@ -22,15 +41,44 @@ def popopt(opt):
 def distribute_to_tempfiles(srcfile, n):
     tmpfiles = [tempfile.NamedTemporaryFile('w', encoding='utf8') for _ in range(n)]
 
-    with open(srcfile, 'r', encoding='utf8') as f:
-        nlines = len(list(f))
-        f.seek(0)
-        # round up
-        linesperpart = int((nlines + n - 1) / n)
-        for tf in tmpfiles:
-            for line in islice(f, linesperpart):
+    offsets = find_offsets(srcfile, n)
+    lines_per_tf = list()
+
+    all_lines = len(open(srcfile).readlines())
+
+    for i, tf in enumerate(tmpfiles):
+
+        n_lines = 0
+        start, end = offsets[i], offsets[i+1]
+
+        with open(srcfile, 'r', encoding='utf8') as f:
+            f.seek(start)
+            line = safe_readline(f)
+
+            while line:
+                if 0 < end < f.tell():
+                    break
+
                 tf.write(line)
-            tf.flush()
+                n_lines += 1
+
+                line = f.readline()
+
+        tf.flush()
+
+        lines_per_tf.append(n_lines)
+
+    print("Lines per tmp files to be translated: ", lines_per_tf)
+    assert(sum(lines_per_tf) == all_lines)
+
+    #     nlines = len(list(f))
+    #     f.seek(0)
+    #     # round up
+    #     linesperpart = int((nlines + n - 1) / n)
+    #     for tf in tmpfiles:
+    #         for line in islice(f, linesperpart):
+    #             tf.write(line)
+    #         tf.flush()
 
     return tmpfiles
 

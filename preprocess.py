@@ -624,7 +624,7 @@ def main():
                      'train': train,
                      'valid': valid}
         torch.save(save_data, opt.save_data + '.train.pt')
-        print("Done")
+        print("Done")\
 
     elif opt.format in ['scp', 'scpmem']:
         print('Saving target data to memory indexed data files. Source data is stored only as scp path.')

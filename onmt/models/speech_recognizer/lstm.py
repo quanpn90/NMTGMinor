@@ -90,7 +90,7 @@ class SpeechLSTMEncoder(nn.Module):
         :return:
         """
         if mask is not None:
-            lengths = mask.sum(-1).float()
+            lengths = mask.sum(-1).float().cpu()
             seq = pack_padded_sequence(seq, lengths, batch_first=True, enforce_sorted=False)
             if self.multilingual_factorized_weights:
                 seq, hid = self.rnn(seq, hid, indices=src_lang)

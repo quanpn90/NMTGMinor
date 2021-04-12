@@ -6,10 +6,11 @@ import onmt
 
 
 class VariationalDropout(torch.nn.Module):
-    def __init__(self, p=0.5, batch_first=False):
+    def __init__(self, p=0.5, batch_first=False, inplace=False):
         super().__init__()
         self.p = p
         self.batch_first = batch_first
+        self.inplace = inplace
 
     def forward(self, x):
         if not self.training or not self.p:
@@ -20,14 +21,16 @@ class VariationalDropout(torch.nn.Module):
         else:
             m = x.new(1, x.size(1), x.size(2)).bernoulli_(1 - self.p)
 
-        mask = m / (1 - self.p)
-        # mask = mask.expand_as(x)
+        m.div_(1 - self.p)
 
-        return mask * x
+        if self.inplace:
+            x.mul_(m)
+            return x
+        else:
+            return x * m
 
 
 def variational_dropout(x, p=0.5, training=True, inplace=False, batch_first=False):
-
     if not training or p <= 0:
         return x
 
@@ -45,10 +48,10 @@ def variational_dropout(x, p=0.5, training=True, inplace=False, batch_first=Fals
         return x * m
 
 
-
 def embedded_dropout(embed, words, dropout=0.1, scale=None):
     if dropout:
-        mask = embed.weight.data.new().resize_((embed.weight.size(0), 1)).bernoulli_(1 - dropout).expand_as(embed.weight) / (1 - dropout)
+        mask = embed.weight.data.new().resize_((embed.weight.size(0), 1)).bernoulli_(1 - dropout).expand_as(
+            embed.weight) / (1 - dropout)
         masked_embed_weight = mask * embed.weight
     else:
         masked_embed_weight = embed.weight
@@ -59,12 +62,12 @@ def embedded_dropout(embed, words, dropout=0.1, scale=None):
     if padding_idx is None:
         padding_idx = -1
     # X = embed._backend.Embedding.apply(words, masked_embed_weight,
-        # padding_idx, embed.max_norm, embed.norm_type,
-        # embed.scale_grad_by_freq, embed.sparse
+    # padding_idx, embed.max_norm, embed.norm_type,
+    # embed.scale_grad_by_freq, embed.sparse
     # )
     x = F.embedding(
-            words, masked_embed_weight, padding_idx, embed.max_norm,
-            embed.norm_type, embed.scale_grad_by_freq, embed.sparse)
+        words, masked_embed_weight, padding_idx, embed.max_norm,
+        embed.norm_type, embed.scale_grad_by_freq, embed.sparse)
 
     return x
 
@@ -93,7 +96,7 @@ def switchout(words, vocab_size, tau=1.0, transpose=False, offset=0):
     batch_size, n_steps = words.size()
 
     # first, sample the number of words to corrupt for each sent in batch
-    logits = torch.arange(n_steps).type_as(words).float() # size l
+    logits = torch.arange(n_steps).type_as(words).float()  # size l
 
     logits = logits.mul_(-1).unsqueeze(0).expand_as(words).contiguous().masked_fill_(mask, -float("inf"))
 
@@ -129,3 +132,36 @@ def switchout(words, vocab_size, tau=1.0, transpose=False, offset=0):
         sampled_words = sampled_words.t()
 
     return sampled_words
+
+
+class ReLUDropout(torch.nn.Dropout):
+
+    def __init__(self, p=0.5, variational=False, batch_first=False, inplace=False):
+
+        super().__init__(p, inplace=True)
+        self.variational = variational
+        self.batch_first = batch_first
+
+    def forward(self, input):
+        return relu_dropout(input, p=self.p, training=self.training,
+                            variational=self.variational, batch_first=self.batch_first)
+
+
+def relu_dropout(x, p=0, training=False, variational=False, batch_first=False):
+    if not training or p == 0:
+        return x.clamp_(min=0)
+
+    p1m = 1 - p
+    if variational:
+        if batch_first:
+            mask = torch.rand_like(x[:, 0, :]) > p1m
+            mask = mask.unsqueeze(1).repeat(1, x.size(1), 1)
+        else:
+            mask = torch.rand_like(x[0]) > p1m
+            mask = mask.unsqueeze(0).repeat(x.size(0), 1, 1 )
+    else:
+        mask = torch.rand_like(x) > p1m
+
+    mask |= (x < 0)
+
+    return x.masked_fill_(mask, 0).div_(p1m)

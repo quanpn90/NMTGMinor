@@ -66,9 +66,12 @@ class MultiHeadAttention(nn.Module):
         # batch_size*h x len_query x d_head
         # project inputs to multi-heads
         if self.share == 1:
-            shared_qkv = group_linear(
-                [self.fc_query.function.linear, self.fc_key.function.linear, self.fc_value.function.linear], query)
-            proj_query, proj_key, proj_value = shared_qkv.chunk(3, dim=-1)
+            # shared_qkv = group_linear(
+            #     [self.fc_query.function.linear, self.fc_key.function.linear, self.fc_value.function.linear], query)
+            # proj_query, proj_key, proj_value = shared_qkv.chunk(3, dim=-1)
+            proj_query = self.fc_query(query)
+            proj_key = self.fc_key(key)
+            proj_value = self.fc_value(value)
 
             # In incremental case: we concatenate the previously computed (mapped) states to the proj_key and proj_v
             if incremental:
@@ -91,8 +94,10 @@ class MultiHeadAttention(nn.Module):
                 proj_key = incremental_cache['c_k']
                 proj_value = incremental_cache['c_v']
             else:
-                shared_kv = group_linear([self.fc_key.function.linear, self.fc_value.function.linear], key)
-                proj_key, proj_value = shared_kv.chunk(2, dim=-1)
+                # shared_kv = group_linear([self.fc_key.function.linear, self.fc_value.function.linear], key)
+                # proj_key, proj_value = shared_kv.chunk(2, dim=-1)
+                proj_key = self.fc_key(key)
+                proj_value = self.fc_value(value)
                 if incremental:
                     incremental_cache['c_k'] = proj_key
                     incremental_cache['c_v'] = proj_value

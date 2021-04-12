@@ -33,7 +33,6 @@ def varname(p):
 
 
 def generate_data_iterator(dataset, seed, num_workers=1, epoch=1., buffer_size=0):
-
     # check if dataset is a list:
     if isinstance(dataset, list):
         # this is a multidataset
@@ -84,6 +83,14 @@ class BaseTrainer(object):
         self.model.encoder.language_embedding = None
         encoder_state_dict = pretrained_model.encoder.state_dict()
 
+        current_state_dict = self.model.state_dict()
+        #
+        # for key in current_state_dict:
+        #     if key in encoder_state_dict:
+        #         if current_state_dict[key].ndim == encoder_state_dict[key].ndim and current_state_dict[key].ndim == 2:
+        #             if current_state_dict[key].size(0) == encoder_state_dict[key].size(1) and \
+        #                     current_state_dict[key].size(0) != current_state_dict[key].size(1):
+        #                 encoder_state_dict[key] = encoder_state_dict[key].transpose(0, 1)
         try:
             self.model.encoder.load_state_dict(encoder_state_dict)
         except RuntimeError as e:
@@ -834,5 +841,3 @@ class XETrainer(BaseTrainer):
             self.save(epoch, valid_ppl)
             itr_progress = None
             resume = False
-
-

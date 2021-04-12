@@ -43,6 +43,9 @@ class PrePostProcessing(nn.Module):
                 self.dropout = VariationalDropout(self.dropout_p, batch_first=False)
             else:
                 self.dropout = nn.Dropout(self.dropout_p)
+        if 'z' in self.steps:
+            # Rezero residual method
+            self.g = nn.Parameter(torch.tensor(0.0))
 
     def forward(self, tensor, input_tensor=None, mask=None, factor=None):
         """
@@ -58,12 +61,10 @@ class PrePostProcessing(nn.Module):
             if step == 'n':
                 # this cast is needed for O1 and FusedLayerNorm
                 if self.multilingual:
-
-                    # maybe we don't need to do "type_as" anymore after using amp.half_function at layer norm
                     output = self.layer_norm(output, factor)
                     output = output
                 else:
-                    output = self.layer_norm(output.type_as(self.layer_norm.function.weight))
+                    output = self.layer_norm(output)
             if step == 'd':
                 output = self.dropout(output)
             if step == 'a':
@@ -72,4 +73,8 @@ class PrePostProcessing(nn.Module):
                         output = output + input_tensor
                     else:
                         output = F.relu(self.k) * output + input_tensor
+            if step == 'z':  # rezero-residual but scaling the output with initially small g
+                output = output * self.g
+                if input_tensor is not None:
+                    output = output + input_tensor
         return output

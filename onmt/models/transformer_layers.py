@@ -1,7 +1,6 @@
 import math
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 import torch.nn.init as init
 import torch.nn.utils.weight_norm as WeightNorm
 import onmt
@@ -13,65 +12,64 @@ from onmt.modules.linear import XavierLinear
 from onmt.modules.linear import group_linear, FeedForwardSwish
 from onmt.modules.linear import FeedForward
 from onmt.modules.attention import MultiHeadAttention
-from onmt.modules.dropout import VariationalDropout
 from onmt.modules.optimized.encdec_attention import EncdecMultiheadAttn
 from onmt.modules.optimized.self_attention import SelfMultiheadAttn
 from onmt.modules.optimized.feed_forward import PositionWiseFeedForward
 from collections import defaultdict
-from onmt.modules.layer_norm import LayerNorm
+from onmt.modules.pre_post_processing import PrePostProcessing
 
 
-class PrePostProcessing(nn.Module):
-    """Applies processing to tensors
-    Args:
-        d_model: dimension of model
-        p:       dropout probabolity  
-        sequence of processing steps: 
-            n = normalization
-            d = dropout
-            a = adding previous input to output (residual)
-    """
-
-    def __init__(self, d_model, dropout_p, sequence='nda', variational=False, elementwise_affine=True):
-        super(PrePostProcessing, self).__init__()
-        self.d_model = d_model
-        self.dropout_p = dropout_p
-
-        self.steps = list(sequence)
-
-        if onmt.constants.residual_type == 'gated':
-            # gated residual
-            # initialize k with one 
-            self.k = nn.Parameter(torch.ones(1))
-
-        if 'n' in self.steps:
-            ln = nn.LayerNorm((self.d_model,), elementwise_affine=elementwise_affine)
-            self.layer_norm = Bottle(ln)
-        if 'd' in self.steps:
-            if variational:
-                self.dropout = VariationalDropout(self.dropout_p, batch_first=False)
-            else:
-                self.dropout = nn.Dropout(self.dropout_p)
-        if 'z' in self.steps:
-            # Rezero residual method
-            self.g = nn.Parameter(torch.tensor(0.0))
-
-    def forward(self, tensor, input_tensor=None, mask=None):
-
-        output = tensor
-        for step in self.steps:
-            if step == 'n':
-                output = self.layer_norm(output, mask=mask)
-            if step == 'd':
-                output = self.dropout(output)
-            if step == 'a':
-                if input_tensor is not None:
-                    output = output + input_tensor
-            if step == 'z':  # rezero-residual but scaling the output with initially small g
-                output = output * self.g
-                if input_tensor is not None:
-                    output = output + input_tensor
-        return output
+# class PrePostProcessing(nn.Module):
+#     """Applies processing to tensors
+#     Args:
+#         d_model: dimension of model
+#         p:       dropout probabolity
+#         sequence of processing steps:
+#             n = normalization
+#             d = dropout
+#             a = adding previous input to output (residual)
+#     """
+#
+#     def __init__(self, d_model, dropout_p, sequence='nda', variational=False, elementwise_affine=True):
+#         super(PrePostProcessing, self).__init__()
+#         self.d_model = d_model
+#         self.dropout_p = dropout_p
+#
+#         self.steps = list(sequence)
+#
+#         if onmt.constants.residual_type == 'gated':
+#             # gated residual
+#             # initialize k with one
+#             self.k = nn.Parameter(torch.ones(1))
+#
+#         if 'n' in self.steps:
+#             ln = nn.LayerNorm((self.d_model,), elementwise_affine=elementwise_affine)
+#             self.layer_norm = Bottle(ln)
+#         if 'd' in self.steps:
+#             if variational:
+#                 self.dropout = VariationalDropout(self.dropout_p, batch_first=False)
+#             else:
+#                 self.dropout = nn.Dropout(self.dropout_p)
+#         if 'z' in self.steps:
+#             # Rezero residual method
+#             self.g = nn.Parameter(torch.tensor(0.0))
+#
+#     def forward(self, tensor, input_tensor=None, mask=None):
+#
+#         output = tensor
+#         for step in self.steps:
+#             if step == 'n':
+#                 output = self.layer_norm(output, mask=mask)
+#             if step == 'd':
+#                 output = self.dropout(output)
+#             if step == 'a':
+#                 if input_tensor is not None:
+#                     output = output + input_tensor
+#             if step == 'z':  # rezero-residual but scaling the output with initially small g
+#                 output = output * self.g
+#                 if input_tensor is not None:
+#                     output = output + input_tensor
+#         return output
 
 
 def preprocessing(rezero, *args, **kwargs):
@@ -422,7 +420,6 @@ class PositionalEncoding(nn.Module):
             time_ = self.pos_emb[:len_seq, :].type_as(word_emb)
             out = word_emb + time_
         else:
-            # out = word_emb + Variable(self.pos_emb[:len_seq, :][-1, :], requires_grad=False)
             time_emb = self.pos_emb[len_seq - 1, :]  # 1 x dim
             # out should have size bs x 1 x dim
             out = word_emb + time_emb.unsqueeze(0).repeat(word_emb.size(0), 1, 1).type_as(word_emb)

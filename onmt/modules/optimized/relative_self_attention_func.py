@@ -180,14 +180,14 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
             keys = keys.view(-1, bsz * heads, head_dim)
             values = values.view(-1, bsz * heads, head_dim)
-            # re-update len_k to be the newly
+            # re-update len_k to be the newly updated length of the keys
             len_k = keys.size(0)
         # Relative Attention from here:
         # r_w_bias size: head * head_dim
         rw_head_q = queries.view(len_q, bsz, heads, head_dim) + r_w_bias  #
         rw_head_q = rw_head_q.view(len_q, bsz * heads, head_dim)
 
-        # matmul1 batched GEMMs
+        # matmulac batched GEMMs
         # queries+bias: [len_q, bsz*heads, head_dim] transpose(0, 1)
         # keys: [len_k, bsz*heads, head_dim] transpose(0, 1)
         if queries.is_cuda:
@@ -319,12 +319,10 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         coverage = softmax_results
 
         return outputs.detach(), coverage
-        # return outputs.detach()
 
     @staticmethod
     @custom_bwd
     def backward(ctx, output_grads, softmax_grads):
-        # def backward(ctx, output_grads):
         """
         :param ctx:
         :param output_grads: gradients w.r.t the outputs
