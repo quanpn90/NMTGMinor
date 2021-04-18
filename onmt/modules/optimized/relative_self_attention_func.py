@@ -112,7 +112,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         len_r = pos.size(0)  # r can be longer than query, i.e for bidirectional attention we need 2k+1 positions
         len_k = len_q  # because of self-attention
 
-        if pos.size(1) == 1:
+        if pos.size(1) == 1 and not learnable_pos:
             pos = pos.repeat(1, bsz, 1)  # to T x B x H
 
         # Input Linear GEMM

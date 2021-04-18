@@ -165,7 +165,8 @@ class FastTranslator(Translator):
                         torch.backends.quantized.engine = 'fbgemm'
                     else:
                         print(
-                            "[INFO] fbgemm is not found in the available engines. Possibly the CPU does not support AVX2."
+                            "[INFO] fbgemm is not found in the available engines. "
+                            " Possibly the CPU does not support AVX2."
                             " It is recommended to disable Quantization (set to 0).")
                         torch.backends.quantized.engine = 'qnnpack'
 
@@ -177,13 +178,16 @@ class FastTranslator(Translator):
 
                 self.sub_models.append(model)
                 self.sub_model_types.append(model_opt.model)
+        else:
+            self.n_sub_models = 0
+            self.sub_models = []
 
-    def translateBatch(self, batches, sub_batches=None):
+    def translate_batch(self, batches, sub_batches=None):
 
         with torch.no_grad():
-            return self._translateBatch(batches, sub_batches=sub_batches)
+            return self._translate_batch(batches, sub_batches=sub_batches)
 
-    def _translateBatch(self, batches, sub_batches):
+    def _translate_batch(self, batches, sub_batches):
         batch = batches[0]
         # Batch size is in different location depending on data.
 
@@ -655,7 +659,7 @@ class FastTranslator(Translator):
                 batches[i].cuda(fp16=self.fp16)
 
         #  (2) translate
-        finalized, gold_score, gold_words, allgold_words = self.translateBatch(batches)
+        finalized, gold_score, gold_words, allgold_words = self.translate_batch(batches)
         pred_length = []
 
         #  (3) convert indexes to words

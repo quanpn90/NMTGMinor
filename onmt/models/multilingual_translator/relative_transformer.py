@@ -385,7 +385,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         if not self.absolute_position_encoding:
             if self.learnable_position_encoding:
                 if buffering:
-                    distance_mat = torch.arange(-klen + 1, 1, 1).unsqueeze(0)
+                    distance_mat = torch.arange(-klen + 1, 1, 1, device=emb.device).unsqueeze(0)
                 else:
                     range_vec = torch.arange(klen, device=emb.device)
                     range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
