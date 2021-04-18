@@ -84,10 +84,6 @@ class TransformerEncoder(nn.Module):
         self.lsh_src_attention = opt.lsh_src_attention
         self.reversible = opt.src_reversible
 
-        # disable word dropout when switch out is in action
-        if self.switchout > 0.0:
-            self.word_dropout = 0.0
-
         feature_size = opt.input_size
         self.channels = 1  # n. audio channels
 
@@ -163,11 +159,6 @@ class TransformerEncoder(nn.Module):
         """ Embedding: batch_size x len_src x d_model """
         if self.input_type == "text":
             mask_src = input.eq(onmt.constants.SRC_PAD).unsqueeze(1)  # batch_size x 1 x len_src for broadcasting
-
-            # apply switchout
-            # if self.switchout > 0 and self.training:
-            #     vocab_size = self.word_lut.weight.size(0)
-            #     input = switchout(input, vocab_size, self.switchout)
 
             emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         else:
@@ -265,9 +256,6 @@ class TransformerDecoder(nn.Module):
         self.language_embedding_type = opt.language_embedding_type
         self.reversible = opt.tgt_reversible
 
-        if self.switchout > 0:
-            self.word_dropout = 0
-
         self.time_transformer = positional_encoder
 
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d',
@@ -324,12 +312,6 @@ class TransformerDecoder(nn.Module):
 
     def process_embedding(self, input, input_lang=None):
 
-        # if self.switchout == 0:
-        #     input_ = input
-        # if self.switchout > 0 and self.training:
-        #     vocab_size = self.word_lut.weight.size(0)
-        #     input_ = switchout(input, vocab_size, self.switchout)
-        # else:
         input_ = input
 
         emb = embedded_dropout(self.word_lut, input_, dropout=self.word_dropout if self.training else 0)

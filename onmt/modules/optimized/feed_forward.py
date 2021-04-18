@@ -49,13 +49,19 @@ class PositionWiseFeedForward(nn.Module):
         self.reset_parameters()
         self.optimized = 2
 
-        if onmt.constants.fused_ffn:
+        self.fused = False
+        # At the moment fused mlp is only supported for non-GLU and ReLU
+        if not self.glu and self.activation in ['relu']:
             try:
-                from apex.mlp.mlp import mlp_function
-                self.optimized = 1
+                import fused_mlp
+                self.fused = True
+
+                from onmt.modules.mlp.mlp import mlp_function
                 self.fast_mlp_func = mlp_function
-            except ModuleNotFoundError as e:
-                self.optimized = 1
+            except (ModuleNotFoundError, ImportError) as e:
+                print(
+                    "[INFO] Fused MLP implementation not found. Installation can be found in onmt.modules.mlp/setup.py")
+                self.fused = False
 
     def reset_parameters(self, init='normal'):
         if init == 'normal':
@@ -72,40 +78,38 @@ class PositionWiseFeedForward(nn.Module):
 
     def forward(self, input, *args):
 
-        hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)
+        if self.fused and input.is_cuda:
+            weights = [self.in_proj_weight,  self.out_proj_weight]
+            biases = [self.in_proj_bias, self.out_proj_bias]
 
-        if self.glu and self.activation != 'sigmoid':
-            hidden, gate = hidden.chunk(2, dim=-1)
-            hidden = self.act(hidden) * gate
-        else:
-            hidden = self.act(hidden)
+            seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
 
-        if not (not self.glu and self.activation == 'relu'):    
-            if self.variational:
-                hidden = variational_dropout(hidden, p=self.dropout, training=self.training,
-                                             inplace=self.activation in ['silu', 'relu', 'swish'])
+            if self.activation in ['relu']:
+                activation = 1
             else:
-                hidden = F.dropout(hidden, p=self.dropout, training=self.training,
-                                   inplace=self.activation in ['silu', 'relu', 'swish'])
-        hidden = F.linear(hidden, self.out_proj_weight, self.out_proj_bias)
+                raise NotImplementedError
 
-        # if self.optimized == 2 or not input.is_cuda:
-        #     hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)
-        #     hidden = F.relu(hidden, inplace=True)
-        #     if self.variational:
-        #         hidden = variational_dropout(hidden, p=self.dropout, training=self.training)
-        #     else:
-        #         hidden = F.dropout(hidden, p=self.dropout, training=self.training)
-        #     hidden = F.linear(hidden, self.out_proj_weight, self.out_proj_bias)
-        # else:
-        #     # Apex MLP does not support dropout so instead we use dropconnect
-        #     # Theoretically they should be yield similar results
-        #     weights = [F.dropout(self.in_proj_weight, p=self.dropout, training=self.training),
-        #                self.out_proj_weight]
-        #     biases = [F.dropout(self.in_proj_bias, p=self.dropout, training=self.training),
-        #               self.out_proj_bias]
-        #     seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
-        #     hidden = self.fast_mlp_func(True, 1, input.view(seq_len*bsz, -1), *weights, *biases)
-        #     hidden = hidden.view(seq_len, bsz, hidden_size)
+            hidden = self.fast_mlp_func(1, self.dropout if self.training else 0,
+                                        activation, input.view(seq_len * bsz, -1),
+                                        *weights, *biases)
+            hidden = hidden.view(seq_len, bsz, hidden_size)
+
+        else:
+            hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)
+
+            if self.glu and self.activation != 'sigmoid':
+                hidden, gate = hidden.chunk(2, dim=-1)
+                hidden = self.act(hidden) * gate
+            else:  # GLU function
+                hidden = self.act(hidden)
+
+            if not (not self.glu and self.activation == 'relu'):
+                if self.variational:
+                    hidden = variational_dropout(hidden, p=self.dropout, training=self.training,
+                                                 inplace=self.activation in ['silu', 'relu', 'swish'])
+                else:
+                    hidden = F.dropout(hidden, p=self.dropout, training=self.training,
+                                       inplace=self.activation in ['silu', 'relu', 'swish'])
+            hidden = F.linear(hidden, self.out_proj_weight, self.out_proj_bias)
 
         return hidden

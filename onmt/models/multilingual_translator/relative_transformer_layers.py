@@ -35,6 +35,8 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.dropout = opt.dropout
         self.rezero = opt.rezero
         self.absolute_position_encoding = opt.absolute_position_encoding
+        self.learnable_pos = opt.learnable_position_encoding
+        self.stochastic_sublayer = opt.stochastic_sublayer
 
         if self.macaron:
             self.preprocess_mcr_ffn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
@@ -85,7 +87,9 @@ class RelativeTransformerEncoderLayer(nn.Module):
                                                        glu=opt.ffn_glu)
 
             if not self.absolute_position_encoding:
-                self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+                self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
+                                                           learnable_pos=self.learnable_pos,
+                                                           max_pos=opt.max_pos_length)
             else:
                 self.multihead = SelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
@@ -110,6 +114,11 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
                 input = self.postprocess_mcr_ffn(out * ffn_scale, input)
 
+        if self.stochastic_sublayer:  # re-toss-coin
+            if self.training and self.death_rate > 0:
+                coin = (torch.rand(1)[0].item() >= self.death_rate)
+
+        if coin:
             query = self.preprocess_attn(input)
 
             if self.mfw:
@@ -119,12 +128,17 @@ class RelativeTransformerEncoderLayer(nn.Module):
                 out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
                                         incremental=incremental, incremental_cache=incremental_cache)
 
-            # rescaling before residual
+                # rescaling before residual
+                if self.training and self.death_rate > 0:
+                    out = out / (1 - self.death_rate)
+
+                input = self.postprocess_attn(out, input)
+
+        if self.stochastic_sublayer:  # re-toss-coin
             if self.training and self.death_rate > 0:
-                out = out / (1 - self.death_rate)
+                coin = (torch.rand(1)[0].item() >= self.death_rate)
 
-            input = self.postprocess_attn(out, input)
-
+        if coin:
             """ Feed forward layer 
                 layernorm > ffn > dropout > residual
             """
@@ -159,6 +173,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.rezero = opt.rezero
         self.n_heads = opt.n_heads
         self.absolute_position_encoding = opt.absolute_position_encoding
+        self.learnable_pos = opt.learnable_position_encoding
+        self.stochastic_sublayer = opt.stochastic_sublayer
 
         if self.macaron:
             self.preprocess_mcr_ffn = preprocessing(opt.rezero, opt.model_size, opt.dropout, sequence='n')
@@ -228,10 +244,12 @@ class RelativeTransformerDecoderLayer(nn.Module):
                                                        glu=opt.ffn_glu)
 
             if not self.absolute_position_encoding:
-                self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+                self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
+                                                               learnable_pos=self.learnable_pos,
+                                                               max_pos=opt.max_pos_length)
+
             else:
                 self.multihead_tgt = SelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
-            # self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
     def forward(self, input, context, pos_emb, mask_tgt, mask_src,
                 src_lang=None, tgt_lang=None,
@@ -260,6 +278,11 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
                 input = self.postprocess_mcr_ffn(out * ffn_scale, input)
 
+        if self.stochastic_sublayer:
+            if self.training and self.death_rate > 0:
+                coin = (torch.rand(1)[0].item() >= self.death_rate)
+
+        if coin:
             # input and context should be time first ?
             if mems is not None and mems.size(0) > 0:
                 mems = self.preprocess_attn(mems)
@@ -282,6 +305,12 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 out = out / (1 - self.death_rate)
 
             input = self.postprocess_attn(out, input)
+
+        if self.stochastic_sublayer:
+            if self.training and self.death_rate > 0:
+                coin = (torch.rand(1)[0].item() >= self.death_rate)
+
+        if coin:
 
             """ Context Attention layer 
                 layernorm > attn > dropout > residual
@@ -308,6 +337,15 @@ class RelativeTransformerDecoderLayer(nn.Module):
             else:
                 coverage = None
 
+        else:
+            coverage = input.new_zeros(input.size(1), self.n_heads,
+                                       input.size(0), context.size(0) if context is None else input.size(0))
+
+        if self.stochastic_sublayer:
+            if self.training and self.death_rate > 0:
+                coin = (torch.rand(1)[0].item() >= self.death_rate)
+
+        if coin:
             """ Feed forward layer 
                 layernorm > ffn > dropout > residual
             """
@@ -320,10 +358,6 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 ffn_scale = self.ffn_scale
 
             input = self.postprocess_ffn(out * ffn_scale, input)
-
-        else:
-            coverage = input.new_zeros(input.size(1), self.n_heads,
-                                       input.size(0), context.size(0) if context is None else input.size(0))
 
         # if incremental_cache is None:
         #     return input, coverage

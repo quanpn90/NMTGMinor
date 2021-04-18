@@ -20,6 +20,8 @@ onmt.markdown.add_md_help_argument(parser)
 
 parser.add_argument('-model', required=True,
                     help='Path to model .pt file')
+parser.add_argument('-sub_model', required=False, default="",
+                    help='Path to (secondary) model .pt file')
 parser.add_argument('-streaming', action="store_true",
                     help="""Use streaming mode (for model with streaming)""")
 parser.add_argument('-lm', required=False,
@@ -31,6 +33,8 @@ parser.add_argument('-autoencoder', required=False,
 parser.add_argument('-input_type', default="word",
                     help="Input type: word/char")
 parser.add_argument('-src', required=True,
+                    help='Source sequence to decode (one line per sequence)')
+parser.add_argument('-sub_src', required=False, default="",
                     help='Source sequence to decode (one line per sequence)')
 parser.add_argument('-src_lang', default='src',
                     help='Source language')
@@ -227,6 +231,8 @@ def main():
     else:
         if opt.fast_translate:
             translator = FastTranslator(opt)
+
+            # TODO: load sub model
         else:
             translator = onmt.Translator(opt)
 
@@ -251,6 +257,8 @@ def main():
         assert len(concats) == n_models, "The number of models must match the number of concat configs"
         for j, _ in enumerate(concats):
             src_batches.append(list())  # We assign different inputs for each model in the ensemble
+
+        sub_src = open(opt.sub_src) if opt.sub_src else None
 
         while True:
             if opt.asr_format == "h5":
@@ -344,6 +352,8 @@ def main():
 
                 tgt_batch += [tgt_tokens]
 
+            # if opt.sub_src:
+
         # catch the last batch
         if len(src_batches[0]) != 0:
             print("Batch size:", len(src_batches[0]), len(tgt_batch))
@@ -366,7 +376,8 @@ def main():
             src_batch, tgt_batch = [], []
             for j, _ in enumerate(src_batches):
                 src_batches[j] = []
-    # Text processing
+
+    # Text processing for MT
     else:
         for line in addone(in_file):
             if line is not None:

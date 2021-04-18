@@ -61,8 +61,6 @@ def make_parser(parser):
                         help='Maximum distance length for relative self-attention')
     parser.add_argument('-max_src_length', type=int, default=2048,
                         help='Maximum distance length for relative self-attention')
-    parser.add_argument('-learnable_position_encoding', action='store_true',
-                        help="""Use embeddings as learnable position encoding.""")
     parser.add_argument('-fix_norm_output_embedding', action='store_true',
                         help="""Normalize the output embedding""")
 
@@ -108,6 +106,8 @@ def make_parser(parser):
                         help='Apply weight normalization on linear modules')
     parser.add_argument('-death_rate', type=float, default=0.0,
                         help='Stochastic layer death rate')
+    parser.add_argument('-stochastic_sublayer', action='store_true',
+                        help='Apply stochastic death rate for each sub-layer')
     parser.add_argument('-activation_layer', default='linear_relu_linear', type=str,
                         help='The activation layer in each transformer block '
                              'linear_relu_linear|linear_swish_linear|maxout')
@@ -444,6 +444,8 @@ def make_parser(parser):
                         help='use ReZero residual mechanism')
     parser.add_argument('-absolute_position_encoding', action='store_true',
                         help='use absolute position encoding for the Translator')
+    parser.add_argument('-learnable_position_encoding', action='store_true',
+                        help='use absolute position encoding for the Translator')
     parser.add_argument('-decoder_late_emb_scale', action='store_true',
                         help='only scale the embedding very late at the decoder. This option is here'
                              'to fix the problem of the multilingual model w/ relative position.')
@@ -689,6 +691,9 @@ def backward_compatible(opt):
     if not hasattr(opt, 'absolute_position_encoding'):
         opt.absolute_position_encoding = False
 
+    if not hasattr(opt, 'learnable_position_encoding'):
+        opt.learnable_position_encoding = False
+
     if not hasattr(opt, 'decoder_late_emb_scale'):
         opt.decoder_late_emb_scale = False
 
@@ -697,5 +702,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'no_input_scale'):
         opt.no_input_scale = False
+
+    if not hasattr(opt, 'stochastic_sublayer'):
+        opt.stochastic_sublayer = False
 
     return opt

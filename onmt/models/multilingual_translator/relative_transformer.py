@@ -40,6 +40,8 @@ class RelativeTransformerEncoder(TransformerEncoder):
         self.checkpointing = opt.checkpointing
         self.absolute_position_encoding = opt.absolute_position_encoding
         self.early_emb_scale = opt.encoder_early_emb_scale
+        self.learnable_position_encoding = opt.learnable_position_encoding
+        self.max_pos_length = opt.max_pos_length
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type,
@@ -51,7 +53,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         # learnable position encoding
         if self.learnable_position_encoding:
-            raise NotImplementedError
+            self.positional_encoder = None
         else:
             if not self.absolute_position_encoding:
                 # or using pre-set sinusoidal
@@ -116,10 +118,18 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         # Asynchronous positions: 2K+1 positions instead of K+1
         if not self.absolute_position_encoding:
-            pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
-            # pos_emb has size 2T+1 x 1 x H
-            pos_emb = self.positional_encoder(pos, bsz=input.size(1))
-            pos_emb = self.preprocess_layer(pos_emb)
+            if not self.learnable_position_encoding:
+                pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
+                # pos_emb has size 2T+1 x 1 x H
+                pos_emb = self.positional_encoder(pos, bsz=input.size(1))
+                pos_emb = self.preprocess_layer(pos_emb)
+            else:
+                range_vec = torch.arange(klen, device=emb.device)
+                range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+                distance_mat = range_vec - range_mat.transpose(0, 1)
+                distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                pos_emb = distance_mat
+
             mask_src = input.eq(onmt.constants.PAD).unsqueeze(0)  # 1 x src_len x batch_size for broadcasting
         else:
             # Absolute position encoding from 0 -> n
@@ -129,9 +139,6 @@ class RelativeTransformerEncoder(TransformerEncoder):
 
         if onmt.constants.torch_version >= 1.2:
             mask_src = mask_src.bool()
-
-        if self.learnable_position_encoding:
-            raise NotImplementedError
 
         if not self.early_emb_scale:
             """ Scale the emb by sqrt(d_model) """
@@ -167,6 +174,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
         self.checkpointing = opt.checkpointing
         self.absolute_position_encoding = opt.absolute_position_encoding
         self.late_emb_scale = opt.decoder_late_emb_scale
+        self.learnable_position_encoding = opt.learnable_position_encoding
+        self.max_pos_length = opt.max_pos_length
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerDecoder, self).__init__(opt, dicts,
@@ -175,11 +184,14 @@ class RelativeTransformerDecoder(TransformerDecoder):
                                                          ignore_source,
                                                          allocate_positions=False)
 
-        if not self.absolute_position_encoding:
-            # or using pre-set sinusoidal
-            self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
+        if self.learnable_position_encoding:
+            self.positional_encoder = None
         else:
-            self.positional_encoder = FastSinusoidalPositionalEncoding(opt.model_size)
+            if not self.absolute_position_encoding:
+                # or using pre-set sinusoidal
+                self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
+            else:
+                self.positional_encoder = FastSinusoidalPositionalEncoding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
         if opt.rezero:
             self.postprocess_layer = Identity()
@@ -267,9 +279,16 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         if not self.absolute_position_encoding:
             # relative positions
-            pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
-            pos_emb = self.positional_encoder(pos, bsz=input.size(1))
-            pos_emb = self.preprocess_layer(pos_emb)
+            if not self.learnable_position_encoding:
+                pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+                pos_emb = self.positional_encoder(pos, bsz=input.size(1))
+                pos_emb = self.preprocess_layer(pos_emb)
+            else:
+                range_vec = torch.arange(klen, device=emb.device)
+                range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+                distance_mat = range_vec - range_mat.transpose(0, 1)
+                distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                pos_emb = distance_mat
         else:
             # absolute positions
             emb = self.positional_encoder(emb.transpose(0, 1)).transpose(0, 1)
@@ -364,8 +383,18 @@ class RelativeTransformerDecoder(TransformerDecoder):
         mlen = klen - qlen
 
         if not self.absolute_position_encoding:
-            pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
-            pos_emb = self.positional_encoder(pos)
+            if self.learnable_position_encoding:
+                if buffering:
+                    distance_mat = torch.arange(-klen + 1, 1, 1).unsqueeze(0)
+                else:
+                    range_vec = torch.arange(klen, device=emb.device)
+                    range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+                    distance_mat = range_vec - range_mat.transpose(0, 1)
+                distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                pos_emb = distance_mat
+            else:
+                pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+                pos_emb = self.positional_encoder(pos)
         else:
             if buffering:
                 emb = self.positional_encoder(emb.transpose(0, 1), t=input.size(1)).transpose(0, 1)

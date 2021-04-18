@@ -2,13 +2,27 @@ from copy import copy
 import math
 import torch
 from torch import nn
+
+try:
+    import apex.amp as amp
+    from apex.amp import half_function
+except (ModuleNotFoundError, ImportError) as e:
+    amp = None
+    from ..optimized.compat import half_function
+
+try:
+    from torch.cuda.amp import custom_fwd, custom_bwd
+except (ModuleNotFoundError, ImportError) as e:
+    from .compat import custom_fwd, custom_bwd
+
 import fused_mlp
-from apex import amp
+
 
 class MlpFunction(torch.autograd.Function):
     @staticmethod
+    @custom_fwd(cast_inputs=torch.float16)
     def forward(ctx, bias, dropout_prob, activation, *args):
-        output = mlp_onmt.forward(bias, dropout_prob, activation, args)
+        output = fused_mlp.forward(bias, dropout_prob, activation, args)
         ctx.save_for_backward(*args)
         ctx.outputs = output
         ctx.bias = bias
@@ -17,12 +31,18 @@ class MlpFunction(torch.autograd.Function):
         return output[0]
 
     @staticmethod
+    @custom_bwd
     def backward(ctx, grad_o):
-        grads = mlp_onmt.backward(ctx.bias, ctx.dropout_prob, ctx.activation, grad_o, ctx.outputs, ctx.saved_tensors)
+        grads = fused_mlp.backward(ctx.bias, ctx.dropout_prob, ctx.activation, grad_o, ctx.outputs, ctx.saved_tensors)
         del ctx.outputs
         return (None, None, None, *grads)
 
-mlp_function = amp.half_function(MlpFunction.apply)
+
+mlp_function = half_function(MlpFunction.apply)
+# @half_function
+# def mlp_function(bias, dropout_prob, activation, *args):
+#     return MlpFunction.apply(bias, dropout_prob, activation, args)
+
 
 class MLP(torch.nn.Module):
     """Launch MLP in C++
@@ -32,6 +52,7 @@ class MLP(torch.nn.Module):
         bias (bool): Default True:
         relu (bool): Default True
     """
+
     def __init__(self, mlp_sizes, bias=True, activation='relu', dropout_prob=0.0):
         super(MLP, self).__init__()
         self.num_layers = len(mlp_sizes) - 1
@@ -51,12 +72,12 @@ class MLP(torch.nn.Module):
         self.weights = []
         self.biases = []
         for i in range(self.num_layers):
-            w = torch.nn.Parameter(torch.empty(mlp_sizes[i+1], mlp_sizes[i]))
+            w = torch.nn.Parameter(torch.empty(mlp_sizes[i + 1], mlp_sizes[i]))
             self.weights.append(w)
             name = 'weight_{}'.format(i)
             setattr(self, name, w)
             if self.bias:
-                b = torch.nn.Parameter(torch.empty(mlp_sizes[i+1]))
+                b = torch.nn.Parameter(torch.empty(mlp_sizes[i + 1]))
                 self.biases.append(b)
                 name = 'bias_{}'.format(i)
                 setattr(self, name, b)

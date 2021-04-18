@@ -8,8 +8,9 @@ from onmt.model_factory import build_model
 import torch.nn.functional as F
 from onmt.inference.search import BeamSearch, DiverseBeamSearch
 from onmt.inference.translator import Translator
+
 # buggy lines: 392, 442, 384
-model_list = ['transformer', 'stochastic_transformer']
+model_list = ['transformer', 'stochastic_transformer', 'fusion_network']
 
 
 class FastTranslator(Translator):
@@ -17,6 +18,7 @@ class FastTranslator(Translator):
     A fast implementation of the Beam Search based translator
     Based on Fairseq implementation
     """
+
     def __init__(self, opt):
 
         super().__init__(opt)
@@ -91,12 +93,97 @@ class FastTranslator(Translator):
         else:
             self.use_filter = False
 
-    def translateBatch(self, batches):
+        if opt.sub_model:
+            self.sub_models = list()
+            self.sub_model_types = list()
+
+            # models are string with | as delimiter
+            sub_models = opt.sub_model.split("|")
+
+            print("Loading sub models ... ")
+            self.n_sub_models = len(sub_models)
+            self.sub_type = 'text'
+
+            for i, model_path in enumerate(sub_models):
+                checkpoint = torch.load(model_path,
+                                        map_location=lambda storage, loc: storage)
+
+                model_opt = checkpoint['opt']
+                model_opt = backward_compatible(model_opt)
+                if hasattr(model_opt, "enc_not_load_state"):
+                    model_opt.enc_not_load_state = True
+                    model_opt.dec_not_load_state = True
+
+                dicts = checkpoint['dicts']
+
+                # update special tokens
+                onmt.constants = add_tokenidx(model_opt, onmt.constants, dicts)
+                # self.bos_token = model_opt.tgt_bos_word
+
+                """"BE CAREFUL: the sub-models might mismatch with the main models in terms of language dict"""
+                """"REQUIRE RE-matching"""
+
+                # if i == 0:
+                #     if "src" in checkpoint['dicts']:
+                #         self.src_dict = checkpoint['dicts']['src']
+                #     else:
+                #         self._type = "audio"
+                #     self.tgt_dict = checkpoint['dicts']['tgt']
+                #
+                #     if "langs" in checkpoint["dicts"]:
+                #         self.lang_dict = checkpoint['dicts']['langs']
+                #
+                #     else:
+                #         self.lang_dict = {'src': 0, 'tgt': 1}
+                #
+                #     self.bos_id = self.tgt_dict.labelToIdx[self.bos_token]
+                if opt.verbose:
+                    print('Loading sub-model from %s' % model_path)
+
+                model = build_model(model_opt, checkpoint['dicts'])
+                optimize_model(model)
+                model.load_state_dict(checkpoint['model'])
+
+                if model_opt.model in model_list:
+                    # if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:
+                    #     print("Not enough len to decode. Renewing .. ")
+                    #     model.decoder.renew_buffer(self.opt.max_sent_length)
+                    model.renew_buffer(self.opt.max_sent_length)
+
+                if opt.fp16:
+                    model = model.half()
+
+                if opt.cuda:
+                    model = model.cuda()
+                else:
+                    model = model.cpu()
+
+                if opt.dynamic_quantile == 1:
+
+                    engines = torch.backends.quantized.supported_engines
+                    if 'fbgemm' in engines:
+                        torch.backends.quantized.engine = 'fbgemm'
+                    else:
+                        print(
+                            "[INFO] fbgemm is not found in the available engines. Possibly the CPU does not support AVX2."
+                            " It is recommended to disable Quantization (set to 0).")
+                        torch.backends.quantized.engine = 'qnnpack'
+
+                    model = torch.quantization.quantize_dynamic(
+                        model, {torch.nn.LSTM, torch.nn.Linear}, dtype=torch.qint8
+                    )
+
+                model.eval()
+
+                self.sub_models.append(model)
+                self.sub_model_types.append(model_opt.model)
+
+    def translateBatch(self, batches, sub_batches=None):
 
         with torch.no_grad():
-            return self._translateBatch(batches)
+            return self._translateBatch(batches, sub_batches=sub_batches)
 
-    def _translateBatch(self, batches):
+    def _translateBatch(self, batches, sub_batches):
         batch = batches[0]
         # Batch size is in different location depending on data.
 
@@ -247,9 +334,14 @@ class FastTranslator(Translator):
         # - expanding the context over the batch dimension len_src x (B*beam) x H
         # - expanding the mask over the batch dimension    (B*beam) x len_src
         decoder_states = dict()
+        sub_decoder_states = dict()  # for sub-model
         for i in range(self.n_models):
             decoder_states[i] = self.models[i].create_decoder_state(batches[i], beam_size, type=2,
                                                                     buffering=self.buffering)
+        if self.opt.sub_model:
+            for i in range(self.n_sub_models):
+                sub_decoder_states[i] = self.sub_models[i].create_decoder_state(sub_batches[i], beam_size, type=2,
+                                                                                buffering=self.buffering)
 
         if self.dynamic_max_len:
             src_len = src.size(0)
@@ -265,10 +357,12 @@ class FastTranslator(Translator):
                     reorder_state.view(-1, beam_size).add_(corr.unsqueeze(-1) * beam_size)
                 for i, model in enumerate(self.models):
                     decoder_states[i]._reorder_incremental_state(reorder_state)
+                for i, model in enumerate(self.sub_models):
+                    sub_decoder_states[i]._reorder_incremental_state(reorder_state)
 
             decode_input = tokens[:, :step + 1]
 
-            lprobs, avg_attn_scores = self._decode(decode_input, decoder_states)
+            lprobs, avg_attn_scores = self._decode(decode_input, decoder_states, sub_decoder_states=None)
             avg_attn_scores = None
 
             if self.use_filter:
@@ -509,7 +603,7 @@ class FastTranslator(Translator):
 
         return finalized, gold_scores, gold_words, allgold_scores
 
-    def _decode(self, tokens, decoder_states):
+    def _decode(self, tokens, decoder_states, sub_decoder_states=None):
 
         # require batch first for everything
         outs = dict()
@@ -527,19 +621,23 @@ class FastTranslator(Translator):
             outs[i] = decoder_output['log_prob']
             attns[i] = decoder_output['coverage']
 
+        for j in range(self.n_sub_models):
+            sub_decoder_output = self.sub_models[i].step(tokens, sub_decoder_states[i])
+            outs[self.n_models - 1 + j] = sub_decoder_output['log_prob']
+
         out = self._combine_outputs(outs)
         # attn = self._combine_attention(attns)
 
         if self.vocab_size > out.size(-1):
-            self.vocab_size = out.size(-13)
-        # attn = attn[:, -1, :] # I dont know what this line means
-        attn = None  # lol this is never used probably
+            self.vocab_size = out.size(-1)  # what the hell ?
+        # attn = attn[:, -1, :] # I dont know what this line does
+        attn = None  # attn is never used in decoding probably
 
         return out, attn
 
     def translate(self, src_data, tgt_data, type='mt'):
         #  (1) convert words to indexes
-        if isinstance(src_data[0], list)  and type == 'asr':
+        if isinstance(src_data[0], list) and type == 'asr':
             batches = list()
             for src_data_ in src_data:
                 dataset = self.build_data(src_data_, tgt_data, type=type)
@@ -594,4 +692,3 @@ class FastTranslator(Translator):
                 )
 
         return pred_batch, pred_score, pred_length, gold_score, gold_words, allgold_words
-

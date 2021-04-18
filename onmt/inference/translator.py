@@ -99,7 +99,7 @@ class Translator(object):
                     torch.backends.quantized.engine = 'fbgemm'
                 else:
                     print("[INFO] fbgemm is not found in the available engines. Possibly the CPU does not support AVX2."
-                          " Quantization is suggested to be set to 0.")
+                          " It is recommended to disable Quantization (set to 0).")
                     torch.backends.quantized.engine = 'qnnpack'
 
                 model = torch.quantization.quantize_dynamic(

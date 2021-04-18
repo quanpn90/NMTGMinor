@@ -15,6 +15,7 @@ except (ModuleNotFoundError, ImportError) as e:
 
 try:
     from swish_torch._C import swish_forward, swish_backward
+
     fast_swish = True
 except (ModuleNotFoundError, ImportError) as e:
     swish_forward, swish_backward = lambda *args: None, lambda *args: None
@@ -44,7 +45,7 @@ def fast_silu(input):
 class SiLU(nn.Module):
 
     def __init__(self, inplace=False):
-        
+
         super(SiLU, self).__init__()
         self.inplace = inplace
 
@@ -54,4 +55,9 @@ class SiLU(nn.Module):
         if fast_swish and input.is_cuda and self.training:
             return fast_silu(input)
         else:
-            return torch.nn.functional.silu(input, inplace=self.inplace)
+            try:
+                output = torch.nn.functional.silu(input, inplace=self.inplace)
+            except AttributeError:
+                output = input * torch.sigmoid(input)
+
+            return output
