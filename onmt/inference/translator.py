@@ -62,6 +62,8 @@ class Translator(object):
                     self.src_dict = checkpoint['dicts']['src']
                 else:
                     self._type = "audio"
+                    # self.src_dict = self.tgt_dict
+
                 self.tgt_dict = checkpoint['dicts']['tgt']
 
                 if "langs" in checkpoint["dicts"]:
@@ -255,9 +257,11 @@ class Translator(object):
                 src_data = [self.src_dict.convertToIdx(b,
                                                        onmt.constants.UNK_WORD)
                             for b in src_sents]
+            data_type = 'text'
         elif type == 'asr':
             # no need to deal with this
             src_data = src_sents
+            data_type = 'audio'
         else:
             raise NotImplementedError
 
@@ -277,7 +281,7 @@ class Translator(object):
         return onmt.Dataset(src_data, tgt_data,
                             src_langs=src_lang_data, tgt_langs=tgt_lang_data,
                             batch_size_words=sys.maxsize,
-                            data_type=self._type,
+                            data_type=data_type,
                             batch_size_sents=self.opt.batch_size,
                             src_align_right=self.opt.src_align_right)
 

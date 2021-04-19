@@ -259,6 +259,7 @@ def main():
             src_batches.append(list())  # We assign different inputs for each model in the ensemble
 
         sub_src = open(opt.sub_src) if opt.sub_src else None
+        sub_src_batch = list()
 
         while True:
             if opt.asr_format == "h5":
@@ -289,9 +290,9 @@ def main():
             if _is_oversized(src_batches[0], src_length, opt.batch_size):
                 # If adding a new sentence will make the batch oversized
                 # Then do translation now, and then free the list
-                print("Batch size:", len(src_batches[0]), len(tgt_batch))
+                print("Batch size:", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
                 pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
-                    src_batches, tgt_batch, type='asr')
+                    src_batches, tgt_batch, sub_src_data=sub_src_batch, type='asr')
 
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
@@ -306,7 +307,7 @@ def main():
                 pred_words_total += pred_words
                 gold_score_total += gold_score
                 gold_words_total += goldWords
-                src_batch, tgt_batch = [], []
+                src_batch, tgt_batch, sub_src_batch = [], [], []
                 for j, _ in enumerate(src_batches):
                     src_batches[j] = []
 
@@ -352,14 +353,23 @@ def main():
 
                 tgt_batch += [tgt_tokens]
 
-            # if opt.sub_src:
+            if opt.sub_src:
+                sline = sub_src.readline().strip()
+
+                if opt.input_type == 'word':
+                    src_tokens = sline.split()
+                elif opt.input_type == 'char':
+                    src_tokens = list(sline.strip())
+
+                sub_src_batch += [src_tokens]
 
         # catch the last batch
         if len(src_batches[0]) != 0:
-            print("Batch size:", len(src_batches[0]), len(tgt_batch))
+            print("Batch size:", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
             pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
                 src_batches,
-                tgt_batch, type='asr')
+                tgt_batch,
+                sub_src_data=sub_src_batch, type='asr')
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
                 = translate_batch(opt, tgtF, count, outF, translator,

@@ -3,11 +3,12 @@ import onmt.modules
 import torch.nn as nn
 import torch
 import math
-from torch.autograd import Variable
-from onmt.model_factory import build_model
+from onmt.model_factory import build_model, optimize_model
 import torch.nn.functional as F
 from onmt.inference.search import BeamSearch, DiverseBeamSearch
 from onmt.inference.translator import Translator
+from onmt.constants import add_tokenidx
+from options import backward_compatible
 
 # buggy lines: 392, 442, 384
 model_list = ['transformer', 'stochastic_transformer', 'fusion_network']
@@ -123,9 +124,9 @@ class FastTranslator(Translator):
                 """"BE CAREFUL: the sub-models might mismatch with the main models in terms of language dict"""
                 """"REQUIRE RE-matching"""
 
-                # if i == 0:
-                #     if "src" in checkpoint['dicts']:
-                #         self.src_dict = checkpoint['dicts']['src']
+                if i == 0:
+                    if "src" in checkpoint['dicts']:
+                        self.src_dict = checkpoint['dicts']['src']
                 #     else:
                 #         self._type = "audio"
                 #     self.tgt_dict = checkpoint['dicts']['tgt']
@@ -366,7 +367,8 @@ class FastTranslator(Translator):
 
             decode_input = tokens[:, :step + 1]
 
-            lprobs, avg_attn_scores = self._decode(decode_input, decoder_states, sub_decoder_states=None)
+            lprobs, avg_attn_scores = self._decode(decode_input, decoder_states,
+                                                   sub_decoder_states=sub_decoder_states)
             avg_attn_scores = None
 
             if self.use_filter:
@@ -614,20 +616,15 @@ class FastTranslator(Translator):
         attns = dict()
 
         for i in range(self.n_models):
+            # decoder output contains the log-prob distribution of the next step
             decoder_output = self.models[i].step(tokens, decoder_states[i])
 
-            # take the last decoder state
-            # decoder_hidden = decoder_hidden.squeeze(1)
-            # attns[i] = coverage[:, -1, :].squeeze(1)  # batch * beam x src_len
-
-            # batch * beam x vocab_size
-            # outs[i] = self.models[i].generator(decoder_hidden)
             outs[i] = decoder_output['log_prob']
             attns[i] = decoder_output['coverage']
 
         for j in range(self.n_sub_models):
-            sub_decoder_output = self.sub_models[i].step(tokens, sub_decoder_states[i])
-            outs[self.n_models - 1 + j] = sub_decoder_output['log_prob']
+            sub_decoder_output = self.sub_models[j].step(tokens, sub_decoder_states[j])
+            outs[self.n_models + j] = sub_decoder_output['log_prob']
 
         out = self._combine_outputs(outs)
         # attn = self._combine_attention(attns)
@@ -639,7 +636,7 @@ class FastTranslator(Translator):
 
         return out, attn
 
-    def translate(self, src_data, tgt_data, type='mt'):
+    def translate(self, src_data, tgt_data, sub_src_data=None, type='mt'):
         #  (1) convert words to indexes
         if isinstance(src_data[0], list) and type == 'asr':
             batches = list()
@@ -653,22 +650,30 @@ class FastTranslator(Translator):
             batches = [batch] * self.n_models
             src_data = [src_data] * self.n_models
 
+        if sub_src_data is not None and len(sub_src_data) > 0:
+            sub_dataset = self.build_data(sub_src_data, tgt_data, type='mt')
+            sub_batch = sub_dataset.get_batch(0)
+            sub_batches = [sub_batch] * self.n_sub_models
+            sub_src_data = [sub_src_data] * self.n_sub_models
+        else:
+            sub_batches, sub_src_data = None, None
+
         batch_size = batches[0].size
         if self.cuda:
             for i, _ in enumerate(batches):
                 batches[i].cuda(fp16=self.fp16)
+            if sub_batches:
+                for i, _ in enumerate(sub_batches):
+                    sub_batches[i].cuda(fp16=self.fp16)
 
         #  (2) translate
-        finalized, gold_score, gold_words, allgold_words = self.translate_batch(batches)
+        finalized, gold_score, gold_words, allgold_words = self.translate_batch(batches, sub_batches=sub_batches)
         pred_length = []
 
         #  (3) convert indexes to words
         pred_batch = []
         src_data = src_data[0]
         for b in range(batch_size):
-            # print(len(finalized[b]), src_data)
-            # if len(finalized[b]) < self.opt.n_best:
-            #     print(src_data[b])
 
             # probably when the src is empty so beam search stops immediately
             if len(finalized[b]) == 0:
