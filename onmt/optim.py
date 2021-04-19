@@ -443,6 +443,7 @@ class Optim(object):
 
     def load_state_dict(self, state_dict):
         self._step = state_dict['_step']
+        state_dict['step'] = self._step
         self._first_step = self._step
         print("* Loading from step %d " % self._step)
 

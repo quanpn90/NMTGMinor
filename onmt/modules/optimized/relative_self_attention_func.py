@@ -113,7 +113,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         len_k = len_q  # because of self-attention
 
         if pos.size(1) == 1 and not learnable_pos:
-            pos = pos.repeat(1, bsz, 1)  # to T x B x H
+            pos = pos.repeat(1, bsz, 1)  # to T x B x Hq
 
         # Input Linear GEMM
         # input1: (activations) [len_q, bsz, hidden]
