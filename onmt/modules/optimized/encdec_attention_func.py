@@ -14,6 +14,11 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     from .compat import custom_fwd, custom_bwd
 
+try:
+    import mask_softmax_dropout_cuda
+except (ModuleNotFoundError, ImportError) as e:
+    mask_softmax_dropout_cuda = None
+
 
 class EncdecAttnFunc(torch.autograd.Function):
     @staticmethod
@@ -27,10 +32,12 @@ class EncdecAttnFunc(torch.autograd.Function):
         null_tensor = torch.tensor([])
         head_dim = inputs_q.size(2) // heads
         scale_t = torch.tensor([head_dim ** -0.5])
+        use_mask = (mask is not None)
 
         bsz, len_q, len_k = inputs_q.size(1), inputs_q.size(0), inputs_kv.size(0)
-
-        # TODO: add incremental cache
+        ctx.incremental = incremental
+        ctx.len_q = len_q
+        ctx.len_k = len_k
 
         # Input Linear GEMM Q
         # input1: (activations) [seql_q, bsz, embed_dim(1024)]
@@ -104,14 +111,12 @@ class EncdecAttnFunc(torch.autograd.Function):
             batches, seql_q, seql_k = matmul1_results.size()
             bsz = int(batches / heads)
             matmul1_results = matmul1_results.view(bsz, heads, seql_q, seql_k)
-            mask = mask.to(torch.bool)
             # after unsqueezing the mask should have size [bsz x 1 x 1 x seql_k]
             matmul1_results = matmul1_results.masked_fill_(mask, float('-inf'))
             matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
 
         dtype_ = torch.float64 if double_precision else torch.float32
         softmax_results = F.softmax(matmul1_results, dim=-1, dtype=dtype_).type_as(matmul1_results)
-        # softmax_results = F.softmax(matmul1_results.float(), dim=-1).type_as(matmul1_results)
 
         # Dropout - is not executed for inference
         if is_training:
@@ -119,6 +124,13 @@ class EncdecAttnFunc(torch.autograd.Function):
         else:
             dropout_results = softmax_results
             dropout_mask = null_tensor
+        # else:
+        #     # Fused Softmax and Dropout
+        #     if len(mask.shape) == 3:
+        #         mask = mask.squeeze(1)
+        #     dropout_results, dropout_mask, softmax_results = \
+        #         mask_softmax_dropout_cuda.forward(is_training, False, heads,
+        #                                           matmul1_results, mask.byte(), dropout_prob_t[0])
 
         # Matmul2 Batched GEMMs
         # The output tensor specification is needed here to specify the non-standard output.
@@ -161,11 +173,15 @@ class EncdecAttnFunc(torch.autograd.Function):
                               dropout_mask,
                               dropout_prob_t)
 
-        return outputs.detach(), softmax_results.detach()
+        return outputs, softmax_results
 
     @staticmethod
     @custom_bwd
     def backward(ctx, output_grads, softmax_grads):
+
+        incremental = ctx.incremental
+        len_q = ctx.len_q
+        len_key = ctx.len_k
 
         heads_t, scale_t, matmul2_results, dropout_results, softmax_results \
             , input_lin_q_results, input_lin_kv_results \
@@ -226,11 +242,17 @@ class EncdecAttnFunc(torch.autograd.Function):
         # GEMM: Per batch: ( seql_q x head_dim ) x ( head_dim x seql_k ) = ( seql_q x seql_k )
         values_grads = torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
 
-        # Mask and Scaling for Dropout (not a publically documented op)
-        dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
+        if mask_softmax_dropout_cuda is not None and len_key <= 1024 \
+                and matmul2_dgrad1.is_cuda and matmul2_dgrad1.dtype == 'torch.float16':
+            # Fused and inplace softmax dropouts
+            softmax_grads = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1, softmax_results,
+                                                               dropout_mask, torch.tensor([]), dropout_prob_t[0])
+        else:
+            # Mask and Scaling for Dropout (not a publically documented op)
+            dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
 
-        # Softmax Grad (not a publically documented op)
-        softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
+            # Softmax Grad (not a publically documented op)
+            softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
 
         # Matmul1 - DGRAD1
         # Input1: (data grads)  [seqs*heads, seql_q, seql_k]
@@ -299,20 +321,3 @@ def encdec_attn_func(time_masking, is_training,
                                             incremental, incremental_cache)
 
     return output, coverage
-
-
-@half_function
-def fast_encdec_attn_func(time_masking, is_training, num_heads, query, key,
-                          in_proj_weight_q, in_proj_weight_kv,
-                          out_proj_weight,
-                          attn_mask, dropout):
-    try:
-        from apex.contrib.multihead_attn.fast_encdec_multihead_attn_func import fast_encdec_attn_func as attn
-        from .encdec_attention_func_fused import fast_encdec_attn_func as attn
-    except ModuleNotFoundError as e:
-        print("Cannot use fast self-attention implementation")
-
-    return attn(time_masking, is_training, num_heads, query, key,
-                in_proj_weight_q, in_proj_weight_kv,
-                out_proj_weight,
-                attn_mask, dropout)

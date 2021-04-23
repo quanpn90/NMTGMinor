@@ -8,10 +8,6 @@ import torch.nn.functional as F
 from .self_attention_func import self_attn_func
 from onmt.constants import double_precision
 
-# from .fast_self_multihead_attn_func          import fast_self_attn_func
-# from .fast_self_multihead_attn_norm_add_func import fast_self_attn_norm_add_func
-# from apex.normalization.fused_layer_norm     import FusedLayerNorm
-
 
 class SelfMultiheadAttn(nn.Module):
     """Multi-headed attention.
@@ -88,20 +84,11 @@ class SelfMultiheadAttn(nn.Module):
         else:
             mask = None
 
-        if self.optimized == 1 and self.training and len_key <= 1024 and query.is_cuda:
-            if mask is not None:
-                mask = mask.byte()
-            outputs = self.attn_func_fast(attn_mask is not None, is_training, self.num_heads, query,
-                                          input_weights, self.out_proj_weight, input_bias, self.out_proj_bias, mask,
-                                          False, self.dropout)
-            coverage = None
-        else:
-
-            outputs, coverage = self.attn_func(attn_mask is not None, is_training, self.num_heads, query,
-                                               input_weights, self.out_proj_weight,
-                                               input_bias, self.out_proj_bias,
-                                               mask, self.dropout,
-                                               incremental, incremental_cache)
+        outputs, coverage = self.attn_func(attn_mask is not None, is_training, self.num_heads, query,
+                                           input_weights, self.out_proj_weight,
+                                           input_bias, self.out_proj_bias,
+                                           mask, self.dropout,
+                                           incremental, incremental_cache)
 
         return outputs, coverage
 

@@ -158,7 +158,11 @@ def make_parser(parser):
 
     # Dropout
     parser.add_argument('-dropout', type=float, default=0.3,
-                        help='Dropout probability; applied between LSTM stacks.')
+                        help='Dropout probability; general values for ffn and residual if set negatively')
+    parser.add_argument('-ffn_dropout', type=float, default=-1,
+                        help='Dropout probability; applied at the FFN.')
+    parser.add_argument('-residual_dropout', type=float, default=-1,
+                        help='Dropout probability; applied at the residual connection.')
     parser.add_argument('-word_dropout', type=float, default=0.0,
                         help='Dropout probability; applied on embedding indices.')
     parser.add_argument('-switchout', type=float, default=0.0,
@@ -442,6 +446,8 @@ def make_parser(parser):
 
     parser.add_argument('-rezero', action='store_true',
                         help='use ReZero residual mechanism')
+    parser.add_argument('-post_norm', action='store_true',
+                        help='use post-layer norm')
     parser.add_argument('-absolute_position_encoding', action='store_true',
                         help='use absolute position encoding for the Translator')
     parser.add_argument('-learnable_position_encoding', action='store_true',
@@ -705,5 +711,14 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'stochastic_sublayer'):
         opt.stochastic_sublayer = False
+
+    if not hasattr(opt, 'ffn_dropout'):
+        opt.ffn_dropout = opt.dropout
+
+    if not hasattr(opt, 'residual_dropout'):
+        opt.residual_dropout = opt.dropout
+
+    if not hasattr(opt, 'post_norm'):
+        opt.post_norm = False
 
     return opt

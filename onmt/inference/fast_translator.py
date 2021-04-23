@@ -183,6 +183,21 @@ class FastTranslator(Translator):
             self.n_sub_models = 0
             self.sub_models = []
 
+        if opt.ensemble_weight:
+            ensemble_weight = [float(item) for item in opt.ensemble_weight.split("|")]
+            assert len(ensemble_weight) == self.n_models
+
+            if opt.sub_ensemble_weight:
+                sub_ensemble_weight = [float(item) for item in opt.sub_ensemble_weight.split("|")]
+                assert len(sub_ensemble_weight) == self.n_sub_models
+                ensemble_weight = ensemble_weight + sub_ensemble_weight
+
+            total = sum(ensemble_weight)
+            self.ensemble_weight = [ item / total for item in ensemble_weight]
+        else:
+            self.ensemble_weight = None
+
+
     def translate_batch(self, batches, sub_batches=None):
 
         with torch.no_grad():
@@ -626,7 +641,7 @@ class FastTranslator(Translator):
             sub_decoder_output = self.sub_models[j].step(tokens, sub_decoder_states[j])
             outs[self.n_models + j] = sub_decoder_output['log_prob']
 
-        out = self._combine_outputs(outs)
+        out = self._combine_outputs(outs, weight=self.ensemble_weight)
         # attn = self._combine_attention(attns)
 
         if self.vocab_size > out.size(-1):

@@ -49,7 +49,7 @@ def distribute_to_tempfiles(srcfile, n):
     for i, tf in enumerate(tmpfiles):
 
         n_lines = 0
-        start, end = offsets[i], offsets[i+1]
+        start, end = offsets[i], offsets[i + 1]
 
         with open(srcfile, 'r', encoding='utf8') as f:
             f.seek(start)
@@ -69,7 +69,7 @@ def distribute_to_tempfiles(srcfile, n):
         lines_per_tf.append(n_lines)
 
     print("Lines per tmp files to be translated: ", lines_per_tf)
-    assert(sum(lines_per_tf) == all_lines)
+    assert (sum(lines_per_tf) == all_lines)
 
     #     nlines = len(list(f))
     #     f.seek(0)
@@ -80,15 +80,33 @@ def distribute_to_tempfiles(srcfile, n):
     #             tf.write(line)
     #         tf.flush()
 
+    return tmpfiles, lines_per_tf
+
+
+def distribute_to_tempfiles_withlist(srcfile, n, line_per_tf):
+    tmpfiles = [tempfile.NamedTemporaryFile('w', encoding='utf8') for _ in range(n)]
+    assert len(line_per_tf) == n
+
+    with open(srcfile) as f:
+        for i, tf in enumerate(tmpfiles):
+            nlines = line_per_tf[i]
+            for _ in range(nlines):
+                line = f.readline()
+                tf.write(line)
+            tf.flush()
+
     return tmpfiles
 
 
 def run_part(args):
-    infile, goldfile, outfile, gpu = args
+    infile, goldfile, subsrcfile, outfile, gpu = args
     start = time()
     sys.argv += ['-gpu', gpu, '-src', infile, '-output', outfile]
     if goldfile:
         sys.argv += ['-tgt', goldfile]
+    if subsrcfile:
+        sys.argv += ['-sub_src', subsrcfile]
+
     translate_main()
     print('GPU {} done after {:.1f}s'.format(gpu, time() - start))
 
@@ -98,18 +116,28 @@ outfile = popopt('output')
 gpu_list = popopt('gpus').split(',')
 
 # (1) distribute input lines to N tempfiles
-inparts = distribute_to_tempfiles(srcfile, len(gpu_list))
+inparts, lines_per_file = distribute_to_tempfiles(srcfile, len(gpu_list))
 if hasopt('tgt'):
     goldfile = popopt('tgt')
-    goldparts = distribute_to_tempfiles(goldfile, len(gpu_list))
+    goldparts = distribute_to_tempfiles_withlist(goldfile, len(gpu_list), lines_per_file)
 else:
     goldparts = [None for _ in range(len(gpu_list))]
+
+if hasopt('sub_src'):
+    sub_src_file = popopt('sub_src')
+    sub_src_parts = distribute_to_tempfiles_withlist(sub_src_file, len(gpu_list), lines_per_file)
+else:
+    sub_src_parts = [None for _ in range(len(gpu_list))]
 
 # (2) run N processes translating one tempfile each
 outparts = [tempfile.NamedTemporaryFile('r', encoding='utf8') for _ in gpu_list]
 filenames = lambda tmpfiles: [tf.name if tf else None for tf in tmpfiles]
 with Pool(len(gpu_list)) as p:
-    p.map(run_part, zip(filenames(inparts), filenames(goldparts), filenames(outparts), gpu_list))
+    p.map(run_part, zip(filenames(inparts),
+                        filenames(goldparts),
+                        filenames(sub_src_parts),
+                        filenames(outparts),
+                        gpu_list))
 
 # (3) concatenate tempfiles into one output file
 with open(outfile, 'w', encoding='utf8') as f:

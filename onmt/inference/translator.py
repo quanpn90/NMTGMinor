@@ -172,8 +172,12 @@ class Translator(object):
             "log_probs": []}
 
     # Combine distributions from different models
-    def _combine_outputs(self, outputs):
+    def _combine_outputs(self, outputs, weight=None):
 
+        if weight is None:
+            weight = [1.0/len(outputs) for _ in range(len(outputs))]
+
+        # in case outputs have difference vocabulary sizes: take the shortest common one
         sizes = [output_.size(-1) for output_ in outputs.values()]
         min_size = min(sizes)
 
@@ -185,22 +189,22 @@ class Translator(object):
             return outputs[0]
 
         if self.ensemble_op == "logSum":
-            output = (outputs[0])
+            output = (outputs[0]) * weight[0]
 
             # sum the log prob
             for i in range(1, len(outputs)):
-                output += (outputs[i])
+                output += (outputs[i] * weight[i])
 
-            output.div_(len(outputs))
+            # output.div_(len(outputs))
             output = F.log_softmax(output, dim=-1)
-        elif self.ensemble_op == "mean":
-            output = torch.exp(outputs[0])
+        elif self.ensemble_op == "mean":  # default one
+            output = torch.exp(outputs[0]) * weight[0]
 
             # sum the log prob
             for i in range(1, len(outputs)):
-                output += torch.exp(outputs[i])
+                output += torch.exp(outputs[i]) * weight[i]
 
-            output.div_(len(outputs))
+            # output.div_(len(outputs))
             output = torch.log(output)
         elif self.ensemble_op == "max":
             output = outputs[0]

@@ -61,7 +61,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
             else:
                 self.positional_encoder = FastSinusoidalPositionalEncoding(opt.model_size)
 
-        if opt.rezero:
+        if opt.rezero or opt.post_norm:
             self.postprocess_layer = Identity()
 
         self.d_head = self.model_size // self.n_heads
@@ -124,11 +124,12 @@ class RelativeTransformerEncoder(TransformerEncoder):
                 pos_emb = self.positional_encoder(pos, bsz=input.size(1))
                 pos_emb = self.preprocess_layer(pos_emb)
             else:
-                range_vec = torch.arange(klen, device=emb.device)
-                range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
-                distance_mat = range_vec - range_mat.transpose(0, 1)
-                distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
-                pos_emb = distance_mat
+                # range_vec = torch.arange(klen, device=emb.device)
+                # range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+                # distance_mat = range_vec - range_mat.transpose(0, 1)
+                pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
+                pos.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                pos_emb = distance_mat.unsqueeze(-1)
 
             mask_src = input.eq(onmt.constants.PAD).unsqueeze(0)  # 1 x src_len x batch_size for broadcasting
         else:
@@ -193,7 +194,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
             else:
                 self.positional_encoder = FastSinusoidalPositionalEncoding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
-        if opt.rezero:
+
+        if opt.rezero or opt.post_norm:
             self.postprocess_layer = Identity()
 
     def renew_buffer(self, new_len):

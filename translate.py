@@ -44,6 +44,8 @@ parser.add_argument('-attributes', default="",
                     help='Attributes for the decoder. Split them by | ')
 parser.add_argument('-ensemble_weight', default="",
                     help='Weight for ensembles. Default as uniform. Split them by | and they will be normalized later')
+parser.add_argument('-sub_ensemble_weight', default="",
+                    help='Weight for ensembles. Default as uniform. Split them by | and they will be normalized later')
 
 parser.add_argument('-stride', type=int, default=1,
                     help="Stride on input features")

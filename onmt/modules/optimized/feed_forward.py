@@ -60,7 +60,8 @@ class PositionWiseFeedForward(nn.Module):
                 self.fast_mlp_func = mlp_function
             except (ModuleNotFoundError, ImportError) as e:
                 print(
-                    "[INFO] Fused MLP implementation not found. Installation can be found in onmt.modules.mlp/setup.py")
+                    "[INFO] Fused MLP implementation not found. "
+                    "Installation can be found in onmt.modules.mlp/setup.py")
                 self.fused = False
 
     def reset_parameters(self, init='normal'):
@@ -78,7 +79,7 @@ class PositionWiseFeedForward(nn.Module):
 
     def forward(self, input, *args):
 
-        if self.fused and input.is_cuda:
+        if self.fused and input.is_cuda and not self.variational:
             weights = [self.in_proj_weight,  self.out_proj_weight]
             biases = [self.in_proj_bias, self.out_proj_bias]
 

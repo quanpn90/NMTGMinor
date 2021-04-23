@@ -1,15 +1,9 @@
 import math
-
 import torch
 from torch import nn
 from torch.nn import Parameter
 import torch.nn.functional as F
 from .encdec_attention_func import encdec_attn_func
-
-if hasattr(torch._C, '_jit_set_profiling_executor'):
-    torch._C._jit_set_profiling_executor(False)
-if hasattr(torch._C, '_jit_set_profiling_mode'):
-    torch._C._jit_set_profiling_mode(False)
 
 
 class EncdecMultiheadAttn(nn.Module):
@@ -40,19 +34,6 @@ class EncdecMultiheadAttn(nn.Module):
         self.attn_func = encdec_attn_func
 
         self.reset_parameters()
-        try:
-            # the fast one requires apex and does not work with incremental so careful
-            from apex.contrib.multihead_attn.fast_encdec_multihead_attn_func import fast_encdec_attn_func
-            from .encdec_attention_func import fast_encdec_attn_func
-
-            self.attn_func_fast = fast_encdec_attn_func
-            self.optimized = 1
-
-        except ModuleNotFoundError as e:
-            # print(e)
-            # print("Cannot use fast self-attention implementation")
-            self.optimized = 2
-            self.attn_func_fast = None
 
     def reset_parameters(self, init='normal'):
         # nn.init.xavier_uniform_(self.in_proj_weight_q)
@@ -81,29 +62,11 @@ class EncdecMultiheadAttn(nn.Module):
         time_masking = False
         len_key = key.size(0)
 
-        if self.optimized == 1 and (self.training and not incremental) and len_key <= 1024 and query.is_cuda:
-            if attn_mask is not None:
-                if attn_mask.dim() == 3:
-                    attn_mask = attn_mask.squeeze(1)
-                attn_mask = attn_mask.byte()
-
-            outputs = self.attn_func_fast(time_masking, is_training, self.num_heads, query, key,
-                                          self.in_proj_weight_q, self.in_proj_weight_kv,
-                                          self.out_proj_weight,
-                                          attn_mask, self.dropout)
-
-            coverage = query.new_zeros(1, 1, query.size(0), key.size(0))
-            coverage.requires_grad = True
-
-        # during evaluation we use the python binding which is safer ....
-        else:
-            outputs, coverage, = self.attn_func(time_masking, is_training,
-                                                self.num_heads, query, key,
-                                                self.in_proj_weight_q, self.in_proj_weight_kv,
-                                                self.out_proj_weight, attn_mask, self.dropout,
-                                                incremental, incremental_cache)
-
-        # TODO: add incremental cache
+        outputs, coverage, = self.attn_func(time_masking, is_training,
+                                            self.num_heads, query, key,
+                                            self.in_proj_weight_q, self.in_proj_weight_kv,
+                                            self.out_proj_weight, attn_mask, self.dropout,
+                                            incremental, incremental_cache)
 
         return outputs, coverage
 
