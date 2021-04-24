@@ -76,6 +76,7 @@ class Adafactor(torch.optim.Optimizer):
 
     def _get_lr(self, param_group, param_state):
         rel_step_sz = param_group["lr"]
+        # this should override the rel_step_sz
         if param_group["relative_step"]:
             min_step = (
                 1e-6 * param_state["step"] if param_group["warmup_init"] else 1e-2
@@ -278,11 +279,13 @@ class Optim(object):
                                         weight_decay=self.weight_decay, amsgrad=self.amsgrad)
         elif self.method == 'adafactor':
 
+            relative_step = False if self.lr > 0 else True
             self.optimizer = Adafactor(self.params, lr=self.lr if self.lr > 0 else None,
                                        eps=(1e-30, 1e-3), beta1=None,
                                        weight_decay=self.weight_decay,
-                                       relative_step=False if self.lr > 0 else True,
-                                       scale_parameter=False if self.lr > 0 else True)
+                                       relative_step=relative_step,
+                                       scale_parameter=False if self.lr > 0 else True,
+                                       warmup_init=relative_step)
         elif self.method in ['fused_adam']:
 
             fast_adam = True
@@ -428,7 +431,11 @@ class Optim(object):
         self.lr = lr
 
     def getLearningRate(self):
-        return self.lr
+
+        if self.optimizer.param_groups[0]['lr'] is None:
+            return self.lr
+        else:
+            return self.optimizer.param_groups[0]['lr']
 
     def reset(self):
         self._step = self._first_step

@@ -99,38 +99,44 @@ class EncdecAttnFunc(torch.autograd.Function):
             matmul1_results = torch.matmul(queries.transpose(0, 1), keys.transpose(0, 1).transpose(1, 2))
             matmul1_results.mul_(scale_t[0])
 
-        if mask is not None:
-            # Self Attention Time Mask
-            mask = mask.to(torch.bool)
+        if not(mask_softmax_dropout_cuda is not None and matmul1_results.is_cuda):
+            if mask is not None:
+                # Self Attention Time Mask
+                mask = mask.to(torch.bool)
 
-            if len(mask.shape) == 3:
-                mask = mask.unsqueeze(1)  # for the head dimension
+                if len(mask.shape) == 3:
+                    mask = mask.unsqueeze(1)  # for the head dimension
+                else:
+                    mask = mask.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
+
+                batches, seql_q, seql_k = matmul1_results.size()
+                bsz = int(batches / heads)
+                matmul1_results = matmul1_results.view(bsz, heads, seql_q, seql_k)
+                # after unsqueezing the mask should have size [bsz x 1 x 1 x seql_k]
+                matmul1_results = matmul1_results.masked_fill_(mask, float('-inf'))
+                matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
+
+            dtype_ = torch.float64 if double_precision else torch.float32
+            softmax_results = F.softmax(matmul1_results, dim=-1, dtype=dtype_).type_as(matmul1_results)
+
+            # Dropout - is not executed for inference
+            if is_training:
+                dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
             else:
-                mask = mask.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
-
-            batches, seql_q, seql_k = matmul1_results.size()
-            bsz = int(batches / heads)
-            matmul1_results = matmul1_results.view(bsz, heads, seql_q, seql_k)
-            # after unsqueezing the mask should have size [bsz x 1 x 1 x seql_k]
-            matmul1_results = matmul1_results.masked_fill_(mask, float('-inf'))
-            matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
-
-        dtype_ = torch.float64 if double_precision else torch.float32
-        softmax_results = F.softmax(matmul1_results, dim=-1, dtype=dtype_).type_as(matmul1_results)
-
-        # Dropout - is not executed for inference
-        if is_training:
-            dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
+                dropout_results = softmax_results
+                dropout_mask = null_tensor
         else:
+            # Fused Softmax and Dropout
+            if len(mask.shape) == 3:
+                mask = mask.squeeze(1)
+
+            mask = mask.half() * torch.finfo(torch.float16).min
+            dropout_mask, softmax_results = \
+                mask_softmax_dropout_cuda.forward(is_training, False, heads,
+                                                  matmul1_results, mask, dropout_prob_t[0])
             dropout_results = softmax_results
-            dropout_mask = null_tensor
-        # else:
-        #     # Fused Softmax and Dropout
-        #     if len(mask.shape) == 3:
-        #         mask = mask.squeeze(1)
-        #     dropout_results, dropout_mask, softmax_results = \
-        #         mask_softmax_dropout_cuda.forward(is_training, False, heads,
-        #                                           matmul1_results, mask.byte(), dropout_prob_t[0])
+            # if not is_training:
+            #     dropout_results = softmax_results
 
         # Matmul2 Batched GEMMs
         # The output tensor specification is needed here to specify the non-standard output.
@@ -243,10 +249,10 @@ class EncdecAttnFunc(torch.autograd.Function):
         values_grads = torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
 
         if mask_softmax_dropout_cuda is not None and len_key <= 1024 \
-                and matmul2_dgrad1.is_cuda and matmul2_dgrad1.dtype == 'torch.float16':
+                and matmul2_dgrad1.is_cuda:
             # Fused and inplace softmax dropouts
             softmax_grads = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1, softmax_results,
-                                                               dropout_mask, torch.tensor([]), dropout_prob_t[0])
+                                                               dropout_mask, dropout_prob_t[0])
         else:
             # Mask and Scaling for Dropout (not a publically documented op)
             dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))

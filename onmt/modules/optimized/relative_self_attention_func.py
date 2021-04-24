@@ -217,35 +217,47 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
         attn_score = matmul_ac + matmul_bd  # both AC and BD are scaled with scale_t before in baddbmm
         # attn_score should have size [bsz*heads, len_q, len_k] for now
-        if mask is not None:
-            # Self Attention Time Mask
-            if use_time_mask:
-                assert (len(mask.size()) == 2), "Timing mask is not 2D!"
-                # assert (mask.size(0) == mask.size(1)), "Sequence length should match!"
-                mask = mask.to(torch.bool)
-                attn_score = attn_score.masked_fill_(mask, float('-inf'))
-            # Key Padding Mask
+        if not (mask_softmax_dropout_cuda is not None and len_k <= 2048 \
+                and attn_score.is_cuda):
+            if mask is not None:
+                # Self Attention Time Mask
+                if use_time_mask:
+                    assert (len(mask.size()) == 2), "Timing mask is not 2D!"
+                    # assert (mask.size(0) == mask.size(1)), "Sequence length should match!"
+                    mask = mask.to(torch.bool)
+                    attn_score = attn_score.masked_fill_(mask, float('-inf'))
+                # Key Padding Mask
+                else:
+                    batches, len_q, seql_k = attn_score.size()
+                    bsz = int(batches / heads)
+                    attn_score = attn_score.view(bsz, heads, len_q, seql_k)
+                    mask = mask.to(torch.bool)
+                    attn_score = attn_score.masked_fill_(mask.unsqueeze(1).unsqueeze(2), float('-inf'))
+                    attn_score = attn_score.view(bsz * heads, len_q, seql_k)
+
+            dtype_ = torch.float64 if double_precision else torch.float32
+            softmax_results = F.softmax(attn_score, dim=-1, dtype=dtype_).type_as(attn_score)
+
+            # Dropout - is not executed for inference
+            if is_training:
+                dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
             else:
-                batches, len_q, seql_k = attn_score.size()
-                bsz = int(batches / heads)
-                attn_score = attn_score.view(bsz, heads, len_q, seql_k)
-                mask = mask.to(torch.bool)
-                attn_score = attn_score.masked_fill_(mask.unsqueeze(1).unsqueeze(2), float('-inf'))
-                attn_score = attn_score.view(bsz * heads, len_q, seql_k)
-
-        dtype_ = torch.float64 if double_precision else torch.float32
-        softmax_results = F.softmax(attn_score, dim=-1, dtype=dtype_).type_as(attn_score)
-
-        nan_mask = torch.isnan(softmax_results)
-        if nan_mask.any():
-            softmax_results.masked_fill_(nan_mask, 0)
-
-        # Dropout - is not executed for inference
-        if is_training:
-            dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
+                dropout_results = softmax_results
+                dropout_mask = null_tensor
         else:
+
+            # Fused Softmax and Dropout
+            mask = mask.half() * torch.finfo(torch.float16).min
+            dropout_mask, softmax_results = \
+                mask_softmax_dropout_cuda.forward(is_training, use_time_mask, heads,
+                                                  attn_score, mask, dropout_prob_t[0])
+
             dropout_results = softmax_results
-            dropout_mask = null_tensor
+
+        nan_mask = null_tensor
+        # nan_mask = torch.isnan(softmax_results)
+        # if nan_mask.any():
+        #     softmax_results.masked_fill_(nan_mask, 0)
 
         # Matmul2 Batched GEMMs
         # The output tensor specification is needed here to specify the non-standard output.
@@ -378,9 +390,9 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
         # haven't tested with len_k > 1024 ...
         if mask_softmax_dropout_cuda is not None and len_k <= 1024 \
-                and matmul2_dgrad1.is_cuda and matmul2_dgrad1.dtype == 'torch.float16':
+                and matmul2_dgrad1.is_cuda:
             softmax_grads = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1, softmax_results,
-                                                               dropout_mask, torch.tensor([]), dropout_prob_t[0])
+                                                               dropout_mask, dropout_prob_t[0])
         else:
             # Mask and Scaling for Dropout (not a publically documented op)
             if dropout_prob_t[0] > 0.0:
