@@ -107,10 +107,10 @@ class PositionWiseFeedForward(nn.Module):
             if not (not self.glu and self.activation == 'relu'):
                 if self.variational:
                     hidden = variational_dropout(hidden, p=self.dropout, training=self.training,
-                                                 inplace=self.activation in ['silu', 'relu', 'swish'])
+                                                 inplace=self.activation in ['silu', 'relu', 'swish', 'gelu'])
                 else:
                     hidden = F.dropout(hidden, p=self.dropout, training=self.training,
-                                       inplace=self.activation in ['silu', 'relu', 'swish'])
+                                       inplace=self.activation in ['silu', 'relu', 'swish', 'gelu'])
             hidden = F.linear(hidden, self.out_proj_weight, self.out_proj_bias)
 
         return hidden
