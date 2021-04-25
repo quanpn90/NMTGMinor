@@ -309,16 +309,16 @@ __global__ void additive_masked_softmax_dropout_warp_forward_vec4(output_t *dst,
             #pragma unroll
             for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
     	//masking_value is a large negative value
-                elements_input[i][it + element] = -65504;
+                elements_input[i][it + element] = -10000;
             }
-    
+
             if (element_index < batch_element_count) {
                 int itr_jmp = it * WARP_SIZE;
                 int itr_idx = i * element_count + itr_jmp;
                 copy_vector<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], src + itr_idx);
                 apply_additive_mask<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], curr_mask + itr_jmp); //(__half)-std::numeric_limits<float>::infinity()
-            } 
-    
+            }
+
         }
     }
     // convert input_t to acc_t
@@ -330,25 +330,25 @@ __global__ void additive_masked_softmax_dropout_warp_forward_vec4(output_t *dst,
             elements[i][it] = elements_input[i][it];
         }
     }
- 
+
     constexpr uint32_t  FULL_MASK = 0xffffffff;
- 
+
     // compute local max_value
- 
+
     // take the max_value of the first element to avoid one max call
     acc_t max_value[WARP_BATCH];
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
         max_value[i] = elements[i][0];
     }
- 
+
     #pragma unroll
     for (int it = 1;it < WARP_ITERATIONS;++it) {
         for (int i = 0;i < WARP_BATCH;++i) {
             max_value[i] = (max_value[i] > elements[i][it]) ? max_value[i] : elements[i][it];
         }
     }
- 
+
     // reduction max_value
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
@@ -362,10 +362,10 @@ __global__ void additive_masked_softmax_dropout_warp_forward_vec4(output_t *dst,
             max_value[i] = max_value[i] > val[i] ? max_value[i] : val[i];
         }
     }
- 
+
     // compute local sum
     acc_t sum[WARP_BATCH] { 0.0f };
- 
+
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
         for (int it = 0;it < WARP_ITERATIONS;++it) {
@@ -373,7 +373,7 @@ __global__ void additive_masked_softmax_dropout_warp_forward_vec4(output_t *dst,
             sum[i] += elements[i][it];
         }
     }
- 
+
     // reduction sum
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
@@ -383,7 +383,7 @@ __global__ void additive_masked_softmax_dropout_warp_forward_vec4(output_t *dst,
         }
     }
     auto seeds = at::cuda::philox::unpack(philox_args);
-    Philox ph(std::get<0>(seeds), tid, std::get<1>(seeds));     
+    Philox ph(std::get<0>(seeds), tid, std::get<1>(seeds));
     uint8_t rands[WARP_BATCH][WARP_ITERATIONS];
     float4 rand_num;
     #pragma unroll
@@ -395,7 +395,7 @@ __global__ void additive_masked_softmax_dropout_warp_forward_vec4(output_t *dst,
             int element_index = ELEMENTS_PER_LDG_STG * local_idx + it * WARP_SIZE;
             if (element_index < element_count) {
 		rand_num = uniform4(ph());
-                rands[i][it] = (rand_num.x <= p) > 0.5;  
+                rands[i][it] = (rand_num.x <= p) > 0.5;
                 rands[i][it+1] = (rand_num.y <= p) > 0.5;
                 rands[i][it+2] = (rand_num.z <= p) > 0.5;
                 rands[i][it+3] = (rand_num.w <= p) > 0.5;
@@ -419,7 +419,7 @@ __global__ void additive_masked_softmax_dropout_warp_forward_vec4(output_t *dst,
                     out[element] = rands[i][it+element] * (pinv * (elements[i][it + element] / sum[i]));
                 }
                 copy_vector<output_t, ELEMENTS_PER_LDG_STG>(dst + i * element_count + it * WARP_SIZE, out);
-    
+
             }
             else {
                 break;
@@ -441,7 +441,7 @@ __global__ void additive_masked_softmax_dropout_warp_forward(output_t *dst, uint
     int local_batches = batch_size - first_batch;
     if (local_batches > WARP_BATCH)
         local_batches = WARP_BATCH;
-     
+
     // there might be multiple batches per warp. compute the index within the batch
     int local_idx = threadIdx.x;
     //vectorize if element_count is multiple of 4, else don't vectorize
@@ -451,7 +451,7 @@ __global__ void additive_masked_softmax_dropout_warp_forward(output_t *dst, uint
     src += thread_offset;
     dst += thread_offset;
     dropout_mask += thread_offset;
-    
+
     // load data from global memory
     for (int i = 0;i < WARP_BATCH;++i) {
         int batch_element_count = (i >= local_batches) ? 0 : element_count;
@@ -463,16 +463,16 @@ __global__ void additive_masked_softmax_dropout_warp_forward(output_t *dst, uint
             #pragma unroll
             for (int element = 0;element < 1;++element) {
     	//masking_value is a large negative value
-                elements_input[i][it + element] = -65504;
+                elements_input[i][it + element] = -10000;
             }
-    
+
             if (element_index < batch_element_count) {
                 int itr_jmp = it * WARP_SIZE;
                 int itr_idx = i * element_count + itr_jmp;
                 copy_vector<input_t, 1>(&elements_input[i][it], src + itr_idx);
-                apply_additive_mask<input_t, 1>(&elements_input[i][it], curr_mask + itr_jmp); 
-            } 
-    
+                apply_additive_mask<input_t, 1>(&elements_input[i][it], curr_mask + itr_jmp);
+            }
+
         }
     }
     // convert input_t to acc_t
@@ -484,25 +484,25 @@ __global__ void additive_masked_softmax_dropout_warp_forward(output_t *dst, uint
             elements[i][it] = elements_input[i][it];
         }
     }
- 
+
     constexpr uint32_t  FULL_MASK = 0xffffffff;
- 
+
     // compute local max_value
- 
+
     // take the max_value of the first element to avoid one max call
     acc_t max_value[WARP_BATCH];
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
         max_value[i] = elements[i][0];
     }
- 
+
     #pragma unroll
     for (int it = 1;it < WARP_ITERATIONS;++it) {
         for (int i = 0;i < WARP_BATCH;++i) {
             max_value[i] = (max_value[i] > elements[i][it]) ? max_value[i] : elements[i][it];
         }
     }
- 
+
     // reduction max_value
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
@@ -516,10 +516,10 @@ __global__ void additive_masked_softmax_dropout_warp_forward(output_t *dst, uint
             max_value[i] = max_value[i] > val[i] ? max_value[i] : val[i];
         }
     }
- 
+
     // compute local sum
     acc_t sum[WARP_BATCH] { 0.0f };
- 
+
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
         for (int it = 0;it < WARP_ITERATIONS;++it) {
@@ -527,7 +527,7 @@ __global__ void additive_masked_softmax_dropout_warp_forward(output_t *dst, uint
             sum[i] += elements[i][it];
         }
     }
- 
+
     // reduction sum
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
@@ -543,7 +543,7 @@ __global__ void additive_masked_softmax_dropout_warp_forward(output_t *dst, uint
       tid,
       std::get<1>(seeds),
       &state);
-     
+
     // store result
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -556,19 +556,19 @@ __global__ void additive_masked_softmax_dropout_warp_forward(output_t *dst, uint
                 output_t out[1];
                 acc_t softmax_out[1];
                 uint8_t dropout_mask_temp[1];
-                //generate a vector of random numbers here 
+                //generate a vector of random numbers here
                 float rand = curand_uniform(&state);
-                float *rand_ptr = (float*)(&rand);    
+                float *rand_ptr = (float*)(&rand);
                 #pragma unroll
                 for (int element = 0;element < 1;++element) {
-    	        softmax_out[element] = (elements[i][it + element] / sum[i]);	
-                    rand_ptr[element] = rand_ptr[element] <= p;       
+    	        softmax_out[element] = (elements[i][it + element] / sum[i]);
+                    rand_ptr[element] = rand_ptr[element] <= p;
                     out[element] = rand_ptr[element] * pinv * softmax_out[element];
-    	            dropout_mask_temp[element] = rand_ptr[element] > 0.5; // just to distinguish 0.0f and 1.0f 
+    	            dropout_mask_temp[element] = rand_ptr[element] > 0.5; // just to distinguish 0.0f and 1.0f
                 }
                 copy_vector<output_t, 1>(dst + i * element_count + it * WARP_SIZE, out);
                 copy_vector<uint8_t, 1>(dropout_mask + i * element_count + it * WARP_SIZE, dropout_mask_temp);
-    
+
             }
             else {
                 break;
@@ -599,10 +599,10 @@ bool warp_additive_masked_softmax_dropout_kernel(int element_count,
     // determine size of a warp
     const int next_power_of_two = 1 << log2_elements;
     warp_size = (next_power_of_two < 32) ? next_power_of_two : 32;
- 
+
     // determine how many batches a warp should process.
     batches_per_warp = (next_power_of_two <= 128) ? 2 : 1;
-    bool flag_vec4 = (element_count % 4 == 0); 
+    bool flag_vec4 = (element_count % 4 == 0);
     switch (log2_elements) {
     case 0: // 1
         kernel = &additive_masked_softmax_dropout_warp_forward<input_t, output_t, acc_t, 2,1,1,1>;
@@ -667,7 +667,7 @@ bool dispatch_additive_masked_softmax_dropout(
                                                 float p,
                                                 cudaStream_t streamid)// p is the probability to keep, not drop
 {
-	
+
     if (softmax_elements == 0) {
         return true;
     } else if (softmax_elements <= 2048) {
@@ -683,7 +683,7 @@ bool dispatch_additive_masked_softmax_dropout(
         {
             return false;
         }
- 
+
         // use 128 threads per block to maximimize gpu utilization
         constexpr int threads_per_block = 128;
         // compute warps per block.
@@ -698,10 +698,10 @@ bool dispatch_additive_masked_softmax_dropout(
 	        std::lock_guard<std::mutex> lock(gen->mutex_);
 	        rng_engine_inputs = gen->philox_cuda_state(counter_offset);
         }
- 
+
         // compute launch size
         dim3 threads(warp_size, warps_per_block, 1);
-         
+
         // launch
         kernel<<<blocks, threads, 0, streamid>>>(dst, dropout_mask, src, pad_mask, batch_count, softmax_elements_stride, softmax_elements, pad_batch_stride, rng_engine_inputs, p);
         return true;
@@ -720,22 +720,22 @@ __global__ void additive_masked_softmax_warp_forward(input_t *dst, const output_
                                                      int stride, int element_count, int pad_batch_stride)
 {
     assert(ELEMENTS_PER_LDG_STG==1);
- 
+
     int first_batch = (blockDim.y * blockIdx.x + threadIdx.y) * WARP_BATCH;
- 
+
     // batch_size might not be a multiple of WARP_BATCH. Check how
     // many batches have to computed within this WARP.
     int local_batches = batch_size - first_batch;
     if (local_batches > WARP_BATCH)
         local_batches = WARP_BATCH;
- 
+
     // there might be multiple batches per warp. compute the index within the batch
     int local_idx = threadIdx.x;
 
     int thread_offset =  first_batch * stride + ELEMENTS_PER_LDG_STG * local_idx;
     src += thread_offset;
     dst += thread_offset;
- 
+
     // load data from global memory
     input_t elements_input[WARP_BATCH][WARP_ITERATIONS];
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -747,23 +747,23 @@ __global__ void additive_masked_softmax_warp_forward(input_t *dst, const output_
             #pragma unroll
             for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
 		//masking_value is a large negative value
-                elements_input[i][it + element] = -65504;
+                elements_input[i][it + element] = -10000;
             }
- 
+
             if (element_index < batch_element_count) {
                 int itr_jmp = it * WARP_SIZE;
                 int itr_idx = i * element_count + itr_jmp;
                 copy_vector<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], src + itr_idx);
-                //apply_mask<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], 
-                //                                          (__half)-std::numeric_limits<float>::infinity(), 
+                //apply_mask<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it],
+                //                                          (__half)-std::numeric_limits<float>::infinity(),
                 //                                          curr_mask + itr_jmp);
                 // apply additive mask here
                 elements_input[i][it] += *(curr_mask + itr_jmp);
-	    } 
- 
+	    }
+
         }
     }
- 
+
     // convert input_t to acc_t
     acc_t elements[WARP_BATCH][WARP_ITERATIONS];
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -771,25 +771,25 @@ __global__ void additive_masked_softmax_warp_forward(input_t *dst, const output_
             elements[i][it] = elements_input[i][it];
         }
     }
- 
+
     constexpr uint32_t  FULL_MASK = 0xffffffff;
- 
+
     // compute local max_value
- 
+
     // take the max_value of the first element to avoid one max call
     acc_t max_value[WARP_BATCH];
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
         max_value[i] = elements[i][0];
     }
- 
+
     #pragma unroll
     for (int it = 1;it < WARP_ITERATIONS;++it) {
         for (int i = 0;i < WARP_BATCH;++i) {
             max_value[i] = (max_value[i] > elements[i][it]) ? max_value[i] : elements[i][it];
         }
     }
- 
+
     // reduction max_value
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
@@ -803,10 +803,10 @@ __global__ void additive_masked_softmax_warp_forward(input_t *dst, const output_
             max_value[i] = max_value[i] > val[i] ? max_value[i] : val[i];
         }
     }
- 
+
     // compute local sum
     acc_t sum[WARP_BATCH] { 0.0f };
- 
+
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
         for (int it = 0;it < WARP_ITERATIONS;++it) {
@@ -815,7 +815,7 @@ __global__ void additive_masked_softmax_warp_forward(input_t *dst, const output_
             sum[i] += elements[i][it];
         }
     }
- 
+
     // reduction sum
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
@@ -824,7 +824,7 @@ __global__ void additive_masked_softmax_warp_forward(input_t *dst, const output_
             sum[i] += __shfl_xor_sync(FULL_MASK, sum[i], offset, WARP_SIZE);
         }
     }
- 
+
     // store result
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -857,7 +857,7 @@ using additive_masked_softmax_forward_func = void(*)(input_t *dst,
 const output_t *src, const half *pad_mask,
 int batch_size, int stride,
 int element_count, int pad_batch_stride);
- 
+
 template <typename input_t, typename output_t, typename acc_t>
 bool warp_additive_masked_softmax_kernel(int log2_elements, int &warp_size,
 int &batches_per_warp,
@@ -866,10 +866,10 @@ additive_masked_softmax_forward_func<input_t, output_t> &kernel) {
     // determine size of a warp
     const int next_power_of_two = 1 << log2_elements;
     warp_size = (next_power_of_two < 32) ? next_power_of_two : 32;
- 
+
     // determine how many batches a warp should process.
     batches_per_warp = (next_power_of_two <= 128) ? 2 : 1;
- 
+
     switch (log2_elements) {
     case 0: // 1
         kernel = &additive_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,1,1>;
@@ -909,7 +909,7 @@ additive_masked_softmax_forward_func<input_t, output_t> &kernel) {
     }
     return true;
 }
- 
+
 template<typename input_t, typename output_t, typename acc_t>
 bool dispatch_additive_masked_softmax(
 output_t *dst,
@@ -926,7 +926,7 @@ int pad_batch_stride)
         // compute function index. there's a function for each power of two size up to 1024.
         int log2_elements = 0;
         while ((1 << log2_elements) < softmax_elements) ++log2_elements;
- 
+
         additive_masked_softmax_forward_func<input_t, output_t> kernel;
         int warp_size, batches_per_warp;
         if (!warp_additive_masked_softmax_kernel<input_t, output_t, acc_t>(log2_elements,
@@ -935,18 +935,18 @@ int pad_batch_stride)
         {
             return false;
         }
- 
+
         // use 128 threads per block to maximimize gpu utilization
         constexpr int threads_per_block = 128;
- 
+
         // compute warps per block.
         int warps_per_block = (threads_per_block / warp_size);
- 
+
         // compute launch size
         int batches_per_block = warps_per_block * batches_per_warp;
         int blocks = (batch_count + batches_per_block - 1) / batches_per_block;
         dim3 threads(warp_size, warps_per_block, 1);
- 
+
         // launch
         kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(dst, src, pad_mask, batch_count, softmax_elements_stride, softmax_elements, pad_batch_stride);
         return true;
@@ -1008,22 +1008,22 @@ __global__ void masked_softmax_warp_forward(input_t *dst, const output_t *src,
                                             int pad_batch_stride)
 {
     assert(ELEMENTS_PER_LDG_STG==1);
- 
+
     int first_batch = (blockDim.y * blockIdx.x + threadIdx.y) * WARP_BATCH;
- 
+
     // batch_size might not be a multiple of WARP_BATCH. Check how
     // many batches have to computed within this WARP.
     int local_batches = batch_size - first_batch;
     if (local_batches > WARP_BATCH)
         local_batches = WARP_BATCH;
- 
+
     // there might be multiple batches per warp. compute the index within the batch
     int local_idx = threadIdx.x;
 
     int thread_offset =  first_batch * stride + ELEMENTS_PER_LDG_STG * local_idx;
     src += thread_offset;
     dst += thread_offset;
- 
+
     // load data from global memory
     input_t elements_input[WARP_BATCH][WARP_ITERATIONS];
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -1036,19 +1036,19 @@ __global__ void masked_softmax_warp_forward(input_t *dst, const output_t *src,
             for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
                 elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
             }
- 
+
             if (element_index < batch_element_count) {
                 int itr_jmp = it * WARP_SIZE;
                 int itr_idx = i * element_count + itr_jmp;
                 copy_vector<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], src + itr_idx);
-                apply_mask<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], 
-                                                          (__half)-std::numeric_limits<float>::infinity(), 
+                apply_mask<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it],
+                                                          (__half)-std::numeric_limits<float>::infinity(),
                                                           curr_mask + itr_jmp);
             }
- 
+
         }
     }
- 
+
     // convert input_t to acc_t
     acc_t elements[WARP_BATCH][WARP_ITERATIONS];
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -1056,25 +1056,25 @@ __global__ void masked_softmax_warp_forward(input_t *dst, const output_t *src,
             elements[i][it] = elements_input[i][it];
         }
     }
- 
+
     constexpr uint32_t  FULL_MASK = 0xffffffff;
- 
+
     // compute local max_value
- 
+
     // take the max_value of the first element to avoid one max call
     acc_t max_value[WARP_BATCH];
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
         max_value[i] = elements[i][0];
     }
- 
+
     #pragma unroll
     for (int it = 1;it < WARP_ITERATIONS;++it) {
         for (int i = 0;i < WARP_BATCH;++i) {
             max_value[i] = (max_value[i] > elements[i][it]) ? max_value[i] : elements[i][it];
         }
     }
- 
+
     // reduction max_value
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
@@ -1088,10 +1088,10 @@ __global__ void masked_softmax_warp_forward(input_t *dst, const output_t *src,
             max_value[i] = max_value[i] > val[i] ? max_value[i] : val[i];
         }
     }
- 
+
     // compute local sum
     acc_t sum[WARP_BATCH] { 0.0f };
- 
+
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
         for (int it = 0;it < WARP_ITERATIONS;++it) {
@@ -1100,7 +1100,7 @@ __global__ void masked_softmax_warp_forward(input_t *dst, const output_t *src,
             sum[i] += elements[i][it];
         }
     }
- 
+
     // reduction sum
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
@@ -1109,7 +1109,7 @@ __global__ void masked_softmax_warp_forward(input_t *dst, const output_t *src,
             sum[i] += __shfl_xor_sync(FULL_MASK, sum[i], offset, WARP_SIZE);
         }
     }
- 
+
     // store result
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -1139,16 +1139,16 @@ __global__ void masked_softmax_warp_forward(input_t *dst, const output_t *src,
 // ELEMENTS_PER_LDG_STG has to be 1.
 template <typename input_t, typename output_t>
 using masked_softmax_forward_func = void(*)(input_t *dst, const output_t *src, const uint8_t *pad_mask, int batch_size, int stride, int element_count, int pad_batch_stride);
- 
+
 template <typename input_t, typename output_t, typename acc_t>
 bool warp_masked_softmax_kernel(int log2_elements, int &warp_size, int &batches_per_warp, masked_softmax_forward_func<input_t, output_t> &kernel) {
     // determine size of a warp
     const int next_power_of_two = 1 << log2_elements;
     warp_size = (next_power_of_two < 32) ? next_power_of_two : 32;
- 
+
     // determine how many batches a warp should process.
     batches_per_warp = (next_power_of_two <= 128) ? 2 : 1;
- 
+
     switch (log2_elements) {
     case 0: // 1
         kernel = &masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,1,1>;
@@ -1188,7 +1188,7 @@ bool warp_masked_softmax_kernel(int log2_elements, int &warp_size, int &batches_
     }
     return true;
 }
- 
+
 template<typename input_t, typename output_t, typename acc_t>
 bool dispatch_masked_softmax(output_t *dst, const input_t *src, const uint8_t *pad_mask, int softmax_elements, int softmax_elements_stride, int batch_count, int pad_batch_stride)
 {
@@ -1198,24 +1198,24 @@ bool dispatch_masked_softmax(output_t *dst, const input_t *src, const uint8_t *p
         // compute function index. there's a function for each power of two size up to 1024.
         int log2_elements = 0;
         while ((1 << log2_elements) < softmax_elements) ++log2_elements;
- 
+
         masked_softmax_forward_func<input_t, output_t> kernel;
         int warp_size, batches_per_warp;
         if (!warp_masked_softmax_kernel<input_t, output_t, acc_t>(log2_elements, warp_size, batches_per_warp, kernel)) {
             return false;
         }
- 
+
         // use 128 threads per block to maximimize gpu utilization
         constexpr int threads_per_block = 128;
- 
+
         // compute warps per block.
         int warps_per_block = (threads_per_block / warp_size);
- 
+
         // compute launch size
         int batches_per_block = warps_per_block * batches_per_warp;
         int blocks = (batch_count + batches_per_block - 1) / batches_per_block;
         dim3 threads(warp_size, warps_per_block, 1);
- 
+
         // launch
         kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(dst, src, pad_mask, batch_count, softmax_elements_stride, softmax_elements, pad_batch_stride);
         return true;
@@ -1238,22 +1238,22 @@ int element_count,
 int mod_seq_len)
 {
     assert(ELEMENTS_PER_LDG_STG==1);
- 
+
     int first_batch = (blockDim.y * blockIdx.x + threadIdx.y) * WARP_BATCH;
- 
+
     // batch_size might not be a multiple of WARP_BATCH. Check how
     // many batches have to computed within this WARP.
     int local_batches = batch_size - first_batch;
     if (local_batches > WARP_BATCH)
         local_batches = WARP_BATCH;
- 
+
     // there might be multiple batches per warp. compute the index within the batch
     int local_idx = threadIdx.x;
 
     int thread_offset =  first_batch * stride + ELEMENTS_PER_LDG_STG * local_idx;
     src += thread_offset;
     dst += thread_offset;
- 
+
     // load data from global memory
     input_t elements_input[WARP_BATCH][WARP_ITERATIONS];
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -1266,19 +1266,19 @@ int mod_seq_len)
             for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
                 elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
             }
- 
+
             if (element_index < batch_element_count) {
                 int itr_jmp = it * WARP_SIZE;
                 int itr_idx = i * element_count + itr_jmp;
                 copy_vector<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], src + itr_idx);
-                apply_mask<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], 
-                                                          (__half)-std::numeric_limits<float>::infinity(), 
+                apply_mask<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it],
+                                                          (__half)-std::numeric_limits<float>::infinity(),
                                                           curr_mask + itr_jmp);
             }
- 
+
         }
     }
- 
+
     // convert input_t to acc_t
     acc_t elements[WARP_BATCH][WARP_ITERATIONS];
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -1286,25 +1286,25 @@ int mod_seq_len)
             elements[i][it] = elements_input[i][it];
         }
     }
- 
+
     constexpr uint32_t  FULL_MASK = 0xffffffff;
- 
+
     // compute local max_value
- 
+
     // take the max_value of the first element to avoid one max call
     acc_t max_value[WARP_BATCH];
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
         max_value[i] = elements[i][0];
     }
- 
+
     #pragma unroll
     for (int it = 1;it < WARP_ITERATIONS;++it) {
         for (int i = 0;i < WARP_BATCH;++i) {
             max_value[i] = (max_value[i] > elements[i][it]) ? max_value[i] : elements[i][it];
         }
     }
- 
+
     // reduction max_value
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
@@ -1318,10 +1318,10 @@ int mod_seq_len)
             max_value[i] = max_value[i] > val[i] ? max_value[i] : val[i];
         }
     }
- 
+
     // compute local sum
     acc_t sum[WARP_BATCH] { 0.0f };
- 
+
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
         for (int it = 0;it < WARP_ITERATIONS;++it) {
@@ -1330,7 +1330,7 @@ int mod_seq_len)
             sum[i] += elements[i][it];
         }
     }
- 
+
     // reduction sum
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
@@ -1339,7 +1339,7 @@ int mod_seq_len)
             sum[i] += __shfl_xor_sync(FULL_MASK, sum[i], offset, WARP_SIZE);
         }
     }
- 
+
     // store result
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -1370,17 +1370,17 @@ int mod_seq_len)
 template <typename input_t, typename output_t>
 using time_masked_softmax_forward_func = void(*)(input_t *dst,
 const output_t *src, const uint8_t *pad_mask, int batch_size, int stride, int element_count, int mod_seq_len);
- 
+
 template <typename input_t, typename output_t, typename acc_t>
 bool warp_time_masked_softmax_kernel(int log2_elements,
 int &warp_size, int &batches_per_warp, time_masked_softmax_forward_func<input_t, output_t> &kernel) {
     // determine size of a warp
     const int next_power_of_two = 1 << log2_elements;
     warp_size = (next_power_of_two < 32) ? next_power_of_two : 32;
- 
+
     // determine how many batches a warp should process.
     batches_per_warp = (next_power_of_two <= 128) ? 2 : 1;
- 
+
     switch (log2_elements) {
     case 0: // 1
         kernel = &time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,1,1>;
@@ -1420,7 +1420,7 @@ int &warp_size, int &batches_per_warp, time_masked_softmax_forward_func<input_t,
     }
     return true;
 }
- 
+
 template<typename input_t, typename output_t, typename acc_t>
 bool dispatch_time_masked_softmax(
                                 output_t *dst,
@@ -1437,7 +1437,7 @@ bool dispatch_time_masked_softmax(
         // compute function index. there's a function for each power of two size up to 1024.
         int log2_elements = 0;
         while ((1 << log2_elements) < softmax_elements) ++log2_elements;
- 
+
         time_masked_softmax_forward_func<input_t, output_t> kernel;
         int warp_size, batches_per_warp;
         if (!warp_time_masked_softmax_kernel<input_t, output_t, acc_t>(log2_elements,
@@ -1446,18 +1446,18 @@ bool dispatch_time_masked_softmax(
                                                                        kernel)) {
             return false;
         }
- 
+
         // use 128 threads per block to maximimize gpu utilization
         constexpr int threads_per_block = 128;
- 
+
         // compute warps per block.
         int warps_per_block = (threads_per_block / warp_size);
- 
+
         // compute launch size
         int batches_per_block = warps_per_block * batches_per_warp;
         int blocks = (batch_count + batches_per_block - 1) / batches_per_block;
         dim3 threads(warp_size, warps_per_block, 1);
- 
+
         // launch
         kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(dst,
                                                                          src,
@@ -1557,7 +1557,7 @@ __global__ void masked_scale_softmax_warp_backward_masked_dgrad(output_t *gradIn
     acc_t sum[WARP_BATCH];
     #pragma unroll
     for (int i = 0;  i < WARP_BATCH;  ++i) {
-        sum[i] = grad_reg[i][0]; 
+        sum[i] = grad_reg[i][0];
         #pragma unroll
         for (int it = 1;  it < WARP_ITERATIONS;  ++it) {
             sum[i] += grad_reg[i][it];
@@ -1805,7 +1805,7 @@ element_count)
     acc_t sum[WARP_BATCH];
     #pragma unroll
     for (int i = 0;  i < WARP_BATCH;  ++i) {
-        sum[i] = grad_reg[i][0]; 
+        sum[i] = grad_reg[i][0];
         #pragma unroll
         for (int it = 1;  it < WARP_ITERATIONS;  ++it) {
             sum[i] += grad_reg[i][it];
@@ -1857,17 +1857,17 @@ __global__ void masked_scale_softmax_warp_backward_recompute(output_t *gradInput
 
     // the first element to process by the current thread
     int thread_offset =  first_batch * stride + ELEMENTS_PER_LDG_STG * local_idx;
-    
+
     grad += thread_offset;
     softmax_input += thread_offset;
     gradInput += thread_offset;
     mask += thread_offset;
-    
+
     // The nested loops over WARP_BATCH and then WARP_ITERATIONS can be simplified to one loop,
     // but I think doing so would obfuscate the logic of the algorithm, thus I chose to keep
     // the nested loops.
     // This should have no impact on performance because the loops are unrolled anyway.
-    
+
     // load data from global memory
     for (int i = 0;  i < WARP_BATCH;  ++i) {
         int batch_element_count = (i >= local_batches) ? 0 : element_count;
@@ -1876,11 +1876,11 @@ __global__ void masked_scale_softmax_warp_backward_recompute(output_t *gradInput
         #pragma unroll
         for (int it = 0;  it < WARP_ITERATIONS;  it += ELEMENTS_PER_LDG_STG) {
             int element_index = ELEMENTS_PER_LDG_STG * local_idx + it * WARP_SIZE;
-    
+
             #pragma unroll
             for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
     	//masking_value is a large negative value
-                elements_input[i][it + element] = -65504;
+                elements_input[i][it + element] = -10000;
     	        grad_reg[i][it+element] = acc_t(0);
             }
     

@@ -144,7 +144,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
             r_head_k = pos_lin_results.view(pos.size(0), bsz * heads, head_dim)  # T x BxH x D
         else:
-            pos_lin_results = pos.view(pos.size(0), bsz*heads, head_dim) # T x BxH x D
+            pos_lin_results = pos.view(pos.size(0), bsz * heads, head_dim)  # T x BxH x D
             r_head_k = pos_lin_results
 
         # Slice out q,k,v from one big Input Linear output (should only impact meta data, no copies!)
@@ -217,26 +217,43 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
         attn_score = matmul_ac + matmul_bd  # both AC and BD are scaled with scale_t before in baddbmm
         # attn_score should have size [bsz*heads, len_q, len_k] for now
-        if not (mask_softmax_dropout_cuda is not None and len_k <= 2048 \
-                and attn_score.is_cuda):
-            if mask is not None:
-                # Self Attention Time Mask
-                if use_time_mask:
-                    assert (len(mask.size()) == 2), "Timing mask is not 2D!"
-                    # assert (mask.size(0) == mask.size(1)), "Sequence length should match!"
-                    mask = mask.to(torch.bool)
-                    attn_score = attn_score.masked_fill_(mask, float('-inf'))
-                # Key Padding Mask
-                else:
-                    batches, len_q, seql_k = attn_score.size()
-                    bsz = int(batches / heads)
-                    attn_score = attn_score.view(bsz, heads, len_q, seql_k)
-                    mask = mask.to(torch.bool)
-                    attn_score = attn_score.masked_fill_(mask.unsqueeze(1).unsqueeze(2), float('-inf'))
-                    attn_score = attn_score.view(bsz * heads, len_q, seql_k)
 
+        # if True:
+        if mask is not None:
+            # Self Attention Time Mask
+            if use_time_mask:
+                assert (len(mask.size()) == 2), "Timing mask is not 2D!"
+                # assert (mask.size(0) == mask.size(1)), "Sequence length should match!"
+                mask = mask.to(torch.bool)
+            # Key Padding Mask
+            else:
+                batches, len_q, seql_k = attn_score.size()
+                bsz = int(batches / heads)
+                attn_score = attn_score.view(bsz, heads, len_q, seql_k)
+                mask = mask.to(torch.bool)
+                mask = mask.unsqueeze(1).unsqueeze(2)
+
+        attn_score.masked_fill_(mask, float('-inf'))
+        attn_score = attn_score.view(bsz * heads, len_q, len_k)
+
+        if not (mask_softmax_dropout_cuda is not None and len_k <= 2048 and attn_score.is_cuda):
+
+            # if True:
             dtype_ = torch.float64 if double_precision else torch.float32
             softmax_results = F.softmax(attn_score, dim=-1, dtype=dtype_).type_as(attn_score)
+
+            # so the use_time_mask is correct but not the other way around
+            # if mask_softmax_dropout_cuda:
+            #
+            #     _, softmax_results2 = \
+            #         mask_softmax_dropout_cuda.forward(is_training, heads,
+            #                                           attn_score,
+            #                                           dropout_prob_t[0])
+            #
+            #     result = torch.allclose(softmax_results, softmax_results2, atol=1e-3, rtol=1e-3)
+            #     if is_training:
+            #         print(softmax_results - softmax_results2)
+            #         print(result)
 
             # Dropout - is not executed for inference
             if is_training:
@@ -244,15 +261,17 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             else:
                 dropout_results = softmax_results
                 dropout_mask = null_tensor
+            ctx.fused_softmax_dropout = False
         else:
-
             # Fused Softmax and Dropout
-            mask = mask.half() * torch.finfo(torch.float16).min
             dropout_mask, softmax_results = \
-                mask_softmax_dropout_cuda.forward(is_training, use_time_mask, heads,
-                                                  attn_score, mask, dropout_prob_t[0])
+                mask_softmax_dropout_cuda.forward(is_training, heads, attn_score, dropout_prob_t[0])
 
+            # In this fused (inplace) dropout-softmax, "softmax_results" is mask-dropped already
+            # We need to store the attn_score to recompute the softmax later in the backward pass
             dropout_results = softmax_results
+            softmax_results = attn_score
+            ctx.fused_softmax_dropout = True
 
         nan_mask = null_tensor
         # nan_mask = torch.isnan(softmax_results)
@@ -304,9 +323,9 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         ctx.return_coverage = return_coverage
 
         if return_coverage:
-            return (outputs, softmax_results)
+            return (outputs, dropout_results)
         else:
-            return (outputs, )
+            return (outputs,)
 
     @staticmethod
     @custom_bwd
@@ -388,20 +407,29 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # GEMM: Per batch: ( len_q x head_dim ) x ( head_dim x seql_k ) = ( len_q x seql_k )
         torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
 
-        # haven't tested with len_k > 1024 ...
-        if mask_softmax_dropout_cuda is not None and len_k <= 1024 \
-                and matmul2_dgrad1.is_cuda:
-            softmax_grads = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1, softmax_results,
-                                                               dropout_mask, dropout_prob_t[0])
+        if ctx.fused_softmax_dropout:
+            assert (mask_softmax_dropout_cuda is not None)
+            # softmax_results here is actually softmax input to recompute softmax (attn_score above)
+            softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t, matmul2_dgrad1,
+                                                                         softmax_results, dropout_mask,
+                                                                         dropout_prob_t[0])
         else:
-            # Mask and Scaling for Dropout (not a publically documented op)
-            if dropout_prob_t[0] > 0.0:
-                dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
-            else:
-                dropout_grads = matmul2_dgrad1
+            # haven't tested with len_k > 1024 ...
+            if mask_softmax_dropout_cuda is not None and len_k <= 1024 \
+                    and matmul2_dgrad1.is_cuda:
+                # if False:
+                softmax_grads = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1, softmax_results,
+                                                                   dropout_mask, dropout_prob_t[0])
 
-            # Softmax Grad (not a publically documented op)
-            softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
+            else:
+                # Mask and Scaling for Dropout (not a publically documented op)
+                if dropout_prob_t[0] > 0.0:
+                    dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
+                else:
+                    dropout_grads = matmul2_dgrad1
+
+                # Softmax Grad (not a publically documented op)
+                softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
 
         attn_score_grads = softmax_grads
         # the grads are evenly distributed to AC and BD
@@ -512,7 +540,6 @@ def relative_self_attn_func(input, pos, use_mask, is_training, num_heads,
                             mask, dropout,
                             incremental, incremental_cache,
                             double_precision, learnable_pos, return_coverage):
-
     return RelativeSelfAttnFunc.apply(input, pos, use_mask, is_training, num_heads,
                                       in_proj_weight, out_proj_weight, pos_proj_weight,
                                       in_proj_bias, out_proj_bias, pos_proj_bias,
@@ -520,7 +547,6 @@ def relative_self_attn_func(input, pos, use_mask, is_training, num_heads,
                                       mask, dropout,
                                       incremental, incremental_cache,
                                       double_precision, learnable_pos, return_coverage)
-
 
 # TODO: write test function
 # if __name__ == "__main__":

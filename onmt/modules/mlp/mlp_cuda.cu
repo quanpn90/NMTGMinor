@@ -1379,6 +1379,8 @@ int mlp_bp(
         // activation backward
         int num_blocks = 0;
         int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
+
+        // sigmoid bprop
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, Sigmoid_bprop<T>, BIAS_RELU_FW_NTHREADS, 0);
         Sigmoid_bprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(dy, y, batch_size, yfeat, dy_gemm);
 
