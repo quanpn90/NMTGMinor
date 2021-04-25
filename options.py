@@ -63,6 +63,9 @@ def make_parser(parser):
                         help='Maximum distance length for relative self-attention')
     parser.add_argument('-learnable_position_encoding', action='store_true',
                         help="""Use embeddings as learnable position encoding.""")
+    parser.add_argument('-diff_head_pos', action='store_true',
+                        help="""share relative pos embedding cross heads""")
+
     parser.add_argument('-fix_norm_output_embedding', action='store_true',
                         help="""Normalize the output embedding""")
 
@@ -499,6 +502,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'max_pos_length'):
         opt.max_pos_length = 0
+    if not hasattr(opt, 'diff_head_pos'):
+        opt.max_pos_length = False
 
     if not hasattr(opt, 'learnable_position_encoding'):
         opt.learnable_position_encoding = False

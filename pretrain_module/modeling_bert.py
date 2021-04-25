@@ -72,15 +72,18 @@ class BertEmbeddings(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
-        self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
+        self.max_relative_pos_len = config.max_relative_pos_len
+        self.diff_head_pos = config.diff_head_pos
+        if self.max_relative_pos_len > 0:
+            self.position_embeddings = None
+        else:
+            self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
+
         self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
         self.max_position_id = config.max_position_embeddings
         self.bert_word_dropout = config.bert_word_dropout
-        # print("config.bert_word_dropout", config.bert_word_dropout)
         self.LayerNorm = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.bert_emb_dropout)
-        # print("config.bert_emb_dropout", config.bert_emb_dropout)
-        # position_ids (1, len position emb) is contiguous in memory and exported when serialized
         self.register_buffer("position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)))
 
     def forward(self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None, no_emb_offset=False):
@@ -106,11 +109,13 @@ class BertEmbeddings(nn.Module):
         words_embeddings = F.embedding(
             input_ids, masked_embed_weight, padding_idx, embed.max_norm,
             embed.norm_type, embed.scale_grad_by_freq, embed.sparse)
-
-        position_embeddings = self.position_embeddings(position_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
+        embeddings = words_embeddings + token_type_embeddings
 
-        embeddings = words_embeddings + position_embeddings + token_type_embeddings
+        if self.position_embeddings is not None:
+            position_embeddings = self.position_embeddings(position_ids)
+            embeddings += position_embeddings
+
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
@@ -131,11 +136,13 @@ class BertEmbeddings(nn.Module):
         words_embeddings = F.embedding(
             input_ids, masked_embed_weight, padding_idx, embed.max_norm,
             embed.norm_type, embed.scale_grad_by_freq, embed.sparse)
-
-        position_embeddings = self.position_embeddings(position_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
-        embeddings = words_embeddings + position_embeddings + token_type_embeddings
+        embeddings = words_embeddings + token_type_embeddings
+        if self.position_embeddings is not None:
+            position_embeddings = self.position_embeddings(position_ids)
+            embeddings += position_embeddings
+
         embeddings = self.LayerNorm(embeddings)
         return embeddings
 
@@ -149,17 +156,31 @@ class BertSelfAttention(nn.Module):
                 "heads (%d)" % (config.hidden_size, config.num_attention_heads)
             )
 
-        self.num_attention_heads = config.num_attention_heads
-        self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
-        self.all_head_size = self.num_attention_heads * self.attention_head_size
+        self.heads_num = config.num_attention_heads
+        self.head_size = int(config.hidden_size / config.num_attention_heads)
+        self.all_head_size = self.heads_num * self.head_size
 
         self.query = nn.Linear(config.hidden_size, self.all_head_size)
         self.key = nn.Linear(config.hidden_size, self.all_head_size)
         self.value = nn.Linear(config.hidden_size, self.all_head_size)
         self.dropout = nn.Dropout(config.bert_atten_dropout)
 
+        # for relative attention
+        self.max_relative_pos_len = config.max_relative_pos_len
+        self.diff_head_pos = config.diff_head_pos
+        if self.max_relative_pos_len > 0:
+            if self.diff_head_pos:
+                self.relative_pos_emb = nn.Embedding(2 * self.max_relative_pos_len + 1, self.all_head_size)
+            else:
+                self.relative_pos_emb = nn.Embedding(2 * self.max_relative_pos_len + 1, self.head_size)
+        else:
+            self.relative_pos_emb = None
+
     def transpose_for_scores(self, x):
-        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
+        # x: [h_dim, len, all_head_size]
+        # new_x_shape: [h_dim, len, h_num, h_dim]
+        # return: [h_dim, h_num, len, h_dim]
+        new_x_shape = x.size()[:-1] + (self.heads_num, self.head_size)
         x = x.view(*new_x_shape)
         return x.permute(0, 2, 1, 3)
 
@@ -172,7 +193,8 @@ class BertSelfAttention(nn.Module):
         encoder_attention_mask=None,
         output_attentions=False,
     ):
-        mixed_query_layer = self.query(hidden_states)
+        # hidden_states: [bsz, len, H]
+        mixed_query_layer = self.query(hidden_states)  # [bsz, len, all_head_size]
 
         # If this is instantiated as a cross-attention module, the keys
         # and values come from an encoder; the attention mask needs to be
@@ -182,16 +204,57 @@ class BertSelfAttention(nn.Module):
             mixed_value_layer = self.value(encoder_hidden_states)
             attention_mask = encoder_attention_mask
         else:
+            # hidden_states [bsz, len_q, H]
+            # mixed_key_layer: [bsz, len_k, all_head_size] with all_head_size = H
             mixed_key_layer = self.key(hidden_states)
             mixed_value_layer = self.value(hidden_states)
 
-        query_layer = self.transpose_for_scores(mixed_query_layer)
-        key_layer = self.transpose_for_scores(mixed_key_layer)
-        value_layer = self.transpose_for_scores(mixed_value_layer)
+        query_layer = self.transpose_for_scores(mixed_query_layer)  # [bsz, h_num, q, h_dim]
+        key_layer = self.transpose_for_scores(mixed_key_layer)  # [bsz, h_num, k, h_dim]
+        value_layer = self.transpose_for_scores(mixed_value_layer)  # [bsz, h_num, len_v, h_dim]
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
-        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
+        attention_scores_qk = torch.matmul(query_layer, key_layer.transpose(-1, -2))  # [bsz h_num q k]
+        attention_scores = attention_scores_qk / math.sqrt(self.head_size)
+
+        if self.relative_pos_emb:
+            klen = mixed_key_layer.shape[1]
+            qlen = mixed_query_layer.shape[1]
+            bsz = hidden_states.shape[0]
+            range_vec_q = torch.arange(qlen, device=hidden_states.device)
+            range_mat_q = range_vec_q.unsqueeze(-1).expand(-1, klen)
+            range_vec_k = torch.arange(klen, device=hidden_states.device)
+            distance_mat = range_mat_q - range_vec_k
+            distance_mat_clamp = distance_mat.clamp_(-self.max_relative_pos_len, self.max_relative_pos_len)
+            relative_position = distance_mat_clamp.add_(self.max_relative_pos_len)  # [qlen ,klen,h_dim]
+            relative_pos_emb = self.relative_pos_emb(relative_position)  # [q ,k,h_dim/all_h_dim]
+            relative_pos_emb = relative_pos_emb.to(dtype=query_layer.dtype)  # fp16 compatibility
+
+            # einsum"bhld,lrd->bhlr"
+            if not self.diff_head_pos:
+                #  query_layer   [bsz, h_num, qlen, h_dim]  =>  [bsz*h_num, q, h_dim]
+                query_layer_rel = query_layer.reshape(bsz * self.heads_num, qlen, self.head_size)
+                query_layer_rel = query_layer_rel.transpose(0, 1)  # [q, bsz*h_num, h_dim]
+                # [q, b*h_num, h_dim] [q ,h_dim, k] => [q, b*h_num, bsz, k]
+                attention_scores_rel = torch.bmm(query_layer_rel, relative_pos_emb.transpose(1, 2))
+                attention_scores_rel = attention_scores_rel.transpose(0, 1).reshape(bsz, self.heads_num, qlen, klen)
+
+            else:
+                query_layer_rel = query_layer.reshape(bsz, self.heads_num * qlen, self.head_size)  # [b, h_num*q, h_dim]
+                query_layer_rel = query_layer_rel.transpose(0, 1)  # [h_num*q, bsz, h_dim]
+
+                relative_pos_emb = relative_pos_emb.transpose(0, 1)  # [k, q, all_h_dim]
+                # [k, q, h_num, h_dim] => [k, h_num, q, h_dim]
+                relative_pos_emb = relative_pos_emb.reshape(klen, qlen, self.heads_num, self.head_size).transpose(1, 2)
+                # [klen, h_num, qlen, h_dim] =>[k, h_num*q, h_dim] => [h_num*q, k, h_dim]
+                relative_pos_emb = relative_pos_emb.reshape(klen, self.heads_num * qlen, self.head_size).transpose(0, 1)
+                # [h_num*q, bsz, h_dim] [h_num*q, h_dim, k] => [h_num*q, bsz, k]
+                attention_scores_rel = torch.bmm(query_layer_rel, relative_pos_emb.transpose(1, 2))
+                attention_scores_rel = attention_scores_rel.transpose(0, 1).reshape(bsz, self.heads_num, qlen, klen)
+
+            attention_scores_rel = attention_scores_rel / math.sqrt(self.head_size)
+            attention_scores += attention_scores_rel
+
         if attention_mask is not None:
             # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
             attention_scores = attention_scores + attention_mask
@@ -225,7 +288,7 @@ class BertSelfAttention(nn.Module):
                       buffer=None
                       ):
         # hidden_size -> all_head_size: 767 -> 768
-        proj_query = self.query(hidden_states)
+        proj_query = self.query(hidden_states)  # [beam*bsz, 1(always), H]
 
         # If this is instantiated as a cross-attention module, the keys
         # and values come from an encoder; the attention mask needs to be
@@ -247,6 +310,7 @@ class BertSelfAttention(nn.Module):
                 buffer['src_v'] = proj_value
 
         # decoder self-attention
+        # hidden_states [bsz*beam, 1(always), H], bsz will decrease if finished e.g. bsz*beam:128,124...
         else:
             proj_key = self.key(hidden_states)
             proj_value = self.value(hidden_states)
@@ -261,13 +325,51 @@ class BertSelfAttention(nn.Module):
                 buffer['k'] = proj_key
                 buffer['v'] = proj_value
 
-        query_layer = self.transpose_for_scores(proj_query)
+        query_layer = self.transpose_for_scores(proj_query)  # [beam*bsz, h_num, 1, head_size]
         key_layer = self.transpose_for_scores(proj_key)
         value_layer = self.transpose_for_scores(proj_value)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
-        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
+        attention_scores_qk = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+        # dec self-attention: [beam*bsz, h_num, 1(always), step]) bsz -->1 step 1-->qlen(klen)
+        # dec cross-attention [beam*bsz, h_num, 1(always), src_len(klen)(always)]) bsz -->1
+        attention_scores = attention_scores_qk / math.sqrt(self.head_size)
+
+        # relative attention
+        if self.relative_pos_emb:
+            qlen = buffer['k'].shape[1]  # always k, not src_k, so the current inference position in decoder
+            klen = proj_key.shape[1]  # change based on self-attn(constant) or cross-attn(increase) accordingly
+            bbsz = attention_scores_qk.shape[0]
+            range_vec_q = torch.arange(qlen, device=hidden_states.device)[-1].unsqueeze(-1)
+            range_mat_q = range_vec_q.unsqueeze(-1).expand(-1, klen)  # [1, klen]
+            range_vec_k = torch.arange(klen, device=hidden_states.device)  # [1, klen]
+            distance_mat = range_mat_q - range_vec_k
+            distance_mat_clamp = distance_mat.clamp_(-self.max_relative_pos_len, self.max_relative_pos_len)
+            relative_position = distance_mat_clamp.add_(self.max_relative_pos_len)  # [1, k], q is always 1
+            relative_pos_emb = self.relative_pos_emb(relative_position)  # [1, k, h_dim/all_h_dim]
+
+            if not self.diff_head_pos:
+                # query_layer   [bbsz(beam*bsz), h_num, 1, h_dim]
+                query_layer_rel = query_layer.reshape(bbsz * self.heads_num, 1, self.head_size)
+                query_layer_rel = query_layer_rel.transpose(0, 1)  # [1, bsz*h_num, h_dim]
+                # [1, bsz*h_num, h_dim] [1, h_dim, k] => [1, bsz*h_num, k]
+                attention_scores_rel = torch.bmm(query_layer_rel, relative_pos_emb.transpose(1, 2))
+
+                # [1, bsz*h_num, k] => [bbsz, h_num, 1, k]
+                attention_scores_rel = attention_scores_rel.transpose(0, 1).reshape(bbsz, self.heads_num, 1, klen)
+            else:
+                relative_pos_emb = relative_pos_emb.transpose(0, 1)  # [ k, 1, all_h_dim]
+                relative_pos_emb = relative_pos_emb.reshape(klen, 1, self.heads_num, self.head_size).transpose(1, 2)  # [k, h_num, 1, h_dim]
+                relative_pos_emb = relative_pos_emb.reshape(klen, self.heads_num * 1, self.head_size).transpose(0, 1)  # [h_num* 1, klen, h_dim]
+                # query_layer   [bbsz(beam*bsz), h_num, 1, h_dim]
+                query_layer_rel = query_layer.reshape(bbsz, self.heads_num * 1, self.head_size)  # [bbsz, h_num*1, h_dim]
+                query_layer_rel = query_layer_rel.transpose(0, 1)  # [h_num*1, bbsz, h_dim]
+                attention_scores_rel = torch.bmm(query_layer_rel, relative_pos_emb.transpose(1, 2)) # [h_num*1, bbsz, klen]
+                # [bsz, h_num, qlen, klen]
+                attention_scores_rel = attention_scores_rel.transpose(0, 1).reshape(bbsz, self.heads_num, 1, klen)
+
+        attention_scores_rel = attention_scores_rel / math.sqrt(self.head_size)
+        attention_scores += attention_scores_rel
 
         if attention_mask is not None:
             attention_scores = attention_scores + attention_mask
@@ -570,6 +672,7 @@ class BertModel(BertPreTrainedModel):
                  is_decoder=False,
                  before_plm_output_ln=False,
                  gradient_checkpointing=False,
+                 **kwargs
                  ):
 
         super().__init__(config)
@@ -585,6 +688,8 @@ class BertModel(BertPreTrainedModel):
         if bert_hidden_size is not None:
             self.config.bert_hidden_size = bert_hidden_size
 
+        self.config.max_relative_pos_len = kwargs.pop('max_pos_len', 0)
+        self.config.diff_head_pos = kwargs.pop('diff_head_pos', False)
         self.config.is_decoder = is_decoder
         self.config.before_plm_output_ln = before_plm_output_ln
         self.config.gradient_checkpointing = gradient_checkpointing
