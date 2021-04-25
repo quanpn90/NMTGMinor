@@ -55,9 +55,9 @@ class Translator(object):
 
             model_opt = checkpoint['opt']
             model_opt = backward_compatible(model_opt)
-            if hasattr(model_opt, "enc_not_load_state"):
-                model_opt.enc_not_load_state = True
-                model_opt.dec_not_load_state = True
+            if hasattr(model_opt, "enc_state_dict"):
+                model_opt.enc_state_dict = None
+                model_opt.dec_state_dict = None
 
             dicts = checkpoint['dicts']
 

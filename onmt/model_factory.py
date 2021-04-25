@@ -352,7 +352,7 @@ def build_tm_model(opt, dicts):
                                     )
 
         if opt.dec_pretrained_model:
-            print("* Build encoder with dec_pretrained_model: {}".format(opt.dec_pretrained_model))
+            print("* Build decoder with dec_pretrained_model: {}".format(opt.dec_pretrained_model))
 
         if opt.dec_pretrained_model == "bert":
             if opt.enc_pretrained_model != "bert":

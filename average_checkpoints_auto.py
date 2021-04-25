@@ -102,8 +102,8 @@ def main():
     dicts = checkpoint['dicts']
 
     # only create the object
-    model_opt.enc_not_load_state = True
-    model_opt.dec_not_load_state = True
+    model_opt.enc_state_dict = None
+    model_opt.dec_state_dict = None
 
     print(model_opt.layers)
 
@@ -123,8 +123,10 @@ def main():
 
         model_opt = checkpoint['opt']
 
-        model_opt.enc_not_load_state = True
-        model_opt.dec_not_load_state = True
+        # model_opt.enc_not_load_state = True
+        # model_opt.dec_not_load_state = True
+        model_opt.enc_state_dict = None
+        model_opt.dec_state_dict = None
 
         # delete optim information to save GPU memory
         if 'optim' in checkpoint:
