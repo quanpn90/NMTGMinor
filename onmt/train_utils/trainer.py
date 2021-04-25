@@ -284,7 +284,7 @@ class BaseTrainer(object):
 
             if self.cuda:
                 with amp.scale_loss(full_loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
+                    scaled_loss.div_(2^16).backward()
             else:
                 loss.div_(batch.tgt_size).backward()
 

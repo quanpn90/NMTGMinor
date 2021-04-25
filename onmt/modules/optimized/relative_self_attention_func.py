@@ -413,6 +413,9 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t, matmul2_dgrad1,
                                                                          softmax_results, dropout_mask,
                                                                          dropout_prob_t[0])
+
+            # ASSERTED to have the same grads with recomputing softmax and then calling torch.softmax_backward_data
+
         else:
             # haven't tested with len_k > 1024 ...
             if mask_softmax_dropout_cuda is not None and len_k <= 1024 \

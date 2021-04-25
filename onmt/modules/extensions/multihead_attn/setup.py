@@ -36,8 +36,23 @@ if int(bare_metal_major) >= 11:
 
 # subprocess.run(["git", "submodule", "update", "--init", "cutlass"])
 subprocess.run(["git", "clone", "https://github.com/NVIDIA/cutlass.git", "cutlass"])
-subprocess.run(["git", "-C", "cutlass", "checkout", "ed2ed4d667ce95e1371bd62db32b6a114e774336"])
-# subprocess.run(["git", "-C", "cutlass", "checkout", "fe3438a3c1ccbdd03dc1aca3bb68099a9e2a58bd"])
+# subprocess.run(["git", "-C", "cutlass", "checkout", "ed2ed4d667ce95e1371bd62db32b6a114e774336"])
+subprocess.run(["git", "-C", "cutlass", "checkout", "fe3438a3c1ccbdd03dc1aca3bb68099a9e2a58bd"])
+
+
+ext_modules.append(
+    CUDAExtension(name='encdec_multihead_attn_cuda',
+                  sources=['encdec_multihead_attn.cpp',
+                           'encdec_multihead_attn_cuda.cu'],
+                  extra_compile_args={'cxx': ['-O3', ],
+                                      'nvcc': ['-O3',
+                                               '-gencode', 'arch=compute_70,code=sm_70',
+                                               '-I./cutlass/',
+                                               '-U__CUDA_NO_HALF_OPERATORS__',
+                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
+                                               '--expt-relaxed-constexpr',
+                                               '--expt-extended-lambda',
+                                               '--use_fast_math'] + cc_flag}))
 
 ext_modules.append(
     CUDAExtension(name='fused_dropout_add_cuda',
@@ -59,7 +74,7 @@ ext_modules.append(
                            'masked_softmax_dropout_cuda.cu'],
                   extra_compile_args={'cxx': ['-O3', ],
                                       'nvcc': ['-O3',
-                                               '-gencode', 'arch=compute_75,code=sm_75',
+                                               '-gencode', 'arch=compute_70,code=sm_70',
                                                '-I./cutlass/include',
                                                '-U__CUDA_NO_HALF_OPERATORS__',
                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
@@ -118,19 +133,7 @@ ext_modules.append(
 #                                               '--expt-relaxed-constexpr',
 #                                               '--expt-extended-lambda',
 #                                               '--use_fast_math'] + cc_flag}))
-# ext_modules.append(
-#     CUDAExtension(name='encdec_multihead_attn_cuda',
-#                   sources=['encdec_multihead_attn.cpp',
-#                            'encdec_multihead_attn_cuda.cu'],
-#                   extra_compile_args={'cxx': ['-O3', ],
-#                                       'nvcc': ['-O3',
-#                                                '-gencode', 'arch=compute_75,code=sm_75',
-#                                                '-I./cutlass/',
-#                                                '-U__CUDA_NO_HALF_OPERATORS__',
-#                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
-#                                                '--expt-relaxed-constexpr',
-#                                                '--expt-extended-lambda',
-#                                                '--use_fast_math'] + cc_flag}))
+
 # ext_modules.append(
 #     CUDAExtension(name='fast_encdec_multihead_attn_norm_add',
 #                   sources=['encdec_multihead_attn_norm_add.cpp',

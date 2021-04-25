@@ -10,6 +10,7 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/extension.h>
 #include <math.h>
+#include <stdint.h>
 
 #include "dropout.h"
 #include "softmax_dropout.h"
@@ -132,14 +133,15 @@ torch::Tensor bwd_recompute_cuda(
   const int   attn_batches   = output_grads.size(0);
   const int   q_seq_len      = output_grads.size(1);
   const int   k_seq_len      = output_grads.size(2);
-//  const int   dropout_elems  = attn_batches * q_seq_len * k_seq_len;
+  // const int   dropout_elems  = attn_batches * q_seq_len * k_seq_len;
   // TODO: Streams can be used in Backprop but I haven't added more than one
   // in my first attempt to create the code
   cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
   cudaStream_t   stream = at::cuda::getCurrentCUDAStream().stream();
   cublasSetStream(handle, stream);
 
-  dispatch_masked_scale_softmax_backward_recompute<half, half, float, false>(
+  bool softmax_success = false;
+  softmax_success = dispatch_masked_scale_softmax_backward_recompute<half, half, float, false>(
                                  static_cast<half*>(output_grads.data_ptr()),
                                  static_cast<half* const>(output_grads.data_ptr()),
                                  reinterpret_cast<half const*>(softmax_inputs.data_ptr()),
@@ -150,6 +152,7 @@ torch::Tensor bwd_recompute_cuda(
                                  attn_batches*q_seq_len,
                                  stream);
 
+  assert(softmax_success);
   //backward pass is completely in-place
   return output_grads;
 }

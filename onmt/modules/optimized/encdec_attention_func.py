@@ -19,6 +19,11 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     mask_softmax_dropout_cuda = None
 
+try:
+    import encdec_multihead_attn_cuda
+except (ModuleNotFoundError, ImportError) as e:
+    encdec_multihead_attn_cuda = None
+
 
 class EncdecAttnFunc(torch.autograd.Function):
     @staticmethod
@@ -36,8 +41,45 @@ class EncdecAttnFunc(torch.autograd.Function):
 
         bsz, len_q, len_k = inputs_q.size(1), inputs_q.size(0), inputs_kv.size(0)
         ctx.incremental = incremental
+        ctx.fused_softmax_dropout = False
+        ctx.fused_all = False
         ctx.len_q = len_q
         ctx.len_k = len_k
+
+        if mask is not None:
+            # Self Attention Pad Mask
+            mask = mask.to(torch.bool)
+
+            if len(mask.shape) == 3:
+                mask = mask.unsqueeze(1)  # for the head dimension
+            else:
+                mask = mask.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
+
+        if encdec_multihead_attn_cuda is not None and not incremental and len_k <= 2048:
+            input_lin_q_results, input_lin_kv_results, \
+            attn_scores, softmax_results, dropout_mask, \
+            matmul2_results, outputs \
+                = encdec_multihead_attn_cuda.forward(is_training, heads, inputs_q, inputs_kv,
+                                                     input_weights_q, input_weights_kv,
+                                                     output_weights, mask, dropout_prob)
+
+            ctx.save_for_backward(heads_t,
+                                  scale_t,
+                                  matmul2_results,
+                                  softmax_results,
+                                  attn_scores,
+                                  input_lin_q_results,
+                                  input_lin_kv_results,
+                                  inputs_q,
+                                  inputs_kv,
+                                  input_weights_q,
+                                  input_weights_kv,
+                                  output_weights,
+                                  dropout_mask,
+                                  dropout_prob_t)
+            ctx.fused_all = True
+
+            return outputs, softmax_results
 
         # Input Linear GEMM Q
         # input1: (activations) [seql_q, bsz, embed_dim(1024)]
@@ -100,14 +142,6 @@ class EncdecAttnFunc(torch.autograd.Function):
             matmul1_results.mul_(scale_t[0])
 
         if mask is not None:
-            # Self Attention Time Mask
-            mask = mask.to(torch.bool)
-
-            if len(mask.shape) == 3:
-                mask = mask.unsqueeze(1)  # for the head dimension
-            else:
-                mask = mask.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
-
             batches, seql_q, seql_k = matmul1_results.size()
             bsz = int(batches / heads)
             matmul1_results = matmul1_results.view(bsz, heads, seql_q, seql_k)
@@ -117,7 +151,7 @@ class EncdecAttnFunc(torch.autograd.Function):
 
         if mask_softmax_dropout_cuda and len_k <= 2048:
             dropout_mask, softmax_results = mask_softmax_dropout_cuda.forward(is_training, heads,
-                                                                               matmul1_results, dropout_prob_t[0])
+                                                                              matmul1_results, dropout_prob_t[0])
             dropout_results = softmax_results
             softmax_results = matmul1_results
             ctx.fused_softmax_dropout = True
@@ -132,8 +166,6 @@ class EncdecAttnFunc(torch.autograd.Function):
             else:
                 dropout_results = softmax_results
                 dropout_mask = null_tensor
-
-            ctx.fused_softmax_dropout = False
 
         # Matmul2 Batched GEMMs
         # The output tensor specification is needed here to specify the non-standard output.
@@ -194,6 +226,28 @@ class EncdecAttnFunc(torch.autograd.Function):
             = ctx.saved_tensors
 
         head_dim = inputs_q.size(2) // heads_t[0]
+
+        if encdec_multihead_attn_cuda is not None and len_key <= 2048:
+            softmax_results = dropout_results
+            attn_scores = softmax_results
+
+            input_q_grads, \
+                input_kv_grads, \
+                input_weight_q_grads, \
+                input_weight_kv_grads, \
+                output_weight_grads = encdec_multihead_attn_cuda.backward(heads_t[0], output_grads, matmul2_results,
+                                                                          softmax_results,
+                                                                          attn_scores, input_lin_q_results,
+                                                                          input_lin_kv_results,
+                                                                          inputs_q, inputs_kv, input_weights_q,
+                                                                          input_weights_kv,
+                                                                          output_weights, dropout_mask,
+                                                                          dropout_prob_t[0])
+
+            return None, None, None, \
+                input_q_grads, input_kv_grads, \
+                input_weight_q_grads, input_weight_kv_grads, output_weight_grads, \
+                None, None, None, None
 
         # Slice out k,v from one big Input Linear output (should only impact meta data, no copies!)
         # Batch sizes and heads are combined to make the batch of the Batched GEMM
