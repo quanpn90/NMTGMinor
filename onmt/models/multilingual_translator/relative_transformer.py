@@ -124,12 +124,14 @@ class RelativeTransformerEncoder(TransformerEncoder):
                 pos_emb = self.positional_encoder(pos, bsz=input.size(1))
                 pos_emb = self.preprocess_layer(pos_emb)
             else:
-                # range_vec = torch.arange(klen, device=emb.device)
-                # range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
-                # distance_mat = range_vec - range_mat.transpose(0, 1)
-                pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device).long()
-                pos.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
-                pos_emb = pos.unsqueeze(1)
+                range_vec = torch.arange(klen, device=emb.device)
+                range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+                distance_mat = range_vec - range_mat.transpose(0, 1)
+                distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                pos_emb = distance_mat
+                # pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device).long()
+                # pos.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                # pos_emb = pos.unsqueeze(1)
 
             mask_src = input.eq(onmt.constants.PAD).unsqueeze(0)  # 1 x src_len x batch_size for broadcasting
         else:
@@ -286,9 +288,14 @@ class RelativeTransformerDecoder(TransformerDecoder):
                 pos_emb = self.positional_encoder(pos, bsz=input.size(1))
                 pos_emb = self.preprocess_layer(pos_emb)
             else:
-                pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype).long()
-                pos.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
-                pos_emb = pos.unsqueeze(1)
+                range_vec = torch.arange(klen, device=emb.device)
+                range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+                distance_mat = range_vec - range_mat.transpose(0, 1)
+                distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                pos_emb = distance_mat
+                # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype).long()
+                # pos.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                # pos_emb = pos.unsqueeze(1)
         else:
             # absolute positions
             emb = self.positional_encoder(emb.transpose(0, 1)).transpose(0, 1)
@@ -384,15 +391,17 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         if not self.absolute_position_encoding:
             if self.learnable_position_encoding:
-                # if buffering:
-                #     distance_mat = torch.arange(-klen + 1, 1, 1, device=emb.device).unsqueeze(0)
-                # else:
-                #     range_vec = torch.arange(klen, device=emb.device)
-                #     range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
-                #     distance_mat = range_vec - range_mat.transpose(0, 1)
-                pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
-                pos.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
-                pos_emb = pos.unsqueeze(1)
+                if buffering:
+                    distance_mat = torch.arange(-klen + 1, 1, 1, device=emb.device).unsqueeze(0)
+                else:
+                    range_vec = torch.arange(klen, device=emb.device)
+                    range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+                    distance_mat = range_vec - range_mat.transpose(0, 1)
+                distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                pos_emb = distance_mat
+                # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+                # pos.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                # pos_emb = pos.unsqueeze(1)
             else:
                 pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
                 pos_emb = self.positional_encoder(pos)

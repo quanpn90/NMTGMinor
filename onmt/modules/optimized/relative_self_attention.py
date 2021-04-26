@@ -28,10 +28,10 @@ class RelativeSelfMultiheadAttn(nn.Module):
         self.out_proj_weight = Parameter(torch.Tensor(embed_dim, embed_dim))
 
         if self.learnable_pos:
-            # If using learnable position embeddings, then assign embeddings for 2N - 1 max positions
+            # If using learnable position embeddings, then assign embeddings for 2N + 1 max positions
             # (embeddings are shared across heads)
             assert max_pos >= 1
-            self.pos_emb = nn.Embedding(2 * max_pos + 1, self.embed_dim)
+            self.pos_emb = nn.Embedding(2 * max_pos + 1, self.head_dim)
             self.pos_proj_weight, self.pos_proj_bias = None, None
         else:
             # Using sin/cos position encodings which are linearly projected to head_dim (seperately per head)
@@ -100,7 +100,6 @@ class RelativeSelfMultiheadAttn(nn.Module):
 
         if self.learnable_pos:
             # [len_q x len_k] -> [len_q x len_k x head_dim]
-            # [len_r x 1] -> [len_r x 1 x model_size]
             pos = self.pos_emb(pos)
 
         outputs, coverage = self.attn_func(input, pos, attn_mask is not None, is_training, self.num_heads,

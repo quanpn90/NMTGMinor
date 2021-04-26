@@ -59,9 +59,9 @@ class PositionWiseFeedForward(nn.Module):
                 from onmt.modules.mlp.mlp import mlp_function
                 self.fast_mlp_func = mlp_function
             except (ModuleNotFoundError, ImportError) as e:
-                print(
-                    "[INFO] Fused MLP implementation not found. "
-                    "Installation can be found in onmt.modules.mlp/setup.py")
+                # print(
+                #     "[INFO] Fused MLP implementation not found. "
+                #     "Installation can be found in onmt.modules.mlp/setup.py")
                 self.fused = False
 
     def reset_parameters(self, init='normal'):

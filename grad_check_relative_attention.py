@@ -81,7 +81,6 @@ class TestAttention(nn.Module):
         self.r_r_bias = nn.Parameter(torch.Tensor(self.heads, self.head_dim))
         self.reset_parameters()
 
-
     def forward(self, input, pos, in_proj_weight, out_proj_weight, pos_proj_weight,
                 in_proj_bias, out_proj_bias, pos_proj_bias, r_w_bias, r_r_bias):
 

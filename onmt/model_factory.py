@@ -384,7 +384,7 @@ def init_model_parameters(model, opt):
     def init_embed(weight, padding_idx=0):
 
         # The embedding is intialized as in "Attention is all you need" and "Ada-factor" paper
-        std_ = opt.model_size ** -0.5 if not opt.rezero else 0.01
+        std_ = opt.model_size ** -0.5 if not opt.rezero else 0.05
 
         if opt.init_embedding == 'normal':
             nn.init.normal_(weight, 0.0, std_)
