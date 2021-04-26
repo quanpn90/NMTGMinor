@@ -54,6 +54,9 @@ std::vector<torch::Tensor> fwd_cuda(
   const float alpha             = 1.0;
   const float beta              = 0.0;
   const float scale             = 1.0 / sqrt(static_cast<float>(head_dim));
+
+//  printf("Input kernel sizes: %d %d %d \n",
+//			inputs_kv.size(0), inputs_kv.size(1), inputs_kv.size(2));
  
   // There is no reason to use more than one stream as every kernel is 
   // sequentially dependent
@@ -88,25 +91,25 @@ std::vector<torch::Tensor> fwd_cuda(
   THCublasCheck(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
   // Input Linear Q Fwd
   THCublasCheck(cublasGemmEx(handle,
-                             CUBLAS_OP_T, 
-                             CUBLAS_OP_N,
-                             output_lin_q_dim, 
-                             batches_q, 
-                             embed_dim,
+                             CUBLAS_OP_T, // A transpose
+                             CUBLAS_OP_N, // B wo/ transpose
+                             output_lin_q_dim, // embed_dim
+                             batches_q,  // bsz x len_q
+                             embed_dim,  // embed_dim
                              static_cast<const void*>(&alpha),
-                             static_cast<const void*>(input_weights_q.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim,
-                             static_cast<const void*>(inputs_q.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim, 
-                             static_cast<const void*>(&beta),
-                             q_lin_results_ptr,
-                             CUDA_R_16F, 
-                             output_lin_q_dim,
+                             static_cast<const void*>(input_weights_q.data_ptr()), // weight emb x emb
+                             CUDA_R_16F,
+                             embed_dim, // lda  so A has size [lda x m] -> [embed_dim x output_lin_q_dim]
+                             static_cast<const void*>(inputs_q.data_ptr()), // input Q transposed to embed_dim * B
+                             CUDA_R_16F,
+                             embed_dim, // ldb B has size [lda xn] -> [embed_dim x batches_q]
+                             static_cast<const void*>(&beta), // beta
+                             q_lin_results_ptr, // C -> emb * B
+                             CUDA_R_16F,
+                             output_lin_q_dim, // ldc C [lda x n] -> [embed_dim x batches_q]
                              CUDA_R_32F,
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
-  
+
   // Input Linear KV Fwd
   THCublasCheck(cublasGemmEx(handle,
                              CUBLAS_OP_T, 
@@ -304,24 +307,26 @@ std::vector<torch::Tensor> bwd_cuda(
   THCublasCheck(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
  
   // Output Linear Dgrad
-  THCublasCheck(cublasGemmEx(handle,
-                             CUBLAS_OP_N, 
-                             CUBLAS_OP_N,
-                             embed_dim, 
-                             batches_q, 
-                             embed_dim,
-                             static_cast<const void*>(&alpha),
-                             static_cast<const void*>(output_weights.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim,
-                             static_cast<const void*>(output_grads.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim, 
-                             static_cast<const void*>(&beta),
-                             static_cast<void*>(output_lin_grads.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim,
-                             CUDA_R_32F,
+  // C = alpha * op(A) op(B) + BetaC
+  // op(A): mxk, op(B): kxn C: mxn
+  THCublasCheck(cublasGemmEx(handle,  //
+                             CUBLAS_OP_N, // no transpose
+                             CUBLAS_OP_N, // no transpose
+                             embed_dim, // m
+                             batches_q, // n = bsz * len_q
+                             embed_dim, // k
+                             static_cast<const void*>(&alpha),  // alpha = 1.0
+                             static_cast<const void*>(output_weights.data_ptr()), // A mxk
+                             CUDA_R_16F, // data type
+                             embed_dim,  // leading dimension of A (embed dim) (the rows)
+                             static_cast<const void*>(output_grads.data_ptr()), // B kxn
+                             CUDA_R_16F, // data type
+                             embed_dim,  // leading dimension of B (embed dim)
+                             static_cast<const void*>(&beta), // beta
+                             static_cast<void*>(output_lin_grads.data_ptr()), // C mxn
+                             CUDA_R_16F,  // data type
+                             embed_dim, // ldc
+                             CUDA_R_32F, // compute type
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
  
   // Output Linear Wgrad

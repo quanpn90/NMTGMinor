@@ -236,22 +236,22 @@ class Trainer(object):
 
             # Ensure that the distributed copies have the same initial parameters
             # Manual seed may not work the same for different GPU models.
-            if self.world_size > 1:
-                params = [p for p in self.model.parameters()]
-
-                with torch.no_grad():
-                    if not self.is_main():
-                        # zero everything except for the main model
-                        for p in params:
-                            p.zero_()
-                    else:
-                        for p in params:
-                            p.add_(0)
+            # if self.world_size > 1:
+            #     params = [p for p in self.model.parameters()]
+            #
+            #     with torch.no_grad():
+            #         if not self.is_main():
+            #             # zero everything except for the main model
+            #             for p in params:
+            #                 p.zero_()
+            #         else:
+            #             for p in params:
+            #                 p.add_(0)
 
             # run all_reduce to ensure that all models have exactly the same parameters
-            if self.world_size > 1:
-                params = [p for p in self.model.parameters()]
-                all_reduce_and_rescale_tensors(params, 1)
+            # if self.world_size > 1:
+            #     params = [p for p in self.model.parameters()]
+            #     all_reduce_and_rescale_tensors(params, 1)
 
         if setup_optimizer:
 
@@ -268,7 +268,7 @@ class Trainer(object):
         if self.world_size > 1:
             # find_unused_parameters may be required for dropped layer (parameters that are not connected to
             # any particular graph)
-            find_unused_parameters = False # if opt.death_rate > 0.0 else True
+            find_unused_parameters = False if opt.death_rate == 0.0 else True
 
             self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[self.rank],
                                                                    output_device=self.rank,
@@ -540,14 +540,18 @@ class Trainer(object):
             os.remove(save_file)
 
     def eval(self, data):
+
+        if self.rank != 0:
+            return 0
+
         self.print("[INFO] Running cross-entropy evaluation...", flush=True)
         opt = self.opt
-        rank = self.device
-        world_size = self.world_size
+        rank = 0
+        world_size = 1
 
         # the data iterator creates an epoch iterator
         data_iterator = generate_data_iterator(data, rank, world_size, seed=self.opt.seed,
-                                               num_workers=opt.num_workers, epoch=1, buffer_size=opt.buffer_size)
+                                               num_workers=1, epoch=1, buffer_size=opt.buffer_size)
         epoch_iterator = data_iterator.next_epoch_itr(False, pin_memory=False)
 
         data_size = len(epoch_iterator)
@@ -586,8 +590,8 @@ class Trainer(object):
                     i = i + 1
 
         # allreduce the total loss and total words from other processes
-        self.all_reduce(total_loss, op=dist.ReduceOp.SUM, group=self.group)
-        self.all_reduce(total_words, op=dist.ReduceOp.SUM, group=self.group)
+        # self.all_reduce(total_loss, op=dist.ReduceOp.SUM, group=self.group)
+        # self.all_reduce(total_words, op=dist.ReduceOp.SUM, group=self.group)
 
         self.model.train()
         self.loss_function.train()
@@ -667,12 +671,13 @@ class Trainer(object):
                 reduction_disabled = False if counter >= opt.update_frequency or i == (n_samples - 1) else True
 
                 def maybe_no_sync():
-                    if not reduction_disabled and isinstance(self.model, DDP_model):
-                        return self.model.no_sync()
-                    else:
-                        # when we dont reach the updating step, we do not need to synchronize the gradients
-                        # thus disabling the backward grad sync to improve speed
-                        return contextlib.ExitStack()  # dummy contextmanager
+                    # if not reduction_disabled and isinstance(self.model, DDP_model):
+                    # if isinstance(self.model, DDP_model):
+                    #     return self.model.no_sync()
+                    # else:
+                    # when we dont reach the updating step, we do not need to synchronize the gradients
+                    # thus disabling the backward grad sync to improve speed
+                    return contextlib.ExitStack()  # dummy contextmanager
 
                 with maybe_no_sync():
                     with autocast():
@@ -764,7 +769,7 @@ class Trainer(object):
 
             if update_flag:
                 # accumulated gradient case, in this case the update frequency
-                self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
+                # self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
 
                 grad_denom = 1.0 / grad_div
 
@@ -778,7 +783,7 @@ class Trainer(object):
                 grad_denom = grad_denom / self.world_size
 
                 # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
-                normalize_gradients(self.model.parameters(), grad_denom)
+                # normalize_gradients(self.model.parameters(), grad_denom)
 
                 # Update the parameters.
                 if self.opt.max_grad_norm > 0:
@@ -786,7 +791,7 @@ class Trainer(object):
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.opt.max_grad_norm)
                 self.optim.step(scaler=self.grad_scaler)
                 self.grad_scaler.update()
-                # self.optim.zero_grad()
+                self.optim.zero_grad()
                 self.model.zero_grad()
                 counter = 0
                 num_accumulated_words.zero_()
@@ -825,9 +830,9 @@ class Trainer(object):
             # control the index a little bit to ensure the log is always printed
             if i == 0 or ((i + 1) % opt.log_interval < self.world_size):
 
-                self.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
-                self.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
-                self.all_reduce(report_src_words, op=dist.ReduceOp.SUM, group=self.group)
+                # self.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
+                # self.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
+                # self.all_reduce(report_src_words, op=dist.ReduceOp.SUM, group=self.group)
 
                 if self.is_main():
                     log_string = ("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; " %

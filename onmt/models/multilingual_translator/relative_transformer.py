@@ -148,10 +148,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
             emb = emb * math.sqrt(self.model_size)
 
         # B x T x H -> T x B x H
-        context = emb
-
-        # Apply dropout to both context and pos_emb
-        context = self.preprocess_layer(context)
+        context = self.preprocess_layer(emb)
 
         for i, layer in enumerate(self.layer_modules):
             # src_len x batch_size x d_model

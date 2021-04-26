@@ -50,6 +50,7 @@ class Translator(object):
             if hasattr(model_opt, "enc_not_load_state"):
                 model_opt.enc_not_load_state = True
                 model_opt.dec_not_load_state = True
+            self.main_model_opt = model_opt
 
             dicts = checkpoint['dicts']
 

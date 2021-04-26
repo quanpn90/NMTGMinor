@@ -56,6 +56,7 @@ class EncdecAttnFunc(torch.autograd.Function):
                 mask = mask.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
 
         # if encdec_multihead_attn_cuda is not None and not incremental and len_k <= 2048:
+        #
         #     input_lin_q_results, input_lin_kv_results, \
         #     attn_scores, softmax_results, dropout_mask, \
         #     matmul2_results, outputs \
@@ -82,9 +83,9 @@ class EncdecAttnFunc(torch.autograd.Function):
         #     return outputs, softmax_results
 
         # Input Linear GEMM Q
-        # input1: (activations) [seql_q, bsz, embed_dim(1024)]
-        # input2: (weights)     [embed_dim (1024), embed_dim (1024)] (transpose [0,1])
-        # output:               [seql_q, bsz, embed_dim]
+        # input1: (activations) [seql_q, bsz, embed_dim] -> [len_q * bsz, embed_dim]
+        # input2: (weights)     [embed_dim, embed_dim]. transpose(0, 1)
+        # output:               [len_q * bsz, embed_dim] -> [seql_q, bsz, embed_dim]
         # GEMM: ( (seql_q*seqs) x embed_dim ) x ( embed_dim x embed_dim ) = (seql_q*seqs x embed_dim)
         input_lin_q_results = torch.mm(inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
                                        input_weights_q.transpose(0, 1))
@@ -149,7 +150,8 @@ class EncdecAttnFunc(torch.autograd.Function):
             matmul1_results = matmul1_results.masked_fill_(mask, float('-inf'))
             matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
 
-        if mask_softmax_dropout_cuda and len_k <= 2048:
+        # if mask_softmax_dropout_cuda and len_k <= 2048 and matmul1_results.is_cuda:
+        if False:
             dropout_mask, softmax_results = mask_softmax_dropout_cuda.forward(is_training, heads,
                                                                               matmul1_results, dropout_prob_t[0])
             dropout_results = softmax_results
@@ -300,8 +302,8 @@ class EncdecAttnFunc(torch.autograd.Function):
         values_grads = torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
 
         if not ctx.fused_softmax_dropout:
-            if mask_softmax_dropout_cuda is not None and matmul2_dgrad1.is_cuda:
-                # if False:
+            # if mask_softmax_dropout_cuda is not None and matmul2_dgrad1.is_cuda:
+            if False:
                 # Fused and inplace softmax dropouts
                 softmax_grads = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1, softmax_results,
                                                                    dropout_mask, dropout_prob_t[0])

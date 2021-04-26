@@ -197,6 +197,7 @@ class FastTranslator(Translator):
         else:
             self.ensemble_weight = None
 
+        print(self.main_model_opt)
 
     def translate_batch(self, batches, sub_batches=None):
 
