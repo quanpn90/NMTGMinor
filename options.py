@@ -64,7 +64,10 @@ def make_parser(parser):
     parser.add_argument('-learnable_position_encoding', action='store_true',
                         help="""Use embeddings as learnable position encoding.""")
     parser.add_argument('-diff_head_pos', action='store_true',
-                        help="""share relative pos embedding cross heads""")
+                        help="""Not share relative pos embedding cross heads""")
+    parser.add_argument('-pos_emb_type', default='absolute',
+                        help="Position embedding type. [absolute| relative_k| relative_kv]")
+
 
     parser.add_argument('-fix_norm_output_embedding', action='store_true',
                         help="""Normalize the output embedding""")

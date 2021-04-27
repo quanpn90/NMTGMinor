@@ -295,7 +295,8 @@ def build_tm_model(opt, dicts):
     elif opt.model == 'pretrain_transformer':
         assert (opt.enc_pretrained_model or opt.dec_pretrained_model)
         from onmt.models.pretrain_transformer import PretrainTransformer
-        print(f"Use relatvie position embedding: {opt.max_pos_length > 0}")
+        print(f"pos_emb_type: {opt.pos_emb_type}")
+        print(f"max_pos_length: {opt.max_pos_length }")
         print(f"Share position embeddings cross heads: {not opt.diff_head_pos}")
         print()
         if opt.enc_pretrained_model:
@@ -315,7 +316,8 @@ def build_tm_model(opt, dicts):
                                 before_plm_output_ln=opt.before_enc_output_ln,
                                 gradient_checkpointing=opt.enc_gradient_checkpointing,
                                 max_pos_len=opt.max_pos_length,
-                                diff_head_pos=opt.diff_head_pos
+                                diff_head_pos=opt.diff_head_pos,
+                                pos_emb_type=opt.pos_emb_type,
                                 )
 
         elif opt.enc_pretrained_model == "roberta":
@@ -334,6 +336,7 @@ def build_tm_model(opt, dicts):
                                    gradient_checkpointing=opt.enc_gradient_checkpointing,
                                    max_pos_len=opt.max_pos_length,
                                    diff_head_pos=opt.diff_head_pos,
+                                   pos_emb_type=opt.pos_emb_type,
                                    )
         elif not opt.enc_pretrained_model:
             print(" Encoder is not from pretrained model")
@@ -375,6 +378,7 @@ def build_tm_model(opt, dicts):
                                 gradient_checkpointing=opt.dec_gradient_checkpointing,
                                 max_pos_len=opt.max_pos_length,
                                 diff_head_pos=opt.diff_head_pos,
+                                pos_emb_type=opt.pos_emb_type,
                                 )
 
         elif opt.dec_pretrained_model == "roberta":
@@ -394,6 +398,7 @@ def build_tm_model(opt, dicts):
                                    gradient_checkpointing=opt.dec_gradient_checkpointing,
                                    max_pos_len=opt.max_pos_length,
                                    diff_head_pos=opt.diff_head_pos,
+                                   pos_emb_type=opt.pos_emb_type,
                                    )
 
         elif not opt.dec_pretrained_model:
