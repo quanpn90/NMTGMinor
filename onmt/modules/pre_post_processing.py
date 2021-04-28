@@ -71,11 +71,11 @@ class PrePostProcessing(nn.Module):
                     output = self.layer_norm(output)
             if step == 'd':
                 # in the case 'da'
-                # if i < (len(self.steps) - 1) and self.steps[i + 1] == 'a' and not self.variational:
-                #     output = fused_dropout_add(output, input_tensor, self.dropout_p, self.training)
-                #     i = i + 1
-                # else:
-                output = self.dropout(output)
+                if i < (len(self.steps) - 1) and self.steps[i + 1] == 'a' and not self.variational:
+                    output = fused_dropout_add(output, input_tensor, self.dropout_p, self.training)
+                    i = i + 1
+                else:
+                    output = self.dropout(output)
             if step == 'a':
                 if input_tensor is not None:
                     if onmt.constants.residual_type != 'gated':

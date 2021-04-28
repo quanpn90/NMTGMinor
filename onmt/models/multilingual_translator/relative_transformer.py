@@ -11,6 +11,7 @@ from onmt.modules.dropout import embedded_dropout
 from onmt.modules.sinusoidal_positional_encoding import SinusoidalPositionalEmbedding, FastSinusoidalPositionalEncoding
 from onmt.models.transformer_layers import PrePostProcessing
 from .relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
+from .reversible_transformers import ReversibleTransformerEncoderLayer, reversible_encoder
 from onmt.modules.identity import Identity
 from onmt.utils import flip, expected_length
 from collections import defaultdict
@@ -42,6 +43,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
         self.early_emb_scale = opt.encoder_early_emb_scale
         self.learnable_position_encoding = opt.learnable_position_encoding
         self.max_pos_length = opt.max_pos_length
+        self.reversible = opt.src_reversible
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type,
@@ -69,14 +71,20 @@ class RelativeTransformerEncoder(TransformerEncoder):
     def build_modules(self):
 
         e_length = expected_length(self.layers, self.death_rate)
-        print("* Relative Translation Encoder with %.2f expected layers" % e_length)
+        if self.reversible:
+            print("* Relative Reversible Encoder with %.2f expected layers" % e_length)
+        else:
+            print("* Relative Translation Encoder with %.2f expected layers" % e_length)
 
         self.layer_modules = nn.ModuleList()
 
         for _l in range(self.layers):
             # linearly decay the death rate
             death_r = (_l + 1.0) / self.layers * self.death_rate
-            block = RelativeTransformerEncoderLayer(self.opt, death_rate=death_r)
+            if self.reversible:
+                block = ReversibleTransformerEncoderLayer(self.opt, death_rate=death_r)
+            else:
+                block = RelativeTransformerEncoderLayer(self.opt, death_rate=death_r)
 
             self.layer_modules.append(block)
 
@@ -147,17 +155,20 @@ class RelativeTransformerEncoder(TransformerEncoder):
             """ Scale the emb by sqrt(d_model) """
             emb = emb * math.sqrt(self.model_size)
 
-        # B x T x H -> T x B x H
+        # context size is now T x B x H
         context = self.preprocess_layer(emb)
 
-        for i, layer in enumerate(self.layer_modules):
-            # src_len x batch_size x d_model
-            if self.checkpointing == 0 or self.training is False:
-                context = layer(context, pos_emb, mask_src, src_lang=input_lang)
-            else:
-                context = checkpoint(create_forward_function(layer), context, pos_emb, mask_src, input_lang)
+        if self.reversible:
+            context = reversible_encoder(self.layer_modules, context, pos_emb, mask_src)
+        else:
+            for i, layer in enumerate(self.layer_modules):
+                # src_len x batch_size x d_model
+                if self.checkpointing == 0 or self.training is False:
+                    context = layer(context, pos_emb, mask_src, src_lang=input_lang)
+                else:
+                    context = checkpoint(create_forward_function(layer), context, pos_emb, mask_src, input_lang)
 
-        # final layer norm
+        # final layer norm. we can consider this layer norm as a part of the output layer/function
         context = self.postprocess_layer(context)
 
         output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask, 'src': input})

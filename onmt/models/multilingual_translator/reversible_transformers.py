@@ -2,35 +2,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from onmt.models.transformer_layers import PrePostProcessing
-# from onmt.modules.linear import FeedForward as position_wise_feed_forward
 from onmt.modules.attention import MultiHeadAttention
-# from onmt.modules.relative_attention import RelPartialLearnableMultiHeadAttn
 from onmt.modules.optimized.relative_self_attention import RelativeSelfMultiheadAttn
 from onmt.modules.optimized.encdec_attention import EncdecMultiheadAttn
 from onmt.modules.optimized.feed_forward import PositionWiseFeedForward
 from onmt.modules.layer_norm import LayerNorm
 from torch.autograd.function import Function
-import sys
 from torch.utils.checkpoint import get_device_states, set_device_states
 from onmt.modules.dropout import variational_dropout
-
-try:
-    from torch.cuda.amp import custom_fwd, custom_bwd
-except (ModuleNotFoundError, ImportError) as e:
-    from ..modules.optimized.compat import custom_fwd, custom_bwd
-
-try:
-    import apex.amp as amp
-    from apex.amp import half_function
-except (ModuleNotFoundError, ImportError) as e:
-    amp = None
-    from ..modules.optimized.compat import half_function
-
-
-def deterministic_dropout(input, p=0.5, training=True, seed=None):
-    if seed is not None:
-        torch.manual_seed(seed)
-    return nn.functional.dropout(input, p=p, training=training)
 
 
 class RelativeSelfAttention(nn.Module):
@@ -39,15 +18,13 @@ class RelativeSelfAttention(nn.Module):
         super().__init__()
         # self.layer_norm = PrePostProcessing(opt.model_size, opt.dropout, sequence='n')
         self.layer_norm = LayerNorm((opt.model_size,), elementwise_affine=True)
-        # self.attn = MultiHeadAttention(opt.n_heads, opt.model_size, attn_p=opt.attn_dropout, share=1)
-        # self.attn = RelPartialLearnableMultiHeadAttn(opt.n_heads, opt.model_size, opt.model_size // opt.n_heads,
-        #                                              dropatt=opt.attn_dropout)
         self.residual_dropout = opt.residual_dropout if opt.residual_dropout >= 0 else opt.dropout
         self.attn = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, dropout=opt.attn_dropout,
-                                              learnable_pos=opt.learnable_pos)
+                                              learnable_pos=opt.learnable_position_encoding)
         self.variational = opt.variational_dropout
 
-    def forward(self, input, pos, attn_mask=None, incremental=False, incremental_cache=None, cleaning=False):
+    def forward(self, input, pos, attn_mask=None, incremental=False,
+                incremental_cache=None, cleaning=False):
         q = self.layer_norm(input)
         attn, coverage = self.attn(q, pos, attn_mask, incremental=incremental, incremental_cache=incremental_cache)
 
@@ -116,7 +93,6 @@ class SourceAttention(nn.Module):
 class ReversibleEncoderFunction(Function):
 
     @staticmethod
-    @custom_fwd(cast_inputs=torch.float16)
     def forward(ctx, layers, hidden_states, pos, attn_mask):
 
         # attn_output, hidden_states = hidden_states, hidden_states # torch.chunk(hidden_states, 2, dim=-1)
@@ -147,15 +123,10 @@ class ReversibleEncoderFunction(Function):
 
         return output
 
-        # concatenate 2 revnet outputs:
-        # return torch.cat([attn_output, hidden_states], dim=-1)
-
     @staticmethod
-    @custom_bwd
     def backward(ctx, grad_output):
 
-        # grad_attn_output, grad_hidden_states = torch.chunk(grad_hidden_states, 2, dim=-1)
-        first_grad_output, second_grad_output = grad_output
+        first_grad_output, second_grad_output = grad_output, grad_output
 
         # retrieve params from ctx
         first_output, second_output, pos = ctx.saved_tensors
@@ -164,17 +135,16 @@ class ReversibleEncoderFunction(Function):
 
         for idx, layer in enumerate(layers[::-1]):
             # backprop
-            first_input, hidden_states, first_grad_output, second_grad_output = layer.backward_pass(
+            first_output, second_output, first_grad_output, second_grad_output = layer.backward_pass(
                 first_output, second_output, first_grad_output, second_grad_output, pos, attn_mask
             )
 
         grad_hidden_states = first_grad_output + second_grad_output
 
         # the position encodings don't need embeddings
-        return grad_hidden_states, None, None, None
+        return None, grad_hidden_states, None, None
 
 
-@half_function
 def reversible_encoder(layers, hidden_states, pos, attn_mask):
     return ReversibleEncoderFunction.apply(layers, hidden_states, pos, attn_mask)
 
@@ -258,17 +228,15 @@ class ReversibleTransformerEncoderLayer(nn.Module):
                 torch.set_rng_state(self.ffn_cpu_state)
                 set_device_states(self.ffn_gpu_devices, self.ffn_gpu_states)
 
-                z2 = self.feedforward(y1)
+                gy1 = self.feedforward(y1)
 
-            # res_hidden_states.backward(grad_hidden_states, retain_grah=True)
-            torch.autograd.backward(z2, dy2)
+            gy1.backward(dy2)
 
         with torch.no_grad():
             # restore X2 = Y2 - G(Y1)
-            x2 = y2 - z2
-            del z2, y2
+            x2 = y2 - gy1
+            del gy1, y2
 
-            # DX1 = DY1 + Y1.grad
             dx1 = dy1 + y1.grad
             del dy1
             y1.grad = None
@@ -280,19 +248,18 @@ class ReversibleTransformerEncoderLayer(nn.Module):
                 torch.set_rng_state(self.attn_cpu_state)
                 set_device_states(self.attn_gpu_devices, self.attn_gpu_states)
 
-                z1, _, _ = self.self_attn(x2, pos, attn_mask)
+                fx2, _, = self.self_attn(x2, pos, attn_mask)
 
-            z1.backward(dx1)
+            fx2.backward(dx1)
 
         with torch.no_grad():
             # restore X1 = Y1 - F(X2)
-            x1 = y1 - z1
-            del y1, z1
+            x1 = y1 - fx2
+            del y1, fx2
 
             dx2 = dy2 + x2.grad
             x2.grad = None
             del dy2
-            x2 = x2.detach()
 
         return x1, x2, dx1, dx2
 
@@ -589,3 +556,5 @@ class ReversibleTransformerDecoderLayer(nn.Module):
         #     x2 = x2.detach()
 
         return x1, x2, dx1, dx2, grad_context
+
+

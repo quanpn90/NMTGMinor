@@ -199,7 +199,7 @@ class LayerNorm(torch.nn.Module):
 
         eps = self.eps
 
-        if not input.is_cuda or not self.fused:
+        if not (input.is_cuda and input.type() == 'torch.cuda.HalfTensor' ) or not self.fused:
             return F.layer_norm(
                 input, self.normalized_shape, self.weight, self.bias, eps)
         if self.elementwise_affine:

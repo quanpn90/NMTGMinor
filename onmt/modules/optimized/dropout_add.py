@@ -34,7 +34,8 @@ class FusedDropoutAdd(torch.autograd.Function):
             else:
                 dropout_mask = null_tensor
                 dropout_results = input
-            output = dropout_results + residual
+            dropout_results.add_(residual)
+            output = dropout_results
 
         ctx.save_for_backward(dropout_mask, dropout_prob_t)
 

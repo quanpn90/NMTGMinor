@@ -86,7 +86,7 @@ torch::Tensor bwd_recompute(
                  )
 {
   AT_ASSERTM(output_grads.dim()      == 3, "expected 3D tensor");
-  AT_ASSERTM(softmax_inputs.dim()   == 3, "expected 3D tensor");
+  AT_ASSERTM(softmax_inputs.dim()    == 3, "expected 3D tensor");
   AT_ASSERTM(dropout_mask.dim()      == 3, "expected 3D tensor");
 
   AT_ASSERTM(output_grads.type().scalarType()      == at::ScalarType::Half, "Only HALF is supported");

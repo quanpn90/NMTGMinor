@@ -57,12 +57,13 @@ class EncdecAttnFunc(torch.autograd.Function):
 
         # if encdec_multihead_attn_cuda is not None and not incremental and len_k <= 2048:
         #
-        #     input_lin_q_results, input_lin_kv_results, \
-        #     attn_scores, softmax_results, dropout_mask, \
-        #     matmul2_results, outputs \
+        #     input_lin_q_results2, input_lin_kv_results2, \
+        #     softmax_results2, dropout_results2, dropout_mask, \
+        #     matmul2_results2, outputs2 \
         #         = encdec_multihead_attn_cuda.forward(is_training, heads, inputs_q, inputs_kv,
         #                                              input_weights_q, input_weights_kv,
         #                                              output_weights, mask, dropout_prob)
+
         #
         #     ctx.save_for_backward(heads_t,
         #                           scale_t,
@@ -91,6 +92,7 @@ class EncdecAttnFunc(torch.autograd.Function):
                                        input_weights_q.transpose(0, 1))
         input_lin_q_results = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1), input_weights_q.size(0))
         queries = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1) * heads, head_dim)
+
         # Input Linear GEMM KV
         # input1: (activations) [seql_k, bsz, embed_dim(1024)]
         # input2: (weights)     [embed_dim*2 (2048), embed_dim (1024)] (transpose [0,1])
@@ -111,6 +113,7 @@ class EncdecAttnFunc(torch.autograd.Function):
                                             input_weights_kv.transpose(0, 1))
             input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1),
                                                              input_weights_kv.size(0))
+
             input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1) * heads, 2, head_dim)
             keys = input_lin_kv_results[:, :, 0, :]
             values = input_lin_kv_results[:, :, 1, :]
@@ -150,12 +153,32 @@ class EncdecAttnFunc(torch.autograd.Function):
             matmul1_results = matmul1_results.masked_fill_(mask, float('-inf'))
             matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
 
-        # if mask_softmax_dropout_cuda and len_k <= 2048 and matmul1_results.is_cuda:
-        if False:
-            dropout_mask, softmax_results = mask_softmax_dropout_cuda.forward(is_training, heads,
-                                                                              matmul1_results, dropout_prob_t[0])
-            dropout_results = softmax_results
-            softmax_results = matmul1_results
+        if mask_softmax_dropout_cuda and len_k <= 2048 and matmul1_results.type() == 'torch.cuda.HalfTensor':
+        # if False:
+            # dropout_results_ref = F.softmax(matmul1_results, dim=-1)
+            dropout_mask, softmax_results, dropout_results = mask_softmax_dropout_cuda.forward(is_training, heads,
+                                                                                               matmul1_results,
+                                                                                               dropout_prob_t[0])
+            if not is_training:
+                dropout_results = softmax_results  # because the cuda returns empty craps
+
+            # Verification code
+            # softmax_results_ref = F.softmax(matmul1_results, dim=-1)
+            # #
+            # if is_training:
+            #     # print(dropout_mask.float().sum(), dropout_mask.numel())
+            #     dropout_results_ref = softmax_results_ref * dropout_mask.half() * (1 / (1 - dropout_prob_t[0]))
+            # else:
+            #     dropout_results_ref = softmax_results_ref
+            # #
+            # comp = torch.allclose(softmax_results_ref, softmax_results, rtol=1e-03, atol=1e-04)
+            # comp = torch.allclose(dropout_results_ref, dropout_results, rtol=1e-03, atol=1e-04)
+            # if comp:
+            #     print("Forward pass verification passed.")
+            # else:
+            #     print("ERROR: Forward pass verification failed")
+            # Verification done
+
             ctx.fused_softmax_dropout = True
 
         else:
@@ -210,7 +233,7 @@ class EncdecAttnFunc(torch.autograd.Function):
                               dropout_mask,
                               dropout_prob_t)
 
-        return outputs, softmax_results
+        return outputs, dropout_results
 
     @staticmethod
     @custom_bwd
@@ -228,6 +251,7 @@ class EncdecAttnFunc(torch.autograd.Function):
             = ctx.saved_tensors
 
         head_dim = inputs_q.size(2) // heads_t[0]
+        bsz = inputs_q.size(1)
 
         # if encdec_multihead_attn_cuda is not None and len_key <= 2048:
         #     softmax_results = dropout_results
@@ -301,22 +325,41 @@ class EncdecAttnFunc(torch.autograd.Function):
         # GEMM: Per batch: ( seql_q x head_dim ) x ( head_dim x seql_k ) = ( seql_q x seql_k )
         values_grads = torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
 
-        if not ctx.fused_softmax_dropout:
-            # if mask_softmax_dropout_cuda is not None and matmul2_dgrad1.is_cuda:
-            if False:
-                # Fused and inplace softmax dropouts
-                softmax_grads = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1, softmax_results,
-                                                                   dropout_mask, dropout_prob_t[0])
-            else:
-                # Mask and Scaling for Dropout (not a publically documented op)
-                dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
-
-                # Softmax Grad (not a publically documented op)
-                softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
+        if not (mask_softmax_dropout_cuda is not None and matmul2_dgrad1.type() == 'torch.cuda.HalfTensor'):
+            # if mask_softmax_dropout_cuda is not None and matmul2_dgrad1.type() == 'torch.cuda.HalfTensor':
+            #     # Fused and inplace softmax dropouts
+            #
+            softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t[0], matmul2_dgrad1, softmax_results,
+                                                               dropout_mask, dropout_prob_t[0])
+            # Mask and Scaling for Dropout (not a publically documented op)
         else:
-            softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t, matmul2_dgrad1,
-                                                                         softmax_results, dropout_mask,
-                                                                         dropout_prob_t[0])
+            dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
+
+            # Softmax Grad (not a publically documented op)
+            softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
+        # else:
+        #     assert mask_softmax_dropout_cuda is not None
+        #
+        #     # matmul2_dgrad1_ref = matmul2_dgrad1.clone()
+        #     #
+        #     # dropout_grads = torch._masked_scale(matmul2_dgrad1_ref, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
+        #     # softmax_grads_ref = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
+        #     #
+        #     # softmax_grads = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1, softmax_results,
+        #     #                                                    dropout_mask, dropout_prob_t[0])
+        #
+        #     # matmul2_dgrad1_2 = matmul2_dgrad1.clone()
+        #     softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t[0], matmul2_dgrad1,
+        #                                                                  softmax_results, dropout_mask,
+        #                                                                  dropout_prob_t[0])
+
+            # comp = torch.allclose(softmax_grads_ref, softmax_grads, rtol=1e-03, atol=1e-04)
+            # if not comp:
+            #     # print(softmax_grads_ref - softmax_grads)
+            #     print("ERROR: Gradients mismatched.")
+            #     print(softmax_grads_ref - softmax_grads)
+            # else:
+            #     print("Gradients matched.")
 
         # Matmul1 - DGRAD1
         # Input1: (data grads)  [seqs*heads, seql_q, seql_k]
