@@ -254,7 +254,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             attn_score = attn_score.view(bsz * heads, len_q, len_k)
 
         if not (mask_softmax_dropout_cuda is not None and len_k <= 2048
-                and attn_score.type() == 'torch.cuda.HalfTensor' and not use_time_mask) or double_precision:
+                and attn_score.type() == 'torch.cuda.HalfTensor') or double_precision:
 
             dtype_ = torch.float64 if double_precision else torch.float32
             softmax_results = F.softmax(attn_score, dim=-1).type_as(attn_score)
@@ -447,26 +447,16 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             # Output:               [len_q, len_k, head_dim]
             # pos_grads = torch.bmm(dropout_results.transpose(0, 1).transpose(1, 2), output_lin_grads.transpose(0, 1))
 
-        # if ctx.fused_softmax_dropout:
-        #     assert (mask_softmax_dropout_cuda is not None)
-        #     # softmax_results here is actually softmax input to recompute softmax (attn_score above)
-        #     softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t, matmul2_dgrad1,
-        #                                                                  softmax_results, dropout_mask,
-        #                                                                  dropout_prob_t[0])
-
-            # ASSERTED to have the same grads with recomputing softmax and then calling torch.softmax_backward_data
-
-        # else:
         if mask_softmax_dropout_cuda is not None and len_k <= 1024 \
                 and matmul2_dgrad1.type() == 'torch.cuda.HalfTensor' and not ctx.double_precision:
-
+        # if False:
             # matmul2_dgrad1_ref = matmul2_dgrad1.clone()
             # dropout_grads = torch._masked_scale(matmul2_dgrad1_ref, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
             # softmax_grads_ref = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
 
             # softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t[0], matmul2_dgrad1, softmax_results,
             #                                                              dropout_mask, dropout_prob_t[0])
-            softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t[0], matmul2_dgrad1, softmax_results,
+            softmax_grads = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1, softmax_results,
                                                                          dropout_mask, dropout_prob_t[0])
 
             # comp = torch.allclose(softmax_grads_ref, softmax_grads, rtol=1e-03, atol=1e-04)

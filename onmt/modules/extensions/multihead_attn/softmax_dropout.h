@@ -132,8 +132,8 @@ float p)
             #pragma unroll
             for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
     	        //masking_value is a large negative value
-//                elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
-                elements_input[i][it + element] = -10000;
+                elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
+//                elements_input[i][it + element] = -10000;
             }
 
             if (element_index < batch_element_count) {
@@ -246,7 +246,7 @@ float p)
                     out[element] = rands[i][it+element] * (pinv * temp[element]);  // masked and scaled
                 }
                 copy_vector<output_t, ELEMENTS_PER_LDG_STG>(dst + i * element_count + it * WARP_SIZE, out);
-                copy_vector<output_t, ELEMENTS_PER_LDG_STG>(dst + i * element_count + it * WARP_SIZE, softmax_out);
+                copy_vector<output_t, ELEMENTS_PER_LDG_STG>(softmax_dst + i * element_count + it * WARP_SIZE, softmax_out);
 
             }
             else {
@@ -306,8 +306,8 @@ __global__ void softmax_dropout_warp_forward(output_t *dst,
             #pragma unroll
             for (int element = 0;element < 1;++element) {
     	        //masking_value is a large negative value
-//                elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
-                elements_input[i][it + element] = -10000;
+                elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
+//                elements_input[i][it + element] = -10000;
             }
 
             if (element_index < batch_element_count) {
@@ -612,8 +612,8 @@ int element_count)
             #pragma unroll
             for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
     	        //masking_value is a large negative value
-//                elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
-                elements_input[i][it + element] = -10000;
+                elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
+//                elements_input[i][it + element] = -10000;
             }
 
             if (element_index < batch_element_count) {
@@ -779,8 +779,8 @@ __global__ void softmax_warp_forward(output_t *dst,
             #pragma unroll
             for (int element = 0;element < 1;++element) {
     	        //masking_value is a large negative value
-//                elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
-                elements_input[i][it + element] = -10000;
+                elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
+//                elements_input[i][it + element] = -10000;
             }
 
             if (element_index < batch_element_count) {
@@ -1135,7 +1135,7 @@ int batch_size, int stride, int element_count)
     // there might be multiple batches per warp. compute the index within the batch
     int local_idx = threadIdx.x % WARP_SIZE;
     //vectorize if a row length is multiple of 4
-    int flag_vec4 = element_count & 3 == 0;
+//    int flag_vec4 = element_count & 3 == 0;
 
     // the first element to process by the current thread
     int thread_offset =  first_batch * stride + ELEMENTS_PER_LDG_STG * local_idx;
@@ -1197,7 +1197,7 @@ int batch_size, int stride, int element_count)
         }
     }
 
-    constexpr uint32_t  FULL_MASK = 0xffffffff;
+//    constexpr uint32_t  FULL_MASK = 0xffffffff;
 
     // compute local max_value
 

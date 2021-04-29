@@ -49,37 +49,27 @@ std::vector<torch::Tensor> fwd_cuda(
   // Softmax Intermediate Result Ptr (used by Matmul1 -> Softmax)
   void* input_ptr = static_cast<void*>(input.data_ptr());
 
-  float dropout_keep_prob = 1.0f - dropout_prob;
+//  float dropout_keep_prob = 1.0f - dropout_prob;
 
   // Padded Softmax
   bool softmax_success = false;
   void* softmax_results_ptr = static_cast<void*>(softmax_results.data_ptr());
   void* dropout_results_ptr = static_cast<void*>(dropout_results.data_ptr());
 
-//  if (is_training) {
-//      softmax_success = dispatch_softmax_dropout<half, half, float>(
-//                             reinterpret_cast<half*>(dropout_results_ptr),
-//                             reinterpret_cast<half*>(softmax_results_ptr),
-//                             reinterpret_cast<uint8_t*>(dropout_mask.data_ptr<uint8_t>()),
-//                             reinterpret_cast<const half*>(input_ptr),
-//                             dropout_elems,
-//                             k_seq_len,
-//                             k_seq_len,
-//                             attn_batches*q_seq_len,
-//                             dropout_keep_prob,
-//                             stream);
-//    } else {
-//      softmax_success = dispatch_softmax<half, half, float>(
-//                             reinterpret_cast<half*>(softmax_results_ptr),
-//                             reinterpret_cast<const half*>(input_ptr),
-//                             dropout_elems,
-//                             k_seq_len,
-//                             k_seq_len,
-//                             attn_batches*q_seq_len,
-//                             stream);
-//    }
-
-  softmax_success = dispatch_softmax<half, half, float>(
+  if (is_training) {
+      softmax_success = dispatch_softmax_dropout<half, half, float>(
+                             reinterpret_cast<half*>(dropout_results_ptr),
+                             reinterpret_cast<half*>(softmax_results_ptr),
+                             reinterpret_cast<uint8_t*>(dropout_mask.data_ptr<uint8_t>()),
+                             reinterpret_cast<const half*>(input_ptr),
+                             dropout_elems,
+                             k_seq_len,
+                             k_seq_len,
+                             attn_batches*q_seq_len,
+                             1.0f - dropout_prob,
+                             stream);
+    } else {
+      softmax_success = dispatch_softmax<half, half, float>(
                              reinterpret_cast<half*>(softmax_results_ptr),
                              reinterpret_cast<const half*>(input_ptr),
                              dropout_elems,
@@ -87,13 +77,23 @@ std::vector<torch::Tensor> fwd_cuda(
                              k_seq_len,
                              attn_batches*q_seq_len,
                              stream);
+    }
 
-  if (is_training) {
-    //use at:: function so that C++ version generates the same random mask as python version
-    auto dropout_tuple = at::_fused_dropout(softmax_results, 1.0f-dropout_prob);
-    dropout_results = std::get<0>(dropout_tuple);
-    dropout_mask = std::get<1>(dropout_tuple);
-  }
+//  softmax_success = dispatch_softmax<half, half, float>(
+//                             reinterpret_cast<half*>(softmax_results_ptr),
+//                             reinterpret_cast<const half*>(input_ptr),
+//                             dropout_elems,
+//                             k_seq_len,
+//                             k_seq_len,
+//                             attn_batches*q_seq_len,
+//                             stream);
+//
+//  if (is_training) {
+//    //use at:: function so that C++ version generates the same random mask as python version
+//    auto dropout_tuple = at::_fused_dropout(softmax_results, 1.0f-dropout_prob);
+//    dropout_results = std::get<0>(dropout_tuple);
+//    dropout_mask = std::get<1>(dropout_tuple);
+//  }
 
   assert(softmax_success);
 
@@ -147,7 +147,7 @@ torch::Tensor bwd_recompute_cuda(
   const int   attn_batches   = output_grads.size(0);
   const int   q_seq_len      = output_grads.size(1);
   const int   k_seq_len      = output_grads.size(2);
-  const int   dropout_elems  = attn_batches * q_seq_len * k_seq_len;
+//  const int   dropout_elems  = attn_batches * q_seq_len * k_seq_len;
   // TODO: Streams can be used in Backprop but I haven't added more than one
   // in my first attempt to create the code
   cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
@@ -160,7 +160,7 @@ torch::Tensor bwd_recompute_cuda(
 //  torch::Tensor softmax_results   = torch::empty({attn_batches, q_seq_len, k_seq_len}, act_options);
 //  void* softmax_results_ptr = static_cast<void*>(softmax_results.data_ptr());
 
-  bool softmax_success = false;
+//  bool softmax_success = false;
 
 //  softmax_success = dispatch_softmax<half, half, float>(
 //                             reinterpret_cast<half*>(softmax_results_ptr),

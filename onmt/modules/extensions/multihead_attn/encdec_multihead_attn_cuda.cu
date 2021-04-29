@@ -72,6 +72,7 @@ std::vector<torch::Tensor> fwd_cuda(
   torch::Tensor input_lin_kv_results = torch::empty({k_seq_len, sequences, output_lin_kv_dim}, act_options);
   torch::Tensor attn_scores          = torch::empty({attn_batches, q_seq_len, k_seq_len},      act_options);
   torch::Tensor softmax_results      = torch::empty({attn_batches, q_seq_len, k_seq_len},      act_options);
+  torch::Tensor dropout_results      = torch::empty({attn_batches, q_seq_len, k_seq_len},      act_options);
   torch::Tensor dropout_mask         = torch::empty({attn_batches, q_seq_len, k_seq_len},      mask_options);
   torch::Tensor matmul2_results      = torch::empty({q_seq_len, attn_batches, head_dim},       act_options);
   torch::Tensor outputs              = torch::empty_like(inputs_q, act_options);
@@ -81,6 +82,7 @@ std::vector<torch::Tensor> fwd_cuda(
   void* k_lin_results_ptr   = static_cast<void*>(input_lin_kv_results.data_ptr());
   void* v_lin_results_ptr   = static_cast<void*>(static_cast<half*>(input_lin_kv_results.data_ptr()) + head_dim);
   void* softmax_results_ptr = static_cast<void*>(softmax_results.data_ptr());
+  void* dropout_results_ptr = static_cast<void*>(dropout_results.data_ptr());
   // Softmax Intermediate Result Ptr (used by Matmul1 -> Softmax)
   void* attn_scores_ptr     = static_cast<void*>(attn_scores.data_ptr());
 
@@ -160,6 +162,7 @@ std::vector<torch::Tensor> fwd_cuda(
 
   if (is_training) {
       softmax_success = dispatch_softmax_dropout<half, half, float>(
+                             reinterpret_cast<half*>(dropout_results_ptr),
                              reinterpret_cast<half*>(softmax_results_ptr),
                              reinterpret_cast<uint8_t*>(dropout_mask.data_ptr<uint8_t>()),
                              reinterpret_cast<const half*>(attn_scores_ptr),
@@ -171,7 +174,7 @@ std::vector<torch::Tensor> fwd_cuda(
                              stream);
   } else {
       softmax_success = dispatch_softmax<half, half, float>(
-                             reinterpret_cast<half*>(softmax_results_ptr),
+                             reinterpret_cast<half*>(dropout_results_ptr),
                              reinterpret_cast<const half*>(attn_scores_ptr),
                              dropout_elems,
                              k_seq_len,
@@ -193,7 +196,7 @@ std::vector<torch::Tensor> fwd_cuda(
                              static_cast<const half*>(v_lin_results_ptr), 
                              lead_dim_kv, 
                              batch_stride_kv, 
-                             static_cast<const half*>(softmax_results.data_ptr()) ,
+                             static_cast<const half*>(dropout_results.data_ptr()) ,
                              k_seq_len, 
                              k_seq_len*q_seq_len, 
                              beta, 
@@ -229,8 +232,8 @@ std::vector<torch::Tensor> fwd_cuda(
   return { 
            input_lin_q_results, 
            input_lin_kv_results,
-           attn_scores,
            softmax_results,
+           dropout_results,
            dropout_mask, 
            matmul2_results, 
            outputs
@@ -241,8 +244,8 @@ std::vector<torch::Tensor> bwd_cuda(
                                int                  heads,
                                torch::Tensor const& output_grads, 
                                torch::Tensor const& matmul2_results,
-                               torch::Tensor const& softmax_results,
-                               torch::Tensor const& attn_scores,
+                               torch::Tensor const& dropout_results,
+                               torch::Tensor const& softmax_scores,
                                torch::Tensor const& input_lin_q_results,
                                torch::Tensor const& input_lin_kv_results,
                                torch::Tensor const& inputs_q, 
@@ -381,7 +384,7 @@ std::vector<torch::Tensor> bwd_cuda(
                              static_cast<const half*>(output_lin_grads.data_ptr()),
                              head_dim*attn_batches, 
                              head_dim, 
-                             static_cast<const half*>(softmax_results.data_ptr()),
+                             static_cast<const half*>(dropout_results.data_ptr()),
                              k_seq_len, 
                              k_seq_len*q_seq_len, 
                              beta, 
@@ -390,39 +393,18 @@ std::vector<torch::Tensor> bwd_cuda(
                              batch_stride_kv, 
                              attn_batches);
 
-  bool softmax_success = false;
+  // bool softmax_success = false;
 
-  softmax_success = dispatch_masked_scale_softmax_backward_recompute<half, half, float, false>(
+  dispatch_masked_scale_softmax_backward_recompute<half, half, float, false>(
                                  static_cast<half*>(matmul2_grads.data_ptr()),
                                  static_cast<half* const>(matmul2_grads.data_ptr()),
-                                 reinterpret_cast<half const*>(attn_scores.data_ptr()),
+                                 reinterpret_cast<half const*>(softmax_results.data_ptr()),
                                  static_cast<uint8_t const*>(dropout_mask.data_ptr()),
                                  1.0/(1.0-dropout_prob),
                                  k_seq_len,
                                  k_seq_len,
                                  attn_batches*q_seq_len,
                                  stream);
-
-  // backward is in-place so matmul2_grads stores gradients of attn_scores now
-
-//  // Apply Dropout Mask and Scale by Dropout Probability
-//  apex_masked_scale_cuda<at::Half,float,uint32_t>(
-//                             static_cast<at::Half const*>(matmul2_grads.data_ptr()),
-//                             static_cast<at::Half*>(matmul2_grads.data_ptr()),
-//                             static_cast<uint8_t const*>(dropout_mask.data_ptr()),
-//                             dropout_elems,
-//                             (1.0 / (1.0 - dropout_prob)));
-//
-//  // Softmax Grad
-//  bool softmax_success = false;
-//  softmax_success = dispatch_softmax_backward<half, half, float>(
-//                             static_cast<half*>(matmul2_grads.data_ptr()),
-//                             static_cast<half*>(matmul2_grads.data_ptr()),
-//                             reinterpret_cast<half const*>(softmax_results.data_ptr()),
-//                             k_seq_len,
-//                             k_seq_len,
-//                             attn_batches*q_seq_len);
-  assert(softmax_success);
 
   // Matmul1 Dgrad1
   gemm_switch_fp32accum(     state, 
