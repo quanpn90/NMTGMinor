@@ -326,11 +326,27 @@ class EncdecAttnFunc(torch.autograd.Function):
         values_grads = torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
 
         if mask_softmax_dropout_cuda is not None and matmul2_dgrad1.type() == 'torch.cuda.HalfTensor'\
-                and len_key <= 1024:
+                and len_key <= 2048:
 
-            softmax_grads = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1, softmax_results,
+            # This is a safe implementation
+            # softmax_grads = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1, softmax_results,
+            #                                                    dropout_mask, dropout_prob_t[0])
+
+            # matmul2_dgrad1_ref = matmul2_dgrad1.clone()
+            # softmax_results_ref = softmax_results.clone()
+            # dropout_grads = torch._masked_scale(matmul2_dgrad1_ref, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
+            # softmax_grads_ref = torch._softmax_backward_data(dropout_grads,
+            #                                                  softmax_results_ref, -1, softmax_results_ref)
+            
+            softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t[0], matmul2_dgrad1, softmax_results,
                                                                dropout_mask, dropout_prob_t[0])
-
+            # comp = torch.allclose(softmax_grads_ref, softmax_grads, rtol=1e-03, atol=1e-04)
+            # if not comp:
+            #     # print(softmax_grads_ref - softmax_grads)
+            #     print("ERROR: Gradients mismatched.")
+            #     print(softmax_grads_ref - softmax_grads)
+            # else:
+            #     print("Gradients matched.")
         else:
             # Mask and Scaling for Dropout (not a publically documented op)
             dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))

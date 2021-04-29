@@ -99,10 +99,10 @@ std::vector<torch::Tensor> fwd_cuda(
                              batches_q,  // bsz x len_q
                              embed_dim,  // embed_dim
                              static_cast<const void*>(&alpha),
-                             static_cast<const void*>(input_weights_q.data_ptr()), // weight emb x emb
+                             static_cast<const void*>(input_weights_q.data_ptr()), // weight emb_out x emb_in transposed
                              CUDA_R_16F,
                              embed_dim, // lda  so A has size [lda x m] -> [embed_dim x output_lin_q_dim]
-                             static_cast<const void*>(inputs_q.data_ptr()), // input Q transposed to embed_dim * B
+                             static_cast<const void*>(inputs_q.data_ptr()), // input Q
                              CUDA_R_16F,
                              embed_dim, // ldb B has size [lda xn] -> [embed_dim x batches_q]
                              static_cast<const void*>(&beta), // beta
@@ -181,6 +181,8 @@ std::vector<torch::Tensor> fwd_cuda(
                              k_seq_len,
                              attn_batches*q_seq_len,
                              stream);
+
+      softmax_results.copy_(dropout_results)
   }
 
   assert(softmax_success);
@@ -395,7 +397,7 @@ std::vector<torch::Tensor> bwd_cuda(
 
   // bool softmax_success = false;
 
-  dispatch_masked_scale_softmax_backward_recompute<half, half, float, false>(
+  dispatch_masked_scale_softmax_backward_stream<half, half, float, false>(
                                  static_cast<half*>(matmul2_grads.data_ptr()),
                                  static_cast<half* const>(matmul2_grads.data_ptr()),
                                  reinterpret_cast<half const*>(softmax_results.data_ptr()),
