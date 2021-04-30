@@ -137,21 +137,25 @@ std::vector<torch::Tensor> fwd_cuda(
   gemm_switch_fp32accum(     state, 
                              a_layout_t, 
                              b_layout_n, 
-                             k_seq_len,
-                             q_seq_len,
-                             head_dim,
+                             k_seq_len, // m
+                             q_seq_len, // n
+                             head_dim, // k
                              scale, 
                              static_cast<const half*>(k_lin_results_ptr), 
-                             lead_dim_kv, 
-                             batch_stride_kv, 
+                             lead_dim_kv, // lda
+                             batch_stride_kv,  //strideA
                              static_cast<const half*>(q_lin_results_ptr),
-                             lead_dim_q, 
-                             batch_stride_q, 
+                             lead_dim_q,  // ldb
+                             batch_stride_q,  //strideB
                              beta, 
-                             static_cast<half*>(attn_scores_ptr),
-                             k_seq_len, 
-                             k_seq_len*q_seq_len, 
-                             attn_batches);
+                             static_cast<half*>(attn_scores_ptr), // [attn_batches * len_q * len_k]
+                             k_seq_len,  // ldc
+                             k_seq_len*q_seq_len, // stride c
+                             attn_batches); // p
+  // C[k_seq_len - 1 + (q_seq_len-1) * k_seq_len + (attn_batches-1) * k_seq_len * q_seqlen] = max C
+  // A[m + k*ldA + p*strideA]
+  // max: A: [(k_seq_len -1) + (head_dim-1) * (attn_batches * 2 *head_dim) + (attn_batches-1) * (2 * head_dim)
+  // B[k + n*ldB +
 
   // need to call padding from torch interface here.
   attn_scores.view({sequences, heads, q_seq_len, k_seq_len}).masked_fill_(pad_mask,
@@ -182,30 +186,33 @@ std::vector<torch::Tensor> fwd_cuda(
                              attn_batches*q_seq_len,
                              stream);
 
-      softmax_results.copy_(dropout_results)
+      softmax_results.copy_(dropout_results);
   }
 
   assert(softmax_success);
 
   // Matmul2
+  // matrix kv has size len_k * batch_size * (2 * heads * head_dim)
+  // dropout results [bsz*heads, len_q, len_k]
+  // matmul2_results is [len_q x attn_batches x head_dim]
   gemm_switch_fp32accum(     state, 
                              a_layout_n, 
                              b_layout_n, 
-                             head_dim, 
-                             q_seq_len, 
-                             k_seq_len, 
+                             head_dim,  // m
+                             q_seq_len,  // n
+                             k_seq_len,  // k
                              alpha, 
-                             static_cast<const half*>(v_lin_results_ptr), 
-                             lead_dim_kv, 
-                             batch_stride_kv, 
-                             static_cast<const half*>(dropout_results.data_ptr()) ,
-                             k_seq_len, 
-                             k_seq_len*q_seq_len, 
+                             static_cast<const half*>(v_lin_results_ptr), // A_i [head_dimxk_seq_len]
+                             lead_dim_kv,  // attn_batches * 2 *head_dim
+                             batch_stride_kv,  // stride = 2 * head_dim
+                             static_cast<const half*>(dropout_results.data_ptr()) // B_i [k_seq_len x q_seq_len]
+                             k_seq_len, // lead_dim
+                             k_seq_len*q_seq_len,  // stride
                              beta, 
                              static_cast<half*>(matmul2_results.data_ptr()), 
-                             head_dim*attn_batches, 
-                             head_dim, 
-                             attn_batches);
+                             head_dim*attn_batches, // ldc
+                             head_dim,  // stride c
+                             attn_batches); //p
 
   // Output Linear
   THCublasCheck(cublasGemmEx(handle,
@@ -247,7 +254,7 @@ std::vector<torch::Tensor> bwd_cuda(
                                torch::Tensor const& output_grads, 
                                torch::Tensor const& matmul2_results,
                                torch::Tensor const& dropout_results,
-                               torch::Tensor const& softmax_scores,
+                               torch::Tensor const& softmax_results,
                                torch::Tensor const& input_lin_q_results,
                                torch::Tensor const& input_lin_kv_results,
                                torch::Tensor const& inputs_q, 
@@ -364,8 +371,8 @@ std::vector<torch::Tensor> bwd_cuda(
                              head_dim,
                              alpha, 
                              static_cast<const half*>(v_lin_results_ptr),
-                             lead_dim_kv, 
-                             batch_stride_kv,
+                             lead_dim_kv,
+                             batch_stride_kv, // 2 * head_dim
                              static_cast<const half*>(output_lin_grads.data_ptr()),
                              head_dim*attn_batches, 
                              head_dim, 
@@ -397,7 +404,7 @@ std::vector<torch::Tensor> bwd_cuda(
 
   // bool softmax_success = false;
 
-  dispatch_masked_scale_softmax_backward_stream<half, half, float, false>(
+  dispatch_masked_scale_softmax_backward_recompute<half, half, float, false>(
                                  static_cast<half*>(matmul2_grads.data_ptr()),
                                  static_cast<half* const>(matmul2_grads.data_ptr()),
                                  reinterpret_cast<half const*>(softmax_results.data_ptr()),

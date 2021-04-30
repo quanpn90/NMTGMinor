@@ -1,3 +1,9 @@
+"""
+Self-attention with multi-head attention.
+Code is taken from apex self-attention implementation
+https://github.com/NVIDIA/apex/tree/master/apex/contrib/csrc/multihead_attn
+"""
+
 import torch
 import torch.nn.functional as F
 from onmt.constants import double_precision

@@ -37,6 +37,9 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
         lengths = [x.size(0) for x in data]
         # positions = [torch.arange(length_) for length_ in lengths]
         max_length = max(lengths)
+        # if max_length > 8:
+        #     max_length = math.ceil(max_length / 8) * 8
+
         if dataname == "source":
             tensor = data[0].new(len(data), max_length).fill_(onmt.constants.SRC_PAD)
         elif dataname == "target":
@@ -75,6 +78,7 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
         lengths = [x.size(0) for x in samples]
 
         max_length = max(lengths)
+        # max_length = math.ceil(max_length / 8) * 8
 
         # allocate data for the batch speech
         feature_size = samples[0].size(1)

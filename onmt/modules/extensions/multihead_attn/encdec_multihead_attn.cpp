@@ -20,8 +20,8 @@ std::vector<torch::Tensor> bwd_cuda(
                                int                  heads,
                                torch::Tensor const& output_grads, 
                                torch::Tensor const& matmul2_results,
+                               torch::Tensor const& dropout_results,
                                torch::Tensor const& softmax_results,
-                               torch::Tensor const& attn_scores_results,
                                torch::Tensor const& input_lin_q_results,
                                torch::Tensor const& input_lin_kv_results,
                                torch::Tensor const& inputs_q, 
@@ -83,8 +83,8 @@ std::vector<torch::Tensor> bwd(
                                int                  heads,
                                torch::Tensor const& output_grads, 
                                torch::Tensor const& matmul2_results,
+                               torch::Tensor const& dropout_results,
                                torch::Tensor const& softmax_results,
-                               torch::Tensor const& attn_scores_results,
                                torch::Tensor const& input_lin_q_results,
                                torch::Tensor const& input_lin_kv_results,
                                torch::Tensor const& inputs_q, 
@@ -98,7 +98,7 @@ std::vector<torch::Tensor> bwd(
 {
   AT_ASSERTM(output_grads.dim()         == 3, "expected 3D tensor");
   AT_ASSERTM(matmul2_results.dim()      == 3, "expected 3D tensor");
-  AT_ASSERTM(attn_scores_results.dim()  == 3, "expected 3D tensor");
+  AT_ASSERTM(dropout_results.dim()      == 3, "expected 3D tensor");
   AT_ASSERTM(softmax_results.dim()      == 3, "expected 3D tensor");
   AT_ASSERTM(input_lin_q_results.dim()  == 3, "expected 3D tensor");
   AT_ASSERTM(input_lin_kv_results.dim() == 3, "expected 3D tensor");
@@ -111,7 +111,7 @@ std::vector<torch::Tensor> bwd(
   
   AT_ASSERTM(output_grads.type().scalarType()         == at::ScalarType::Half, "Only HALF is supported");
   AT_ASSERTM(matmul2_results.type().scalarType()      == at::ScalarType::Half, "Only HALF is supported");
-  AT_ASSERTM(attn_scores_results.type().scalarType()  == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(dropout_results.type().scalarType()      == at::ScalarType::Half, "Only HALF is supported");
   AT_ASSERTM(softmax_results.type().scalarType()      == at::ScalarType::Half, "Only HALF is supported");
   AT_ASSERTM(input_lin_q_results.type().scalarType()  == at::ScalarType::Half, "Only HALF is supported");
   AT_ASSERTM(input_lin_kv_results.type().scalarType() == at::ScalarType::Half, "Only HALF is supported");
@@ -126,8 +126,8 @@ std::vector<torch::Tensor> bwd(
                                  heads, 
                                  output_grads,
                                  matmul2_results,
+                                 dropout_results,
                                  softmax_results,
-                                 attn_scores_results,
                                  input_lin_q_results, 
                                  input_lin_kv_results, 
                                  inputs_q, 

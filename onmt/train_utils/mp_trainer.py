@@ -783,7 +783,7 @@ class Trainer(object):
                 grad_denom = grad_denom / self.world_size
 
                 # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
-                # normalize_gradients(self.model.parameters(), grad_denom)
+                normalize_gradients(self.model.parameters(), grad_denom)
 
                 # Update the parameters.
                 if self.opt.max_grad_norm > 0:
@@ -897,13 +897,13 @@ class Trainer(object):
             if not opt.reset_optim:
 
                 # Only load the progress when we use the same optimizer
-                if 'itr' in checkpoint:
-                    itr_progress = checkpoint['itr']
-                else:
-                    itr_progress = None
+                # if 'itr' in checkpoint:
+                #     itr_progress = checkpoint['itr']
+                # else:
+                itr_progress = None
 
                 resume = True
-                start_epoch = checkpoint['epoch'] if 'epoch' in checkpoint else 1
+                start_epoch = math.floor(checkpoint['epoch']) if 'epoch' in checkpoint else 1
                 if start_epoch is None:
                     start_epoch = 1
             else:
