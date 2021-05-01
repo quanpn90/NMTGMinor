@@ -152,10 +152,6 @@ std::vector<torch::Tensor> fwd_cuda(
                              k_seq_len,  // ldc
                              k_seq_len*q_seq_len, // stride c
                              attn_batches); // p
-  // C[k_seq_len - 1 + (q_seq_len-1) * k_seq_len + (attn_batches-1) * k_seq_len * q_seqlen] = max C
-  // A[m + k*ldA + p*strideA]
-  // max: A: [(k_seq_len -1) + (head_dim-1) * (attn_batches * 2 *head_dim) + (attn_batches-1) * (2 * head_dim)
-  // B[k + n*ldB +
 
   // need to call padding from torch interface here.
   attn_scores.view({sequences, heads, q_seq_len, k_seq_len}).masked_fill_(pad_mask,
@@ -205,7 +201,7 @@ std::vector<torch::Tensor> fwd_cuda(
                              static_cast<const half*>(v_lin_results_ptr), // A_i [head_dimxk_seq_len]
                              lead_dim_kv,  // attn_batches * 2 *head_dim
                              batch_stride_kv,  // stride = 2 * head_dim
-                             static_cast<const half*>(dropout_results.data_ptr()) // B_i [k_seq_len x q_seq_len]
+                             static_cast<const half*>(dropout_results.data_ptr()), // B_i [k_seq_len x q_seq_len]
                              k_seq_len, // lead_dim
                              k_seq_len*q_seq_len,  // stride
                              beta, 

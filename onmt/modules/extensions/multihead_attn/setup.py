@@ -43,44 +43,44 @@ subprocess.run(["git", "clone", "https://github.com/NVIDIA/cutlass.git", "cutlas
 subprocess.run(["git", "-C", "cutlass", "checkout", "fe3438a3c1ccbdd03dc1aca3bb68099a9e2a58bd"])
 
 
-# ext_modules.append(
-#     CUDAExtension(name='encdec_multihead_attn_cuda',
-#                   sources=['encdec_multihead_attn.cpp',
-#                            'encdec_multihead_attn_cuda.cu'],
-#                   extra_compile_args={'cxx': ['-O3', ],
-#                                       'nvcc': ['-O3',
-#                                                '-I./cutlass/',
-#                                                '-U__CUDA_NO_HALF_OPERATORS__',
-#                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
-#                                                '--expt-relaxed-constexpr',
-#                                                '--expt-extended-lambda',
-#                                                '--use_fast_math'] + cc_flag}))
-#
-# ext_modules.append(
-#     CUDAExtension(name='fused_dropout_add_cuda',
-#                   sources=['dropout_add.cpp',
-#                            'dropout_add_cuda.cu'],
-#                   extra_compile_args={'cxx': ['-O3', ],
-#                                       'nvcc': ['-O3',
-#                                                '-U__CUDA_NO_HALF_OPERATORS__',
-#                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
-#                                                '--expt-relaxed-constexpr',
-#                                                '--expt-extended-lambda',
-#                                                '--use_fast_math'] + cc_flag}))
-#
-#
-# ext_modules.append(
-#     CUDAExtension(name='mask_softmax_dropout_cuda',
-#                   sources=['masked_softmax_dropout.cpp',
-#                            'masked_softmax_dropout_cuda.cu'],
-#                   extra_compile_args={'cxx': ['-O3', ],
-#                                       'nvcc': ['-O3',
-#                                                '-I./cutlass/include',
-#                                                '-U__CUDA_NO_HALF_OPERATORS__',
-#                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
-#                                                '--expt-relaxed-constexpr',
-#                                                '--expt-extended-lambda',
-#                                                '--use_fast_math'] + cc_flag}))
+ext_modules.append(
+    CUDAExtension(name='encdec_multihead_attn_cuda',
+                  sources=['encdec_multihead_attn.cpp',
+                           'encdec_multihead_attn_cuda.cu'],
+                  extra_compile_args={'cxx': ['-O3', ],
+                                      'nvcc': ['-O3',
+                                               '-I./cutlass/',
+                                               '-U__CUDA_NO_HALF_OPERATORS__',
+                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
+                                               '--expt-relaxed-constexpr',
+                                               '--expt-extended-lambda',
+                                               '--use_fast_math'] + cc_flag}))
+
+ext_modules.append(
+    CUDAExtension(name='fused_dropout_add_cuda',
+                  sources=['dropout_add.cpp',
+                           'dropout_add_cuda.cu'],
+                  extra_compile_args={'cxx': ['-O3', ],
+                                      'nvcc': ['-O3',
+                                               '-U__CUDA_NO_HALF_OPERATORS__',
+                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
+                                               '--expt-relaxed-constexpr',
+                                               '--expt-extended-lambda',
+                                               '--use_fast_math'] + cc_flag}))
+
+
+ext_modules.append(
+    CUDAExtension(name='mask_softmax_dropout_cuda',
+                  sources=['masked_softmax_dropout.cpp',
+                           'masked_softmax_dropout_cuda.cu'],
+                  extra_compile_args={'cxx': ['-O3', ],
+                                      'nvcc': ['-O3',
+                                               '-I./cutlass/include',
+                                               '-U__CUDA_NO_HALF_OPERATORS__',
+                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
+                                               '--expt-relaxed-constexpr',
+                                               '--expt-extended-lambda',
+                                               '--use_fast_math'] + cc_flag}))
 
 ext_modules.append(
     CUDAExtension(name='rel_self_attn_cuda',
@@ -94,32 +94,6 @@ ext_modules.append(
                                               '--expt-relaxed-constexpr',
                                               '--expt-extended-lambda',
                                               '--use_fast_math'] + cc_flag}))
-# ext_modules.append(
-#     CUDAExtension(name='fast_self_multihead_attn_bias',
-#                   sources=['self_multihead_attn_bias.cpp',
-#                            'self_multihead_attn_bias_cuda.cu'],
-#                   extra_compile_args={'cxx': ['-O3',],
-#                                       'nvcc':['-O3',
-#                                               '-gencode', 'arch=compute_70,code=sm_70',
-#                                               '-I./cutlass/',
-#                                               '-U__CUDA_NO_HALF_OPERATORS__',
-#                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
-#                                               '--expt-relaxed-constexpr',
-#                                               '--expt-extended-lambda',
-#                                               '--use_fast_math'] + cc_flag}))
-# ext_modules.append(
-#     CUDAExtension(name='fast_self_multihead_attn',
-#                   sources=['self_multihead_attn.cpp',
-#                            'self_multihead_attn_cuda.cu'],
-#                   extra_compile_args={'cxx': ['-O3',],
-#                                       'nvcc':['-O3',
-#                                               '-gencode', 'arch=compute_70,code=sm_70',
-#                                               '-I./cutlass/',
-#                                               '-U__CUDA_NO_HALF_OPERATORS__',
-#                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
-#                                               '--expt-relaxed-constexpr',
-#                                               '--expt-extended-lambda',
-#                                               '--use_fast_math'] + cc_flag}))
 
 
 setup(
