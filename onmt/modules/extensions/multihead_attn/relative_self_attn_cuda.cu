@@ -142,7 +142,7 @@ std::vector<torch::Tensor> fwd_cuda(
 
     // k_lin_results_ptr has to transpose because its [head_dim x [BH x len_k]] -> transpose to have head_dim last
     // rw_head_q [head_dim *  bsz*heads x len_q] -> no transpose
-//    torch::Tensor matmul_ac = at::baddbmm(attn_scores, rw_head_q.view({q_seq_len, attn_batches, head_dim}).transpose(0, 1),
+//    torch::Tensor matmul_ac = at::baddbmm(attn_scores, rw_head_q.transpose(0, 1),
 //                               key.contiguous().view({k_seq_len, attn_batches, head_dim}).transpose(0, 1).transpose(1, 2),
 //                               0.0, scale);
 
@@ -187,7 +187,6 @@ std::vector<torch::Tensor> fwd_cuda(
 //    const int   ldc = k_seq_len;  // k_seq_len * q_seq_len or len_k
 //    const int   stride_c = attn_batches *k_seq_len; // k_seq_len or attn_batches * len_k
 
-    //
     // [len_k * head_dim] x [head_dim x attn_batches] -> [len_k x attn_batches]
 
 //    Try to write in gemm_switch_fp32accum later
@@ -209,7 +208,6 @@ std::vector<torch::Tensor> fwd_cuda(
 //                             ldc,
 //                             stride_c,
 //                             batch_count_bd); // batch count
-
 
     attn_scores.view({sequences, heads, q_seq_len, k_seq_len}).masked_fill_(pad_mask,
                                                                           -std::numeric_limits<float>::infinity());

@@ -668,16 +668,16 @@ class Trainer(object):
                 # outputs is a dictionary containing keys/values necessary for loss function
                 # can be flexibly controlled within models for easier extensibility
                 counter = counter + 1
-                reduction_disabled = False if counter >= opt.update_frequency or i == (n_samples - 1) else True
+                # reduction_disabled = False if counter >= opt.update_frequency or i == (n_samples - 1) else True
+                reduce = True if counter >= opt.update_frequency or i == (n_samples - 1) else False
 
                 def maybe_no_sync():
-                    # if not reduction_disabled and isinstance(self.model, DDP_model):
-                    # if isinstance(self.model, DDP_model):
-                    #     return self.model.no_sync()
-                    # else:
-                    # when we dont reach the updating step, we do not need to synchronize the gradients
-                    # thus disabling the backward grad sync to improve speed
-                    return contextlib.ExitStack()  # dummy contextmanager
+                    if not reduce and isinstance(self.model, DDP_model):
+                        return self.model.no_sync()
+                    else:
+                        # when we dont reach the updating step, we do not need to synchronize the gradients
+                        # thus disabling the backward grad sync to improve speed
+                        return contextlib.ExitStack()  # dummy contextmanager
 
                 with maybe_no_sync():
                     with autocast():
@@ -750,8 +750,8 @@ class Trainer(object):
                     if opt.streaming:  # reset stream in this case ...
                         streaming_state = self.model.init_stream()
                     # raise e
-                else:
-                    raise e
+                # else:
+                #     raise e
 
             batch_size = batch.size
 
