@@ -300,13 +300,13 @@ class ReversibleTransformerEncoderLayer(nn.Module):
 class ReversibleDecoderFunction(Function):
 
     @staticmethod
-    def forward(ctx, hidden_states, pos, context, layers, tgt_mask, src_mask,
+    def forward(ctx, layers, hidden_states, pos, context, tgt_mask, src_mask,
                 incremental=False, incremental_cache=None):
 
         bsz, seq_len = hidden_states.shape[0], hidden_states.shape[1]
         B = bsz * seq_len
         idx = 0
-        attn_output, hidden_states = torch.chunk(hidden_states, 2, dim=-1)
+        attn_output, hidden_states = hidden_states, hidden_states
 
         for layer in layers:
             idx = idx + 1
@@ -362,8 +362,15 @@ class ReversibleDecoderFunction(Function):
                 grad_context.add_(grad_context_)
                 del grad_context_
 
-        grad_hidden_states = torch.cat([grad_attn_output, grad_hidden_states], dim=-1)
-        return grad_hidden_states, None, grad_context, None, None, None, None, None
+        grad_hidden_states = grad_attn_output + grad_hidden_states
+
+        return None, grad_hidden_states,  grad_context, None, None, None, None
+
+
+@half_function
+def reversible_decoder(layers,  hidden_states, pos, context, tgt_mask, src_mask, incremental, incremental_cache):
+    return ReversibleDecoderFunction.apply(layers, hidden_states, pos, context,
+                                           tgt_mask, src_mask, incremental, incremental_cache)
 
 
 class ReversibleTransformerDecoderLayer(nn.Module):
@@ -380,9 +387,10 @@ class ReversibleTransformerDecoderLayer(nn.Module):
         self.dropout = opt.dropout
 
         self.self_attention = RelativeSelfAttention(opt)
-        self.feed_forward = FeedForward(opt)
+        self.feed_forward_first = FeedForward(opt)
         if not self.ignore_source:
             self.src_attention = SourceAttention(opt)
+        self.feed_forward_second = FeedForward(opt)
 
     def _init_src_attention_seed(self, *args):
         """
@@ -409,7 +417,7 @@ class ReversibleTransformerDecoderLayer(nn.Module):
         self.attn_cpu_state = torch.get_rng_state()
         self.attn_gpu_devices, self.attn_gpu_states = get_device_states(*args)
 
-    def _init_feedforward_seed(self, *args):
+    def _init_feedforward1_seed(self, *args):
         """
                     This function sets a new seed for the
                     feed forward layer to make dropout deterministic
@@ -419,8 +427,21 @@ class ReversibleTransformerDecoderLayer(nn.Module):
                 """
 
         # randomize seeds
-        self.ffn_cpu_state = torch.get_rng_state()
-        self.ffn_gpu_devices, self.ffn_gpu_states = get_device_states(*args)
+        self.ffn1_cpu_state = torch.get_rng_state()
+        self.ffn1_gpu_devices, self.ffn1_gpu_states = get_device_states(*args)
+
+    def _init_feedforward2_seed(self, *args):
+        """
+                    This function sets a new seed for the
+                    feed forward layer to make dropout deterministic
+                    for both forward calls: 1 normal forward
+                    call and 1 forward call in backward
+                    to recalculate activations.
+                """
+
+        # randomize seeds
+        self.ffn2_cpu_state = torch.get_rng_state()
+        self.ffn2_gpu_devices, self.ffn2_gpu_states = get_device_states(*args)
 
     def forward(self, x1, x2, pos, context, mask_tgt, mask_src,
                 incremental=False, incremental_cache=None, reuse_source=True):
@@ -449,37 +470,32 @@ class ReversibleTransformerDecoderLayer(nn.Module):
                                                                     incremental_cache=incremental_cache,
                                                                     cleaning=True)
 
-            z = f_x2
+            z1 = f_x2 + x1
+
+            self._init_feedforward1_seed()
+            g_z1 = self.feed_forward_first(z1, cleaning=True)
+
+            z2 = x2 + g_z1
+
             # print("self_attention", z.sum() / (z.size(0) * z.size(1)))
             # if not self.ignore_source:
-            f_x2, coverage, incremental_cache = self.src_attention(f_x2, context, mask_src,
+            self._init_src_attention_seed()
+            h_z2, coverage, incremental_cache = self.src_attention(z2, context, mask_src,
                                                                    incremental=incremental,
                                                                    incremental_cache=incremental_cache,
                                                                    cleaning=True)
 
-            # print("src_attention", f_x2.sum() / (f_x2.size(0) * f_x2.size(1)))
-            f_x2 = f_x2 + z
-            del z
-
-            # if self.training and self.death_rate > 0:
-            #     f_x2 = f_x2 / (1 - self.death_rate)
-
-            y1 = x1 + f_x2
-            # del f_x2, x1
+            y1 = z1 + h_z2
 
             # prepare the state for the second function
-            self._init_feedforward_seed(y1)
+            self._init_feedforward2_seed(y1)
             # print("y1", y1.sum() / (y1.size(0) * y1.size(1)))
-            g_y1 = self.feed_forward(y1, cleaning=True)
+            k_y1 = self.feed_forward_second(y1, cleaning=True)
 
             # if self.training and self.death_rate > 0:
             #     g_y1 = g_y1 / (1 - self.death_rate)
 
-            y2 = x2 + g_y1
-
-            # print("y2", y2.sum() / (y2.size(0) * y2.size(1)))
-
-            del g_y1, x2
+            y2 = z2 + k_y1
 
         """return Y1 and Y2"""
         return y1, y2, coverage, incremental_cache
@@ -509,83 +525,92 @@ class ReversibleTransformerDecoderLayer(nn.Module):
         with torch.enable_grad():
             y1.requires_grad = True
 
-            with torch.random.fork_rng(devices=self.ffn_gpu_devices, enabled=True):
-                torch.set_rng_state(self.ffn_cpu_state)
-                set_device_states(self.ffn_gpu_devices, self.ffn_gpu_states)
+            with torch.random.fork_rng(devices=self.ffn2_gpu_devices, enabled=True):
+                torch.set_rng_state(self.ffn2_cpu_state)
+                set_device_states(self.ffn2_gpu_devices, self.ffn2_gpu_states)
 
-                g_y1 = self.feed_forward(y1)
+                k_y1 = self.feed_forward_second(y1)
 
-            torch.autograd.backward(g_y1, dy2)
+            torch.autograd.backward(k_y1, dy2)  # get the gradients dk/dy1
 
         with torch.no_grad():
-            # restore X2 = Y2 - G(Y1)
-            x2 = y2 - g_y1
+            # restore z2 = Y2 - K(Y1)
+            z2 = y2 - k_y1
 
-            # DX1 = DY1 + Y1.grad
-            dx1 = dy1 + y1.grad
-            del y2, g_y1, dy1
+            # Dz1 = DY1 + Y1.grad
+            dz1 = dy1 + y1.grad
+            del y2, k_y1, dy1
             y1.grad = None
 
         # second block
         with torch.enable_grad():
-            x2.requires_grad = True
+            z2.requires_grad = True
             context.requires_grad = True
+
+            with torch.random.fork_rng(devices=self.src_attn_gpu_devices, enabled=True):
+                torch.set_rng_state(self.src_attn_cpu_state)
+                set_device_states(self.src_attn_gpu_devices, self.src_attn_gpu_states)
+
+                # if not self.ignore_source:
+                h_z2, _, _ = self.src_attention(z2, context, mask_src,
+                                                incremental=incremental,
+                                                incremental_cache=incremental_cache)
+
+            torch.autograd.backward(h_z2, dz1)
+
+        with torch.no_grad():
+            z1 = y1 - h_z2
+            del y1, h_z2
+
+            dz2 = dy2 + z2.grad
+            z2.grad = None
+            del dy2
+
+            grad_context = context.grad
+            del context.grad
+
+        # third block
+        with torch.enable_grad():
+            z1.requires_grad = True
+
+            with torch.random.fork_rng(devices=self.ffn1_gpu_devices, enabled=True):
+                torch.set_rng_state(self.ffn1_cpu_state)
+                set_device_states(self.ffn1_gpu_devices, self.ffn1_gpu_states)
+
+                g_z1, = self.feed_forward_second(z1, cleaning=True)
+
+            torch.autograd.backward(g_z1, dz2)
+
+        with torch.no_grad():
+            x2 = z2 - g_z1
+            del z2, g_z1
+
+            dx1 = dz1 + z1.grad
+
+            z1.grad = None
+            del dz1
+
+        # fourth block
+        with torch.enable_grad():
+            x2.requires_grad = True
 
             with torch.random.fork_rng(devices=self.attn_gpu_devices, enabled=True):
                 torch.set_rng_state(self.attn_cpu_state)
                 set_device_states(self.attn_gpu_devices, self.attn_gpu_states)
 
-                f_x2, coverage, incremental_cache = self.self_attention(x2, pos, mask_tgt,
-                                                                        incremental=incremental,
-                                                                        incremental_cache=incremental_cache)
-
-                z = f_x2
-
-                # if not self.ignore_source:
-                f_x2, _, _ = self.src_attention(f_x2, context, mask_src,
-                                                incremental=incremental,
-                                                incremental_cache=incremental_cache)
-
-                f_x2 = f_x2 + z
+                f_x2, _, _ = self.self_attention(x2, pos, mask_tgt,
+                                                 incremental=incremental,
+                                                 incremental_cache=incremental_cache)
 
             torch.autograd.backward(f_x2, dx1)
 
         with torch.no_grad():
-            # restore X1 = Y1 - F(X2)
-            x1 = y1 - f_x2
-            del y1, f_x2
+            x1 = z1 - f_x2
+            del z1, f_x2
 
-            dx2 = dy2 + x2.grad
+            dx2 = dz2 + x2.grad
             x2.grad = None
-            del dy2
-            x2 = x2.detach()
-            grad_context = context.grad
-            del context.grad
 
-        # # third block
-        # with torch.enable_grad():
-        #     x2.requires_grad = True
-        #
-        #     with torch.random.fork_rng(devices=self.attn_gpu_devices, enabled=True):
-        #         torch.set_rng_state(self.attn_cpu_state)
-        #         set_device_states(self.attn_gpu_devices, self.attn_gpu_states)
-        #
-        #         f_x2, _, _ = self.self_attention(x2, mask_tgt)
-        #
-        #         if self.training and self.death_rate > 0:
-        #             f_x2 = f_x2 / (1 - self.death_rate)
-        #
-        #     torch.autograd.backward(f_x2, dz1)
-        #
-        # with torch.no_grad():
-        #     # restore X1 = Y1 - F(X2)
-        #     x1 = z1 - f_x2
-        #
-        #     dx1 = dz1
-        #     dx2 = dy2 + x2.grad
-        #     del z1, f_x2
-        #
-        #     x2.grad = None
-        #     x2 = x2.detach()
+            del dz2
 
         return x1, x2, dx1, dx2, grad_context

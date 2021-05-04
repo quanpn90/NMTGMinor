@@ -338,7 +338,7 @@ def make_parser(parser):
     parser.add_argument('-adapter_bottleneck_size', type=int, default=1024,
                         help='New norm for each language')
 
-    parser.add_argument('-ffn_activation', default='relu', type=str,
+    parser.add_argument('-ffn_activation', default='silu', type=str,
                         help='The activation layer in each transformer block '
                              'relu|gelu|silu|swish')
 

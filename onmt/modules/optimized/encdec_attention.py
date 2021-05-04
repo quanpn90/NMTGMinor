@@ -66,7 +66,8 @@ class EncdecMultiheadAttn(nn.Module):
                                             self.num_heads, query, key,
                                             self.in_proj_weight_q, self.in_proj_weight_kv,
                                             self.out_proj_weight, attn_mask, self.dropout,
-                                            incremental, incremental_cache)
+                                            incremental, incremental_cache,
+                                            False, True)  # double precision False and return coverage True
 
         return outputs, coverage
 

@@ -749,6 +749,8 @@ class Trainer(object):
                     loss = 0
                     if opt.streaming:  # reset stream in this case ...
                         streaming_state = self.model.init_stream()
+
+                    self.grad_scaler._check_inf_per_device(self.optim.optimizer)
                     # raise e
                 # else:
                 #     raise e

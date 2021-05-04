@@ -1,17 +1,18 @@
-#include <ATen/ATen.h>
+﻿#include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <torch/torch.h>
+#include <cmath>
 
 /* Includes, cuda */
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
-#include <ATen/CUDAGeneratorImpl.h>
-#include <curand_kernel.h>
+// includes cublaslt
+#include <cublasLt.h>
 
 // constants for fused bias+relu kernel
 #define BIAS_RELU_FW_NTHREADS 128 // forward number of thread per block
@@ -21,6 +22,7 @@
 
 // move to a header later on
 #define ILP 4
+#define SQRT_M2_PI sqrt(M_2_PI)
 template<typename T>
 __host__ __device__ __forceinline__ bool is_aligned(T* p){
   return ((uint64_t)p) % (ILP*sizeof(T)) == 0;
@@ -51,6 +53,22 @@ __device__ __inline__ float relu(float a) {
 // Keep Sigmoid in float only. When using half, cast to float before calling.
 __device__ __inline__ float sigmoid(float a) {
   float retf = 1.f / (1.f + expf(-a));
+  return (retf);
+}
+
+// Keep gelu in float only. When using half, cast to float before calling.
+__device__ __inline__ float gelu(float a) {
+//  float retf = 0.5f * a * (1.f + tanhf(0.79788456f * (a +  0.044715f * a * a * a)));
+  float retf = 0.5f * a * (1.f + tanhf(sqrt(M_2_PI) * (a +  0.044715f * a * a * a)));
+  return (retf);
+  // float retf = 1.f / (1.f + expf(-a));
+  // return (retf);
+}
+
+// Keep gelu in float only. When using half, cast to float before calling.
+__device__ __inline__ float gelu_back(float a) {
+  float tanh_outf = tanhf(SQRT_M2_PI * (a +  0.044715f * a * a * a));
+  float retf = 0.5f * a * (1.f - tanh_outf * tanh_outf) * (SQRT_M2_PI + 0.1070322243f * a * a) + 0.5f * (1.f + tanh_outf);
   return (retf);
 }
 
@@ -167,6 +185,253 @@ cublasStatus_t mlp_gemm(
       CUDA_R_32F,
       CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 }
+
+int mlp_gemm_lt(
+    cublasLtHandle_t ltHandle,
+    cublasOperation_t transa,
+    cublasOperation_t transb,
+    int m,
+    int n,
+    int k,
+    float *alpha, /* host pointer */
+    const at::Half* A,
+    int lda,
+    const at::Half* B,
+    int ldb,
+    float *beta, /* host pointer */
+    at::Half* C,
+    int ldc,
+    void *workspace,
+    size_t workspaceSize,
+    cudaStream_t stream,
+    bool use_relu,
+    const void* bias) {
+  cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
+
+  cublasLtMatmulDescOpaque_t operationDesc = {};
+  cublasLtMatrixLayoutOpaque_t Adesc = {}, Bdesc = {}, Cdesc = {};
+  cublasLtMatmulPreferenceOpaque_t preference = {};
+
+  int returnedResults                             = 0;
+  cublasLtMatmulHeuristicResult_t heuristicResult = {};
+  cublasLtEpilogue_t epilogue = CUBLASLT_EPILOGUE_DEFAULT;
+
+  // Create operation descriptor; see cublasLtMatmulDescAttributes_t
+  // for details about defaults; here we just set the transforms for
+  // A and B.
+  status = cublasLtMatmulDescInit(&operationDesc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_TRANSA, &transa, sizeof(transa));
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(transa));
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+
+  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &bias, sizeof(bias));
+  if (status != CUBLAS_STATUS_SUCCESS) {
+      goto CLEANUP;
+  }
+  if (use_relu) {
+      epilogue = CUBLASLT_EPILOGUE_RELU_BIAS;
+  } else {
+      epilogue = CUBLASLT_EPILOGUE_BIAS;
+  }
+
+  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_EPILOGUE, &epilogue, sizeof(epilogue));
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    goto CLEANUP;
+  }
+
+  // Create matrix descriptors. Not setting any extra attributes.
+  status = cublasLtMatrixLayoutInit(
+    &Adesc, CUDA_R_16F, transa == CUBLAS_OP_N ? m : k, transa == CUBLAS_OP_N ? k : m, lda);
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+  status = cublasLtMatrixLayoutInit(
+    &Bdesc, CUDA_R_16F, transb == CUBLAS_OP_N ? k : n, transb == CUBLAS_OP_N ? n : k, ldb);
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+  status = cublasLtMatrixLayoutInit(&Cdesc, CUDA_R_16F, m, n, ldc);
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+
+  // Create preference handle; In general, extra attributes can be
+  // used here to disable tensor ops or to make sure algo selected
+  // will work with badly aligned A, B, C. However, for simplicity
+  // here we assume A,B,C are always well aligned (e.g., directly
+  // come from cudaMalloc)
+  status = cublasLtMatmulPreferenceInit(&preference);
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+  status = cublasLtMatmulPreferenceSetAttribute(
+    &preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspaceSize, sizeof(workspaceSize));
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+
+  // We just need the best available heuristic to try and run matmul.
+  // There is no guarantee that this will work. For example, if A is
+  // badly aligned, you can request more (e.g. 32) algos and try to
+  // run them one by one until something works.
+  status = cublasLtMatmulAlgoGetHeuristic(
+    ltHandle, &operationDesc, &Adesc, &Bdesc, &Cdesc, &Cdesc, &preference, 1, &heuristicResult, &returnedResults);
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+
+  if (returnedResults == 0) {
+    status = CUBLAS_STATUS_NOT_SUPPORTED;
+    goto CLEANUP;
+  }
+  status = cublasLtMatmul(ltHandle,
+                          &operationDesc,
+                          alpha,
+                          A,
+                          &Adesc,
+                          B,
+                          &Bdesc,
+                          beta,
+                          C,
+                          &Cdesc,
+                          C,
+                          &Cdesc,
+                          &heuristicResult.algo,
+                          workspace,
+                          workspaceSize,
+                          stream);
+
+CLEANUP:
+  // Descriptors are no longer needed as all GPU work was already
+  // enqueued.
+  return status == CUBLAS_STATUS_SUCCESS ? 0 : 1;
+}
+
+int mlp_gemm_lt(
+    cublasLtHandle_t ltHandle,
+    cublasOperation_t transa,
+    cublasOperation_t transb,
+    int m,
+    int n,
+    int k,
+    float *alpha, /* host pointer */
+    const double* A,
+    int lda,
+    const double* B,
+    int ldb,
+    float *beta, /* host pointer */
+    double* C,
+    int ldc,
+    void *workspace,
+    size_t workspaceSize,
+    cudaStream_t stream,
+    bool use_relu,
+    const void* bias) {
+  return 1;
+}
+
+int mlp_gemm_lt(
+    cublasLtHandle_t ltHandle,
+    cublasOperation_t transa,
+    cublasOperation_t transb,
+    int m,
+    int n,
+    int k,
+    float *alpha, /* host pointer */
+    const float *A,
+    int lda,
+    const float *B,
+    int ldb,
+    float *beta, /* host pointer */
+    float *C,
+    int ldc,
+    void *workspace,
+    size_t workspaceSize,
+    cudaStream_t stream,
+    bool use_relu,
+    const void* bias) {
+  cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
+
+  cublasLtMatmulDescOpaque_t operationDesc = {};
+  cublasLtMatrixLayoutOpaque_t Adesc = {}, Bdesc = {}, Cdesc = {};
+  cublasLtMatmulPreferenceOpaque_t preference = {};
+
+  int returnedResults                             = 0;
+  cublasLtMatmulHeuristicResult_t heuristicResult = {};
+  cublasLtEpilogue_t epilogue = CUBLASLT_EPILOGUE_DEFAULT;
+
+  // Create operation descriptor; see cublasLtMatmulDescAttributes_t
+  // for details about defaults; here we just set the transforms for
+  // A and B.
+  status = cublasLtMatmulDescInit(&operationDesc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_TRANSA, &transa, sizeof(transa));
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(transa));
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+
+  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &bias, sizeof(bias));
+  if (status != CUBLAS_STATUS_SUCCESS) {
+      goto CLEANUP;
+  }
+  if (use_relu) {
+      epilogue = CUBLASLT_EPILOGUE_RELU_BIAS;
+  } else {
+      epilogue = CUBLASLT_EPILOGUE_BIAS;
+  }
+
+  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_EPILOGUE, &epilogue, sizeof(epilogue));
+  if (status != CUBLAS_STATUS_SUCCESS) {
+    goto CLEANUP;
+  }
+
+  // Create matrix descriptors. Not setting any extra attributes.
+  status = cublasLtMatrixLayoutInit(
+    &Adesc, CUDA_R_32F, transa == CUBLAS_OP_N ? m : k, transa == CUBLAS_OP_N ? k : m, lda);
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+  status = cublasLtMatrixLayoutInit(
+    &Bdesc, CUDA_R_32F, transb == CUBLAS_OP_N ? k : n, transb == CUBLAS_OP_N ? n : k, ldb);
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+  status = cublasLtMatrixLayoutInit(&Cdesc, CUDA_R_32F, m, n, ldc);
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+
+  // Create preference handle; In general, extra attributes can be
+  // used here to disable tensor ops or to make sure algo selected
+  // will work with badly aligned A, B, C. However, for simplicity
+  // here we assume A,B,C are always well aligned (e.g., directly
+  // come from cudaMalloc)
+  status = cublasLtMatmulPreferenceInit(&preference);
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+  status = cublasLtMatmulPreferenceSetAttribute(
+    &preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspaceSize, sizeof(workspaceSize));
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+
+  // We just need the best available heuristic to try and run matmul.
+  // There is no guarantee that this will work. For example, if A is
+  // badly aligned, you can request more (e.g. 32) algos and try to
+  // run them one by one until something works.
+  status = cublasLtMatmulAlgoGetHeuristic(
+    ltHandle, &operationDesc, &Adesc, &Bdesc, &Cdesc, &Cdesc, &preference, 1, &heuristicResult, &returnedResults);
+  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
+
+  if (returnedResults == 0) {
+    status = CUBLAS_STATUS_NOT_SUPPORTED;
+    goto CLEANUP;
+  }
+
+  status = cublasLtMatmul(ltHandle,
+                          &operationDesc,
+                          alpha,
+                          A,
+                          &Adesc,
+                          B,
+                          &Bdesc,
+                          beta,
+                          C,
+                          &Cdesc,
+                          C,
+                          &Cdesc,
+                          &heuristicResult.algo,
+                          workspace,
+                          workspaceSize,
+                          stream);
+
+CLEANUP:
+  // Descriptors are no longer needed as all GPU work was already
+  // enqueued.
+  return status == CUBLAS_STATUS_SUCCESS ? 0 : 1;
+}
+
 
 // Bias ADD. Assume input X is [features x batch size], column major.
 // Bias is one 'features' long vector, with implicit broadcast.
@@ -302,158 +567,6 @@ __global__ void Relu_fprop(T *X, uint batch_size, uint features) {
   }
 }
 
-// Bias ADD + ReLU. Assume input X is [features x batch size], column major.
-// Activation support fuesed ReLU. Safe to call in-place.
-template <typename T>
-__global__ void biasAddDropoutRelu_fprop(T *X, T *b, uint batch_size, uint features, float p,
-		                                 std::pair<uint64_t, uint64_t> seeds) {
-  T r_x[ILP];
-  T r_b[ILP];
-
-  if(is_aligned(X) && is_aligned(b) && features % ILP ==0) {
-    float pinv = 1.f/(1.f-p);
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    curandStatePhilox4_32_10_t state;
-    curand_init(
-        seeds.first,
-        tid,
-        seeds.second,
-        &state);
-
-    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
-      int row = tid % (features / ILP);
-      load_store(r_x, X, 0 , tid);
-      load_store(r_b, b, 0 , row);
-
-      float4 rand = curand_uniform4(&state);
-      rand.x = rand.x >= p;
-      rand.y = rand.y >= p;
-      rand.z = rand.z >= p;
-      rand.w = rand.w >= p;
-
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_x[ii] = relu(bias_sum)*(&rand.x)[ii]*pinv;
-      }
-      load_store(X, r_x, tid , 0);
-    }
-  } else {
-    float pinv = 1.f/(1.f-p);
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    curandStatePhilox4_32_10_t state;
-    curand_init(
-        seeds.first,
-        tid,
-        seeds.second,
-        &state);
-
-    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
-      float4 rand = curand_uniform4(&state);
-      rand.x = rand.x >= p;
-      rand.y = rand.y >= p;
-      rand.z = rand.z >= p;
-      rand.w = rand.w >= p;
-
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        int idx = tid + ii * blockDim.x * gridDim.x;
-        if(idx < features * batch_size) {
-          int row = tid % features;
-          r_x[ii] = X[idx];
-          r_b[ii] = b[row];
-        }
-      }
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_x[ii] = relu(bias_sum)*(&rand.x)[ii]*pinv;
-      }
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        int idx = tid + ii * blockDim.x * gridDim.x;
-        if(idx < features * batch_size) {
-          X[idx] = r_x[ii];
-        }
-      }
-    }
-  }
-}
-
-// ReLU. Assume input X is [features x batch size], column major.
-// Safe to call in-place.
-template <typename T>
-__global__ void dropoutRelu_fprop(T *X, uint batch_size, uint features, float p,
-		                          std::pair<uint64_t, uint64_t> seeds) {
-  T r_x[ILP];
-  if(is_aligned(X) && features % ILP ==0) {
-    float pinv = 1.f/(1.f-p);
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    curandStatePhilox4_32_10_t state;
-    curand_init(
-        seeds.first,
-        tid,
-        seeds.second,
-        &state);
-
-    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
-      load_store(r_x, X, 0 , tid);
-
-      float4 rand = curand_uniform4(&state);
-      rand.x = rand.x >= p;
-      rand.y = rand.y >= p;
-      rand.z = rand.z >= p;
-      rand.w = rand.w >= p;
-
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        r_x[ii] = relu(static_cast<float>(r_x[ii]))*(&rand.x)[ii]*pinv;
-      }
-      load_store(X, r_x, tid , 0);
-    }
-  } else {
-    float pinv = 1.f/(1.f-p);
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    curandStatePhilox4_32_10_t state;
-    curand_init(
-        seeds.first,
-        tid,
-        seeds.second,
-        &state);
-
-    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
-      float4 rand = curand_uniform4(&state);
-      rand.x = rand.x >= p;
-      rand.y = rand.y >= p;
-      rand.z = rand.z >= p;
-      rand.w = rand.w >= p;
-
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        int idx = tid + ii * blockDim.x * gridDim.x;
-        if(idx < features * batch_size) {
-          r_x[ii] = X[idx];
-        }
-      }
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        r_x[ii] = relu(static_cast<float>(r_x[ii]))*(&rand.x)[ii]*pinv;
-      }
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        int idx = tid + ii * blockDim.x * gridDim.x;
-        if(idx < features * batch_size) {
-          X[idx] = r_x[ii];
-        }
-      }
-    }
-  }
-}
-
 // Sigmoid. Assume input X is [features x batch size], column major.
 // Safe to call in-place.
 template <typename T>
@@ -494,10 +607,50 @@ __global__ void Sigmoid_fprop(T *X, uint batch_size, uint features) {
   }
 }
 
+// Gelu. Assume input X is [features x batch size], column major.
+// Safe to call in-place.
+template <typename T>
+__global__ void Gelu_fprop(T *X, uint batch_size, uint features) {
+  T r_x[ILP];
+  if(is_aligned(X) && features % ILP ==0) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
+      load_store(r_x, X, 0 , tid);
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        r_x[ii] = gelu(static_cast<float>(r_x[ii]));
+      }
+      load_store(X, r_x, tid , 0);
+    }
+  } else {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          r_x[ii] = X[idx];
+        }
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        r_x[ii] = gelu(static_cast<float>(r_x[ii]));
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          X[idx] = r_x[ii];
+        }
+      }
+    }
+  }
+}
+
 // ReLU. Assume input X is [features x batch size], column major.
 // Safe to call in-place.
 template <typename T>
-__global__ void Relu_bprop(T *dY, T *Y, uint batch_size, uint features, T *dX, float p) {
+__global__ void Relu_bprop(T *dY, T *Y, uint batch_size, uint features, T *dX) {
   T r_dy[ILP];
   T r_y[ILP];
   if(is_aligned(dY) &&
@@ -512,8 +665,6 @@ __global__ void Relu_bprop(T *dY, T *Y, uint batch_size, uint features, T *dX, f
       for(int ii=0;ii<ILP;ii++){
         if ((float)r_y[ii] <= 0.f)
           r_dy[ii] = 0;
-        else
-          r_dy[ii] = r_dy[ii] / (1.f - p);
       }
       load_store(dX, r_dy, tid, 0);
     }
@@ -532,8 +683,6 @@ __global__ void Relu_bprop(T *dY, T *Y, uint batch_size, uint features, T *dX, f
       for(int ii = 0; ii < ILP; ii++) {
         if ((float)r_y[ii] <= 0.f)
           r_dy[ii] = 0;
-        else
-          r_dy[ii] = r_dy[ii] / (1.f - p);
       }
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
@@ -598,6 +747,59 @@ __global__ void Sigmoid_bprop(T *dY, T *Y, uint batch_size, uint features, T *dX
   }
 }
 
+
+// Gelu. Assume input X is [features x batch size], column major.
+// Safe to call in-place.
+template <typename T>
+__global__ void Gelu_bprop(T *dY, T *Y, uint batch_size, uint features, T *dX) {
+  T r_dy[ILP];
+  T r_y[ILP];
+  if(is_aligned(dY) &&
+     is_aligned(Y) &&
+     is_aligned(dX) &&
+     features % ILP ==0) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
+      load_store(r_dy, dY, 0 , tid);
+      load_store(r_y, Y, 0 , tid);
+#pragma unroll
+      for(int ii=0;ii<ILP;ii++){
+        float grad_out = r_dy[ii];
+        float out = r_y[ii];
+        float grad_i = gelu_back(out) * grad_out;
+        r_dy[ii] = grad_i;
+      }
+      load_store(dX, r_dy, tid, 0);
+    }
+  } else {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          r_dy[ii] = dY[idx];
+          r_y[ii] = Y[idx];
+        }
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        float grad_out = r_dy[ii];
+        float out = r_y[ii];
+        float grad_i = gelu_back(out)* grad_out;
+        r_dy[ii] = grad_i;
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          dX[idx] = r_dy[ii];
+        }
+      }
+    }
+  }
+}
+
 // Compute grid size for pointwise backward kernel.
 // block_x/y is total elment being handled per block, not number of threads
 void get_biasAddRelu_bprop_grid_size(
@@ -612,7 +814,7 @@ void get_biasAddRelu_bprop_grid_size(
   // Get number of SMs for efficient reduction.
   int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
   // can switch to occupancy calculation. use 4 below now for sm_70
-  int max_blocks_y = num_SMs * 4 / (*grid_x);
+  int max_blocks_y = (num_SMs * 4+(*grid_x)-1) / (*grid_x);
   // block_y should be from minimal work per thread
   int nRedSplits = (batch_size + block_y - 1) / block_y;
   // increase number of elem per thread redcution to not launch more than enough
@@ -657,7 +859,7 @@ __global__ void biasAdd_bprop(
     int nidx = 0;
     // Handle non-multiple of UNROLL_FACTOR residue
     for (; nidx < nSpan % UNROLL_FACTOR; nidx++) {
-      int row, col, flat_idx;
+      int64_t row, col, flat_idx;
       row = f;
       col = nStart + nidx;
       flat_idx = col * features + row;
@@ -666,7 +868,7 @@ __global__ void biasAdd_bprop(
 
     // Handle meat of work
     for (; (nidx + UNROLL_FACTOR - 1) < nSpan; nidx += UNROLL_FACTOR) {
-      int row, col, flat_idx;
+      int64_t row, col, flat_idx;
       row = f;
       col = nStart + nidx;
       flat_idx = col * features + row;
@@ -731,8 +933,7 @@ __global__ void biasAddRelu_bprop(
     T* dX,
     volatile float* intermediate,
     int* semaphores,
-    T* db,
-    float p) {
+    T* db) {
   // The feature that this thread is responsible for
   int f = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -767,7 +968,7 @@ __global__ void biasAddRelu_bprop(
       T dy_val = dY[flat_idx];
       T dx_val;
       if ((float)y_val > 0.f)
-        dx_val = dy_val / (1.f - p);
+        dx_val = dy_val;
       else
         dx_val = 0;
       dX[flat_idx] = dx_val;
@@ -786,7 +987,7 @@ __global__ void biasAddRelu_bprop(
         T dy_val = dY[flat_idx];
         T dx_val;
         if ((float)y_val > 0.f)
-          dx_val = dy_val / (1.f - p);
+          dx_val = dy_val;
         else
           dx_val = 0;
         dX[flat_idx] = dx_val;
@@ -849,8 +1050,7 @@ __global__ void biasAddRelu_bprop_aligned(
     T* dX,
     volatile float* intermediate,
     int* semaphores,
-    T* db,
-    float p) {
+    T* db) {
   // The feature that this thread is responsible for
   int f = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -895,8 +1095,6 @@ __global__ void biasAddRelu_bprop_aligned(
     for(int ii=0;ii<ILP;ii++){
       if ((float)r_y[ii] <= 0.f)
         r_dy[ii] = 0;
-      else
-        r_dy[ii] = r_dy[ii] / (1.f - p);
       db_local[ii] += (float)r_dy[ii];
     }
     load_store(dX, r_dy, flat_idx, 0);
@@ -916,8 +1114,6 @@ __global__ void biasAddRelu_bprop_aligned(
       for(int ii=0;ii<ILP;ii++){
         if ((float)r_y[ii] <= 0.f)
           r_dy[ii] = 0;
-        else
-          r_dy[ii] = r_dy[ii] / (1.f - p);
         db_local[ii] += (float)r_dy[ii];
       }
       load_store(dX, r_dy, flat_idx, 0);
@@ -945,7 +1141,6 @@ __global__ void biasAddRelu_bprop_aligned(
     }
 
     // block result is in db_local now for all threadIdx.y == 0
-    // TODO: maybe not useful early exit here
     if(gridDim.y == 1) {
 #pragma unroll
       for(int ii=0;ii<ILP;ii++){
@@ -1012,7 +1207,7 @@ void get_y_offsets(
 }
 
 // Returns the reserved space (in elements) needed for the MLP
-size_t get_mlp_reserved_space(int batch_size, int num_layers, const int* output_features) {
+size_t get_mlp_reserved_space(int64_t batch_size, int num_layers, const int* output_features) {
   size_t res_space = 0;
   // Need to store output of every intermediate MLP - size equal to output_features[i] * batch_size
   // for all 'i' in [0, num_layers-1)
@@ -1023,7 +1218,7 @@ size_t get_mlp_reserved_space(int batch_size, int num_layers, const int* output_
 }
 
 // Returns the size of all fprop activations combined
-size_t get_all_activations_size(int batch_size, int num_layers, const int* output_features) {
+size_t get_all_activations_size(int64_t batch_size, int num_layers, const int* output_features) {
   size_t acts_size = 0;
   for (int l = 0; l < num_layers; l++) {
     acts_size += output_features[l] * batch_size;
@@ -1143,10 +1338,8 @@ int mlp_fp(
     T** BPtr,
     T* Y,
     T* reserved_space,
-    int use_bias,
     int activation,
-    float dropout_prob) {
-  auto gen = at::cuda::detail::getDefaultCUDAGenerator();
+    void* lt_workspace) {
   T *weight, *input, *output, *bias;
   T *reserved_space_x, *reserved_space_y;
   reserved_space_x = NULL;
@@ -1162,18 +1355,45 @@ int mlp_fp(
     weight = WPtr[layer];
     input = (layer == 0) ? X : reserved_space_x;
     output = (layer == num_layers - 1) ? Y : reserved_space_y;
-    if (use_bias) {
-      bias = BPtr[layer];
-    }
+    bias = BPtr[layer];
     int ifeat = (layer == 0) ? input_features : output_features[layer - 1];
     int ofeat = output_features[layer];
 
     float one = 1.f;
     float zero = 0.f;
 
-    cublasStatus_t cublas_status;
-    // Call GEMM: fprop is Y = W'X
-    cublas_status = mlp_gemm(
+    // try with cublaslt first for supported case with valid handle
+    int cublaslt_status = 1;
+//    if(activation < 1){
+//        cublaslt_status = mlp_gemm_lt(
+//          //ltHandle,
+//          (cublasLtHandle_t)handle,
+//          CUBLAS_OP_T,
+//          CUBLAS_OP_N,
+//          ofeat,
+//          batch_size,
+//          ifeat,
+//          &one,
+//          weight,
+//          ifeat,
+//          input,
+//          ifeat,
+//          &zero,
+//          output,
+//          ofeat,
+//          lt_workspace,
+//          1 << 22,
+//          stream,
+//          use_bias == 1,
+//          activation == 1,
+//          bias);
+//    }
+
+    // if cublaslt failed or not executed, fallback to cublas
+    if (cublaslt_status != 0) {
+      cublasStatus_t cublas_status;
+      // Call GEMM: fprop is Y = W'X
+      cublas_status = mlp_gemm(
         handle,
         CUBLAS_OP_T,
         CUBLAS_OP_N,
@@ -1189,64 +1409,35 @@ int mlp_fp(
         output,
         ofeat);
 
-    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
-      printf("GEMM fprop failed with %d\n", cublas_status);
-      return 1;
-    }
+      if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+        printf("GEMM fprop failed with %d\n", cublas_status);
+        return 1;
+      }
 
-    const uint &input_size = ofeat;
-    int num_blocks = 0;
-    int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
-    // Call biasReLU
-    if(use_bias == 1) {
-      if (activation == 0 || layer == num_layers - 1) { // no activation
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAdd_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-        biasAdd_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
+      const uint &input_size = ofeat;
+      int num_blocks = 0;
+      int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
+      // Call biasReLU
+      if (layer == (num_layers -1)) { // no activation
+//          printf("NO ACTIVATION\n");
+          cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAdd_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+          biasAdd_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
       } else if (activation == 1) { // relu
-        if (dropout_prob == 0.f) {
+//          printf("RELU\n");
           cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAddRelu_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
           biasAddRelu_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
-        } else {
-          cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAddDropoutRelu_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-          //number of times random will be generated per thread, to offset philox counter in thc random state
-          int64_t counter_offset = ((input_size*batch_size-1)/(BIAS_RELU_FW_NTHREADS*num_SMs*num_blocks*ILP)+1)*ILP;
-          std::pair<uint64_t, uint64_t> rng_engine_inputs;
-          {
-            std::lock_guard<std::mutex> lock(gen.mutex());
-            rng_engine_inputs = at::check_generator<at::CUDAGeneratorImpl>(gen)->philox_engine_inputs(counter_offset);
-          }
-          biasAddDropoutRelu_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size, dropout_prob, rng_engine_inputs);
-        }
       } else if (activation == 2) { // sigmoid
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAdd_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-        biasAdd_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, Sigmoid_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-        Sigmoid_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, batch_size, input_size);
-      }
-    } else {
-      if (layer == num_layers - 1) { // no activation
-        // don't need to do anything in case of no activation and no bias or in case of final layer
-      } else if (activation == 1) { // relu
-        if (dropout_prob == 0.f) {
-          cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, Relu_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-          Relu_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, batch_size, input_size);
-        } else {
-          cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, dropoutRelu_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-          //number of times random will be generated per thread, to offset philox counter in thc random state
-          int64_t counter_offset = ((input_size*batch_size-1)/(BIAS_RELU_FW_NTHREADS*num_SMs*num_blocks*ILP)+1)*ILP;
-          std::pair<uint64_t, uint64_t> rng_engine_inputs;
-          {
-            std::lock_guard<std::mutex> lock(gen.mutex());
-            rng_engine_inputs = at::check_generator<at::CUDAGeneratorImpl>(gen)->philox_engine_inputs(counter_offset);
-          }
-          dropoutRelu_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, batch_size, input_size, dropout_prob, rng_engine_inputs);
-        }
-      } else if (activation == 2) { // sigmoid
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, Sigmoid_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-        Sigmoid_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, batch_size, input_size);
+          cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAdd_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+          biasAdd_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
+          cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, Sigmoid_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+          Sigmoid_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, batch_size, input_size);
+      } else if (activation == 3) { //gelu
+          cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, Gelu_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+          Gelu_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, batch_size, input_size);
+      } else {
+          assert(false && "Not implemented");
       }
     }
-
     // Set current output as next layer input
     reserved_space_x = reserved_space_y;
     // Set next layer output
@@ -1275,9 +1466,7 @@ int mlp_bp(
     T** dwPtr,
     T** dbPtr,
     bool requires_grad,
-    int use_bias,
-    int activation,
-    float dropout_prob) {
+    int activation) {
   T* weight;
   T *dweight, *dx, *dy, *dbias;
   T *x, *y;
@@ -1336,8 +1525,7 @@ int mlp_bp(
     float one = 1.f;
     float zero = 0.f;
 
-    if (use_bias == 1) {
-      if (activation == 0 || layer == num_layers - 1) { // no acitvation
+    if (layer == (num_layers -1)) { // no acitvation
         // bgrad
         dim3 block(BIAS_RELU_BW_NTHREADS_X, BIAS_RELU_BW_NTHREADS_Y);
         int grid_x, grid_y;
@@ -1351,7 +1539,7 @@ int mlp_bp(
           dy, yfeat, batch_size, db_scratch, semaphores, dbias);
         // bypass dgrad through reset pointer
         dy_gemm = dy;
-      } else if (activation == 1) { // relu
+    } else if (activation == 1) { // relu
         dim3 block(BIAS_RELU_BW_NTHREADS_X, BIAS_RELU_BW_NTHREADS_Y);
         int grid_x, grid_y;
         cudaMemsetAsync(semaphores, 0, semaphore_size, stream);
@@ -1366,21 +1554,19 @@ int mlp_bp(
           get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
           dim3 grid(grid_x, grid_y);
           biasAddRelu_bprop_aligned<T, 4><<<grid, block, 0, stream>>>(
-            y, dy, yfeat, batch_size, dy_gemm, db_scratch, semaphores, dbias, dropout_prob);
-        } else {
+            y, dy, yfeat, batch_size, dy_gemm, db_scratch, semaphores, dbias);
+      } else {
           int block_x = BIAS_RELU_BW_NTHREADS_X;
           int block_y = BIAS_RELU_RED_PER_THREAD * BIAS_RELU_BW_NTHREADS_Y;
           get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
           dim3 grid(grid_x, grid_y);
           biasAddRelu_bprop<T, 4><<<grid, block, 0, stream>>>(
-            y, dy, yfeat, batch_size, dy_gemm, db_scratch, semaphores, dbias, dropout_prob);
+            y, dy, yfeat, batch_size, dy_gemm, db_scratch, semaphores, dbias);
         }
-      } else if (activation == 2) { // sigmoid
+    } else if (activation == 2) { // sigmoid
         // activation backward
         int num_blocks = 0;
         int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
-
-        // sigmoid bprop
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, Sigmoid_bprop<T>, BIAS_RELU_FW_NTHREADS, 0);
         Sigmoid_bprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(dy, y, batch_size, yfeat, dy_gemm);
 
@@ -1395,24 +1581,25 @@ int mlp_bp(
         dim3 grid(grid_x, grid_y);
         biasAdd_bprop<T, 4><<<grid, block, 0, stream>>>(
           dy_gemm, yfeat, batch_size, db_scratch, semaphores, dbias);
-      }
-    } else { // no bias below
-      if (activation == 0 || layer == num_layers - 1) {
-        // bypass dgrad through reset pointer
-        dy_gemm = dy;
-      } else if (activation == 1) { // relu
-        int num_blocks = 0;
-        int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, Relu_bprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-        Relu_bprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(dy, y, batch_size, yfeat, dy_gemm, dropout_prob);
-      } else if (activation == 2) { // sigmoid
+    } else if (activation == 3) { // gelu
+        // activation backward
         int num_blocks = 0;
         int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, Sigmoid_bprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-        Sigmoid_bprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(dy, y, batch_size, yfeat, dy_gemm);
-      }
-    }
+        Gelu_bprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(dy, y, batch_size, yfeat, dy_gemm);
 
+        // bgrad, from dy_gemm
+        dim3 block(BIAS_RELU_BW_NTHREADS_X, BIAS_RELU_BW_NTHREADS_Y);
+        int grid_x, grid_y;
+        cudaMemsetAsync(semaphores, 0, semaphore_size, stream);
+
+        int block_x = BIAS_RELU_BW_NTHREADS_X;
+        int block_y = BIAS_RELU_RED_PER_THREAD * BIAS_RELU_BW_NTHREADS_Y;
+        get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
+        dim3 grid(grid_x, grid_y);
+        biasAdd_bprop<T, 4><<<grid, block, 0, stream>>>(
+          dy_gemm, yfeat, batch_size, db_scratch, semaphores, dbias);
+    }
     cublasStatus_t cublas_status;
     // Call GEMM dgrad
     if (layer > 0 || requires_grad == 1) {
@@ -1475,9 +1662,8 @@ template int mlp_fp<float>(
     float** BPtr,
     float* Y,
     float* reserved_space,
-    int use_bias,
     int activation,
-    float dropout_prob);
+    void* lt_workspace);
 
 template int mlp_bp<float>(
     float* X,
@@ -1494,9 +1680,7 @@ template int mlp_bp<float>(
     float** dwPtr,
     float** dbPtr,
     bool requires_grad,
-    int use_bias,
-    int activation,
-    float dropout_prob);
+    int activation);
 
 template int mlp_fp<at::Half>(
     at::Half* X,
@@ -1508,9 +1692,8 @@ template int mlp_fp<at::Half>(
     at::Half** BPtr,
     at::Half* Y,
     at::Half* reserved_space,
-    int use_bias,
     int activation,
-    float dropout_prob);
+    void* lt_workspace);
 
 template int mlp_bp<at::Half>(
     at::Half* X,
@@ -1527,9 +1710,7 @@ template int mlp_bp<at::Half>(
     at::Half** dwPtr,
     at::Half** dbPtr,
     bool requires_grad,
-    int use_bias,
-    int activation,
-    float dropout_prob);
+    int activation);
 
 template int mlp_fp<double>(
     double* X,
@@ -1541,9 +1722,8 @@ template int mlp_fp<double>(
     double** BPtr,
     double* Y,
     double* reserved_space,
-    int use_bias,
     int activation,
-    float dropout_prob);
+    void* lt_workspace);
 
 template int mlp_bp<double>(
     double* X,
@@ -1560,9 +1740,7 @@ template int mlp_bp<double>(
     double** dwPtr,
     double** dbPtr,
     bool requires_grad,
-    int use_bias,
-    int activation,
-    float dropout_prob);
+    int activation);
 
 template size_t get_mlp_bp_workspace_in_bytes<float>(
     int batch_size,

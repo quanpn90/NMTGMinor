@@ -9,6 +9,7 @@ from onmt.modules.swish import SiLU
 import onmt
 
 
+
 class PositionWiseFeedForward(nn.Module):
     """Two-layer Feed-forward neural network"""
 
@@ -50,19 +51,23 @@ class PositionWiseFeedForward(nn.Module):
         self.optimized = 2
 
         self.fused = False
-        # At the moment fused mlp is only supported for non-GLU and ReLU
-        if not self.glu and self.activation in ['relu']:
-            try:
-                import fused_mlp
-                self.fused = True
 
-                from onmt.modules.mlp.mlp import mlp_function
-                self.fast_mlp_func = mlp_function
-            except (ModuleNotFoundError, ImportError) as e:
-                # print(
-                #     "[INFO] Fused MLP implementation not found. "
-                #     "Installation can be found in onmt.modules.mlp/setup.py")
-                self.fused = False
+        # At the moment fused mlp is only supported for non-GLU and ReLU
+        # if not self.glu and self.activation in ['relu', 'gelu'] and self.dropout == 0.0:
+        #     # and mlp_relu_function is not None:
+        #     # if self.activation == 'relu':
+        #     from onmt.modules.mlp.mlp import mlp_function
+        #     if mlp_function is not None:
+        #         self.fused_function = mlp_function
+        #         self.fused = True
+            # elif self.activation == 'gelu':
+            #     from onmt.modules.mlp.mlp import mlp_gelu_function
+            #     if mlp_gelu_function is not None:
+            #         self.fused_function = mlp_gelu_function
+            #         self.fused = True
+
+            # self.fused = True
+            # self.mlp_relu_function = mlp_relu_function
 
     def reset_parameters(self, init='normal'):
         if init == 'normal':
@@ -79,21 +84,18 @@ class PositionWiseFeedForward(nn.Module):
 
     def forward(self, input, *args):
 
-        if self.fused and input.is_cuda and not self.variational:
-            weights = [self.in_proj_weight,  self.out_proj_weight]
+        if self.fused and input.is_cuda:
+            weights = [self.in_proj_weight, self.out_proj_weight]
             biases = [self.in_proj_bias, self.out_proj_bias]
 
             seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
 
-            if self.activation in ['relu']:
-                activation = 1
-            else:
-                raise NotImplementedError
-
-            hidden = self.fast_mlp_func(1, self.dropout if self.training else 0,
-                                        activation, input.view(seq_len * bsz, -1),
-                                        *weights, *biases)
-            hidden = hidden.view(seq_len, bsz, hidden_size)
+            if self.activation == 'relu':
+                activation = 1   # relu
+            elif self.activation == 'gelu':
+                activation = 3
+            hidden = self.fused_function(activation, input.view(seq_len * bsz, -1),
+                                         *weights, *biases).view(seq_len, bsz, hidden_size)
 
         else:
             hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)
