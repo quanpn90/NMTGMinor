@@ -53,6 +53,7 @@ class CopyGenerator(nn.Module):
 
         self.hidden_size = hidden_size
         self.output_size = output_size
+        self.must_softmax = True
 
         # this constant is used to inverse the softmax function
         self.c = 0.1712209
@@ -70,7 +71,7 @@ class CopyGenerator(nn.Module):
 
         self.fix_norm = fix_norm
 
-    def forward(self, model_outputs):
+    def forward(self, model_outputs, log_softmax=True):
         """
 
         """
@@ -123,7 +124,12 @@ class CopyGenerator(nn.Module):
         #                       src_map.transpose(0, 1)).transpose(0, 1) # tlen, batch, vocab_size
 
         # revert the softmax function to get logits
-        output = torch.log(p_g) + self.c
+        if log_softmax:
+            output = torch.log(p_g) + self.c
+        else:
+            output = p_g
 
+        model_outputs['logits'] = output
+        model_outputs['softmaxed'] = self.must_softmax
         # the logits is then used in the normal loss function
-        return output
+        return model_outputs

@@ -62,7 +62,7 @@ class EncdecMultiheadAttn(nn.Module):
         time_masking = False
         len_key = key.size(0)
 
-        outputs, coverage, = self.attn_func(time_masking, is_training,
+        outputs, coverage = self.attn_func(time_masking, is_training,
                                             self.num_heads, query, key,
                                             self.in_proj_weight_q, self.in_proj_weight_kv,
                                             self.out_proj_weight, attn_mask, self.dropout,

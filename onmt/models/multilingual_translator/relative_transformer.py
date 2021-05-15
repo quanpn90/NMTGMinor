@@ -12,6 +12,7 @@ from onmt.modules.sinusoidal_positional_encoding import SinusoidalPositionalEmbe
 from onmt.models.transformer_layers import PrePostProcessing
 from .relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
 from .reversible_transformers import ReversibleTransformerEncoderLayer, reversible_encoder
+from .reversible_transformers import ReversibleTransformerDecoderLayer, reversible_decoder
 from onmt.modules.identity import Identity
 from onmt.utils import flip, expected_length
 from collections import defaultdict
@@ -187,6 +188,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         self.late_emb_scale = opt.decoder_late_emb_scale
         self.learnable_position_encoding = opt.learnable_position_encoding
         self.max_pos_length = opt.max_pos_length
+        self.reversible = opt.tgt_reversible
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerDecoder, self).__init__(opt, dicts,
@@ -226,7 +228,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
             # linearly decay the death rate
             death_r = (l + 1.0) / self.layers * self.death_rate
 
-            block = RelativeTransformerDecoderLayer(self.opt, death_rate=death_r)
+            if not self.reversible:
+                block = RelativeTransformerDecoderLayer(self.opt, death_rate=death_r)
+            else:
+                block = ReversibleTransformerDecoderLayer(self.opt)
 
             self.layer_modules.append(block)
 
@@ -315,17 +320,23 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         output = self.preprocess_layer(emb.contiguous())
 
-        for i, layer in enumerate(self.layer_modules):
+        if self.reversible:
+            # TODO: add src lang and tgt lang to reversible
+            output, coverage = reversible_decoder(self.layer_modules, output, pos_emb, context,
+                                                  dec_attn_mask.squeeze(-1), mask_src,
+                                                  False, None)  # incremental variables
+        else:
+            for i, layer in enumerate(self.layer_modules):
 
-            if self.checkpointing == 0 or self.training is False:
+                if self.checkpointing == 0 or self.training is False:
 
-                output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src,
-                                            src_lang=src_lang, tgt_lang=tgt_lang)
+                    output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                                                src_lang=src_lang, tgt_lang=tgt_lang)
 
-            else:
-                output, coverage, _ = checkpoint(create_forward_function(layer), output, context, pos_emb,
-                                                 dec_attn_mask,
-                                                 mask_src, src_lang, tgt_lang)
+                else:
+                    output, coverage, _ = checkpoint(create_forward_function(layer), output, context, pos_emb,
+                                                     dec_attn_mask,
+                                                     mask_src, src_lang, tgt_lang)
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -440,18 +451,24 @@ class RelativeTransformerDecoder(TransformerDecoder):
             emb = emb * math.sqrt(self.model_size)
 
         output = emb.contiguous()
+        if self.reversible:
+            incremental = True
+            incremental_cache = buffer
+            output, coverage = reversible_decoder.apply(self.layer_modules, output, pos_emb, context,
+                                                        dec_attn_mask, mask_src,
+                                                        incremental, incremental_cache)
+        else:
+            for i, layer in enumerate(self.layer_modules):
+                buffer = buffers[i] if i in buffers else None
 
-        for i, layer in enumerate(self.layer_modules):
-            buffer = buffers[i] if i in buffers else None
-
-            if buffering:
-                output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, mask_src,
-                                                 tgt_lang=lang, src_lang=src_lang,
-                                                 incremental=True, incremental_cache=buffer)
-                decoder_state.update_attention_buffer(buffer, i)
-            else:
-                output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src,
-                                            src_lang=src_lang, tgt_lang=lang)
+                if buffering:
+                    output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                                                     tgt_lang=lang, src_lang=src_lang,
+                                                     incremental=True, incremental_cache=buffer)
+                    decoder_state.update_attention_buffer(buffer, i)
+                else:
+                    output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                                                src_lang=src_lang, tgt_lang=lang)
 
         # normalize and take the last time step
         output = self.postprocess_layer(output)

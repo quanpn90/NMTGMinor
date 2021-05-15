@@ -32,7 +32,7 @@ if __name__ == "__main__":
     opt.n_heads = 4
     opt.inner_size = 4 * opt.model_size
     opt.ffn_glu = False
-    opt.ffn_activation = 'gelu'
+    opt.ffn_activation = 'relu'
     opt.head_dim = opt.model_size // opt.n_heads
     opt.learnable_position_encoding = False
     opt.ignore_source = False
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     input_states = torch.randn(*(len_q, bsz, opt.model_size), dtype=torch.float64, requires_grad=True, device=device)
     pos = torch.randn(*(len_q, 1, opt.model_size), dtype=torch.float64, requires_grad=False, device=device)
 
-    context = torch.randn(*(len_k, bsz, opt.model_size), dtype=torch.float64, requires_grad=False, device=device)
+    context = torch.randn(*(len_k, bsz, opt.model_size), dtype=torch.float64, requires_grad=True, device=device)
 
     layers = torch.nn.ModuleList()
 

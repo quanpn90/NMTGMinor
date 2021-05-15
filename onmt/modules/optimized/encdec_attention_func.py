@@ -195,8 +195,12 @@ class EncdecAttnFunc(torch.autograd.Function):
             ctx.fused_softmax_dropout = True
 
         else:
-            dtype_ = torch.float64 if double_precision else torch.float32
-            softmax_results = F.softmax(matmul1_results, dim=-1, dtype=dtype_).type_as(matmul1_results)
+            # dtype_ = torch.float64 if double_precision else torch.float32
+            # softmax_results = F.softmax(matmul1_results, dim=-1, dtype=dtype_).type_as(matmul1_results)
+            if matmul1_results.type() == 'torch.cuda.HalfTensor':
+                softmax_results = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
+            else:
+                softmax_results = F.softmax(matmul1_results, dim=-1)
 
             # Dropout - is not executed for inference
             if is_training:
@@ -295,7 +299,7 @@ class EncdecAttnFunc(torch.autograd.Function):
             return None, None, None, \
                    input_q_grads, input_kv_grads, \
                    input_weight_q_grads, input_weight_kv_grads, output_weight_grads, \
-                   None, None, None, None
+                   None, None, None, None, None, None
 
         # Slice out k,v from one big Input Linear output (should only impact meta data, no copies!)
         # Batch sizes and heads are combined to make the batch of the Batched GEMM
@@ -375,29 +379,6 @@ class EncdecAttnFunc(torch.autograd.Function):
 
             # Softmax Grad (not a publically documented op)
             softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
-        # else:
-        #     assert mask_softmax_dropout_cuda is not None
-        #
-        #     # matmul2_dgrad1_ref = matmul2_dgrad1.clone()
-        #     #
-        #     # dropout_grads = torch._masked_scale(matmul2_dgrad1_ref, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
-        #     # softmax_grads_ref = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
-        #     #
-        #     # softmax_grads = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1, softmax_results,
-        #     #                                                    dropout_mask, dropout_prob_t[0])
-        #
-        #     # matmul2_dgrad1_2 = matmul2_dgrad1.clone()
-        #     softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t[0], matmul2_dgrad1,
-        #                                                                  softmax_results, dropout_mask,
-        #                                                                  dropout_prob_t[0])
-
-        # comp = torch.allclose(softmax_grads_ref, softmax_grads, rtol=1e-03, atol=1e-04)
-        # if not comp:
-        #     # print(softmax_grads_ref - softmax_grads)
-        #     print("ERROR: Gradients mismatched.")
-        #     print(softmax_grads_ref - softmax_grads)
-        # else:
-        #     print("Gradients matched.")
 
         # Matmul1 - DGRAD1
         # Input1: (data grads)  [seqs*heads, seql_q, seql_k]

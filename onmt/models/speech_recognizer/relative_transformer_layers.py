@@ -263,6 +263,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.macaron = opt.macaron
         self.ffn_scale = 0.5 if self.macaron else 1
         self.rezero = opt.rezero
+        self.learnable_pos = opt.learnable_position_encoding
 
         self.preprocess_attn = preprocessing(self.rezero, opt.model_size, opt.dropout, sequence='n',
                                              multilingual=self.mln, n_languages=opt.n_languages)

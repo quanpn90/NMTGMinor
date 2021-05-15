@@ -537,6 +537,8 @@ class Transformer(NMTModel):
         if self.ctc:
             self.ctc_linear = nn.Linear(encoder.model_size, self.tgt_vocab_size)
 
+        self
+
     def reset_states(self):
         return
 
@@ -711,10 +713,13 @@ class Transformer(NMTModel):
             dec_out['context'] = context
 
             if isinstance(self.generator, nn.ModuleList):
-                gen_t = self.generator[0](dec_out)['logits']
+                dec_out = self.generator[0](dec_out)
+                # gen_t = self.generator[0](dec_out)['logits']
             else:
-                gen_t = self.generator(dec_out)['logits']
-            gen_t = F.log_softmax(gen_t, dim=-1, dtype=torch.float32)
+                dec_out = self.generator(dec_out)
+            gen_t = dec_out['logits']
+            if dec_out['softmaxed'] is False:
+                gen_t = F.log_softmax(gen_t, dim=-1, dtype=torch.float32)
             gen_t = gen_t.squeeze(0)
             tgt_t = tgt_t.unsqueeze(1)
             scores = gen_t.gather(1, tgt_t)
@@ -743,8 +748,10 @@ class Transformer(NMTModel):
         output_dict['src'] = decoder_state.src.transpose(0, 1)
 
         # squeeze to remove the time step dimension
-        log_prob = self.generator[0](output_dict)['logits'].squeeze(0)
-        log_prob = F.log_softmax(log_prob, dim=-1, dtype=torch.float32)
+        output_dict = self.generator[0](output_dict)
+        log_prob = output_dict['logits'].squeeze(0)
+        if output_dict['softmaxed'] is False:
+            log_prob = F.log_softmax(log_prob, dim=-1, dtype=torch.float32)
 
         coverage = output_dict['coverage']
         last_coverage = coverage[:, -1, :].squeeze(1)

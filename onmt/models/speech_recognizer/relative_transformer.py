@@ -265,16 +265,17 @@ class SpeechTransformerDecoder(TransformerDecoder):
 
     def build_modules(self):
 
-        e_length = expected_length(self.layers, 0.0)
+        self.death_rate = 0.0
+        e_length = expected_length(self.layers, self.death_rate)
         self.opt.ignore_source = self.ignore_source
         opt = self.opt
         print("* Speech Transformer Decoder with Relative Attention with %.2f layers" % e_length)
 
         self.layer_modules = nn.ModuleList()
 
-        for l in range(self.layers):
+        for _l in range(self.layers):
             # linearly decay the death rate
-            death_r = 0.0
+            death_r = (_l + 1.0) / self.layers * self.death_rate
 
             from .relative_transformer_layers import LIDFeedForward
             lid_network = None
