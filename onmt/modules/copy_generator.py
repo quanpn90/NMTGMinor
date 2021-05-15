@@ -125,7 +125,7 @@ class CopyGenerator(nn.Module):
 
         # revert the softmax function to get logits
         if log_softmax:
-            output = torch.log(p_g) + self.c
+            output = torch.log(p_g)
         else:
             output = p_g
 

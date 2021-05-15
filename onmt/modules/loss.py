@@ -59,7 +59,7 @@ class CrossEntropyLossBase(_Loss):
         else:
             self.softmax_xentropy = None
 
-    def _compute_loss(self, logits, targets, vocab_mask=None):
+    def _compute_loss(self, logits, targets, vocab_mask=None, softmaxed=False):
         """
         :param logits: T x B x V or B x T x V tensor (output of decoder)
         :param targets: T x B x V or B x T target tensor
@@ -79,9 +79,13 @@ class CrossEntropyLossBase(_Loss):
         logits = logits.view(-1, logits.size(-1))  # B*T x V
 
         eps_i = self.smoothing_value if self.training else 0.0
+        fast_entropy = self.fast_xentropy and not softmaxed
 
-        if not self.fast_xentropy:
-            lprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
+        if not fast_entropy:
+            if not softmaxed:
+                lprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
+            else:
+                lprobs = logits
 
             non_pad_mask = gtruth.ne(self.padding_idx)
             nll_loss = -lprobs.gather(1, gtruth.unsqueeze(1))[non_pad_mask]
@@ -144,6 +148,7 @@ class NMTLossFunc(CrossEntropyLossBase):
             :param model: passing the model in for necessary components
         """
 
+        softmaxed = model_outputs['softmaxed']
         outputs = model_outputs['hidden']
         # the model no longer outputs logprobs, only logits
         logits = model_outputs['logprobs']
@@ -157,12 +162,12 @@ class NMTLossFunc(CrossEntropyLossBase):
             reverse_targets = model_outputs['reverse_target']
             alpha = 1.0
 
-        loss, loss_data = self._compute_loss(logits, targets, vocab_mask=vocab_mask)
+        loss, loss_data = self._compute_loss(logits, targets, vocab_mask=vocab_mask, softmaxed=softmaxed)
 
         total_loss = loss
 
         if mirror:
-            reverse_loss, rev_loss_data = self._compute_loss(reverse_logits, reverse_targets)
+            reverse_loss, rev_loss_data = self._compute_loss(reverse_logits, reverse_targets, softmaxed=softmaxed)
 
             # flip the reverse outputs so they have the same thing
             reverse_outputs = torch.flip(reverse_outputs, (0,))
@@ -211,7 +216,7 @@ class NMTLossFunc(CrossEntropyLossBase):
 
             rec_logits = model_outputs['rec_logprobs']
             rec_targets = model_outputs['rec_target']
-            rec_loss, rec_loss_data = self._compute_loss(rec_logits, rec_targets)
+            rec_loss, rec_loss_data = self._compute_loss(rec_logits, rec_targets, softmaxed=softmaxed)
             total_loss = total_loss + rec_loss
         else:
             rec_loss, rec_loss_data = None, None
