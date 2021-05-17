@@ -43,9 +43,9 @@ version_dependent_macros = version_ge_1_1 + version_ge_1_3 + version_ge_1_5
 
 
 ext_modules.append(
-    CUDAExtension(name='fused_mlp',
-                  sources=['mlp.cpp',
-                           'mlp_cuda.cu'],
+    CUDAExtension(name='fused_mlp_relu',
+                  sources=['mlp_relu.cpp',
+                           'mlp_relu_cuda.cu'],
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                       'nvcc': ['-O3'] + version_dependent_macros}))
 

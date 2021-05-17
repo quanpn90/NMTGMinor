@@ -9,7 +9,6 @@ from onmt.modules.swish import SiLU
 import onmt
 
 
-
 class PositionWiseFeedForward(nn.Module):
     """Two-layer Feed-forward neural network"""
 
@@ -54,13 +53,12 @@ class PositionWiseFeedForward(nn.Module):
         self.fused = False
 
         # At the moment fused mlp is only supported for non-GLU and ReLU
-        # if not self.glu and self.activation in ['relu', 'gelu'] and self.dropout == 0.0:
-        #     # and mlp_relu_function is not None:
-        #     # if self.activation == 'relu':
-        #     from onmt.modules.mlp.mlp import mlp_function
-        #     if mlp_function is not None:
-        #         self.fused_function = mlp_function
-        #         self.fused = True
+        if not self.glu and self.activation in ['relu'] and not self.variational:
+            if self.activation == 'relu':
+                from onmt.modules.mlp.mlp import mlp_relu_function
+                if mlp_relu_function is not None:
+                    self.fused_function = mlp_relu_function
+                    self.fused = True
             # elif self.activation == 'gelu':
             #     from onmt.modules.mlp.mlp import mlp_gelu_function
             #     if mlp_gelu_function is not None:
@@ -89,7 +87,6 @@ class PositionWiseFeedForward(nn.Module):
             return
 
         with torch.no_grad():
-
             self.autograd = True
             self.linear_in = torch.nn.Linear(self.model_size, self.inner_size)
             self.linear_out = torch.nn.Linear(self.inner_size, self.model_size)
@@ -112,12 +109,13 @@ class PositionWiseFeedForward(nn.Module):
 
             seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
 
-            if self.activation == 'relu':
-                activation = 1   # relu
-            elif self.activation == 'gelu':
-                activation = 3
-            hidden = self.fused_function(activation, input.view(seq_len * bsz, -1),
-                                         *weights, *biases).view(seq_len, bsz, hidden_size)
+            # if self.activation == 'relu':
+            #     activation = 1   # relu
+            # elif self.activation == 'gelu':
+            #     activation = 3
+            hidden = self.fused_function(self.dropout, input.view(seq_len * bsz, -1),
+                                                       *weights, *biases)
+            hidden = hidden.view(seq_len, bsz, hidden_size)
 
         else:
             if self.autograd:
