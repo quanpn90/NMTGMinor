@@ -1206,6 +1206,15 @@ void get_y_offsets(
   }
 }
 
+// Returns the size of all fprop activations combined
+size_t get_all_activations_size(int64_t batch_size, int num_layers, const int* output_features) {
+  size_t acts_size = 0;
+  for (int l = 0; l < num_layers; l++) {
+    acts_size += output_features[l] * batch_size;
+  }
+  return acts_size;
+}
+
 // Returns the reserved space (in elements) needed for the MLP
 size_t get_mlp_reserved_space(int64_t batch_size, int num_layers, const int* output_features) {
   size_t res_space = 0;
@@ -1218,9 +1227,10 @@ size_t get_mlp_reserved_space(int64_t batch_size, int num_layers, const int* out
 }
 
 // Returns the size of all fprop activations combined
-size_t get_all_activations_size(int64_t batch_size, int num_layers, const int* output_features) {
+// no dropout and activation at the last layer so no need that one
+size_t get_mlp_activation_space(int64_t batch_size, int num_layers, const int* output_features) {
   size_t acts_size = 0;
-  for (int l = 0; l < num_layers; l++) {
+  for (int l = 0; l < num_layers - 1; l++) {
     acts_size += output_features[l] * batch_size;
   }
   return acts_size;
@@ -1338,6 +1348,7 @@ int mlp_fp(
     T** BPtr,
     T* Y,
     T* reserved_space,
+    uint8_t* reserved_mask,
     int activation,
     void* lt_workspace) {
   T *weight, *input, *output, *bias;
@@ -1662,6 +1673,7 @@ template int mlp_fp<float>(
     float** BPtr,
     float* Y,
     float* reserved_space,
+    uint8_t* reserved_mask,
     int activation,
     void* lt_workspace);
 
@@ -1692,6 +1704,7 @@ template int mlp_fp<at::Half>(
     at::Half** BPtr,
     at::Half* Y,
     at::Half* reserved_space,
+    uint8_t* reserved_mask,
     int activation,
     void* lt_workspace);
 
@@ -1722,6 +1735,7 @@ template int mlp_fp<double>(
     double** BPtr,
     double* Y,
     double* reserved_space,
+    uint8_t* reserved_mask,
     int activation,
     void* lt_workspace);
 
