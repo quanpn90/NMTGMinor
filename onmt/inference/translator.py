@@ -87,6 +87,8 @@ class Translator(object):
                 #     model.decoder.renew_buffer(self.opt.max_sent_length)
                 model.renew_buffer(self.opt.max_sent_length)
 
+            # model.convert_autograd()
+
             if opt.fp16:
                 model = model.half()
 
@@ -104,6 +106,9 @@ class Translator(object):
                     print("[INFO] fbgemm is not found in the available engines. Possibly the CPU does not support AVX2."
                           " It is recommended to disable Quantization (set to 0).")
                     torch.backends.quantized.engine = 'qnnpack'
+
+                # convert the custom functions to their autograd equivalent first
+                model.convert_autograd()
 
                 model = torch.quantization.quantize_dynamic(
                     model, {torch.nn.LSTM, torch.nn.Linear}, dtype=torch.qint8

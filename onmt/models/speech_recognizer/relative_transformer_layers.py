@@ -59,6 +59,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.macaron = opt.macaron
         self.ffn_scale = 0.5 if self.macaron else 1
         self.rezero = opt.rezero
+        self.learnable_pos = opt.learnable_position_encoding
 
         if self.macaron:
             self.preprocess_mcr_ffn = preprocessing(self.rezero, opt.model_size, opt.dropout,
@@ -130,7 +131,9 @@ class RelativeTransformerEncoderLayer(nn.Module):
                                                            activation=opt.ffn_activation,
                                                            glu=opt.ffn_glu)
 
-            self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+            self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
+                                                       learnable_pos=self.learnable_pos,
+                                                       max_pos=opt.max_pos_length)
 
         if self.depthwise_conv:
             self.preprocess_conv = preprocessing(self.rezero, opt.model_size, opt.dropout,
@@ -142,11 +145,11 @@ class RelativeTransformerEncoderLayer(nn.Module):
         else:
             self.depthwise_conv = None
 
-        if self.multilingual_adapter:
-            from onmt.modules.multilingual_factorized.multilingual_adapters import MultilingualAdapter
-            self.adapters = MultilingualAdapter(opt.model_size, opt.adapter_bottleneck_size,
-                                                n_languages=opt.n_languages,
-                                                dropout=opt.dropout)
+        # if self.multilingual_adapter:
+        #     from onmt.modules.multilingual_factorized.multilingual_adapters import MultilingualAdapter
+        #     self.adapters = MultilingualAdapter(opt.model_size, opt.adapter_bottleneck_size,
+        #                                         n_languages=opt.n_languages,
+        #                                         dropout=opt.dropout)
 
     def forward(self, input, pos_emb, attn_mask, src_lang=None,
                 incremental=False, incremental_cache=None, mems=None):
@@ -342,7 +345,9 @@ class RelativeTransformerDecoderLayer(nn.Module):
             self.multihead_tgt = MPRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                              factor_size=opt.mpw_factor_size)
         else:
-            self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+            self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
+                                                           learnable_pos=self.learnable_pos,
+                                                           max_pos=opt.max_pos_length)
 
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                        variational=self.variational,

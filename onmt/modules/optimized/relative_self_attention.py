@@ -6,6 +6,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 
 from .relative_self_attention_func import relative_self_attn_func
+from .relative_self_attention_func import RelativeShift
 
 
 class RelativeSelfMultiheadAttn(nn.Module):
@@ -23,6 +24,7 @@ class RelativeSelfMultiheadAttn(nn.Module):
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
         self.bias = True
         self.learnable_pos = learnable_pos
+        self.autograd = False
 
         self.in_proj_weight = Parameter(torch.Tensor(3 * embed_dim, embed_dim))
         self.out_proj_weight = Parameter(torch.Tensor(embed_dim, embed_dim))
@@ -46,6 +48,36 @@ class RelativeSelfMultiheadAttn(nn.Module):
 
         self.reset_parameters()
         self.attn_func = relative_self_attn_func
+
+    def convert_autograd(self):
+
+        if self.autograd:
+            return
+
+        self.autograd = True
+
+        with torch.no_grad():
+
+            self.in_linear = torch.nn.Linear(self.embed_dim, 3 * self.embed_dim)
+            self.out_linear = torch.nn.Linear(self.embed_dim, self.embed_dim)
+
+            if not self.learnable_pos:
+                self.pos_linear = torch.nn.Linear(self.embed_dim, self.embed_dim)
+                self.pos_linear.weight.copy_(self.pos_proj_weight)
+                self.pos_linear.bias.copy_(self.pos_proj_bias)
+                del self.pos_proj_weight
+                del self.pos_proj_bias
+
+            self.in_linear.weight.copy_(self.in_proj_weight)
+            self.in_linear.bias.copy_(self.in_proj_bias)
+
+            self.out_linear.weight.copy_(self.out_proj_weight)
+            self.out_linear.bias.copy_(self.out_proj_bias)
+
+            del self.in_proj_weight
+            del self.out_proj_weight
+            del self.in_proj_bias
+            del self.out_proj_bias
 
     def reset_parameters(self, init='normal'):
         if init == 'normal':  # xavier normal
@@ -102,13 +134,93 @@ class RelativeSelfMultiheadAttn(nn.Module):
             # [len_q x len_k] -> [len_q x len_k x head_dim]
             pos = self.pos_emb(pos)
 
-        outputs, coverage = self.attn_func(input, pos, attn_mask is not None, is_training, self.num_heads,
-                                           self.in_proj_weight, self.out_proj_weight, self.pos_proj_weight,
-                                           self.in_proj_bias, self.out_proj_bias, self.pos_proj_bias,
-                                           self.r_w_bias, self.r_r_bias,
-                                           mask, self.dropout,
-                                           incremental, incremental_cache, False,
-                                           self.learnable_pos, True)
-        # last Falses are double precision, learnable_embedding and return coverage
+        if self.autograd:
+            assert not self.training, "Auto-grad mode only used in Evaluation (for Quantization)."
+            bsz = input.size(1)
+            heads = self.num_heads
+            head_dim = self.head_dim
+            len_q = input.size(0)
+            len_k = len_q
+            input_lin_results = self.in_linear(input)
+            scale_t = torch.tensor([head_dim ** -0.5])
+            use_time_mask = attn_mask is not None
 
-        return outputs, coverage
+            if mask is not None:
+                mask = mask.to(torch.bool)
+                # Self Attention Time Mask
+                if use_time_mask:
+                    assert (len(mask.size()) == 2), "Timing mask is not 2D!"
+                    mask = mask.unsqueeze(0).unsqueeze(0)
+                # Key Padding Mask
+                else:
+                    mask = mask.unsqueeze(1).unsqueeze(2)
+
+            if not self.learnable_pos:
+                pos_lin_results = self.pos_linear(pos)
+                r_head_k = pos_lin_results.view(pos.size(0), bsz * self.num_heads, self.head_dim)
+
+            input_lin_results = input_lin_results.view(input.size(0), input.size(1) * self.num_heads, 3, self.head_dim)
+            queries = input_lin_results[:, :, 0, :]
+            keys = input_lin_results[:, :, 1, :]
+            values = input_lin_results[:, :, 2, :]
+
+            if incremental:
+                # We have to change the heads x head_dim first and then concat to the T dim
+                # bsz is changed during translation due to beam search
+                # during translation we want to keep the actual T dim in MM as 1 constantly
+                keys = keys.reshape(len_q, bsz, heads * head_dim)
+                values = values.reshape(len_q, bsz, heads * head_dim)
+
+                if 'k' in incremental_cache and 'v' in incremental_cache:
+                    keys = torch.cat([incremental_cache['k'], keys], dim=0)  # time first
+                    incremental_cache['k'] = keys
+                    values = torch.cat([incremental_cache['v'], values], dim=0)  # time first
+                    incremental_cache['v'] = values
+                else:
+                    incremental_cache['k'] = keys
+                    incremental_cache['v'] = values
+
+                keys = keys.view(-1, bsz * heads, head_dim)
+                values = values.view(-1, bsz * heads, head_dim)
+                # re-update len_k to be the newly updated length of the keys
+                len_k = keys.size(0)
+
+            rw_head_q = queries.view(len_q, bsz, heads, head_dim) + self.r_w_bias
+            rw_head_q = rw_head_q.view(len_q, bsz * heads, head_dim)
+            matmul_ac = torch.bmm(rw_head_q.transpose(0, 1), keys.transpose(0, 1).transpose(1, 2)).mul_(scale_t[0])
+
+            rr_head_q = queries.view(len_q, bsz, heads, head_dim) + self.r_r_bias
+            rr_head_q = rr_head_q.view(len_q, bsz * heads, head_dim)
+
+            if not self.learnable_pos:
+                matmul_bd = torch.matmul(rr_head_q.transpose(0, 1), r_head_k.transpose(0, 1).transpose(1, 2)) \
+                    .mul_(scale_t[0])
+                matmul_bd = RelativeShift.forward(matmul_bd, True, False)
+                matmul_bd = matmul_bd[:, :, :len_k]
+                attn_score = matmul_ac + matmul_bd
+            else:
+                matmul_ac.transpose(0, 1).baddbmm_(rr_head_q, pos.transpose(1, 2), beta=1.0, alpha=scale_t[0])
+                attn_score = matmul_ac
+
+            if mask is not None:
+                attn_score.view(bsz, heads, len_q, len_k).masked_fill_(mask, float('-inf'))
+
+            softmax_results = F.softmax(attn_score, dim=-1)
+            matmul2_results = torch.bmm(softmax_results, values.transpose(0, 1)).transpose(0, 1)
+            matmul2_results = matmul2_results.contiguous().view(len_q, bsz, self.embed_dim)
+            outputs = self.out_linear(matmul2_results)
+
+            return outputs, softmax_results
+
+        else:
+
+            outputs, coverage = self.attn_func(input, pos, attn_mask is not None, is_training, self.num_heads,
+                                               self.in_proj_weight, self.out_proj_weight, self.pos_proj_weight,
+                                               self.in_proj_bias, self.out_proj_bias, self.pos_proj_bias,
+                                               self.r_w_bias, self.r_r_bias,
+                                               mask, self.dropout,
+                                               incremental, incremental_cache, False,
+                                               self.learnable_pos, True)
+            # last Falses are double precision, learnable_embedding and return coverage
+
+            return outputs, coverage

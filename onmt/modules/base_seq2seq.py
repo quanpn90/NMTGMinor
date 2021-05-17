@@ -128,6 +128,18 @@ class NMTModel(nn.Module):
         if type(self.generator) is not nn.ModuleList:
             self.generator = nn.ModuleList([self.generator])
 
+    def convert_autograd(self):
+
+        def attempt_to_convert(m):
+            if hasattr(m, 'convert_autograd'):
+                m.convert_autograd()
+
+            for n, ch in m.named_children():
+                attempt_to_convert(ch)
+
+        attempt_to_convert(self.encoder)
+        attempt_to_convert(self.decoder)
+
 
 class Reconstructor(nn.Module):
     """

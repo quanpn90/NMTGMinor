@@ -24,6 +24,7 @@ class PositionWiseFeedForward(nn.Module):
         self.activation = activation
         self.glu = glu
         self.weight_drop = weight_drop
+        self.autograd = False
 
         if self.activation == 'relu':
             if self.glu:
@@ -82,6 +83,27 @@ class PositionWiseFeedForward(nn.Module):
         nn.init.constant_(self.in_proj_bias, 0.0)
         nn.init.constant_(self.out_proj_bias, 0.0)
 
+    def convert_autograd(self):
+
+        if self.autograd:
+            return
+
+        with torch.no_grad():
+
+            self.autograd = True
+            self.linear_in = torch.nn.Linear(self.model_size, self.inner_size)
+            self.linear_out = torch.nn.Linear(self.inner_size, self.model_size)
+
+            self.linear_in.weight.copy_(self.in_proj_weight)
+            self.linear_in.bias.copy_(self.in_proj_bias)
+            self.linear_out.weight.copy_(self.out_proj_weight)
+            self.linear_out.bias.copy_(self.out_proj_bias)
+
+            del self.in_proj_weight
+            del self.in_proj_bias
+            del self.out_proj_weight
+            del self.out_proj_bias
+
     def forward(self, input, *args):
 
         if self.fused and input.is_cuda:
@@ -98,7 +120,10 @@ class PositionWiseFeedForward(nn.Module):
                                          *weights, *biases).view(seq_len, bsz, hidden_size)
 
         else:
-            hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)
+            if self.autograd:
+                hidden = self.linear_in(input)
+            else:
+                hidden = F.linear(input, self.in_proj_weight, self.in_proj_bias)
 
             if self.glu and self.activation != 'sigmoid':
                 hidden, gate = hidden.chunk(2, dim=-1)
@@ -113,6 +138,10 @@ class PositionWiseFeedForward(nn.Module):
                 else:
                     hidden = F.dropout(hidden, p=self.dropout, training=self.training,
                                        inplace=self.activation in ['silu', 'relu', 'swish', 'gelu'])
-            hidden = F.linear(hidden, self.out_proj_weight, self.out_proj_bias)
+
+            if self.autograd:
+                hidden = self.linear_out(hidden)
+            else:
+                hidden = F.linear(hidden, self.out_proj_weight, self.out_proj_bias)
 
         return hidden

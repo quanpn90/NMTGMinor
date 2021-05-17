@@ -47,6 +47,8 @@ class SpeechTransformerEncoder(TransformerEncoder):
         self.multilingual_linear_projection = opt.multilingual_linear_projection
         self.mln = opt.multilingual_layer_norm
         self.no_input_scale = opt.no_input_scale
+        self.learnable_position_encoding = opt.learnable_position_encoding
+        self.max_pos_length = opt.max_pos_length
 
         # TODO: multilingually linear transformation
 
@@ -55,7 +57,8 @@ class SpeechTransformerEncoder(TransformerEncoder):
 
         # learnable position encoding
         if self.learnable_position_encoding:
-            raise NotImplementedError
+            # raise NotImplementedError
+            self.positional_encoder = None
         else:
             # or using pre-set sinusoidal
             self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
@@ -156,17 +159,17 @@ class SpeechTransformerEncoder(TransformerEncoder):
         qlen = input.size(0)
         klen = qlen + mem_len
 
-        # Asynchronous positions: 2K+1 positions instead of K+1
-        if self.unidirectional:
-            pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
-        else:
+        if not self.learnable_position_encoding:
             pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
-
-        # pos_emb has size 2T+1 x 1 x H
-        pos_emb = self.positional_encoder(pos, bsz=input.size(1))
-
-        if self.learnable_position_encoding:
-            raise NotImplementedError
+            # pos_emb has size 2T+1 x 1 x H
+            pos_emb = self.positional_encoder(pos, bsz=input.size(1))
+            pos_emb = self.preprocess_layer(pos_emb)
+        else:
+            range_vec = torch.arange(klen, device=emb.device)
+            range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+            distance_mat = range_vec - range_mat.transpose(0, 1)
+            distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+            pos_emb = distance_mat
 
         # B x T x H -> T x B x H
         context = emb
@@ -176,8 +179,6 @@ class SpeechTransformerEncoder(TransformerEncoder):
 
         # Apply dropout to both context and pos_emb
         context = self.preprocess_layer(context)
-
-        pos_emb = self.preprocess_layer(pos_emb)
 
         if self.mpw:
             input_lang = self.factor_embeddings(input_lang).squeeze(0)
@@ -242,12 +243,17 @@ class SpeechTransformerDecoder(TransformerDecoder):
         self.n_heads = opt.n_heads
         self.fast_self_attn = opt.fast_self_attention
         self.mpw = opt.multilingual_partitioned_weights
+        self.learnable_position_encoding = opt.learnable_position_encoding
+        self.max_pos_length = opt.max_pos_length
 
         # build_modules will be called from the inherited constructor
         super().__init__(opt, dicts, positional_encoder, language_embeddings,
                          ignore_source,
                          allocate_positions=False)
-        self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
+        if self.learnable_position_encoding:
+            self.positional_encoder = None
+        else:
+            self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
         # Parameters for the position biases - deprecated. kept for backward compatibility
         # self.r_w_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
@@ -345,11 +351,21 @@ class SpeechTransformerDecoder(TransformerDecoder):
 
         dec_attn_mask = dec_attn_mask.bool()
 
-        pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+        # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+        if not self.learnable_position_encoding:
+            pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+            pos_emb = self.positional_encoder(pos, bsz=input.size(1))
+            pos_emb = self.preprocess_layer(pos_emb)
+        else:
+            range_vec = torch.arange(klen, device=emb.device)
+            range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+            distance_mat = range_vec - range_mat.transpose(0, 1)
+            distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+            pos_emb = distance_mat
 
-        pos_emb = self.positional_encoder(pos, bsz=input.size(1))
+        # pos_emb = self.positional_encoder(pos, bsz=input.size(1))
         output = self.preprocess_layer(emb.contiguous())
-        pos_emb = self.preprocess_layer(pos_emb)
+        # pos_emb = self.preprocess_layer(pos_emb)
 
         lfv_vector, lid_logits = None, list()
 
@@ -431,8 +447,20 @@ class SpeechTransformerDecoder(TransformerDecoder):
         qlen = emb.size(0)
         mlen = klen - qlen
 
-        pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
-        pos_emb = self.positional_encoder(pos)
+        # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+        # pos_emb = self.positional_encoder(pos)
+        if self.learnable_position_encoding:
+            if buffering:
+                distance_mat = torch.arange(-klen + 1, 1, 1, device=emb.device).unsqueeze(0)
+            else:
+                range_vec = torch.arange(klen, device=emb.device)
+                range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+                distance_mat = range_vec - range_mat.transpose(0, 1)
+            distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+            pos_emb = distance_mat
+        else:
+            pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+            pos_emb = self.positional_encoder(pos)
 
         dec_attn_mask = torch.triu(
             emb.new_ones(klen, klen), diagonal=1 + mlen).byte()[:, :, None]  # [:, :, None]
