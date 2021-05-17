@@ -404,12 +404,12 @@ class RelativeTransformerDecoderLayer(nn.Module):
             query = self.preprocess_attn(input, factor=tgt_lang)
             if self.mfw or self.mpw:
                 out, _ = self.multihead_tgt(query, pos_emb, tgt_lang, None, mask_tgt, mems=mems,
-                                            incremental=False, incremental_cache=incremental_cache)
-                # incremental=incremental, incremental_cache=incremental_cache)
+                                            # incremental=False, incremental_cache=incremental_cache)
+                                            incremental=incremental, incremental_cache=incremental_cache)
             else:
                 out, _ = self.multihead_tgt(query, pos_emb, None, mask_tgt, mems=mems,
-                                            incremental=False, incremental_cache=incremental_cache)
-                # incremental=incremental, incremental_cache=incremental_cache)
+                                            # incremental=False, incremental_cache=incremental_cache)
+                                            incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
