@@ -53,11 +53,16 @@ class PositionWiseFeedForward(nn.Module):
         self.fused = False
 
         # At the moment fused mlp is only supported for non-GLU and ReLU
-        if not self.glu and self.activation in ['relu'] and not self.variational:
+        if not self.glu and self.activation in ['relu', 'silu', 'swish'] and not self.variational:
             if self.activation == 'relu':
                 from onmt.modules.mlp.mlp import mlp_relu_function
                 if mlp_relu_function is not None:
                     self.fused_function = mlp_relu_function
+                    self.fused = True
+            elif self.activation in ['silu', 'swish']:
+                from onmt.modules.mlp.mlp import mlp_silu_function
+                if mlp_silu_function is not None:
+                    self.fused_function = mlp_silu_function
                     self.fused = True
             # elif self.activation == 'gelu':
             #     from onmt.modules.mlp.mlp import mlp_gelu_function
@@ -109,11 +114,9 @@ class PositionWiseFeedForward(nn.Module):
 
             seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
 
-            # if self.activation == 'relu':
-            #     activation = 1   # relu
-            # elif self.activation == 'gelu':
-            #     activation = 3
-            hidden = self.fused_function(self.dropout, input.view(seq_len * bsz, -1),
+            dropout = self.dropout if self.training else 0.0
+
+            hidden = self.fused_function(dropout, input.view(seq_len * bsz, -1),
                                                        *weights, *biases)
             hidden = hidden.view(seq_len, bsz, hidden_size)
 

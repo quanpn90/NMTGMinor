@@ -49,6 +49,13 @@ ext_modules.append(
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                       'nvcc': ['-O3'] + version_dependent_macros}))
 
+ext_modules.append(
+    CUDAExtension(name='fused_mlp_silu',
+                  sources=['mlp_silu.cpp',
+                           'mlp_silu_cuda.cu'],
+                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                                      'nvcc': ['-O3'] + version_dependent_macros}))
+
 setup(
     name="fused_mlp_functions",
     ext_modules=ext_modules,

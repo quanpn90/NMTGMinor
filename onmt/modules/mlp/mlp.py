@@ -23,6 +23,11 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     fused_mlp_relu = None
 
+try:
+    import fused_mlp_silu
+except (ModuleNotFoundError, ImportError) as e:
+    fused_mlp_silu = None
+
 
 class MlpReluFunction(torch.autograd.Function):
     @staticmethod
@@ -49,4 +54,29 @@ if fused_mlp_relu:
 else:
     mlp_relu_function = None
 
+
+class MlpSiluFunction(torch.autograd.Function):
+    @staticmethod
+    @custom_fwd(cast_inputs=torch.float16)
+    def forward(ctx, p, *args):
+        output = fused_mlp_silu.forward(p, args)
+        ctx.save_for_backward(*args)
+        ctx.outputs = output
+        dropout_mask = output[-1]
+        ctx.p = p
+        return output[0]
+
+    @staticmethod
+    @custom_bwd
+    def backward(ctx, *grad_o):
+        p = ctx.p
+        grads = fused_mlp_silu.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
+        del ctx.outputs
+        return (None, *grads)
+
+
+if fused_mlp_silu:
+    mlp_silu_function = half_function(MlpSiluFunction.apply)
+else:
+    mlp_silu_function = None
 

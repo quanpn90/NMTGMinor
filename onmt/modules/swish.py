@@ -14,12 +14,9 @@ except (ModuleNotFoundError, ImportError) as e:
     from .optimized.compat import custom_fwd, custom_bwd
 
 try:
-    from swish_torch._C import swish_forward, swish_backward
-
-    fast_swish = True
+    import silu_cuda
 except (ModuleNotFoundError, ImportError) as e:
-    swish_forward, swish_backward = lambda *args: None, lambda *args: None
-    fast_swish = False
+    silu_cuda = None
 
 
 class SwishFunction(torch.autograd.Function):
@@ -27,14 +24,14 @@ class SwishFunction(torch.autograd.Function):
     @custom_fwd
     def forward(ctx, inp):
         ctx.save_for_backward(inp)
-        return swish_forward(inp)
+        return silu_cuda.forward(inp)
 
     @staticmethod
     @custom_bwd
     def backward(ctx, grad_out):
         inp, = ctx.saved_tensors
         if not ctx.needs_input_grad[0]: return (None,)
-        return swish_backward(inp, grad_out)
+        return silu_cuda.backward(inp, grad_out)
 
 
 @half_function
@@ -52,7 +49,7 @@ class SiLU(nn.Module):
     def forward(self, input):
 
         # maybe only use during training to avoid kernel problem?
-        if fast_swish and input.is_cuda and self.training:
+        if silu_cuda is not None and input.is_cuda:
             return fast_silu(input)
         else:
             try:
