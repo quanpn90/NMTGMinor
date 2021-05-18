@@ -45,7 +45,7 @@ class TranslatorParameter(object):
 
         self.sub_model = ""
         self.sub_src = ""
-        self.opt.ensemble_weight = ""
+        self.ensemble_weight = ""
 
         self.read_file(filename)
 
