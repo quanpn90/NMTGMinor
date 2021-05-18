@@ -7,6 +7,8 @@ def make_parser(parser):
                         help='Path to the *-train.pt file from preprocess.py')
     parser.add_argument('-data_format', required=False, default='raw',
                         help='Default data format: raw')
+    parser.add_argument('-engine', default="apex", type=str,
+                        help="""Engine for training apex|deepspeed""")
 
     parser.add_argument('-multi_dataset', action='store_true',
                         help='Reading multiple datasets (sharing the same dictionary)')
