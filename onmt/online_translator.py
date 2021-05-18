@@ -43,6 +43,10 @@ class TranslatorParameter(object):
         self.dynamic_quantile = 0
         self.vocab_list = ""
 
+        self.sub_model = ""
+        self.sub_src = ""
+        self.opt.ensemble_weight = ""
+
         self.read_file(filename)
 
     def read_file(self, filename):
