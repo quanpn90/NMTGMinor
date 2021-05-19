@@ -830,9 +830,7 @@ class XETrainer(BaseTrainer):
             del checkpoint
         else:
             # For pretrain_transformer initialization is done in pretrain_module 
-            if opt.model != "pretrain_transformer":
-                print('Initializing model parameters')
-                # init_model_parameters(model, opt)
+            init_model_parameters(model, opt)
             itr_progress = None
             resume = False
             start_epoch = 1

@@ -81,10 +81,10 @@ class PretrainTransformer(NMTModel):
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
+        src_attention_mask = src.ne(onmt.constants.SRC_PAD).long()  # [b, src_len]
         if hasattr(self.encoder, 'enc_pretrained_model') and self.encoder.enc_pretrained_model in ["bert", "roberta"]:
-            src_attention_mask = src.ne(onmt.constants.SRC_PAD).long()  # [b, src_len]
             segments_tensor = src.ne(onmt.constants.SRC_PAD).long()
-            enc_outputs = self.encoder(src, segments_tensor, src_attention_mask)  # the encoder is a pretrained model
+            enc_outputs = self.encoder(src, src_attention_mask, segments_tensor)  # the encoder is a pretrained model
             context = enc_outputs[0]
             encoder_output = defaultdict(lambda: None)
             encoder_output['context'] = context
@@ -97,6 +97,7 @@ class PretrainTransformer(NMTModel):
 
             encoder_output = defaultdict(lambda: None, encoder_output)
             context = encoder_output['context']
+            context = context.transpose(0, 1)  # to make it consistent with bert batch first
             # the state is changed
             streaming_state = encoder_output['streaming_state']
 
@@ -105,8 +106,7 @@ class PretrainTransformer(NMTModel):
             context.zero_()
 
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bert", "roberta"]:
-            # src: [b, l],for mask_src
-            # context: [b, l, de_model]
+            # src: [b, src_l]  context: [b, src_l, de_model]
             tgt_token_type = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
             tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
             decoder_output = self.decoder(input_ids=tgt,
@@ -119,29 +119,30 @@ class PretrainTransformer(NMTModel):
             decoder_output = decoder_output[0]
             output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
             output_dict = defaultdict(lambda: None)
+            context = context.transpose(0, 1)  # to [src_l, b, de_model]
         else:
+            context = context.transpose(0, 1)  # to  [src_l, b, de_model] src: [b, l]
             decoder_output = self.decoder(tgt, context, src,
-                                          src_lang=src_lang, tgt_lang=tgt_lang, input_pos=tgt_pos, streaming=streaming,
+                                          src_lang=src_lang, tgt_lang=tgt_lang,
+                                          input_pos=tgt_pos, streaming=streaming,
                                           src_lengths=src_lengths, tgt_lengths=tgt_lengths,
                                           streaming_state=streaming_state)
 
             # update the streaming state again
             decoder_output = defaultdict(lambda: None, decoder_output)
             streaming_state = decoder_output['streaming_state']
-            output = decoder_output['hidden']
+            output = decoder_output['hidden']  # [tgt_len, bsz, d]
 
             # build the output dict based on decoder output
             output_dict = defaultdict(lambda: None, decoder_output)
 
-
-        output_dict['hidden'] = output
-        output_dict['context'] = context
-        output_dict['src_mask'] = encoder_output['src_mask']
+        output_dict['hidden'] = output  # [tgt_len, bsz, d]
+        output_dict['context'] = context  # [b, l, de_model]
+        output_dict['src_mask'] = encoder_output['src_attention_mask']  # [b, l, de_model]
         output_dict['src'] = src
         output_dict['target_mask'] = target_mask
         output_dict['streaming_state'] = streaming_state
         output_dict['target'] = batch.get('target_output')
-        # output_dict['lid_logits'] = decoder_output['lid_logits']
 
         # final layer: computing softmax
         if self.training and nce:

@@ -63,6 +63,13 @@ def make_parser(parser):
                         help='Maximum distance length for relative self-attention')
     parser.add_argument('-max_src_length', type=int, default=2048,
                         help='Maximum distance length for relative self-attention')
+    parser.add_argument('-learnable_position_encoding', action='store_true',
+                        help="""Use embeddings as learnable position encoding.""")
+    parser.add_argument('-diff_head_pos', action='store_true',
+                        help="""Not share relative pos embedding cross heads""")
+    parser.add_argument('-pos_emb_type', default='absolute',
+                        help="Position embedding type. [absolute| relative_k| relative_kv]")
+
     parser.add_argument('-fix_norm_output_embedding', action='store_true',
                         help="""Normalize the output embedding""")
 
@@ -383,8 +390,8 @@ def make_parser(parser):
 
     parser.add_argument('-enc_state_dict', default="", type=str,
                         help=""" the state_dict of the  pretrained model for src language """)
-    parser.add_argument('-enc_not_load_state', action='store_true',
-                        help='only create a  Bert Object, not load the state from pytorch modle or fituned model for src')
+    # parser.add_argument('-enc_not_load_state', action='store_true',
+    #                     help='only create a Bert Object, not load the state from pytorch modle or fituned model for src')
 
     parser.add_argument('-enc_pretrain_word_dropout', type=float, default=0.0,
                         help="""word dropout appled on bert""")
@@ -411,9 +418,6 @@ def make_parser(parser):
                         help=""" the name of tgt pretrained model configuration.""")
     parser.add_argument('-dec_state_dict', default="", type=str,
                         help=""" the state_dict of the  pretrained model""")
-    parser.add_argument('-dec_not_load_state', action='store_true',
-                        help='only create a  Bert Object, not load the state '
-                             'from pytorch modle or fituned model for tgt')
 
     parser.add_argument('-dec_pretrain_word_dropout', type=float, default=0.0,
                         help="""word dropout appled on bert""")
@@ -451,8 +455,6 @@ def make_parser(parser):
     parser.add_argument('-post_norm', action='store_true',
                         help='use post-layer norm')
     parser.add_argument('-absolute_position_encoding', action='store_true',
-                        help='use absolute position encoding for the Translator')
-    parser.add_argument('-learnable_position_encoding', action='store_true',
                         help='use absolute position encoding for the Translator')
     parser.add_argument('-decoder_late_emb_scale', action='store_true',
                         help='only scale the embedding very late at the decoder. This option is here'
@@ -520,6 +522,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'max_pos_length'):
         opt.max_pos_length = 0
+    if not hasattr(opt, 'diff_head_pos'):
+        opt.max_pos_length = False
 
     if not hasattr(opt, 'learnable_position_encoding'):
         opt.learnable_position_encoding = False
@@ -698,9 +702,6 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'absolute_position_encoding'):
         opt.absolute_position_encoding = False
-
-    if not hasattr(opt, 'learnable_position_encoding'):
-        opt.learnable_position_encoding = False
 
     if not hasattr(opt, 'decoder_late_emb_scale'):
         opt.decoder_late_emb_scale = False
