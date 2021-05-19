@@ -10,15 +10,7 @@ import sys
 from onmt.constants import add_tokenidx
 from options import backward_compatible
 
-#
-# import torchbackend='fbgemm'
-# # 'fbgemm' for server, 'qnnpack' for mobile
-# my_model.qconfig = torch.quantization.get_default_qconfig(backend)
-# prepare and convert model
-# Set the backend on which the quantized kernels need to be run
-# torch.backends.quantized.engine=# torch.backends.quantized.engine = 'fbgemm'
 model_list = ['transformer', 'stochastic_transformer', 'fusion_network']
-
 
 
 class Translator(object):
@@ -70,6 +62,8 @@ class Translator(object):
                     self.src_dict = checkpoint['dicts']['src']
                 else:
                     self._type = "audio"
+                    # self.src_dict = self.tgt_dict
+
                 self.tgt_dict = checkpoint['dicts']['tgt']
 
                 if "langs" in checkpoint["dicts"]:
@@ -79,15 +73,6 @@ class Translator(object):
                     self.lang_dict = {'src': 0, 'tgt': 1}
 
                 self.bos_id = self.tgt_dict.labelToIdx[self.bos_token]
-
-
-            # Build model from the saved option
-            # if hasattr(model_opt, 'fusion') and model_opt.fusion == True:
-            #     print("* Loading a FUSION model")
-            #     model = build_fusion(model_opt, checkpoint['dicts'])
-            # else:
-            #     model = build_model(model_opt, checkpoint['dicts'])
-
 
             model = build_model(model_opt, checkpoint['dicts'])
             optimize_model(model)
@@ -100,6 +85,8 @@ class Translator(object):
                 #     print("Not enough len to decode. Renewing .. ")
                 #     model.decoder.renew_buffer(self.opt.max_sent_length)
                 model.renew_buffer(self.opt.max_sent_length)
+
+            # model.convert_autograd()
 
             if opt.fp16:
                 model = model.half()
@@ -115,7 +102,12 @@ class Translator(object):
                 if 'fbgemm' in engines:
                     torch.backends.quantized.engine = 'fbgemm'
                 else:
+                    print("[INFO] fbgemm is not found in the available engines. Possibly the CPU does not support AVX2."
+                          " It is recommended to disable Quantization (set to 0).")
                     torch.backends.quantized.engine = 'qnnpack'
+
+                # convert the custom functions to their autograd equivalent first
+                model.convert_autograd()
 
                 model = torch.quantization.quantize_dynamic(
                     model, {torch.nn.LSTM, torch.nn.Linear}, dtype=torch.qint8
@@ -185,8 +177,12 @@ class Translator(object):
             "log_probs": []}
 
     # Combine distributions from different models
-    def _combine_outputs(self, outputs):
+    def _combine_outputs(self, outputs, weight=None):
 
+        if weight is None:
+            weight = [1.0/len(outputs) for _ in range(len(outputs))]
+
+        # in case outputs have difference vocabulary sizes: take the shortest common one
         sizes = [output_.size(-1) for output_ in outputs.values()]
         min_size = min(sizes)
 
@@ -198,37 +194,34 @@ class Translator(object):
             return outputs[0]
 
         if self.ensemble_op == "logSum":
-            output = (outputs[0])
+            output = (outputs[0]) * weight[0]
 
             # sum the log prob
             for i in range(1, len(outputs)):
-                output += (outputs[i])
+                output += (outputs[i] * weight[i])
 
-            output.div_(len(outputs))
-
-            # output = torch.log(output)
+            # output.div_(len(outputs))
             output = F.log_softmax(output, dim=-1)
-        elif self.ensemble_op == "mean":
-            output = torch.exp(outputs[0])
+        elif self.ensemble_op == "mean":  # default one
+            output = torch.exp(outputs[0]) * weight[0]
 
             # sum the log prob
             for i in range(1, len(outputs)):
-                output += torch.exp(outputs[i])
+                output += torch.exp(outputs[i]) * weight[i]
 
-            output.div_(len(outputs))
-            # output = torch.log(output)
+            # output.div_(len(outputs))
             output = torch.log(output)
         elif self.ensemble_op == "max":
             output = outputs[0]
 
             for i in range(1, len(outputs)):
-                output = torch.max(output,outputs[i])
+                output = torch.max(output, outputs[i])
 
         elif self.ensemble_op == "min":
             output = outputs[0]
 
             for i in range(1, len(outputs)):
-                output = torch.min(output,outputs[i])
+                output = torch.min(output, outputs[i])
 
         elif self.ensemble_op == 'gmean':
             output = torch.exp(outputs[0])
@@ -273,9 +266,11 @@ class Translator(object):
                 src_data = [self.src_dict.convertToIdx(b,
                                                        onmt.constants.UNK_WORD)
                             for b in src_sents]
+            data_type = 'text'
         elif type == 'asr':
             # no need to deal with this
             src_data = src_sents
+            data_type = 'audio'
         else:
             raise NotImplementedError
 
@@ -295,7 +290,7 @@ class Translator(object):
         return onmt.Dataset(src_data, tgt_data,
                             src_langs=src_lang_data, tgt_langs=tgt_lang_data,
                             batch_size_words=sys.maxsize,
-                            data_type=self._type,
+                            data_type=data_type,
                             batch_size_sents=self.opt.batch_size,
                             src_align_right=self.opt.src_align_right)
 
@@ -388,7 +383,7 @@ class Translator(object):
                 lm_decoder_output = self.lm_model.step(decoder_input.clone(), lm_decoder_states)
 
                 # fusion
-                lm_out =  lm_decoder_output['log_prob']
+                lm_out = lm_decoder_output['log_prob']
                 # out = out + 0.3 * lm_out
 
                 out = lm_out
@@ -523,4 +518,3 @@ class Translator(object):
             )
 
         return pred_batch, pred_score, pred_length, gold_score, gold_words, allgold_words
-

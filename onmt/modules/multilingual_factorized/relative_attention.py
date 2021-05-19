@@ -206,7 +206,7 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
                                            self.in_proj_bias, self.out_proj_bias, self.pos_proj_bias,
                                            self.r_w_bias, self.r_r_bias,
                                            mask, self.dropout,
-                                           incremental, incremental_cache, False, False)
+                                           incremental, incremental_cache, False, False, True)
         # last False is double precision
 
         return outputs, coverage

@@ -23,7 +23,6 @@ prior_pi = 0.5
 
 
 def add_tokenidx(opt, cons, dicts):
-
     # the src_pad_word, tgt_pad_word etc are by default the same as before
     # changed if we use roberta/bert
     cons.SRC_PAD_WORD = opt.src_pad_word
@@ -71,6 +70,7 @@ def add_tokenidx(opt, cons, dicts):
 
     return cons
 
+
 # # for Bert, both en and zh; also for roberta zh
 # BERT_PAD = 0
 # BERT_UNK = 100
@@ -91,3 +91,10 @@ def add_tokenidx(opt, cons, dicts):
 # UNK_WORD = '<unk>'
 # BOS_WORD = '<s>'
 # EOS_WORD = '</s>'
+SRC_PAD = PAD
+TGT_PAD = PAD
+SRC_BOS = BOS
+TGT_BOS = BOS
+TGT_EOS = EOS
+TGT_UNK = UNK
+SRC_UNK = UNK

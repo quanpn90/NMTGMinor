@@ -4,6 +4,7 @@ from .layer_norm import LayerNorm, MultilingualLayerNorm
 import onmt
 from onmt.modules.dropout import VariationalDropout
 from onmt.modules.bottle import Bottle
+from onmt.modules.optimized.dropout_add import fused_dropout_add
 
 
 class PrePostProcessing(nn.Module):
@@ -23,7 +24,7 @@ class PrePostProcessing(nn.Module):
         self.d_model = d_model
         self.dropout_p = dropout_p
         self.multilingual = multilingual
-
+        self.variational = variational
         self.steps = list(sequence)
 
         if onmt.constants.residual_type == 'gated':
@@ -42,7 +43,10 @@ class PrePostProcessing(nn.Module):
             if variational:
                 self.dropout = VariationalDropout(self.dropout_p, batch_first=False)
             else:
-                self.dropout = nn.Dropout(self.dropout_p)
+                self.dropout = nn.Dropout(self.dropout_p, inplace=False)
+        if 'z' in self.steps:
+            # Rezero residual method
+            self.g = nn.Parameter(torch.tensor(0.0))
 
     def forward(self, tensor, input_tensor=None, mask=None, factor=None):
         """
@@ -54,22 +58,33 @@ class PrePostProcessing(nn.Module):
         """
 
         output = tensor
-        for step in self.steps:
+
+        i = 0
+        while i < len(self.steps):
+            step = self.steps[i]
             if step == 'n':
                 # this cast is needed for O1 and FusedLayerNorm
                 if self.multilingual:
-
-                    # maybe we don't need to do "type_as" anymore after using amp.half_function at layer norm
                     output = self.layer_norm(output, factor)
                     output = output
                 else:
-                    output = self.layer_norm(output.type_as(self.layer_norm.function.weight))
+                    output = self.layer_norm(output)
             if step == 'd':
-                output = self.dropout(output)
+                # in the case 'da'
+                if i < (len(self.steps) - 1) and self.steps[i + 1] == 'a' and not self.variational:
+                    output = fused_dropout_add(output, input_tensor, self.dropout_p, self.training)
+                    i = i + 1
+                else:
+                    output = self.dropout(output)
             if step == 'a':
                 if input_tensor is not None:
                     if onmt.constants.residual_type != 'gated':
                         output = output + input_tensor
                     else:
                         output = F.relu(self.k) * output + input_tensor
+            if step == 'z':  # rezero-residual but scaling the output with initially small g
+                output = output * self.g
+                if input_tensor is not None:
+                    output = output + input_tensor
+            i = i + 1
         return output

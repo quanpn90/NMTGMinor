@@ -8,9 +8,11 @@ from onmt.models.transformers import TransformerEncoder, TransformerDecoder, Tra
 import onmt
 from onmt.modules.base_seq2seq import NMTModel, Reconstructor, DecoderState
 from onmt.modules.dropout import embedded_dropout
-from onmt.modules.sinusoidal_positional_encoding import SinusoidalPositionalEmbedding
+from onmt.modules.sinusoidal_positional_encoding import SinusoidalPositionalEmbedding, FastSinusoidalPositionalEncoding
 from onmt.models.transformer_layers import PrePostProcessing
 from .relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
+from .reversible_transformers import ReversibleTransformerEncoderLayer, reversible_encoder
+from .reversible_transformers import ReversibleTransformerDecoderLayer, reversible_decoder
 from onmt.modules.identity import Identity
 from onmt.utils import flip, expected_length
 from collections import defaultdict
@@ -38,19 +40,31 @@ class RelativeTransformerEncoder(TransformerEncoder):
         self.n_heads = opt.n_heads
         self.n_languages = opt.n_languages
         self.checkpointing = opt.checkpointing
+        self.absolute_position_encoding = opt.absolute_position_encoding
+        self.early_emb_scale = opt.encoder_early_emb_scale
+        self.learnable_position_encoding = opt.learnable_position_encoding
+        self.max_pos_length = opt.max_pos_length
+        self.reversible = opt.src_reversible
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerEncoder, self).__init__(opt, dicts, positional_encoder, encoder_type,
                                                          language_embeddings)
 
+        if not self.early_emb_scale and (self.use_language_embedding or self.absolute_position_encoding):
+            print("[INFO] Embedding will be scaled after being added with embedding and position encoding."
+                  "\n[INFO] For multilingual models its advisable to use -encoder_early_emb_scale")
+
         # learnable position encoding
         if self.learnable_position_encoding:
-            raise NotImplementedError
+            self.positional_encoder = None
         else:
-            # or using pre-set sinusoidal
-            self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
+            if not self.absolute_position_encoding:
+                # or using pre-set sinusoidal
+                self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
+            else:
+                self.positional_encoder = FastSinusoidalPositionalEncoding(opt.model_size)
 
-        if opt.rezero:
+        if opt.rezero or opt.post_norm:
             self.postprocess_layer = Identity()
 
         self.d_head = self.model_size // self.n_heads
@@ -58,14 +72,20 @@ class RelativeTransformerEncoder(TransformerEncoder):
     def build_modules(self):
 
         e_length = expected_length(self.layers, self.death_rate)
-        print("* Relative Translation Encoder with %.2f expected layers" % e_length)
+        if self.reversible:
+            print("* Relative Reversible Encoder with %.2f expected layers" % e_length)
+        else:
+            print("* Relative Translation Encoder with %.2f expected layers" % e_length)
 
         self.layer_modules = nn.ModuleList()
 
         for _l in range(self.layers):
             # linearly decay the death rate
             death_r = (_l + 1.0) / self.layers * self.death_rate
-            block = RelativeTransformerEncoderLayer(self.opt, death_rate=death_r)
+            if self.reversible:
+                block = ReversibleTransformerEncoderLayer(self.opt, death_rate=death_r)
+            else:
+                block = RelativeTransformerEncoderLayer(self.opt, death_rate=death_r)
 
             self.layer_modules.append(block)
 
@@ -85,10 +105,13 @@ class RelativeTransformerEncoder(TransformerEncoder):
         dec_attn_mask = bsz_first_input.eq(onmt.constants.PAD).unsqueeze(1)
 
         mem_len = 0
-        mask_src = input.eq(onmt.constants.PAD).unsqueeze(0)  # batch_size x src_len x 1 for broadcasting
+
         mems = None
 
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
+        if self.early_emb_scale:
+            """ Scale the emb by sqrt(d_model) """
+            emb = emb * math.sqrt(self.model_size)
 
         """ Adding language embeddings """
         if self.use_language_embedding:
@@ -96,59 +119,57 @@ class RelativeTransformerEncoder(TransformerEncoder):
             # There is no "unsqueeze" here because the input is T x B x H and lang_emb is B x H
             if self.language_embedding_type in ['sum', 'all_sum']:
                 lang_emb = self.language_embedding(input_lang)
-                # print(lang_emb.size(), emb.size())
                 emb = emb + lang_emb.unsqueeze(0)
-
-        if self.unidirectional:
-            qlen = input.size(0)
-            klen = qlen + mem_len
-            attn_mask_src = torch.triu(
-                emb.new_ones(qlen, klen), diagonal=1 + mem_len).byte()[:, :, None]
-
-            pad_mask = mask_src
-
-            mask_src = pad_mask + attn_mask_src
-            # dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
-            mask_src = mask_src.gt(0)
-
-        if onmt.constants.torch_version >= 1.2:
-            mask_src = mask_src.bool()
-
-        """ Scale the emb by sqrt(d_model) """
-        emb = emb * math.sqrt(self.model_size)
 
         """ Adding positional encoding """
         qlen = input.size(0)
         klen = qlen + mem_len
 
         # Asynchronous positions: 2K+1 positions instead of K+1
-        if self.unidirectional:
-            pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
-        else:
-            pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
-
-        # pos_emb has size 2T+1 x 1 x H
-        pos_emb = self.positional_encoder(pos, bsz=input.size(1))
-
-        if self.learnable_position_encoding:
-            raise NotImplementedError
-
-        # B x T x H -> T x B x H
-        context = emb
-
-        # Apply dropout to both context and pos_emb
-        context = self.preprocess_layer(context)
-
-        pos_emb = self.preprocess_layer(pos_emb)
-
-        for i, layer in enumerate(self.layer_modules):
-            # src_len x batch_size x d_model
-            if self.checkpointing == 0 or self.training is False:
-                context = layer(context, pos_emb, mask_src, src_lang=input_lang)
+        if not self.absolute_position_encoding:
+            if not self.learnable_position_encoding:
+                pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
+                # pos_emb has size 2T+1 x 1 x H
+                pos_emb = self.positional_encoder(pos, bsz=input.size(1))
+                pos_emb = self.preprocess_layer(pos_emb)
             else:
-                context = checkpoint(create_forward_function(layer), context, pos_emb, mask_src, input_lang)
+                range_vec = torch.arange(klen, device=emb.device)
+                range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+                distance_mat = range_vec - range_mat.transpose(0, 1)
+                distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                pos_emb = distance_mat
+                # pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device).long()
+                # pos.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                # pos_emb = pos.unsqueeze(1)
 
-        # final layer norm
+            mask_src = input.eq(onmt.constants.PAD).unsqueeze(0)  # 1 x src_len x batch_size for broadcasting
+        else:
+            # Absolute position encoding from 0 -> n
+            pos, pos_emb = None, None
+            emb = self.positional_encoder(emb.transpose(0, 1)).transpose(0, 1)
+            mask_src = bsz_first_input.eq(onmt.constants.PAD)  # batch_size x src_len
+
+        if onmt.constants.torch_version >= 1.2:
+            mask_src = mask_src.bool()
+
+        if not self.early_emb_scale:
+            """ Scale the emb by sqrt(d_model) """
+            emb = emb * math.sqrt(self.model_size)
+
+        # context size is now T x B x H
+        context = self.preprocess_layer(emb)
+
+        if self.reversible:
+            context = reversible_encoder(self.layer_modules, context, pos_emb, mask_src)
+        else:
+            for i, layer in enumerate(self.layer_modules):
+                # src_len x batch_size x d_model
+                if self.checkpointing == 0 or self.training is False:
+                    context = layer(context, pos_emb, mask_src, src_lang=input_lang)
+                else:
+                    context = checkpoint(create_forward_function(layer), context, pos_emb, mask_src, input_lang)
+
+        # final layer norm. we can consider this layer norm as a part of the output layer/function
         context = self.postprocess_layer(context)
 
         output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask, 'src': input})
@@ -163,6 +184,11 @@ class RelativeTransformerDecoder(TransformerDecoder):
         self.death_rate = opt.death_rate
         self.n_heads = opt.n_heads
         self.checkpointing = opt.checkpointing
+        self.absolute_position_encoding = opt.absolute_position_encoding
+        self.late_emb_scale = opt.decoder_late_emb_scale
+        self.learnable_position_encoding = opt.learnable_position_encoding
+        self.max_pos_length = opt.max_pos_length
+        self.reversible = opt.tgt_reversible
 
         # build_modules will be called from the inherited constructor
         super(RelativeTransformerDecoder, self).__init__(opt, dicts,
@@ -171,9 +197,17 @@ class RelativeTransformerDecoder(TransformerDecoder):
                                                          ignore_source,
                                                          allocate_positions=False)
 
-        self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
+        if self.learnable_position_encoding:
+            self.positional_encoder = None
+        else:
+            if not self.absolute_position_encoding:
+                # or using pre-set sinusoidal
+                self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
+            else:
+                self.positional_encoder = FastSinusoidalPositionalEncoding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
-        if opt.rezero:
+
+        if opt.rezero or opt.post_norm:
             self.postprocess_layer = Identity()
 
     def renew_buffer(self, new_len):
@@ -194,7 +228,10 @@ class RelativeTransformerDecoder(TransformerDecoder):
             # linearly decay the death rate
             death_r = (l + 1.0) / self.layers * self.death_rate
 
-            block = RelativeTransformerDecoderLayer(self.opt, death_rate=death_r)
+            if not self.reversible:
+                block = RelativeTransformerDecoderLayer(self.opt, death_rate=death_r)
+            else:
+                block = ReversibleTransformerDecoderLayer(self.opt)
 
             self.layer_modules.append(block)
 
@@ -221,7 +258,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
         """ Embedding: batch_size x len_tgt x d_model """
         input = input.transpose(0, 1)  # T x B
         emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
-        emb = emb * math.sqrt(self.model_size)
+        if not self.late_emb_scale:
+            emb = emb * math.sqrt(self.model_size)
 
         mem_len = 0
         mems = None
@@ -232,10 +270,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
             if self.language_embedding_type == 'sum':
                 emb = emb + lang_emb
             elif self.language_embedding_type == 'concat':
-                # replace the bos embedding with the language
-                bos_emb = lang_emb.expand_as(emb[0])
-                emb[0] = bos_emb
-
                 lang_emb = lang_emb.unsqueeze(0).expand_as(emb)
                 concat_emb = torch.cat([emb, lang_emb], dim=-1)
                 emb = torch.relu(self.projector(concat_emb))
@@ -250,7 +284,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
         qlen = input.size(0)
         klen = qlen + mem_len
 
-        # preparing self-attention mask. The input is either left or right aligned
+        # preparing self-attention mask. The input is left aligned so we do not need to add the pad mask
 
         dec_attn_mask = torch.triu(
             emb.new_ones(qlen, klen), diagonal=1 + mem_len).byte()[:, :, None]
@@ -260,23 +294,49 @@ class RelativeTransformerDecoder(TransformerDecoder):
         # dec_attn_mask = dec_attn_mask.gt(0)
         dec_attn_mask = dec_attn_mask.bool()
 
-        pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
-
-        pos_emb = self.positional_encoder(pos, bsz=input.size(1))
-        output = self.preprocess_layer(emb.contiguous())
-        pos_emb = self.preprocess_layer(pos_emb)
-
-        for i, layer in enumerate(self.layer_modules):
-
-            if self.checkpointing == 0 or self.training is False:
-
-                output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src,
-                                            src_lang=src_lang, tgt_lang=tgt_lang)
-
+        if not self.absolute_position_encoding:
+            # relative positions
+            if not self.learnable_position_encoding:
+                pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+                pos_emb = self.positional_encoder(pos, bsz=input.size(1))
+                pos_emb = self.preprocess_layer(pos_emb)
             else:
+                range_vec = torch.arange(klen, device=emb.device)
+                range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+                distance_mat = range_vec - range_mat.transpose(0, 1)
+                distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                pos_emb = distance_mat
+                # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype).long()
+                # pos.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                # pos_emb = pos.unsqueeze(1)
+        else:
+            # absolute positions
+            emb = self.positional_encoder(emb.transpose(0, 1)).transpose(0, 1)
+            pos, pos_emb = None, None
+            dec_attn_mask = dec_attn_mask.squeeze(-1)
 
-                output, coverage = checkpoint(create_forward_function(layer), output, context, pos_emb, dec_attn_mask,
-                                              mask_src, src_lang, tgt_lang)
+        if self.late_emb_scale:
+            emb = emb * math.sqrt(self.model_size)
+
+        output = self.preprocess_layer(emb.contiguous())
+
+        if self.reversible:
+            # TODO: add src lang and tgt lang to reversible
+            output, coverage = reversible_decoder(self.layer_modules, output, pos_emb, context,
+                                                  dec_attn_mask.squeeze(-1), mask_src,
+                                                  False, None)  # incremental variables
+        else:
+            for i, layer in enumerate(self.layer_modules):
+
+                if self.checkpointing == 0 or self.training is False:
+
+                    output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                                                src_lang=src_lang, tgt_lang=tgt_lang)
+
+                else:
+                    output, coverage, _ = checkpoint(create_forward_function(layer), output, context, pos_emb,
+                                                     dec_attn_mask,
+                                                     mask_src, src_lang, tgt_lang)
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done
@@ -320,18 +380,17 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         if buffering:
             # use the last value of input to continue decoding
-            if input.size(1) > 1:
-                input_ = input[:, -1].unsqueeze(1).transpose(0, 1)
-            else:
-                input_ = input.transpose(0, 1)
+            input_ = input[:, -1].unsqueeze(1).transpose(0, 1)
+            # input_ = input.transpose(0, 1)
         else:
             input_ = input.transpose(0, 1)  # from B x T to T x B
 
         """ Embedding: batch_size x 1 x d_model """
-        emb = self.word_lut(input_) * math.sqrt(self.model_size)
+        emb = self.word_lut(input_)
+        if not self.late_emb_scale:
+            emb = emb * math.sqrt(self.model_size)
         input = input.transpose(0, 1)
         klen = input.size(0)
-        # emb = self.word_lut(input) * math.sqrt(self.model_size)
 
         if self.use_language_embedding:
             lang_emb = self.language_embeddings(lang)  # B x H
@@ -339,9 +398,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
             if self.language_embedding_type in ['sum', 'all_sum']:
                 emb = emb + lang_emb
             elif self.language_embedding_type == 'concat':
-                if input.size(0) == 1:
-                    emb[0] = lang_emb
-
                 lang_emb = lang_emb.unsqueeze(0).expand_as(emb)
                 concat_emb = torch.cat([emb, lang_emb], dim=-1)
                 emb = torch.relu(self.projector(concat_emb))
@@ -352,20 +408,32 @@ class RelativeTransformerDecoder(TransformerDecoder):
         qlen = emb.size(0)
         mlen = klen - qlen
 
-        pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
-
-        pos_emb = self.positional_encoder(pos)
+        if not self.absolute_position_encoding:
+            if self.learnable_position_encoding:
+                if buffering:
+                    distance_mat = torch.arange(-klen + 1, 1, 1, device=emb.device).unsqueeze(0)
+                else:
+                    range_vec = torch.arange(klen, device=emb.device)
+                    range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+                    distance_mat = range_vec - range_mat.transpose(0, 1)
+                distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                pos_emb = distance_mat
+                # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+                # pos.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+                # pos_emb = pos.unsqueeze(1)
+            else:
+                pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+                pos_emb = self.positional_encoder(pos)
+        else:
+            if buffering:
+                emb = self.positional_encoder(emb.transpose(0, 1), t=input.size(1)).transpose(0, 1)
+            else:
+                emb = self.positional_encoder(emb.transpose(0, 1)).transpose(0, 1)
 
         dec_attn_mask = torch.triu(
             emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]
 
-        # pad_mask = input.eq(onmt.constants.PAD).byte()  # L x B
-
-        # dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
-        # dec_attn_mask = dec_attn_mask.gt(0)
-
-        if onmt.constants.torch_version >= 1.2:
-            dec_attn_mask = dec_attn_mask.bool()
+        dec_attn_mask = dec_attn_mask.bool()
 
         if context is not None:
             if self.encoder_type == "audio":
@@ -379,31 +447,27 @@ class RelativeTransformerDecoder(TransformerDecoder):
         else:
             mask_src = None
 
+        if self.late_emb_scale:
+            emb = emb * math.sqrt(self.model_size)
+
         output = emb.contiguous()
-
         if self.reversible:
-            output_1, output_2 = output, output
+            incremental = True
+            incremental_cache = buffer
+            output, coverage = reversible_decoder.apply(self.layer_modules, output, pos_emb, context,
+                                                        dec_attn_mask, mask_src,
+                                                        incremental, incremental_cache)
+        else:
+            for i, layer in enumerate(self.layer_modules):
+                buffer = buffers[i] if i in buffers else None
 
-        for i, layer in enumerate(self.layer_modules):
-            buffer = buffers[i] if i in buffers else None
-
-            if self.reversible:
-                if buffering:
-                    output_1, output_2, coverage, buffer = layer(output_1, output_2, pos_emb, context,
-                                                                 dec_attn_mask, mask_src, incremental=True,
-                                                                 incremental_cache=buffer)
-                    decoder_state.update_attention_buffer(buffer, i)
-                else:
-                    output_1, output_2, coverage, _ = layer(output_1, output_2, pos_emb, context,
-                                                            dec_attn_mask, mask_src)
-            else:
                 if buffering:
                     output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, mask_src,
                                                      tgt_lang=lang, src_lang=src_lang,
                                                      incremental=True, incremental_cache=buffer)
                     decoder_state.update_attention_buffer(buffer, i)
                 else:
-                    output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                    output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src,
                                                 src_lang=src_lang, tgt_lang=lang)
 
         # normalize and take the last time step

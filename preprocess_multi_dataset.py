@@ -420,7 +420,7 @@ def main():
     src_langs = opt.train_src_lang.split("|")
     tgt_langs = opt.train_tgt_lang.split("|")
     langs = (src_langs + tgt_langs)
-    langs = list(set(langs))
+    langs = sorted(list(set(langs)))
 
     if opt.load_dict is not None:
         loaded_dict = torch.load(opt.load_dict)

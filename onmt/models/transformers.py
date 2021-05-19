@@ -84,10 +84,6 @@ class TransformerEncoder(nn.Module):
         self.lsh_src_attention = opt.lsh_src_attention
         self.reversible = opt.src_reversible
 
-        # disable word dropout when switch out is in action
-        if self.switchout > 0.0:
-            self.word_dropout = 0.0
-
         feature_size = opt.input_size
         self.channels = 1  # n. audio channels
 
@@ -142,15 +138,10 @@ class TransformerEncoder(nn.Module):
             # linearly decay the death rate
             death_r = (_l + 1.0) / self.layers * self.death_rate
 
-            if not self.lsh_src_attention:
-                if not self.reversible:
-                    block = EncoderLayer(self.opt, death_rate=death_r)
-                else:
-                    block = ReversibleTransformerEncoderLayer(self.opt, death_rate=death_r)
-
+            if not self.reversible:
+                block = EncoderLayer(self.opt, death_rate=death_r)
             else:
-                from onmt.models.reformer import ReformerEncoderLayer
-                block = ReformerEncoderLayer(self.opt, death_rate=death_r)
+                block = ReversibleTransformerEncoderLayer(self.opt, death_rate=death_r)
 
             self.layer_modules.append(block)
 
@@ -168,11 +159,6 @@ class TransformerEncoder(nn.Module):
         """ Embedding: batch_size x len_src x d_model """
         if self.input_type == "text":
             mask_src = input.eq(onmt.constants.SRC_PAD).unsqueeze(1)  # batch_size x 1 x len_src for broadcasting
-
-            # apply switchout
-            # if self.switchout > 0 and self.training:
-            #     vocab_size = self.word_lut.weight.size(0)
-            #     input = switchout(input, vocab_size, self.switchout)
 
             emb = embedded_dropout(self.word_lut, input, dropout=self.word_dropout if self.training else 0)
         else:
@@ -270,9 +256,6 @@ class TransformerDecoder(nn.Module):
         self.language_embedding_type = opt.language_embedding_type
         self.reversible = opt.tgt_reversible
 
-        if self.switchout > 0:
-            self.word_dropout = 0
-
         self.time_transformer = positional_encoder
 
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d',
@@ -329,12 +312,6 @@ class TransformerDecoder(nn.Module):
 
     def process_embedding(self, input, input_lang=None):
 
-        # if self.switchout == 0:
-        #     input_ = input
-        # if self.switchout > 0 and self.training:
-        #     vocab_size = self.word_lut.weight.size(0)
-        #     input_ = switchout(input, vocab_size, self.switchout)
-        # else:
         input_ = input
 
         emb = embedded_dropout(self.word_lut, input_, dropout=self.word_dropout if self.training else 0)
@@ -346,12 +323,8 @@ class TransformerDecoder(nn.Module):
         if self.use_language_embedding:
             lang_emb = self.language_embeddings(input_lang)  # B x H or 1 x H
             if self.language_embedding_type == 'sum':
-                emb = emb + lang_emb
+                emb = emb + lang_emb.unsqueeze(1)
             elif self.language_embedding_type == 'concat':
-                # replace the bos embedding with the language
-                bos_emb = lang_emb.expand_as(emb[:, 0, :])
-                emb[:, 0, :] = bos_emb
-
                 lang_emb = lang_emb.unsqueeze(1).expand_as(emb)
                 concat_emb = torch.cat([emb, lang_emb], dim=-1)
                 emb = torch.relu(self.projector(concat_emb))
@@ -564,6 +537,8 @@ class Transformer(NMTModel):
         if self.ctc:
             self.ctc_linear = nn.Linear(encoder.model_size, self.tgt_vocab_size)
 
+        self
+
     def reset_states(self):
         return
 
@@ -738,10 +713,13 @@ class Transformer(NMTModel):
             dec_out['context'] = context
 
             if isinstance(self.generator, nn.ModuleList):
-                gen_t = self.generator[0](dec_out)['logits']
+                dec_out = self.generator[0](dec_out)
+                # gen_t = self.generator[0](dec_out)['logits']
             else:
-                gen_t = self.generator(dec_out)['logits']
-            gen_t = F.log_softmax(gen_t, dim=-1, dtype=torch.float32)
+                dec_out = self.generator(dec_out)
+            gen_t = dec_out['logits']
+            if dec_out['softmaxed'] is False:
+                gen_t = F.log_softmax(gen_t, dim=-1, dtype=torch.float32)
             gen_t = gen_t.squeeze(0)
             tgt_t = tgt_t.unsqueeze(1)
             scores = gen_t.gather(1, tgt_t)
@@ -770,8 +748,10 @@ class Transformer(NMTModel):
         output_dict['src'] = decoder_state.src.transpose(0, 1)
 
         # squeeze to remove the time step dimension
-        log_prob = self.generator[0](output_dict)['logits'].squeeze(0)
-        log_prob = F.log_softmax(log_prob, dim=-1, dtype=torch.float32)
+        output_dict = self.generator[0](output_dict)
+        log_prob = output_dict['logits'].squeeze(0)
+        if output_dict['softmaxed'] is False:
+            log_prob = F.log_softmax(log_prob, dim=-1, dtype=torch.float32)
 
         coverage = output_dict['coverage']
         last_coverage = coverage[:, -1, :].squeeze(1)
@@ -799,6 +779,8 @@ class Transformer(NMTModel):
 
         src_transposed = src.transpose(0, 1)
         encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
+
+        print("[INFO] create Transformer decoding state with buffering", buffering)
         decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], src_lang,
                                                  beam_size=beam_size, model_size=self.model_size,
                                                  type=type, buffering=buffering)

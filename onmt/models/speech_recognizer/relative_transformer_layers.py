@@ -59,6 +59,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.macaron = opt.macaron
         self.ffn_scale = 0.5 if self.macaron else 1
         self.rezero = opt.rezero
+        self.learnable_pos = opt.learnable_position_encoding
 
         if self.macaron:
             self.preprocess_mcr_ffn = preprocessing(self.rezero, opt.model_size, opt.dropout,
@@ -130,7 +131,9 @@ class RelativeTransformerEncoderLayer(nn.Module):
                                                            activation=opt.ffn_activation,
                                                            glu=opt.ffn_glu)
 
-            self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+            self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
+                                                       learnable_pos=self.learnable_pos,
+                                                       max_pos=opt.max_pos_length)
 
         if self.depthwise_conv:
             self.preprocess_conv = preprocessing(self.rezero, opt.model_size, opt.dropout,
@@ -142,11 +145,11 @@ class RelativeTransformerEncoderLayer(nn.Module):
         else:
             self.depthwise_conv = None
 
-        if self.multilingual_adapter:
-            from onmt.modules.multilingual_factorized.multilingual_adapters import MultilingualAdapter
-            self.adapters = MultilingualAdapter(opt.model_size, opt.adapter_bottleneck_size,
-                                                n_languages=opt.n_languages,
-                                                dropout=opt.dropout)
+        # if self.multilingual_adapter:
+        #     from onmt.modules.multilingual_factorized.multilingual_adapters import MultilingualAdapter
+        #     self.adapters = MultilingualAdapter(opt.model_size, opt.adapter_bottleneck_size,
+        #                                         n_languages=opt.n_languages,
+        #                                         dropout=opt.dropout)
 
     def forward(self, input, pos_emb, attn_mask, src_lang=None,
                 incremental=False, incremental_cache=None, mems=None):
@@ -179,7 +182,6 @@ class RelativeTransformerEncoderLayer(nn.Module):
                 out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang)
 
                 if self.training and self.death_rate > 0:
-                    # out = out / (1 - self.death_rate)
                     ffn_scale = self.ffn_scale / (1 - self.death_rate)
                 else:
                     ffn_scale = self.ffn_scale
@@ -228,14 +230,11 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
                 # rescaling before residual
                 if self.training and self.death_rate > 0:
-                    # out = out / (1 - self.death_rate)
                     ffn_scale = self.ffn_scale / (1 - self.death_rate)
                 else:
                     ffn_scale = self.ffn_scale
 
-                out = out * ffn_scale
-
-                input = self.postprocess_ffn(out, input)
+                input = self.postprocess_ffn(out * ffn_scale, input)
 
             if self.multilingual_adapter:
                 input = self.adapters(input, src_lang)
@@ -267,6 +266,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.macaron = opt.macaron
         self.ffn_scale = 0.5 if self.macaron else 1
         self.rezero = opt.rezero
+        self.learnable_pos = opt.learnable_position_encoding
 
         self.preprocess_attn = preprocessing(self.rezero, opt.model_size, opt.dropout, sequence='n',
                                              multilingual=self.mln, n_languages=opt.n_languages)
@@ -345,7 +345,9 @@ class RelativeTransformerDecoderLayer(nn.Module):
             self.multihead_tgt = MPRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                              factor_size=opt.mpw_factor_size)
         else:
-            self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+            self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
+                                                           learnable_pos=self.learnable_pos,
+                                                           max_pos=opt.max_pos_length)
 
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, opt.dropout,
                                                        variational=self.variational,
@@ -393,21 +395,20 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang)
 
                 if self.training and self.death_rate > 0:
-                    # out = out / (1 - self.death_rate)
                     ffn_scale = self.ffn_scale / (1 - self.death_rate)
                 else:
                     ffn_scale = self.ffn_scale
 
                 input = self.postprocess_mcr_ffn(out * ffn_scale, input)
 
-                # input = input + ffn_scale * out
-
             query = self.preprocess_attn(input, factor=tgt_lang)
             if self.mfw or self.mpw:
                 out, _ = self.multihead_tgt(query, pos_emb, tgt_lang, None, mask_tgt, mems=mems,
+                                            # incremental=False, incremental_cache=incremental_cache)
                                             incremental=incremental, incremental_cache=incremental_cache)
             else:
                 out, _ = self.multihead_tgt(query, pos_emb, None, mask_tgt, mems=mems,
+                                            # incremental=False, incremental_cache=incremental_cache)
                                             incremental=incremental, incremental_cache=incremental_cache)
 
             # rescaling before residual
@@ -452,7 +453,6 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
             # rescaling before residual
             if self.training and self.death_rate > 0:
-                # out = out / (1 - self.death_rate)
                 ffn_scale = self.ffn_scale / (1 - self.death_rate)
             else:
                 ffn_scale = self.ffn_scale

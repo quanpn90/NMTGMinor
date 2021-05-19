@@ -24,6 +24,11 @@ from onmt.model_factory import freeze_model_specialized_weights, unfreeze_model_
 
 from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
 
+try:
+    import deepspeed
+except (ModuleNotFoundError, ImportError) as e:
+    deepspeed = None
+
 
 def varname(p):
     for line in inspect.getframeinfo(inspect.currentframe().f_back)[3]:
@@ -33,7 +38,6 @@ def varname(p):
 
 
 def generate_data_iterator(dataset, seed, num_workers=1, epoch=1., buffer_size=0):
-
     # check if dataset is a list:
     if isinstance(dataset, list):
         # this is a multidataset
@@ -51,6 +55,7 @@ class BaseTrainer(object):
 
     def __init__(self, model, loss_function, train_data, valid_data, dicts, opt):
 
+        init_model_parameters(model, opt)
         self.model = model
         self.train_data = train_data
         self.valid_data = valid_data
@@ -61,6 +66,7 @@ class BaseTrainer(object):
 
         self.loss_function = loss_function
         self.start_time = 0
+        self.engine = opt.engine
 
     def run(self, *args, **kwargs):
 
@@ -84,6 +90,14 @@ class BaseTrainer(object):
         self.model.encoder.language_embedding = None
         encoder_state_dict = pretrained_model.encoder.state_dict()
 
+        current_state_dict = self.model.state_dict()
+        #
+        # for key in current_state_dict:
+        #     if key in encoder_state_dict:
+        #         if current_state_dict[key].ndim == encoder_state_dict[key].ndim and current_state_dict[key].ndim == 2:
+        #             if current_state_dict[key].size(0) == encoder_state_dict[key].size(1) and \
+        #                     current_state_dict[key].size(0) != current_state_dict[key].size(1):
+        #                 encoder_state_dict[key] = encoder_state_dict[key].transpose(0, 1)
         try:
             self.model.encoder.load_state_dict(encoder_state_dict)
         except RuntimeError as e:
@@ -218,7 +232,10 @@ class BaseTrainer(object):
         try:
             targets = batch.get('target_output')
             tgt_mask = None
-            outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+
+            model = self.model if self.engine is not 'deepspeed' else self.model_engine
+
+            outputs = model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                  zero_encoder=opt.zero_encoder,
                                  mirror=opt.mirror_loss, streaming_state=streaming_state,
                                  nce=opt.nce)
@@ -275,9 +292,11 @@ class BaseTrainer(object):
                 # print(torch.cuda.memory_summary())
                 # exit()
 
-            if self.cuda:
+            if self.cuda and self.engine == 'apex':
                 with amp.scale_loss(full_loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
+                    scaled_loss.div_(batch.tgt_size).backward()
+            elif self.cuda and self.engine == 'deepspeed':
+                self.model_engine.backward(full_loss)
             else:
                 loss.div_(batch.tgt_size).backward()
 
@@ -332,28 +351,41 @@ class XETrainer(BaseTrainer):
             if opt.ctc_loss > 0.0:
                 self.ctc_loss_function = self.ctc_loss_function.cuda()
 
+            if self.engine == 'deepspeed':
+                deepspeed.init_distributed(verbose=False)
+
         if setup_optimizer:
 
             self.optim = onmt.Optim(opt)
             self.optim.set_parameters(self.model.parameters())
 
-            if not self.opt.fp16:
-                opt_level = "O0"
-                keep_batchnorm_fp32 = False
-            elif self.opt.fp16_mixed:
-                opt_level = "O1"
-                keep_batchnorm_fp32 = None
-            else:
-                opt_level = "O2"
-                keep_batchnorm_fp32 = False
+            if self.engine == 'apex':
+                if not self.opt.fp16:
+                    opt_level = "O0"
+                    keep_batchnorm_fp32 = False
+                elif self.opt.fp16_mixed:
+                    opt_level = "O1"
+                    keep_batchnorm_fp32 = None
+                else:
+                    opt_level = "O2"
+                    keep_batchnorm_fp32 = False
 
-            if self.cuda:
-                self.model, self.optim.optimizer = amp.initialize(self.model,
-                                                                  self.optim.optimizer,
-                                                                  opt_level=opt_level,
-                                                                  keep_batchnorm_fp32=keep_batchnorm_fp32,
-                                                                  loss_scale="dynamic",
-                                                                  verbosity=1 if self.opt.verbose else 0)
+                if self.cuda:
+                    self.model, self.optim.optimizer = amp.initialize(self.model,
+                                                                      self.optim.optimizer,
+                                                                      opt_level=opt_level,
+                                                                      keep_batchnorm_fp32=keep_batchnorm_fp32,
+                                                                      loss_scale="dynamic",
+                                                                      verbosity=1 if self.opt.verbose else 0)
+
+            elif self.engine == 'deepspeed':
+                assert deepspeed is not None, "DeepSpeed has not been installed."
+                self.model_engine, _, _, _ = deepspeed.initialize(model=self.model,
+                                                                              model_parameters=self.model.parameters(),
+                                                                              optimizer=self.optim.optimizer,
+                                                                              config='deepspeed.config.json')
+
+                self.model = self.model_engine._modules['module']
 
             print(self.optim.optimizer)
 
@@ -443,7 +475,10 @@ class XETrainer(BaseTrainer):
                 """
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.constants.TGT_PAD)
-                outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+
+                model = self.model if self.engine is not 'deepspeed' else self.model_engine
+
+                outputs = model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                      mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce)
 
                 if opt.streaming:
@@ -602,9 +637,11 @@ class XETrainer(BaseTrainer):
                     full_loss.zero_()
                     loss_data = 0
 
-                if self.cuda:
+                if self.cuda and self.engine == 'apex':
                     with amp.scale_loss(full_loss, optimizer) as scaled_loss:
                         scaled_loss.backward()
+                elif self.engine == 'deepspeed':
+                    self.model_engine.backward(full_loss)
                 else:
                     full_loss.backward()
 
@@ -664,11 +701,16 @@ class XETrainer(BaseTrainer):
                     if self.opt.normalize_gradient:
                         grad_denom = num_accumulated_words * grad_denom
                     # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
-                    normalize_gradients(amp.master_params(optimizer), grad_denom)
+                    if self.engine == 'apex':
+                        normalize_gradients(amp.master_params(optimizer), grad_denom)
                     # Update the parameters.
-                    if self.opt.max_grad_norm > 0:
+                    if self.opt.max_grad_norm > 0 and self.engine == 'apex':
                         torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), self.opt.max_grad_norm)
-                    self.optim.step()
+
+                    self.optim.step(fake=(self.engine == 'deepspeed'))
+                    # self.optim.step()
+                    if self.engine == 'deepspeed':
+                        self.model_engine.step()
                     self.optim.zero_grad()
                     self.model.zero_grad()
 
@@ -768,15 +810,16 @@ class XETrainer(BaseTrainer):
                             amp.load_state_dict(checkpoint['amp'])
 
                 # Only load the progress when we use the same optimizer
-                if 'itr' in checkpoint:
-                    itr_progress = checkpoint['itr']
-                else:
-                    itr_progress = None
+                # if 'itr' in checkpoint:
+                #     itr_progress = checkpoint['itr']
+                # else:
+                itr_progress = None
 
-                resume = True
+                resume = False
                 start_epoch = checkpoint['epoch'] if 'epoch' in checkpoint else 1
                 if start_epoch is None:
                     start_epoch = 1
+                start_epoch = math.floor(start_epoch)
             else:
                 itr_progress = None
                 resume = False
@@ -788,7 +831,6 @@ class XETrainer(BaseTrainer):
         else:
             # For pretrain_transformer initialization is done in pretrain_module 
             init_model_parameters(model, opt)
-                
             itr_progress = None
             resume = False
             start_epoch = 1
@@ -832,5 +874,3 @@ class XETrainer(BaseTrainer):
             self.save(epoch, valid_ppl)
             itr_progress = None
             resume = False
-
-

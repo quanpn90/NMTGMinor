@@ -76,6 +76,7 @@ class Adafactor(torch.optim.Optimizer):
 
     def _get_lr(self, param_group, param_state):
         rel_step_sz = param_group["lr"]
+        # this should override the rel_step_sz
         if param_group["relative_step"]:
             min_step = (
                 1e-6 * param_state["step"] if param_group["warmup_init"] else 1e-2
@@ -278,11 +279,13 @@ class Optim(object):
                                         weight_decay=self.weight_decay, amsgrad=self.amsgrad)
         elif self.method == 'adafactor':
 
+            relative_step = False if self.lr > 0 else True
             self.optimizer = Adafactor(self.params, lr=self.lr if self.lr > 0 else None,
                                        eps=(1e-30, 1e-3), beta1=None,
                                        weight_decay=self.weight_decay,
-                                       relative_step=False if self.lr > 0 else True,
-                                       scale_parameter=False if self.lr > 0 else True)
+                                       relative_step=relative_step,
+                                       scale_parameter=False if self.lr > 0 else True,
+                                       warmup_init=relative_step)
         elif self.method in ['fused_adam']:
 
             fast_adam = True
@@ -300,6 +303,21 @@ class Optim(object):
             if not fast_adam:
                 self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
                                             weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+        elif self.method in ['cpu_adam']:
+            fast_adam = True
+            try:
+                from deepspeed.ops.adam.cpu_adam import DeepSpeedCPUAdam
+
+                self.optimizer = DeepSpeedCPUAdam(self.params, lr=self.lr,
+                                                   betas=(self.beta1, self.beta2), eps=1e-9,
+                                                   weight_decay=self.weight_decay, amsgrad=False)
+            except Exception:
+                fast_adam = False
+
+            if not fast_adam:  # fall back to normal Adam that works on CPU
+                self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                                            weight_decay=self.weight_decay, amsgrad=False)
+
         elif self.method in ['novograd']:
             try:
                 import apex
@@ -348,7 +366,7 @@ class Optim(object):
         self.amsgrad = opt.amsgrad
         self.max_steps = opt.max_steps
 
-    def step(self, scaler=None, grad_denom=None, warmup=False):
+    def step(self, scaler=None, grad_denom=None, warmup=False, fake=False):
 
         "Normalize gradients by batch size"
         self.normalize_grad(denom=grad_denom)
@@ -363,9 +381,9 @@ class Optim(object):
         # if gradients have NaN/inf: return (which will be zeroed afterwards)
         # only do that if the scaler is None, i.e no mechanism to detect inf/nan implicitly
         # for apex amp, only skip if overflow is not detected
-        if detech_nan_inf(self.params):
-            if scaler is None and not overflow:
-                return
+        # if detech_nan_inf(self.params):
+        #     if scaler is None and not overflow:
+        #         return
 
         "Automatically scale learning rate over learning period if not overflow"
         if not overflow:
@@ -373,10 +391,11 @@ class Optim(object):
             if 'noam' in self.update_method or 'cosine' in self.update_method:
                 self.updateLearningRate()
 
-        if scaler is not None:
-            scaler.step(self.optimizer)
-        else:
-            self.optimizer.step()
+        if not fake:
+            if scaler is not None:
+                scaler.step(self.optimizer)
+            else:
+                self.optimizer.step()
 
         # return grad_norm
 
@@ -428,7 +447,11 @@ class Optim(object):
         self.lr = lr
 
     def getLearningRate(self):
-        return self.lr
+
+        if self.optimizer.param_groups[0]['lr'] is None:
+            return self.lr
+        else:
+            return self.optimizer.param_groups[0]['lr']
 
     def reset(self):
         self._step = self._first_step
@@ -443,6 +466,7 @@ class Optim(object):
 
     def load_state_dict(self, state_dict):
         self._step = state_dict['_step']
+        state_dict['step'] = self._step
         self._first_step = self._step
         print("* Loading from step %d " % self._step)
 

@@ -41,6 +41,12 @@ class TranslatorParameter(object):
         self.no_buffering = False
         self.src_align_right = False
         self.dynamic_quantile = 0
+        self.vocab_list = ""
+
+        self.sub_model = ""
+        self.sub_src = ""
+        self.ensemble_weight = ""
+
         self.read_file(filename)
 
     def read_file(self, filename):
@@ -74,11 +80,9 @@ class OnlineTranslator(object):
         opt = TranslatorParameter(model)
         from onmt.inference.fast_translator import FastTranslator
         self.translator = FastTranslator(opt)
-        # self.translator = onmt.EnsembleTranslator(opt)
 
-    def translate(self,input):
-        predBatch, predScore, predLength, goldScore, numGoldWords, allGoldScores = self.translator.translate([input.split()],[])
+    def translate(self, input):
+        predBatch, predScore, predLength, goldScore, numGoldWords, allGoldScores = \
+            self.translator.translate([input.split()], [])
 
         return " ".join(predBatch[0][0])
-  
-

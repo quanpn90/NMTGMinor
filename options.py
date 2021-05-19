@@ -7,6 +7,8 @@ def make_parser(parser):
                         help='Path to the *-train.pt file from preprocess.py')
     parser.add_argument('-data_format', required=False, default='raw',
                         help='Default data format: raw')
+    parser.add_argument('-engine', default="apex", type=str,
+                        help="""Engine for training apex|deepspeed""")
 
     parser.add_argument('-multi_dataset', action='store_true',
                         help='Reading multiple datasets (sharing the same dictionary)')
@@ -68,7 +70,6 @@ def make_parser(parser):
     parser.add_argument('-pos_emb_type', default='absolute',
                         help="Position embedding type. [absolute| relative_k| relative_kv]")
 
-
     parser.add_argument('-fix_norm_output_embedding', action='store_true',
                         help="""Normalize the output embedding""")
 
@@ -114,6 +115,8 @@ def make_parser(parser):
                         help='Apply weight normalization on linear modules')
     parser.add_argument('-death_rate', type=float, default=0.0,
                         help='Stochastic layer death rate')
+    parser.add_argument('-stochastic_sublayer', action='store_true',
+                        help='Apply stochastic death rate for each sub-layer')
     parser.add_argument('-activation_layer', default='linear_relu_linear', type=str,
                         help='The activation layer in each transformer block '
                              'linear_relu_linear|linear_swish_linear|maxout')
@@ -164,7 +167,11 @@ def make_parser(parser):
 
     # Dropout
     parser.add_argument('-dropout', type=float, default=0.3,
-                        help='Dropout probability; applied between LSTM stacks.')
+                        help='Dropout probability; general values for ffn and residual if set negatively')
+    parser.add_argument('-ffn_dropout', type=float, default=-1,
+                        help='Dropout probability; applied at the FFN.')
+    parser.add_argument('-residual_dropout', type=float, default=-1,
+                        help='Dropout probability; applied at the residual connection.')
     parser.add_argument('-word_dropout', type=float, default=0.0,
                         help='Dropout probability; applied on embedding indices.')
     parser.add_argument('-switchout', type=float, default=0.0,
@@ -340,7 +347,7 @@ def make_parser(parser):
     parser.add_argument('-adapter_bottleneck_size', type=int, default=1024,
                         help='New norm for each language')
 
-    parser.add_argument('-ffn_activation', default='relu', type=str,
+    parser.add_argument('-ffn_activation', default='silu', type=str,
                         help='The activation layer in each transformer block '
                              'relu|gelu|silu|swish')
 
@@ -411,8 +418,6 @@ def make_parser(parser):
                         help=""" the name of tgt pretrained model configuration.""")
     parser.add_argument('-dec_state_dict', default="", type=str,
                         help=""" the state_dict of the  pretrained model""")
-    # parser.add_argument('-dec_not_load_state', action='store_true',
-    #                     help='only create a Bert Object, not load the state from pytorch modle or fituned model for tgt')
 
     parser.add_argument('-dec_pretrain_word_dropout', type=float, default=0.0,
                         help="""word dropout appled on bert""")
@@ -447,10 +452,22 @@ def make_parser(parser):
 
     parser.add_argument('-rezero', action='store_true',
                         help='use ReZero residual mechanism')
+    parser.add_argument('-post_norm', action='store_true',
+                        help='use post-layer norm')
+    parser.add_argument('-absolute_position_encoding', action='store_true',
+                        help='use absolute position encoding for the Translator')
+    parser.add_argument('-decoder_late_emb_scale', action='store_true',
+                        help='only scale the embedding very late at the decoder. This option is here'
+                             'to fix the problem of the multilingual model w/ relative position.')
+    parser.add_argument('-encoder_early_emb_scale', action='store_true',
+                        help='only scale the embedding early in the encoder. This option is here'
+                             'to fix the problem of the multilingual model w/ relative position.')
     parser.add_argument('-sa_f', type=int, default=8,
                         help="""word dropout appled on bert""")
     parser.add_argument('-sa_t', type=int, default=64,
                         help="""word dropout appled on bert""")
+    parser.add_argument('-no_input_scale', action='store_true',
+                        help='Do not scale the embeddings of the speech (the features) before transformer.')
 
     return parser
 
@@ -682,5 +699,29 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'ffn_glu'):
         opt.ffn_glu = False
+
+    if not hasattr(opt, 'absolute_position_encoding'):
+        opt.absolute_position_encoding = False
+
+    if not hasattr(opt, 'decoder_late_emb_scale'):
+        opt.decoder_late_emb_scale = False
+
+    if not hasattr(opt, 'encoder_early_emb_scale'):
+        opt.encoder_early_emb_scale = False
+
+    if not hasattr(opt, 'no_input_scale'):
+        opt.no_input_scale = False
+
+    if not hasattr(opt, 'stochastic_sublayer'):
+        opt.stochastic_sublayer = False
+
+    if not hasattr(opt, 'ffn_dropout'):
+        opt.ffn_dropout = opt.dropout
+
+    if not hasattr(opt, 'residual_dropout'):
+        opt.residual_dropout = opt.dropout
+
+    if not hasattr(opt, 'post_norm'):
+        opt.post_norm = False
 
     return opt

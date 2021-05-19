@@ -1,6 +1,12 @@
+"""
+Encoder-Decoder multi-head attention.
+Code is heavily adapted from apex
+https://github.com/NVIDIA/apex/tree/master/apex/contrib/csrc/multihead_attn
+"""
+
+
 import torch
 import torch.nn.functional as F
-from onmt.constants import double_precision
 
 try:
     import apex.amp as amp
@@ -14,6 +20,16 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     from .compat import custom_fwd, custom_bwd
 
+try:
+    import mask_softmax_dropout_cuda
+except (ModuleNotFoundError, ImportError) as e:
+    mask_softmax_dropout_cuda = None
+
+try:
+    import encdec_multihead_attn_cuda
+except (ModuleNotFoundError, ImportError) as e:
+    encdec_multihead_attn_cuda = None
+
 
 class EncdecAttnFunc(torch.autograd.Function):
     @staticmethod
@@ -21,26 +37,74 @@ class EncdecAttnFunc(torch.autograd.Function):
     def forward(ctx, use_time_mask, is_training, heads, inputs_q, inputs_kv,
                 input_weights_q, input_weights_kv, output_weights,
                 mask, dropout_prob,
-                incremental, incremental_cache):
+                incremental, incremental_cache,
+                double_precision, return_coverage):
         heads_t = torch.tensor([heads])
         dropout_prob_t = torch.tensor([dropout_prob])
         null_tensor = torch.tensor([])
         head_dim = inputs_q.size(2) // heads
         scale_t = torch.tensor([head_dim ** -0.5])
+        use_mask = (mask is not None)
 
         bsz, len_q, len_k = inputs_q.size(1), inputs_q.size(0), inputs_kv.size(0)
+        ctx.incremental = incremental
+        ctx.fused_softmax_dropout = False
+        ctx.fused_all = False
+        ctx.len_q = len_q
+        ctx.len_k = len_k
+        ctx.double_precision = double_precision
+        ctx.return_coverage = return_coverage
 
-        # TODO: add incremental cache
+        if mask is not None:
+            # Self Attention Pad Mask
+            mask = mask.to(torch.bool)
+
+            if len(mask.shape) == 3:
+                mask = mask.unsqueeze(1)  # for the head dimension
+            else:
+                mask = mask.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
+
+        if encdec_multihead_attn_cuda is not None and not incremental and len_k <= 2048\
+                and inputs_q.type() == 'torch.cuda.HalfTensor':
+            input_lin_q_results, input_lin_kv_results, \
+                softmax_results, dropout_results, dropout_mask, \
+                matmul2_results, outputs \
+                = encdec_multihead_attn_cuda.forward(is_training, heads, inputs_q, inputs_kv,
+                                                     input_weights_q, input_weights_kv,
+                                                     output_weights, mask, dropout_prob)
+
+            ctx.save_for_backward(heads_t,
+                                  scale_t,
+                                  matmul2_results,
+                                  dropout_results,
+                                  softmax_results,
+                                  input_lin_q_results,
+                                  input_lin_kv_results,
+                                  inputs_q,
+                                  inputs_kv,
+                                  input_weights_q,
+                                  input_weights_kv,
+                                  output_weights,
+                                  dropout_mask,
+                                  dropout_prob_t)
+            ctx.fused_all = True
+
+            if return_coverage:
+                return outputs, softmax_results
+            else:
+                return (outputs, )
 
         # Input Linear GEMM Q
-        # input1: (activations) [seql_q, bsz, embed_dim(1024)]
-        # input2: (weights)     [embed_dim (1024), embed_dim (1024)] (transpose [0,1])
-        # output:               [seql_q, bsz, embed_dim]
+        # input1: (activations) [seql_q, bsz, embed_dim] -> [len_q * bsz, embed_dim]
+        # input2: (weights)     [embed_dim, embed_dim]. transpose(0, 1)
+        # output:               [len_q * bsz, embed_dim] -> [seql_q, bsz, embed_dim]
         # GEMM: ( (seql_q*seqs) x embed_dim ) x ( embed_dim x embed_dim ) = (seql_q*seqs x embed_dim)
         input_lin_q_results = torch.mm(inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
                                        input_weights_q.transpose(0, 1))
         input_lin_q_results = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1), input_weights_q.size(0))
+
         queries = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1) * heads, head_dim)
+
         # Input Linear GEMM KV
         # input1: (activations) [seql_k, bsz, embed_dim(1024)]
         # input2: (weights)     [embed_dim*2 (2048), embed_dim (1024)] (transpose [0,1])
@@ -61,6 +125,7 @@ class EncdecAttnFunc(torch.autograd.Function):
                                             input_weights_kv.transpose(0, 1))
             input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1),
                                                              input_weights_kv.size(0))
+
             input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1) * heads, 2, head_dim)
             keys = input_lin_kv_results[:, :, 0, :]
             values = input_lin_kv_results[:, :, 1, :]
@@ -93,32 +158,56 @@ class EncdecAttnFunc(torch.autograd.Function):
             matmul1_results.mul_(scale_t[0])
 
         if mask is not None:
-            # Self Attention Time Mask
-            mask = mask.to(torch.bool)
-
-            if len(mask.shape) == 3:
-                mask = mask.unsqueeze(1)  # for the head dimension
-            else:
-                mask = mask.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
-
             batches, seql_q, seql_k = matmul1_results.size()
             bsz = int(batches / heads)
             matmul1_results = matmul1_results.view(bsz, heads, seql_q, seql_k)
-            mask = mask.to(torch.bool)
             # after unsqueezing the mask should have size [bsz x 1 x 1 x seql_k]
             matmul1_results = matmul1_results.masked_fill_(mask, float('-inf'))
             matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
 
-        dtype_ = torch.float64 if double_precision else torch.float32
-        softmax_results = F.softmax(matmul1_results, dim=-1, dtype=dtype_).type_as(matmul1_results)
-        # softmax_results = F.softmax(matmul1_results.float(), dim=-1).type_as(matmul1_results)
+        if mask_softmax_dropout_cuda and len_k <= 2048 \
+                and matmul1_results.type() == 'torch.cuda.HalfTensor' and not double_precision:
+            # if False:
+            # dropout_results_ref = F.softmax(matmul1_results, dim=-1)
+            dropout_mask, softmax_results, dropout_results = mask_softmax_dropout_cuda.forward(is_training, heads,
+                                                                                               matmul1_results,
+                                                                                               dropout_prob_t[0])
+            if not is_training:
+                dropout_results = softmax_results  # because the cuda returns empty craps
 
-        # Dropout - is not executed for inference
-        if is_training:
-            dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
+            # Verification code
+            # softmax_results_ref = F.softmax(matmul1_results, dim=-1)
+            # #
+            # if is_training:
+            #     # print(dropout_mask.float().sum(), dropout_mask.numel())
+            #     dropout_results_ref = softmax_results_ref * dropout_mask.half() * (1 / (1 - dropout_prob_t[0]))
+            # else:
+            #     dropout_results_ref = softmax_results_ref
+            # #
+            # comp = torch.allclose(softmax_results_ref, softmax_results, rtol=1e-03, atol=1e-04)
+            # comp = torch.allclose(dropout_results_ref, dropout_results, rtol=1e-03, atol=1e-04)
+            # if comp:
+            #     print("Forward pass verification passed.")
+            # else:
+            #     print("ERROR: Forward pass verification failed")
+            # Verification done
+
+            ctx.fused_softmax_dropout = True
+
         else:
-            dropout_results = softmax_results
-            dropout_mask = null_tensor
+            # dtype_ = torch.float64 if double_precision else torch.float32
+            # softmax_results = F.softmax(matmul1_results, dim=-1, dtype=dtype_).type_as(matmul1_results)
+            if matmul1_results.type() == 'torch.cuda.HalfTensor':
+                softmax_results = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
+            else:
+                softmax_results = F.softmax(matmul1_results, dim=-1)
+
+            # Dropout - is not executed for inference
+            if is_training:
+                dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
+            else:
+                dropout_results = softmax_results
+                dropout_mask = null_tensor
 
         # Matmul2 Batched GEMMs
         # The output tensor specification is needed here to specify the non-standard output.
@@ -128,14 +217,16 @@ class EncdecAttnFunc(torch.autograd.Function):
         # Input2: (values)     [seql_v, seqs*heads, head_dim] transpose(0,1)
         # Output:              [seql_q, seqs*heads, head_dim] transpose(0,1)
         # GEMM: Per batch: ( seql_q x seql_k ) x ( seql_k x head_dim ) = (seql_q x head_dim)
+
         if queries.is_cuda:
             matmul2_results = torch.empty((dropout_results.size(1), dropout_results.size(0), values.size(2)),
-                                          dtype=dropout_results.dtype, device=dropout_results.device).transpose(1, 0)
-            matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1), out=matmul2_results)
+                                          dtype=dropout_results.dtype, device=dropout_results.device)
+            torch.bmm(dropout_results, values.transpose(0, 1), out=matmul2_results.transpose(1, 0))
         else:
-            matmul2_results = torch.matmul(dropout_results, values.transpose(0, 1))
-        matmul2_results = matmul2_results.transpose(0, 1).contiguous().view(inputs_q.size(0), inputs_q.size(1),
-                                                                            inputs_q.size(2))
+            matmul2_results = torch.matmul(dropout_results, values.transpose(0, 1)).transpose(0, 1)
+
+        # view from [len_q, bsz*heads, head_dim] to [len_q, bsz, embed]
+        matmul2_results = matmul2_results.contiguous().view(inputs_q.size(0), inputs_q.size(1), inputs_q.size(2))
 
         # Output Linear GEMM
         # Input1: (activations) [seql_q, seqs, embed_dim=heads*head_dim]
@@ -161,20 +252,54 @@ class EncdecAttnFunc(torch.autograd.Function):
                               dropout_mask,
                               dropout_prob_t)
 
-        return outputs.detach(), softmax_results.detach()
+        if return_coverage:
+            return (outputs, dropout_results)
+        else:
+            return (outputs, )
 
     @staticmethod
     @custom_bwd
-    def backward(ctx, output_grads, softmax_grads):
+    def backward(ctx, *output_grads):
 
-        heads_t, scale_t, matmul2_results, dropout_results, softmax_results \
-            , input_lin_q_results, input_lin_kv_results \
-            , inputs_q, inputs_kv \
-            , input_weights_q, input_weights_kv, output_weights \
-            , dropout_mask, dropout_prob_t \
+        incremental = ctx.incremental
+        len_q = ctx.len_q
+        len_key = ctx.len_k
+
+        if ctx.return_coverage:
+            output_grads, coverage_grads = output_grads
+        else:
+            output_grads = output_grads[0]
+
+        heads_t, scale_t, matmul2_results, dropout_results, softmax_results, \
+        input_lin_q_results, input_lin_kv_results, \
+        inputs_q, inputs_kv, \
+        input_weights_q, input_weights_kv, output_weights, \
+        dropout_mask, dropout_prob_t \
             = ctx.saved_tensors
 
         head_dim = inputs_q.size(2) // heads_t[0]
+        bsz = inputs_q.size(1)
+
+        if ctx.fused_all:
+            assert encdec_multihead_attn_cuda is not None and len_key <= 2048
+
+            input_q_grads, \
+            input_kv_grads, \
+            input_weight_q_grads, \
+            input_weight_kv_grads, \
+            output_weight_grads = encdec_multihead_attn_cuda.backward(heads_t[0], output_grads, matmul2_results,
+                                                                      dropout_results,
+                                                                      softmax_results, input_lin_q_results,
+                                                                      input_lin_kv_results,
+                                                                      inputs_q, inputs_kv, input_weights_q,
+                                                                      input_weights_kv,
+                                                                      output_weights, dropout_mask,
+                                                                      dropout_prob_t[0])
+
+            return None, None, None, \
+                   input_q_grads, input_kv_grads, \
+                   input_weight_q_grads, input_weight_kv_grads, output_weight_grads, \
+                   None, None, None, None, None, None
 
         # Slice out k,v from one big Input Linear output (should only impact meta data, no copies!)
         # Batch sizes and heads are combined to make the batch of the Batched GEMM
@@ -226,11 +351,34 @@ class EncdecAttnFunc(torch.autograd.Function):
         # GEMM: Per batch: ( seql_q x head_dim ) x ( head_dim x seql_k ) = ( seql_q x seql_k )
         values_grads = torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
 
-        # Mask and Scaling for Dropout (not a publically documented op)
-        dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
+        if mask_softmax_dropout_cuda is not None and matmul2_dgrad1.type() == 'torch.cuda.HalfTensor' \
+                and len_key <= 2048:
 
-        # Softmax Grad (not a publically documented op)
-        softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
+            # This is a safe implementation
+            # softmax_grads = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1, softmax_results,
+            #                                                    dropout_mask, dropout_prob_t[0])
+
+            # matmul2_dgrad1_ref = matmul2_dgrad1.clone()
+            # softmax_results_ref = softmax_results.clone()
+            # dropout_grads = torch._masked_scale(matmul2_dgrad1_ref, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
+            # softmax_grads_ref = torch._softmax_backward_data(dropout_grads,
+            #                                                  softmax_results_ref, -1, softmax_results_ref)
+
+            softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t[0], matmul2_dgrad1, softmax_results,
+                                                                         dropout_mask, dropout_prob_t[0])
+            # comp = torch.allclose(softmax_grads_ref, softmax_grads, rtol=1e-03, atol=1e-04)
+            # if not comp:
+            #     # print(softmax_grads_ref - softmax_grads)
+            #     print("ERROR: Gradients mismatched.")
+            #     print(softmax_grads_ref - softmax_grads)
+            # else:
+            #     print("Gradients matched.")
+        else:
+            # Mask and Scaling for Dropout (not a publically documented op)
+            dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
+
+            # Softmax Grad (not a publically documented op)
+            softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
 
         # Matmul1 - DGRAD1
         # Input1: (data grads)  [seqs*heads, seql_q, seql_k]
@@ -283,7 +431,7 @@ class EncdecAttnFunc(torch.autograd.Function):
         return None, None, None \
             , input_q_grads, input_kv_grads \
             , input_weight_q_grads, input_weight_kv_grads, output_weight_grads \
-            , None, None, None, None
+            , None, None, None, None, None, None
 
 
 @half_function
@@ -291,28 +439,130 @@ def encdec_attn_func(time_masking, is_training,
                      num_heads, query, key,
                      in_proj_weight_q, in_proj_weight_kv,
                      out_proj_weight, attn_mask, dropout,
-                     incremental, incremental_cache):
-    output, coverage = EncdecAttnFunc.apply(time_masking, is_training,
-                                            num_heads, query, key,
-                                            in_proj_weight_q, in_proj_weight_kv,
-                                            out_proj_weight, attn_mask, dropout,
-                                            incremental, incremental_cache)
+                     incremental, incremental_cache, double_precision, return_coverage):
+    return EncdecAttnFunc.apply(time_masking, is_training,
+                                num_heads, query, key,
+                                in_proj_weight_q, in_proj_weight_kv,
+                                out_proj_weight, attn_mask, dropout,
+                                incremental, incremental_cache, double_precision, return_coverage)
 
     return output, coverage
 
 
-@half_function
-def fast_encdec_attn_func(time_masking, is_training, num_heads, query, key,
-                          in_proj_weight_q, in_proj_weight_kv,
-                          out_proj_weight,
-                          attn_mask, dropout):
-    try:
-        from apex.contrib.multihead_attn.fast_encdec_multihead_attn_func import fast_encdec_attn_func as attn
-        from .encdec_attention_func_fused import fast_encdec_attn_func as attn
-    except ModuleNotFoundError as e:
-        print("Cannot use fast self-attention implementation")
+if __name__ == "__main__":
+    import argparse
 
-    return attn(time_masking, is_training, num_heads, query, key,
-                in_proj_weight_q, in_proj_weight_kv,
-                out_proj_weight,
-                attn_mask, dropout)
+    parser = argparse.ArgumentParser(description='reversible transformer')
+    parser.add_argument('-model_size', type=int, default=32,
+                        help='Size of embedding / transformer hidden')
+    parser.add_argument('-gpu', default=0, type=int,
+                        help="Seed for deterministic runs.")
+
+    test_function = encdec_attn_func
+
+    opt = parser.parse_args()
+
+    torch.cuda.set_device(opt.gpu)
+
+    opt.layers = 2
+    opt.variational_dropout = False
+    opt.dropout = 0.0
+    opt.attn_dropout = 0.0
+    opt.n_heads = 4
+    opt.inner_size = 16
+    opt.head_dim = opt.model_size // opt.n_heads
+
+
+    class Parameters(torch.nn.Module):
+
+        def __init__(self, model_size=16, heads=1):
+            self.model_size = model_size
+            self.heads = heads
+            self.head_dim = model_size // heads
+            # self.function = RelativeShiftFunction.apply
+
+            self.in_proj_weight_q = torch.Tensor(model_size, model_size)
+            self.in_proj_weight_kv = torch.Tensor(2 * model_size, model_size)
+            self.out_proj_weight = torch.Tensor(model_size, model_size)
+
+            self.in_proj_bias_q = torch.Tensor(model_size)
+            self.in_proj_bias_kv = torch.Tensor(2 * model_size)
+            self.out_proj_bias = torch.Tensor(model_size)
+
+            self.reset_parameters()
+
+        def reset_parameters(self):
+            std_ = 0.02
+            torch.nn.init.normal_(self.in_proj_weight_q, 0.0, std_)
+            torch.nn.init.normal_(self.in_proj_weight_kv, 0.0, std_)
+            torch.nn.init.normal_(self.out_proj_weight, 0.0, std_)
+
+            torch.nn.init.constant_(self.in_proj_bias_q, 0.)
+            torch.nn.init.constant_(self.in_proj_bias_kv, 0.)
+            torch.nn.init.constant_(self.out_proj_bias, 0.)
+
+
+    class TestAttention(torch.nn.Module):
+
+        def __init__(self, test_function, model_size=16, heads=1):
+            super().__init__()
+            self.model_size = model_size
+            self.heads = heads
+            self.head_dim = model_size // heads
+
+            self.function = test_function
+
+        def forward(self, input, context, in_proj_weight_q, in_proj_weight_kv, out_proj_weight, mask):
+            use_time_mask = False
+            is_training = True
+            dropout = 0.0
+            double_precision = True
+            return_coverage = False
+
+            # .apply(time_masking, is_training,
+            #        num_heads, query, key,
+            #        in_proj_weight_q, in_proj_weight_kv,
+            #        out_proj_weight, attn_mask, dropout,
+            #        incremental, incremental_cache)
+
+            return self.function(use_time_mask, is_training, self.heads, input, context,
+                                 in_proj_weight_q, in_proj_weight_kv, out_proj_weight,
+                                 mask, dropout,
+                                 False, None,  # For the incremental stuff
+                                 double_precision, return_coverage)  # double precision set to true
+
+
+    bsz = 4
+    len_q = 5
+    len_r = 15
+
+    input_states = torch.randn(*(len_q, bsz, opt.model_size)).double().cuda()
+    input_states.requires_grad = True
+    net = TestAttention(test_function, model_size=opt.model_size, heads=opt.n_heads)
+
+    parameters = Parameters(opt.model_size, opt.n_heads)
+
+    in_proj_weight_q = parameters.in_proj_weight_q.double().cuda()
+    in_proj_weight_kv = parameters.in_proj_weight_kv.double().cuda()
+    out_proj_weight = parameters.out_proj_weight.double().cuda()
+
+    in_proj_bias_q = parameters.in_proj_bias_q.double().cuda()
+    in_proj_bias_kv = parameters.in_proj_bias_kv.double().cuda()
+    out_proj_bias = parameters.out_proj_bias.double().cuda()
+
+    in_proj_weight_q.requires_grad = True
+    out_proj_weight.requires_grad = True
+    in_proj_weight_kv.requires_grad = True
+    in_proj_bias_q.requires_grad = True
+    in_proj_bias_kv.requires_grad = True
+    out_proj_bias.requires_grad = True
+
+    mask = None  # input_states.new(*(bsz, len_q)).fill_(0).bool()
+
+    print("gradchecking start.")
+
+    context = torch.randn(*(len_r, bsz, opt.model_size)).double().cuda()
+    context.requires_grad = True
+    torch.autograd.gradcheck(net, (input_states, context, in_proj_weight_q, in_proj_weight_kv, out_proj_weight, mask))
+
+    print("gradchecking completed.")

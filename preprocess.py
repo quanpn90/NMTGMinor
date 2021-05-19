@@ -76,6 +76,9 @@ parser.add_argument('-src_vocab',
 parser.add_argument('-tgt_vocab',
                     help="Path to an existing target vocabulary")
 
+parser.add_argument('-load_dict',
+                    help="Path to an existing target vocabulary")
+
 parser.add_argument('-src_seq_length', type=int, default=10000,
                     help="Maximum source sequence length")
 parser.add_argument('-src_seq_length_trunc', type=int, default=0,
@@ -342,17 +345,22 @@ def main():
 
     tokenizer = onmt.Tokenizer(opt.input_type, opt.lower)
 
+    # We can load the dictionary from another project to ensure consistency
+    if opt.load_dict:
+        dicts = torch.load(opt.load_dict)
+
     # construct set of languages from the training languages
     src_langs = opt.train_src_lang.split("|")
     tgt_langs = opt.train_tgt_lang.split("|")
     langs = (src_langs + tgt_langs)
-    langs = list(set(langs))
+    langs = sorted(list(set(langs)))
 
-    dicts['langs'] = dict()
+    if not opt.load_dict:
+        dicts['langs'] = dict()
 
-    for lang in langs:
-        idx = len(dicts['langs'])
-        dicts['langs'][lang] = idx
+        for lang in langs:
+            idx = len(dicts['langs'])
+            dicts['langs'][lang] = idx
 
     print(dicts['langs'])
 
@@ -616,7 +624,7 @@ def main():
                      'train': train,
                      'valid': valid}
         torch.save(save_data, opt.save_data + '.train.pt')
-        print("Done")
+        print("Done")\
 
     elif opt.format in ['scp', 'scpmem']:
         print('Saving target data to memory indexed data files. Source data is stored only as scp path.')

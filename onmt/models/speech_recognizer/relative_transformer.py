@@ -14,7 +14,8 @@ from onmt.utils import flip, expected_length
 from collections import defaultdict
 import math
 import sys
-from torch.utils.checkpoint import checkpoint
+from onmt.modules.checkpoint import checkpoint
+# from torch.utils.checkpoint import checkpoint
 from onmt.modules.identity import Identity
 
 torch.set_printoptions(threshold=500000)
@@ -45,6 +46,9 @@ class SpeechTransformerEncoder(TransformerEncoder):
         self.mpw = opt.multilingual_partitioned_weights
         self.multilingual_linear_projection = opt.multilingual_linear_projection
         self.mln = opt.multilingual_layer_norm
+        self.no_input_scale = opt.no_input_scale
+        self.learnable_position_encoding = opt.learnable_position_encoding
+        self.max_pos_length = opt.max_pos_length
 
         # TODO: multilingually linear transformation
 
@@ -53,7 +57,8 @@ class SpeechTransformerEncoder(TransformerEncoder):
 
         # learnable position encoding
         if self.learnable_position_encoding:
-            raise NotImplementedError
+            # raise NotImplementedError
+            self.positional_encoder = None
         else:
             # or using pre-set sinusoidal
             self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
@@ -147,23 +152,24 @@ class SpeechTransformerEncoder(TransformerEncoder):
         mask_src = mask_src.bool()
 
         """ Scale the emb by sqrt(d_model) """
-        emb = emb * math.sqrt(self.model_size)
+        if not self.no_input_scale:
+            emb = emb * math.sqrt(self.model_size)
 
         """ Adding positional encoding """
         qlen = input.size(0)
         klen = qlen + mem_len
 
-        # Asynchronous positions: 2K+1 positions instead of K+1
-        if self.unidirectional:
-            pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
-        else:
+        if not self.learnable_position_encoding:
             pos = torch.arange(klen - 1, -klen, -1.0, device=emb.device, dtype=emb.dtype)
-
-        # pos_emb has size 2T+1 x 1 x H
-        pos_emb = self.positional_encoder(pos, bsz=input.size(1))
-
-        if self.learnable_position_encoding:
-            raise NotImplementedError
+            # pos_emb has size 2T+1 x 1 x H
+            pos_emb = self.positional_encoder(pos, bsz=input.size(1))
+            pos_emb = self.preprocess_layer(pos_emb)
+        else:
+            range_vec = torch.arange(klen, device=emb.device)
+            range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+            distance_mat = range_vec - range_mat.transpose(0, 1)
+            distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+            pos_emb = distance_mat
 
         # B x T x H -> T x B x H
         context = emb
@@ -173,8 +179,6 @@ class SpeechTransformerEncoder(TransformerEncoder):
 
         # Apply dropout to both context and pos_emb
         context = self.preprocess_layer(context)
-
-        pos_emb = self.preprocess_layer(pos_emb)
 
         if self.mpw:
             input_lang = self.factor_embeddings(input_lang).squeeze(0)
@@ -239,12 +243,17 @@ class SpeechTransformerDecoder(TransformerDecoder):
         self.n_heads = opt.n_heads
         self.fast_self_attn = opt.fast_self_attention
         self.mpw = opt.multilingual_partitioned_weights
+        self.learnable_position_encoding = opt.learnable_position_encoding
+        self.max_pos_length = opt.max_pos_length
 
         # build_modules will be called from the inherited constructor
         super().__init__(opt, dicts, positional_encoder, language_embeddings,
                          ignore_source,
                          allocate_positions=False)
-        self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
+        if self.learnable_position_encoding:
+            self.positional_encoder = None
+        else:
+            self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)
         self.d_head = self.model_size // self.n_heads
         # Parameters for the position biases - deprecated. kept for backward compatibility
         # self.r_w_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
@@ -262,16 +271,17 @@ class SpeechTransformerDecoder(TransformerDecoder):
 
     def build_modules(self):
 
-        e_length = expected_length(self.layers, 0.0)
+        self.death_rate = 0.0
+        e_length = expected_length(self.layers, self.death_rate)
         self.opt.ignore_source = self.ignore_source
         opt = self.opt
         print("* Speech Transformer Decoder with Relative Attention with %.2f layers" % e_length)
 
         self.layer_modules = nn.ModuleList()
 
-        for l in range(self.layers):
+        for _l in range(self.layers):
             # linearly decay the death rate
-            death_r = 0.0
+            death_r = (_l + 1.0) / self.layers * self.death_rate
 
             from .relative_transformer_layers import LIDFeedForward
             lid_network = None
@@ -310,15 +320,10 @@ class SpeechTransformerDecoder(TransformerDecoder):
         extra_context = None
 
         if self.use_language_embedding:
-            # print("Using language embedding")
             lang_emb = self.language_embeddings(tgt_lang)  # B x H or 1 x H
             if self.language_embedding_type == 'sum':
                 emb = emb + lang_emb
             elif self.language_embedding_type == 'concat':
-                # replace the bos embedding with the language
-                bos_emb = lang_emb.expand_as(emb[0])
-                emb[0] = bos_emb
-
                 lang_emb = lang_emb.unsqueeze(0).expand_as(emb)
                 concat_emb = torch.cat([emb, lang_emb], dim=-1)
                 emb = torch.relu(self.projector(concat_emb))
@@ -346,11 +351,21 @@ class SpeechTransformerDecoder(TransformerDecoder):
 
         dec_attn_mask = dec_attn_mask.bool()
 
-        pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+        # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+        if not self.learnable_position_encoding:
+            pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+            pos_emb = self.positional_encoder(pos, bsz=input.size(1))
+            pos_emb = self.preprocess_layer(pos_emb)
+        else:
+            range_vec = torch.arange(klen, device=emb.device)
+            range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+            distance_mat = range_vec - range_mat.transpose(0, 1)
+            distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+            pos_emb = distance_mat
 
-        pos_emb = self.positional_encoder(pos, bsz=input.size(1))
+        # pos_emb = self.positional_encoder(pos, bsz=input.size(1))
         output = self.preprocess_layer(emb.contiguous())
-        pos_emb = self.preprocess_layer(pos_emb)
+        # pos_emb = self.preprocess_layer(pos_emb)
 
         lfv_vector, lid_logits = None, list()
 
@@ -432,15 +447,26 @@ class SpeechTransformerDecoder(TransformerDecoder):
         qlen = emb.size(0)
         mlen = klen - qlen
 
-        pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
-
-        pos_emb = self.positional_encoder(pos)
+        # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+        # pos_emb = self.positional_encoder(pos)
+        if self.learnable_position_encoding:
+            if buffering:
+                distance_mat = torch.arange(-klen + 1, 1, 1, device=emb.device).unsqueeze(0)
+            else:
+                range_vec = torch.arange(klen, device=emb.device)
+                range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
+                distance_mat = range_vec - range_mat.transpose(0, 1)
+            distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
+            pos_emb = distance_mat
+        else:
+            pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
+            pos_emb = self.positional_encoder(pos)
 
         dec_attn_mask = torch.triu(
-            emb.new_ones(klen, klen), diagonal=1 + mlen).byte()  # [:, :, None]
+            emb.new_ones(klen, klen), diagonal=1 + mlen).byte()[:, :, None]  # [:, :, None]
 
-        dec_attn_mask = dec_attn_mask[-1].unsqueeze(0)
-
+        if buffering:
+            dec_attn_mask = dec_attn_mask[-1].unsqueeze(0)
         dec_attn_mask = dec_attn_mask.bool()
 
         if context is not None:
@@ -472,7 +498,6 @@ class SpeechTransformerDecoder(TransformerDecoder):
             buffer = buffers[i] if i in buffers else None
 
             if buffering:
-                # print("DEBUGGING BUFFERING")
                 output, coverage, buffer = layer(output, context, pos_emb, None, dec_attn_mask, mask_src,
                                                  tgt_lang=lang, src_lang=src_lang,
                                                  incremental=True, incremental_cache=buffer)

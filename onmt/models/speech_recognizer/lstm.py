@@ -90,7 +90,7 @@ class SpeechLSTMEncoder(nn.Module):
         :return:
         """
         if mask is not None:
-            lengths = mask.sum(-1).float()
+            lengths = mask.sum(-1).float().cpu()
             seq = pack_padded_sequence(seq, lengths, batch_first=True, enforce_sorted=False)
             if self.multilingual_factorized_weights:
                 seq, hid = self.rnn(seq, hid, indices=src_lang)
@@ -522,12 +522,13 @@ class SpeechLSTMSeq2Seq(NMTModel):
         # tgt_atb = batch.get('target_atb')  # a dictionary of attributes
         src_lang = batch.get('source_lang')
         tgt_lang = batch.get('target_lang')
+        src_lengths = batch.src_lengths
 
         src = src.transpose(0, 1)
         tgt_input = tgt_input.transpose(0, 1)
         batch_size = tgt_input.size(0)
 
-        context = self.encoder(src)['context']
+        context = self.encoder(src, input_pos=src_pos, input_lang=src_lang, src_lengths=src_lengths)['context']
 
         gold_scores = context.new(batch_size).zero_()
         gold_words = 0

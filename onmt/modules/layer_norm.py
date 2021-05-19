@@ -18,9 +18,56 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     from .optimized.compat import custom_fwd, custom_bwd
 
-
 global fused_layer_norm_cuda
 fused_layer_norm_cuda = None
+
+"""
+Faster version of Layer Norm from apex (new)
+"""
+
+try:
+    import apex
+    import fast_layer_norm
+
+    fast_fused = True
+    # print("[INFO] Fast layer norm implementation detected.")
+except (ModuleNotFoundError, ImportError) as e:
+    fast_layer_norm = None
+    fast_fused = False
+    # print("[INFO] Fast layer norm implementation not found.")
+
+
+class FastLayerNormFN(torch.autograd.Function):
+    @staticmethod
+    @custom_fwd(cast_inputs=torch.float16)
+    def forward(ctx, x, gamma, beta, epsilon):
+        x = x.contiguous()
+        gamma = gamma.contiguous()
+        beta = beta.contiguous()
+        hidden_size = gamma.numel()
+        xmat = x.view((-1, hidden_size))
+        ymat, mu, rsigma = fast_layer_norm.ln_fwd(xmat, gamma, beta, epsilon)
+        ctx.save_for_backward(x, gamma, mu, rsigma)
+        return ymat.view(x.shape)
+
+    @staticmethod
+    @custom_bwd
+    def backward(ctx, dy):
+        # assert dy.is_contiguous()
+        dy = dy.contiguous()  # this happens!
+        x, gamma, mu, rsigma = ctx.saved_tensors
+
+        hidden_size = gamma.numel()
+        xmat = x.view((-1, hidden_size))
+        dymat = dy.view(xmat.shape)
+        dxmat, dgamma, dbeta = fast_layer_norm.ln_bwd(dymat, xmat, mu, rsigma, gamma)
+        dx = dxmat.view(x.shape)
+        return dx, dgamma, dbeta, None
+
+
+"""
+Fast version of Layer Norm from Apex
+"""
 
 
 class FusedLayerNormAffineFunction(torch.autograd.Function):
@@ -79,6 +126,11 @@ class FusedLayerNormFunction(torch.autograd.Function):
             input_, ctx.normalized_shape,
             ctx.eps)
         return grad_input, None, None
+
+
+@half_function
+def fast_layer_norm_affine(input, weight, bias, normalized_shape, eps=1e-6):
+    return FastLayerNormFN.apply(input, weight, bias, eps)
 
 
 @half_function
@@ -145,13 +197,16 @@ class LayerNorm(torch.nn.Module):
 
     def forward(self, input):
 
-        # eps = tiny_value_of_dtype(input.dtype)
         eps = self.eps
 
-        if not input.is_cuda or not self.fused:
+        if not (input.is_cuda and input.type() == 'torch.cuda.HalfTensor' ) or not self.fused:
             return F.layer_norm(
                 input, self.normalized_shape, self.weight, self.bias, eps)
         if self.elementwise_affine:
+
+            # if fast_fused:
+            #     return fast_layer_norm_affine(input, self.weight, self.bias, self.normalized_shape, eps)
+
             return FusedLayerNormAffineFunction.apply(
                 input, self.weight, self.bias, self.normalized_shape, eps)
         else:
@@ -214,6 +269,9 @@ class MultilingualLayerNorm(torch.nn.Module):
             return F.layer_norm(
                 input, self.normalized_shape, weight, bias, eps)
         if self.elementwise_affine:
+            if fast_fused and input.is_cuda:
+                return fast_layer_norm_affine(input, weight, bias, self.normalized_shape, eps)
+
             return fused_layer_norm_affine(
                 input, weight, bias, self.normalized_shape, eps)
         else:
@@ -222,4 +280,3 @@ class MultilingualLayerNorm(torch.nn.Module):
     def extra_repr(self):
         return '{normalized_shape}, eps={eps}, ' \
                'elementwise_affine={elementwise_affine}'.format(**self.__dict__)
-

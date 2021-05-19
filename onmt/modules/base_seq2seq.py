@@ -13,6 +13,7 @@ class Generator(nn.Module):
         self.output_size = output_size
         self.linear = nn.Linear(hidden_size, output_size)
         self.fix_norm = fix_norm
+        self.must_softmax = False
         
         stdv = 1. / math.sqrt(self.linear.weight.size(1))
         
@@ -40,6 +41,7 @@ class Generator(nn.Module):
         # softmax will be done at the loss function
         # output = F.log_softmax(logits, dim=-1, dtype=torch.float32)
         output_dicts['logits'] = logits
+        output_dicts['softmaxed'] = self.must_softmax
         return output_dicts
         
 
@@ -126,6 +128,18 @@ class NMTModel(nn.Module):
         # in case using multiple generators
         if type(self.generator) is not nn.ModuleList:
             self.generator = nn.ModuleList([self.generator])
+
+    def convert_autograd(self):
+
+        def attempt_to_convert(m):
+            if hasattr(m, 'convert_autograd'):
+                m.convert_autograd()
+
+            for n, ch in m.named_children():
+                attempt_to_convert(ch)
+
+        attempt_to_convert(self.encoder)
+        attempt_to_convert(self.decoder)
 
 
 class Reconstructor(nn.Module):

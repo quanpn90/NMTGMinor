@@ -652,7 +652,6 @@ class RelativeTransformerDecoder(TransformerDecoder):
         emb = self.word_lut(input_) * math.sqrt(self.model_size)
         input = input.transpose(0, 1)
         klen = input.size(0)
-        # emb = self.word_lut(input) * math.sqrt(self.model_size)
 
         if self.use_language_embedding:
             lang_emb = self.language_embeddings(lang)  # B x H
@@ -677,16 +676,13 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         pos_emb = self.positional_encoder(pos)
 
-        dec_attn_mask = torch.triu(
-            emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]
-
-        # pad_mask = input.eq(onmt.constants.PAD).byte()  # L x B
-
-        # dec_attn_mask = dec_attn_mask + pad_mask.unsqueeze(0)
-        # dec_attn_mask = dec_attn_mask.gt(0)
-
-        if onmt.constants.torch_version >= 1.2:
-            dec_attn_mask = dec_attn_mask.bool()
+        if not buffering:
+            dec_attn_mask = torch.triu(
+                emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]
+            if onmt.constants.torch_version >= 1.2:
+                dec_attn_mask = dec_attn_mask.bool()
+        else:
+            dec_attn_mask = None
 
         if context is not None:
             if self.encoder_type == "audio":
@@ -835,7 +831,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
 class RelativeTransformer(Transformer):
 
-    def create_decoder_state(self, batch, beam_size=1, type=1,
+    def create_decoder_state(self, batch, beam_size=1, type=2,
                              buffering=True, streaming=False, previous_decoding_state=None,
                              **kwargs):
         """

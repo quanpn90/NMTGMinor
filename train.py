@@ -100,7 +100,8 @@ def main():
                                           multiplier=opt.batch_size_multiplier,
                                           augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
                                           upsampling=opt.upsampling,
-                                          num_split=len(opt.gpus))
+                                          num_split=len(opt.gpus),
+                                          cleaning=True)
             else:
                 train_data = onmt.StreamDataset(train_dict['src'], train_dict['tgt'],
                                                 train_src_langs, train_tgt_langs,
@@ -109,7 +110,8 @@ def main():
                                                 batch_size_sents=opt.batch_size_sents,
                                                 multiplier=opt.batch_size_multiplier,
                                                 augment=opt.augment_speech,
-                                                upsampling=opt.upsampling)
+                                                upsampling=opt.upsampling
+                                                )
 
             if valid_dict['src_lang'] is not None:
                 assert 'langs' in dicts
@@ -132,7 +134,7 @@ def main():
                                           data_type=dataset.get("type", "text"), sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
                                           upsampling=opt.upsampling,
-                                          num_split=len(opt.gpus))
+                                          cleaning=True)
             else:
                 valid_data = onmt.StreamDataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
                                                 valid_src_langs, valid_tgt_langs,
@@ -204,8 +206,7 @@ def main():
                                           src_align_right=opt.src_align_right,
                                           augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
                                           upsampling=opt.upsampling,
-                                          cleaning=True, verbose=True,
-                                          num_split=len(opt.gpus))
+                                          cleaning=True, verbose=True)
             else:
                 train_data = onmt.StreamDataset(train_src,
                                                 train_tgt,

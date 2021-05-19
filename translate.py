@@ -11,7 +11,6 @@ import numpy
 import sys
 import h5py as h5
 import numpy as np
-import apex
 from onmt.inference.fast_translator import FastTranslator
 from onmt.inference.stream_translator import StreamTranslator
 
@@ -20,6 +19,8 @@ onmt.markdown.add_md_help_argument(parser)
 
 parser.add_argument('-model', required=True,
                     help='Path to model .pt file')
+parser.add_argument('-sub_model', required=False, default="",
+                    help='Path to (secondary) model .pt file')
 parser.add_argument('-streaming', action="store_true",
                     help="""Use streaming mode (for model with streaming)""")
 parser.add_argument('-lm', required=False,
@@ -32,12 +33,18 @@ parser.add_argument('-input_type', default="word",
                     help="Input type: word/char")
 parser.add_argument('-src', required=True,
                     help='Source sequence to decode (one line per sequence)')
+parser.add_argument('-sub_src', required=False, default="",
+                    help='Source sequence to decode (one line per sequence)')
 parser.add_argument('-src_lang', default='src',
                     help='Source language')
 parser.add_argument('-tgt_lang', default='tgt',
                     help='Target language')
 parser.add_argument('-attributes', default="",
-                    help='Attributes for the decoder. Split them by |   ')
+                    help='Attributes for the decoder. Split them by | ')
+parser.add_argument('-ensemble_weight', default="",
+                    help='Weight for ensembles. Default as uniform. Split them by | and they will be normalized later')
+parser.add_argument('-sub_ensemble_weight', default="",
+                    help='Weight for ensembles. Default as uniform. Split them by | and they will be normalized later')
 
 parser.add_argument('-stride', type=int, default=1,
                     help="Stride on input features")
@@ -122,7 +129,29 @@ parser.add_argument('-dynamic_min_len_scale', type=float, default=0.0,
                     help='Using the fast decoder')
 
 
-def reportScore(name, score_total, words_total):
+def _is_oversized(batch, new_sent_size, batch_size):
+    """
+    Function to see if adding new sentence will make the current batch
+    :param batch:
+    :param new_sent_size:
+    :param batch_size_words:
+    :return:
+    """
+
+    # Always return False if empty
+    if len(batch) == 0:
+        return False
+
+    current_max_length = max([sent.size(0) for sent in batch])
+
+    # Because adding a new sentence will potential enlarge the area of the rectangle, we need to check
+    if max(current_max_length, new_sent_size) * (len(batch) + 1) > batch_size:
+        return True
+
+    return False
+
+
+def report_score(name, score_total, words_total):
     print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (
         name, score_total / (words_total + 1e-9),
         name, math.exp(-score_total / (words_total + 1e-9))))
@@ -134,12 +163,12 @@ def addone(f):
     yield None
 
 
-def lenPenalty(s, l, alpha):
+def len_penalty(s, l, alpha):
     l_term = math.pow(l, alpha)
     return s / l_term
 
 
-def getSentenceFromTokens(tokens, input_type):
+def get_sentence_from_tokens(tokens, input_type):
     if input_type == 'word':
         sent = " ".join(tokens)
     elif input_type == 'char':
@@ -171,10 +200,6 @@ def main():
     count = 0
 
     tgtF = open(opt.tgt) if opt.tgt else None
-    #
-    # if opt.dump_beam != "":
-    #     import json
-    #     translator.initBeamAccum()
 
     in_file = None
 
@@ -184,9 +209,12 @@ def main():
     elif opt.encoder_type == "audio" and opt.asr_format == "h5":
         in_file = h5.File(opt.src, 'r')
     elif opt.encoder_type == "audio" and opt.asr_format == "scp":
-        import kaldiio
-        from kaldiio import ReadHelper
-        audio_data = iter(ReadHelper('scp:' + opt.src))
+        # import kaldiio
+        # from kaldiio import ReadHelper
+        from onmt.data.audio_utils import ArkLoader
+        audio_data = open(opt.src)
+        scp_reader = ArkLoader()
+        # audio_data = iter(ReadHelper('scp:' + opt.src))
     else:
         in_file = open(opt.src)
 
@@ -204,11 +232,17 @@ def main():
     else:
         if opt.fast_translate:
             translator = FastTranslator(opt)
+
+            # TODO: load sub model
         else:
             translator = onmt.Translator(opt)
 
     # Audio processing for the source batch
     if opt.encoder_type == "audio":
+
+        """
+        For Audio we will have to group samples by the total number of frames in the source
+        """
 
         s_prev_context = []
         t_prev_context = []
@@ -223,7 +257,10 @@ def main():
 
         assert len(concats) == n_models, "The number of models must match the number of concat configs"
         for j, _ in enumerate(concats):
-            src_batches.append(list())  #
+            src_batches.append(list())  # We assign different inputs for each model in the ensemble
+
+        sub_src = open(opt.sub_src) if opt.sub_src else None
+        sub_src_batch = list()
 
         while True:
             if opt.asr_format == "h5":
@@ -233,7 +270,9 @@ def main():
                 i += 1
             elif opt.asr_format == "scp":
                 try:
-                    _, line = next(audio_data)
+                    scp_path = next(audio_data).strip().split()[1]
+                    line = scp_reader.load_mat(scp_path)
+
                 except StopIteration:
                     break
 
@@ -242,6 +281,36 @@ def main():
             line = torch.from_numpy(line)
 
             original_line = line
+            src_length = line.size(0)
+
+            """
+            Handling different concatenation size for different models, to make ensembling possible
+            """
+            oversized = False
+
+            if _is_oversized(src_batches[0], src_length, opt.batch_size):
+                # If adding a new sentence will make the batch oversized
+                # Then do translation now, and then free the list
+                print("Batch size:", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
+                pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
+                    src_batches, tgt_batch, sub_src_data=sub_src_batch, type='asr')
+
+                print("Result:", len(pred_batch))
+                count, pred_score, pred_words, gold_score, goldWords = \
+                    translate_batch(opt, tgtF, count, outF, translator,
+                                    src_batches[0], tgt_batch, pred_batch,
+                                    pred_score,
+                                    pred_length, gold_score,
+                                    num_gold_words,
+                                    all_gold_scores, opt.input_type)
+
+                pred_score_total += pred_score
+                pred_words_total += pred_words
+                gold_score_total += gold_score
+                gold_words_total += goldWords
+                src_batch, tgt_batch, sub_src_batch = [], [], []
+                for j, _ in enumerate(src_batches):
+                    src_batches[j] = []
 
             for j, concat_ in enumerate(concats):
                 concat = int(concat_)
@@ -262,7 +331,8 @@ def main():
                     if len(s_prev_context) > opt.previous_context:
                         s_prev_context = s_prev_context[-1 * opt.previous_context:]
 
-                src_batches[j] += [line]
+                # src_batches[j] += [line]
+                src_batches[j].append(line)
 
             if tgtF:
                 # ~ tgt_tokens = tgtF.readline().split() if tgtF else None
@@ -284,37 +354,23 @@ def main():
 
                 tgt_batch += [tgt_tokens]
 
-            if len(src_batches[0]) < opt.batch_size:
-                continue
+            if opt.sub_src:
+                sline = sub_src.readline().strip()
 
-            # TODO: if opt.concat is a list
-            print("Batch size:", len(src_batches[0]), len(tgt_batch))
-            pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
-                src_batches, tgt_batch, type='asr')
+                if opt.input_type == 'word':
+                    src_tokens = sline.split()
+                elif opt.input_type == 'char':
+                    src_tokens = list(sline.strip())
 
-            print("Result:", len(pred_batch))
-            count, pred_score, pred_words, gold_score, goldWords = \
-                translate_batch(opt, tgtF, count, outF, translator,
-                                src_batches[0], tgt_batch, pred_batch,
-                                pred_score,
-                                pred_length, gold_score,
-                                num_gold_words,
-                                all_gold_scores, opt.input_type)
-
-            pred_score_total += pred_score
-            pred_words_total += pred_words
-            gold_score_total += gold_score
-            gold_words_total += goldWords
-            src_batch, tgt_batch = [], []
-            for j, _ in enumerate(src_batches):
-                src_batches[j] = []
+                sub_src_batch += [src_tokens]
 
         # catch the last batch
         if len(src_batches[0]) != 0:
-            print("Batch size:", len(src_batches[0]), len(tgt_batch))
+            print("Batch size:", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
             pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
                 src_batches,
-                tgt_batch, type='asr')
+                tgt_batch,
+                sub_src_data=sub_src_batch, type='asr')
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
                 = translate_batch(opt, tgtF, count, outF, translator,
@@ -331,7 +387,8 @@ def main():
             src_batch, tgt_batch = [], []
             for j, _ in enumerate(src_batches):
                 src_batches[j] = []
-    # Text processing
+
+    # Text processing for MT
     else:
         for line in addone(in_file):
             if line is not None:
@@ -383,8 +440,8 @@ def main():
             src_batch, tgt_batch = [], []
 
     if opt.verbose:
-        reportScore('PRED', pred_score_total, pred_words_total)
-        if tgtF: reportScore('GOLD', gold_score_total, gold_words_total)
+        report_score('PRED', pred_score_total, pred_words_total)
+        if tgtF: report_score('GOLD', gold_score_total, gold_words_total)
 
     if tgtF:
         tgtF.close()
@@ -409,7 +466,7 @@ def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch, pr
         for bb, ss, ll in zip(pred_batch, pred_score, pred_length):
             # ~ ss_ = [s_/numpy.maximum(1.,len(b_)) for b_,s_,l_ in zip(bb,ss,ll)]
             length = [len(i) for i in [''.join(b_) for b_ in bb]]
-            ss_ = [lenPenalty(s_, max(l_, 1), opt.alpha) for b_, s_, l_ in zip(bb, ss, length)]
+            ss_ = [len_penalty(s_, max(l_, 1), opt.alpha) for b_, s_, l_ in zip(bb, ss, length)]
             ss_origin = [(s_, len(b_)) for b_, s_, l_ in zip(bb, ss, ll)]
             sidx = numpy.argsort(ss_)[::-1]
             # ~ print(ss_, sidx, ss_origin)
@@ -431,12 +488,12 @@ def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch, pr
         count += 1
 
         if not opt.print_nbest:
-            outF.write(getSentenceFromTokens(pred_batch[b][0], input_type) + '\n')
+            outF.write(get_sentence_from_tokens(pred_batch[b][0], input_type) + '\n')
             outF.flush()
         else:
             for n in range(opt.n_best):
                 idx = n
-                output_sent = getSentenceFromTokens(pred_batch[b][idx], input_type)
+                output_sent = get_sentence_from_tokens(pred_batch[b][idx], input_type)
                 out_str = "%s ||| %.4f" % (output_sent, pred_score[b][idx])
                 outF.write(out_str + '\n')
                 outF.flush()
@@ -445,18 +502,15 @@ def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch, pr
             if opt.encoder_type == "text":
                 src_sent = " ".join(src_batch[b])
                 print('SRC %d: %s' % (count, src_sent))
-            print('PRED %d: %s' % (count, getSentenceFromTokens(pred_batch[b][0], input_type)))
+            print('PRED %d: %s' % (count, get_sentence_from_tokens(pred_batch[b][0], input_type)))
             print("PRED SCORE: %.4f" % pred_score[b][0])
 
             if tgtF is not None:
-                tgt_sent = getSentenceFromTokens(tgt_batch[b], input_type)
+                tgt_sent = get_sentence_from_tokens(tgt_batch[b], input_type)
                 if translator.tgt_dict.lower:
                     tgt_sent = tgt_sent.lower()
                 print('GOLD %d: %s ' % (count, tgt_sent))
                 print("GOLD SCORE: %.4f" % gold_score[b])
-                # print("Single GOLD Scores:",end=" ")
-                # for j in range(len(tgt_batch[b])):
-                #     print(all_gold_scores[j][b].item(),end =" ")
                 print()
             if opt.print_nbest:
                 print('\n BEST HYP:')

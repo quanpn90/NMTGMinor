@@ -222,25 +222,8 @@ def build_tm_model(opt, dicts):
 
         model = RelativeTransformer(encoder, decoder, generator, rev_decoder, rev_generator, mirror=opt.mirror_loss)
 
-    elif opt.model == 'distance_transformer':
-
-        # from onmt.models.relative_transformer import RelativeTransformerDecoder, RelativeTransformer
-        from onmt.models.distance_transformer import DistanceTransformerEncoder
-
-        if opt.encoder_type == "text":
-            encoder = DistanceTransformerEncoder(opt, embedding_src, None,
-                                                 opt.encoder_type, language_embeddings=language_embeddings)
-        if opt.encoder_type == "audio":
-            # raise NotImplementedError
-            encoder = DistanceTransformerEncoder(opt, None, None, encoder_type=opt.encoder_type,
-                                                 language_embeddings=language_embeddings)
-
-        generator = nn.ModuleList(generators)
-        decoder = DistanceTransformerDecoder(opt, embedding_tgt, None, language_embeddings=language_embeddings)
-        model = Transformer(encoder, decoder, generator, mirror=opt.mirror_loss)
-
     elif opt.model == 'universal_transformer':
-        from onmt.models.universal_transformer import UniversalTransformerDecoder, UniversalTransformerEncoder
+        from onmt.legacy.old_models.universal_transformer import UniversalTransformerDecoder, UniversalTransformerEncoder
 
         generator = nn.ModuleList(generators)
 
@@ -254,43 +237,6 @@ def build_tm_model(opt, dicts):
                                               language_embeddings=language_embeddings)
 
         model = Transformer(encoder, decoder, generator, mirror=opt.mirror_loss)
-
-    elif opt.model == 'relative_universal_transformer':
-        from onmt.models.relative_universal_transformer import \
-            RelativeUniversalTransformerEncoder, RelativeUniversalTransformerDecoder
-        generator = nn.ModuleList(generators)
-
-        if opt.encoder_type == "text":
-            encoder = RelativeUniversalTransformerEncoder(opt, embedding_src, None,
-                                                          opt.encoder_type, language_embeddings=language_embeddings)
-        elif opt.encoder_type == "audio":
-            encoder = RelativeUniversalTransformerDecoder(opt, None, None, opt.encoder_type)
-
-        decoder = RelativeUniversalTransformerDecoder(opt, embedding_tgt, None,
-                                                      language_embeddings=language_embeddings)
-
-        model = RelativeTransformer(encoder, decoder, generator, mirror=opt.mirror_loss)
-
-    elif opt.model == 'relative_unified_transformer':
-        from onmt.models.relative_unified_transformer import RelativeUnifiedTransformer
-
-        if opt.encoder_type == "audio":
-            raise NotImplementedError
-
-        generator = nn.ModuleList(generators)
-        model = RelativeUnifiedTransformer(opt, embedding_src, embedding_tgt,
-                                           generator, positional_encoder, language_embeddings=language_embeddings)
-
-    elif opt.model == 'memory_transformer':
-        from onmt.models.memory_transformer import MemoryTransformer
-
-        if opt.encoder_type == "audio":
-            raise NotImplementedError
-
-        generator = nn.ModuleList(generators)
-        model = MemoryTransformer(opt, embedding_src, embedding_tgt,
-                                  generator, positional_encoder, language_embeddings=language_embeddings,
-                                  dictionary=dicts['tgt'])
 
     elif opt.model == 'pretrain_transformer':
         assert (opt.enc_pretrained_model or opt.dec_pretrained_model)
@@ -461,17 +407,20 @@ def init_model_parameters(model, opt):
 
     def init_embed(weight, padding_idx=0):
 
-        # std_ = opt.model_size ** -0.5
-        std_ = 0.01
+        # The embedding is intialized as in "Attention is all you need" and "Ada-factor" paper
+        std_ = opt.model_size ** -0.5 if not opt.rezero else 0.05
 
         if opt.init_embedding == 'normal':
             nn.init.normal_(weight, 0.0, std_)
-        else:
+        if opt.init_embedding == 'fixed':
+            nn.init.normal_(weight, 0.0, 0.01)
+        else:  # uni form
             nn.init.uniform_(weight, -std_, std_)
 
+        # don't uncomment the next lines...
         # for some reason normalizing the weights at fp16 doesnt work when setting the padding to 0
-        if not opt.fix_norm_output_embedding:
-            nn.init.constant_(weight[padding_idx], 0)
+        # if not opt.fix_norm_output_embedding:
+        #     nn.init.constant_(weight[padding_idx], 0)
 
     def init_bias(bias):
         nn.init.constant_(bias, 0.0)
@@ -496,10 +445,11 @@ def init_model_parameters(model, opt):
 
         elif classname.find('LayerNorm') != -1 or classname.find('FusedLayerNorm') != -1:
             if hasattr(m, 'weight'):
-                if opt.init == 'normal':
-                    nn.init.normal_(m.weight, 1.0, init_std)
-                else:
-                    nn.init.uniform_(m.weight, 1.0 - init_std, 1.0 + init_std)
+                # if opt.init == 'normal':
+                #     nn.init.normal_(m.weight, 1.0, 0)
+                # else:
+                #     nn.init.uniform_(m.weight, 1.0 - init_std, 1.0 + init_std)
+                nn.init.constant_(m.weight, 1.0)
             if hasattr(m, 'bias') and m.bias is not None:
                 init_bias(m.bias)
             pass
@@ -655,7 +605,7 @@ def optimize_model(model, fp16=True, distributed=False):
 
                 setattr(m, attr_str, target_attr)
 
-    replace_layer_norm(model, "Transformer")
+    # replace_layer_norm(model, "Transformer")
 
 
 def freeze_model_specialized_weights(model):

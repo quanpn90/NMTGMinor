@@ -6,6 +6,7 @@ from torch.nn import Parameter
 
 from onmt.modules.optimized.relative_self_attention_func import RelativeShiftFunction
 
+
 class Parameters(nn.Module):
 
     def __init__(self, model_size=16, heads=1):
@@ -79,20 +80,6 @@ class TestAttention(nn.Module):
         self.r_w_bias = nn.Parameter(torch.Tensor(self.heads, self.head_dim))
         self.r_r_bias = nn.Parameter(torch.Tensor(self.heads, self.head_dim))
         self.reset_parameters()
-
-    def reset_parameters(self):
-        
-        std_ = 0.02
-        nn.init.normal_(self.in_proj_weight, 0.0, std_)
-        nn.init.normal_(self.out_proj_weight, 0.0, std_)
-        nn.init.normal_(self.pos_proj_weight, 0.0, std_)
-
-        nn.init.constant_(self.in_proj_bias, 0.)
-        nn.init.constant_(self.out_proj_bias, 0.)
-        nn.init.constant_(self.pos_proj_bias, 0.)
-
-        nn.init.normal_(self.r_w_bias, 0.0, std_)
-        nn.init.normal_(self.r_r_bias, 0.0, std_)
 
     def forward(self, input, pos, in_proj_weight, out_proj_weight, pos_proj_weight,
                 in_proj_bias, out_proj_bias, pos_proj_bias, r_w_bias, r_r_bias):
