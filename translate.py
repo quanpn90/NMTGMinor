@@ -11,7 +11,6 @@ import numpy
 import sys
 import h5py as h5
 import numpy as np
-import apex
 from onmt.inference.fast_translator import FastTranslator
 from onmt.inference.stream_translator import StreamTranslator
 

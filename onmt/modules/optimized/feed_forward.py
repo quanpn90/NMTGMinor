@@ -9,6 +9,19 @@ from onmt.modules.swish import SiLU
 import onmt
 
 
+class AGELU(torch.nn.Module):
+
+    def forward(self, input):
+        return agelu(input)
+
+
+def agelu(x):
+    SQRT_M2_PI = math.sqrt(2 / math.pi)
+    COEFF = 0.044715
+
+    return 0.5 * x * (1.0 + torch.tanh(SQRT_M2_PI * (x + COEFF * torch.pow(x, 3))))
+
+
 class PositionWiseFeedForward(nn.Module):
     """Two-layer Feed-forward neural network"""
 
@@ -32,6 +45,8 @@ class PositionWiseFeedForward(nn.Module):
                 self.act = ReLUDropout(p=self.dropout, variational=self.variational, batch_first=False)
         elif self.activation == 'gelu':
             self.act = nn.GELU()
+        elif self.activation == 'agelu':
+            self.act = AGELU()
         elif self.activation in ['silu', 'swish']:
             self.act = SiLU()
         elif self.activation in ['sigmoid']:
@@ -53,7 +68,8 @@ class PositionWiseFeedForward(nn.Module):
         self.fused = False
 
         # At the moment fused mlp is only supported for non-GLU and ReLU
-        if not self.glu and self.activation in ['relu', 'silu', 'swish'] and not self.variational:
+        if not self.glu and \
+                self.activation in ['relu', 'silu', 'swish', 'gelu', 'agelu'] and not self.variational:
             if self.activation == 'relu':
                 from onmt.modules.mlp.mlp import mlp_relu_function
                 if mlp_relu_function is not None:
@@ -64,14 +80,16 @@ class PositionWiseFeedForward(nn.Module):
                 if mlp_silu_function is not None:
                     self.fused_function = mlp_silu_function
                     self.fused = True
-            # elif self.activation == 'gelu':
-            #     from onmt.modules.mlp.mlp import mlp_gelu_function
-            #     if mlp_gelu_function is not None:
-            #         self.fused_function = mlp_gelu_function
-            #         self.fused = True
-
-            # self.fused = True
-            # self.mlp_relu_function = mlp_relu_function
+            elif self.activation == 'gelu':
+                from onmt.modules.mlp.mlp import mlp_gelu_function
+                if mlp_gelu_function is not None:
+                    self.fused_function = mlp_gelu_function
+                    self.fused = True
+            elif self.activation == 'agelu':
+                from onmt.modules.mlp.mlp import mlp_agelu_function
+                if mlp_agelu_function is not None:
+                    self.fused_function = mlp_agelu_function
+                    self.fused = True
 
     def reset_parameters(self, init='normal'):
         if init == 'normal':

@@ -27,21 +27,6 @@ if (TORCH_MAJOR > 1) or (TORCH_MAJOR == 1 and TORCH_MINOR > 4):
     version_ge_1_5 = ['-DVERSION_GE_1_5']
 version_dependent_macros = version_ge_1_1 + version_ge_1_3 + version_ge_1_5
 
-# ext_modules.append(
-#     CUDAExtension(name='fused_relu_mlp',
-#                   sources=['mlp_relu.cpp',
-#                            'mlp_relu_cuda.cu'],
-#                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-#                                       'nvcc': ['-O3'] + version_dependent_macros}))
-#
-# ext_modules.append(
-#     CUDAExtension(name='fused_gelu_mlp',
-#                   sources=['mlp_gelu.cpp',
-#                            'mlp_gelu_cuda.cu'],
-#                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-#                                       'nvcc': ['-O3'] + version_dependent_macros}))
-
-
 ext_modules.append(
     CUDAExtension(name='fused_mlp_relu',
                   sources=['mlp_relu.cpp',
@@ -53,6 +38,21 @@ ext_modules.append(
     CUDAExtension(name='fused_mlp_silu',
                   sources=['mlp_silu.cpp',
                            'mlp_silu_cuda.cu'],
+                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                                      'nvcc': ['-O3'] + version_dependent_macros}))
+
+# Approximated GELU function
+ext_modules.append(
+    CUDAExtension(name='fused_mlp_agelu',
+                  sources=['mlp_agelu.cpp',
+                           'mlp_agelu_cuda.cu'],
+                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                                      'nvcc': ['-O3'] + version_dependent_macros}))
+
+ext_modules.append(
+    CUDAExtension(name='fused_mlp_gelu',
+                  sources=['mlp_gelu.cpp',
+                           'mlp_gelu_cuda.cu'],
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                       'nvcc': ['-O3'] + version_dependent_macros}))
 

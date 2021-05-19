@@ -6,7 +6,6 @@
 #include <string.h>
 #include <torch/torch.h>
 #include <cmath>
-#include <math.h>
 
 /* Includes, cuda */
 #include <cublas_v2.h>
@@ -18,14 +17,16 @@
 #include <cublasLt.h>
 
 // constants for fused bias+relu kernel
-#define BIAS_RELU_FW_NTHREADS 128 // forward number of thread per block
-#define BIAS_RELU_BW_NTHREADS_X 32 // backward number of thread in feature dim
+#define BIAS_RELU_FW_NTHREADS 256 // forward number of thread per block
+#define BIAS_RELU_BW_NTHREADS_X 64 // backward number of thread in feature dim
 #define BIAS_RELU_BW_NTHREADS_Y 16 // backward number of thread in batch dim
 #define BIAS_RELU_RED_PER_THREAD 16 // backward minimal reduction length per thread
 
 // move to a header later on
 #define ILP 4
-#define BACKCOEFF M_2_SQRTPI * M_SQRT1_2 * 0.5f
+#define SQRT_M2_PI sqrt(M_2_PI)
+#define COEFF 0.044715f
+#define BACKCOEFF COEFF*SQRT_M2_PI*3
 template<typename T>
 __host__ __device__ __forceinline__ bool is_aligned(T* p){
   return ((uint64_t)p) % (ILP*sizeof(T)) == 0;
@@ -53,23 +54,37 @@ __device__ __inline__ float relu(float a) {
   return (retf);
 }
 
-
-// Keep gelu in float only. When using half, cast to float before calling.
-__device__ __inline__ float gelu(float a) {
-  float retf = a * normcdff(a);
+// Keep Sigmoid in float only. When using half, cast to float before calling.
+__device__ __inline__ float sigmoid(float a) {
+  float retf = 1.f / (1.f + expf(-a));
   return (retf);
 }
 
+// Keep gelu in float only. When using half, cast to float before calling.
+__device__ __inline__ float gelu(float a) {
+  float retf = 0.5f * a * (1.f + tanhf(SQRT_M2_PI * (a +  COEFF * a * a * a)));
+  return (retf);
+}
+
+// Keep gelu in float only. When using half, cast to float before calling.
+__device__ __inline__ float silu(float a) {
+  float retf = 1.f / (1.f + expf(-a));
+  return (a * retf);
+}
 
 // Keep gelu in float only. When using half, cast to float before calling.
 __device__ __inline__ float gelu_back(float dy, float a) {
-  float cdf = normcdff(a);
-  float pdf = BACKCOEFF * expf(-0.5f * a * a);
-  float retf = cdf + a * pdf;
-
+  float tanh_outf = tanhf(SQRT_M2_PI * (a +  COEFF * a * a * a));
+  float retf = 0.5f * a * (1.f - tanh_outf * tanh_outf) * (SQRT_M2_PI + BACKCOEFF * a * a) + 0.5f * (1.f + tanh_outf);
   return (dy * retf);
 }
 
+// Keep gelu in float only. When using half, cast to float before calling.
+__device__ __inline__ float silu_back(float dy, float x) {
+  float sig = 1.f / (1.f + expf(-x));
+  float retf = dy * sig * (1.0f + x * (1.0f - sig));
+  return (retf);
+}
 
 
 
