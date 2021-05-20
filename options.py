@@ -523,7 +523,7 @@ def backward_compatible(opt):
     if not hasattr(opt, 'max_pos_length'):
         opt.max_pos_length = 0
     if not hasattr(opt, 'diff_head_pos'):
-        opt.max_pos_length = False
+        opt.diff_head_pos = False
 
     if not hasattr(opt, 'learnable_position_encoding'):
         opt.learnable_position_encoding = False

@@ -146,11 +146,11 @@ class RelativeTransformerEncoderLayer(nn.Module):
                 out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
                                         incremental=incremental, incremental_cache=incremental_cache)
 
-                # rescaling before residual
-                if self.training and self.death_rate > 0:
-                    out = out / (1 - self.death_rate)
+            # rescaling before residual
+            if self.training and self.death_rate > 0:
+                out = out / (1 - self.death_rate)
 
-                input = self.postprocess_attn(out, input)
+            input = self.postprocess_attn(out, input)
 
         if self.stochastic_sublayer:  # re-toss-coin
             if self.training and self.death_rate > 0:

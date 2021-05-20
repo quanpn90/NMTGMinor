@@ -67,7 +67,7 @@ class PositionWiseFeedForward(nn.Module):
 
         self.fused = False
 
-        # At the moment fused mlp is only supported for non-GLU and ReLU
+        # At the moment fused mlp is supported for RELU, SiLU, Swish, GELU and AGELU (approximated GELU)
         if not self.glu and \
                 self.activation in ['relu', 'silu', 'swish', 'gelu', 'agelu'] and not self.variational:
             if self.activation == 'relu':
@@ -137,6 +137,14 @@ class PositionWiseFeedForward(nn.Module):
             hidden = self.fused_function(dropout, input.view(seq_len * bsz, -1),
                                                        *weights, *biases)
             hidden = hidden.view(seq_len, bsz, hidden_size)
+
+            # verification code (only with dropout = 0.0)
+            # with torch.no_grad():
+            #     hidden_ = F.linear(self.act(F.linear(input, self.in_proj_weight, self.in_proj_bias)),
+            #                        self.out_proj_weight, self.out_proj_bias)
+            #
+            #     comp = torch.allclose(hidden, hidden_, rtol=1e-03, atol=1e-04)
+            #     print(comp)
 
         else:
             if self.autograd:

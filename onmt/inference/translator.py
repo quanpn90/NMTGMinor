@@ -51,6 +51,7 @@ class Translator(object):
                 model_opt.enc_state_dict = None
                 model_opt.dec_state_dict = None
 
+            self.main_model_opt = model_opt
             dicts = checkpoint['dicts']
 
             # update special tokens
