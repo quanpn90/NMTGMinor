@@ -41,7 +41,8 @@ except (ModuleNotFoundError, ImportError) as e:
 
 class MlpReluFunction(torch.autograd.Function):
     @staticmethod
-    @custom_fwd(cast_inputs=torch.float16)
+    # @custom_fwd(cast_inputs=torch.float16)
+    @custom_fwd
     def forward(ctx, p, *args):
         output = fused_mlp_relu.forward(p, args)
         ctx.save_for_backward(*args)
@@ -67,7 +68,7 @@ else:
 
 class MlpSiluFunction(torch.autograd.Function):
     @staticmethod
-    @custom_fwd(cast_inputs=torch.float16)
+    @custom_fwd
     def forward(ctx, p, *args):
         output = fused_mlp_silu.forward(p, args)
         ctx.save_for_backward(*args)
@@ -93,7 +94,7 @@ else:
 
 class MlpGELUFunction(torch.autograd.Function):
     @staticmethod
-    @custom_fwd(cast_inputs=torch.float16)
+    @custom_fwd
     def forward(ctx, p, *args):
         output = fused_mlp_gelu.forward(p, args)
         ctx.save_for_backward(*args)
@@ -119,7 +120,7 @@ else:
 
 class MlpAGELUFunction(torch.autograd.Function):
     @staticmethod
-    @custom_fwd(cast_inputs=torch.float16)
+    @custom_fwd
     def forward(ctx, p, *args):
         output = fused_mlp_agelu.forward(p, args)
         ctx.save_for_backward(*args)

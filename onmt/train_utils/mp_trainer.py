@@ -832,9 +832,9 @@ class Trainer(object):
             # control the index a little bit to ensure the log is always printed
             if i == 0 or ((i + 1) % opt.log_interval < self.world_size):
 
-                # self.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
-                # self.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
-                # self.all_reduce(report_src_words, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(report_src_words, op=dist.ReduceOp.SUM, group=self.group)
 
                 if self.is_main():
                     log_string = ("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; " %

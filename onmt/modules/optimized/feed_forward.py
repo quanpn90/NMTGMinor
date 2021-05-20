@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from onmt.modules.dropout import variational_dropout, ReLUDropout
 from onmt.modules.swish import SiLU
 import onmt
+from torch.cuda.amp import autocast
 
 
 class AGELU(torch.nn.Module):
@@ -127,16 +128,20 @@ class PositionWiseFeedForward(nn.Module):
     def forward(self, input, *args):
 
         if self.fused and input.is_cuda:
-            weights = [self.in_proj_weight, self.out_proj_weight]
-            biases = [self.in_proj_bias, self.out_proj_bias]
 
-            seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
+            # if autocast is enabled: manually cast the function args into half manually
+            # for some reason custom_fwd(...) doesn't work
+            with autocast(enabled=False):
+                weights = [self.in_proj_weight.half(), self.out_proj_weight.half()]
+                biases = [self.in_proj_bias.half(), self.out_proj_bias.half()]
 
-            dropout = self.dropout if self.training else 0.0
+                seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
 
-            hidden = self.fused_function(dropout, input.view(seq_len * bsz, -1),
-                                                       *weights, *biases)
-            hidden = hidden.view(seq_len, bsz, hidden_size)
+                dropout = self.dropout if self.training else 0.0
+
+                hidden = self.fused_function(dropout, input.half().view(seq_len * bsz, -1),
+                                                           *weights, *biases).type_as(input)
+                hidden = hidden.view(seq_len, bsz, hidden_size)
 
             # verification code (only with dropout = 0.0)
             # with torch.no_grad():
