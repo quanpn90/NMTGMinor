@@ -36,7 +36,6 @@ std::vector<torch::Tensor> fwd_cuda(
     cublasSetStream(handle, stream);
 
     auto act_options                   = inputs.options().requires_grad(false);
-    auto lyr_nrm_options               = act_options.dtype(torch::kFloat32);
     auto mask_options                  = act_options.dtype(torch::kUInt8);
     torch::Tensor dropout_add_mask     = torch::empty_like(inputs, mask_options);
     torch::Tensor outputs              = torch::empty_like(inputs, act_options);

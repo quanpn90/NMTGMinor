@@ -303,21 +303,6 @@ class Optim(object):
             if not fast_adam:
                 self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
                                             weight_decay=self.weight_decay, amsgrad=self.amsgrad)
-        elif self.method in ['cpu_adam']:
-            fast_adam = True
-            try:
-                from deepspeed.ops.adam.cpu_adam import DeepSpeedCPUAdam
-
-                self.optimizer = DeepSpeedCPUAdam(self.params, lr=self.lr,
-                                                   betas=(self.beta1, self.beta2), eps=1e-9,
-                                                   weight_decay=self.weight_decay, amsgrad=False)
-            except Exception:
-                fast_adam = False
-
-            if not fast_adam:  # fall back to normal Adam that works on CPU
-                self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-                                            weight_decay=self.weight_decay, amsgrad=False)
-
         elif self.method in ['novograd']:
             try:
                 import apex
@@ -366,7 +351,7 @@ class Optim(object):
         self.amsgrad = opt.amsgrad
         self.max_steps = opt.max_steps
 
-    def step(self, scaler=None, grad_denom=None, warmup=False, fake=False):
+    def step(self, scaler=None, grad_denom=None, warmup=False):
 
         "Normalize gradients by batch size"
         self.normalize_grad(denom=grad_denom)
@@ -391,11 +376,10 @@ class Optim(object):
             if 'noam' in self.update_method or 'cosine' in self.update_method:
                 self.updateLearningRate()
 
-        if not fake:
-            if scaler is not None:
-                scaler.step(self.optimizer)
-            else:
-                self.optimizer.step()
+        if scaler is not None:
+            scaler.step(self.optimizer)
+        else:
+            self.optimizer.step()
 
         # return grad_norm
 

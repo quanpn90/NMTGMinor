@@ -4,7 +4,7 @@ from .layer_norm import LayerNorm, MultilingualLayerNorm
 import onmt
 from onmt.modules.dropout import VariationalDropout
 from onmt.modules.bottle import Bottle
-from onmt.modules.optimized.dropout_add import fused_dropout_add
+# from onmt.modules.optimized.dropout_add import fused_dropout_add
 
 
 class PrePostProcessing(nn.Module):
@@ -26,11 +26,11 @@ class PrePostProcessing(nn.Module):
         self.multilingual = multilingual
         self.variational = variational
         self.steps = list(sequence)
-
-        if onmt.constants.residual_type == 'gated':
-            # gated residual
-            # initialize k with one
-            self.k = nn.Parameter(torch.ones(1))
+        #
+        # if onmt.constants.residual_type == 'gated':
+        #     # gated residual
+        #     # initialize k with one
+        #     self.k = nn.Parameter(torch.ones(1))
 
         if 'n' in self.steps:
             if not multilingual:
@@ -70,18 +70,10 @@ class PrePostProcessing(nn.Module):
                 else:
                     output = self.layer_norm(output)
             if step == 'd':
-                # in the case 'da'
-                if i < (len(self.steps) - 1) and self.steps[i + 1] == 'a' and not self.variational:
-                    output = fused_dropout_add(output, input_tensor, self.dropout_p, self.training)
-                    i = i + 1
-                else:
-                    output = self.dropout(output)
+                output = self.dropout(output)
             if step == 'a':
                 if input_tensor is not None:
-                    if onmt.constants.residual_type != 'gated':
-                        output = output + input_tensor
-                    else:
-                        output = F.relu(self.k) * output + input_tensor
+                    output = output + input_tensor
             if step == 'z':  # rezero-residual but scaling the output with initially small g
                 output = output * self.g
                 if input_tensor is not None:
