@@ -153,7 +153,7 @@ class MlpGELUFunction(torch.autograd.Function):
     @staticmethod
     @custom_fwd
     def forward(ctx, p, *args):
-        output = fused_mlp_gelu_dropout_add.forward(p, args)
+        output = fused_mlp_gelu.forward(p, args)
         ctx.save_for_backward(*args)
         ctx.outputs = output
         dropout_mask = output[-1]
@@ -186,7 +186,7 @@ class MlpGeLUDropoutAddFunction(torch.autograd.Function):
         residual_mask = outputs[-1]
         ctx.p = p
         ctx.r_p = p
-        return outputs[0], dropout_mask, residual_mask
+        return outputs[0]
 
     @staticmethod
     @custom_bwd

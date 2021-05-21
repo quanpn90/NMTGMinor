@@ -129,6 +129,7 @@ class MFWPositionWiseFeedForward(torch.nn.Module):
         self.n_languages = n_languages
         self.weight_drop = weight_drop
         self.glu = glu
+        self.dropout_residual = False
 
         self.input_linear = MultilingualLinear(model_size, inner_size * (2 if glu else 1), n_languages,
                                                rank, use_multiplicative, weight_drop, mfw_activation=mfw_activation,

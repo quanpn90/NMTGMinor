@@ -24,14 +24,19 @@ def preprocessing(rezero, model_size, post_norm=False):
     return PrePostProcessing(model_size, 0.0, sequence=sequence)
 
 
-def postprocessing(rezero, model_size, dropout, variational=False, post_norm=False):
-    sequence = 'd'
-    if rezero:
-        sequence += 'z'
-    else:
-        sequence += 'a'
-    if post_norm:
-        sequence += 'n'
+def postprocessing(rezero, model_size, dropout, variational=False, post_norm=False,
+                   dropout_residual=True):
+
+    sequence = ''
+
+    if dropout_residual:
+        sequence += 'd'
+        if rezero:
+            sequence += 'z'
+        else:
+            sequence += 'a'
+        if post_norm:
+            sequence += 'n'
 
     return PrePostProcessing(model_size, dropout,
                              sequence=sequence,
@@ -59,8 +64,6 @@ class RelativeTransformerEncoderLayer(nn.Module):
 
         if self.macaron:
             self.preprocess_mcr_ffn = preprocessing(opt.rezero, opt.model_size, self.post_norm)
-            self.postprocess_mcr_ffn = postprocessing(opt.rezero, opt.model_size, self.residual_dropout,
-                                                      self.variational, self.post_norm)
 
             if self.mfw:
                 self.mcr_feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, self.ffn_dropout,
@@ -74,14 +77,19 @@ class RelativeTransformerEncoderLayer(nn.Module):
                 self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, self.ffn_dropout,
                                                                variational=self.variational,
                                                                activation=opt.ffn_activation,
-                                                               glu=opt.ffn_glu)
+                                                               glu=opt.ffn_glu,
+                                                               dropout_residual=self.post_norm,
+                                                               res_dropout=self.residual_dropout)
+
+            self.postprocess_mcr_ffn = postprocessing(opt.rezero, opt.model_size, self.residual_dropout,
+                                                      self.variational, self.post_norm,
+                                                      dropout_residual=not self.mcr_feedforward.dropout_residual)
 
         self.preprocess_attn = preprocessing(opt.rezero, opt.model_size, self.post_norm)
         self.postprocess_attn = postprocessing(opt.rezero, opt.model_size, self.residual_dropout,
                                                self.variational, self.post_norm)
         self.preprocess_ffn = preprocessing(opt.rezero, opt.model_size, self.post_norm)
-        self.postprocess_ffn = postprocessing(opt.rezero, opt.model_size, self.residual_dropout,
-                                              self.variational, self.post_norm)
+
         d_head = opt.model_size // opt.n_heads
 
         if self.mfw:
@@ -102,7 +110,9 @@ class RelativeTransformerEncoderLayer(nn.Module):
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, self.ffn_dropout,
                                                        variational=self.variational,
                                                        activation=opt.ffn_activation,
-                                                       glu=opt.ffn_glu)
+                                                       glu=opt.ffn_glu,
+                                                       dropout_residual=opt.post_norm,
+                                                       res_dropout=self.residual_dropout)
 
             if not self.absolute_position_encoding:
                 self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
@@ -110,6 +120,10 @@ class RelativeTransformerEncoderLayer(nn.Module):
                                                            max_pos=opt.max_pos_length)
             else:
                 self.multihead = SelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+
+        self.postprocess_ffn = postprocessing(opt.rezero, opt.model_size, self.residual_dropout,
+                                              self.variational, self.post_norm,
+                                              dropout_residual=not self.feedforward.dropout_residual)
 
     def forward(self, input, pos_emb, attn_mask, src_lang=None,
                 incremental=False, incremental_cache=None, mems=None):
@@ -199,8 +213,6 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
         if self.macaron:
             self.preprocess_mcr_ffn = preprocessing(opt.rezero, opt.model_size, self.post_norm)
-            self.postprocess_mcr_ffn = postprocessing(opt.rezero, opt.model_size, self.residual_dropout,
-                                                      self.variational, self.post_norm)
 
             if self.mfw:
                 self.mcr_feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, self.ffn_dropout,
@@ -215,7 +227,13 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 self.mcr_feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, self.ffn_dropout,
                                                                variational=self.variational,
                                                                activation=opt.ffn_activation,
-                                                               glu=opt.ffn_glu)
+                                                               glu=opt.ffn_glu,
+                                                               dropout_residual=opt.post_norm,
+                                                               res_dropout=self.residual_dropout)
+
+            self.postprocess_mcr_ffn = postprocessing(opt.rezero, opt.model_size, self.residual_dropout,
+                                                      self.variational, self.post_norm,
+                                                      dropout_residual=not self.mcr_feedforward.dropout_residual)
 
         self.preprocess_attn = preprocessing(opt.rezero, opt.model_size, self.post_norm)
         self.postprocess_attn = postprocessing(opt.rezero, opt.model_size, self.residual_dropout,
@@ -235,9 +253,6 @@ class RelativeTransformerDecoderLayer(nn.Module):
                                                             no_bias=opt.mfw_no_bias, )
 
         self.preprocess_ffn = preprocessing(opt.rezero, opt.model_size, self.post_norm)
-        self.postprocess_ffn = postprocessing(opt.rezero, opt.model_size, self.residual_dropout,
-                                              self.variational, self.post_norm)
-
         d_head = opt.model_size // opt.n_heads
 
         if self.mfw:
@@ -258,7 +273,9 @@ class RelativeTransformerDecoderLayer(nn.Module):
             self.feedforward = PositionWiseFeedForward(opt.model_size, opt.inner_size, self.ffn_dropout,
                                                        variational=self.variational,
                                                        activation=opt.ffn_activation,
-                                                       glu=opt.ffn_glu)
+                                                       glu=opt.ffn_glu,
+                                                       dropout_residual=opt.post_norm,
+                                                       res_dropout=self.residual_dropout)
 
             if not self.absolute_position_encoding:
                 self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
@@ -267,6 +284,10 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
             else:
                 self.multihead_tgt = SelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+
+        self.postprocess_ffn = postprocessing(opt.rezero, opt.model_size, self.residual_dropout,
+                                              self.variational, self.post_norm,
+                                              dropout_residual=not self.feedforward.dropout_residual)
 
     def forward(self, input, context, pos_emb, mask_tgt, mask_src,
                 src_lang=None, tgt_lang=None,

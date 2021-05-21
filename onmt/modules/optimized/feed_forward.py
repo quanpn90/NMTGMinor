@@ -27,7 +27,8 @@ class PositionWiseFeedForward(nn.Module):
     """Two-layer Feed-forward neural network"""
 
     def __init__(self, model_size, inner_size, dropout=0., variational=False,
-                 activation='relu', glu=False, weight_drop=0.0):
+                 activation='relu', glu=False, weight_drop=0.0,
+                 dropout_residual=False, res_dropout=0.0):
         super().__init__()
         self.model_size = model_size
         self.inner_size = inner_size
@@ -38,6 +39,9 @@ class PositionWiseFeedForward(nn.Module):
         self.glu = glu
         self.weight_drop = weight_drop
         self.autograd = False
+        self.fused_dropout_add = False
+        self.dropout_residual = dropout_residual
+        self.res_dropout = res_dropout
 
         if self.activation == 'relu':
             if self.glu:
@@ -64,7 +68,6 @@ class PositionWiseFeedForward(nn.Module):
         self.out_proj_bias = Parameter(torch.Tensor(model_size))
 
         self.reset_parameters()
-        self.optimized = 2
 
         self.fused = False
 
@@ -82,10 +85,17 @@ class PositionWiseFeedForward(nn.Module):
                     self.fused_function = mlp_silu_function
                     self.fused = True
             elif self.activation == 'gelu':
-                from onmt.modules.mlp.mlp import mlp_gelu_function
-                if mlp_gelu_function is not None:
-                    self.fused_function = mlp_gelu_function
-                    self.fused = True
+                if self.dropout_residual:
+                    from onmt.modules.mlp.mlp import mlp_gelu_dropout_add_function
+                    if mlp_gelu_dropout_add_function is not None:
+                        self.fused_function = mlp_gelu_dropout_add_function
+                        self.fused = True
+                        self.fused_dropout_add = True
+                if not self.fused:
+                    from onmt.modules.mlp.mlp import mlp_gelu_function
+                    if mlp_gelu_function is not None:
+                        self.fused_function = mlp_gelu_function
+                        self.fused = True
             elif self.activation == 'agelu':
                 from onmt.modules.mlp.mlp import mlp_agelu_function
                 if mlp_agelu_function is not None:
@@ -139,17 +149,27 @@ class PositionWiseFeedForward(nn.Module):
 
                 dropout = self.dropout if self.training else 0.0
 
-                hidden = self.fused_function(dropout, input.half().view(seq_len * bsz, -1),
-                                                           *weights, *biases).type_as(input)
+                if self.fused_dropout_add:
+                    res_dropout = self.res_dropout if self.training else 0.0
+                    hidden = self.fused_function(dropout, res_dropout, input.half().view(seq_len * bsz, -1),
+                                                               *weights, *biases).type_as(input)
+                else:
+                    hidden = self.fused_function(dropout, input.half().view(seq_len * bsz, -1),
+                                                               *weights, *biases).type_as(input)
                 hidden = hidden.view(seq_len, bsz, hidden_size)
 
-            # verification code (only with dropout = 0.0)
-            # with torch.no_grad():
-            #     hidden_ = F.linear(self.act(F.linear(input, self.in_proj_weight, self.in_proj_bias)),
-            #                        self.out_proj_weight, self.out_proj_bias).type_as(hidden)
-            #
-            #     comp = torch.allclose(hidden, hidden_, rtol=1e-03, atol=1e-04)
-            #     print(comp)
+                # verification code (only with dropout = 0.0)
+                # with torch.no_grad():
+                #     hidden_ = F.linear(self.act(F.linear(input, self.in_proj_weight, self.in_proj_bias)),
+                #                        self.out_proj_weight, self.out_proj_bias).type_as(hidden)
+                #
+                #     if self.fused_dropout_add:
+                #         hidden_.add_(input)
+                #
+                #     comp = torch.allclose(hidden, hidden_, rtol=1e-02, atol=1e-03)
+                #     if not comp:
+                #         print("Warning! The fused function doesn't match the PyTorch function.")
+                #         print(hidden - hidden_)
 
         else:
             if self.autograd:
@@ -175,5 +195,12 @@ class PositionWiseFeedForward(nn.Module):
                 hidden = self.linear_out(hidden)
             else:
                 hidden = F.linear(hidden, self.out_proj_weight, self.out_proj_bias)
+
+        if self.dropout_residual:
+            if not self.fused_dropout_add:
+                if not self.variational:
+                    hidden = F.dropout(hidden, p=self.res_dropout, training=self.training) + input
+                else:
+                    hidden = variational_dropout(hidden, p=self.dropout, training=self.training) + input
 
         return hidden
