@@ -24,9 +24,10 @@ int mlp_fp(
     T* reserved_space,
     T* reserved_activations,
     uint8_t* reserved_mask,
+    uint8_t* residual_mask,
     void* lt_workspace,
     float p,
-    float r _p);
+    float r_p);
 
 template <typename T>
 int mlp_bp(
@@ -41,6 +42,7 @@ int mlp_bp(
     T* reserved_space,
     T* reserved_activations,
     uint8_t* reserved_mask,
+    uint8_t* residual_mask,
     T* work_space,
     T* dX,
     T** dwPtr,
@@ -49,7 +51,7 @@ int mlp_bp(
     float p,
     float r_p);
 
-std::vector<torch::Tensor> mlp_forward(float p, std::vector<torch::Tensor> inputs) {
+std::vector<torch::Tensor> mlp_forward(float p, float r_p, std::vector<torch::Tensor> inputs) {
 
   auto num_layers = inputs.size() - 1;
   num_layers /= 2;
@@ -62,7 +64,6 @@ std::vector<torch::Tensor> mlp_forward(float p, std::vector<torch::Tensor> input
   }
 
   auto reserved_size = get_mlp_reserved_space(batch_size, num_layers, output_features.data());
-  auto dmask_size    = get_mlp_activation_space(batch_size, num_layers, output_features.data());
   auto last_layer_size = output_features.data()[num_layers - 1] * batch_size;
 
   // create output/workspace tensor
@@ -73,7 +74,20 @@ std::vector<torch::Tensor> mlp_forward(float p, std::vector<torch::Tensor> input
 
   auto act_options  = inputs[0].options().requires_grad(false);
   auto mask_options = act_options.dtype(torch::kUInt8);
+
+  // allocate mask for dropout at activations (no need if not used dropout)
+
+  auto dmask_size = get_mlp_activation_space(batch_size, num_layers, output_features.data());
+  if ( p == 0.0f ) {
+    dmask_size = 0;
+  }
   auto reserved_mask  = torch::empty({dmask_size}, mask_options);  // for relu we don't need to keep the mask
+
+  // allocate mask for dropout at residual
+  if ( r_p == 0.0f ) {
+      last_layer_size = 0;
+  }
+  auto residual_mask = torch::empty({last_layer_size}, mask_options);
   // allocate fixed 4MB workspace for cublaslt for now, and this gets at least 4 MB
   auto lt_workspace = torch::empty({1 << 22}, inputs[0].type());
 
@@ -96,15 +110,17 @@ std::vector<torch::Tensor> mlp_forward(float p, std::vector<torch::Tensor> input
         reserved_space.data_ptr<scalar_t>(),
         reserved_activations.data_ptr<scalar_t>(),
         reserved_mask.data_ptr<uint8_t>(),
+        residual_mask.data_ptr<uint8_t>(),
         (void*) (lt_workspace.data_ptr<scalar_t>()),
-        p);
+        p,
+        r_p);
   });
 
-  return {out, reserved_space, reserved_activations, reserved_mask};
+  return {out, reserved_space, reserved_activations, reserved_mask, residual_mask};
 }
 
 std::vector<torch::Tensor> mlp_backward(
-  float p,
+  float p, float r_p,
   torch::Tensor grad_o,
   std::vector<torch::Tensor> fprop_outputs,
   std::vector<torch::Tensor> inputs) {
@@ -125,6 +141,9 @@ std::vector<torch::Tensor> mlp_backward(
   std::vector<torch::Tensor> outputs;
   for (int i = 0; i < inputs.size(); i++) {
     outputs.push_back(torch::empty(inputs[i].sizes(), inputs[i].type()));  // clone for testing now
+    if (i == 0 && requires_grad == 1) {
+        outputs[0].copy_(grad_o);  // because of residual
+    }
   }
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(inputs[0].type(), "mlp_backward", [&] {
@@ -154,13 +173,15 @@ std::vector<torch::Tensor> mlp_backward(
         grad_o.contiguous().data_ptr<scalar_t>(),
         fprop_outputs[1].data_ptr<scalar_t>(),
         fprop_outputs[2].data_ptr<scalar_t>(),
-        fprop_outputs[3].data_ptr<uint8_t>(),
+        fprop_outputs[3].data_ptr<uint8_t>(),  // dropout mask
+        fprop_outputs[4].data_ptr<uint8_t>(),  // residual mask
         work_space.data_ptr<scalar_t>(),
-        outputs_ptr[0],
-        outputs_ptr.data() + 1,
-        outputs_ptr.data() + 1 + num_layers,
+        outputs_ptr[0],  // dX
+        outputs_ptr.data() + 1, // dWeights
+        outputs_ptr.data() + 1 + num_layers, // dBiases
         requires_grad,
-        p);
+        p,
+        r_p);
   });
 
   return outputs;

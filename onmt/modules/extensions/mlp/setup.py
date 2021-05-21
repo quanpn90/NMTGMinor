@@ -56,6 +56,13 @@ ext_modules.append(
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                       'nvcc': ['-O3'] + version_dependent_macros}))
 
+ext_modules.append(
+    CUDAExtension(name='fused_mlp_gelu_dropout_add',
+                  sources=['mlp_gelu_dropoutadd.cpp',
+                           'mlp_gelu_dropoutadd_cuda.cu'],
+                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                                      'nvcc': ['-O3'] + version_dependent_macros}))
+
 setup(
     name="fused_mlp_functions",
     ext_modules=ext_modules,

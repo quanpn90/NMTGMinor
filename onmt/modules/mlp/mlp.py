@@ -38,6 +38,11 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     fused_mlp_agelu = None
 
+try:
+    import fused_mlp_gelu_dropout_add
+except (ModuleNotFoundError, ImportError) as e:
+    fused_mlp_gelu_dropout_add = None
+
 
 class MlpReluFunction(torch.autograd.Function):
     @staticmethod
@@ -142,3 +147,58 @@ if fused_mlp_gelu:
     mlp_agelu_function = half_function(MlpAGELUFunction.apply)
 else:
     mlp_agelu_function = None
+
+
+class MlpGELUFunction(torch.autograd.Function):
+    @staticmethod
+    @custom_fwd
+    def forward(ctx, p, *args):
+        output = fused_mlp_gelu_dropout_add.forward(p, args)
+        ctx.save_for_backward(*args)
+        ctx.outputs = output
+        dropout_mask = output[-1]
+        ctx.p = p
+        return output[0]
+
+    @staticmethod
+    @custom_bwd
+    def backward(ctx, *grad_o):
+        p = ctx.p
+        grads = fused_mlp_gelu.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
+        del ctx.outputs
+        return (None, *grads)
+
+
+if fused_mlp_gelu:
+    mlp_gelu_function = half_function(MlpGELUFunction.apply)
+else:
+    mlp_gelu_function = None
+
+
+class MlpGeLUDropoutAddFunction(torch.autograd.Function):
+    @staticmethod
+    @custom_fwd
+    def forward(ctx, p, r_p, *args):
+        outputs = fused_mlp_gelu_dropout_add.forward(p, r_p, args)
+        ctx.save_for_backward(*args)
+        ctx.outputs = outputs
+        dropout_mask = outputs[-2]
+        residual_mask = outputs[-1]
+        ctx.p = p
+        ctx.r_p = p
+        return outputs[0], dropout_mask, residual_mask
+
+    @staticmethod
+    @custom_bwd
+    def backward(ctx, *grad_o):
+        p = ctx.p
+        r_p = ctx.r_p
+        grads = fused_mlp_gelu_dropout_add.backward(p, r_p, grad_o[0], ctx.outputs, ctx.saved_tensors)
+        del ctx.outputs
+        return (None, None, *grads)
+
+
+if fused_mlp_gelu_dropout_add:
+    mlp_gelu_dropout_add_function = half_function(MlpGeLUDropoutAddFunction.apply)
+else:
+    mlp_gelu_dropout_add_function = None

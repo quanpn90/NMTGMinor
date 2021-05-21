@@ -204,8 +204,9 @@ class LayerNorm(torch.nn.Module):
                 input, self.normalized_shape, self.weight, self.bias, eps)
         if self.elementwise_affine:
 
-            # if fast_fused:
-            #     return fast_layer_norm_affine(input, self.weight, self.bias, self.normalized_shape, eps)
+            # at the moment the super fast layer norm only supports hidden size 1024 :)
+            if fast_fused and input.size(-1) == 1024:
+                return fast_layer_norm_affine(input, self.weight, self.bias, self.normalized_shape, eps)
 
             return FusedLayerNormAffineFunction.apply(
                 input, self.weight, self.bias, self.normalized_shape, eps)

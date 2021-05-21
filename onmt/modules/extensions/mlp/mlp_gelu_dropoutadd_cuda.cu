@@ -483,22 +483,25 @@ __global__ void biasAdd_fprop(T *X, T *b, uint batch_size, uint features) {
 
 
 
-// Bias ADD + ReLU. Assume input X is [features x batch size], column major.
-// Activation support fuesed ReLU. Safe to call in-place.
+
+// Bias ADD. Assume input X is [features x batch size], column major.
+// Bias is one 'features' long vector, with implicit broadcast.
 template <typename T>
-__global__ void biasAddRelu_fprop(T *X, T *b, uint batch_size, uint features) {
+__global__ void biasAddResidual_fprop(T *X, T *R, T *b, uint batch_size, uint features) {
   T r_x[ILP];
   T r_b[ILP];
+  T r_r[ILP];
   if(is_aligned(X) && is_aligned(b) && features % ILP ==0) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
       int row = tid % (features / ILP);
       load_store(r_x, X, 0 , tid);
+      load_store(r_r, R, 0 , tid);
       load_store(r_b, b, 0 , row);
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
-        float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_x[ii] = relu(bias_sum);
+        float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]) + static_cast<float>(r_r[ii]);
+        r_x[ii] = bias_sum;
       }
       load_store(X, r_x, tid , 0);
     }
@@ -517,7 +520,7 @@ __global__ void biasAddRelu_fprop(T *X, T *b, uint batch_size, uint features) {
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
         float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_x[ii] = relu(bias_sum);
+        r_x[ii] = bias_sum;
       }
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
@@ -530,18 +533,21 @@ __global__ void biasAddRelu_fprop(T *X, T *b, uint batch_size, uint features) {
   }
 }
 
-// Bias ADD + ReLU. Assume input X is [features x batch size], column major.
-// Activation support fuesed ReLU. Safe to call in-place.
+
+
+
+// Bias ADD. Assume input X is [features x batch size], column major.
+// Bias is one 'features' long vector, with implicit broadcast.
 template <typename T>
-__global__ void biasAddDropoutRelu_fprop(T *X, T *b, uint batch_size, uint features, float p,
+__global__ void biasAddDropoutResidual_fprop(T *X, T *R, uint8_t* mask, T *b, uint batch_size, uint features, float p,
                                          std::pair<uint64_t, uint64_t> seeds) {
+
+  float pinv = 1.f/(1.f-p);
   T r_x[ILP];
   T r_b[ILP];
-//  uint8_t r_m[ILP];
-  float pinv = 1.f/(1.f-p);
-
+  T r_r[ILP];
+  uint8_t r_m[ILP];
   if(is_aligned(X) && is_aligned(b) && features % ILP ==0) {
-
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     curandStatePhilox4_32_10_t state;
@@ -554,8 +560,9 @@ __global__ void biasAddDropoutRelu_fprop(T *X, T *b, uint batch_size, uint featu
     for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
       int row = tid % (features / ILP);
       load_store(r_x, X, 0 , tid);
+      load_store(r_r, R, 0 , tid);
       load_store(r_b, b, 0 , row);
-//      load_store(r_m, mask, 0, tid);  // mask has the same size with X
+      load_store(r_m, mask, 0, tid);  // mask has the same size with X
 
       float4 rand = curand_uniform4(&state);
       rand.x = rand.x >= p;
@@ -566,12 +573,11 @@ __global__ void biasAddDropoutRelu_fprop(T *X, T *b, uint batch_size, uint featu
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
         float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_x[ii] = relu(bias_sum)*(&rand.x)[ii]*pinv;
-//        r_m[ii] = (uint8_t)(&rand.x)[ii];
-
+        r_x[ii] = bias_sum * (&rand.x)[ii]*pinv  + static_cast<float>(r_r[ii]) ;
+        r_m[ii] = (uint8_t)(&rand.x)[ii];
       }
       load_store(X, r_x, tid , 0);
-//      load_store(mask, r_m, tid , 0);
+      load_store(mask, r_m, tid, 0);
     }
   } else {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -597,21 +603,22 @@ __global__ void biasAddDropoutRelu_fprop(T *X, T *b, uint batch_size, uint featu
           int row = tid % features;
           r_x[ii] = X[idx];
           r_b[ii] = b[row];
-//          r_m[ii] = mask[idx];
+          r_r[ii] = R[idx];
+          r_m[ii] = mask[idx];
         }
       }
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
         float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_x[ii] = relu(bias_sum)*(&rand.x)[ii]*pinv;
-//        r_m[ii] = (uint8_t)(&rand.x)[ii];
+        r_x[ii] = bias_sum*(&rand.x)[ii]*pinv  + static_cast<float>(r_r[ii]);
+        r_m[ii] = (uint8_t)(&rand.x)[ii];
       }
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
         int idx = tid + ii * blockDim.x * gridDim.x;
         if(idx < features * batch_size) {
           X[idx] = r_x[ii];
-//          mask[idx] = r_m[ii];
+          mask[idx] = r_m[ii];
         }
       }
     }
@@ -894,6 +901,288 @@ __global__ void biasAdd_bprop(
         db_local += (float)(intermediate[col * features + row]);
       }
       db[f] = (T)db_local;
+    }
+  }
+}
+
+
+
+// Addition done deterministically via a 2-pass approach. Each CTA writes out partial
+// sum, and the last CTA in grid Y dimension accumulates partials serially and writes to result.
+// Addition done deterministically via a 2-pass approach. Each CTA writes out partial
+// sum, and the last CTA in grid Y dimension accumulates partials serially and writes to result.
+template <typename T, int UNROLL_FACTOR>
+__global__ void biasAddDropout_bprop(
+    T* Y,
+    T* dY,
+    uint8_t* mask,
+    int features,
+    int batch_size,
+    T* dX,
+    volatile float* intermediate,
+    int* semaphores,
+    T* db,
+    float p) {
+  // The feature that this thread is responsible for
+  int f = blockIdx.x * blockDim.x + threadIdx.x;
+  float pinv = 1.0f / (1.0f - p);
+
+  // Compute the span this thread is responsible for
+  // For this block
+  int b_chunkSize = (batch_size + gridDim.y - 1) / gridDim.y;
+  int b_nStart = blockIdx.y * b_chunkSize;
+  int b_nSpan = min(batch_size, b_nStart + b_chunkSize) - b_nStart;
+  // For this thread
+  int chunkSize = (b_chunkSize + blockDim.y - 1) / blockDim.y;
+  int nStart = threadIdx.y * chunkSize + b_nStart;
+  int nSpan = min(b_nStart + b_nSpan, nStart + chunkSize) - nStart;
+
+  volatile float* out = intermediate + blockIdx.y * features;
+
+  // Flag to trigger last reduction.
+  __shared__ bool isLastBlock;
+  // we know block size for now
+  __shared__ float smem[BIAS_RELU_BW_NTHREADS_X*BIAS_RELU_BW_NTHREADS_Y];
+
+  // Accumulate db in FP32 always
+  float db_local = 0;
+  if (f < features) {
+    int nidx = 0;
+    // Handle non-multiple of UNROLL_FACTOR residue
+    for (; nidx < nSpan % UNROLL_FACTOR; nidx++) {
+      int row, col, flat_idx;
+      row = f;
+      col = nStart + nidx;
+      flat_idx = col * features + row;
+      T y_val = Y[flat_idx];
+      T dy_val = dY[flat_idx];
+      uint8_t m_val = mask[flat_idx];
+      T dx_val;
+      dx_val = (float)dy_val * m_val * pinv ;  // dropout backprop
+
+      dX[flat_idx] = dx_val;
+      db_local += (float)dx_val;
+    }
+
+    // Handle meat of work
+    for (; (nidx + UNROLL_FACTOR - 1) < nSpan; nidx += UNROLL_FACTOR) {
+      int row, col, flat_idx;
+      row = f;
+      col = nStart + nidx;
+      flat_idx = col * features + row;
+#pragma unroll 4
+      for (int u = 0; u < UNROLL_FACTOR; u++) {
+        T y_val = Y[flat_idx];
+        T dy_val = dY[flat_idx];
+        uint8_t m_val = mask[flat_idx];
+        T dx_val;
+        dx_val = (float)dy_val * m_val * pinv;
+
+        dX[flat_idx] = dx_val;
+        db_local += (float)dx_val;
+        flat_idx += features;
+      }
+    }
+
+    // naive block reduction on y-dim
+    int linear_idx = threadIdx.y * blockDim.x + threadIdx.x;
+    smem[linear_idx] = db_local;
+  }
+  __syncthreads();
+  if (f < features) {
+    if(threadIdx.y == 0) {
+      for(int yidx = 1; yidx < blockDim.y; yidx++){
+        db_local += smem[yidx * blockDim.x + threadIdx.x];
+      }
+
+      // block result is in db_local now for all threadIdx.y == 0
+      // Write out partial result
+      out[f] = db_local;
+    }
+  }
+  __threadfence();
+  __syncthreads();
+
+  // Increment semaphore and check if this is the last CTA in the grid_y dimension.
+  // Only thread (0,0) calls this
+  if (threadIdx.x == 0 && threadIdx.y == 0 && f < features) {
+    unsigned int sum_idx;
+    sum_idx = atomicAdd(&(semaphores[blockIdx.x]), 1);
+    isLastBlock = (sum_idx == (gridDim.y - 1));
+  }
+  __syncthreads();
+
+  db_local = 0;
+  // No block reduction for now, only thread (*,0) do grid reduction
+  if (isLastBlock && f < features) {
+    if(threadIdx.y == 0) {
+      for (int n = 0; n < gridDim.y; n++) {
+        int row, col;
+        row = f;
+        col = n;
+        db_local += (float)(intermediate[col * features + row]);
+      }
+      db[f] = (T)db_local;
+    }
+  }
+}
+
+// Addition done deterministically via a 2-pass approach. Each CTA writes out partial
+// sum, and the last CTA in grid Y dimension accumulates partials serially and writes to result.
+template <typename T, int UNROLL_FACTOR>
+__global__ void biasAddDropout_bprop_aligned(
+    T* Y,
+    T* dY,
+    uint8_t* mask,
+    int features,
+    int batch_size,
+    T* dX,
+    volatile float* intermediate,
+    int* semaphores,
+    T* db,
+    float p) {
+  // The feature that this thread is responsible for
+  int f = blockIdx.x * blockDim.x + threadIdx.x;
+  float pinv = 1.0f / (1.0f - p);
+
+  // Compute the span this thread is responsible for
+  // For this block
+  int b_chunkSize = (batch_size + gridDim.y - 1) / gridDim.y;
+  int b_nStart = blockIdx.y * b_chunkSize;
+  int b_nSpan = min(batch_size, b_nStart + b_chunkSize) - b_nStart;
+  // For this thread
+  int chunkSize = (b_chunkSize + blockDim.y - 1) / blockDim.y;
+  int nStart = threadIdx.y * chunkSize + b_nStart;
+  int nSpan = min(b_nStart + b_nSpan, nStart + chunkSize) - nStart;
+
+  volatile float* out = intermediate + blockIdx.y * features;
+
+  // Flag to trigger last reduction.
+  __shared__ bool isLastBlock;
+
+  // Accumulate db in FP32 always
+  float db_local[ILP];
+  T r_y[ILP];
+  T r_dy[ILP];
+  uint8_t r_m[ILP];
+#pragma unroll
+  for(int ii=0;ii<ILP;ii++){
+    db_local[ii] = 0.f;
+  }
+
+  // f always <= features in this case
+  //if (f < features) {
+  int nidx = 0;
+
+  // Handle non-multiple of UNROLL_FACTOR residue
+  for (; nidx < nSpan % UNROLL_FACTOR; nidx++) {
+    int row, col, flat_idx;
+    row = f;
+    col = nStart + nidx;
+    flat_idx = col * features / ILP + row;
+
+    load_store(r_y, Y, 0, flat_idx);
+    load_store(r_dy, dY, 0, flat_idx);
+    load_store(r_m, mask, 0, flat_idx);
+#pragma unroll
+    for(int ii=0;ii<ILP;ii++){
+
+      r_dy[ii] = (float)r_dy[ii] * r_m[ii] * pinv;  // dropout backward
+      db_local[ii] += (float)r_dy[ii];
+    }
+    load_store(dX, r_dy, flat_idx, 0);
+  }
+
+  // Handle meat of work
+  for (; (nidx + UNROLL_FACTOR - 1) < nSpan; nidx += UNROLL_FACTOR) {
+    int row, col, flat_idx;
+    row = f;
+    col = nStart + nidx;
+    flat_idx = col * features / ILP + row; // total threads in x == features/ILP
+#pragma unroll
+    for (int u = 0; u < UNROLL_FACTOR; u++) {
+      load_store(r_y, Y, 0, flat_idx);
+      load_store(r_dy, dY, 0, flat_idx);
+      load_store(r_m, mask, 0, flat_idx);
+#pragma unroll
+      for(int ii=0;ii<ILP;ii++){
+
+        r_dy[ii] = (float)r_dy[ii] * r_m[ii] * pinv; // dropout backward
+        db_local[ii] += (float)r_dy[ii];
+      }
+      load_store(dX, r_dy, flat_idx, 0);
+      flat_idx += features/ILP;
+    }
+  }
+
+  // we know block size for now
+  __shared__ float smem[BIAS_RELU_BW_NTHREADS_X*BIAS_RELU_BW_NTHREADS_Y*ILP];
+  // naive block reduction on y-dim
+  int linear_idx = threadIdx.y * blockDim.x + threadIdx.x;
+  float* smem_out = smem + ILP * linear_idx;
+#pragma unroll
+  for(int ii=0;ii<ILP;ii++){
+    smem_out[ii] = db_local[ii]; // reuse local dy buffer
+  }
+  __syncthreads();
+  if(threadIdx.y == 0) {
+    for(int yidx = 1; yidx < blockDim.y; yidx++){
+      float* smem_in = smem + ILP * (yidx * blockDim.x + threadIdx.x);
+#pragma unroll
+      for(int ii=0;ii<ILP;ii++){
+        db_local[ii] += smem_in[ii]; // reuse local dy buffer
+      }
+    }
+
+    // block result is in db_local now for all threadIdx.y == 0
+    if(gridDim.y == 1) {
+#pragma unroll
+      for(int ii=0;ii<ILP;ii++){
+        r_dy[ii] = db_local[ii]; // reuse local dy buffer
+      }
+      load_store(db, r_dy, f, 0);
+      return;
+    }
+
+    // Write out partial result
+    load_store(out, db_local, f, 0);
+  }
+  __threadfence();
+  __syncthreads();
+
+  // Increment semaphore and check if this is the last CTA in the grid_y dimension.
+  // Only thread (0,0) calls this
+  if (threadIdx.x == 0 && threadIdx.y == 0) {
+    unsigned int sum_idx;
+    sum_idx = atomicAdd(&(semaphores[blockIdx.x]), 1);
+    isLastBlock = (sum_idx == (gridDim.y - 1));
+  }
+  __syncthreads();
+
+#pragma unroll
+  for(int ii=0;ii<ILP;ii++){
+    db_local[ii] = 0.f;
+  }
+  float r_db[ILP];
+
+  // No block reduction for now, only thread (*,0) do grid reduction
+  if (isLastBlock) {
+    if(threadIdx.y == 0){
+      for (int n = 0; n < gridDim.y; n++) {
+        int row, col;
+        row = f;
+        col = n;
+        load_store(r_db, intermediate, 0, col * features / ILP + row);
+#pragma unroll
+        for(int ii=0;ii<ILP;ii++){
+          db_local[ii] += r_db[ii];
+        }
+      }
+#pragma unroll
+      for(int ii=0;ii<ILP;ii++){
+        r_dy[ii] = db_local[ii]; // reuse local dy buffer
+      }
+      load_store(db, r_dy, f, 0);
     }
   }
 }
@@ -1518,9 +1807,15 @@ __global__ void biasAddGeLUDropout_bprop(
       T y_val = Y[flat_idx];
       T h_val = H[flat_idx];
       T dy_val = dY[flat_idx];
-      uint8_t m_val = mask[flat_idx];
+      uint8_t m_val;
+      if (pinv != 1)
+        m_val = mask[flat_idx];
       T dx_val;
-      dx_val = gelu_back((float)dy_val, (float)h_val) * m_val * pinv ;  // gelu backprop
+
+      if (pinv == 1)
+        dx_val = gelu_back((float)dy_val, (float)h_val) ;  // gelu backprop
+      else
+        dx_val = gelu_back((float)dy_val, (float)h_val) * m_val * pinv ;  // gelu backprop
 //      if ((float)y_val > 0.f)
 //        dx_val = dy_val;
 //      else
@@ -1540,13 +1835,15 @@ __global__ void biasAddGeLUDropout_bprop(
         T y_val = Y[flat_idx];
         T dy_val = dY[flat_idx];
         T h_val = H[flat_idx];
-        uint8_t m_val = mask[flat_idx];
+        uint8_t m_val;
+        if (pinv != 1)
+            m_val = mask[flat_idx];
         T dx_val;
-        dx_val = gelu_back((float)dy_val, (float)h_val) * m_val * pinv;
-//        if ((float)y_val > 0.f)
-//          dx_val = dy_val * pinv;
-//        else
-//          dx_val = 0;
+        if (pinv == 1)
+            dx_val = gelu_back((float)dy_val, (float)h_val);
+        else
+            dx_val = gelu_back((float)dy_val, (float)h_val) * m_val * pinv;
+
         dX[flat_idx] = dx_val;
         db_local += (float)dx_val;
         flat_idx += features;
@@ -1655,7 +1952,8 @@ __global__ void biasAddGeLUDropout_bprop_aligned(
     load_store(r_y, Y, 0, flat_idx);
     load_store(r_h, H, 0, flat_idx);
     load_store(r_dy, dY, 0, flat_idx);
-    load_store(r_m, mask, 0, flat_idx);
+    if (pinv != 1)
+        load_store(r_m, mask, 0, flat_idx);
 #pragma unroll
     for(int ii=0;ii<ILP;ii++){
 //      if ((float)r_y[ii] <= 0.f)
@@ -1663,7 +1961,10 @@ __global__ void biasAddGeLUDropout_bprop_aligned(
 //      else {
 //        r_dy[ii] = r_dy[ii] * pinv;
 //      }
-      r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]) * r_m[ii] * pinv;
+      if (pinv == 1)
+        r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]);
+      else
+        r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]) * r_m[ii] * pinv;
       db_local[ii] += (float)r_dy[ii];
     }
     load_store(dX, r_dy, flat_idx, 0);
@@ -1680,14 +1981,18 @@ __global__ void biasAddGeLUDropout_bprop_aligned(
       load_store(r_y, Y, 0, flat_idx);
       load_store(r_h, H, 0, flat_idx);
       load_store(r_dy, dY, 0, flat_idx);
-      load_store(r_m, mask, 0, flat_idx);
+      if (pinv != 1)
+        load_store(r_m, mask, 0, flat_idx);
 #pragma unroll
       for(int ii=0;ii<ILP;ii++){
 //        if ((float)r_y[ii] <= 0.f)
 //          r_dy[ii] = 0;
 //        else
 //          r_dy[ii] = r_dy[ii] * pinv;
-        r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]) * r_m[ii] * pinv;
+        if (pinv == 1)
+            r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]);
+        else
+            r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]) * r_m[ii] * pinv;
         db_local[ii] += (float)r_dy[ii];
       }
       load_store(dX, r_dy, flat_idx, 0);
@@ -1924,8 +2229,10 @@ int mlp_fp(
     T* reserved_space,
     T* reserved_activations,
     uint8_t* reserved_mask,
+    uint8_t* residual_mask,
     void* lt_workspace,
-    float p) {
+    float p,
+    float r_p) {
   auto gen = at::cuda::detail::getDefaultCUDAGenerator();
   T *weight, *input, *output, *hidden, *bias;
   uint8_t *mask,  *reserved_space_m;
@@ -1958,30 +2265,6 @@ int mlp_fp(
 
     // try with cublaslt first for supported case with valid handle
     int cublaslt_status = 1;
-//    if(activation < 1 && p == 0){
-//        cublaslt_status = mlp_gemm_lt(
-//          //ltHandle,
-//          (cublasLtHandle_t)handle,
-//          CUBLAS_OP_T,
-//          CUBLAS_OP_N,
-//          ofeat,
-//          batch_size,
-//          ifeat,
-//          &one,
-//          weight,
-//          ifeat,
-//          input,
-//          ifeat,
-//          &zero,
-//          output,
-//          ofeat,
-//          lt_workspace,
-//          1 << 22,
-//          stream,
-//          use_bias == 1,
-//          activation == 1,
-//          bias);
-//    }
 
     // if cublaslt failed or not executed, fallback to cublas
     if (cublaslt_status != 0) {
@@ -2014,8 +2297,23 @@ int mlp_fp(
       // Call biasReLU
       if (layer == (num_layers -1)) { // no activation
 //          printf("NO ACTIVATION\n");
-          cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAdd_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-          biasAdd_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
+          if (r_p == 0) {
+              cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAddResidual_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+//              biasAdd_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
+              biasAddResidual_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, X,
+                                                                                        bias, batch_size, input_size);
+          } else {
+              cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAddDropoutResidual_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+              int64_t counter_offset = ((input_size*batch_size-1)/(BIAS_RELU_FW_NTHREADS*num_SMs*num_blocks*ILP)+1)*ILP;
+              std::pair<uint64_t, uint64_t> rng_engine_inputs;
+              {
+                std::lock_guard<std::mutex> lock(gen.mutex());
+                rng_engine_inputs = at::check_generator<at::CUDAGeneratorImpl>(gen)->philox_engine_inputs(counter_offset);
+              }
+              biasAddDropoutResidual_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, X, residual_mask,
+                                                                                        bias, batch_size, input_size,
+                                                                                        r_p, rng_engine_inputs);
+          }
       } else {  // GELU
 //          printf("RELU\n");
           if (p == 0) {
@@ -2045,7 +2343,8 @@ int mlp_fp(
     if (layer == (num_layers -1)) {
         reserved_space_y += ofeat * batch_size;
         reserved_space_a += ofeat * batch_size;
-        reserved_space_m += ofeat * batch_size;
+        if (p > 0)
+            reserved_space_m += ofeat * batch_size;
         mask += ofeat * batch_size;
     }
   }
@@ -2065,16 +2364,18 @@ int mlp_bp(
     T** WPtr,
     int num_layers,
     int* output_features,
-    T* dY,
+    T* dY,  // grad output (at the final layer)
     T* reserved_space,
     T* reserved_activations,
     uint8_t* reserved_mask,
+    uint8_t* residual_mask,
     T* work_space,
     T* dX,
     T** dwPtr,
     T** dbPtr,
     bool requires_grad,
-    float p) {
+    float p,
+    float r_p) {
   T* weight;
   T *dweight, *dx, *dy, *dbias;
   T *x, *y, *h;
@@ -2127,7 +2428,11 @@ int mlp_bp(
 
     // note: last layer doesn't have h and mask
     h = (layer == num_layers - 1) ? NULL : reserved_activations + y_offsets[layer];  // activation + dropout output
-    mask = (layer == num_layers - 1) ? NULL : reserved_mask + y_offsets[layer];  // mask
+
+    if (p == 0)
+        mask = NULL;
+    else
+        mask = (layer == num_layers - 1) ? NULL : reserved_mask + y_offsets[layer];  // mask
 
     // dx from layer+1
     dy = (layer == num_layers - 1) ? dY : dx_gemm_base + y_offsets[layer];
@@ -2149,12 +2454,39 @@ int mlp_bp(
 
         int block_x = BIAS_RELU_BW_NTHREADS_X;
         int block_y = BIAS_RELU_RED_PER_THREAD * BIAS_RELU_BW_NTHREADS_Y;
-        get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
-        dim3 grid(grid_x, grid_y);
-        biasAdd_bprop<T, 4><<<grid, block, 0, stream>>>(
-          dy, yfeat, batch_size, db_scratch, semaphores, dbias);
-        // bypass dgrad through reset pointer
-        dy_gemm = dy;
+
+        if (r_p == 0) {
+            get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
+            dim3 grid(grid_x, grid_y);
+            if (r_p == 0.0f)
+                biasAdd_bprop<T, 4><<<grid, block, 0, stream>>>(
+                  dy, yfeat, batch_size, db_scratch, semaphores, dbias);
+
+            // bypass dgrad through reset pointer
+            dy_gemm = dy;
+        } else {
+            if(yfeat % (ILP * BIAS_RELU_BW_NTHREADS_X) == 0 &&
+               is_aligned(y) &&
+               is_aligned(dy) &&
+               is_aligned(dy_gemm) &&
+               is_aligned(dbias))
+            {
+               int block_x = ILP * BIAS_RELU_BW_NTHREADS_X;
+               int block_y = BIAS_RELU_RED_PER_THREAD * BIAS_RELU_BW_NTHREADS_Y;
+               // reusing the same grid size with biasAddRelu ... hopefully not a mistake
+               get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
+               dim3 grid(grid_x, grid_y);
+               biasAddDropout_bprop_aligned<T, 4><<<grid, block, 0, stream>>>(
+                y, dy, residual_mask, yfeat, batch_size, dy_gemm, db_scratch, semaphores, dbias, r_p);
+            } else {
+               int block_x = BIAS_RELU_BW_NTHREADS_X;
+               int block_y = BIAS_RELU_RED_PER_THREAD * BIAS_RELU_BW_NTHREADS_Y;
+               get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
+               dim3 grid(grid_x, grid_y);
+               biasAddDropout_bprop<T, 4><<<grid, block, 0, stream>>>(
+                y, dy, residual_mask, yfeat, batch_size, dy_gemm, db_scratch, semaphores, dbias, r_p);
+            }
+        }
     } else  { // gelu
         dim3 block(BIAS_RELU_BW_NTHREADS_X, BIAS_RELU_BW_NTHREADS_Y);
         int grid_x, grid_y;
@@ -2211,21 +2543,39 @@ int mlp_bp(
     cublasStatus_t cublas_status;
     // Call GEMM dgrad
     if (layer > 0 || requires_grad == 1) {
-      cublas_status = mlp_gemm(
-        handle,
-        CUBLAS_OP_N,
-        CUBLAS_OP_N,
-        xfeat,
-        batch_size,
-        yfeat,
-        &one,
-        weight,
-        xfeat,
-        dy_gemm,
-        yfeat,
-        &zero,
-        dx,
-        xfeat);
+
+      if (layer == 0)
+          cublas_status = mlp_gemm(
+            handle,
+            CUBLAS_OP_N,
+            CUBLAS_OP_N,
+            xfeat,
+            batch_size,
+            yfeat,
+            &one,
+            weight,
+            xfeat,
+            dy_gemm,
+            yfeat,
+            &one,  // one such as C = 1 * C + 1 * AB for residual
+            dx,
+            xfeat);
+      else
+          cublas_status = mlp_gemm(
+            handle,
+            CUBLAS_OP_N,
+            CUBLAS_OP_N,
+            xfeat,
+            batch_size,
+            yfeat,
+            &one,
+            weight,
+            xfeat,
+            dy_gemm,
+            yfeat,
+            &zero,
+            dx,
+            xfeat);
 
       if (cublas_status != CUBLAS_STATUS_SUCCESS) {
         printf("GEMM dgrad failed with %d\n", cublas_status);
@@ -2272,8 +2622,10 @@ template int mlp_fp<float>(
     float* reserved_space,
     float* reserved_activations,
     uint8_t* reserved_mask,
+    uint8_t* residual_mask,
     void* lt_workspace,
-    float p);
+    float p,
+    float r_p);
 
 template int mlp_bp<float>(
     float* X,
@@ -2287,12 +2639,14 @@ template int mlp_bp<float>(
     float* reserved_space,
     float* reserved_activations,
     uint8_t* reserved_mask,
+    uint8_t* residual_mask,
     float* work_space,
     float* dX,
     float** dwPtr,
     float** dbPtr,
     bool requires_grad,
-    float p);
+    float p,
+    float r_p);
 
 template int mlp_fp<at::Half>(
     at::Half* X,
@@ -2306,8 +2660,10 @@ template int mlp_fp<at::Half>(
     at::Half* reserved_space,
     at::Half* reserved_activations,
     uint8_t* reserved_mask,
+    uint8_t* residual_mask,
     void* lt_workspace,
-    float p);
+    float p,
+    float r_p);
 
 template int mlp_bp<at::Half>(
     at::Half* X,
@@ -2321,12 +2677,14 @@ template int mlp_bp<at::Half>(
     at::Half* reserved_space,
     at::Half* reserved_activations,
     uint8_t* reserved_mask,
+    uint8_t* residual_mask,
     at::Half* work_space,
     at::Half* dX,
     at::Half** dwPtr,
     at::Half** dbPtr,
     bool requires_grad,
-    float p);
+    float p,
+    float r_p);
 
 template int mlp_fp<double>(
     double* X,
@@ -2340,8 +2698,10 @@ template int mlp_fp<double>(
     double* reserved_space,
     double* reserved_activations,
     uint8_t* reserved_mask,
+    uint8_t* residual_mask,
     void* lt_workspace,
-    float p);
+    float p,
+    float r_p);
 
 template int mlp_bp<double>(
     double* X,
@@ -2355,12 +2715,14 @@ template int mlp_bp<double>(
     double* reserved_space,
     double* reserved_activations,
     uint8_t* reserved_mask,
+    uint8_t* residual_mask,
     double* work_space,
     double* dX,
     double** dwPtr,
     double** dbPtr,
     bool requires_grad,
-    float p);
+    float p,
+    float r_p);
 
 template size_t get_mlp_bp_workspace_in_bytes<float>(
     int batch_size,

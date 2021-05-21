@@ -753,6 +753,9 @@ class Transformer(NMTModel):
         else:
             output_dict = self.generator(output_dict)
         log_prob = output_dict['logits'].squeeze(0)
+
+        # the key 'softmaxed' should be included in generators.
+        # The 'normal linear + CE' doesn't need softmax
         if output_dict['softmaxed'] is False:
             log_prob = F.log_softmax(log_prob, dim=-1, dtype=torch.float32)
 
