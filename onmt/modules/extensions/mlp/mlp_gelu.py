@@ -370,13 +370,13 @@ if __name__ == '__main__':
                 np.testing.assert_allclose(
                     test_input.grad.detach().cpu().numpy(),
                     ref_input.grad.detach().cpu().numpy(),
-                    atol=0, rtol=1)
+                    atol=1e-5, rtol=1e-4)
 
                 for l in range(mlp.num_layers):
                     np.testing.assert_allclose(
                         mlp.weights[l].grad.detach().cpu().numpy(),
                         ref_mlp.weights[l].grad.detach().cpu().numpy(),
-                        atol=1e-7, rtol=1)
+                        atol=1e-7, rtol=1e-5)
                     np.testing.assert_allclose(
                         mlp.biases[l].grad.detach().cpu().numpy(),
                         ref_mlp.biases[l].grad.detach().cpu().numpy(),

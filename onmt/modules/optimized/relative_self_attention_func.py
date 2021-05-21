@@ -147,6 +147,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
         if rel_self_attn_cuda is not None and not incremental and len_k <= 2048 and \
                 inputs.type() == 'torch.cuda.HalfTensor' and learnable_pos:
+
             input_lin_results, rr_head_q, rw_head_q, \
                 softmax_results, dropout_results, dropout_mask, \
                 matmul2_results, outputs \

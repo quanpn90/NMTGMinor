@@ -82,18 +82,18 @@ ext_modules.append(
                                                '--expt-extended-lambda',
                                                '--use_fast_math'] + cc_flag}))
 
-# ext_modules.append(
-#     CUDAExtension(name='rel_self_attn_cuda',
-#                   sources=['relative_self_attn.cpp',
-#                            'relative_self_attn_cuda.cu'],
-#                   extra_compile_args={'cxx': ['-O3',],
-#                                       'nvcc':['-O3',
-#                                               '-I./cutlass/',
-#                                               '-U__CUDA_NO_HALF_OPERATORS__',
-#                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
-#                                               '--expt-relaxed-constexpr',
-#                                               '--expt-extended-lambda',
-#                                               '--use_fast_math'] + cc_flag}))
+ext_modules.append(
+    CUDAExtension(name='rel_self_attn_cuda',
+                  sources=['relative_self_attn.cpp',
+                           'relative_self_attn_cuda.cu'],
+                  extra_compile_args={'cxx': ['-O3',],
+                                      'nvcc':['-O3',
+                                              '-I./cutlass/',
+                                              '-U__CUDA_NO_HALF_OPERATORS__',
+                                              '-U__CUDA_NO_HALF_CONVERSIONS__',
+                                              '--expt-relaxed-constexpr',
+                                              '--expt-extended-lambda',
+                                              '--use_fast_math'] + cc_flag}))
 
 
 setup(

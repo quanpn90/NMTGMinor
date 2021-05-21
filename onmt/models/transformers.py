@@ -748,7 +748,10 @@ class Transformer(NMTModel):
         output_dict['src'] = decoder_state.src.transpose(0, 1)
 
         # squeeze to remove the time step dimension
-        output_dict = self.generator[0](output_dict)
+        if isinstance(self.generator, nn.ModuleList):
+            output_dict = self.generator[0](output_dict)
+        else:
+            output_dict = self.generator(output_dict)
         log_prob = output_dict['logits'].squeeze(0)
         if output_dict['softmaxed'] is False:
             log_prob = F.log_softmax(log_prob, dim=-1, dtype=torch.float32)

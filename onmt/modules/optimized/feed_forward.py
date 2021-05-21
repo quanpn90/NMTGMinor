@@ -146,7 +146,7 @@ class PositionWiseFeedForward(nn.Module):
             # verification code (only with dropout = 0.0)
             # with torch.no_grad():
             #     hidden_ = F.linear(self.act(F.linear(input, self.in_proj_weight, self.in_proj_bias)),
-            #                        self.out_proj_weight, self.out_proj_bias)
+            #                        self.out_proj_weight, self.out_proj_bias).type_as(hidden)
             #
             #     comp = torch.allclose(hidden, hidden_, rtol=1e-03, atol=1e-04)
             #     print(comp)
