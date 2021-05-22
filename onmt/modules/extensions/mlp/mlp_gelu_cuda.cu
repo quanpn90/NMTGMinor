@@ -482,143 +482,6 @@ __global__ void biasAdd_fprop(T *X, T *b, uint batch_size, uint features) {
 }
 
 
-
-// Bias ADD + ReLU. Assume input X is [features x batch size], column major.
-// Activation support fuesed ReLU. Safe to call in-place.
-template <typename T>
-__global__ void biasAddRelu_fprop(T *X, T *b, uint batch_size, uint features) {
-  T r_x[ILP];
-  T r_b[ILP];
-  if(is_aligned(X) && is_aligned(b) && features % ILP ==0) {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
-      int row = tid % (features / ILP);
-      load_store(r_x, X, 0 , tid);
-      load_store(r_b, b, 0 , row);
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_x[ii] = relu(bias_sum);
-      }
-      load_store(X, r_x, tid , 0);
-    }
-  } else {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        int idx = tid + ii * blockDim.x * gridDim.x;
-        if(idx < features * batch_size) {
-          int row = tid % features;
-          r_x[ii] = X[idx];
-          r_b[ii] = b[row];
-        }
-      }
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_x[ii] = relu(bias_sum);
-      }
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        int idx = tid + ii * blockDim.x * gridDim.x;
-        if(idx < features * batch_size) {
-          X[idx] = r_x[ii];
-        }
-      }
-    }
-  }
-}
-
-// Bias ADD + ReLU. Assume input X is [features x batch size], column major.
-// Activation support fuesed ReLU. Safe to call in-place.
-template <typename T>
-__global__ void biasAddDropoutRelu_fprop(T *X, T *b, uint batch_size, uint features, float p,
-                                         std::pair<uint64_t, uint64_t> seeds) {
-  T r_x[ILP];
-  T r_b[ILP];
-//  uint8_t r_m[ILP];
-  float pinv = 1.f/(1.f-p);
-
-  if(is_aligned(X) && is_aligned(b) && features % ILP ==0) {
-
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    curandStatePhilox4_32_10_t state;
-    curand_init(
-        seeds.first,
-        tid,
-        seeds.second,
-        &state);
-
-    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
-      int row = tid % (features / ILP);
-      load_store(r_x, X, 0 , tid);
-      load_store(r_b, b, 0 , row);
-//      load_store(r_m, mask, 0, tid);  // mask has the same size with X
-
-      float4 rand = curand_uniform4(&state);
-      rand.x = rand.x >= p;
-      rand.y = rand.y >= p;
-      rand.z = rand.z >= p;
-      rand.w = rand.w >= p;
-
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_x[ii] = relu(bias_sum)*(&rand.x)[ii]*pinv;
-//        r_m[ii] = (uint8_t)(&rand.x)[ii];
-
-      }
-      load_store(X, r_x, tid , 0);
-//      load_store(mask, r_m, tid , 0);
-    }
-  } else {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    curandStatePhilox4_32_10_t state;
-    curand_init(
-        seeds.first,
-        tid,
-        seeds.second,
-        &state);
-
-    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
-
-      float4 rand = curand_uniform4(&state);
-      rand.x = rand.x >= p;
-      rand.y = rand.y >= p;
-      rand.z = rand.z >= p;
-      rand.w = rand.w >= p;
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        int idx = tid + ii * blockDim.x * gridDim.x;
-        if(idx < features * batch_size) {
-          int row = tid % features;
-          r_x[ii] = X[idx];
-          r_b[ii] = b[row];
-//          r_m[ii] = mask[idx];
-        }
-      }
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_x[ii] = relu(bias_sum)*(&rand.x)[ii]*pinv;
-//        r_m[ii] = (uint8_t)(&rand.x)[ii];
-      }
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        int idx = tid + ii * blockDim.x * gridDim.x;
-        if(idx < features * batch_size) {
-          X[idx] = r_x[ii];
-//          mask[idx] = r_m[ii];
-        }
-      }
-    }
-  }
-}
-
-
 // Bias ADD + ReLU. Assume input X is [features x batch size], column major.
 // Activation support fuesed ReLU. Safe to call in-place.
 template <typename T>
@@ -658,9 +521,8 @@ __global__ void biasAddDropoutGeLU_fprop(T *X, T *Y, T *b, uint8_t *mask, uint b
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
         float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        //r_x[ii] = relu(bias_sum)*(&rand.x)[ii]*pinv;
         r_y[ii] = bias_sum;  // store the mm + bias output
-        r_x[ii] = gelu(bias_sum) * (&rand.x)[ii]*pinv;  // gelu * dropout mask
+        r_x[ii] = gelu(bias_sum) * (float)(&rand.x)[ii]*pinv;  // gelu * dropout mask
         r_m[ii] = (uint8_t)(&rand.x)[ii];  // store the mask values in buffer
       }
       load_store(X, r_x, tid , 0);
@@ -699,7 +561,7 @@ __global__ void biasAddDropoutGeLU_fprop(T *X, T *Y, T *b, uint8_t *mask, uint b
       for(int ii = 0; ii < ILP; ii++) {
         float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
         r_y[ii] = bias_sum;
-        r_x[ii] = gelu(bias_sum)*(&rand.x)[ii]*pinv;
+        r_x[ii] = gelu(bias_sum)*(float)(&rand.x)[ii]*pinv;
         r_m[ii] = (uint8_t)(&rand.x)[ii];
       }
 #pragma unroll
@@ -1520,7 +1382,7 @@ __global__ void biasAddGeLUDropout_bprop(
       T dy_val = dY[flat_idx];
       uint8_t m_val = mask[flat_idx];
       T dx_val;
-      dx_val = gelu_back((float)dy_val, (float)h_val) * m_val * pinv ;  // gelu backprop
+      dx_val = gelu_back((float)dy_val, (float)h_val) * float(m_val) * pinv ;  // gelu backprop
 //      if ((float)y_val > 0.f)
 //        dx_val = dy_val;
 //      else
@@ -1542,7 +1404,7 @@ __global__ void biasAddGeLUDropout_bprop(
         T h_val = H[flat_idx];
         uint8_t m_val = mask[flat_idx];
         T dx_val;
-        dx_val = gelu_back((float)dy_val, (float)h_val) * m_val * pinv;
+        dx_val = gelu_back((float)dy_val, (float)h_val) * float(m_val) * pinv;
 //        if ((float)y_val > 0.f)
 //          dx_val = dy_val * pinv;
 //        else
@@ -1663,7 +1525,7 @@ __global__ void biasAddGeLUDropout_bprop_aligned(
 //      else {
 //        r_dy[ii] = r_dy[ii] * pinv;
 //      }
-      r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]) * r_m[ii] * pinv;
+      r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]) * float(r_m[ii]) * pinv;
       db_local[ii] += (float)r_dy[ii];
     }
     load_store(dX, r_dy, flat_idx, 0);
@@ -1687,7 +1549,7 @@ __global__ void biasAddGeLUDropout_bprop_aligned(
 //          r_dy[ii] = 0;
 //        else
 //          r_dy[ii] = r_dy[ii] * pinv;
-        r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]) * r_m[ii] * pinv;
+        r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]) * (float)r_m[ii] * pinv;
         db_local[ii] += (float)r_dy[ii];
       }
       load_store(dX, r_dy, flat_idx, 0);
@@ -1937,7 +1799,7 @@ int mlp_fp(
 
   // Get cublas handle from Pytorch
   cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
-  // Get the stream from cublas handle to reuse for biasReLU kernel.
+  // Get the strea* from cublas handle to reuse for biasReLU kernel.
   cudaStream_t stream;
   cublasGetStream(handle, &stream);
 //  int activation = 1;

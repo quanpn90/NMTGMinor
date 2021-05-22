@@ -84,9 +84,9 @@ std::vector<torch::Tensor> mlp_forward(float p, float r_p, std::vector<torch::Te
   auto reserved_mask  = torch::empty({dmask_size}, mask_options);  // for relu we don't need to keep the mask
 
   // allocate mask for dropout at residual
-  if ( r_p == 0.0f ) {
-      last_layer_size = 0;
-  }
+//  if ( r_p == 0.0f ) {
+//      last_layer_size = 0;
+//  }
   auto residual_mask = torch::empty({last_layer_size}, mask_options);
   // allocate fixed 4MB workspace for cublaslt for now, and this gets at least 4 MB
   auto lt_workspace = torch::empty({1 << 22}, inputs[0].type());

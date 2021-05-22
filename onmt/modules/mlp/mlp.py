@@ -185,7 +185,7 @@ class MlpGeLUDropoutAddFunction(torch.autograd.Function):
         dropout_mask = outputs[-2]
         residual_mask = outputs[-1]
         ctx.p = p
-        ctx.r_p = p
+        ctx.r_p = r_p
         return outputs[0]
 
     @staticmethod

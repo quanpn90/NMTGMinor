@@ -35,8 +35,8 @@ def postprocessing(rezero, model_size, dropout, variational=False, post_norm=Fal
             sequence += 'z'
         else:
             sequence += 'a'
-        if post_norm:
-            sequence += 'n'
+    if post_norm:
+        sequence += 'n'
 
     return PrePostProcessing(model_size, dropout,
                              sequence=sequence,

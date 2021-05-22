@@ -573,7 +573,7 @@ __global__ void biasAddDropoutResidual_fprop(T *X, T *R, uint8_t* mask, T *b, ui
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
         float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_x[ii] = bias_sum * (&rand.x)[ii]*pinv  + static_cast<float>(r_r[ii]) ;
+        r_x[ii] = static_cast<float>(bias_sum * (float)(&rand.x)[ii]*pinv)  + static_cast<float>(r_r[ii]) ;
         r_m[ii] = (uint8_t)(&rand.x)[ii];
       }
       load_store(X, r_x, tid , 0);
@@ -610,7 +610,7 @@ __global__ void biasAddDropoutResidual_fprop(T *X, T *R, uint8_t* mask, T *b, ui
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
         float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_x[ii] = bias_sum*(&rand.x)[ii]*pinv  + static_cast<float>(r_r[ii]);
+        r_x[ii] = static_cast<float>(bias_sum*(float)(&rand.x)[ii]*pinv)  + static_cast<float>(r_r[ii]);
         r_m[ii] = (uint8_t)(&rand.x)[ii];
       }
 #pragma unroll
@@ -667,7 +667,7 @@ __global__ void biasAddDropoutGeLU_fprop(T *X, T *Y, T *b, uint8_t *mask, uint b
         float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
         //r_x[ii] = relu(bias_sum)*(&rand.x)[ii]*pinv;
         r_y[ii] = bias_sum;  // store the mm + bias output
-        r_x[ii] = gelu(bias_sum) * (&rand.x)[ii]*pinv;  // gelu * dropout mask
+        r_x[ii] = gelu(bias_sum) * (float)(&rand.x)[ii]*pinv;  // gelu * dropout mask
         r_m[ii] = (uint8_t)(&rand.x)[ii];  // store the mask values in buffer
       }
       load_store(X, r_x, tid , 0);
@@ -706,7 +706,7 @@ __global__ void biasAddDropoutGeLU_fprop(T *X, T *Y, T *b, uint8_t *mask, uint b
       for(int ii = 0; ii < ILP; ii++) {
         float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
         r_y[ii] = bias_sum;
-        r_x[ii] = gelu(bias_sum)*(&rand.x)[ii]*pinv;
+        r_x[ii] = gelu(bias_sum)*(float)(&rand.x)[ii]*pinv;
         r_m[ii] = (uint8_t)(&rand.x)[ii];
       }
 #pragma unroll
@@ -741,7 +741,6 @@ __global__ void biasAddGeLU_fprop(T *X, T *Y, T *b, uint batch_size, uint featur
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
         float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        //r_x[ii] = relu(bias_sum)*(&rand.x)[ii]*pinv;
         r_y[ii] = bias_sum;  // store the mm + bias output
         r_x[ii] = gelu(bias_sum);  // gelu * dropout mask
       }
@@ -958,7 +957,7 @@ __global__ void biasAddDropout_bprop(
       T dy_val = dY[flat_idx];
       uint8_t m_val = mask[flat_idx];
       T dx_val;
-      dx_val = (float)dy_val * m_val * pinv ;  // dropout backprop
+      dx_val = (float)dy_val * (float)m_val * pinv ;  // dropout backprop
 
       dX[flat_idx] = dx_val;
       db_local += (float)dx_val;
@@ -976,7 +975,7 @@ __global__ void biasAddDropout_bprop(
         T dy_val = dY[flat_idx];
         uint8_t m_val = mask[flat_idx];
         T dx_val;
-        dx_val = (float)dy_val * m_val * pinv;
+        dx_val = (float)dy_val * (float)m_val * pinv;
 
         dX[flat_idx] = dx_val;
         db_local += (float)dx_val;
@@ -1064,6 +1063,7 @@ __global__ void biasAddDropout_bprop_aligned(
   float db_local[ILP];
   T r_y[ILP];
   T r_dy[ILP];
+  T r_dx[ILP];
   uint8_t r_m[ILP];
 #pragma unroll
   for(int ii=0;ii<ILP;ii++){
@@ -1083,14 +1083,15 @@ __global__ void biasAddDropout_bprop_aligned(
 
     load_store(r_y, Y, 0, flat_idx);
     load_store(r_dy, dY, 0, flat_idx);
+    load_store(r_dx, dX, 0, flat_idx);
     load_store(r_m, mask, 0, flat_idx);
 #pragma unroll
     for(int ii=0;ii<ILP;ii++){
 
-      r_dy[ii] = (float)r_dy[ii] * r_m[ii] * pinv;  // dropout backward
+      r_dx[ii] = (float)r_dy[ii] * (float)r_m[ii] * pinv;  // dropout backward
       db_local[ii] += (float)r_dy[ii];
     }
-    load_store(dX, r_dy, flat_idx, 0);
+    load_store(dX, r_dx, flat_idx, 0);
   }
 
   // Handle meat of work
@@ -1103,294 +1104,15 @@ __global__ void biasAddDropout_bprop_aligned(
     for (int u = 0; u < UNROLL_FACTOR; u++) {
       load_store(r_y, Y, 0, flat_idx);
       load_store(r_dy, dY, 0, flat_idx);
+      load_store(r_dx, dX, 0, flat_idx);
       load_store(r_m, mask, 0, flat_idx);
 #pragma unroll
       for(int ii=0;ii<ILP;ii++){
 
-        r_dy[ii] = (float)r_dy[ii] * r_m[ii] * pinv; // dropout backward
+        r_dx[ii] = (float)r_dy[ii] * (float)r_m[ii] * pinv; // dropout backward
         db_local[ii] += (float)r_dy[ii];
       }
-      load_store(dX, r_dy, flat_idx, 0);
-      flat_idx += features/ILP;
-    }
-  }
-
-  // we know block size for now
-  __shared__ float smem[BIAS_RELU_BW_NTHREADS_X*BIAS_RELU_BW_NTHREADS_Y*ILP];
-  // naive block reduction on y-dim
-  int linear_idx = threadIdx.y * blockDim.x + threadIdx.x;
-  float* smem_out = smem + ILP * linear_idx;
-#pragma unroll
-  for(int ii=0;ii<ILP;ii++){
-    smem_out[ii] = db_local[ii]; // reuse local dy buffer
-  }
-  __syncthreads();
-  if(threadIdx.y == 0) {
-    for(int yidx = 1; yidx < blockDim.y; yidx++){
-      float* smem_in = smem + ILP * (yidx * blockDim.x + threadIdx.x);
-#pragma unroll
-      for(int ii=0;ii<ILP;ii++){
-        db_local[ii] += smem_in[ii]; // reuse local dy buffer
-      }
-    }
-
-    // block result is in db_local now for all threadIdx.y == 0
-    if(gridDim.y == 1) {
-#pragma unroll
-      for(int ii=0;ii<ILP;ii++){
-        r_dy[ii] = db_local[ii]; // reuse local dy buffer
-      }
-      load_store(db, r_dy, f, 0);
-      return;
-    }
-
-    // Write out partial result
-    load_store(out, db_local, f, 0);
-  }
-  __threadfence();
-  __syncthreads();
-
-  // Increment semaphore and check if this is the last CTA in the grid_y dimension.
-  // Only thread (0,0) calls this
-  if (threadIdx.x == 0 && threadIdx.y == 0) {
-    unsigned int sum_idx;
-    sum_idx = atomicAdd(&(semaphores[blockIdx.x]), 1);
-    isLastBlock = (sum_idx == (gridDim.y - 1));
-  }
-  __syncthreads();
-
-#pragma unroll
-  for(int ii=0;ii<ILP;ii++){
-    db_local[ii] = 0.f;
-  }
-  float r_db[ILP];
-
-  // No block reduction for now, only thread (*,0) do grid reduction
-  if (isLastBlock) {
-    if(threadIdx.y == 0){
-      for (int n = 0; n < gridDim.y; n++) {
-        int row, col;
-        row = f;
-        col = n;
-        load_store(r_db, intermediate, 0, col * features / ILP + row);
-#pragma unroll
-        for(int ii=0;ii<ILP;ii++){
-          db_local[ii] += r_db[ii];
-        }
-      }
-#pragma unroll
-      for(int ii=0;ii<ILP;ii++){
-        r_dy[ii] = db_local[ii]; // reuse local dy buffer
-      }
-      load_store(db, r_dy, f, 0);
-    }
-  }
-}
-
-// Addition done deterministically via a 2-pass approach. Each CTA writes out partial
-// sum, and the last CTA in grid Y dimension accumulates partials serially and writes to result.
-template <typename T, int UNROLL_FACTOR>
-__global__ void biasAddRelu_bprop(
-    T* Y,
-    T* dY,
-    int features,
-    int batch_size,
-    T* dX,
-    volatile float* intermediate,
-    int* semaphores,
-    T* db,
-    float p) {
-  // The feature that this thread is responsible for
-  int f = blockIdx.x * blockDim.x + threadIdx.x;
-  float pinv = 1.0f / (1.0f - p);
-
-  // Compute the span this thread is responsible for
-  // For this block
-  int b_chunkSize = (batch_size + gridDim.y - 1) / gridDim.y;
-  int b_nStart = blockIdx.y * b_chunkSize;
-  int b_nSpan = min(batch_size, b_nStart + b_chunkSize) - b_nStart;
-  // For this thread
-  int chunkSize = (b_chunkSize + blockDim.y - 1) / blockDim.y;
-  int nStart = threadIdx.y * chunkSize + b_nStart;
-  int nSpan = min(b_nStart + b_nSpan, nStart + chunkSize) - nStart;
-
-  volatile float* out = intermediate + blockIdx.y * features;
-
-  // Flag to trigger last reduction.
-  __shared__ bool isLastBlock;
-  // we know block size for now
-  __shared__ float smem[BIAS_RELU_BW_NTHREADS_X*BIAS_RELU_BW_NTHREADS_Y];
-
-  // Accumulate db in FP32 always
-  float db_local = 0;
-  if (f < features) {
-    int nidx = 0;
-    // Handle non-multiple of UNROLL_FACTOR residue
-    for (; nidx < nSpan % UNROLL_FACTOR; nidx++) {
-      int row, col, flat_idx;
-      row = f;
-      col = nStart + nidx;
-      flat_idx = col * features + row;
-      T y_val = Y[flat_idx];
-      T dy_val = dY[flat_idx];
-      T dx_val;
-      if ((float)y_val > 0.f)
-        dx_val = dy_val * pinv;
-      else
-        dx_val = 0;
-      dX[flat_idx] = dx_val;
-      db_local += (float)dx_val;
-    }
-
-    // Handle meat of work
-    for (; (nidx + UNROLL_FACTOR - 1) < nSpan; nidx += UNROLL_FACTOR) {
-      int row, col, flat_idx;
-      row = f;
-      col = nStart + nidx;
-      flat_idx = col * features + row;
-#pragma unroll 4
-      for (int u = 0; u < UNROLL_FACTOR; u++) {
-        T y_val = Y[flat_idx];
-        T dy_val = dY[flat_idx];
-        T dx_val;
-        if ((float)y_val > 0.f)
-          dx_val = dy_val * pinv;
-        else
-          dx_val = 0;
-        dX[flat_idx] = dx_val;
-        db_local += (float)dx_val;
-        flat_idx += features;
-      }
-    }
-
-    // naive block reduction on y-dim
-    int linear_idx = threadIdx.y * blockDim.x + threadIdx.x;
-    smem[linear_idx] = db_local;
-  }
-  __syncthreads();
-  if (f < features) {
-    if(threadIdx.y == 0) {
-      for(int yidx = 1; yidx < blockDim.y; yidx++){
-        db_local += smem[yidx * blockDim.x + threadIdx.x];
-      }
-
-      // block result is in db_local now for all threadIdx.y == 0
-      // Write out partial result
-      out[f] = db_local;
-    }
-  }
-  __threadfence();
-  __syncthreads();
-
-  // Increment semaphore and check if this is the last CTA in the grid_y dimension.
-  // Only thread (0,0) calls this
-  if (threadIdx.x == 0 && threadIdx.y == 0 && f < features) {
-    unsigned int sum_idx;
-    sum_idx = atomicAdd(&(semaphores[blockIdx.x]), 1);
-    isLastBlock = (sum_idx == (gridDim.y - 1));
-  }
-  __syncthreads();
-
-  db_local = 0;
-  // No block reduction for now, only thread (*,0) do grid reduction
-  if (isLastBlock && f < features) {
-    if(threadIdx.y == 0) {
-      for (int n = 0; n < gridDim.y; n++) {
-        int row, col;
-        row = f;
-        col = n;
-        db_local += (float)(intermediate[col * features + row]);
-      }
-      db[f] = (T)db_local;
-    }
-  }
-}
-
-// Addition done deterministically via a 2-pass approach. Each CTA writes out partial
-// sum, and the last CTA in grid Y dimension accumulates partials serially and writes to result.
-template <typename T, int UNROLL_FACTOR>
-__global__ void biasAddRelu_bprop_aligned(
-    T* Y,
-    T* dY,
-    int features,
-    int batch_size,
-    T* dX,
-    volatile float* intermediate,
-    int* semaphores,
-    T* db,
-    float p) {
-  // The feature that this thread is responsible for
-  int f = blockIdx.x * blockDim.x + threadIdx.x;
-  float pinv = 1.0f / (1.0f - p);
-
-  // Compute the span this thread is responsible for
-  // For this block
-  int b_chunkSize = (batch_size + gridDim.y - 1) / gridDim.y;
-  int b_nStart = blockIdx.y * b_chunkSize;
-  int b_nSpan = min(batch_size, b_nStart + b_chunkSize) - b_nStart;
-  // For this thread
-  int chunkSize = (b_chunkSize + blockDim.y - 1) / blockDim.y;
-  int nStart = threadIdx.y * chunkSize + b_nStart;
-  int nSpan = min(b_nStart + b_nSpan, nStart + chunkSize) - nStart;
-
-  volatile float* out = intermediate + blockIdx.y * features;
-
-  // Flag to trigger last reduction.
-  __shared__ bool isLastBlock;
-
-  // Accumulate db in FP32 always
-  float db_local[ILP];
-  T r_y[ILP];
-  T r_dy[ILP];
-#pragma unroll
-  for(int ii=0;ii<ILP;ii++){
-    db_local[ii] = 0.f;
-  }
-
-  // f always <= features in this case
-  //if (f < features) {
-  int nidx = 0;
-
-  // Handle non-multiple of UNROLL_FACTOR residue
-  for (; nidx < nSpan % UNROLL_FACTOR; nidx++) {
-    int row, col, flat_idx;
-    row = f;
-    col = nStart + nidx;
-    flat_idx = col * features / ILP + row;
-
-    load_store(r_y, Y, 0, flat_idx);
-    load_store(r_dy, dY, 0, flat_idx);
-#pragma unroll
-    for(int ii=0;ii<ILP;ii++){
-      if ((float)r_y[ii] <= 0.f)
-        r_dy[ii] = 0;
-      else {
-        r_dy[ii] = r_dy[ii] * pinv;
-      }
-      db_local[ii] += (float)r_dy[ii];
-    }
-    load_store(dX, r_dy, flat_idx, 0);
-  }
-
-  // Handle meat of work
-  for (; (nidx + UNROLL_FACTOR - 1) < nSpan; nidx += UNROLL_FACTOR) {
-    int row, col, flat_idx;
-    row = f;
-    col = nStart + nidx;
-    flat_idx = col * features / ILP + row; // total threads in x == features/ILP
-#pragma unroll
-    for (int u = 0; u < UNROLL_FACTOR; u++) {
-      load_store(r_y, Y, 0, flat_idx);
-      load_store(r_dy, dY, 0, flat_idx);
-#pragma unroll
-      for(int ii=0;ii<ILP;ii++){
-        if ((float)r_y[ii] <= 0.f)
-          r_dy[ii] = 0;
-        else
-          r_dy[ii] = r_dy[ii] * pinv;
-        db_local[ii] += (float)r_dy[ii];
-      }
-      load_store(dX, r_dy, flat_idx, 0);
+      load_store(dX, r_dx, flat_idx, 0);
       flat_idx += features/ILP;
     }
   }
@@ -1647,11 +1369,7 @@ __global__ void biasAddGeLU_bprop_aligned(
     load_store(r_dy, dY, 0, flat_idx);
 #pragma unroll
     for(int ii=0;ii<ILP;ii++){
-//      if ((float)r_y[ii] <= 0.f)
-//        r_dy[ii] = 0;
-//      else {
-//        r_dy[ii] = r_dy[ii] * pinv;
-//      }
+
       r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]);
       db_local[ii] += (float)r_dy[ii];
     }
@@ -1671,10 +1389,7 @@ __global__ void biasAddGeLU_bprop_aligned(
       load_store(r_dy, dY, 0, flat_idx);
 #pragma unroll
       for(int ii=0;ii<ILP;ii++){
-//        if ((float)r_y[ii] <= 0.f)
-//          r_dy[ii] = 0;
-//        else
-//          r_dy[ii] = r_dy[ii] * pinv;
+
         r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]);
         db_local[ii] += (float)r_dy[ii];
       }
@@ -1756,7 +1471,7 @@ __global__ void biasAddGeLU_bprop_aligned(
 }
 
 
-///////////// DROPOUT SILU BACKWARD ///////////////////////////////
+///////////// DROPOUT GELU BACKWARD ///////////////////////////////
 
 // Addition done deterministically via a 2-pass approach. Each CTA writes out partial
 // sum, and the last CTA in grid Y dimension accumulates partials serially and writes to result.
@@ -1807,19 +1522,10 @@ __global__ void biasAddGeLUDropout_bprop(
       T y_val = Y[flat_idx];
       T h_val = H[flat_idx];
       T dy_val = dY[flat_idx];
-      uint8_t m_val;
-      if (pinv != 1)
-        m_val = mask[flat_idx];
+      uint8_t m_val = mask[flat_idx];
       T dx_val;
+      dx_val = gelu_back((float)dy_val, (float)h_val) * (float)m_val * pinv ;  // gelu backprop
 
-      if (pinv == 1)
-        dx_val = gelu_back((float)dy_val, (float)h_val) ;  // gelu backprop
-      else
-        dx_val = gelu_back((float)dy_val, (float)h_val) * m_val * pinv ;  // gelu backprop
-//      if ((float)y_val > 0.f)
-//        dx_val = dy_val;
-//      else
-//        dx_val = 0;
       dX[flat_idx] = dx_val;
       db_local += (float)dx_val;
     }
@@ -1835,14 +1541,9 @@ __global__ void biasAddGeLUDropout_bprop(
         T y_val = Y[flat_idx];
         T dy_val = dY[flat_idx];
         T h_val = H[flat_idx];
-        uint8_t m_val;
-        if (pinv != 1)
-            m_val = mask[flat_idx];
+        uint8_t m_val = mask[flat_idx];
         T dx_val;
-        if (pinv == 1)
-            dx_val = gelu_back((float)dy_val, (float)h_val);
-        else
-            dx_val = gelu_back((float)dy_val, (float)h_val) * m_val * pinv;
+        dx_val = gelu_back((float)dy_val, (float)h_val) * (float)m_val * pinv;
 
         dX[flat_idx] = dx_val;
         db_local += (float)dx_val;
@@ -1952,8 +1653,8 @@ __global__ void biasAddGeLUDropout_bprop_aligned(
     load_store(r_y, Y, 0, flat_idx);
     load_store(r_h, H, 0, flat_idx);
     load_store(r_dy, dY, 0, flat_idx);
-    if (pinv != 1)
-        load_store(r_m, mask, 0, flat_idx);
+    load_store(r_m, mask, 0, flat_idx);
+
 #pragma unroll
     for(int ii=0;ii<ILP;ii++){
 //      if ((float)r_y[ii] <= 0.f)
@@ -1961,10 +1662,8 @@ __global__ void biasAddGeLUDropout_bprop_aligned(
 //      else {
 //        r_dy[ii] = r_dy[ii] * pinv;
 //      }
-      if (pinv == 1)
-        r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]);
-      else
-        r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]) * r_m[ii] * pinv;
+      r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]) * (float)r_m[ii] * pinv;
+
       db_local[ii] += (float)r_dy[ii];
     }
     load_store(dX, r_dy, flat_idx, 0);
@@ -1981,18 +1680,12 @@ __global__ void biasAddGeLUDropout_bprop_aligned(
       load_store(r_y, Y, 0, flat_idx);
       load_store(r_h, H, 0, flat_idx);
       load_store(r_dy, dY, 0, flat_idx);
-      if (pinv != 1)
-        load_store(r_m, mask, 0, flat_idx);
+      load_store(r_m, mask, 0, flat_idx);
+
 #pragma unroll
       for(int ii=0;ii<ILP;ii++){
-//        if ((float)r_y[ii] <= 0.f)
-//          r_dy[ii] = 0;
-//        else
-//          r_dy[ii] = r_dy[ii] * pinv;
-        if (pinv == 1)
-            r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]);
-        else
-            r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]) * r_m[ii] * pinv;
+        r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]) * (float)r_m[ii] * pinv;
+
         db_local[ii] += (float)r_dy[ii];
       }
       load_store(dX, r_dy, flat_idx, 0);
@@ -2458,9 +2151,8 @@ int mlp_bp(
         if (r_p == 0) {
             get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
             dim3 grid(grid_x, grid_y);
-            if (r_p == 0.0f)
-                biasAdd_bprop<T, 4><<<grid, block, 0, stream>>>(
-                  dy, yfeat, batch_size, db_scratch, semaphores, dbias);
+            biasAdd_bprop<T, 4><<<grid, block, 0, stream>>>(
+              dy, yfeat, batch_size, db_scratch, semaphores, dbias);
 
             // bypass dgrad through reset pointer
             dy_gemm = dy;
