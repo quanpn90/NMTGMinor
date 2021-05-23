@@ -22,8 +22,6 @@ from onmt.train_utils.stats import Logger
 from onmt.utils import checkpoint_paths, normalize_gradients
 from onmt.model_factory import freeze_model_specialized_weights, unfreeze_model_speciailized_weights
 
-from onmt.multiprocessing.multiprocessing_wrapper import MultiprocessingRunner
-
 
 def varname(p):
     for line in inspect.getframeinfo(inspect.currentframe().f_back)[3]:
