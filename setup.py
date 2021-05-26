@@ -1,8 +1,9 @@
+#!/usr/bin/env python3
 from setuptools import setup, find_packages
 
-setup(name='onmt',
+setup(name='NMTGMinor',
       version='0.1',
-      author='quanpn90',
+      author='Ngoc-Quan Pham',
       author_email='ngoc.pham@kit.edu',
       url='https://github.com/quanpn90/NMTGMinor',
       license='MIT',
@@ -17,4 +18,4 @@ setup(name='onmt',
           'translate.py'
       ],
       packages=find_packages(),
-      install_requires=['pytorch', 'apex', 'h5py'])
+      install_requires=['torch', 'h5py'])

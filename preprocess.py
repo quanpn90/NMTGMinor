@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import onmt
 import onmt.markdown
 import argparse

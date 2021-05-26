@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import onmt
 import torch
 import torch.nn as nn
