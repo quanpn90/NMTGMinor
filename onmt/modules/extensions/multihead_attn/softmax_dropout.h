@@ -1119,7 +1119,8 @@ element_count)
 
 
 
-template <typename input_t, typename output_t, typename acc_t, int WARP_BATCH, int WARP_ITERATIONS, int WARP_SIZE=32, int ELEMENTS_PER_LDG_STG, bool is_log_softmax>
+template <typename input_t, typename output_t, typename acc_t, int WARP_BATCH, int WARP_ITERATIONS, int WARP_SIZE=32,
+int ELEMENTS_PER_LDG_STG, bool is_log_softmax>
 __global__ void masked_scale_softmax_warp_backward_recompute(output_t *gradInput, const input_t *grad,
 const input_t *output, const uint8_t *mask, acc_t scale,
 int batch_size, int stride, int element_count)

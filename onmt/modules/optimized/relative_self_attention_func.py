@@ -149,8 +149,8 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                 inputs.type() == 'torch.cuda.HalfTensor' and learnable_pos:
 
             input_lin_results, rr_head_q, rw_head_q, \
-                softmax_results, dropout_results, dropout_mask, \
-                matmul2_results, outputs \
+            softmax_results, dropout_results, dropout_mask, \
+            matmul2_results, outputs \
                 = rel_self_attn_cuda.forward(is_training, heads, inputs, pos,
                                              input_weights, output_weights,
                                              input_biases, output_biases,
@@ -437,16 +437,16 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
         if ctx.fused_all:  # only applicable for learnable position and len_k <= 2048
             input_grads, pos_grads, \
-                input_weight_grads, \
-                input_bias_grads, \
-                output_weight_grads, \
-                output_bias_grads, \
-                r_w_bias_grads, r_r_bias_grads = rel_self_attn_cuda.backward(
-                                                                         heads_t[0], output_grads, matmul2_results,
-                                                                         dropout_results, softmax_results,
-                                                                         input_lin_results, rw_head_q, rr_head_q,
-                                                                         inputs, pos, input_weights, output_weights,
-                                                                         dropout_mask, dropout_prob_t[0])
+            input_weight_grads, \
+            input_bias_grads, \
+            output_weight_grads, \
+            output_bias_grads, \
+            r_w_bias_grads, r_r_bias_grads = rel_self_attn_cuda.backward(
+                heads_t[0], output_grads, matmul2_results,
+                dropout_results, softmax_results,
+                input_lin_results, rw_head_q, rr_head_q,
+                inputs, pos, input_weights, output_weights,
+                dropout_mask, dropout_prob_t[0])
             pos_weight_grads = None
             pos_bias_grads = None
 
@@ -522,7 +522,8 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
         if mask_softmax_dropout_cuda is not None and len_k <= 2048 \
                 and matmul2_dgrad1.type() == 'torch.cuda.HalfTensor' and not ctx.double_precision:
-            # if False:
+
+            # verification code
             # matmul2_dgrad1_ref = matmul2_dgrad1.clone()
             # softmax_results_ref = softmax_results.clone()
             # dropout_grads = torch._masked_scale(matmul2_dgrad1_ref, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
@@ -531,9 +532,14 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
             # softmax_grads_ref = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1_ref, softmax_results,
             #                                                              dropout_mask, dropout_prob_t[0])
+
+            # note this function doesn't really do recompute
+            # because if we don't store softmax results, we have to store matmul2_dgrad1
+            # so the only difference is that we allocated more memory, but the memory kept for backward is the same
             softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t[0], matmul2_dgrad1, softmax_results,
                                                                          dropout_mask, dropout_prob_t[0])
 
+            # verification code (next)
             # comp = torch.allclose(softmax_grads_ref, softmax_grads, rtol=1e-03, atol=1e-04)
             # if not comp:
             #     print("ERROR: Gradients mismatched.")
