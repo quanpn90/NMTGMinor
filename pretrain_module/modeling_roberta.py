@@ -193,6 +193,7 @@ class RobertaModel(BertModel):
                  is_decoder=False,
                  before_plm_output_ln=False,
                  gradient_checkpointing=False,
+                 **kwargs,
                  ):
 
         super().__init__(config, bert_word_dropout,
@@ -203,6 +204,7 @@ class RobertaModel(BertModel):
                          is_decoder,
                          before_plm_output_ln,
                          gradient_checkpointing,
+                         **kwargs
                          )
 
         # replace the original bert embedding with roberta embedding
