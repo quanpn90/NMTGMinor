@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from __future__ import division
 
 import onmt
@@ -11,7 +12,7 @@ from onmt.modules.loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.model_factory import build_model, optimize_model
 from onmt.bayesian_factory import build_model as build_bayesian_model
 from onmt.constants import add_tokenidx
-from options import make_parser
+from onmt.options import make_parser
 from collections import defaultdict
 import os
 import numpy as np

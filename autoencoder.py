@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from __future__ import division
 
 import onmt
@@ -18,7 +19,7 @@ from ae.Trainer import AETrainer
 parser = argparse.ArgumentParser(description='train.py')
 onmt.markdown.add_md_help_argument(parser)
 
-from options import make_parser
+from onmt.options import make_parser
 
 # Please look at the options file to see the options regarding models and data
 parser = make_parser(parser)

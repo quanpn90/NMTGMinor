@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from __future__ import division
 
 import onmt
@@ -12,7 +13,7 @@ from onmt.data.scp_dataset import SCPIndexDataset
 from onmt.modules.loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.model_factory import build_model, optimize_model, init_model_parameters
 from onmt.bayesian_factory import build_model as build_bayesian_model
-from options import make_parser
+from onmt.options import make_parser
 from collections import defaultdict
 from onmt.constants import add_tokenidx
 import os

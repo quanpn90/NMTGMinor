@@ -1,5 +1,4 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python3
 from __future__ import division
 
 import onmt
@@ -12,7 +11,7 @@ import sys
 import copy
 from onmt.model_factory import build_model, build_language_model, optimize_model
 from onmt.constants import add_tokenidx
-from options import backward_compatible
+from onmt.options import backward_compatible
 
 
 parser = argparse.ArgumentParser(description='translate.py')
