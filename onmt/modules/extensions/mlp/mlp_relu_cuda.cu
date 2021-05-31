@@ -708,6 +708,66 @@ __global__ void biasAddDropoutMaskRelu_fprop(T *X, T *b, uint8_t* mask, uint bat
   }
 }
 
+// Bias ADD + ReLU. Assume input X is [features x batch size], column major.
+// Activation support fuesed ReLU. Safe to call in-place.
+// This function stores the sampled mask for recomputation
+template <typename T>
+__global__ void biasAddDropoutMaskRelu_fprop_presampled(T *X, T *b, uint8_t* mask, uint batch_size, uint features, float p) {
+  T r_x[ILP];
+  T r_b[ILP];
+  uint8_t r_m[ILP];
+
+  float pinv = 1.f/(1.f-p);
+
+  if(is_aligned(X) && is_aligned(b) && features % ILP ==0) {
+
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
+      int row = tid % (features / ILP);
+      load_store(r_x, X, 0 , tid);
+      load_store(r_b, b, 0 , row);
+      load_store(r_m, mask, 0, tid);  // mask has the same size with X
+
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
+        r_x[ii] = relu(bias_sum)* r_m[ii] * pinv;
+      }
+      load_store(X, r_x, tid , 0);
+    }
+  } else {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
+
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          int row = tid % features;
+          r_x[ii] = X[idx];
+          r_b[ii] = b[row];
+          r_m[ii] = mask[idx];
+        }
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
+        r_x[ii] = relu(bias_sum)*r_m[ii]*pinv;
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          X[idx] = r_x[ii];
+        }
+      }
+    }
+  }
+}
+
+
 
 // ReLU. Assume input X is [features x batch size], column major.
 // Safe to call in-place.
@@ -1684,7 +1744,6 @@ int mlp_fp(
 template <typename T>
 int mlp_bp(
     T* X,
-    T* Y,
     int input_features,
     int batch_size,
     T** WPtr,
@@ -1744,7 +1803,7 @@ int mlp_bp(
     dx = (layer == 0) ? dX : dx_gemm_base + y_offsets[layer - 1];
 
     // y is read from reserved space
-    y = (layer == num_layers - 1) ? Y : reserved_space + y_offsets[layer];
+    y = (layer == num_layers - 1) ? NULL : reserved_space + y_offsets[layer];
     // dx from layer+1
     dy = (layer == num_layers - 1) ? dY : dx_gemm_base + y_offsets[layer];
     // dy_gemm is written to and read immediately
@@ -1848,6 +1907,251 @@ int mlp_bp(
   return 0;
 }
 
+
+template <typename T>
+int mlp_bp_recompute(
+    T* X,
+    int input_features,
+    int batch_size,
+    T** WPtr,
+    T** BPtr,
+    int num_layers,
+    int* output_features,
+    T* dY,
+    T* reserved_space,
+    uint8_t* reserved_mask,
+    T* work_space,
+    T* dX,
+    T** dwPtr,
+    T** dbPtr,
+    bool requires_grad,
+    float p) {
+  T *weight, *bias, *input, *output;
+  T *dweight, *dx, *dy, *dbias;
+  T *x, *y;
+
+  // Get cublas handle from Pytorch
+  cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
+  // Get the stream from cublas handle to reuse for biasReLU kernel.
+  cudaStream_t stream;
+  cublasGetStream(handle, &stream);
+
+  // recomputation for the forward pass
+  uint8_t* mask;
+  T *reserved_space_x, *reserved_space_y;
+  uint8_t* reserved_space_m;
+  reserved_space_x = NULL;
+  reserved_space_y = reserved_space;
+  reserved_space_m = reserved_mask;
+
+  // (re)forward pass starts
+  // We only need to recompute upto the penultimate layer
+  for (int layer = 0; layer < num_layers - 1; layer++)
+  {
+    weight = WPtr[layer];
+    bias = BPtr[layer];
+
+    input = (layer == 0) ? X : reserved_space_x;
+    output = reserved_space_y;
+    mask = reserved_space_m;
+
+    int ifeat = (layer == 0) ? input_features : output_features[layer - 1];
+    int ofeat = output_features[layer];
+
+    float one = 1.f;
+    float zero = 0.f;
+
+    cublasStatus_t cublas_status;
+      // Call GEMM: fprop is Y = W'X
+    cublas_status = mlp_gemm(
+        handle,
+        CUBLAS_OP_T,
+        CUBLAS_OP_N,
+        ofeat,
+        batch_size,
+        ifeat,
+        &one,
+        weight,
+        ifeat,
+        input,
+        ifeat,
+        &zero,
+        output,
+        ofeat);
+
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+        printf("GEMM fprop failed with %d\n", cublas_status);
+        return 1;
+    }
+
+    const uint &input_size = ofeat;
+    int num_blocks = 0;
+    int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
+
+    // Call biasReLU (we don't reach the last layer)
+    if (p == 0) {
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAddRelu_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+        biasAddRelu_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
+    } else {
+
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAddDropoutMaskRelu_fprop_presampled<T>,
+                                                          BIAS_RELU_FW_NTHREADS, 0);
+
+        // don't need to sample mask
+        biasAddDropoutMaskRelu_fprop_presampled<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias,
+                                                                                       mask, batch_size, input_size, p);
+    }
+
+    reserved_space_x = reserved_space_y;
+    reserved_space_y += ofeat * batch_size;
+    if ( p > 0.0)
+        reserved_space_m += ofeat * batch_size;
+
+  }
+
+  // recomputation finished
+
+  // Where the dx of the biasReLU (== dy of gemm) is stored. Can be thrown away
+  // after bp call.
+  T* dy_gemm_base;
+  // Where the dx after GEMM is stored.
+  T* dx_gemm_base;
+  // Where partial reduction results are stored.
+  float* db_scratch;
+  // Semaphores for reduction.
+  int* semaphores;
+
+  partition_mlp_bp_workspace<T>(
+      batch_size,
+      num_layers,
+      output_features,
+      work_space,
+      &dy_gemm_base,
+      &dx_gemm_base,
+      &db_scratch,
+      &semaphores);
+
+  size_t semaphore_size = get_semaphores_size(num_layers, output_features) * sizeof(int);
+
+  int* y_offsets = (int*)malloc(num_layers * sizeof(int));
+  get_y_offsets(batch_size, num_layers, output_features, y_offsets);
+
+  for (int layer = num_layers - 1; layer >= 0; layer--) {
+    weight = WPtr[layer];
+    dweight = dwPtr[layer];
+
+    // x is read from reserved space
+    x = (layer == 0) ? X : reserved_space + y_offsets[layer - 1];
+    // dx is written in workspace for all but layer==0
+    dx = (layer == 0) ? dX : dx_gemm_base + y_offsets[layer - 1];
+
+    // y is read from reserved space
+    y = (layer == num_layers - 1) ? NULL : reserved_space + y_offsets[layer];
+    // dx from layer+1
+    dy = (layer == num_layers - 1) ? dY : dx_gemm_base + y_offsets[layer];
+    // dy_gemm is written to and read immediately
+    T* dy_gemm = dy_gemm_base + y_offsets[layer];
+
+    dbias = dbPtr[layer];
+    int xfeat = (layer == 0) ? input_features : output_features[layer - 1];
+    int yfeat = output_features[layer];
+
+    float one = 1.f;
+    float zero = 0.f;
+
+    if (layer == (num_layers -1)) { // no activation
+        // bgrad
+        dim3 block(BIAS_RELU_BW_NTHREADS_X, BIAS_RELU_BW_NTHREADS_Y);
+        int grid_x, grid_y;
+        cudaMemsetAsync(semaphores, 0, semaphore_size, stream);
+
+        int block_x = BIAS_RELU_BW_NTHREADS_X;
+        int block_y = BIAS_RELU_RED_PER_THREAD * BIAS_RELU_BW_NTHREADS_Y;
+        get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
+        dim3 grid(grid_x, grid_y);
+        biasAdd_bprop<T, 4><<<grid, block, 0, stream>>>(
+          dy, yfeat, batch_size, db_scratch, semaphores, dbias);
+        // bypass dgrad through reset pointer
+        dy_gemm = dy;
+    } else  { // relu
+        dim3 block(BIAS_RELU_BW_NTHREADS_X, BIAS_RELU_BW_NTHREADS_Y);
+        int grid_x, grid_y;
+        cudaMemsetAsync(semaphores, 0, semaphore_size, stream);
+
+        if(yfeat % (ILP * BIAS_RELU_BW_NTHREADS_X) == 0 &&
+           is_aligned(y) &&
+           is_aligned(dy) &&
+           is_aligned(dy_gemm) &&
+           is_aligned(dbias))
+        {
+          int block_x = ILP * BIAS_RELU_BW_NTHREADS_X;
+          int block_y = BIAS_RELU_RED_PER_THREAD * BIAS_RELU_BW_NTHREADS_Y;
+          get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
+          dim3 grid(grid_x, grid_y);
+          biasAddRelu_bprop_aligned<T, 4><<<grid, block, 0, stream>>>(
+            y, dy, yfeat, batch_size, dy_gemm, db_scratch, semaphores, dbias, p);
+        } else {
+          int block_x = BIAS_RELU_BW_NTHREADS_X;
+          int block_y = BIAS_RELU_RED_PER_THREAD * BIAS_RELU_BW_NTHREADS_Y;
+          get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
+          dim3 grid(grid_x, grid_y);
+          biasAddRelu_bprop<T, 4><<<grid, block, 0, stream>>>(
+            y, dy, yfeat, batch_size, dy_gemm, db_scratch, semaphores, dbias, p);
+        }
+    }
+    cublasStatus_t cublas_status;
+    // Call GEMM dgrad
+    if (layer > 0 || requires_grad == 1) {
+      cublas_status = mlp_gemm(
+        handle,
+        CUBLAS_OP_N,
+        CUBLAS_OP_N,
+        xfeat,
+        batch_size,
+        yfeat,
+        &one,
+        weight,
+        xfeat,
+        dy_gemm,
+        yfeat,
+        &zero,
+        dx,
+        xfeat);
+
+      if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+        printf("GEMM dgrad failed with %d\n", cublas_status);
+        return 1;
+      }
+    }
+
+    // Call GEMM wgrad
+    cublas_status = mlp_gemm(
+        handle,
+        CUBLAS_OP_N,
+        CUBLAS_OP_T,
+        xfeat,
+        yfeat,
+        batch_size,
+        &one,
+        x,
+        xfeat,
+        dy_gemm,
+        yfeat,
+        &zero,
+        dweight,
+        xfeat);
+
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM wgrad failed with %d\n", cublas_status);
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+
+
 // Instantiate for floating point types
 template int mlp_fp<float>(
     float* X,
@@ -1866,7 +2170,6 @@ template int mlp_fp<float>(
 
 template int mlp_bp<float>(
     float* X,
-    float* Y,
     int input_features,
     int batch_size,
     float** WPtr,
@@ -1874,6 +2177,24 @@ template int mlp_bp<float>(
     int* output_features,
     float* dY,
     float* reserved_space,
+    float* work_space,
+    float* dX,
+    float** dwPtr,
+    float** dbPtr,
+    bool requires_grad,
+    float p);
+
+template int mlp_bp_recompute<float>(
+    float* X,
+    int input_features,
+    int batch_size,
+    float** WPtr,
+    float** BPtr,
+    int num_layers,
+    int* output_features,
+    float* dY,
+    float* reserved_space,
+    uint8_t* reserved_mask,
     float* work_space,
     float* dX,
     float** dwPtr,
@@ -1898,7 +2219,6 @@ template int mlp_fp<at::Half>(
 
 template int mlp_bp<at::Half>(
     at::Half* X,
-    at::Half* Y,
     int input_features,
     int batch_size,
     at::Half** WPtr,
@@ -1906,6 +2226,24 @@ template int mlp_bp<at::Half>(
     int* output_features,
     at::Half* dY,
     at::Half* reserved_space,
+    at::Half* work_space,
+    at::Half* dX,
+    at::Half** dwPtr,
+    at::Half** dbPtr,
+    bool requires_grad,
+    float p);
+
+template int mlp_bp_recompute<at::Half>(
+    at::Half* X,
+    int input_features,
+    int batch_size,
+    at::Half** WPtr,
+    at::Half** BPtr,
+    int num_layers,
+    int* output_features,
+    at::Half* dY,
+    at::Half* reserved_space,
+    uint8_t* reserved_mask,
     at::Half* work_space,
     at::Half* dX,
     at::Half** dwPtr,
@@ -1930,7 +2268,6 @@ template int mlp_fp<double>(
 
 template int mlp_bp<double>(
     double* X,
-    double* Y,
     int input_features,
     int batch_size,
     double** WPtr,
@@ -1944,6 +2281,25 @@ template int mlp_bp<double>(
     double** dbPtr,
     bool requires_grad,
     float p);
+
+template int mlp_bp_recompute<double>(
+    double* X,
+    int input_features,
+    int batch_size,
+    double** WPtr,
+    double** BPtr,
+    int num_layers,
+    int* output_features,
+    double* dY,
+    double* reserved_space,
+    uint8_t* reserved_mask,
+    double* work_space,
+    double* dX,
+    double** dwPtr,
+    double** dbPtr,
+    bool requires_grad,
+    float p);
+
 
 template size_t get_mlp_bp_workspace_in_bytes<float>(
     int batch_size,
