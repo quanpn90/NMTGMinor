@@ -1400,7 +1400,7 @@ void get_y_offsets(
 // Returns the size of all fprop activations combined
 size_t get_all_activations_size(int64_t batch_size, int num_layers, const int* output_features) {
   size_t acts_size = 0;
-  for (int l = 0; l < num_layers; l++) {
+  for (int l = 0; l < num_layers - 1; l++) {
     acts_size += output_features[l] * batch_size;
   }
   return acts_size;
@@ -1565,7 +1565,7 @@ int mlp_fp(
     output = (layer == num_layers - 1) ? Y : reserved_space_y;
 
     if (store_dropout_mask)
-        mask = (layer == num_layers - 1 ) ? NULL : reserved_mask;
+        mask = (layer == num_layers - 1 ) ? NULL : reserved_space_m;
     else
         mask = NULL;
 
@@ -1668,7 +1668,7 @@ int mlp_fp(
     reserved_space_x = reserved_space_y;
     // Set next layer output
 
-    if (layer == (num_layers -1)) {
+    if (layer < (num_layers - 1)) {
         reserved_space_y += ofeat * batch_size;
         if (store_dropout_mask)
             reserved_space_m += ofeat * batch_size;

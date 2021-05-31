@@ -160,7 +160,7 @@ std::vector<torch::Tensor> fwd_cuda(
   attn_scores.view({sequences*heads, q_seq_len, k_seq_len});
   bool softmax_success = false;
 
-  if (is_training || dropout_prob > 0.0) {
+  if (is_training && dropout_prob > 0.0) {
       softmax_success = dispatch_softmax_dropout<half, half, float>(
                              reinterpret_cast<half*>(dropout_results_ptr),
                              reinterpret_cast<half*>(softmax_results_ptr),

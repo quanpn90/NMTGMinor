@@ -308,7 +308,7 @@ if __name__ == '__main__':
 
 
     batch_size = 24568
-    mlp_sizes = [1024, 4096, 1024]
+    mlp_sizes = [1024, 4096, 4096, 1024]
     # mlp_sizes = [4, 7, 4]
     num_iters = 10
 
