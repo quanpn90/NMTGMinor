@@ -1572,7 +1572,7 @@ int mlp_fp(
     reserved_space_x = reserved_space_y;
     // Set next layer output
 
-    if (layer == (num_layers -1)) {
+    if (layer < (num_layers - 1)) {
         reserved_space_y += ofeat * batch_size;
         mask += ofeat * batch_size;
     }

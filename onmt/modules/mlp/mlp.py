@@ -50,10 +50,11 @@ class MlpReluFunction(torch.autograd.Function):
     # @custom_fwd(cast_inputs=torch.float16)
     @custom_fwd
     def forward(ctx, p, *args):
-        output = fused_mlp_relu.forward(p, args)
+        store_dropout_mask = False
+        output = fused_mlp_relu.forward(p, store_dropout_mask, args)
         ctx.save_for_backward(*args)
         ctx.outputs = output
-        dropout_mask = output[-1]
+        # dropout_mask = output[-1]
         ctx.p = p
         return output[0]
 

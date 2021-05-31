@@ -70,7 +70,7 @@ std::vector<torch::Tensor> mlp_forward(float p, std::vector<torch::Tensor> input
 
   auto act_options  = inputs[0].options().requires_grad(false);
   auto mask_options = act_options.dtype(torch::kUInt8);
-  auto reserved_mask  = torch::empty({dmask_size}, mask_options);  // for relu we don't need to keep the mask
+  auto reserved_mask  = torch::empty({dmask_size}, mask_options);  // for relu we don't need the mask for bwd
   // allocate fixed 4MB workspace for cublaslt for now, and this gets at least 4 MB
   auto lt_workspace = torch::empty({1 << 22}, inputs[0].type());
 
