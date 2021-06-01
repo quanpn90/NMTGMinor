@@ -328,6 +328,8 @@ class XETrainer(BaseTrainer):
             from onmt.speech.ctc_loss import CTC
             self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True)
 
+        init_model_parameters(model, opt)
+        
         if self.cuda:
             torch.cuda.set_device(self.opt.gpus[0])
             if self.opt.seed >= 0:
@@ -338,7 +340,6 @@ class XETrainer(BaseTrainer):
                 self.ctc_loss_function = self.ctc_loss_function.cuda()
 
         if setup_optimizer:
-
             self.optim = onmt.Optim(opt)
             self.optim.set_parameters(self.model.parameters())
 
@@ -793,7 +794,7 @@ class XETrainer(BaseTrainer):
             del checkpoint
         else:
             # For pretrain_transformer initialization is done in pretrain_module 
-            init_model_parameters(model, opt)
+
             itr_progress = None
             resume = False
             start_epoch = 1

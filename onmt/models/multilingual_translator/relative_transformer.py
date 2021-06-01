@@ -330,11 +330,11 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
                 if self.checkpointing == 0 or self.training is False:
 
-                    output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                    output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src,
                                                 src_lang=src_lang, tgt_lang=tgt_lang)
 
                 else:
-                    output, coverage, _ = checkpoint(create_forward_function(layer), output, context, pos_emb,
+                    output, coverage = checkpoint(create_forward_function(layer), output, context, pos_emb,
                                                      dec_attn_mask,
                                                      mask_src, src_lang, tgt_lang)
 
@@ -467,7 +467,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
                                                      incremental=True, incremental_cache=buffer)
                     decoder_state.update_attention_buffer(buffer, i)
                 else:
-                    output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                    output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src,
                                                 src_lang=src_lang, tgt_lang=lang)
 
         # normalize and take the last time step

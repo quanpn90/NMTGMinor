@@ -103,8 +103,9 @@ class RelativeSelfMultiheadAttn(nn.Module):
         nn.init.normal_(self.r_r_bias, 0.0, 0.02)
 
     def forward(self, input, pos, key_padding_mask=None, attn_mask=None, mems=None,
-                incremental=False, incremental_cache=None):
+                incremental=False, incremental_cache=None, recompute=False):
         """
+        :param recompute:
         :param input: [T x B x H]
         :param pos: [T x 1 x H] or [T x T x H]
         :param key_padding_mask: [1 x T x B]
@@ -135,7 +136,7 @@ class RelativeSelfMultiheadAttn(nn.Module):
             pos = self.pos_emb(pos)
 
         if self.autograd:
-            assert not self.training, "Auto-grad mode only used in Evaluation (for Quantization)."
+            # assert not self.training, "Auto-grad mode only used in Evaluation (for Quantization)."
             bsz = input.size(1)
             heads = self.num_heads
             head_dim = self.head_dim
@@ -206,7 +207,8 @@ class RelativeSelfMultiheadAttn(nn.Module):
                 attn_score.view(bsz, heads, len_q, len_k).masked_fill_(mask, float('-inf'))
 
             softmax_results = F.softmax(attn_score, dim=-1)
-            matmul2_results = torch.bmm(softmax_results, values.transpose(0, 1)).transpose(0, 1)
+            dropout_results = F.dropout(softmax_results, self.dropout, training=self.training)
+            matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1)).transpose(0, 1)
             matmul2_results = matmul2_results.contiguous().view(len_q, bsz, self.embed_dim)
             outputs = self.out_linear(matmul2_results)
 
@@ -220,7 +222,7 @@ class RelativeSelfMultiheadAttn(nn.Module):
                                                self.r_w_bias, self.r_r_bias,
                                                mask, self.dropout,
                                                incremental, incremental_cache, False,
-                                               self.learnable_pos, True)
+                                               self.learnable_pos, True, recompute)
             # last Falses are double precision, learnable_embedding and return coverage
 
             return outputs, coverage

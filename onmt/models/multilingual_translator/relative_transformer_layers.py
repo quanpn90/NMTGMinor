@@ -395,7 +395,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
             input = self.postprocess_ffn(out * ffn_scale, input)
 
-        # if incremental_cache is None:
-        #     return input, coverage
-        # else:
-        return input, coverage, incremental_cache
+        if incremental_cache is None:
+            return input, coverage
+        else:
+            return input, coverage, incremental_cache

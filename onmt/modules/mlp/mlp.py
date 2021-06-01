@@ -47,14 +47,22 @@ except (ModuleNotFoundError, ImportError) as e:
 
 class MlpReluFunction(torch.autograd.Function):
     @staticmethod
-    # @custom_fwd(cast_inputs=torch.float16)
     @custom_fwd
-    def forward(ctx, p, *args):
-        store_dropout_mask = False
+    def forward(ctx, p, recompute, *args):
+
+        # only need to store dropout mask if we need to recompute
+        store_dropout_mask = recompute
         output = fused_mlp_relu.forward(p, store_dropout_mask, args)
         ctx.save_for_backward(*args)
-        ctx.outputs = output
-        # dropout_mask = output[-1]
+        ctx.recompute = recompute
+
+        if not recompute:
+            ctx.outputs = output
+            ctx.dropout_mask = None
+        else:
+            ctx.dropout_mask = output[-1]
+            ctx.outputs = None
+
         ctx.p = p
         return output[0]
 
@@ -62,9 +70,14 @@ class MlpReluFunction(torch.autograd.Function):
     @custom_bwd
     def backward(ctx, *grad_o):
         p = ctx.p
-        grads = fused_mlp_relu.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
-        del ctx.outputs
-        return (None, *grads)
+        if not ctx.recompute:
+            grads = fused_mlp_relu.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
+            del ctx.outputs
+        else:
+            grads = fused_mlp_relu.backward_recompute(p, grad_o[0], ctx.dropout_mask, ctx.saved_tensors)
+            del ctx.dropout_mask
+
+        return (None, None, *grads)
 
 
 if fused_mlp_relu:
@@ -76,7 +89,7 @@ else:
 class MlpSiluFunction(torch.autograd.Function):
     @staticmethod
     @custom_fwd
-    def forward(ctx, p, *args):
+    def forward(ctx, p, recompute, *args):
         output = fused_mlp_silu.forward(p, args)
         ctx.save_for_backward(*args)
         ctx.outputs = output
@@ -90,7 +103,7 @@ class MlpSiluFunction(torch.autograd.Function):
         p = ctx.p
         grads = fused_mlp_silu.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
         del ctx.outputs
-        return (None, *grads)
+        return (None, None, *grads)
 
 
 if fused_mlp_silu:
@@ -102,7 +115,7 @@ else:
 class MlpGELUFunction(torch.autograd.Function):
     @staticmethod
     @custom_fwd
-    def forward(ctx, p, *args):
+    def forward(ctx, p, recompute, *args):
         output = fused_mlp_gelu.forward(p, args)
         ctx.save_for_backward(*args)
         ctx.outputs = output
@@ -116,7 +129,7 @@ class MlpGELUFunction(torch.autograd.Function):
         p = ctx.p
         grads = fused_mlp_gelu.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
         del ctx.outputs
-        return (None, *grads)
+        return (None, None, *grads)
 
 
 if fused_mlp_gelu:
@@ -128,7 +141,7 @@ else:
 class MlpAGELUFunction(torch.autograd.Function):
     @staticmethod
     @custom_fwd
-    def forward(ctx, p, *args):
+    def forward(ctx, p, recompute, *args):
         output = fused_mlp_agelu.forward(p, args)
         ctx.save_for_backward(*args)
         ctx.outputs = output
@@ -142,7 +155,7 @@ class MlpAGELUFunction(torch.autograd.Function):
         p = ctx.p
         grads = fused_mlp_agelu.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
         del ctx.outputs
-        return (None, *grads)
+        return (None, None, *grads)
 
 
 if fused_mlp_gelu:
@@ -154,7 +167,7 @@ else:
 class MlpGELUFunction(torch.autograd.Function):
     @staticmethod
     @custom_fwd
-    def forward(ctx, p, *args):
+    def forward(ctx, p, recompute, *args):
         output = fused_mlp_gelu.forward(p, args)
         ctx.save_for_backward(*args)
         ctx.outputs = output
@@ -168,7 +181,7 @@ class MlpGELUFunction(torch.autograd.Function):
         p = ctx.p
         grads = fused_mlp_gelu.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
         del ctx.outputs
-        return (None, *grads)
+        return (None, None, *grads)
 
 
 if fused_mlp_gelu:

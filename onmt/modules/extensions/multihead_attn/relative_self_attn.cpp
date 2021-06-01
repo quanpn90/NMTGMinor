@@ -36,6 +36,22 @@ std::vector<torch::Tensor> bwd_cuda(
                                float                dropout_prob
                                                   );
 
+std::vector<torch::Tensor> bwd_recompute_cuda(
+                               int                  heads,
+                               torch::Tensor const& output_grads,
+                               torch::Tensor const& inputs,
+                               torch::Tensor const& pos,
+                               torch::Tensor const& input_weights,
+                               torch::Tensor const& output_weights,
+                               torch::Tensor const& input_biases,
+                               torch::Tensor const& output_biases,
+                               torch::Tensor const& r_w_bias,
+                               torch::Tensor const& r_r_bias,
+                               torch::Tensor const& dropout_mask,
+                               torch::Tensor const& pad_mask,
+                               float                dropout_prob
+                                                  );
+
 // C++ interface
 
 #define CHECK_CUDA(x) AT_ASSERTM(x.type().is_cuda(), #x " must be a CUDA tensor")
@@ -132,8 +148,6 @@ std::vector<torch::Tensor> bwd(
   AT_ASSERTM(pos.type().scalarType()        == at::ScalarType::Half, "Only HALF is supported");
   AT_ASSERTM(input_weights.type().scalarType()  == at::ScalarType::Half, "Only HALF is supported");
   AT_ASSERTM(output_weights.type().scalarType() == at::ScalarType::Half, "Only HALF is supported");
-//  AT_ASSERTM(r_w_bias.type().scalarType()   == at::ScalarType::Half, "Only HALF is supported");
-//  AT_ASSERTM(r_w_bias.type().scalarType()   == at::ScalarType::Half, "Only HALF is supported");
 
   return bwd_cuda(
                                heads,
@@ -153,6 +167,64 @@ std::vector<torch::Tensor> bwd(
                                 );
 }
 
+
+std::vector<torch::Tensor> bwd_recompute(
+                               int                  heads,
+                               torch::Tensor const& output_grads,
+                               torch::Tensor const& inputs,
+                               torch::Tensor const& pos,
+                               torch::Tensor const& input_weights,
+                               torch::Tensor const& output_weights,
+                               torch::Tensor const& input_biases,
+                               torch::Tensor const& output_biases,
+                               torch::Tensor const& r_w_bias,
+                               torch::Tensor const& r_r_bias,
+                               torch::Tensor const& dropout_mask,
+                               torch::Tensor const& pad_mask,
+                               float                dropout_prob
+                                                  )
+{
+  AT_ASSERTM(output_grads.dim()         == 3, "expected 3D tensor");
+  AT_ASSERTM(inputs.dim()         == 3, "expected 3D tensor");
+  AT_ASSERTM(pos.dim()        == 3, "expected 3D tensor");
+  AT_ASSERTM(input_weights.dim()  == 2, "expected 2D tensor");
+  AT_ASSERTM(output_weights.dim() == 2, "expected 2D tensor");
+  AT_ASSERTM(input_biases.dim()  == 1, "expected 2D tensor");
+  AT_ASSERTM(output_biases.dim() == 1, "expected 2D tensor");
+  AT_ASSERTM(r_w_bias.dim() == 2, "expected 2D tensor");
+  AT_ASSERTM(r_w_bias.dim() == 2, "expected 2D tensor");
+
+  AT_ASSERTM(output_grads.type().scalarType()         == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(inputs.type().scalarType()         == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(pos.type().scalarType()        == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(input_weights.type().scalarType()  == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(output_weights.type().scalarType() == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(input_biases.type().scalarType()   == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(output_biases.type().scalarType()   == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(r_w_bias.type().scalarType()   == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(r_w_bias.type().scalarType()   == at::ScalarType::Half, "Only HALF is supported");
+
+  AT_ASSERTM(pad_mask.dim()                     == 4,                    "expected 4D tensor");
+  AT_ASSERTM(dropout_mask.dim()         == 3, "expected 3D tensor");
+
+  return bwd_recompute_cuda(
+                               heads,
+                               output_grads,
+                               inputs,
+                               pos,
+                               input_weights,
+                               output_weights,
+                               input_biases,
+                               output_biases,
+                               r_w_bias,
+                               r_r_bias,
+                               dropout_mask,
+                               pad_mask,
+                               dropout_prob
+                                );
+}
+
+
 } // end namespace cublas_gemmex
 } // end namespace encdec
 } // end namespace multihead_attn
@@ -160,4 +232,5 @@ std::vector<torch::Tensor> bwd(
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("forward", &multihead_attn::relative_self::cublas_gemmex::fwd, "Relative Self-Attention Forward.");
   m.def("backward", &multihead_attn::relative_self::cublas_gemmex::bwd, "Relative Self-Attention Backward.");
+  m.def("backward_recompute", &multihead_attn::relative_self::cublas_gemmex::bwd_recompute, "Relative Self-Attention Backward.");
 }

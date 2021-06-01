@@ -68,16 +68,16 @@ class EncdecMultiheadAttn(nn.Module):
             nn.init.uniform_(self.in_proj_weight_kv, -std_, std_)
             nn.init.uniform_(self.out_proj_weight, -std_, std_)
 
-    def forward(self, query, key, value, attn_mask=None, incremental=False, incremental_cache=None):
+    def forward(self, query, key, value,
+                attn_mask=None, incremental=False, incremental_cache=None, recompute=False):
 
         assert value is key, "ERROR: Keys and values must be the same."
 
         is_training = self.training
-        time_masking = False
 
         if self.autograd:
 
-            assert not self.training
+            # assert not self.training
             mask = attn_mask
 
             if mask is not None:
@@ -131,6 +131,7 @@ class EncdecMultiheadAttn(nn.Module):
                 matmul1_results = matmul1_results.view(bsz * heads, len_q, len_k)
 
             softmax_results = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
+            dropout_results = F.dropout(softmax_results, self.dropout, training=self.training)
             matmul2_results = torch.matmul(softmax_results, values.transpose(0, 1)).transpose(0, 1)
             matmul2_results = matmul2_results.contiguous().view(len_q, bsz, self.embed_dim)
             outputs = self.out_linear(matmul2_results)
@@ -139,7 +140,7 @@ class EncdecMultiheadAttn(nn.Module):
 
         else:
 
-            outputs, coverage = self.attn_func(time_masking, is_training,
+            outputs, coverage = self.attn_func(recompute, is_training,
                                                 self.num_heads, query, key,
                                                 self.in_proj_weight_q, self.in_proj_weight_kv,
                                                 self.out_proj_weight, attn_mask, self.dropout,

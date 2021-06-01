@@ -92,7 +92,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                 r_w_bias, r_r_bias,
                 mask, dropout_prob,
                 incremental, incremental_cache,
-                double_precision, learnable_pos, return_coverage):
+                double_precision, learnable_pos, return_coverage, recompute):
         """
         :param return_coverage:
         :param learnable_pos:
@@ -128,6 +128,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         ctx.learnable_pos = learnable_pos
         ctx.return_coverage = return_coverage
         ctx.fused_all = False
+        ctx.recompute = recompute
 
         bsz, len_q = inputs.size(1), inputs.size(0)
         len_r = pos.size(0)  # r can be longer than query, i.e for bidirectional attention we need 2k+1 positions
@@ -157,29 +158,34 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                                              r_w_bias, r_r_bias,
                                              mask, dropout_prob)
 
-            # temporary changing shapes to match with the python backward pass
-            # matmul2_results = matmul2_results.view(inputs.size(0), inputs.size(1), inputs.size(2))
-            # input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1) * heads, 3, head_dim)
-            # rw_head_q = rw_head_q.view(len_q, bsz * heads, head_dim)
-            # rr_head_q = rr_head_q.view(len_q, bsz * heads, head_dim)
-
             pos_lin_results = None
             r_head_k = None
             nan_mask = null_tensor
 
-            ctx.save_for_backward(heads_t,
-                                  scale_t,
-                                  matmul2_results,
-                                  dropout_results,
-                                  softmax_results,
-                                  input_lin_results,
-                                  pos_lin_results,
-                                  rw_head_q, rr_head_q,
-                                  inputs, pos, r_head_k,
-                                  input_weights, pos_weights,
-                                  output_weights,
-                                  dropout_mask, nan_mask,
-                                  dropout_prob_t)
+            if recompute:
+                ctx.save_for_backward(heads_t,
+                                      scale_t,
+                                      inputs, pos, r_head_k,
+                                      input_weights, pos_weights, output_weights,
+                                      input_biases, pos_biases, output_biases,
+                                      r_w_bias, r_r_bias,
+                                      dropout_mask, nan_mask, mask,
+                                      dropout_prob_t)
+            else:
+
+                ctx.save_for_backward(heads_t,
+                                      scale_t,
+                                      matmul2_results,
+                                      dropout_results,
+                                      softmax_results,
+                                      input_lin_results,
+                                      pos_lin_results,
+                                      rw_head_q, rr_head_q,
+                                      inputs, pos, r_head_k,
+                                      input_weights, pos_weights,
+                                      output_weights,
+                                      dropout_mask, nan_mask,
+                                      dropout_prob_t)
 
             ctx.fused_all = True
             if return_coverage:
@@ -410,18 +416,31 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         :param output_grads: gradients w.r.t the outputs
         :return:
         """
-        heads_t, \
-        scale_t, \
-        matmul2_results, \
-        dropout_results, \
-        softmax_results, \
-        input_lin_results, pos_lin_results, \
-        rw_head_q, rr_head_q, \
-        inputs, pos, r_head_k, \
-        input_weights, pos_weights, \
-        output_weights, \
-        dropout_mask, nan_mask, \
-        dropout_prob_t = ctx.saved_tensors
+
+        if not ctx.recompute:
+
+            heads_t, \
+            scale_t, \
+            matmul2_results, \
+            dropout_results, \
+            softmax_results, \
+            input_lin_results, pos_lin_results, \
+            rw_head_q, rr_head_q, \
+            inputs, pos, r_head_k, \
+            input_weights, pos_weights, \
+            output_weights, \
+            dropout_mask, nan_mask, \
+            dropout_prob_t = ctx.saved_tensors
+
+        else:
+            heads_t, \
+            scale_t, \
+            inputs, pos, r_head_k, \
+            input_weights, pos_weights, output_weights, \
+            input_biases, pos_biases, output_biases, \
+            r_w_bias, r_r_bias, \
+            dropout_mask, nan_mask, pad_mask, \
+            dropout_prob_t = ctx.saved_tensors
 
         learnable_pos = ctx.learnable_pos
         if ctx.return_coverage:
@@ -436,29 +455,39 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         len_r = pos.size(0)
 
         if ctx.fused_all:  # only applicable for learnable position and len_k <= 2048
-            input_grads, pos_grads, \
-            input_weight_grads, \
-            input_bias_grads, \
-            output_weight_grads, \
-            output_bias_grads, \
-            r_w_bias_grads, r_r_bias_grads = rel_self_attn_cuda.backward(
-                heads_t[0], output_grads, matmul2_results,
-                dropout_results, softmax_results,
-                input_lin_results, rw_head_q, rr_head_q,
-                inputs, pos, input_weights, output_weights,
-                dropout_mask, dropout_prob_t[0])
+
+            if ctx.recompute:
+                input_grads, pos_grads, \
+                input_weight_grads, \
+                input_bias_grads, \
+                output_weight_grads, \
+                output_bias_grads, \
+                r_w_bias_grads, r_r_bias_grads = rel_self_attn_cuda.backward_recompute(
+                    heads_t[0], output_grads,
+                    inputs, pos,
+                    input_weights, output_weights,
+                    input_biases, output_biases,
+                    r_w_bias, r_r_bias,
+                    dropout_mask, pad_mask, dropout_prob_t[0])
+            else:
+                input_grads, pos_grads, \
+                input_weight_grads, \
+                input_bias_grads, \
+                output_weight_grads, \
+                output_bias_grads, \
+                r_w_bias_grads, r_r_bias_grads = rel_self_attn_cuda.backward(
+                    heads_t[0], output_grads, matmul2_results,
+                    dropout_results, softmax_results,
+                    input_lin_results, rw_head_q, rr_head_q,
+                    inputs, pos, input_weights, output_weights,
+                    dropout_mask, dropout_prob_t[0])
             pos_weight_grads = None
             pos_bias_grads = None
-
-            # matmul2_results = matmul2_results.view(inputs.size(0), inputs.size(1), inputs.size(2))
-            # input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1) * heads_t[0], 3, head_dim)
-            # rw_head_q = rw_head_q.view(len_q, bsz * heads_t[0], head_dim)
-            # rr_head_q = rr_head_q.view(len_q, bsz * heads_t[0], head_dim)
 
             return input_grads, pos_grads, None, None, None, input_weight_grads, \
                    output_weight_grads, pos_weight_grads, \
                    input_bias_grads, output_bias_grads, pos_bias_grads, r_w_bias_grads, r_r_bias_grads, \
-                   None, None, None, None, None, None, None
+                   None, None, None, None, None, None, None, None
 
         # Slice out q,k,v from one big Input Linear outuput (should only impact meta data, no copies!)
         # input_lin_results: [len_q, bsz, heads(16), 3, head_dim(64)]
@@ -673,7 +702,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
         return input_grads, pos_grads, None, None, None, input_weight_grads, output_weight_grads, pos_weight_grads, \
                input_bias_grads, output_bias_grads, pos_bias_grads, r_w_bias_grads, r_r_bias_grads, \
-               None, None, None, None, None, None, None
+               None, None, None, None, None, None, None, None
 
 
 @half_function
@@ -683,14 +712,14 @@ def relative_self_attn_func(input, pos, use_mask, is_training, num_heads,
                             r_w_bias, r_r_bias,
                             mask, dropout,
                             incremental, incremental_cache,
-                            double_precision, learnable_pos, return_coverage):
+                            double_precision, learnable_pos, return_coverage, recompute):
     return RelativeSelfAttnFunc.apply(input, pos, use_mask, is_training, num_heads,
                                       in_proj_weight, out_proj_weight, pos_proj_weight,
                                       in_proj_bias, out_proj_bias, pos_proj_bias,
                                       r_w_bias, r_r_bias,
                                       mask, dropout,
                                       incremental, incremental_cache,
-                                      double_precision, learnable_pos, return_coverage)
+                                      double_precision, learnable_pos, return_coverage, recompute)
 
 
 # TODO: write test function

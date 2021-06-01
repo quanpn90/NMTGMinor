@@ -137,7 +137,7 @@ class PositionWiseFeedForward(nn.Module):
 
     def forward(self, input, *args):
 
-        if self.fused and input.is_cuda:
+        if self.fused and input.is_cuda and not self.autograd:
 
             # if autocast is enabled: manually cast the function args into half manually
             # for some reason custom_fwd(...) doesn't work
@@ -154,7 +154,8 @@ class PositionWiseFeedForward(nn.Module):
                     hidden = self.fused_function(dropout, res_dropout, input.half().view(seq_len * bsz, -1),
                                                                *weights, *biases).type_as(input)
                 else:
-                    hidden = self.fused_function(dropout, input.half().view(seq_len * bsz, -1),
+                    recompute = False
+                    hidden = self.fused_function(dropout, recompute, input.half().view(seq_len * bsz, -1),
                                                                *weights, *biases).type_as(input)
                 hidden = hidden.view(seq_len, bsz, hidden_size)
 

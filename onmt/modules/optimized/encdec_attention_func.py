@@ -4,7 +4,6 @@ Code is heavily adapted from apex
 https://github.com/NVIDIA/apex/tree/master/apex/contrib/csrc/multihead_attn
 """
 
-
 import torch
 import torch.nn.functional as F
 
@@ -34,7 +33,7 @@ except (ModuleNotFoundError, ImportError) as e:
 class EncdecAttnFunc(torch.autograd.Function):
     @staticmethod
     @custom_fwd(cast_inputs=torch.float16)
-    def forward(ctx, use_time_mask, is_training, heads, inputs_q, inputs_kv,
+    def forward(ctx, recompute, is_training, heads, inputs_q, inputs_kv,
                 input_weights_q, input_weights_kv, output_weights,
                 mask, dropout_prob,
                 incremental, incremental_cache,
@@ -54,6 +53,7 @@ class EncdecAttnFunc(torch.autograd.Function):
         ctx.len_k = len_k
         ctx.double_precision = double_precision
         ctx.return_coverage = return_coverage
+        ctx.recompute = recompute
 
         if mask is not None:
             # Self Attention Pad Mask
@@ -64,35 +64,47 @@ class EncdecAttnFunc(torch.autograd.Function):
             else:
                 mask = mask.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
 
-        if encdec_multihead_attn_cuda is not None and not incremental and len_k <= 2048\
+        if encdec_multihead_attn_cuda is not None and not incremental and len_k <= 2048 \
                 and inputs_q.type() == 'torch.cuda.HalfTensor':
             input_lin_q_results, input_lin_kv_results, \
-                softmax_results, dropout_results, dropout_mask, \
-                matmul2_results, outputs \
+            softmax_results, dropout_results, dropout_mask, \
+            matmul2_results, outputs \
                 = encdec_multihead_attn_cuda.forward(is_training, heads, inputs_q, inputs_kv,
                                                      input_weights_q, input_weights_kv,
                                                      output_weights, mask, dropout_prob)
 
-            ctx.save_for_backward(heads_t,
-                                  scale_t,
-                                  matmul2_results,
-                                  dropout_results,
-                                  softmax_results,
-                                  input_lin_q_results,
-                                  input_lin_kv_results,
-                                  inputs_q,
-                                  inputs_kv,
-                                  input_weights_q,
-                                  input_weights_kv,
-                                  output_weights,
-                                  dropout_mask,
-                                  dropout_prob_t)
+            if not ctx.recompute:
+                ctx.save_for_backward(heads_t,
+                                      scale_t,
+                                      matmul2_results,
+                                      dropout_results,
+                                      softmax_results,
+                                      input_lin_q_results,
+                                      input_lin_kv_results,
+                                      inputs_q,
+                                      inputs_kv,
+                                      input_weights_q,
+                                      input_weights_kv,
+                                      output_weights,
+                                      dropout_mask,
+                                      dropout_prob_t)
+            else:
+                ctx.save_for_backward(heads_t,
+                                      scale_t,
+                                      inputs_q,
+                                      inputs_kv,
+                                      input_weights_q,
+                                      input_weights_kv,
+                                      output_weights,
+                                      dropout_mask,
+                                      dropout_prob_t,
+                                      mask)
             ctx.fused_all = True
 
             if return_coverage:
                 return outputs, softmax_results
             else:
-                return (outputs, )
+                return (outputs,)
 
         # Input Linear GEMM Q
         # input1: (activations) [seql_q, bsz, embed_dim] -> [len_q * bsz, embed_dim]
@@ -255,7 +267,7 @@ class EncdecAttnFunc(torch.autograd.Function):
         if return_coverage:
             return (outputs, dropout_results)
         else:
-            return (outputs, )
+            return (outputs,)
 
     @staticmethod
     @custom_bwd
@@ -270,12 +282,22 @@ class EncdecAttnFunc(torch.autograd.Function):
         else:
             output_grads = output_grads[0]
 
-        heads_t, scale_t, matmul2_results, dropout_results, softmax_results, \
-        input_lin_q_results, input_lin_kv_results, \
-        inputs_q, inputs_kv, \
-        input_weights_q, input_weights_kv, output_weights, \
-        dropout_mask, dropout_prob_t \
-            = ctx.saved_tensors
+        if ctx.recompute:
+            heads_t, scale_t, \
+            inputs_q, inputs_kv, \
+            input_weights_q, input_weights_kv, output_weights, \
+            dropout_mask, dropout_prob_t, pad_mask \
+                = ctx.saved_tensors
+        else:
+
+            heads_t, scale_t, matmul2_results, dropout_results, softmax_results, \
+            input_lin_q_results, input_lin_kv_results, \
+            inputs_q, inputs_kv, \
+            input_weights_q, input_weights_kv, output_weights, \
+            dropout_mask, dropout_prob_t \
+                = ctx.saved_tensors
+
+            pad_mask = None
 
         head_dim = inputs_q.size(2) // heads_t[0]
         bsz = inputs_q.size(1)
@@ -283,18 +305,36 @@ class EncdecAttnFunc(torch.autograd.Function):
         if ctx.fused_all:
             assert encdec_multihead_attn_cuda is not None and len_key <= 2048
 
-            input_q_grads, \
-            input_kv_grads, \
-            input_weight_q_grads, \
-            input_weight_kv_grads, \
-            output_weight_grads = encdec_multihead_attn_cuda.backward(heads_t[0], output_grads, matmul2_results,
-                                                                      dropout_results,
-                                                                      softmax_results, input_lin_q_results,
-                                                                      input_lin_kv_results,
-                                                                      inputs_q, inputs_kv, input_weights_q,
-                                                                      input_weights_kv,
-                                                                      output_weights, dropout_mask,
-                                                                      dropout_prob_t[0])
+            if not ctx.recompute:
+
+                input_q_grads, \
+                    input_kv_grads, \
+                    input_weight_q_grads, \
+                    input_weight_kv_grads, \
+                    output_weight_grads \
+                    = encdec_multihead_attn_cuda.backward(heads_t[0], output_grads, matmul2_results,
+                                                                          dropout_results,
+                                                                          softmax_results, input_lin_q_results,
+                                                                          input_lin_kv_results,
+                                                                          inputs_q, inputs_kv, input_weights_q,
+                                                                          input_weights_kv,
+                                                                          output_weights, dropout_mask,
+                                                                          dropout_prob_t[0])
+
+            else:
+
+                input_q_grads, \
+                    input_kv_grads, \
+                    input_weight_q_grads, \
+                    input_weight_kv_grads, \
+                    output_weight_grads \
+                    = encdec_multihead_attn_cuda.backward_recompute(heads_t[0], output_grads,
+                                                                                    inputs_q, inputs_kv,
+                                                                                    input_weights_q,
+                                                                                    input_weights_kv,
+                                                                                    output_weights, dropout_mask,
+                                                                                    pad_mask,
+                                                                                    dropout_prob_t[0])
 
             return None, None, None, \
                    input_q_grads, input_kv_grads, \
