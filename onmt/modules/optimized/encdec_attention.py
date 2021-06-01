@@ -132,7 +132,7 @@ class EncdecMultiheadAttn(nn.Module):
 
             softmax_results = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
             dropout_results = F.dropout(softmax_results, self.dropout, training=self.training)
-            matmul2_results = torch.matmul(softmax_results, values.transpose(0, 1)).transpose(0, 1)
+            matmul2_results = torch.matmul(dropout_results, values.transpose(0, 1)).transpose(0, 1)
             matmul2_results = matmul2_results.contiguous().view(len_q, bsz, self.embed_dim)
             outputs = self.out_linear(matmul2_results)
 
