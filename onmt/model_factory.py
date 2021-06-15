@@ -241,10 +241,11 @@ def build_tm_model(opt, dicts):
     elif opt.model == 'pretrain_transformer':
         assert (opt.enc_pretrained_model or opt.dec_pretrained_model)
         from onmt.models.pretrain_transformer import PretrainTransformer
-        print(f"pos_emb_type: {opt.pos_emb_type}")
-        print(f"max_pos_length: {opt.max_pos_length }")
-        print(f"Share position embeddings cross heads: {not opt.diff_head_pos}")
-        print()
+        if opt.pos_emb_type !="absolute":
+            print(f"pos_emb_type: {opt.pos_emb_type}")
+            print(f"max_pos_length: {opt.max_pos_length }")
+            print(f"Share position embeddings cross heads: {not opt.diff_head_pos}")
+            print()
         if opt.enc_pretrained_model:
             print("* Build encoder with enc_pretrained_model: {}".format(opt.enc_pretrained_model))
         if opt.enc_pretrained_model == "bert":
