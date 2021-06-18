@@ -135,7 +135,7 @@ class PositionWiseFeedForward(nn.Module):
             del self.out_proj_weight
             del self.out_proj_bias
 
-    def forward(self, input, *args):
+    def forward(self, input, *args, **kwargs):
 
         if self.fused and input.is_cuda and not self.autograd:
 
@@ -154,7 +154,7 @@ class PositionWiseFeedForward(nn.Module):
                     hidden = self.fused_function(dropout, res_dropout, input.half().view(seq_len * bsz, -1),
                                                                *weights, *biases).type_as(input)
                 else:
-                    recompute = False
+                    recompute = onmt.constants.recompute
                     hidden = self.fused_function(dropout, recompute, input.half().view(seq_len * bsz, -1),
                                                                *weights, *biases).type_as(input)
                 hidden = hidden.view(seq_len, bsz, hidden_size)

@@ -112,6 +112,8 @@ class RelativeTransformerEncoderLayer(nn.Module):
                                                               glu=opt.ffn_glu)
 
             self.multihead = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
+                                                          learnable_pos=self.learnable_pos,
+                                                          max_pos=opt.max_pos_length,
                                                           n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                           use_multiplicative=opt.mfw_multiplicative,
                                                           weight_drop=self.weight_drop,
@@ -153,9 +155,10 @@ class RelativeTransformerEncoderLayer(nn.Module):
                                                 n_languages=opt.n_languages,
                                                 dropout=opt.dropout)
 
-    def forward(self, input, pos_emb, attn_mask, src_lang=None,
+    def forward(self, input, pos_emb, attn_mask, src_lang=None, factorize=False,
                 incremental=False, incremental_cache=None, mems=None):
         """
+        :param factorize:
         :param input: tensor [T x B x H]
         :param pos_emb: tensor [T x 1 x H]
         :param attn_mask: tensor [1 x T x B]
@@ -181,7 +184,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
                 mems = None
 
             if self.macaron:
-                out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang)
+                out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang, factorize=factorize)
 
                 if self.training and self.death_rate > 0:
                     ffn_scale = self.ffn_scale / (1 - self.death_rate)
@@ -196,8 +199,8 @@ class RelativeTransformerEncoderLayer(nn.Module):
             query = self.preprocess_attn(input, factor=src_lang)
 
             if self.mfw or self.mpw:
-                out, _ = self.multihead(query, pos_emb, src_lang, attn_mask, None, mems=mems,
-                                        incremental=incremental, incremental_cache=incremental_cache)
+                out, _ = self.multihead(query, pos_emb, src_lang, attn_mask, None, factorize=factorize,
+                                        incremental=incremental, incremental_cache=incremental_cache, )
             else:
                 out, _ = self.multihead(query, pos_emb, attn_mask, None, mems=mems,
                                         incremental=incremental, incremental_cache=incremental_cache)
@@ -228,7 +231,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
             Feed forward layer 
             """
             if not self.no_ffn:
-                out = self.feedforward(self.preprocess_ffn(input, factor=src_lang), src_lang)
+                out = self.feedforward(self.preprocess_ffn(input, factor=src_lang), src_lang, factorize=factorize)
 
                 # rescaling before residual
                 if self.training and self.death_rate > 0:
@@ -282,7 +285,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
                                                          variational=self.variational)
 
             if self.mfw:
-                self.mcr_feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, self.ffn_dropoutt,
+                self.mcr_feedforward = MFWPositionWiseFeedForward(opt.model_size, opt.inner_size, self.ffn_dropout,
                                                                   variational=self.variational,
                                                                   n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                                   use_multiplicative=opt.mfw_multiplicative,
@@ -332,6 +335,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
                                                           glu=opt.ffn_glu)
 
             self.multihead_tgt = MFWRelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
+                                                              learnable_pos=self.learnable_pos,
+                                                              max_pos=opt.max_pos_length,
                                                               n_languages=opt.n_languages, rank=opt.mfw_rank,
                                                               use_multiplicative=opt.mfw_multiplicative,
                                                               weight_drop=self.weight_drop,
@@ -368,9 +373,9 @@ class RelativeTransformerDecoderLayer(nn.Module):
                                                 n_languages=opt.n_languages,
                                                 dropout=opt.dropout)
 
-    def forward(self, input, context, pos_emb, lfv=None, mask_tgt=None, mask_src=None,
+    def forward(self, input, context, pos_emb, mask_tgt=None, mask_src=None,
                 src_lang=None, tgt_lang=None,
-                incremental=False, incremental_cache=None, reuse_source=True, mems=None):
+                incremental=False, incremental_cache=None, reuse_source=True, mems=None, factorize=False):
 
         """ Self attention layer
             layernorm > attn > dropout > residual
@@ -391,7 +396,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 mems = None
 
             if self.macaron:
-                out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang)
+                out = self.mcr_feedforward(self.preprocess_mcr_ffn(input), src_lang, factorize=factorize)
 
                 if self.training and self.death_rate > 0:
                     ffn_scale = self.ffn_scale / (1 - self.death_rate)
@@ -402,7 +407,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
             query = self.preprocess_attn(input, factor=tgt_lang)
             if self.mfw or self.mpw:
-                out, _ = self.multihead_tgt(query, pos_emb, tgt_lang, None, mask_tgt, mems=mems,
+                out, _ = self.multihead_tgt(query, pos_emb, tgt_lang, None, mask_tgt, factorize=factorize,
                                             incremental=incremental, incremental_cache=incremental_cache)
             else:
                 out, _ = self.multihead_tgt(query, pos_emb, None, mask_tgt, mems=mems,
@@ -423,6 +428,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
 
                 if self.mfw or self.mpw:
                     out, coverage = self.multihead_src(query, context, context, tgt_lang, tgt_lang, mask_src,
+                                                       factorize=factorize,
                                                        incremental=incremental_source,
                                                        incremental_cache=incremental_cache)
                 else:
@@ -441,7 +447,7 @@ class RelativeTransformerDecoderLayer(nn.Module):
             """ Feed forward layer 
                 layernorm > ffn > dropout > residual
             """
-            out = self.feedforward(self.preprocess_ffn(input, factor=tgt_lang), tgt_lang)
+            out = self.feedforward(self.preprocess_ffn(input, factor=tgt_lang), tgt_lang, factorize=factorize)
 
             # rescaling before residual
             if self.training and self.death_rate > 0:

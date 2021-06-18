@@ -250,13 +250,6 @@ class BaseTrainer(object):
                 rec_loss = rec_loss
                 full_loss = full_loss + rec_loss
 
-            if opt.lfv_multilingual:
-                lid_logits = outputs['lid_logits']
-                lid_labels = batch.get('target_lang')
-                lid_loss_function = self.loss_function.get_loss_function('lid_loss')
-                lid_loss = lid_loss_function(lid_logits, lid_labels)
-                full_loss = full_loss + lid_loss
-
             optimizer = self.optim.optimizer
 
             if self.opt.memory_profiling:
@@ -316,11 +309,6 @@ class XETrainer(BaseTrainer):
 
     def __init__(self, model, loss_function, train_data, valid_data, dicts, opt, setup_optimizer=True):
         super().__init__(model, loss_function, train_data, valid_data, dicts, opt)
-
-        if opt.lfv_multilingual:
-            from onmt.models.speech_recognizer.lid_loss import CrossEntropyLIDLoss
-            lid_loss = CrossEntropyLIDLoss(opt.n_languages, opt.label_smoothing, opt.fast_xentropy)
-            self.loss_function.add_loss_function(lid_loss, 'lid_loss')
 
         self.n_gpus = len(self.opt.gpus)
 
@@ -431,10 +419,11 @@ class XETrainer(BaseTrainer):
         data_size = len(epoch_iterator)
         i = 0
 
+        factorize = (self.optim._step >= opt.factorizing_step)
+
         with torch.no_grad():
             # for i in range(len()):
             while not data_iterator.end_of_epoch():
-                # batch = data.next()[0]
                 batch = next(epoch_iterator)
                 if isinstance(batch, list):
                     batch = batch[0]
@@ -450,7 +439,8 @@ class XETrainer(BaseTrainer):
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.constants.TGT_PAD)
                 outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                     mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce)
+                                     mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce,
+                                     factorize=factorize)
 
                 if opt.streaming:
                     streaming_state = outputs['streaming_state']
@@ -548,10 +538,13 @@ class XETrainer(BaseTrainer):
                 # can be flexibly controlled within models for easier extensibility
                 targets = batch.get('target_output')
                 tgt_mask = targets.ne(onmt.constants.TGT_PAD)
+
+                factorize = (self.optim._step >= opt.factorizing_step)
+
                 outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                      zero_encoder=opt.zero_encoder,
                                      mirror=opt.mirror_loss, streaming_state=streaming_state,
-                                     nce=opt.nce)
+                                     nce=opt.nce, factorize=factorize)
 
                 batch_size = batch.size
 
@@ -567,6 +560,8 @@ class XETrainer(BaseTrainer):
                     ctc_loss_data = ctc_loss.item()
                     full_loss = full_loss + opt.ctc_loss * ctc_loss
                     report_ctc_loss += ctc_loss_data
+                else:
+                    ctc_loss = None
 
                 if opt.mirror_loss:
                     rev_loss = loss_dict['rev_loss']
@@ -587,13 +582,6 @@ class XETrainer(BaseTrainer):
                 else:
                     rec_loss_data = None
 
-                if opt.lfv_multilingual:
-                    lid_logits = outputs['lid_logits']
-                    lid_labels = batch.get('target_lang')
-                    lid_loss_function = self.loss_function.get_loss_function('lid_loss')
-                    lid_loss = lid_loss_function(lid_logits, lid_labels)
-                    full_loss = full_loss + lid_loss
-
                 optimizer = self.optim.optimizer
 
                 # When the batch size is large, each gradient step is very easy to explode on fp16
@@ -601,10 +589,6 @@ class XETrainer(BaseTrainer):
                 full_loss.div_(grad_scaler)
 
                 if loss != loss:
-                    # nan loss
-                    # del full_loss
-                    # del loss
-                    # continue
                     full_loss.zero_()
                     loss_data = 0
 
@@ -620,15 +604,32 @@ class XETrainer(BaseTrainer):
                 if 'out of memory' in str(e):
                     print('| WARNING: ran out of memory on GPU , skipping batch')
                     oom = True
+                    torch.cuda.synchronize()
+                    full_loss = None
+                    loss_dict = None
+                    ctc_loss = None
+                    # del loss
+                    # del loss_dict, ctc_loss
+
+                    torch.cuda.empty_cache()
+
+                    counter = 0
+                    self.model.zero_grad()
+                    self.optim.zero_grad()
+
                     for p in self.model.parameters():
                         if p.grad is not None:
                             del p.grad  # free some memory
-                    torch.cuda.empty_cache()
 
+                    # maybe run warmup again?
+                    # self.warm_up()
+
+                    # reset stuffs
                     loss = 0
                     loss_data = 0
                     if opt.streaming:  # reset stream in this case ...
                         streaming_state = self.model.init_stream()
+                    continue
                 else:
                     raise e
 

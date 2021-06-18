@@ -4,6 +4,7 @@ from torch import nn
 from torch.nn import Parameter
 import torch.nn.functional as F
 from .encdec_attention_func import encdec_attn_func
+import onmt
 
 
 class EncdecMultiheadAttn(nn.Module):
@@ -69,7 +70,8 @@ class EncdecMultiheadAttn(nn.Module):
             nn.init.uniform_(self.out_proj_weight, -std_, std_)
 
     def forward(self, query, key, value,
-                attn_mask=None, incremental=False, incremental_cache=None, recompute=False):
+                attn_mask=None, incremental=False, incremental_cache=None,
+                **kwargs):
 
         assert value is key, "ERROR: Keys and values must be the same."
 
@@ -139,6 +141,7 @@ class EncdecMultiheadAttn(nn.Module):
             return outputs, softmax_results
 
         else:
+            recompute = onmt.constants.recompute
 
             outputs, coverage = self.attn_func(recompute, is_training,
                                                 self.num_heads, query, key,

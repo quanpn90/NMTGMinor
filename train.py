@@ -29,6 +29,7 @@ opt = parser.parse_args()
 # An ugly hack to have weight norm on / off
 onmt.constants.weight_norm = opt.weight_norm
 onmt.constants.checkpointing = opt.checkpointing
+onmt.constants.recompute = opt.checkpointing > 0
 onmt.constants.max_position_length = opt.max_position_length
 
 

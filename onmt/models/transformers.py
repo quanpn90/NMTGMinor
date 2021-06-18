@@ -543,7 +543,7 @@ class Transformer(NMTModel):
         return
 
     def forward(self, batch, target_mask=None, streaming=False, zero_encoder=False,
-                mirror=False, streaming_state=None, nce=False):
+                mirror=False, streaming_state=None, nce=False, factorize=True, **kwargs):
         """
         :param nce: use noise contrastive estimation
         :param streaming_state:
@@ -572,7 +572,7 @@ class Transformer(NMTModel):
         tgt = tgt.transpose(0, 1)
 
         encoder_output = self.encoder(src, input_pos=src_pos, input_lang=src_lang, streaming=streaming,
-                                      src_lengths=src_lengths, streaming_state=streaming_state)
+                                      src_lengths=src_lengths, streaming_state=streaming_state, factorize=factorize)
 
         encoder_output = defaultdict(lambda: None, encoder_output)
         context = encoder_output['context']
@@ -587,7 +587,7 @@ class Transformer(NMTModel):
         decoder_output = self.decoder(tgt, context, src,
                                       src_lang=src_lang, tgt_lang=tgt_lang, input_pos=tgt_pos, streaming=streaming,
                                       src_lengths=src_lengths, tgt_lengths=tgt_lengths,
-                                      streaming_state=streaming_state)
+                                      streaming_state=streaming_state, factorize=factorize)
 
         # update the streaming state again
         decoder_output = defaultdict(lambda: None, decoder_output)

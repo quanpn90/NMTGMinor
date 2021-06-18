@@ -164,10 +164,11 @@ class RelativeTransformerEncoder(TransformerEncoder):
         else:
             for i, layer in enumerate(self.layer_modules):
                 # src_len x batch_size x d_model
-                if self.checkpointing == 0 or self.training is False:
-                    context = layer(context, pos_emb, mask_src, src_lang=input_lang)
-                else:
-                    context = checkpoint(create_forward_function(layer), context, pos_emb, mask_src, input_lang)
+                context = layer(context, pos_emb, mask_src, src_lang=input_lang)
+                # if self.checkpointing == 0 or self.training is False:
+                #     context = layer(context, pos_emb, mask_src, src_lang=input_lang)
+                # else:
+                #     context = checkpoint(create_forward_function(layer), context, pos_emb, mask_src, input_lang)
 
         # final layer norm. we can consider this layer norm as a part of the output layer/function
         context = self.postprocess_layer(context)
@@ -327,16 +328,17 @@ class RelativeTransformerDecoder(TransformerDecoder):
                                                   False, None)  # incremental variables
         else:
             for i, layer in enumerate(self.layer_modules):
-
-                if self.checkpointing == 0 or self.training is False:
-
-                    output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src,
-                                                src_lang=src_lang, tgt_lang=tgt_lang)
-
-                else:
-                    output, coverage = checkpoint(create_forward_function(layer), output, context, pos_emb,
-                                                     dec_attn_mask,
-                                                     mask_src, src_lang, tgt_lang)
+                output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                                         src_lang=src_lang, tgt_lang=tgt_lang)
+                # if self.checkpointing == 0 or self.training is False:
+                #
+                #     output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                #                                 src_lang=src_lang, tgt_lang=tgt_lang)
+                #
+                # else:
+                #     output, coverage = checkpoint(create_forward_function(layer), output, context, pos_emb,
+                #                                      dec_attn_mask,
+                #                                      mask_src, src_lang, tgt_lang)
 
         # From Google T2T
         # if normalization is done in layer_preprocess, then it should also be done

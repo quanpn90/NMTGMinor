@@ -94,6 +94,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                 incremental, incremental_cache,
                 double_precision, learnable_pos, return_coverage, recompute):
         """
+        :param recompute:
         :param return_coverage:
         :param learnable_pos:
         :param double_precision: ops at float64, only for debugging
@@ -120,7 +121,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
         heads_t = torch.tensor([heads])
         dropout_prob_t = torch.tensor([dropout_prob])
-        null_tensor = torch.tensor([])
+        null_tensor = torch.tensor([]).to(inputs.device)
         head_dim = inputs.size(2) // heads
         scale_t = torch.tensor([head_dim ** -0.5])
         ctx.double_precision = double_precision
@@ -172,7 +173,6 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                                       dropout_mask, nan_mask, mask,
                                       dropout_prob_t)
             else:
-
                 ctx.save_for_backward(heads_t,
                                       scale_t,
                                       matmul2_results,
@@ -258,7 +258,6 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # Relative Attention from here:
         # r_w_bias size: head * head_dim
         rw_head_q = queries.view(len_q, bsz, heads, head_dim) + r_w_bias  #
-        # rw_head_q = queries.add(r_w_bias.view(-1))
         rw_head_q = rw_head_q.view(len_q, bsz * heads, head_dim)
 
         # matmul_ac batched GEMMs
@@ -389,19 +388,41 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
         outputs = outputs.view(inputs.size(0), inputs.size(1), output_weights.size(0))
 
-        ctx.save_for_backward(heads_t,
-                              scale_t,
-                              matmul2_results,
-                              dropout_results,
-                              softmax_results,
-                              input_lin_results,
-                              pos_lin_results,
-                              rw_head_q, rr_head_q,
-                              inputs, pos, r_head_k,
-                              input_weights, pos_weights,
-                              output_weights,
-                              dropout_mask, nan_mask,
-                              dropout_prob_t)
+        if recompute:
+            ctx.save_for_backward(heads_t,
+                                  scale_t,
+                                  inputs, pos, r_head_k,
+                                  input_weights, pos_weights, output_weights,
+                                  input_biases, pos_biases, output_biases,
+                                  r_w_bias, r_r_bias,
+                                  dropout_mask, nan_mask, mask,
+                                  dropout_prob_t)
+
+            # delete stuff here
+            del input_lin_results, queries, keys, values
+            del matmul_ac, matmul2_results, attn_score, softmax_results, dropout_results
+            del rr_head_q, rw_head_q
+            if not learnable_pos:
+                del matmul_bd
+
+            dropout_results = null_tensor
+
+        else:
+            ctx.save_for_backward(heads_t,
+                                  scale_t,
+                                  matmul2_results,
+                                  dropout_results,
+                                  softmax_results,
+                                  input_lin_results,
+                                  pos_lin_results,
+                                  rw_head_q, rr_head_q,
+                                  inputs, pos, r_head_k,
+                                  input_weights, pos_weights,
+                                  output_weights,
+                                  dropout_mask, nan_mask,
+                                  dropout_prob_t)
+
+            del attn_score
 
         if return_coverage:
             return (outputs, dropout_results)
@@ -489,6 +510,74 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                    input_bias_grads, output_bias_grads, pos_bias_grads, r_w_bias_grads, r_r_bias_grads, \
                    None, None, None, None, None, None, None, None
 
+        if ctx.recompute:
+            heads = heads_t[0]
+
+            # Recomputing the activations in the forward pass here
+            input_lin_results = torch.addmm(input_biases,
+                                            inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
+                                            input_weights.transpose(0, 1),
+                                            beta=1., alpha=1.)
+
+            input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), input_weights.size(0))
+            if not learnable_pos:
+                pos_lin_results = torch.addmm(pos_biases,
+                                              pos.view(pos.size(0) * pos.size(1), pos.size(2)),
+                                              pos_weights.transpose(0, 1),
+                                              beta=1., alpha=1.)
+
+                pos_lin_results = pos_lin_results.view(pos.size(0), pos.size(1), pos_weights.size(0))
+
+                r_head_k = pos_lin_results.view(pos.size(0), bsz * heads, head_dim)  # T x BxH x D
+            else:
+                # pos_lin_results = pos.view(pos.size(0), bsz * heads, head_dim)  # T x BxH x D
+                # r_head_k = pos_lin_results
+                pos_lin_results = None
+                r_head_k = None
+
+            input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1) * heads, 3, head_dim)
+            queries = input_lin_results[:, :, 0, :]
+            keys = input_lin_results[:, :, 1, :]
+            values = input_lin_results[:, :, 2, :]
+
+            rw_head_q = queries.view(len_q, bsz, heads, head_dim) + r_w_bias  #
+            rw_head_q = rw_head_q.view(len_q, bsz * heads, head_dim)
+
+            matmul_ac = torch.empty((bsz * heads, queries.size(0), keys.size(0)), dtype=queries.dtype,
+                                    device=rw_head_q.device)
+            matmul_ac.baddbmm_(rw_head_q.transpose(0, 1), keys.transpose(0, 1).transpose(1, 2),
+                               beta=0.0, alpha=scale_t[0])
+
+            rr_head_q = queries.view(len_q, bsz, heads, head_dim) + r_r_bias
+            rr_head_q = rr_head_q.view(len_q, bsz * heads, head_dim)
+
+            if not learnable_pos:
+                matmul_bd = torch.empty((bsz * heads, queries.size(0), len_r), dtype=queries.dtype,
+                                        device=rw_head_q.device)
+
+                matmul_bd.baddbmm_(rr_head_q.transpose(0, 1),
+                                   r_head_k.transpose(0, 1).transpose(1, 2),
+                                   beta=0.0, alpha=scale_t[0])
+
+                matmul_bd = RelativeShift.forward(matmul_bd, True, False)
+                matmul_bd = matmul_bd[:, :, :len_k]
+                attn_score = matmul_ac + matmul_bd
+
+            else:
+                matmul_ac.transpose(0, 1).baddbmm_(rr_head_q, pos.transpose(1, 2), beta=1.0, alpha=scale_t[0])
+                attn_score = matmul_ac
+
+            if pad_mask is not None:
+                attn_score.view(bsz, heads, len_q, len_k).masked_fill_(pad_mask, float('-inf'))
+
+            softmax_results = F.softmax(attn_score, dim=-1).type_as(attn_score)
+            del attn_score
+
+            pinv = 1.0 / (1.0 - dropout_prob_t[0])
+            dropout_results = softmax_results * dropout_mask * pinv
+            matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1)).transpose(0, 1)
+            matmul2_results = matmul2_results.contiguous().view(inputs.size(0), inputs.size(1), inputs.size(2))
+
         # Slice out q,k,v from one big Input Linear outuput (should only impact meta data, no copies!)
         # input_lin_results: [len_q, bsz, heads(16), 3, head_dim(64)]
         # input_lin_results: [len_q, batches=bsz*heads, 3, head_dim]
@@ -537,8 +626,6 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # GEMM: Per batch: ( len_k x len_q ) x ( len_q x head_dim ) = ( len_k x head_dim )
         torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
 
-        # if learnable_pos and add_position:
-        # Add the gradients from the positions to the attention matrix
         # Input1: (data grads)  [bsz*heads, len_q,  head_dim].transpose(0, 1)
         # Input2: (rpositions) [len_q, len_k, head_dim].transpose(1,2)
         # Output:               [bsz*heads, len_q, seql_k].transpose(0, 1)
@@ -692,13 +779,6 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                                       inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)))
 
         input_bias_grads = torch.sum(input_lin_results_grads, 0)
-        #
-        # check = torch.allclose(input_weight_grads2, input_weight_grads, rtol=1e-02, atol=1e-03)
-        # print("Check grad weight input", check)
-        # print(input_weight_grads2 - input_weight_grads)
-        #
-        # check = torch.allclose(r_w_bias_grads2, r_w_bias_grads, rtol=1e-02, atol=1e-03)
-        # print("Check grad r_w_bias  ", check)
 
         return input_grads, pos_grads, None, None, None, input_weight_grads, output_weight_grads, pos_weight_grads, \
                input_bias_grads, output_bias_grads, pos_bias_grads, r_w_bias_grads, r_r_bias_grads, \
@@ -793,7 +873,7 @@ if __name__ == "__main__":
 
         def forward(self, input, pos, in_proj_weight, out_proj_weight, pos_proj_weight,
                     in_proj_bias, out_proj_bias, pos_proj_bias, r_w_bias, r_r_bias,
-                    mask, learnable_embedding=False):
+                    mask, learnable_embedding=False, recompute=False):
             use_time_mask = False
             is_training = True
             dropout = 0.0
@@ -806,7 +886,8 @@ if __name__ == "__main__":
                                  r_w_bias, r_r_bias,
                                  mask, dropout,
                                  False, None,  # For the incremental stuff
-                                 double_precision, learnable_embedding, return_coverage)  # double precision set to true
+                                 double_precision, learnable_embedding,
+                                 return_coverage, recompute)  # double precision set to true
 
 
     bsz = 4
@@ -841,7 +922,8 @@ if __name__ == "__main__":
     r_w_bias.requires_grad = True
     r_r_bias.requires_grad = True
 
-    mask = None  # input_states.new(*(bsz, len_q)).fill_(0).bool()
+    # mask = None  # input_states.new(*(bsz, len_q)).fill_(0).bool()
+    mask = input_states.new(*(bsz, len_q)).bernoulli_(p=0.25).bool()
     # mask.requires_grad = False
     learnable_pe = False
 
@@ -850,6 +932,15 @@ if __name__ == "__main__":
     torch.autograd.gradcheck(net, (input_states, pos, in_proj_weight, out_proj_weight, pos_proj_weight,
                                    in_proj_bias, out_proj_bias, pos_proj_bias, r_w_bias, r_r_bias,
                                    mask, learnable_pe))
+
+    print("gradchecking completed.")
+
+    print("gradchecking w/ recompute start.")
+
+    recompute = True
+    torch.autograd.gradcheck(net, (input_states, pos, in_proj_weight, out_proj_weight, pos_proj_weight,
+                                   in_proj_bias, out_proj_bias, pos_proj_bias, r_w_bias, r_r_bias,
+                                   mask, learnable_pe, recompute))
 
     print("gradchecking completed.")
 
@@ -865,3 +956,17 @@ if __name__ == "__main__":
                              eps=1e-6, atol=1e-5, rtol=1e-3)
 
     print("gradchecking w/ learnable position encodings completed.")
+
+    print("gradchecking w/ learnable position encodings and recompute start.")
+    recompute = True
+
+    torch.autograd.gradcheck(net, (input_states, pos, in_proj_weight, out_proj_weight, pos_proj_weight,
+                                   in_proj_bias, out_proj_bias, pos_proj_bias, r_w_bias, r_r_bias,
+                                   mask, learnable_pe, recompute),
+                             eps=1e-6, atol=1e-5, rtol=1e-3)
+
+    print("gradchecking w/ learnable position encodings completed.")
+
+
+
+

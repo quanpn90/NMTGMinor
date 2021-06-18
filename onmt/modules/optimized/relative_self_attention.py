@@ -7,6 +7,7 @@ import torch.nn.functional as F
 
 from .relative_self_attention_func import relative_self_attn_func
 from .relative_self_attention_func import RelativeShift
+import onmt
 
 
 class RelativeSelfMultiheadAttn(nn.Module):
@@ -103,7 +104,7 @@ class RelativeSelfMultiheadAttn(nn.Module):
         nn.init.normal_(self.r_r_bias, 0.0, 0.02)
 
     def forward(self, input, pos, key_padding_mask=None, attn_mask=None, mems=None,
-                incremental=False, incremental_cache=None, recompute=False):
+                incremental=False, incremental_cache=None):
         """
         :param recompute:
         :param input: [T x B x H]
@@ -215,6 +216,7 @@ class RelativeSelfMultiheadAttn(nn.Module):
             return outputs, softmax_results
 
         else:
+            recompute = onmt.constants.recompute
 
             outputs, coverage = self.attn_func(input, pos, attn_mask is not None, is_training, self.num_heads,
                                                self.in_proj_weight, self.out_proj_weight, self.pos_proj_weight,

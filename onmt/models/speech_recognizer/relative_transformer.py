@@ -95,8 +95,9 @@ class SpeechTransformerEncoder(TransformerEncoder):
             block = RelativeTransformerEncoderLayer(self.opt, death_rate=death_r)
             self.layer_modules.append(block)
 
-    def forward(self, input, input_pos=None, input_lang=None, streaming=False, **kwargs):
+    def forward(self, input, input_pos=None, input_lang=None, streaming=False, factorize=True, **kwargs):
         """
+        :param factorize:
         :param input: [B x T x Input_Size]
         :param input_pos: [B x T] positions
         :param input_lang: [B] language ids of each sample
@@ -196,13 +197,7 @@ class SpeechTransformerEncoder(TransformerEncoder):
 
                 mems_i = mems[i] if mems is not None and streaming and self.max_memory_size > 0 else None
 
-                if self.checkpointing == 0 or self.training is False:
-                    context = layer(context, pos_emb, mask_src, mems=mems_i, src_lang=input_lang)
-                else:
-                    incremental = False
-                    incremental_cache = None
-
-                    context = checkpoint(create_forward_function(layer), context, pos_emb, mask_src, input_lang)
+                context = layer(context, pos_emb, mask_src, mems=mems_i, src_lang=input_lang, factorize=factorize)
 
                 if streaming:
                     hids.append(context)
@@ -283,10 +278,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
             # linearly decay the death rate
             death_r = (_l + 1.0) / self.layers * self.death_rate
 
-            from .relative_transformer_layers import LIDFeedForward
-            lid_network = None
-
-            block = RelativeTransformerDecoderLayer(self.opt, death_rate=death_r, lid_net=lid_network)
+            block = RelativeTransformerDecoderLayer(self.opt, death_rate=death_r)
 
             self.layer_modules.append(block)
 
@@ -298,7 +290,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
     # TODO: write a step function for encoder
 
     def forward(self, input, context, src, input_pos=None,
-                src_lang=None, tgt_lang=None, streaming=False, **kwargs):
+                src_lang=None, tgt_lang=None, streaming=False, factorize=True, **kwargs):
         """
                 Inputs Shapes:
                     input: (Variable) batch_size x len_tgt (wanna tranpose)
@@ -367,20 +359,18 @@ class SpeechTransformerDecoder(TransformerDecoder):
         output = self.preprocess_layer(emb.contiguous())
         # pos_emb = self.preprocess_layer(pos_emb)
 
-        lfv_vector, lid_logits = None, list()
-
         if self.mpw:
             src_lang = self.factor_embeddings(src_lang).squeeze(0)
             tgt_lang = self.factor_embeddings(tgt_lang).squeeze(0)
             assert src_lang.ndim == 1 and tgt_lang.ndim == 1
 
         for i, layer in enumerate(self.layer_modules):
-            output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
-                                        src_lang=src_lang, tgt_lang=tgt_lang)
+            output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src,
+                                        src_lang=src_lang, tgt_lang=tgt_lang, factorize=factorize)
 
         output = self.postprocess_layer(output, factor=tgt_lang)
 
-        output_dict = {'hidden': output, 'coverage': coverage, 'context': context, 'lid_logits': lid_logits}
+        output_dict = {'hidden': output, 'coverage': coverage, 'context': context}
         output_dict = defaultdict(lambda: None, output_dict)
 
         return output_dict
@@ -492,18 +482,16 @@ class SpeechTransformerDecoder(TransformerDecoder):
 
         output = emb.contiguous()
 
-        lfv_vector, lid_logits = None, list()
-
         for i, layer in enumerate(self.layer_modules):
             buffer = buffers[i] if i in buffers else None
 
             if buffering:
-                output, coverage, buffer = layer(output, context, pos_emb, None, dec_attn_mask, mask_src,
+                output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, mask_src,
                                                  tgt_lang=lang, src_lang=src_lang,
                                                  incremental=True, incremental_cache=buffer)
                 decoder_state.update_attention_buffer(buffer, i)
             else:
-                output, coverage, _ = layer(output, context, pos_emb, lfv_vector, dec_attn_mask, mask_src,
+                output, coverage, _ = layer(output, context, pos_emb, dec_attn_mask, mask_src,
                                             tgt_lang=lang, src_lang=src_lang)
 
         # normalize and take the last time step

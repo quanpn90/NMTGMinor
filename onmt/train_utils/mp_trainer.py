@@ -734,6 +734,8 @@ class Trainer(object):
                         full_loss.div_(grad_div)
 
                     # grad scaler has to be done outside of the autocast
+                    # this line basically equals full_loss.mul_(some_scale).backward()
+                    # which means the grad scaler doesn't internally change
                     self.grad_scaler.scale(full_loss).backward()
 
                 del outputs
@@ -749,6 +751,10 @@ class Trainer(object):
                     loss = 0
                     if opt.streaming:  # reset stream in this case ...
                         streaming_state = self.model.init_stream()
+
+                    check = 0
+                    self.model.zero_grad()
+                    self.optim.zero_grad()
 
                     self.grad_scaler._check_inf_per_device(self.optim.optimizer)
                     # raise e

@@ -13,8 +13,8 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
     See "Attention Is All You Need" for more details.
     """
 
-    def __init__(self, embed_dim, num_heads, dropout=0., n_languages=1,
-                 rank=1, use_multiplicative=False, weight_drop=0.0,
+    def __init__(self, embed_dim, num_heads, dropout=0., learnable_pos=False, max_pos=0,
+                 n_languages=1, rank=1, use_multiplicative=False, weight_drop=0.0,
                  mfw_activation="none", no_bias=False):
         super().__init__()
         self.embed_dim = embed_dim
@@ -26,33 +26,44 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         self.use_multiplicative = use_multiplicative
         self.weight_drop = weight_drop
         self.no_bias = no_bias
+        self.learnable_pos = learnable_pos
 
         assert (not self.no_bias) or self.use_multiplicative
 
-        self.in_proj_weight = Parameter(torch.Tensor(embed_dim, 3 * embed_dim))
+        self.in_proj_weight = Parameter(torch.Tensor(3 * embed_dim, embed_dim))
         self.out_proj_weight = Parameter(torch.Tensor(embed_dim, embed_dim))
-        self.pos_proj_weight = Parameter(torch.Tensor(embed_dim, embed_dim))
 
         self.in_proj_bias = Parameter(torch.Tensor(3 * embed_dim))
         self.out_proj_bias = Parameter(torch.Tensor(embed_dim))
-        self.pos_proj_bias = Parameter(torch.Tensor(embed_dim))
+
+        if self.learnable_pos:
+            # If using learnable position embeddings, then assign embeddings for 2N + 1 max positions
+            # (embeddings are shared across heads)
+            assert max_pos >= 1
+            self.pos_emb = nn.Embedding(2 * max_pos + 1, self.head_dim)
+            self.pos_proj_weight, self.pos_proj_bias = None, None
+        else:
+            self.pos_proj_weight = Parameter(torch.Tensor(embed_dim, embed_dim))
+            self.pos_proj_bias = Parameter(torch.Tensor(embed_dim))
 
         if not self.no_bias:
-            self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
+            self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
+            self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
             self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
             self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.r_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.s_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            if not self.learnable_pos:
+                self.r_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+                self.s_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
         if use_multiplicative:
             rank = 1
-            self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
+            self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
+            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
             self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
             self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.rm_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.sm_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            if not self.learnable_pos:
+                self.rm_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+                self.sm_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
         self.r_w_bias = nn.Parameter(torch.Tensor(self.num_heads, self.head_dim))
         self.r_r_bias = nn.Parameter(torch.Tensor(self.num_heads, self.head_dim))
@@ -69,17 +80,20 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
             std_ = math.sqrt(2.0 / (self.embed_dim + self.embed_dim))
             nn.init.normal_(self.in_proj_weight, 0.0, std_)
             nn.init.normal_(self.out_proj_weight, 0.0, std_)
-            nn.init.normal_(self.pos_proj_weight, 0.0, std_)
+            if not self.learnable_pos:
+                nn.init.normal_(self.pos_proj_weight, 0.0, std_)
 
         else:
             std_ = math.sqrt(6.0 / (self.embed_dim + self.embed_dim))
             nn.init.uniform_(self.in_proj_weight, -std_, std_)
             nn.init.uniform_(self.out_proj_weight, -std_, std_)
-            nn.init.uniform_(self.pos_proj_weight, -std_, std_)
+            if not self.learnable_pos:
+                nn.init.uniform_(self.pos_proj_weight, -std_, std_)
 
         nn.init.constant_(self.in_proj_bias, 0.)
         nn.init.constant_(self.out_proj_bias, 0.)
-        nn.init.constant_(self.pos_proj_bias, 0.)
+        if not self.learnable_pos:
+            nn.init.constant_(self.pos_proj_bias, 0.)
 
         nn.init.normal_(self.r_w_bias, 0.0, 0.02)
         nn.init.normal_(self.r_r_bias, 0.0, 0.02)
@@ -87,16 +101,18 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         if not self.no_bias:
             nn.init.normal_(self.r_i, 0.0, 0.02)
             nn.init.normal_(self.s_i, 0.0, 0.02)
-            nn.init.normal_(self.r_p, 0.0, 0.02)
-            nn.init.normal_(self.s_p, 0.0, 0.02)
+            if not self.learnable_pos:
+                nn.init.normal_(self.r_p, 0.0, 0.02)
+                nn.init.normal_(self.s_p, 0.0, 0.02)
             nn.init.normal_(self.r_o, 0.0, 0.02)
             nn.init.normal_(self.s_o, 0.0, 0.02)
 
         if self.use_multiplicative:
             nn.init.constant_(self.rm_i, 1.0)
             nn.init.constant_(self.sm_i, 1.0)
-            nn.init.constant_(self.rm_p, 1.0)
-            nn.init.constant_(self.sm_p, 1.0)
+            if not self.learnable_pos:
+                nn.init.constant_(self.rm_p, 1.0)
+                nn.init.constant_(self.sm_p, 1.0)
             nn.init.constant_(self.rm_o, 1.0)
             nn.init.constant_(self.sm_o, 1.0)
 
@@ -105,16 +121,18 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         if not self.no_bias:
             self.r_i.requires_grad = False
             self.s_i.requires_grad = False
-            self.r_p.requires_grad = False
-            self.s_p.requires_grad = False
+            if not self.learnable_pos:
+                self.r_p.requires_grad = False
+                self.s_p.requires_grad = False
             self.r_o.requires_grad = False
             self.s_o.requires_grad = False
 
         if self.use_multiplicative:
             self.rm_i.requires_grad = False
             self.sm_i.requires_grad = False
-            self.rm_p.requires_grad = False
-            self.sm_p.requires_grad = False
+            if not self.learnable_pos:
+                self.rm_p.requires_grad = False
+                self.sm_p.requires_grad = False
             self.rm_o.requires_grad = False
             self.sm_o.requires_grad = False
 
@@ -123,69 +141,84 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
         if not self.no_bias:
             self.r_i.requires_grad = True
             self.s_i.requires_grad = True
-            self.r_p.requires_grad = True
-            self.s_p.requires_grad = True
+            if not self.learnable_pos:
+                self.r_p.requires_grad = True
+                self.s_p.requires_grad = True
             self.r_o.requires_grad = True
             self.s_o.requires_grad = True
 
         if self.use_multiplicative:
             self.rm_i.requires_grad = True
             self.sm_i.requires_grad = True
-            self.rm_p.requires_grad = True
-            self.sm_p.requires_grad = True
+            if not self.learnable_pos:
+                self.rm_p.requires_grad = True
+                self.sm_p.requires_grad = True
             self.rm_o.requires_grad = True
             self.sm_o.requires_grad = True
 
-    def forward(self, input, pos, indices=None, key_padding_mask=None, attn_mask=None, mems=None,
-                incremental=False, incremental_cache=None):
+    def forward(self, input, pos, indices=None, key_padding_mask=None, attn_mask=None,
+                incremental=False, incremental_cache=None, recompute=False, factorize=True, **kwargs):
 
-        # weight dropout
-        in_proj_weight = F.dropout(self.in_proj_weight, p=self.dropout, training=self.training)
-        pos_proj_weight = F.dropout(self.pos_proj_weight, p=self.dropout, training=self.training)
-        out_proj_weight = F.dropout(self.out_proj_weight, p=self.dropout, training=self.training)
+        in_proj_weight = self.in_proj_weight
+        out_proj_weight = self.out_proj_weight
+        pos_proj_weight = self.pos_proj_weight
 
-        if self.use_multiplicative:
-            rm_i = torch.index_select(self.rm_i, 0, indices).squeeze(0)
-            sm_i = torch.index_select(self.sm_i, 0, indices).squeeze(0)
-            rm_p = torch.index_select(self.rm_p, 0, indices).squeeze(0)
-            sm_p = torch.index_select(self.sm_p, 0, indices).squeeze(0)
-            rm_o = torch.index_select(self.rm_o, 0, indices).squeeze(0)
-            sm_o = torch.index_select(self.sm_o, 0, indices).squeeze(0)
-            # print(rm_i, sm_i)
-
-            in_scale = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
-            in_proj_weight = in_proj_weight * in_scale
-            pos_proj_weight = pos_proj_weight * torch.bmm(rm_p.unsqueeze(-1), sm_p.unsqueeze(1)).sum(dim=0)
-            out_proj_weight = out_proj_weight * torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
-
-        if not self.no_bias:
-            if indices.size(0) == 1 and len(indices.shape) == 1:
-                r_i = torch.index_select(self.r_i, 0, indices).squeeze(0)
-                s_i = torch.index_select(self.s_i, 0, indices).squeeze(0)
-                r_p = torch.index_select(self.r_p, 0, indices).squeeze(0)
-                s_p = torch.index_select(self.s_p, 0, indices).squeeze(0)
-                r_o = torch.index_select(self.r_o, 0, indices).squeeze(0)
-                s_o = torch.index_select(self.s_o, 0, indices).squeeze(0)
+        # option to disable factorization
+        if factorize:
+            # weight dropout
+            in_proj_weight = F.dropout(self.in_proj_weight, p=self.weight_drop, training=self.training)
+            out_proj_weight = F.dropout(self.out_proj_weight, p=self.weight_drop, training=self.training)
+            if not self.learnable_pos:
+                pos_proj_weight = F.dropout(self.pos_proj_weight, p=self.weight_drop, training=self.training)
             else:
-                print(indices.size(), input.size())
+                pos_proj_weight = None
+
+
+            if self.use_multiplicative:
+                rm_i = torch.index_select(self.rm_i, 0, indices).squeeze(0)
+                sm_i = torch.index_select(self.sm_i, 0, indices).squeeze(0)
+                rm_o = torch.index_select(self.rm_o, 0, indices).squeeze(0)
+                sm_o = torch.index_select(self.sm_o, 0, indices).squeeze(0)
+                if not self.learnable_pos:
+                    rm_p = torch.index_select(self.rm_p, 0, indices).squeeze(0)
+                    sm_p = torch.index_select(self.sm_p, 0, indices).squeeze(0)
+
+                in_scale = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
+                in_proj_weight = in_proj_weight * in_scale
+                out_proj_weight = out_proj_weight * torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+                if not self.learnable_pos:
+                    pos_proj_weight = pos_proj_weight * torch.bmm(rm_p.unsqueeze(-1), sm_p.unsqueeze(1)).sum(dim=0)
+
+            if not self.no_bias:
+                if indices.size(0) == 1 and len(indices.shape) == 1:
+                    r_i = torch.index_select(self.r_i, 0, indices).squeeze(0)
+                    s_i = torch.index_select(self.s_i, 0, indices).squeeze(0)
+                    if not self.learnable_pos:
+                        r_p = torch.index_select(self.r_p, 0, indices).squeeze(0)
+                        s_p = torch.index_select(self.s_p, 0, indices).squeeze(0)
+                    r_o = torch.index_select(self.r_o, 0, indices).squeeze(0)
+                    s_o = torch.index_select(self.s_o, 0, indices).squeeze(0)
+                else:
+                    print(indices.size(), input.size())
+                    raise NotImplementedError
+
+                in_proj_weight = in_proj_weight + torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
+                if not self.learnable_pos:
+                        pos_proj_weight = pos_proj_weight + torch.bmm(r_p.unsqueeze(-1), s_p.unsqueeze(1)).sum(dim=0)
+                out_proj_weight = out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+
+            if self.mfw_activation == "none":
+                in_proj_weight = in_proj_weight
+            elif self.mfw_activation == "gelu":
+                in_proj_weight = F.gelu(in_proj_weight)
+                pos_proj_weight = F.gelu(pos_proj_weight) if not self.learnable_pos else None
+                out_proj_weight = F.gelu(out_proj_weight)
+            elif self.mfw_activation == "silu":
+                in_proj_weight = F.silu(in_proj_weight)
+                pos_proj_weight = F.silu(pos_proj_weight) if not self.learnable_pos else None
+                out_proj_weight = F.silu(out_proj_weight)
+            else:
                 raise NotImplementedError
-
-            in_proj_weight = in_proj_weight + torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
-            pos_proj_weight = pos_proj_weight + torch.bmm(r_p.unsqueeze(-1), s_p.unsqueeze(1)).sum(dim=0)
-            out_proj_weight = out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
-
-        if self.mfw_activation == "none":
-            in_proj_weight = in_proj_weight
-        elif self.mfw_activation == "gelu":
-            in_proj_weight = F.gelu(in_proj_weight)
-            pos_proj_weight = F.gelu(pos_proj_weight)
-            out_proj_weight = F.gelu(out_proj_weight)
-        elif self.mfw_activation == "silu":
-            in_proj_weight = F.silu(in_proj_weight)
-            pos_proj_weight = F.silu(pos_proj_weight)
-            out_proj_weight = F.silu(out_proj_weight)
-        else:
-            raise NotImplementedError
 
         if key_padding_mask is not None:
             assert (attn_mask is None), "ERROR attn_mask and key_padding_mask should not be both defined!"
@@ -201,12 +234,17 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
 
         is_training = self.training
 
+        if self.learnable_pos:
+            # [len_q x len_k] -> [len_q x len_k x head_dim]
+            pos = self.pos_emb(pos)
+
         outputs, coverage = self.attn_func(input, pos, attn_mask is not None, is_training, self.num_heads,
-                                           in_proj_weight.t(), out_proj_weight.t(), pos_proj_weight.t(),
+                                           in_proj_weight, out_proj_weight, pos_proj_weight,
                                            self.in_proj_bias, self.out_proj_bias, self.pos_proj_bias,
                                            self.r_w_bias, self.r_r_bias,
                                            mask, self.dropout,
-                                           incremental, incremental_cache, False, False, True)
+                                           incremental, incremental_cache, False,
+                                           self.learnable_pos, True, recompute)
         # last False is double precision
 
         return outputs, coverage

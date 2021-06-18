@@ -58,16 +58,6 @@ class MFWEncdecMultiheadAttn(nn.Module):
         self.attn_func = encdec_attn_func
         self.mfw_activation = mfw_activation.lower()
 
-        try:
-            # the fast one requires apex and does not work with incremental so careful
-            from apex.contrib.multihead_attn.fast_encdec_multihead_attn_func import fast_encdec_attn_func
-            self.attn_func_fast = fast_encdec_attn_func
-            self.optimized = 1
-
-        except ModuleNotFoundError as e:
-            self.optimized = 2
-            self.attn_func_fast = None
-
         self.reset_parameters()
 
     def reset_parameters(self, init='normal'):
@@ -135,88 +125,76 @@ class MFWEncdecMultiheadAttn(nn.Module):
             self.sm_o.requires_grad = True
 
     def forward(self, query, key, value, src_indices=None, tgt_indices=None, attn_mask=None,
-                incremental=False, incremental_cache=None):
+                incremental=False, incremental_cache=None, factorize=True, **kwargs):
 
         indices = tgt_indices
-        # n_languages = self.r_q.size(0)
         bsz = query.size(1)
 
         assert value is key, "ERROR: Keys and values must be the same."
 
         is_training = self.training
         time_masking = False
-        len_key = key.size(0)
+        recompute = False
 
         # dropping the main weights during training
-        in_proj_weight_q = F.dropout(self.in_proj_weight_q, p=self.weight_drop, training=self.training)
-        in_proj_weight_kv = F.dropout(self.in_proj_weight_kv, p=self.weight_drop, training=self.training)
-        out_proj_weight = F.dropout(self.out_proj_weight, p=self.weight_drop, training=self.training)
+        in_proj_weight_q = self.in_proj_weight_q
+        in_proj_weight_kv = self.in_proj_weight_kv
+        out_proj_weight = self.out_proj_weight
 
-        if self.use_multiplicative:
-            # multiply main weights with extra weights
-            rm_q = torch.index_select(self.rm_q, 0, indices).squeeze(0)
-            sm_q = torch.index_select(self.sm_q, 0, src_indices).squeeze(0)
-            rm_kv = torch.index_select(self.rm_kv, 0, indices).squeeze(0)
-            sm_kv = torch.index_select(self.sm_kv, 0, src_indices).squeeze(0)
-            rm_o = torch.index_select(self.rm_o, 0, indices).squeeze(0)
-            sm_o = torch.index_select(self.sm_o, 0, src_indices).squeeze(0)
+        if factorize:
+            in_proj_weight_q = F.dropout(self.in_proj_weight_q, p=self.weight_drop, training=self.training)
+            in_proj_weight_kv = F.dropout(self.in_proj_weight_kv, p=self.weight_drop, training=self.training)
+            out_proj_weight = F.dropout(self.out_proj_weight, p=self.weight_drop, training=self.training)
 
-            in_proj_weight_q = in_proj_weight_q * torch.bmm(rm_q.unsqueeze(-1), sm_q.unsqueeze(1)).sum(dim=0)
-            in_proj_weight_kv = in_proj_weight_kv * torch.bmm(rm_kv.unsqueeze(-1), sm_kv.unsqueeze(1)).sum(dim=0)
-            out_proj_weight = out_proj_weight * torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+            if self.use_multiplicative:
+                # multiply main weights with extra weights
+                rm_q = torch.index_select(self.rm_q, 0, indices).squeeze(0)
+                sm_q = torch.index_select(self.sm_q, 0, src_indices).squeeze(0)
+                rm_kv = torch.index_select(self.rm_kv, 0, indices).squeeze(0)
+                sm_kv = torch.index_select(self.sm_kv, 0, src_indices).squeeze(0)
+                rm_o = torch.index_select(self.rm_o, 0, indices).squeeze(0)
+                sm_o = torch.index_select(self.sm_o, 0, src_indices).squeeze(0)
 
-        # adding main weights with extra weights
-        # sum(dim=0) sums over the rank dimension
-        if not self.no_bias:
-            if indices.size(0) == 1 and len(indices.shape) == 1:
-                r_q = torch.index_select(self.r_q, 0, indices).squeeze(0)
-                s_q = torch.index_select(self.s_q, 0, src_indices).squeeze(0)
-                r_kv = torch.index_select(self.r_kv, 0, indices).squeeze(0)
-                s_kv = torch.index_select(self.s_kv, 0, src_indices).squeeze(0)
-                r_o = torch.index_select(self.r_o, 0, indices).squeeze(0)
-                s_o = torch.index_select(self.s_o, 0, src_indices).squeeze(0)
+                in_proj_weight_q = in_proj_weight_q * torch.bmm(rm_q.unsqueeze(-1), sm_q.unsqueeze(1)).sum(dim=0)
+                in_proj_weight_kv = in_proj_weight_kv * torch.bmm(rm_kv.unsqueeze(-1), sm_kv.unsqueeze(1)).sum(dim=0)
+                out_proj_weight = out_proj_weight * torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+
+            # adding main weights with extra weights
+            # sum(dim=0) sums over the rank dimension
+            if not self.no_bias:
+                if indices.size(0) == 1 and len(indices.shape) == 1:
+                    r_q = torch.index_select(self.r_q, 0, indices).squeeze(0)
+                    s_q = torch.index_select(self.s_q, 0, src_indices).squeeze(0)
+                    r_kv = torch.index_select(self.r_kv, 0, indices).squeeze(0)
+                    s_kv = torch.index_select(self.s_kv, 0, src_indices).squeeze(0)
+                    r_o = torch.index_select(self.r_o, 0, indices).squeeze(0)
+                    s_o = torch.index_select(self.s_o, 0, src_indices).squeeze(0)
+                else:
+                    print(indices.size(), input.size())
+                    raise NotImplementedError
+
+                in_proj_weight_q = in_proj_weight_q + torch.bmm(r_q.unsqueeze(-1), s_q.unsqueeze(1)).sum(dim=0)
+                in_proj_weight_kv = in_proj_weight_kv + torch.bmm(r_kv.unsqueeze(-1), s_kv.unsqueeze(1)).sum(dim=0)
+                out_proj_weight = out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+
+            if self.mfw_activation == "none":
+                in_proj_weight_q = in_proj_weight_q
+            elif self.mfw_activation == "gelu":
+                in_proj_weight_q = F.gelu(in_proj_weight_q)
+                in_proj_weight_kv = F.gelu(in_proj_weight_kv)
+                out_proj_weight = F.gelu(out_proj_weight)
+            elif self.mfw_activation == "silu":
+                in_proj_weight_q = F.silu(in_proj_weight_q)
+                in_proj_weight_kv = F.silu(in_proj_weight_kv)
+                out_proj_weight = F.silu(out_proj_weight)
             else:
-                print(indices.size(), input.size())
                 raise NotImplementedError
 
-            in_proj_weight_q = in_proj_weight_q + torch.bmm(r_q.unsqueeze(-1), s_q.unsqueeze(1)).sum(dim=0)
-            in_proj_weight_kv = in_proj_weight_kv + torch.bmm(r_kv.unsqueeze(-1), s_kv.unsqueeze(1)).sum(dim=0)
-            out_proj_weight = out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
-
-        if self.mfw_activation == "none":
-            in_proj_weight_q = in_proj_weight_q
-        elif self.mfw_activation == "gelu":
-            in_proj_weight_q = F.gelu(in_proj_weight_q)
-            in_proj_weight_kv = F.gelu(in_proj_weight_kv)
-            out_proj_weight = F.gelu(out_proj_weight)
-        elif self.mfw_activation == "silu":
-            in_proj_weight_q = F.silu(in_proj_weight_q)
-            in_proj_weight_kv = F.silu(in_proj_weight_kv)
-            out_proj_weight = F.silu(out_proj_weight)
-        else:
-            raise NotImplementedError
-
-        if self.optimized == 1 and (self.training and not incremental) and len_key <= 1024 \
-                and query.is_cuda and in_proj_weight_q.dtype == torch.half:
-            if attn_mask is not None:
-                if attn_mask.dim() == 3:
-                    attn_mask = attn_mask.squeeze(1)
-                attn_mask = attn_mask.byte()
-
-            outputs = self.attn_func_fast(time_masking, is_training, self.num_heads,
-                                          query, key.type_as(in_proj_weight_q),
-                                          in_proj_weight_q, in_proj_weight_kv, out_proj_weight,
-                                          attn_mask, self.dropout)
-
-            coverage = None
-
-        # during evaluation we use the python binding which is safer ....
-        else:
-            outputs, coverage, = self.attn_func(time_masking, is_training,
-                                                self.num_heads, query, key,
-                                                in_proj_weight_q, in_proj_weight_kv,
-                                                out_proj_weight, attn_mask, self.dropout,
-                                                incremental, incremental_cache, False, True)
+        outputs, coverage, = self.attn_func(recompute, is_training,
+                                            self.num_heads, query, key,
+                                            in_proj_weight_q, in_proj_weight_kv,
+                                            out_proj_weight, attn_mask, self.dropout,
+                                            incremental, incremental_cache, False, True)
 
         # TODO: add incremental cache
 

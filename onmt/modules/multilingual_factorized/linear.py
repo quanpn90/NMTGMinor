@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
+from torch.cuda.amp import autocast
 
 
 class MultilingualLinear(torch.nn.Module):
@@ -17,16 +18,16 @@ class MultilingualLinear(torch.nn.Module):
 
         assert (not self.no_bias) or self.use_multiplicative
 
-        self.weight = torch.nn.Parameter(torch.Tensor(input_size, output_size))
+        self.weight = torch.nn.Parameter(torch.Tensor(output_size, input_size))
         self.bias = torch.nn.Parameter(torch.Tensor(output_size))
 
         if not self.no_bias:
-            self.r = torch.nn.Parameter(torch.Tensor(n_factors, rank, input_size))
-            self.s = torch.nn.Parameter(torch.Tensor(n_factors, rank, output_size))
+            self.r = torch.nn.Parameter(torch.Tensor(n_factors, rank, output_size))
+            self.s = torch.nn.Parameter(torch.Tensor(n_factors, rank, input_size))
 
         if use_multiplicative:
-            self.rm = torch.nn.Parameter(torch.Tensor(n_factors, 1, input_size))
-            self.sm = torch.nn.Parameter(torch.Tensor(n_factors, 1, output_size))
+            self.rm = torch.nn.Parameter(torch.Tensor(n_factors, 1, output_size))
+            self.sm = torch.nn.Parameter(torch.Tensor(n_factors, 1, input_size))
 
         self.reset_parameters()
         self.mfw_activation = mfw_activation.lower()
@@ -66,46 +67,56 @@ class MultilingualLinear(torch.nn.Module):
             self.r.requires_grad = True
             self.s.requires_grad = True
 
-    def forward(self, input, indices=None):
+    def get_weight(self, indices, factorize=True):
+
+        weight_ = self.weight
+
+        if indices is None:
+            return weight_, self.bias
+
+        if factorize:
+
+            weight_ = F.dropout(self.weight, p=self.weight_drop, training=self.training)
+
+            if indices.size(0) == 1 and len(indices.shape) == 1:
+
+                if self.use_multiplicative:
+                    rm = torch.index_select(self.rm, 0, indices).squeeze(0)
+                    sm = torch.index_select(self.sm, 0, indices).squeeze(0)
+                    weight_ = weight_ * torch.sum(torch.bmm(rm.unsqueeze(-1), sm.unsqueeze(1)), dim=0)
+
+                if self.mfw_activation == "none":
+                    weight_ = weight_
+                elif self.mfw_activation == "gelu":
+                    weight_ = F.gelu(weight_)
+                elif self.mfw_activation == "silu":
+                    weight_ = F.silu(weight_)
+                else:
+                    raise NotImplementedError
+
+                if not self.no_bias:
+                    r = torch.index_select(self.r, 0, indices).squeeze(0)
+                    s = torch.index_select(self.s, 0, indices).squeeze(0)
+                    weight_mask = torch.bmm(r.unsqueeze(-1), s.unsqueeze(1))
+                    weight_mask = torch.sum(weight_mask, dim=0)
+                    weight_ = weight_ + weight_mask
+
+        return weight_, self.bias
+
+    def forward(self, input, indices=None, factorize=True):
         """
+        :param factorize:
         :param input: T x B x H
         :param indices: T x B or B
         :return:
         """
-        bsz = input.size(1)
-        seq_len = input.size(0)
-
-        weight_ = F.dropout(self.weight, p=self.weight_drop, training=self.training)
 
         if indices.size(0) == 1 and len(indices.shape) == 1:
 
+            weight_, bias = self.get_weight(indices, factorize=factorize)
 
-            # weight_mask = torch.sum(torch.einsum('bi,bj->bij', (s, r)), dim=0)
-            # weight_mask = torch.bmm(s.unsqueeze(-1), r.unsqueeze(1))
-            if self.use_multiplicative:
-                rm = torch.index_select(self.rm, 0, indices).squeeze(0)
-                sm = torch.index_select(self.sm, 0, indices).squeeze(0)
-                weight_ = weight_ * torch.sum(torch.bmm(rm.unsqueeze(-1), sm.unsqueeze(1)), dim=0)
+            input = F.linear(input, weight_, self.bias)
 
-            if self.mfw_activation == "none":
-                weight_ = weight_
-            elif self.mfw_activation == "gelu":
-                weight_ = F.gelu(weight_)
-            elif self.mfw_activation == "silu":
-                weight_ = F.silu(weight_)
-            else:
-                raise NotImplementedError
-
-            if not self.no_bias:
-                r = torch.index_select(self.r, 0, indices).squeeze(0)
-                s = torch.index_select(self.s, 0, indices).squeeze(0)
-                weight_mask = torch.bmm(r.unsqueeze(-1), s.unsqueeze(1))
-                weight_mask = torch.sum(weight_mask, dim=0)
-                weight_ = weight_ + weight_mask
-
-            input = F.linear(input, weight_.t(), self.bias)
-            # input = torch.addmm(self.bias, input.view(-1, input.size(-1)), weight_)
-            # input = input.view(seq_len, bsz, input.size(-1))
             return input
         else:
             print(indices.size(), input.size())
@@ -130,6 +141,7 @@ class MFWPositionWiseFeedForward(torch.nn.Module):
         self.weight_drop = weight_drop
         self.glu = glu
         self.dropout_residual = False
+        self.fused = False
 
         self.input_linear = MultilingualLinear(model_size, inner_size * (2 if glu else 1), n_languages,
                                                rank, use_multiplicative, weight_drop, mfw_activation=mfw_activation,
@@ -151,6 +163,30 @@ class MFWPositionWiseFeedForward(torch.nn.Module):
         else:
             self.dropout_function = F.dropout
 
+        # At the moment fused mlp is supported for RELU, SiLU, Swish, GELU and AGELU (approximated GELU)
+        if not self.glu and \
+                self.activation in ['relu', 'silu', 'swish', 'gelu', 'agelu'] and not self.variational:
+            if self.activation == 'relu':
+                from onmt.modules.mlp.mlp import mlp_relu_function
+                if mlp_relu_function is not None:
+                    self.fused_function = mlp_relu_function
+                    self.fused = True
+            elif self.activation in ['silu', 'swish']:
+                from onmt.modules.mlp.mlp import mlp_silu_function
+                if mlp_silu_function is not None:
+                    self.fused_function = mlp_silu_function
+                    self.fused = True
+            elif self.activation == 'gelu':
+                from onmt.modules.mlp.mlp import mlp_gelu_function
+                if mlp_gelu_function is not None:
+                    self.fused_function = mlp_gelu_function
+                    self.fused = True
+            elif self.activation == 'agelu':
+                from onmt.modules.mlp.mlp import mlp_agelu_function
+                if mlp_agelu_function is not None:
+                    self.fused_function = mlp_agelu_function
+                    self.fused = True
+
     def freeze(self):
 
         self.input_linear.freeze()
@@ -161,24 +197,46 @@ class MFWPositionWiseFeedForward(torch.nn.Module):
         self.input_linear.unfreeze()
         self.output_linear.unfreeze()
 
-    def forward(self, hidden, indices=None):
+    def forward(self, hidden, indices=None, factorize=True, **kwargs):
         """
+        :param factorize:
         :param hidden: tensor [T x B x H]
         :param indices: tensor [1]
         :return:
         """
+        if self.fused and hidden.is_cuda:
+            in_weight, in_bias = self.input_linear.get_weight(indices, factorize=factorize)
+            out_weight, out_bias = self.output_linear.get_weight(indices, factorize=factorize)
 
-        hidden = self.input_linear(hidden, indices)
+            with autocast(enabled=False):
+                input = hidden
+                weights = [in_weight.half(), out_weight.half()]
+                biases = [in_bias.half(), out_bias.half()]
 
-        if self.glu:
-            hidden, gate = hidden.chunk(2, dim=-1)
-            hidden = self.act(hidden) * gate
+                seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
+                recompute = False
+
+                dropout = self.dropout if self.training else 0.0
+
+                hidden = self.fused_function(dropout, recompute, input.half().view(seq_len * bsz, -1),
+                                             *weights, *biases).type_as(input)
+
+                hidden = hidden.view(seq_len, bsz, hidden_size)
+
+            return hidden
+
         else:
-            hidden = self.act(hidden)
+            hidden = self.input_linear(hidden, indices)
 
-        hidden = self.dropout_function(hidden, p=self.dropout, training=self.training)
-        hidden = self.output_linear(hidden, indices)
-        return hidden
+            if self.glu:
+                hidden, gate = hidden.chunk(2, dim=-1)
+                hidden = self.act(hidden) * gate
+            else:
+                hidden = self.act(hidden)
+
+            hidden = self.dropout_function(hidden, p=self.dropout, training=self.training)
+            hidden = self.output_linear(hidden, indices)
+            return hidden
 
     def reset_parameters(self, init='normal'):
 

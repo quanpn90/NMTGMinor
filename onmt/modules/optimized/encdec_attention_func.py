@@ -40,7 +40,7 @@ class EncdecAttnFunc(torch.autograd.Function):
                 double_precision, return_coverage):
         heads_t = torch.tensor([heads])
         dropout_prob_t = torch.tensor([dropout_prob])
-        null_tensor = torch.tensor([])
+        null_tensor = torch.tensor([]).to(inputs_q.device)
         head_dim = inputs_q.size(2) // heads
         scale_t = torch.tensor([head_dim ** -0.5])
         use_mask = (mask is not None)
@@ -179,8 +179,6 @@ class EncdecAttnFunc(torch.autograd.Function):
 
         if mask_softmax_dropout_cuda and len_k <= 2048 \
                 and matmul1_results.type() == 'torch.cuda.HalfTensor' and not double_precision:
-            # if False:
-            # dropout_results_ref = F.softmax(matmul1_results, dim=-1)
             dropout_mask, softmax_results, dropout_results = mask_softmax_dropout_cuda.forward(is_training, heads,
                                                                                                matmul1_results,
                                                                                                dropout_prob_t[0])
@@ -207,8 +205,6 @@ class EncdecAttnFunc(torch.autograd.Function):
             ctx.fused_softmax_dropout = True
 
         else:
-            # dtype_ = torch.float64 if double_precision else torch.float32
-            # softmax_results = F.softmax(matmul1_results, dim=-1, dtype=dtype_).type_as(matmul1_results)
             if matmul1_results.type() == 'torch.cuda.HalfTensor':
                 softmax_results = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
             else:
@@ -249,20 +245,38 @@ class EncdecAttnFunc(torch.autograd.Function):
                            output_weights.transpose(0, 1))
         outputs = outputs.view(inputs_q.size(0), inputs_q.size(1), output_weights.size(0))
 
-        ctx.save_for_backward(heads_t,
-                              scale_t,
-                              matmul2_results,
-                              dropout_results,
-                              softmax_results,
-                              input_lin_q_results,
-                              input_lin_kv_results,
-                              inputs_q,
-                              inputs_kv,
-                              input_weights_q,
-                              input_weights_kv,
-                              output_weights,
-                              dropout_mask,
-                              dropout_prob_t)
+        if not ctx.recompute:
+            ctx.save_for_backward(heads_t,
+                                  scale_t,
+                                  matmul2_results,
+                                  dropout_results,
+                                  softmax_results,
+                                  input_lin_q_results,
+                                  input_lin_kv_results,
+                                  inputs_q,
+                                  inputs_kv,
+                                  input_weights_q,
+                                  input_weights_kv,
+                                  output_weights,
+                                  dropout_mask,
+                                  dropout_prob_t)
+        else:
+            ctx.save_for_backward(heads_t,
+                                  scale_t,
+                                  inputs_q,
+                                  inputs_kv,
+                                  input_weights_q,
+                                  input_weights_kv,
+                                  output_weights,
+                                  dropout_mask,
+                                  dropout_prob_t,
+                                  mask)
+
+            del input_lin_q_results, queries
+            del input_lin_kv_results, keys, values
+            del matmul1_results, matmul2_results
+            del softmax_results, dropout_results
+            dropout_results = null_tensor
 
         if return_coverage:
             return (outputs, dropout_results)
@@ -308,38 +322,90 @@ class EncdecAttnFunc(torch.autograd.Function):
             if not ctx.recompute:
 
                 input_q_grads, \
-                    input_kv_grads, \
-                    input_weight_q_grads, \
-                    input_weight_kv_grads, \
-                    output_weight_grads \
+                input_kv_grads, \
+                input_weight_q_grads, \
+                input_weight_kv_grads, \
+                output_weight_grads \
                     = encdec_multihead_attn_cuda.backward(heads_t[0], output_grads, matmul2_results,
-                                                                          dropout_results,
-                                                                          softmax_results, input_lin_q_results,
-                                                                          input_lin_kv_results,
-                                                                          inputs_q, inputs_kv, input_weights_q,
-                                                                          input_weights_kv,
-                                                                          output_weights, dropout_mask,
-                                                                          dropout_prob_t[0])
+                                                          dropout_results,
+                                                          softmax_results, input_lin_q_results,
+                                                          input_lin_kv_results,
+                                                          inputs_q, inputs_kv, input_weights_q,
+                                                          input_weights_kv,
+                                                          output_weights, dropout_mask,
+                                                          dropout_prob_t[0])
 
             else:
 
                 input_q_grads, \
-                    input_kv_grads, \
-                    input_weight_q_grads, \
-                    input_weight_kv_grads, \
-                    output_weight_grads \
+                input_kv_grads, \
+                input_weight_q_grads, \
+                input_weight_kv_grads, \
+                output_weight_grads \
                     = encdec_multihead_attn_cuda.backward_recompute(heads_t[0], output_grads,
-                                                                                    inputs_q, inputs_kv,
-                                                                                    input_weights_q,
-                                                                                    input_weights_kv,
-                                                                                    output_weights, dropout_mask,
-                                                                                    pad_mask,
-                                                                                    dropout_prob_t[0])
+                                                                    inputs_q, inputs_kv,
+                                                                    input_weights_q,
+                                                                    input_weights_kv,
+                                                                    output_weights, dropout_mask,
+                                                                    pad_mask,
+                                                                    dropout_prob_t[0])
 
             return None, None, None, \
                    input_q_grads, input_kv_grads, \
                    input_weight_q_grads, input_weight_kv_grads, output_weight_grads, \
                    None, None, None, None, None, None
+
+        if ctx.recompute:
+            assert ctx.incremental is not True
+            heads = heads_t[0]
+
+            # Recomputing the tensors in the forward pass here
+            input_lin_q_results = torch.mm(inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
+                                           input_weights_q.transpose(0, 1))
+            input_lin_q_results = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1), input_weights_q.size(0))
+
+            queries = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1) * heads, head_dim)
+
+            input_lin_kv_results = torch.mm(inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)),
+                                            input_weights_kv.transpose(0, 1))
+            input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1),
+                                                             input_weights_kv.size(0))
+
+            input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1) * heads, 2, head_dim)
+            keys = input_lin_kv_results[:, :, 0, :]
+            values = input_lin_kv_results[:, :, 1, :]
+
+            matmul1_results = torch.empty((queries.size(1), queries.size(0), keys.size(0)), dtype=queries.dtype,
+                                          device=queries.device)
+            matmul1_results.baddbmm_(queries.transpose(0, 1),
+                                     keys.transpose(0, 1).transpose(1, 2),
+                                     beta=0.0, alpha=scale_t[0])
+
+            if pad_mask is not None:
+                batches, seql_q, seql_k = matmul1_results.size()
+                bsz = int(batches / heads)
+                matmul1_results = matmul1_results.view(bsz, heads, seql_q, seql_k)
+                # after unsqueezing the mask should have size [bsz x 1 x 1 x seql_k]
+                matmul1_results = matmul1_results.masked_fill_(pad_mask, float('-inf'))
+                matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
+
+            if matmul1_results.type() == 'torch.cuda.HalfTensor':
+                softmax_results = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
+            else:
+                softmax_results = F.softmax(matmul1_results, dim=-1)
+
+            if dropout_prob_t[0] > 0:
+                pinv = 1.0 / (1.0 - dropout_prob_t[0])
+                dropout_results = softmax_results * dropout_mask * pinv
+            else:
+                dropout_results = softmax_results
+
+            matmul2_results = torch.empty((dropout_results.size(1), dropout_results.size(0), values.size(2)),
+                                          dtype=dropout_results.dtype, device=dropout_results.device)
+
+            torch.bmm(dropout_results, values.transpose(0, 1), out=matmul2_results.transpose(1, 0))
+
+            matmul2_results = matmul2_results.contiguous().view(inputs_q.size(0), inputs_q.size(1), inputs_q.size(2))
 
         # Slice out k,v from one big Input Linear output (should only impact meta data, no copies!)
         # Batch sizes and heads are combined to make the batch of the Batched GEMM
@@ -552,8 +618,8 @@ if __name__ == "__main__":
 
             self.function = test_function
 
-        def forward(self, input, context, in_proj_weight_q, in_proj_weight_kv, out_proj_weight, mask):
-            use_time_mask = False
+        def forward(self, input, context, in_proj_weight_q, in_proj_weight_kv, out_proj_weight, mask, recompute=False):
+
             is_training = True
             dropout = 0.0
             double_precision = True
@@ -565,7 +631,7 @@ if __name__ == "__main__":
             #        out_proj_weight, attn_mask, dropout,
             #        incremental, incremental_cache)
 
-            return self.function(use_time_mask, is_training, self.heads, input, context,
+            return self.function(recompute, is_training, self.heads, input, context,
                                  in_proj_weight_q, in_proj_weight_kv, out_proj_weight,
                                  mask, dropout,
                                  False, None,  # For the incremental stuff
@@ -597,12 +663,27 @@ if __name__ == "__main__":
     in_proj_bias_kv.requires_grad = True
     out_proj_bias.requires_grad = True
 
-    mask = None  # input_states.new(*(bsz, len_q)).fill_(0).bool()
+    mask = input_states.new(*(bsz, len_r)).bernoulli_(p=0.25).bool()
+    # mask = None
 
     print("gradchecking start.")
-
+    #
     context = torch.randn(*(len_r, bsz, opt.model_size)).double().cuda()
     context.requires_grad = True
-    torch.autograd.gradcheck(net, (input_states, context, in_proj_weight_q, in_proj_weight_kv, out_proj_weight, mask))
+    #
+    recompute = False
+    torch.autograd.gradcheck(net, (input_states, context, in_proj_weight_q, in_proj_weight_kv,
+                                   out_proj_weight, mask, recompute), atol=1e-04, rtol=0.001)
+
+    print("gradchecking completed.")
+
+    print("gradchecking w/ recomputation start.")
+
+    # context = torch.randn(*(len_r, bsz, opt.model_size)).double().cuda()
+    # context.requires_grad = True
+
+    recompute = True
+    torch.autograd.gradcheck(net, (input_states, context, in_proj_weight_q, in_proj_weight_kv,
+                                   out_proj_weight, mask, recompute), atol=1e-05, rtol=0.001)
 
     print("gradchecking completed.")
