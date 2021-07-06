@@ -9,7 +9,7 @@ from onmt.modules.base_seq2seq import NMTModel, DecoderState
 from onmt.models.speech_recognizer.lstm import SpeechLSTMDecoder, LSTMDecodingState
 from onmt.modules.convolution import Conv2dSubsampling
 from onmt.models.transformer_layers import PrePostProcessing
-from .relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
+from onmt.models.discourse.relative_transformer_layers import RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
 from .conformer_layers import ConformerEncoderLayer
 from onmt.utils import flip, expected_length
 from collections import defaultdict

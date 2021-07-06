@@ -288,23 +288,27 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
     else:
         tgt_bos_word = None
 
-    print("[INFO] Binarizing file %s ..." % tgt_file)
-    binarized_tgt = Binarizer.binarize_file(tgt_file, tgt_dicts, tokenizer,
-                                            bos_word=tgt_bos_word, eos_word=onmt.constants.EOS_WORD,
-                                            data_type=data_type,
-                                            num_workers=num_workers, verbose=verbose)
+    if tgt_file is not None:
+        print("[INFO] Binarizing file %s ..." % tgt_file)
+        binarized_tgt = Binarizer.binarize_file(tgt_file, tgt_dicts, tokenizer,
+                                                bos_word=tgt_bos_word, eos_word=onmt.constants.EOS_WORD,
+                                                data_type=data_type,
+                                                num_workers=num_workers, verbose=verbose)
 
-    tgt = binarized_tgt['data']
-    tgt_sizes = binarized_tgt['sizes']
+        tgt = binarized_tgt['data']
+        tgt_sizes = binarized_tgt['sizes']
 
-    ignored = 0
+        ignored = 0
 
-    if len(src_sizes) != len(tgt_sizes):
-        print("Warning: data size mismatched.")
+        if len(src_sizes) != len(tgt_sizes):
+            print("Warning: data size mismatched.")
 
-    print(('Prepared %d sentences ' +
-           '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
-          (len(src), ignored, max_src_length, max_tgt_length))
+        print(('Prepared %d sentences ' +
+               '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
+              (len(src), ignored, max_src_length, max_tgt_length))
+
+    else:
+        tgt, tgt_sizes = None, None
 
     return src, tgt, src_sizes, tgt_sizes
 
@@ -367,6 +371,8 @@ def save_dataset(path, data, format, dicts, src_type):
         # Finally save the audio path
         # save_data = {'data': data['src']}
         torch.save(data['src'], os.path.join(path, 'data.scp_path.pt'))
+        if 'prev_src' in data and data['prev_src'] is not None:
+            torch.save(data['prev_src'], os.path.join(path, 'data.prev_scp_path.pt'))
 
         print("Done")
 
@@ -488,6 +494,8 @@ def main():
         src_langs = opt.train_src_lang.split("|")
         tgt_langs = opt.train_tgt_lang.split("|")
 
+        past_src_files = opt.prev_train_src.split("|")
+
         assert len(src_input_files) == len(src_langs)
         assert len(src_input_files) == len(tgt_input_files)
         assert len(tgt_input_files) == len(tgt_langs)
@@ -495,7 +503,12 @@ def main():
         n_input_files = len(src_input_files)
 
         idx = opt.starting_train_idx
-        for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
+
+        # TODO: having possible options for past_src and future_src
+        # how to differ with multilingual? maybe having only 1 past at a time
+
+        for i, (src_file, tgt_file, src_lang, tgt_lang) in \
+                enumerate(zip(src_input_files, tgt_input_files, src_langs, tgt_langs)):
             # First, read and convert data to tensor format
 
             src_data, tgt_data, src_sizes, tgt_sizes = make_asr_data(src_file, tgt_file,
@@ -527,6 +540,21 @@ def main():
             data['src_lang'] = src_lang_data
             data['tgt_lang'] = tgt_lang_data
 
+            # processing the previous segment
+            if len(past_src_files) > 0:
+                past_src_file = past_src_files[i]
+
+                prev_src_data, _, _, _ = make_asr_data(past_src_file, None, None, None,
+                                                       input_type=opt.input_type,
+                                                       stride=opt.stride, concat=opt.concat,
+                                                       prev_context=opt.previous_context,
+                                                       fp16=opt.fp16,
+                                                       asr_format=opt.asr_format,
+                                                       output_format=opt.format,
+                                                       num_workers=opt.num_threads)
+
+                data['prev_src'] = prev_src_data
+
             print("Saving training set %i %s-%s to disk ..." % (idx, src_lang, tgt_lang))
 
             # take basedir from opt.save_data
@@ -534,6 +562,7 @@ def main():
             os.makedirs(path, exist_ok=True)
 
             # save data immediately
+            # TODO: save the prev src as well
             save_dataset(path, data, opt.format, dicts, opt.src_type)
             idx = idx + 1
             # create
@@ -542,6 +571,7 @@ def main():
 
         src_input_files = opt.valid_src.split("|")
         tgt_input_files = opt.valid_tgt.split("|")
+        past_src_files = opt.prev_valid_src.split("|")
 
         src_langs = opt.valid_src_lang.split("|")
         tgt_langs = opt.valid_tgt_lang.split("|")

@@ -216,7 +216,8 @@ class SpeechTransformerEncoder(TransformerEncoder):
         # if nan_mask.any():
         #     context.masked_fill_(nan_mask, 0)
 
-        output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask, 'src': input})
+        output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask,
+                                                 'src': input, 'pos_emb': pos_emb})
 
         if streaming:
             # streaming_state.prev_src_mem_size += sum(input_length.tolist())

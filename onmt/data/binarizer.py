@@ -46,8 +46,6 @@ class SpeechBinarizer:
         raise NotImplementedError
 
     @staticmethod
-    # def binarize_file(filename, input_format='scp', output_format='raw',
-    #                   prev_context=0, concat=4, stride=1, fp16=False):
     def binarize_file_single_thread(filename, ark_loader, offset=0, end=-1, worker_id=0, input_format='scp', output_format='raw',
                                     prev_context=0, concat=4, stride=1, fp16=False):
         # if output_format is scp, we only read the length for sorting
@@ -75,9 +73,17 @@ class SpeechBinarizer:
                     break
 
                 parts = line.split()
-                path = parts[1]
+
                 key = parts[0]
 
+                # this special case is for the "preceeding"
+                if key == 'NULL':
+                    feature_vector = torch.zeros(0, 0)
+                    lengths.append(feature_vector.size(0))
+                    line = f.readline()
+                    continue
+
+                path = parts[1]
                 # read numpy array from the ark here
                 feature_vector = ark_loader.load_mat(path)
 

@@ -107,8 +107,8 @@ def collect_fn(src_data, tgt_data,
                src_align_right, tgt_align_right,
                src_type='text',
                augmenter=None, upsampling=False,
-               bilingual=False, vocab_mask=None):
-
+               bilingual=False, vocab_mask=None,
+               past_src_data=None):
     tensors = dict()
     if src_data is not None:
         tensors['source'], tensors['source_pos'], src_lengths = merge_data(src_data, align_right=src_align_right,
@@ -135,6 +135,22 @@ def collect_fn(src_data, tgt_data,
     else:
         tgt_size = 0
         tensors['tgt_lengths'] = None
+
+    # merge data for the previous source
+    if past_src_data is not None:
+        tensors['past_source'], tensors['past_source_pos'], past_src_lengths = merge_data(past_src_data,
+                                                                                          align_right=src_align_right,
+                                                                                          type=src_type,
+                                                                                          augmenter=augmenter,
+                                                                                          upsampling=upsampling,
+                                                                                          feature_size=40,
+                                                                                          dataname="source")
+
+        tensors['past_source'] = tensors['past_source'].transpose(0, 1).contiguous()
+        if tensors['past_source_pos'] is not None:
+            tensors['past_source_pos'] = tensors['past_source_pos'].transpose(0, 1)
+        tensors['past_src_lengths'] = torch.LongTensor(past_src_lengths)
+        tensors['past_src_size'] = sum(past_src_lengths)
 
     tensors['tgt_size'] = tgt_size
     tensors['size'] = len(src_data) if src_data is not None else len(tgt_data)
@@ -248,6 +264,8 @@ class Dataset(torch.utils.data.Dataset):
                  verbose=False, cleaning=False, debug=False,
                  num_split=1,
                  sa_f=8, sa_t=64,
+                 past_src_data=None,
+                 past_src_data_sizes=None,
                  **kwargs):
         """
         :param src_data: List of tensors for the source side (1D for text, 2 or 3Ds for other modalities)
@@ -274,6 +292,7 @@ class Dataset(torch.utils.data.Dataset):
         """
 
         self.src = src_data
+        self.past_src = past_src_data
         self._type = data_type
         self.src_align_right = src_align_right
         if self.src_align_right and verbose:
@@ -287,13 +306,14 @@ class Dataset(torch.utils.data.Dataset):
         self.debug = debug
         self.num_split = num_split
         self.vocab_mask = None
+        self.use_past_src = self.past_src is not None
 
         if self.max_src_len is None:
             if self._type == 'text':
                 self.max_src_len = 256
             else:
                 # for audio set this to 2048 frames
-                self.max_src_len = 2048
+                self.max_src_len = 2048 if not self.use_past_src else 4096
 
         # self.reshape_speech = reshape_speech
         if tgt_data:
@@ -312,6 +332,12 @@ class Dataset(torch.utils.data.Dataset):
                 self.src_sizes = np.asarray([data.size(0) for data in self.src])
         else:
             self.src_sizes = None
+
+        if self.use_past_src:
+            if past_src_data_sizes is not None:
+                self.src_sizes += np.asarray(past_src_data_sizes)
+            else:
+                self.src_sizes += np.asarray([data.size(0) for data in self.past_src])
 
         if self.tgt is not None:
             if tgt_sizes is not None:
@@ -431,11 +457,17 @@ class Dataset(torch.utils.data.Dataset):
 
         # move augmenter here?
 
+        if self.use_past_src:
+            past_src = self.past_src[index]
+        else:
+            past_src = None
+
         sample = {
             'src': self.src[index] if self.src is not None else None,
             'tgt': self.tgt[index] if self.tgt is not None else None,
             'src_lang': src_lang,
-            'tgt_lang': tgt_lang
+            'tgt_lang': tgt_lang,
+            'past_src': past_src
         }
 
         return sample
@@ -474,11 +506,17 @@ class Dataset(torch.utils.data.Dataset):
             if self.tgt_langs is not None:
                 tgt_lang_data = [self.tgt_langs[i] for i in batch_ids]
 
+        if self.use_past_src:
+            past_src = [self.past_src[i] for i in batch_ids]
+        else:
+            past_src = None
+
         batch = rewrap(collect_fn(src_data, tgt_data=tgt_data,
                                   src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
                                   src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
                                   src_type=self._type,
-                                  augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask)
+                                  augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask,
+                                  past_src_data=past_src)
                        )
         return batch
 
@@ -490,7 +528,7 @@ class Dataset(torch.utils.data.Dataset):
         """
 
         split_size = math.ceil(len(collected_samples) / self.num_split)
-        sample_list = [collected_samples[i:i+split_size]
+        sample_list = [collected_samples[i:i + split_size]
                        for i in range(0, len(collected_samples), split_size)]
 
         batches = list()
@@ -499,6 +537,7 @@ class Dataset(torch.utils.data.Dataset):
 
             src_data, tgt_data = None, None
             src_lang_data, tgt_lang_data = None, None
+            past_src_data = None
 
             if self.src:
                 src_data = [sample['src'] for sample in samples]
@@ -517,11 +556,15 @@ class Dataset(torch.utils.data.Dataset):
                 if self.tgt_langs is not None:
                     tgt_lang_data = [sample['tgt_lang'] for sample in samples]  # should be a tensor [1]
 
+            if self.use_past_src:
+                past_src_data = [sample['past_src'] for sample in samples]
+
             batch = collect_fn(src_data, tgt_data=tgt_data,
                                src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
                                src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
                                src_type=self._type,
-                               augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask)
+                               augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask,
+                               past_src_data=past_src_data)
 
             batches.append(batch)
 

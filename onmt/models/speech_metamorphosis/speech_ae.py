@@ -13,7 +13,7 @@ from onmt.models.transformer_layers import PrePostProcessing
 from onmt.modules.attention import MultiHeadAttention
 from onmt.modules.optimized.encdec_attention import EncdecMultiheadAttn
 from onmt.modules.dropout import embedded_dropout
-from onmt.models.speech_recognizer.relative_transformer_layers import LIDFeedForward_small
+from onmt.models.discourse.relative_transformer_layers import LIDFeedForward_small
 
 
 class SpeechLSTMEncoder(nn.Module):

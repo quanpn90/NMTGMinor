@@ -11,7 +11,7 @@ class SCPIndexDataset(torch.utils.data.Dataset):
     The __get__ function uses load_mat from kaldiio to read the ark matrices for retrieval
     """
 
-    def __init__(self, scp_path_list, concat=4):
+    def __init__(self, scp_path_list, concat=4, shared_object=None):
         """
         :param scp_path_list: list of path to the ark matrices
         """
@@ -19,7 +19,11 @@ class SCPIndexDataset(torch.utils.data.Dataset):
         self._sizes = len(self.scp_path_list)
         self._dtype = torch.float32
         self.concat = concat
-        self.reader = ArkLoader()
+
+        if shared_object is not None:
+            self.reader = shared_object.reader
+        else:
+            self.reader = ArkLoader()
 
     @property
     def dtype(self):

@@ -153,6 +153,7 @@ def main():
             print(' * number of training sentences. %d' % len(dataset['train']['src']))
             print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
 
+        # Loading asr data structures
         elif opt.data_format in ['scp', 'scpmem', 'mmem']:
             print("Loading memory mapped data files ....")
             start = time.time()
@@ -164,6 +165,11 @@ def main():
 
             if opt.data_format in ['scp', 'scpmem']:
                 audio_data = torch.load(opt.data + ".scp_path.pt")
+                # # TODO: maybe having another option like -past_context
+                # if os.path.exists(opt.data + '.prev_src_path.pt'):
+                #     prev_audio_data = torch.load(opt.data + '.prev_src_path.pt')
+                # else:
+                #     prev_audio_data = None
 
             # allocate languages if not
             if 'langs' not in dicts:
@@ -174,6 +180,11 @@ def main():
             train_path = opt.data + '.train'
             if opt.data_format in ['scp', 'scpmem']:
                 train_src = SCPIndexDataset(audio_data['train'], concat=opt.concat)
+                if 'train_past' in audio_data:
+                    past_train_src = SCPIndexDataset(audio_data['train_past'],
+                                                     concat=opt.concat, shared_object=train_src)
+                else:
+                    past_train_src = None
             else:
                 train_src = MMapIndexedDataset(train_path + '.src')
 
@@ -198,6 +209,12 @@ def main():
             else:
                 train_src_sizes, train_tgt_sizes = None, None
 
+            # check the length files if they exist
+            if os.path.exists(train_path + '.past_src_sizes.npy'):
+                past_train_src_sizes = np.load(train_path + '.past_src_sizes.npy')
+            else:
+                past_train_src_sizes = None
+
             if opt.encoder_type == 'audio':
                 data_type = 'audio'
             else:
@@ -216,7 +233,9 @@ def main():
                                           upsampling=opt.upsampling,
                                           augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
                                           cleaning=True, verbose=True,
-                                          num_split=1)
+                                          num_split=1,
+                                          past_src_data=past_train_src,
+                                          past_src_data_sizes=past_train_src_sizes)
             else:
                 train_data = onmt.StreamDataset(train_src,
                                                 train_tgt,
@@ -230,6 +249,11 @@ def main():
             valid_path = opt.data + '.valid'
             if opt.data_format in ['scp', 'scpmem']:
                 valid_src = SCPIndexDataset(audio_data['valid'], concat=opt.concat)
+                if 'valid_past' in audio_data:
+                    past_valid_src = SCPIndexDataset(audio_data['valid_past'],
+                                                     concat=opt.concat, shared_object=valid_src)
+                else:
+                    past_valid_src = None
             else:
                 valid_src = MMapIndexedDataset(valid_path + '.src')
             valid_tgt = MMapIndexedDataset(valid_path + '.tgt')
@@ -253,6 +277,12 @@ def main():
             else:
                 valid_src_sizes, valid_tgt_sizes = None, None
 
+            # check the length files if they exist
+            if os.path.exists(valid_path + '.past_src_sizes.npy'):
+                past_valid_src_sizes = np.load(valid_path + '.past_src_sizes.npy')
+            else:
+                past_valid_src_sizes = None
+
             if not opt.streaming:
                 valid_data = onmt.Dataset(valid_src, valid_tgt,
                                           valid_src_sizes, valid_tgt_sizes,
@@ -262,7 +292,9 @@ def main():
                                           data_type=data_type, sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
                                           src_align_right=opt.src_align_right,
-                                          cleaning=True, verbose=True, debug=True)
+                                          cleaning=True, verbose=True, debug=True,
+                                          past_src_data=past_valid_src,
+                                          past_src_data_sizes=past_valid_src_sizes)
             else:
                 # for validation data, we have to go through sentences (very slow but to ensure correctness)
                 valid_data = onmt.StreamDataset(valid_src, valid_tgt,

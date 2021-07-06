@@ -268,7 +268,7 @@ class Trainer(object):
         if self.world_size > 1:
             # find_unused_parameters may be required for dropped layer (parameters that are not connected to
             # any particular graph)
-            find_unused_parameters = False if opt.death_rate == 0.0 else True
+            find_unused_parameters = False  if opt.death_rate == 0.0 else True
 
             self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[self.rank],
                                                                    output_device=self.rank,
@@ -303,20 +303,26 @@ class Trainer(object):
 
     def load_encoder_weight(self, checkpoint_file):
 
-        print("Loading pretrained models from %s" % checkpoint_file)
+        print("Loading pretrained Encoder Weights from %s" % checkpoint_file, flush=True)
         checkpoint = torch.load(checkpoint_file, map_location=lambda storage, loc: storage)
 
         pretrained_model = build_model(checkpoint['opt'], checkpoint['dicts'])
         pretrained_model.load_state_dict(checkpoint['model'])
 
-        print("Loading pretrained encoder weights ...")
-        pretrained_model.encoder.language_embedding = None
-        enc_language_embedding = self.model.encoder.language_embedding
-        self.model.encoder.language_embedding = None
-        encoder_state_dict = pretrained_model.encoder.state_dict()
+        model = self.model.module if self.world_size > 1 else self.model
 
-        self.model.encoder.load_state_dict(encoder_state_dict)
-        self.model.encoder.language_embedding = enc_language_embedding
+        model.load_encoder_weights(pretrained_model)
+
+        # pretrained_model.encoder.language_embedding = None
+        #
+        # current_encoder = self.model.module.encoder if self.world_size > 1 else self.model.encoder
+        #
+        # enc_language_embedding = current_encoder.language_embedding
+        # current_encoder.language_embedding = None
+        # encoder_state_dict = pretrained_model.encoder.state_dict()
+        #
+        # current_encoder.load_state_dict(encoder_state_dict)
+        # current_encoder.language_embedding = enc_language_embedding
         return
 
     def load_decoder_weight(self, checkpoint_file):

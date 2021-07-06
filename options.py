@@ -380,6 +380,12 @@ def make_parser(parser):
     parser.add_argument('-master_port', default='8888', type=str,
                         help="""""")
 
+    # for DISCOURSE-AWARE models
+    parser.add_argument('-n_past', type=int, default=0,
+                        help='number of segments / utterances in the past')
+    parser.add_argument('-n_future', type=int, default=0,
+                        help='number of segments / utterances in the future')
+
     # For pretraining
     # pretrained encoder
     parser.add_argument('-enc_pretrained_model', default="", type=str,

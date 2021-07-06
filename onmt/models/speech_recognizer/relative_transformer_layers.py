@@ -3,20 +3,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import onmt
 
-from onmt.models.transformer_layers import MultiHeadAttention, Linear
-from onmt.modules.relative_attention import RelPartialLearnableMultiHeadAttn
-from onmt.modules.optimized.relative_self_attention import RelativeSelfMultiheadAttn
 from onmt.modules.pre_post_processing import PrePostProcessing
-from onmt.utils import flip
-from onmt.modules.bottle import Bottle
-from onmt.modules.linear import XavierLinear as Linear
-from onmt.modules.linear import XavierLinear
-from onmt.modules.linear import group_linear, FeedForwardSwish, FeedForward
+from onmt.modules.linear import FeedForward
 from onmt.modules.attention import MultiHeadAttention
 from onmt.modules.dropout import VariationalDropout
-from onmt.modules.relative_attention import RelPartialLearnableMultiHeadAttn
+
 from onmt.modules.optimized.encdec_attention import EncdecMultiheadAttn
 from onmt.modules.optimized.feed_forward import PositionWiseFeedForward
+from onmt.modules.optimized.relative_self_attention import RelativeSelfMultiheadAttn
 
 from onmt.modules.multilingual_factorized.linear import MFWPositionWiseFeedForward
 from onmt.modules.multilingual_factorized.encdec_attention import MFWEncdecMultiheadAttn

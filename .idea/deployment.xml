@@ -12,7 +12,7 @@
       <paths name="rg3hpc1">
         <serverdata>
           <mappings>
-            <mapping deploy="/project/wmt2012/project/quan/lib/NMTGMinor" local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/project/wmt2012/project/quan/lib/NMTGMinor-streaming" local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>

@@ -15,7 +15,6 @@ import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-
 parser = argparse.ArgumentParser(description='preprocess.py')
 onmt.markdown.add_md_help_argument(parser)
 
@@ -44,9 +43,17 @@ parser.add_argument('-format', default="raw",
 
 parser.add_argument('-train_src', required=True,
                     help="Path to the training source data")
+parser.add_argument('-past_train_src', default="",
+                    help="Path to the training source data")
+parser.add_argument('-future_train_src', default="",
+                    help="Path to the training source data")
 parser.add_argument('-train_tgt', required=True,
                     help="Path to the training target data")
 parser.add_argument('-valid_src', required=True,
+                    help="Path to the validation source data")
+parser.add_argument('-past_valid_src', default="",
+                    help="Path to the validation source data")
+parser.add_argument('-future_valid_src', default="",
                     help="Path to the validation source data")
 parser.add_argument('-valid_tgt', required=True,
                     help="Path to the validation target data")
@@ -191,7 +198,7 @@ def init_vocab(name, data_files, vocab_file, vocab_size, tokenizer, num_workers=
 
     if vocab is None:
         print('Building ' + name + ' vocabulary...')
-        gen_word_vocab = make_vocab(name, data_files, vocab_size, tokenizer, num_workers=num_workers,)
+        gen_word_vocab = make_vocab(name, data_files, vocab_size, tokenizer, num_workers=num_workers, )
 
         vocab = gen_word_vocab
 
@@ -318,20 +325,25 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
     else:
         tgt_bos_word = None
 
-    print("[INFO] Binarizing file %s ..." % tgt_file)
+    if tgt_file is not None:
+        print("[INFO] Binarizing file %s ..." % tgt_file)
 
-    binarized_tgt = Binarizer.binarize_file(tgt_file, tgt_dicts, tokenizer,
-                                            bos_word=tgt_bos_word, eos_word=opt.tgt_eos_token,
-                                            data_type=data_type,
-                                            num_workers=num_workers, verbose=verbose)
+        binarized_tgt = Binarizer.binarize_file(tgt_file, tgt_dicts, tokenizer,
+                                                bos_word=tgt_bos_word, eos_word=opt.tgt_eos_token,
+                                                data_type=data_type,
+                                                num_workers=num_workers, verbose=verbose)
 
-    tgt = binarized_tgt['data']
-    tgt_sizes = binarized_tgt['sizes']
+        tgt = binarized_tgt['data']
+        tgt_sizes = binarized_tgt['sizes']
 
-    ignored = 0
+        ignored = 0
 
-    if len(src_sizes) != len(tgt_sizes):
-        print("Warning: data size mismatched.")
+        if len(src_sizes) != len(tgt_sizes):
+            print("Warning: data size mismatched.")
+
+    else:
+        tgt = None
+        tgt_sizes = None
 
     print(('Prepared %d sentences ' +
            '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
@@ -416,6 +428,8 @@ def main():
         assert len(src_input_files) == len(tgt_input_files)
         assert len(tgt_input_files) == len(tgt_langs)
 
+        past_src_files = opt.past_train_src.split("|")
+
         n_input_files = len(src_input_files)
 
         train = dict()
@@ -423,7 +437,13 @@ def main():
         train['src_sizes'], train['tgt_sizes'] = list(), list()
         train['src_lang'], train['tgt_lang'] = list(), list()
 
-        for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
+        if opt.past_train_src and len(past_src_files) == len(src_input_files):
+            train['past_src'] = list()
+            train['past_src_sizes'] = list()
+
+        for i, (src_file, tgt_file, src_lang, tgt_lang) in \
+                enumerate(zip(src_input_files, tgt_input_files, src_langs, tgt_langs)):
+
             src_data, tgt_data, src_sizes, tgt_sizes = make_asr_data(src_file, tgt_file,
                                                                      dicts['tgt'], tokenizer,
                                                                      max_src_length=opt.src_seq_length,
@@ -447,6 +467,22 @@ def main():
                 src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
                 tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
 
+            # processing the previous segment
+            if opt.past_train_src and len(past_src_files) == len(src_input_files):
+                past_src_file = past_src_files[i]
+
+                past_src_data, _, past_src_sizes, _ = make_asr_data(past_src_file, None, None, None,
+                                                                    input_type=opt.input_type,
+                                                                    stride=opt.stride, concat=opt.concat,
+                                                                    prev_context=opt.previous_context,
+                                                                    fp16=opt.fp16,
+                                                                    asr_format=opt.asr_format,
+                                                                    output_format=opt.format,
+                                                                    num_workers=opt.num_threads)
+
+                train['past_src'] += past_src_data
+                train['past_src_sizes'] += past_src_sizes
+
             train['src'] += src_data
             train['tgt'] += tgt_data
             train['src_sizes'] += src_sizes
@@ -460,6 +496,7 @@ def main():
 
         src_input_files = opt.valid_src.split("|")
         tgt_input_files = opt.valid_tgt.split("|")
+        past_src_files = opt.past_valid_src.split("|")
 
         src_langs = opt.valid_src_lang.split("|")
         tgt_langs = opt.valid_tgt_lang.split("|")
@@ -475,7 +512,12 @@ def main():
         valid['src_sizes'], valid['tgt_sizes'] = list(), list()
         valid['src_lang'], valid['tgt_lang'] = list(), list()
 
-        for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
+        if opt.past_train_src and len(past_src_files) == len(src_input_files):
+            valid['past_src'] = list()
+            valid['past_src_sizes'] = list()
+
+        for i, (src_file, tgt_file, src_lang, tgt_lang) in \
+                enumerate(zip(src_input_files, tgt_input_files, src_langs, tgt_langs)):
 
             src_data, tgt_data, src_sizes, tgt_sizes = make_asr_data(src_file, tgt_file,
                                                                      dicts['tgt'], tokenizer,
@@ -498,6 +540,22 @@ def main():
                 # each sample will have a different language id
                 src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
                 tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
+
+            # validation past file
+            if opt.past_train_src and len(past_src_files) == len(src_input_files):
+                past_src_file = past_src_files[i]
+
+                past_src_data, _, past_src_sizes, _ = make_asr_data(past_src_file, None, None, None,
+                                                                    input_type=opt.input_type,
+                                                                    stride=opt.stride, concat=opt.concat,
+                                                                    prev_context=opt.previous_context,
+                                                                    fp16=opt.fp16,
+                                                                    asr_format=opt.asr_format,
+                                                                    output_format=opt.format,
+                                                                    num_workers=opt.num_threads)
+
+                valid['past_src'] += past_src_data
+                valid['past_src_sizes'] += past_src_sizes
 
             valid['src'] += src_data
             valid['tgt'] += tgt_data
@@ -624,7 +682,7 @@ def main():
                      'train': train,
                      'valid': valid}
         torch.save(save_data, opt.save_data + '.train.pt')
-        print("Done")\
+        print("Done")
 
     elif opt.format in ['scp', 'scpmem']:
         print('Saving target data to memory indexed data files. Source data is stored only as scp path.')
@@ -683,9 +741,31 @@ def main():
             else:
                 print("Validation %s not found " % set_)
 
+        if 'past_src' in train and len(train['past_src']) > 0:
+            set_ = 'past_src_sizes'
+
+            if train[set_] is not None:
+
+                np_array = np.asarray(train[set_])
+                np.save(opt.save_data + ".train.%s.npy" % set_, np_array)
+            else:
+                print("Training %s not found " % set_)
+
+            if valid[set_] is not None:
+
+                np_array = np.asarray(valid[set_])
+                np.save(opt.save_data + ".valid.%s.npy" % set_, np_array)
+            else:
+                print("Validation %s not found " % set_)
+
         # Finally save the audio path
         save_data = {'train': train['src'],
                      'valid': valid['src']}
+
+        # remember to take into account the past information
+        if 'past_src' in train and len(train['past_src']) > 0:
+            save_data['train_past'] = train['past_src']
+            save_data['valid_past'] = valid['past_src']
 
         torch.save(save_data, opt.save_data + '.scp_path.pt')
 

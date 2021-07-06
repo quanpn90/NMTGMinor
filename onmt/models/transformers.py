@@ -537,8 +537,6 @@ class Transformer(NMTModel):
         if self.ctc:
             self.ctc_linear = nn.Linear(encoder.model_size, self.tgt_vocab_size)
 
-        self
-
     def reset_states(self):
         return
 
@@ -664,6 +662,17 @@ class Transformer(NMTModel):
             output_dict['encoder_logits'] = self.ctc_linear(output_dict['context'])
 
         return output_dict
+
+    def load_encoder_weights(self, pretrained_model):
+
+        pretrained_model.encoder.language_embedding = None
+
+        enc_language_embedding = self.encoder.language_embedding
+        self.encoder.language_embedding = None
+        encoder_state_dict = pretrained_model.encoder.state_dict()
+
+        self.encoder.load_state_dict(encoder_state_dict)
+        self.encoder.language_embedding = enc_language_embedding
 
     def decode(self, batch):
         """

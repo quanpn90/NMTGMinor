@@ -111,7 +111,22 @@ def build_tm_model(opt, dicts):
     if opt.ctc_loss != 0:
         generators.append(onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size() + 1))
 
-    if opt.model in ['conformer', 'speech_transformer', 'hybrid_transformer']:
+    if opt.model in ['discourse_speech_transformer']:
+        from onmt.models.discourse.discourse_transformer import DiscourseTransformerEncoder, DiscourseTransformer
+        from onmt.models.speech_recognizer.relative_transformer import \
+            SpeechTransformerEncoder, SpeechTransformerDecoder
+
+        encoder = SpeechTransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
+
+        decoder = SpeechTransformerDecoder(opt, embedding_tgt, positional_encoder,
+                                           language_embeddings=language_embeddings)
+
+        encoder = DiscourseTransformerEncoder(opt, encoder=encoder)
+
+        model = DiscourseTransformer(encoder, decoder, nn.ModuleList(generators),
+                                     None, None, mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
+
+    elif opt.model in ['conformer', 'speech_transformer', 'hybrid_transformer']:
         onmt.constants.init_value = opt.param_init
         from onmt.models.speech_recognizer.relative_transformer import \
             SpeechTransformerEncoder, SpeechTransformerDecoder
