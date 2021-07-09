@@ -32,11 +32,10 @@ class DiscourseTransformerEncoder(nn.Module):
         assert past_input is not None
 
         # the same encoder is used to encode the previous and current segment
-        with torch.no_grad():
-            past_encoder_output = self.encoder(past_input, input_lang=input_lang, factorize=factorize)
-
-            past_context = past_encoder_output['context']
-            past_pos_emb = past_encoder_output['pos_emb']
+        past_encoder_output = self.encoder(past_input, input_lang=input_lang, factorize=factorize)
+        #
+        past_context = past_encoder_output['context']
+        past_pos_emb = past_encoder_output['pos_emb']
 
         encoder_output = self.encoder(input, input_lang=input_lang, factorize=factorize)
 
@@ -50,9 +49,9 @@ class DiscourseTransformerEncoder(nn.Module):
         mask_src = input.narrow(2, 0, 1).squeeze(2).transpose(0, 1).eq(onmt.constants.PAD).unsqueeze(0)
         past_mask = past_input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
         dec_attn_mask = input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
-        # context = self.gate_layer(current_context, past_context, current_pos_emb, mask_src, past_mask,
-        #                            src_lang=input_lang, factorize=factorize)
-        context = current_context
+        context = self.gate_layer(current_context, past_context, current_pos_emb, mask_src, past_mask,
+                                   src_lang=input_lang, factorize=factorize)
+        # context = current_context
 
         # final layer norm
         context = self.postprocess_layer(context, factor=input_lang)

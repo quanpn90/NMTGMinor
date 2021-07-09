@@ -71,6 +71,7 @@ class EncdecMultiheadAttn(nn.Module):
 
     def forward(self, query, key, value,
                 attn_mask=None, incremental=False, incremental_cache=None,
+                rotary_pos_enc=False, pos_emb_q=None, pos_emb_k=None,
                 **kwargs):
 
         assert value is key, "ERROR: Keys and values must be the same."
@@ -148,6 +149,7 @@ class EncdecMultiheadAttn(nn.Module):
                                                 self.in_proj_weight_q, self.in_proj_weight_kv,
                                                 self.out_proj_weight, attn_mask, self.dropout,
                                                 incremental, incremental_cache,
+                                                rotary_pos_enc, pos_emb_q, pos_emb_k,
                                                 False, True)  # double precision False and return coverage True
 
         return outputs, coverage

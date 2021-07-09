@@ -29,6 +29,45 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     encdec_multihead_attn_cuda = None
 
+from einops import rearrange, repeat
+
+
+def rotate_every_two(x):
+    # splits the last dimension in half
+    x = rearrange(x, '... (d j) -> ... d j', j=2)
+    x1, x2 = x.unbind(dim=-1)
+
+    # stack negative x2 with x1
+    x = torch.stack((-x2, x1), dim=-1)
+
+    return rearrange(x, '... d j -> ... (d j)')
+
+
+# more like encodings because the position values are not learnablew weights
+def apply_rotary_emb(q, sinu_pos):
+    # splits the last dimension of the sinu_pos in half and grab sin and cos terms
+    sinu_pos = rearrange(sinu_pos, 'n (j d) -> n j d', j=2)
+    sin, cos = sinu_pos.unbind(dim=-2)
+
+    # repeat the sin and cos terms with 2?
+    sin, cos = map(lambda t: repeat(t, 'n d -> n (d j)', j=2), (sin, cos))
+
+    q = q * cos.unsqueeze(1) + rotate_every_two(q) * sin.unsqueeze(1)
+
+    return q, sin, cos
+
+
+def rotate_backward(dx):
+    dx = rearrange(dx, '... (d j) -> ... d j', j=2)
+
+    dx2, dx1 = dx.unbind(dim=-1)
+
+    dx = torch.stack((dx1, -dx2), dim=-1)
+
+    dx = rearrange(dx, '... d j -> ... (d j)')
+
+    return dx
+
 
 class EncdecAttnFunc(torch.autograd.Function):
     @staticmethod
@@ -37,6 +76,7 @@ class EncdecAttnFunc(torch.autograd.Function):
                 input_weights_q, input_weights_kv, output_weights,
                 mask, dropout_prob,
                 incremental, incremental_cache,
+                rotary_pos_enc, pos_emb_q, pos_emb_k,
                 double_precision, return_coverage):
         heads_t = torch.tensor([heads])
         dropout_prob_t = torch.tensor([dropout_prob])
@@ -54,6 +94,7 @@ class EncdecAttnFunc(torch.autograd.Function):
         ctx.double_precision = double_precision
         ctx.return_coverage = return_coverage
         ctx.recompute = recompute
+        ctx.rotary_pos_enc = rotary_pos_enc
 
         if mask is not None:
             # Self Attention Pad Mask
@@ -65,13 +106,16 @@ class EncdecAttnFunc(torch.autograd.Function):
                 mask = mask.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
 
         if encdec_multihead_attn_cuda is not None and not incremental and len_k <= 2048 \
-                and inputs_q.type() == 'torch.cuda.HalfTensor':
+                and inputs_q.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc:
             input_lin_q_results, input_lin_kv_results, \
             softmax_results, dropout_results, dropout_mask, \
             matmul2_results, outputs \
                 = encdec_multihead_attn_cuda.forward(is_training, heads, inputs_q, inputs_kv,
                                                      input_weights_q, input_weights_kv,
                                                      output_weights, mask, dropout_prob)
+
+            sinq, cosq, = null_tensor, null_tensor
+            sink, cosk, = null_tensor, null_tensor
 
             if not ctx.recompute:
                 ctx.save_for_backward(heads_t,
@@ -87,7 +131,8 @@ class EncdecAttnFunc(torch.autograd.Function):
                                       input_weights_kv,
                                       output_weights,
                                       dropout_mask,
-                                      dropout_prob_t)
+                                      dropout_prob_t,
+                                      sinq, cosq, sink, cosk)
             else:
                 ctx.save_for_backward(heads_t,
                                       scale_t,
@@ -98,7 +143,8 @@ class EncdecAttnFunc(torch.autograd.Function):
                                       output_weights,
                                       dropout_mask,
                                       dropout_prob_t,
-                                      mask)
+                                      mask,
+                                      sinq, cosq, sink, cosk)
             ctx.fused_all = True
 
             if return_coverage:
@@ -150,6 +196,17 @@ class EncdecAttnFunc(torch.autograd.Function):
 
                 keys = keys.view(len_k, bsz * heads, head_dim)
                 values = values.view(len_k, bsz * heads, head_dim)
+
+        # TODO: rotary pos encoding
+        if rotary_pos_enc:
+            assert pos_emb_q is not None and pos_emb_k is not None
+            queries_, sinq, cosq = apply_rotary_emb(queries, pos_emb_q)
+            keys_, sink, cosk = apply_rotary_emb(keys, pos_emb_k)
+            queries.copy_(queries_)
+            keys.copy_(keys_)
+        else:
+            sinq, cosq = null_tensor, null_tensor
+            sink, cosk = null_tensor, null_tensor
 
         # Matmul1 Batched GEMMs
         # The output tensor is specified prior to the Batch GEMM because baddbmm requires its specification
@@ -259,7 +316,8 @@ class EncdecAttnFunc(torch.autograd.Function):
                                   input_weights_kv,
                                   output_weights,
                                   dropout_mask,
-                                  dropout_prob_t)
+                                  dropout_prob_t,
+                                  sinq, cosq, sink, cosk)
         else:
             ctx.save_for_backward(heads_t,
                                   scale_t,
@@ -270,7 +328,7 @@ class EncdecAttnFunc(torch.autograd.Function):
                                   output_weights,
                                   dropout_mask,
                                   dropout_prob_t,
-                                  mask)
+                                  mask, sinq, cosq, sink, cosk)
 
             del input_lin_q_results, queries
             del input_lin_kv_results, keys, values
@@ -300,7 +358,8 @@ class EncdecAttnFunc(torch.autograd.Function):
             heads_t, scale_t, \
             inputs_q, inputs_kv, \
             input_weights_q, input_weights_kv, output_weights, \
-            dropout_mask, dropout_prob_t, pad_mask \
+            dropout_mask, dropout_prob_t, pad_mask, \
+            sinq, cosq, sink, cosk, \
                 = ctx.saved_tensors
         else:
 
@@ -308,7 +367,8 @@ class EncdecAttnFunc(torch.autograd.Function):
             input_lin_q_results, input_lin_kv_results, \
             inputs_q, inputs_kv, \
             input_weights_q, input_weights_kv, output_weights, \
-            dropout_mask, dropout_prob_t \
+            dropout_mask, dropout_prob_t, \
+            sinq, cosq, sink, cosk, \
                 = ctx.saved_tensors
 
             pad_mask = None
@@ -353,7 +413,7 @@ class EncdecAttnFunc(torch.autograd.Function):
             return None, None, None, \
                    input_q_grads, input_kv_grads, \
                    input_weight_q_grads, input_weight_kv_grads, output_weight_grads, \
-                   None, None, None, None, None, None
+                   None, None, None, None, None, None, None, None, None
 
         if ctx.recompute:
             assert ctx.incremental is not True
@@ -491,8 +551,8 @@ class EncdecAttnFunc(torch.autograd.Function):
         # Input2: (activations) [seql_k, seqs*heads, head_dim] transpose(0,1)
         # Output:               [seqs*heads, seql_q, head_dim] transpose(0,1)
         # GEMM: Per batch: ( seql_q x seql_k ) x ( seql_k x head_dim ) = ( seql_q x head_dim )
-        queries_grads = torch.baddbmm(queries_grads.transpose(0, 1), softmax_grads, keys.transpose(0, 1),
-                                      out=queries_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
+        torch.baddbmm(queries_grads.transpose(0, 1), softmax_grads, keys.transpose(0, 1),
+                      out=queries_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
         # Matmul1 - DGRAD2
         # Input1: (data grads)  [seqs*heads, seql_q, seql_k] transpose(1,2)
         # Input2: (activations) [seql_q, seqs*heads, head_dim] transpose(0,1)
@@ -501,12 +561,18 @@ class EncdecAttnFunc(torch.autograd.Function):
         torch.baddbmm(keys_grads.transpose(0, 1), softmax_grads.transpose(1, 2), queries.transpose(0, 1),
                       out=keys_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
 
+        # TODO:
+        if ctx.rotary_pos_enc:
+            queries_grads = queries_grads * cosq.unsqueeze(1) + rotate_backward(sinq.unsqueeze(1) * queries_grads)
+            keys_grads_ = keys_grads * cosk.unsqueeze(1) + rotate_backward(sink.unsqueeze(1) * keys_grads)
+            keys_grads.copy_(keys_grads_)
+
         # Input Q Linear GEMM - DGRAD
         # input1: (data grads) [seql_q, seqs, embed_dim(1024)]
         # input2: (weights)    [embed_dim (1024), embed_dim (1024)]
         # output:              [seql_q, seqs, embed_dim]
         # GEMM: ( (seql_q*seqs) x embed_dim ) x ( embed_dim x embed_dim ) = (seql_q*seqs x embed_dim)
-        queries_grads = queries_grads.transpose(0, 1).view(inputs_q.size(0) * inputs_q.size(1), heads_t[0] * head_dim)
+        queries_grads = queries_grads.view(inputs_q.size(0) * inputs_q.size(1), heads_t[0] * head_dim)
         input_q_grads = torch.mm(queries_grads, input_weights_q)
         input_q_grads = input_q_grads.view(inputs_q.size(0), inputs_q.size(1), inputs_q.size(2))
         # Input KV Linear GEMM - DGRAD
@@ -537,7 +603,7 @@ class EncdecAttnFunc(torch.autograd.Function):
         return None, None, None \
             , input_q_grads, input_kv_grads \
             , input_weight_q_grads, input_weight_kv_grads, output_weight_grads \
-            , None, None, None, None, None, None
+            , None, None, None, None, None, None, None, None, None
 
 
 @half_function
@@ -545,12 +611,16 @@ def encdec_attn_func(time_masking, is_training,
                      num_heads, query, key,
                      in_proj_weight_q, in_proj_weight_kv,
                      out_proj_weight, attn_mask, dropout,
-                     incremental, incremental_cache, double_precision, return_coverage):
+                     incremental, incremental_cache,
+                     use_rotary_enc, pos_emb_q, pos_emb_k,
+                     double_precision, return_coverage):
     return EncdecAttnFunc.apply(time_masking, is_training,
                                 num_heads, query, key,
                                 in_proj_weight_q, in_proj_weight_kv,
                                 out_proj_weight, attn_mask, dropout,
-                                incremental, incremental_cache, double_precision, return_coverage)
+                                incremental, incremental_cache,
+                                use_rotary_enc, pos_emb_q, pos_emb_k,
+                                double_precision, return_coverage)
 
     return output, coverage
 
@@ -618,8 +688,8 @@ if __name__ == "__main__":
 
             self.function = test_function
 
-        def forward(self, input, context, in_proj_weight_q, in_proj_weight_kv, out_proj_weight, mask, recompute=False):
-
+        def forward(self, in_proj_weight_q, input, context, in_proj_weight_kv, out_proj_weight, mask,
+                    recompute=False, use_rotary_enc=False, pos_emb_q=None, pos_emb_k=None):
             is_training = True
             dropout = 0.0
             double_precision = True
@@ -635,6 +705,7 @@ if __name__ == "__main__":
                                  in_proj_weight_q, in_proj_weight_kv, out_proj_weight,
                                  mask, dropout,
                                  False, None,  # For the incremental stuff
+                                 use_rotary_enc, pos_emb_q, pos_emb_k,
                                  double_precision, return_coverage)  # double precision set to true
 
 
@@ -672,18 +743,68 @@ if __name__ == "__main__":
     context.requires_grad = True
     #
     recompute = False
-    torch.autograd.gradcheck(net, (input_states, context, in_proj_weight_q, in_proj_weight_kv,
-                                   out_proj_weight, mask, recompute), atol=1e-04, rtol=0.001)
+
+    try:
+        torch.autograd.gradcheck(net, (in_proj_weight_q, input_states, context, in_proj_weight_kv,
+                                       out_proj_weight, mask, recompute), atol=1e-04, rtol=0.001)
+    except RuntimeError as e:
+        print(e)
 
     print("gradchecking completed.")
 
-    print("gradchecking w/ recomputation start.")
 
-    # context = torch.randn(*(len_r, bsz, opt.model_size)).double().cuda()
-    # context.requires_grad = True
+    # print("gradchecking w/ recomputation start.")
+    #
+    # # context = torch.randn(*(len_r, bsz, opt.model_size)).double().cuda()
+    # # context.requires_grad = True
+    #
+    # recompute = True
+    # torch.autograd.gradcheck(net, (input_states, context, in_proj_weight_q, in_proj_weight_kv,
+    #                                out_proj_weight, mask, recompute), atol=1e-05, rtol=0.001)
+    #
+    # print("gradchecking completed.")
 
-    recompute = True
-    torch.autograd.gradcheck(net, (input_states, context, in_proj_weight_q, in_proj_weight_kv,
-                                   out_proj_weight, mask, recompute), atol=1e-05, rtol=0.001)
+    class SinusoidalEmbeddings(torch.nn.Module):
+        def __init__(self, dim):
+            super().__init__()
+            inv_freq = 1. / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+            self.register_buffer('inv_freq', inv_freq)
 
-    print("gradchecking completed.")
+        def forward(self, x=None, length=0, timestep=-1):
+            """
+            :param timestep:
+            :param length:
+            :param x: [time x bsz x hidden]
+            :return:
+            """
+            # actually this module doesn't care about anything of x except x.size(1)
+
+            if x is not None:
+                assert length == 0 and timestep == -1
+                n = x.shape[0]  # time dimension
+            elif length > 0:
+                assert timestep == -1
+                n = length
+            elif timestep >= 0:
+                n = timestep + 1
+
+            t = torch.arange(n, device=self.inv_freq.device).type_as(self.inv_freq)
+            sinusoid_inp = torch.einsum('i , j -> i j', t, self.inv_freq)
+            emb = torch.cat((sinusoid_inp.sin(), sinusoid_inp.cos()), dim=-1)
+            return emb
+
+
+    encoder = SinusoidalEmbeddings(opt.head_dim)
+    encoder = encoder.double().cuda()
+
+    pos_emb_q = encoder(length=len_q)
+    pos_emb_k = encoder(length=len_r)
+    pos_emb_q.requires_grads = False
+    pos_emb_k.requires_grads = False
+    recompute = False
+
+    print("gradchecking w/ rotary encoding start.")
+
+    torch.autograd.gradcheck(net, (in_proj_weight_q, input_states, context, in_proj_weight_kv,
+                                   out_proj_weight, mask, recompute, True, pos_emb_q, pos_emb_k), atol=1e-04,
+                             rtol=0.001)

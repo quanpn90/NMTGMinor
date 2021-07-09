@@ -187,6 +187,7 @@ def main():
                     past_train_src = None
             else:
                 train_src = MMapIndexedDataset(train_path + '.src')
+                past_train_src = None
 
             train_tgt = MMapIndexedDataset(train_path + '.tgt')
 
@@ -256,6 +257,8 @@ def main():
                     past_valid_src = None
             else:
                 valid_src = MMapIndexedDataset(valid_path + '.src')
+                past_valid_src = None
+
             valid_tgt = MMapIndexedDataset(valid_path + '.tgt')
 
             if os.path.exists(valid_path + '.src_lang.bin'):
@@ -465,8 +468,11 @@ def main():
 
     # spawn N processes for N gpus
     # each process has a different trainer
-    torch.multiprocessing.spawn(run_process, nprocs=len(opt.gpus),
-                                args=(train_data, valid_data, dicts, opt, checkpoint))
+    if len(opt.gpus) > 1:
+        torch.multiprocessing.spawn(run_process, nprocs=len(opt.gpus),
+                                    args=(train_data, valid_data, dicts, opt, checkpoint))
+    else:
+        run_process(0, train_data, valid_data, dicts, opt, checkpoint)
 
 
 if __name__ == "__main__":

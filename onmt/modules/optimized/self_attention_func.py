@@ -20,21 +20,73 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     from .compat import custom_fwd, custom_bwd
 
+try:
+    import mask_softmax_dropout_cuda
+except (ModuleNotFoundError, ImportError) as e:
+    mask_softmax_dropout_cuda = None
+
+from einops import rearrange, repeat
+
+
+def rotate_every_two(x):
+    # splits the last dimension in half
+    x = rearrange(x, '... (d j) -> ... d j', j=2)
+    x1, x2 = x.unbind(dim=-1)
+
+    # stack negative x2 with x1
+    x = torch.stack((-x2, x1), dim=-1)
+
+    return rearrange(x, '... d j -> ... (d j)')
+
+
+# more like encodings because the position values are not learnablew weights
+def apply_rotary_emb(q, k, sinu_pos):
+    # splits the last dimension of the sinu_pos in half and grab sin and cos terms
+    sinu_pos = rearrange(sinu_pos, 'n (j d) -> n j d', j=2)
+    sin, cos = sinu_pos.unbind(dim=-2)
+
+    # repeat the sin and cos terms with 2?
+    sin, cos = map(lambda t: repeat(t, 'n d -> n (d j)', j=2), (sin, cos))
+
+    q = q * cos.unsqueeze(1) + rotate_every_two(q) * sin.unsqueeze(1)
+    k = k * cos.unsqueeze(1) + rotate_every_two(q) * sin.unsqueeze(1)
+
+    return q, k, sin, cos
+
+
+def rotate_backward(dx):
+    dx = rearrange(dx, '... (d j) -> ... d j', j=2)
+
+    dx2, dx1 = dx.unbind(dim=-1)
+
+    dx = torch.stack((dx1, -dx2), dim=-1)
+
+    dx = rearrange(dx, '... d j -> ... (d j)')
+
+    return dx
+
 
 class SelfAttnFunc(torch.autograd.Function):
     @staticmethod
+    @custom_fwd(cast_inputs=torch.float16)
     def forward(ctx, use_time_mask, is_training, heads, inputs,
                 input_weights, output_weights,
                 input_biases, output_biases,
                 mask, dropout_prob,
-                incremental, incremental_cache):
+                rotary_pos_enc, pos_emb,
+                incremental, incremental_cache,
+                return_coverage):
         heads_t = torch.tensor([heads])
         dropout_prob_t = torch.tensor([dropout_prob])
         null_tensor = torch.tensor([])
         head_dim = inputs.size(2) // heads
         scale_t = torch.tensor([head_dim ** -0.5])
 
+        ctx.rotary_pos_enc = rotary_pos_enc
+        ctx.return_coverage = return_coverage
+
         bsz, len_q = inputs.size(1), inputs.size(0)
+
 
         # Input Linear GEMM
         # input1: (activations) [seql_q, seqs, embed_dim(1024)]
@@ -71,6 +123,17 @@ class SelfAttnFunc(torch.autograd.Function):
             keys = keys.view(-1, bsz * heads, head_dim)
             values = values.view(-1, bsz * heads, head_dim)
 
+        len_k = keys.size(0)
+
+        # apply rotary position encodings
+        if rotary_pos_enc:
+            assert pos_emb is not None and pos_emb is not None
+            queries_, keys_, sin, cos = apply_rotary_emb(queries, keys, pos_emb)
+            queries.copy_(queries_)
+            keys.copy_(keys_)
+        else:
+            sin, cos = null_tensor, null_tensor
+
         # Matmul1 Batched GEMMs
         # The output tensor is specified prior to the Batch GEMM because baddbmm requires its specification
         # baddbmm is used to apply the scale parameter via the Batched GEMM's alpha parameter instead of
@@ -105,15 +168,28 @@ class SelfAttnFunc(torch.autograd.Function):
                 matmul1_results = matmul1_results.masked_fill_(mask.unsqueeze(1).unsqueeze(2), float('-inf'))
                 matmul1_results = matmul1_results.view(seqs * heads, seql_q, seql_k)
 
-        dtype_ = torch.float64 if double_precision else torch.float32
-        softmax_results = F.softmax(matmul1_results, dim=-1, dtype=dtype_).type_as(matmul1_results)
+        # Softmax and Dropout attention
+        if mask_softmax_dropout_cuda and len_k <= 2048 \
+                and matmul1_results.type() == 'torch.cuda.HalfTensor':
+            dropout_mask, softmax_results, dropout_results = mask_softmax_dropout_cuda.forward(is_training, heads,
+                                                                                               matmul1_results,
+                                                                                               dropout_prob_t[0])
+            if not is_training:
+                dropout_results = softmax_results  # because the cuda returns empty craps
 
-        # Dropout - is not executed for inference
-        if is_training:
-            dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
+            ctx.fused_softmax_dropout = True
         else:
-            dropout_results = softmax_results
-            dropout_mask = null_tensor
+            if matmul1_results.type() == 'torch.cuda.HalfTensor':
+                softmax_results = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
+            else:
+                softmax_results = F.softmax(matmul1_results, dim=-1)
+
+            # Dropout - is not executed for inference
+            if is_training:
+                dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
+            else:
+                dropout_results = softmax_results
+                dropout_mask = null_tensor
 
         # Matmul2 Batched GEMMs
         # The output tensor specification is needed here to specify the non-standard output.
@@ -154,11 +230,16 @@ class SelfAttnFunc(torch.autograd.Function):
                               input_weights,
                               output_weights,
                               dropout_mask,
-                              dropout_prob_t)
+                              dropout_prob_t,
+                              sin, cos)
 
-        return outputs.detach(), softmax_results.detach()
+        if return_coverage:
+            return (outputs, dropout_results)
+        else:
+            return (outputs,)
 
     @staticmethod
+    @custom_bwd
     def backward(ctx, output_grads, softmax_grads):
         heads_t, \
             scale_t, \
@@ -170,7 +251,9 @@ class SelfAttnFunc(torch.autograd.Function):
             input_weights, \
             output_weights, \
             dropout_mask, \
-            dropout_prob_t = ctx.saved_tensors
+            dropout_prob_t, \
+            sin, cos \
+                = ctx.saved_tensors
 
         head_dim = inputs.size(2) // heads_t[0]
 
@@ -182,6 +265,8 @@ class SelfAttnFunc(torch.autograd.Function):
         queries = input_lin_results[:, :, 0, :]
         keys = input_lin_results[:, :, 1, :]
         values = input_lin_results[:, :, 2, :]
+
+        len_key = keys.size(0)
 
         # Slice out q,k,v from one big set of gradients entering the input linear's bprop
         # (should only impact meta data, no copies!)
@@ -226,26 +311,38 @@ class SelfAttnFunc(torch.autograd.Function):
         # GEMM: Per batch: ( seql_q x head_dim ) x ( head_dim x seql_k ) = ( seql_q x seql_k )
         values_grads = torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
 
-        # Mask and Scaling for Dropout (not a publically documented op)
-        dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
+        if mask_softmax_dropout_cuda is not None and matmul2_dgrad1.type() == 'torch.cuda.HalfTensor' \
+                and len_key <= 2048:
+            softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t[0], matmul2_dgrad1, softmax_results,
+                                                                         dropout_mask, dropout_prob_t[0])
+        else:
 
-        # Softmax Grad (not a publically documented op)
-        softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
+            # Mask and Scaling for Dropout (not a publically documented op)
+            dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
+
+            # Softmax Grad (not a publically documented op)
+            softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
 
         # Matmul1 - DGRAD1
         # Input1: (data grads)  [seqs*heads, seql_q, seql_k]
         # Input2: (activations) [seql_k, seqs*heads, head_dim] transpose(0,1)
         # Output:               [seqs*heads, seql_q, head_dim] transpose(0,1)
         # GEMM: Per batch: ( seql_q x seql_k ) x ( seql_k x head_dim ) = ( seql_q x head_dim )
-        queries_grads = torch.baddbmm(queries_grads.transpose(0, 1), softmax_grads, keys.transpose(0, 1),
+        torch.baddbmm(queries_grads.transpose(0, 1), softmax_grads, keys.transpose(0, 1),
                                       out=queries_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
         # Matmul1 - DGRAD2
         # Input1: (data grads)  [seqs*heads, seql_q, seql_k] transpose(1,2)
         # Input2: (activations) [seql_q, seqs*heads, head_dim] transpose(0,1)
         # Output:               [seqs*heads, seql_k, head_dim] transpose(0,1)
         # GEMM: Per batch: ( seql_k x seql_q ) x ( seql_q x head_dim ) = ( seql_k x head_dim )
-        keys_grads = torch.baddbmm(keys_grads.transpose(0, 1), softmax_grads.transpose(1, 2), queries.transpose(0, 1),
+        torch.baddbmm(keys_grads.transpose(0, 1), softmax_grads.transpose(1, 2), queries.transpose(0, 1),
                                    out=keys_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
+
+        if ctx.rotary_pos_enc:
+            queries_grads_ = queries_grads * cos.unsqueeze(1) + rotate_backward(sin.unsqueeze(1) * queries_grads)
+            keys_grads_ = keys_grads * cos.unsqueeze(1) + rotate_backward(sin.unsqueeze(1) * keys_grads)
+            queries_grads.copy_(queries_grads_)
+            keys_grads.copy_(keys_grads_)
 
         # Input Linear GEMM - DGRAD
         # input1: (data grads) [seql_q, seqs, 3*embed_dim(3072)]
@@ -270,7 +367,7 @@ class SelfAttnFunc(torch.autograd.Function):
             input_grads, \
             input_weight_grads, output_weight_grads, \
             input_bias_grads, output_bias_grads, \
-            None, None, None, None
+            None, None, None, None, None, None, None
 
 
 self_attn_func = SelfAttnFunc.apply

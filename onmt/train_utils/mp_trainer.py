@@ -313,16 +313,6 @@ class Trainer(object):
 
         model.load_encoder_weights(pretrained_model)
 
-        # pretrained_model.encoder.language_embedding = None
-        #
-        # current_encoder = self.model.module.encoder if self.world_size > 1 else self.model.encoder
-        #
-        # enc_language_embedding = current_encoder.language_embedding
-        # current_encoder.language_embedding = None
-        # encoder_state_dict = pretrained_model.encoder.state_dict()
-        #
-        # current_encoder.load_state_dict(encoder_state_dict)
-        # current_encoder.language_embedding = enc_language_embedding
         return
 
     def load_decoder_weight(self, checkpoint_file):
@@ -750,22 +740,22 @@ class Trainer(object):
                 if 'out of memory' in str(e):
                     print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
                     oom = True
+                    loss = 0
                     for p in self.model.parameters():
                         if p.grad is not None:
                             del p.grad  # free some memory
+                        loss = loss + p.sum() * 0
+
                     torch.cuda.empty_cache()
-                    loss = 0
+
                     if opt.streaming:  # reset stream in this case ...
                         streaming_state = self.model.init_stream()
 
-                    check = 0
+                    # backward something with all parameters involved ifor the grad scaler to be happy?
+                    self.grad_scaler.scale(loss).backward()
+
                     self.model.zero_grad()
                     self.optim.zero_grad()
-
-                    self.grad_scaler._check_inf_per_device(self.optim.optimizer)
-                    # raise e
-                # else:
-                #     raise e
 
             batch_size = batch.size
 

@@ -57,7 +57,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
         self.residual_dropout = opt.residual_dropout if opt.residual_dropout >= 0 else opt.dropout
         self.ffn_dropout = opt.ffn_dropout if opt.ffn_dropout >= 0 else opt.dropout
         self.rezero = opt.rezero
-        self.absolute_position_encoding = opt.absolute_position_encoding
+        self.rotary_position_encoding = opt.rotary_position_encoding
         self.learnable_pos = opt.learnable_position_encoding
         self.stochastic_sublayer = opt.stochastic_sublayer
         self.post_norm = opt.post_norm
@@ -114,12 +114,13 @@ class RelativeTransformerEncoderLayer(nn.Module):
                                                        dropout_residual=opt.post_norm,
                                                        res_dropout=self.residual_dropout)
 
-            if not self.absolute_position_encoding:
+            if not self.rotary_position_encoding:
                 self.multihead = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                            learnable_pos=self.learnable_pos,
                                                            max_pos=opt.max_pos_length)
-            else:
-                self.multihead = SelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
+            elif self.rotary_position_encoding:
+                self.multihead = SelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
+                                                   rotary_pos_enc=True)
 
         self.postprocess_ffn = postprocessing(opt.rezero, opt.model_size, self.residual_dropout,
                                               self.variational, self.post_norm,
@@ -206,8 +207,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
         self.ffn_dropout = opt.ffn_dropout if opt.ffn_dropout >= 0 else opt.dropout
         self.rezero = opt.rezero
         self.n_heads = opt.n_heads
-        self.absolute_position_encoding = opt.absolute_position_encoding
         self.learnable_pos = opt.learnable_position_encoding
+        self.rotary_position_encoding = opt.rotary_position_encoding
         self.stochastic_sublayer = opt.stochastic_sublayer
         self.post_norm = opt.post_norm
 
@@ -277,20 +278,20 @@ class RelativeTransformerDecoderLayer(nn.Module):
                                                        dropout_residual=opt.post_norm,
                                                        res_dropout=self.residual_dropout)
 
-            if not self.absolute_position_encoding:
+            if self.rotary_position_encoding:
+                self.multihead_tgt = SelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
+                                                       rotary_pos_enc=True)
+            else:
                 self.multihead_tgt = RelativeSelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout,
                                                                learnable_pos=self.learnable_pos,
                                                                max_pos=opt.max_pos_length)
-
-            else:
-                self.multihead_tgt = SelfMultiheadAttn(opt.model_size, opt.n_heads, opt.attn_dropout)
 
         self.postprocess_ffn = postprocessing(opt.rezero, opt.model_size, self.residual_dropout,
                                               self.variational, self.post_norm,
                                               dropout_residual=not self.feedforward.dropout_residual)
 
     def forward(self, input, context, pos_emb, mask_tgt, mask_src,
-                src_lang=None, tgt_lang=None,
+                src_lang=None, tgt_lang=None, pos_emb_src=None,
                 incremental=False, incremental_cache=None, reuse_source=True, mems=None):
 
         """ Self attention layer
@@ -361,6 +362,9 @@ class RelativeTransformerDecoderLayer(nn.Module):
                                                        incremental_cache=incremental_cache)
                 else:
                     out, coverage = self.multihead_src(query, context, context, mask_src,
+                                                       rotary_pos_enc=self.rotary_position_encoding,
+                                                       pos_emb_q=pos_emb,
+                                                       pos_emb_k=pos_emb_src,
                                                        incremental=incremental_source,
                                                        incremental_cache=incremental_cache)
 

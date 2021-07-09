@@ -15,7 +15,7 @@ class SelfMultiheadAttn(nn.Module):
     See "Attention Is All You Need" for more details.
     """
 
-    def __init__(self, embed_dim, num_heads, dropout=0.):
+    def __init__(self, embed_dim, num_heads, dropout=0., rotary_pos_enc=True):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -24,6 +24,7 @@ class SelfMultiheadAttn(nn.Module):
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
         self.bias = True
         self.scaling = self.head_dim ** -0.5
+        self.rotary_pos_enc = rotary_pos_enc
 
         self.in_proj_weight = Parameter(torch.Tensor(3 * embed_dim, embed_dim))
         self.out_proj_weight = Parameter(torch.Tensor(embed_dim, embed_dim))
@@ -33,16 +34,6 @@ class SelfMultiheadAttn(nn.Module):
         self.reset_parameters()
 
         self.attn_func = self_attn_func
-        self.optimized = 2
-
-        try:
-            # the fast one requires apex and does not work with incremental so careful
-            from apex.contrib.multihead_attn.fast_self_multihead_attn_func import fast_self_attn_func
-            self.attn_func_fast = fast_self_attn_func
-            self.optimized = 1
-        except ModuleNotFoundError as e:
-            self.optimized = 2
-            self.attn_func_fast = None
 
     def reset_parameters(self):
         # nn.init.xavier_uniform_(self.in_proj_weight, gain=math.sqrt(2))
@@ -54,7 +45,7 @@ class SelfMultiheadAttn(nn.Module):
         nn.init.constant_(self.in_proj_bias, 0.)
         nn.init.constant_(self.out_proj_bias, 0.)
 
-    def forward(self, query, pos, key_padding_mask=None, attn_mask=None,
+    def forward(self, input, pos, key_padding_mask=None, attn_mask=None,
                 incremental=False, incremental_cache=None, **kwargs):
         """Input shape: Time x Batch x Channel
 
@@ -65,11 +56,7 @@ class SelfMultiheadAttn(nn.Module):
         batch x src_len, where padding elements are indicated by 1s.
         """
         is_training = self.training
-        key = query
-        value = query
-        len_key = key.size(0)
         input_weights = self.in_proj_weight
-
         input_bias = self.in_proj_bias
 
         if key_padding_mask is not None:
@@ -84,11 +71,12 @@ class SelfMultiheadAttn(nn.Module):
         else:
             mask = None
 
-        outputs, coverage = self.attn_func(attn_mask is not None, is_training, self.num_heads, query,
+        outputs, coverage = self.attn_func(attn_mask is not None, is_training, self.num_heads, input,
                                            input_weights, self.out_proj_weight,
                                            input_bias, self.out_proj_bias,
                                            mask, self.dropout,
-                                           incremental, incremental_cache)
+                                           self.rotary_pos_enc, pos,
+                                           incremental, incremental_cache, True)
 
         return outputs, coverage
 

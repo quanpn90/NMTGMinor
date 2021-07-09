@@ -65,6 +65,8 @@ def make_parser(parser):
                         help='Maximum distance length for relative self-attention')
     parser.add_argument('-learnable_position_encoding', action='store_true',
                         help="""Use embeddings as learnable position encoding.""")
+    parser.add_argument('-rotary_position_encoding', action='store_true',
+                        help="""Use rotary position encoding.""")
     parser.add_argument('-diff_head_pos', action='store_true',
                         help="""Not share relative pos embedding cross heads""")
     parser.add_argument('-pos_emb_type', default='absolute',
