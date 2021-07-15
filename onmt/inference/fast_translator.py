@@ -1,3 +1,4 @@
+import sys
 import onmt
 import onmt.modules
 import torch.nn as nn
@@ -652,12 +653,61 @@ class FastTranslator(Translator):
 
         return out, attn
 
-    def translate(self, src_data, tgt_data, sub_src_data=None, type='mt'):
+    # override the "build_data" from parent Translator
+    def build_data(self, src_sents, tgt_sents, type='mt', past_sents=None):
+        # This needs to be the same as preprocess.py.
+
+        if type == 'mt':
+            if self.start_with_bos:
+                src_data = [self.src_dict.convertToIdx(b,
+                                                       onmt.constants.UNK_WORD,
+                                                       onmt.constants.BOS_WORD)
+                            for b in src_sents]
+            else:
+                src_data = [self.src_dict.convertToIdx(b,
+                                                       onmt.constants.UNK_WORD)
+                            for b in src_sents]
+            data_type = 'text'
+            past_src_data = None
+        elif type == 'asr':
+            # no need to deal with this
+            src_data = src_sents
+            past_src_data = past_sents
+            data_type = 'audio'
+        else:
+            raise NotImplementedError
+
+        tgt_bos_word = self.opt.bos_token
+        if self.opt.no_bos_gold:
+            tgt_bos_word = None
+        tgt_data = None
+        if tgt_sents:
+            tgt_data = [self.tgt_dict.convertToIdx(b,
+                                                   onmt.constants.UNK_WORD,
+                                                   tgt_bos_word,
+                                                   onmt.constants.EOS_WORD) for b in tgt_sents]
+
+        src_lang_data = [torch.Tensor([self.lang_dict[self.src_lang]])]
+        tgt_lang_data = [torch.Tensor([self.lang_dict[self.tgt_lang]])]
+
+        return onmt.Dataset(src_data, tgt_data,
+                            src_langs=src_lang_data, tgt_langs=tgt_lang_data,
+                            batch_size_words=sys.maxsize,
+                            data_type=data_type,
+                            batch_size_sents=self.opt.batch_size,
+                            src_align_right=self.opt.src_align_right,
+                            past_src_data=past_src_data)
+
+    def translate(self, src_data, tgt_data, past_src_data=None, sub_src_data=None, type='mt'):
         #  (1) convert words to indexes
         if isinstance(src_data[0], list) and type == 'asr':
             batches = list()
-            for src_data_ in src_data:
-                dataset = self.build_data(src_data_, tgt_data, type=type)
+            for i, src_data_ in enumerate(src_data):
+                if past_src_data is not None:
+                    past_src_data_ = past_src_data[i]
+                else:
+                    past_src_data_ = None
+                dataset = self.build_data(src_data_, tgt_data, type=type, past_sents=past_src_data_)
                 batch = dataset.get_batch(0)
                 batches.append(batch)
         else:
@@ -683,6 +733,7 @@ class FastTranslator(Translator):
                     sub_batches[i].cuda(fp16=self.fp16)
 
         #  (2) translate
+        #  each model in the ensemble uses one batch in batches
         finalized, gold_score, gold_words, allgold_words = self.translate_batch(batches, sub_batches=sub_batches)
         pred_length = []
 

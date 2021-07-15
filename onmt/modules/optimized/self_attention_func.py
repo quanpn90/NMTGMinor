@@ -25,45 +25,30 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     mask_softmax_dropout_cuda = None
 
-from einops import rearrange, repeat
+# from einops import rearrange, repeat
 
 
-def rotate_every_two(x):
-    # splits the last dimension in half
-    x = rearrange(x, '... (d j) -> ... d j', j=2)
-    x1, x2 = x.unbind(dim=-1)
-
-    # stack negative x2 with x1
-    x = torch.stack((-x2, x1), dim=-1)
-
-    return rearrange(x, '... d j -> ... (d j)')
+def rotate_half(x):
+    x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
+    return torch.cat((-x2, x1), dim=x1.ndim - 1) # dim=-1 triggers a bug in torch < 1.8.0
 
 
-# more like encodings because the position values are not learnablew weights
-def apply_rotary_emb(q, k, sinu_pos):
-    # splits the last dimension of the sinu_pos in half and grab sin and cos terms
-    sinu_pos = rearrange(sinu_pos, 'n (j d) -> n j d', j=2)
-    sin, cos = sinu_pos.unbind(dim=-2)
-
-    # repeat the sin and cos terms with 2?
-    sin, cos = map(lambda t: repeat(t, 'n d -> n (d j)', j=2), (sin, cos))
-
-    q = q * cos.unsqueeze(1) + rotate_every_two(q) * sin.unsqueeze(1)
-    k = k * cos.unsqueeze(1) + rotate_every_two(q) * sin.unsqueeze(1)
-
-    return q, k, sin, cos
+def apply_rotary_pos_emb(q, k, cos, sin):
+    return (q * cos) + (rotate_half(q) * sin), (k * cos) + (rotate_half(k) * sin)
 
 
 def rotate_backward(dx):
-    dx = rearrange(dx, '... (d j) -> ... d j', j=2)
+    # dx = rearrange(dx, '... (d j) -> ... d j', j=2)
+    #
+    # dx2, dx1 = dx.unbind(dim=-1)
+    #
+    # dx = torch.stack((dx1, -dx2), dim=-1)
+    #
+    # dx = rearrange(dx, '... d j -> ... (d j)')
+    dx2, dx1 = dx[..., :dx.shape[-1] // 2], dx[..., dx.shape[-1] // 2:]
+    return torch.cat((dx1, -dx2), dim=dx1.ndim-1)
 
-    dx2, dx1 = dx.unbind(dim=-1)
-
-    dx = torch.stack((dx1, -dx2), dim=-1)
-
-    dx = rearrange(dx, '... d j -> ... (d j)')
-
-    return dx
+    # return dx
 
 
 class SelfAttnFunc(torch.autograd.Function):
@@ -86,7 +71,6 @@ class SelfAttnFunc(torch.autograd.Function):
         ctx.return_coverage = return_coverage
 
         bsz, len_q = inputs.size(1), inputs.size(0)
-
 
         # Input Linear GEMM
         # input1: (activations) [seql_q, seqs, embed_dim(1024)]
@@ -128,7 +112,8 @@ class SelfAttnFunc(torch.autograd.Function):
         # apply rotary position encodings
         if rotary_pos_enc:
             assert pos_emb is not None and pos_emb is not None
-            queries_, keys_, sin, cos = apply_rotary_emb(queries, keys, pos_emb)
+            cos, sin = pos_emb
+            queries_, keys_ = apply_rotary_pos_emb(queries, keys, cos, sin)
             queries.copy_(queries_)
             keys.copy_(keys_)
         else:
@@ -339,8 +324,8 @@ class SelfAttnFunc(torch.autograd.Function):
                                    out=keys_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
 
         if ctx.rotary_pos_enc:
-            queries_grads_ = queries_grads * cos.unsqueeze(1) + rotate_backward(sin.unsqueeze(1) * queries_grads)
-            keys_grads_ = keys_grads * cos.unsqueeze(1) + rotate_backward(sin.unsqueeze(1) * keys_grads)
+            queries_grads_ = queries_grads * cos + rotate_backward(sin * queries_grads)
+            keys_grads_ = keys_grads * cos + rotate_backward(sin * keys_grads)
             queries_grads.copy_(queries_grads_)
             keys_grads.copy_(keys_grads_)
 

@@ -99,13 +99,15 @@ def distribute_to_tempfiles_withlist(srcfile, n, line_per_tf):
 
 
 def run_part(args):
-    infile, goldfile, subsrcfile, outfile, gpu = args
+    infile, goldfile, subsrcfile, pastsrcfile, outfile, gpu = args
     start = time()
     sys.argv += ['-gpu', gpu, '-src', infile, '-output', outfile]
     if goldfile:
         sys.argv += ['-tgt', goldfile]
     if subsrcfile:
         sys.argv += ['-sub_src', subsrcfile]
+    if pastsrcfile:
+        sys.argv += ['-past_src', pastsrcfile]
 
     translate_main()
     print('GPU {} done after {:.1f}s'.format(gpu, time() - start))
@@ -129,6 +131,12 @@ if hasopt('sub_src'):
 else:
     sub_src_parts = [None for _ in range(len(gpu_list))]
 
+if hasopt('past_src'):
+    past_src_file = popopt('past_src')
+    past_src_parts = distribute_to_tempfiles_withlist(past_src_file, len(gpu_list), lines_per_file)
+else:
+    past_src_parts = [None for _ in range(len(gpu_list))]
+
 # (2) run N processes translating one tempfile each
 outparts = [tempfile.NamedTemporaryFile('r', encoding='utf8') for _ in gpu_list]
 filenames = lambda tmpfiles: [tf.name if tf else None for tf in tmpfiles]
@@ -136,6 +144,7 @@ with Pool(len(gpu_list)) as p:
     p.map(run_part, zip(filenames(inparts),
                         filenames(goldparts),
                         filenames(sub_src_parts),
+                        filenames(past_src_parts),
                         filenames(outparts),
                         gpu_list))
 

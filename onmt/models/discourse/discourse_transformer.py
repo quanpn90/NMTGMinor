@@ -22,6 +22,7 @@ class DiscourseTransformerEncoder(nn.Module):
 
         self.past_layer = RelativeTransformerEncoderLayer(self.opt)
         self.input_type = encoder.input_type
+        self.time = None  # backward compatible
 
         self.gate_layer = RelativeGateEncoderLayer(self.opt)
 
@@ -192,7 +193,7 @@ class DiscourseTransformer(Transformer):
         encoder_.language_embedding = enc_language_embedding
 
     # TODO: override
-    def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True, **kwargs):
+    def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True, factorize=True, **kwargs):
         """
         Generate a new decoder state based on the batch input
         :param buffering:
@@ -203,14 +204,17 @@ class DiscourseTransformer(Transformer):
         :return:
         """
         src = batch.get('source')
-        src_pos = batch.get('source_pos')
         tgt_atb = batch.get('target_atb')
         src_lang = batch.get('source_lang')
         tgt_lang = batch.get('target_lang')
+        past_src = batch.get('past_source')
 
         src_transposed = src.transpose(0, 1)
-        encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
+        # encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
+        encoder_output = self.encoder(src_transposed, past_input=past_src.transpose(0, 1), input_lang=src_lang,
+                                      factorize=factorize)
 
+        # The decoding state is still the same?
         print("[INFO] create Transformer decoding state with buffering", buffering)
         decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], src_lang,
                                                  beam_size=beam_size, model_size=self.model_size,

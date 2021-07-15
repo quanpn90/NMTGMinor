@@ -24,7 +24,7 @@ class TranslatorParameter(object):
 
         self.beta = 0.0
         self.alpha = 0.0
-        self.start_with_bos = True
+        self.start_with_bos = False
         self.fp16 = False
         self.ensemble_op = 'mean'
         self.autoencoder = None

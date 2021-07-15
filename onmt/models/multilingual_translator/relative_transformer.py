@@ -143,8 +143,8 @@ class RelativeTransformerEncoder(TransformerEncoder):
             mask_src = input.eq(onmt.constants.PAD).unsqueeze(0)  # 1 x src_len x batch_size for broadcasting
         elif self.rotary_position_encoding:
             # generate rotary position encodings as sinusoidal
-            pos_emb = self.positional_encoder(length=qlen)
-            mask_src = input.eq(onmt.constants.PAD).transpose(0, 1)
+            pos_emb = self.positional_encoder(input, seq_dim=0)
+            mask_src = input.eq(onmt.constants.PAD).transpose(0, 1)  # bsz first
 
         if onmt.constants.torch_version >= 1.2:
             mask_src = mask_src.bool()
@@ -290,9 +290,8 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
         # relative positions
         if self.rotary_position_encoding:
-            length = qlen
-            pos_emb = self.positional_encoder(length=length)
-            pos_emb_src = self.positional_encoder(context)
+            pos_emb = self.positional_encoder(input, seq_dim=0)
+            pos_emb_src = self.positional_encoder(context, seq_dim=0)
         elif not self.learnable_position_encoding:
             pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
             pos_emb = self.positional_encoder(pos, bsz=input.size(1))
@@ -362,6 +361,9 @@ class RelativeTransformerDecoder(TransformerDecoder):
         src_lang = decoder_state.src_lang
         buffering = decoder_state.buffering
 
+        if self.rotary_position_encoding:
+            buffering = False
+
         if decoder_state.concat_input_seq:
             if decoder_state.input_seq is None:
                 decoder_state.input_seq = input
@@ -402,7 +404,11 @@ class RelativeTransformerDecoder(TransformerDecoder):
         qlen = emb.size(0)
         mlen = klen - qlen
 
-        if not self.absolute_position_encoding:
+        # if not self.absolute_position_encoding:
+        if self.rotary_position_encoding:
+            pos_emb = self.positional_encoder(input, seq_dim=0)
+            pos_emb_src = self.positional_encoder(context, seq_dim=0)
+        else:
             if self.learnable_position_encoding:
                 if buffering:
                     distance_mat = torch.arange(-klen + 1, 1, 1, device=emb.device).unsqueeze(0)
@@ -418,14 +424,14 @@ class RelativeTransformerDecoder(TransformerDecoder):
             else:
                 pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
                 pos_emb = self.positional_encoder(pos)
-        else:
-            if buffering:
-                emb = self.positional_encoder(emb.transpose(0, 1), t=input.size(1)).transpose(0, 1)
-            else:
-                emb = self.positional_encoder(emb.transpose(0, 1)).transpose(0, 1)
+        # else:
+        #     if buffering:
+        #         emb = self.positional_encoder(emb.transpose(0, 1), t=input.size(1)).transpose(0, 1)
+        #     else:
+        #         emb = self.positional_encoder(emb.transpose(0, 1)).transpose(0, 1)
 
         dec_attn_mask = torch.triu(
-            emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]
+            emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()
 
         dec_attn_mask = dec_attn_mask.bool()
 

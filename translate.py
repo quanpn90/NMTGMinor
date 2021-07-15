@@ -35,6 +35,8 @@ parser.add_argument('-src', required=True,
                     help='Source sequence to decode (one line per sequence)')
 parser.add_argument('-sub_src', required=False, default="",
                     help='Source sequence to decode (one line per sequence)')
+parser.add_argument('-past_src', required=False, default="",
+                    help='Past Source sequence to decode (one line per sequence)')
 parser.add_argument('-src_lang', default='src',
                     help='Source language')
 parser.add_argument('-tgt_lang', default='tgt',
@@ -214,7 +216,7 @@ def main():
         from onmt.data.audio_utils import ArkLoader
         audio_data = open(opt.src)
         scp_reader = ArkLoader()
-        # audio_data = iter(ReadHelper('scp:' + opt.src))
+
     else:
         in_file = open(opt.src)
 
@@ -244,6 +246,8 @@ def main():
         For Audio we will have to group samples by the total number of frames in the source
         """
 
+        past_audio_data = open(opt.past_src) if opt.past_src else None
+        past_src_batches = list()
         s_prev_context = []
         t_prev_context = []
 
@@ -258,27 +262,32 @@ def main():
         assert len(concats) == n_models, "The number of models must match the number of concat configs"
         for j, _ in enumerate(concats):
             src_batches.append(list())  # We assign different inputs for each model in the ensemble
+            if past_audio_data:
+                past_src_batches.append(list())
 
         sub_src = open(opt.sub_src) if opt.sub_src else None
         sub_src_batch = list()
 
         while True:
-            if opt.asr_format == "h5":
-                if i == len(in_file):
-                    break
-                line = np.array(in_file[str(i)])
-                i += 1
-            elif opt.asr_format == "scp":
-                try:
-                    scp_path = next(audio_data).strip().split()[1]
-                    line = scp_reader.load_mat(scp_path)
+            try:
+                scp_path = next(audio_data).strip().split()[1]
+                line = scp_reader.load_mat(scp_path)
 
-                except StopIteration:
-                    break
+                if past_audio_data:
+                    scp_path = next(past_audio_data).strip().split()[1]
+                    past_line = scp_reader.load_mat(scp_path)
+                else:
+                    past_line = None
+
+            except StopIteration:
+                break
 
             if opt.stride != 1:
                 line = line[0::opt.stride]
+                if past_line: past_line = past_line[0::opt.stride]
+
             line = torch.from_numpy(line)
+            past_line = torch.from_numpy(past_line) if past_audio_data else None
 
             original_line = line
             src_length = line.size(0)
@@ -286,15 +295,17 @@ def main():
             """
             Handling different concatenation size for different models, to make ensembling possible
             """
-            oversized = False
 
             if _is_oversized(src_batches[0], src_length, opt.batch_size):
                 # If adding a new sentence will make the batch oversized
                 # Then do translation now, and then free the list
-                print("Batch size:", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
+                if past_audio_data:
+                    print("Batch sizes :", len(src_batches[0]), len(tgt_batch), len(sub_src_batch),
+                          len(past_src_batches[0]))
+                else:
+                    print("Batch sizes :", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
                 pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
-                    src_batches, tgt_batch, sub_src_data=sub_src_batch, type='asr')
-
+                    src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr')
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
                     translate_batch(opt, tgtF, count, outF, translator,
@@ -311,28 +322,27 @@ def main():
                 src_batch, tgt_batch, sub_src_batch = [], [], []
                 for j, _ in enumerate(src_batches):
                     src_batches[j] = []
+                    if past_audio_data: past_src_batches[j] = []
 
+            # handling different concatenation settings (for example 4|1|4)
             for j, concat_ in enumerate(concats):
                 concat = int(concat_)
                 line = original_line
 
+                # TODO: move this block to function
                 if concat != 1:
                     add = (concat - line.size()[0] % concat) % concat
                     z = torch.FloatTensor(add, line.size()[1]).zero_()
                     line = torch.cat((line, z), 0)
                     line = line.reshape((line.size()[0] // concat, line.size()[1] * concat))
+                    if past_audio_data:
+                        add = (concat - past_line.size()[0] % concat) % concat
+                        z = torch.FloatTensor(add, past_line.size()[1]).zero_()
+                        past_line = torch.cat((past_line, z), 0)
+                        past_line = past_line.reshape((past_line.size()[0] // concat, past_line.size()[1] * concat))
 
-                if opt.previous_context > 0:
-                    s_prev_context.append(line)
-                    for i in range(1, opt.previous_context + 1):
-                        if i < len(s_prev_context):
-                            line = torch.cat(
-                                (torch.cat((s_prev_context[-i - 1], torch.zeros(1, line.size()[1]))), line))
-                    if len(s_prev_context) > opt.previous_context:
-                        s_prev_context = s_prev_context[-1 * opt.previous_context:]
-
-                # src_batches[j] += [line]
                 src_batches[j].append(line)
+                if past_audio_data: past_src_batches[j].append(past_line)
 
             if tgtF:
                 # ~ tgt_tokens = tgtF.readline().split() if tgtF else None
@@ -354,6 +364,8 @@ def main():
 
                 tgt_batch += [tgt_tokens]
 
+            # read the "sub" input which is text based
+            # this is done for ensemble between a speech model and a text based model
             if opt.sub_src:
                 sline = sub_src.readline().strip()
 
@@ -370,6 +382,7 @@ def main():
             pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
                 src_batches,
                 tgt_batch,
+                past_src_data=past_src_batches,
                 sub_src_data=sub_src_batch, type='asr')
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
@@ -387,6 +400,7 @@ def main():
             src_batch, tgt_batch = [], []
             for j, _ in enumerate(src_batches):
                 src_batches[j] = []
+                if past_audio_data: past_src_batches[j] = []
 
     # Text processing for MT
     else:

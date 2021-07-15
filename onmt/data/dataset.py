@@ -333,6 +333,7 @@ class Dataset(torch.utils.data.Dataset):
         else:
             self.src_sizes = None
 
+        # add the past source size to source size (to balance out the encoder part during allocation)
         if self.use_past_src:
             if past_src_data_sizes is not None:
                 self.src_sizes += np.asarray(past_src_data_sizes)
