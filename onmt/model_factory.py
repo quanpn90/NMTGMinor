@@ -48,6 +48,27 @@ def build_model(opt, dicts):
     return model
 
 
+def build_classifier(opt, dicts):
+    opt = backward_compatible(opt)
+    if 'langs' not in dicts:
+        dicts['langs'] = {'src': 0, 'tgt': 1}
+    opt.n_languages = len(dicts['langs'])
+
+    generators = [onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size(),
+                                                      fix_norm=opt.fix_norm_output_embedding)]
+
+    onmt.constants.init_value = opt.param_init
+    from onmt.models.speech_recognizer.relative_transformer import \
+        SpeechTransformerEncoder, SpeechTransformerDecoder
+
+    from onmt.models.speech_recognizer.classifier import TransformerClassifier
+
+    encoder = SpeechTransformerEncoder(opt, None, None, opt.encoder_type)
+
+    model = TransformerClassifier(encoder, nn.ModuleList(generators))
+
+    return model
+
 def build_tm_model(opt, dicts):
     onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
 
@@ -513,7 +534,8 @@ def init_model_parameters(model, opt):
         if not opt.dec_pretrained_model:
             model.decoder.word_lut.apply(weights_init)
     else:
-        model.tgt_embedding.apply(weights_init)
+        if hasattr(model, 'tgt_embedding'):
+            model.tgt_embedding.apply(weights_init)
 
     if opt.multilingual_partitioned_weights:
         factor_embeddings = model.encoder.factor_embeddings

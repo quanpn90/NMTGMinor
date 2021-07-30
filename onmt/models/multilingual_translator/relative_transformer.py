@@ -296,12 +296,14 @@ class RelativeTransformerDecoder(TransformerDecoder):
             pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype)
             pos_emb = self.positional_encoder(pos, bsz=input.size(1))
             pos_emb = self.preprocess_layer(pos_emb)
+            pos_emb_src = None
         else:
             range_vec = torch.arange(klen, device=emb.device)
             range_mat = range_vec.unsqueeze(-1).expand(-1, klen).transpose(0, 1)
             distance_mat = range_vec - range_mat.transpose(0, 1)
             distance_mat.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
             pos_emb = distance_mat
+            pos_emb_src = None
             # pos = torch.arange(klen - 1, -1, -1.0, device=emb.device, dtype=emb.dtype).long()
             # pos.clamp_(-self.max_pos_length, self.max_pos_length).add_(self.max_pos_length)
             # pos_emb = pos.unsqueeze(1)
@@ -409,6 +411,7 @@ class RelativeTransformerDecoder(TransformerDecoder):
             pos_emb = self.positional_encoder(input, seq_dim=0)
             pos_emb_src = self.positional_encoder(context, seq_dim=0)
         else:
+            pos_emb_src = None
             if self.learnable_position_encoding:
                 if buffering:
                     distance_mat = torch.arange(-klen + 1, 1, 1, device=emb.device).unsqueeze(0)
@@ -463,12 +466,12 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
                 if buffering:
                     output, coverage, buffer = layer(output, context, pos_emb, dec_attn_mask, mask_src,
-                                                     tgt_lang=lang, src_lang=src_lang,
+                                                     tgt_lang=lang, src_lang=src_lang, pos_emb_src=pos_emb_src,
                                                      incremental=True, incremental_cache=buffer)
                     decoder_state.update_attention_buffer(buffer, i)
                 else:
                     output, coverage = layer(output, context, pos_emb, dec_attn_mask, mask_src,
-                                                src_lang=src_lang, tgt_lang=lang)
+                                                src_lang=src_lang, tgt_lang=lang, pos_emb_src=pos_emb_src)
 
         # normalize and take the last time step
         output = self.postprocess_layer(output)

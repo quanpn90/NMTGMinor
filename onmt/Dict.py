@@ -285,9 +285,5 @@ class Dict(object):
             merge_result(counts)
 
 
-    #
-    # @staticmethod
-    # def __read_from_text_file(self):
-
 
 

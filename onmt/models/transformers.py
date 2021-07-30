@@ -575,7 +575,7 @@ class Transformer(NMTModel):
         encoder_output = defaultdict(lambda: None, encoder_output)
         context = encoder_output['context']
 
-        # the state is changed
+        # the state is changed if streaming
         streaming_state = encoder_output['streaming_state']
 
         # zero out the encoder part for pre-training

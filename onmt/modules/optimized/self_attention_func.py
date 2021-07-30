@@ -25,8 +25,6 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     mask_softmax_dropout_cuda = None
 
-# from einops import rearrange, repeat
-
 
 def rotate_half(x):
     x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
@@ -38,17 +36,8 @@ def apply_rotary_pos_emb(q, k, cos, sin):
 
 
 def rotate_backward(dx):
-    # dx = rearrange(dx, '... (d j) -> ... d j', j=2)
-    #
-    # dx2, dx1 = dx.unbind(dim=-1)
-    #
-    # dx = torch.stack((dx1, -dx2), dim=-1)
-    #
-    # dx = rearrange(dx, '... d j -> ... (d j)')
     dx2, dx1 = dx[..., :dx.shape[-1] // 2], dx[..., dx.shape[-1] // 2:]
     return torch.cat((dx1, -dx2), dim=dx1.ndim-1)
-
-    # return dx
 
 
 class SelfAttnFunc(torch.autograd.Function):

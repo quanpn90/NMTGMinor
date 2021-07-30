@@ -229,6 +229,95 @@ class NMTLossFunc(CrossEntropyLossBase):
         return output_dict
 
 
+class ClassifierLoss(CrossEntropyLossBase):
+    """
+    Standard NMT Loss Computation.
+    """
+
+    def __init__(self, hidden_size, output_size, fast_xentropy=False):
+        """
+        :param hidden_size:
+        :param output_size:
+        :param label_smoothing:
+        :param mirror:
+        :param fast_xentropy:
+        """
+        super(ClassifierLoss, self).__init__(output_size, 0.0, fast_xentropy=fast_xentropy)
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        # no label smoothing?
+        self.smoothing_value = 0.0
+        self.confidence = 1.0
+        self.label_smoothing = 0.0
+        self.padding_idx = -9999999999  # don't pad
+
+    def forward(self, model_outputs, targets, model=None, vocab_mask=None, granularity="average",   **kwargs):
+        """
+        Compute the loss. Subclass must define this method.
+        Args:
+            :param vocab_mask:
+            :param model_outputs:  a dictionary containing the predictive output from the model.
+                                                      time x batch x vocab_size
+                                                   or time x batch x hidden_size
+            :param targets: the validate target to compare output with. time x batch
+            :param model: passing the model in for necessary components
+        """
+
+        softmaxed = model_outputs['softmaxed']
+        # the model no longer outputs logprobs, only logits
+        logits = model_outputs['logprobs']
+
+        # assert targets.size(0) == 1
+        # targets should be [1 x batch]
+        t = logits.size(0)
+        # targets = targets.repeat(t, 1)  # --> time x batch
+
+        # print(logits.size())
+
+        mask = model_outputs['src_mask']
+
+        mask = mask.squeeze(1).transpose(0, 1)
+        # because mask is input.eq(pad) which means the pad positions are 1
+        # reverse the mask so that the correct positions are 1
+        # flattened_mask = ~mask.view(-1)
+
+        # get the non-zero positions and index select
+        # non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
+
+        mask = mask.unsqueeze(-1)
+        logits.masked_fill_(mask, 0)
+
+        lengths = (1 - mask.long()).squeeze(-1).sum(dim=0, keepdim=False)
+
+        clean_logits = logits.sum(dim=0, keepdim=False).div(lengths.unsqueeze(-1))
+
+        clean_targets = targets.squeeze(0)  # --> batch
+
+        # clean_targets = targets.view(-1).index_select(0, non_pad_indices)
+        # clean_logits = logits.view(-1, logits.size(-1)).index_select(0, non_pad_indices)
+        #
+        # # loss, loss_data = self._compute_loss(clean_logits, clean_targets, softmaxed=softmaxed)
+        loss = F.cross_entropy(clean_logits.float(), clean_targets, weight=None,
+                                ignore_index=-100, reduction='sum')
+        loss_data = loss.item()
+        #
+        predictions = F.log_softmax(clean_logits.float()).topk(1, dim=1)[1].squeeze(1)
+        #
+        n_correct = (clean_targets.eq(predictions.long())).sum()
+        #
+        # # print(n_correct.size(), predictions.size(), clean_targets.size())
+        # # print(n_correct.int(), n_correct.numel(), n_correct.sum())
+        # assert n_correct.item() <= clean_targets.numel()
+
+        output_dict = {"loss": loss, "data": loss_data, "numel": clean_targets.numel(),
+                       "n_correct": n_correct}
+
+        # return loss, loss_data, None
+        return output_dict
+
+
+
+
 class CTCLossFunc(_Loss):
     """
     Standard NMT Loss Computation.
@@ -436,3 +525,4 @@ class FusionLoss(CrossEntropyLossBase):
         output_dict = {"loss": loss, "data": loss_data}
 
         return output_dict
+
