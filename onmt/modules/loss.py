@@ -229,6 +229,43 @@ class NMTLossFunc(CrossEntropyLossBase):
         return output_dict
 
 
+class MPCLoss(_Loss):
+
+    def forward(self, model_outputs, **kwargs):
+
+        mpc_rec = model_outputs['mpc']  # T x B x F
+        original_source = model_outputs['original_source']  # T x B x F
+        masked_positions = model_outputs['masked_positions']  # T x B
+
+        mask = model_outputs['src_mask']
+        mask = mask.squeeze(1).transpose(0, 1)
+
+        # because mask is input.eq(pad) which means the pad positions are 1
+        # reverse the mask so that the correct positions are 1
+        flattened_mask = ~mask.view(-1)
+
+        # get the non-zero positions and index select
+        non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
+
+        clean_rec = mpc_rec.view(-1, mpc_rec.size(-1)).index_select(0, non_pad_indices)
+        clean_source = original_source.view(-1, original_source.size(-1)).index_select(0, non_pad_indices)
+        clean_masked_positions = masked_positions.view(-1).index_select(0, non_pad_indices)
+
+        clean_masked_positions = torch.nonzero(clean_masked_positions).squeeze(1)
+        # print(clean_masked_positions)
+        #
+        # # next, choose the masked positions
+        mpc_rec = clean_rec.index_select(0, clean_masked_positions)
+        source = clean_source.index_select(0, clean_masked_positions)
+
+        loss = F.l1_loss(mpc_rec, source, reduction='sum')
+        loss_data = loss.item()
+
+        output_dict = {"loss": loss, "data": loss_data, "numel": mpc_rec.size(0)}
+
+        return output_dict
+
+
 class ClassifierLoss(CrossEntropyLossBase):
     """
     Standard NMT Loss Computation.
@@ -251,11 +288,12 @@ class ClassifierLoss(CrossEntropyLossBase):
         self.label_smoothing = 0.0
         self.padding_idx = -9999999999  # don't pad
 
-    def forward(self, model_outputs, targets, model=None, vocab_mask=None, granularity="average",   **kwargs):
+    def forward(self, model_outputs, targets, model=None,
+                granularity="average", **kwargs):
         """
         Compute the loss. Subclass must define this method.
         Args:
-            :param vocab_mask:
+            :param granularity:
             :param model_outputs:  a dictionary containing the predictive output from the model.
                                                       time x batch x vocab_size
                                                    or time x batch x hidden_size
@@ -284,15 +322,14 @@ class ClassifierLoss(CrossEntropyLossBase):
         # get the non-zero positions and index select
         # non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
 
-        mask = mask.unsqueeze(-1)
-        logits.masked_fill_(mask, 0)
-
-        lengths = (1 - mask.long()).squeeze(-1).sum(dim=0, keepdim=False)
-
-        clean_logits = logits.sum(dim=0, keepdim=False).div(lengths.unsqueeze(-1))
-
-        clean_targets = targets.squeeze(0)  # --> batch
-
+        if granularity == 'average':
+            mask = mask.unsqueeze(-1)
+            logits.masked_fill_(mask, 0)
+            lengths = (1 - mask.long()).squeeze(-1).sum(dim=0, keepdim=False)
+            clean_logits = logits.sum(dim=0, keepdim=False).div(lengths.unsqueeze(-1))
+            clean_targets = targets.squeeze(0)  # --> batch
+        else:
+            raise NotImplementedError
         # clean_targets = targets.view(-1).index_select(0, non_pad_indices)
         # clean_logits = logits.view(-1, logits.size(-1)).index_select(0, non_pad_indices)
         #

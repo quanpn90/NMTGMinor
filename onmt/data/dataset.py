@@ -227,6 +227,27 @@ class Batch(object):
             self.tensors['target_output'] = target_full[1:]
             self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.constants.PAD)
 
+    # Masked Predictive Coding mask
+    # Randomly choose positions and set features to Zero
+    # For later reconstruction
+    def mask_mpc(self, p=0.5):
+
+        # the audio has size [T x B x (F+1)] the FIRST dimension is padding
+        # need to sample a mask
+        source = self.tensors['source']
+        with torch.no_grad():
+            source = source.narrow(2, 1, source.size(2) - 1)
+
+            # p drop -> 1 - p keeping probability
+            masked_positions = source.new(source.size(0), source.size(1)).bernoulli_(1 - p)
+            self.tensors['original_source'] = source.clone()
+            source.mul_(masked_positions.unsqueeze(-1))  # in-place multiplication that will change the underlying storage
+
+            # remember the positions to be used later in losses
+            self.tensors['masked_positions'] = masked_positions
+
+        return
+
 
 class LightBatch:
 

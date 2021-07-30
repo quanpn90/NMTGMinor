@@ -478,6 +478,8 @@ def make_parser(parser):
                         help="""word dropout appled on bert""")
     parser.add_argument('-no_input_scale', action='store_true',
                         help='Do not scale the embeddings of the speech (the features) before transformer.')
+    parser.add_argument('-mpc', action='store_true',
+                        help='Using masked predictive coding for speech models')
 
     return parser
 

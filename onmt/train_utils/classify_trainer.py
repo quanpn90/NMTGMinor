@@ -135,6 +135,10 @@ class ClassifierTrainer(object):
         self.loss_function = loss_function
         self.grad_scaler = torch.cuda.amp.GradScaler()
 
+        if opt.mpc:
+            from onmt.modules.loss import MPCLoss
+            self.mpc_loss = MPCLoss()
+
         if opt.load_from:
             checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
             self.model.load_state_dict(checkpoint['model'])
@@ -510,9 +514,10 @@ class ClassifierTrainer(object):
         epoch_iterator = data_iterator.next_epoch_itr(not streaming, pin_memory=opt.pin_memory)
 
         total_tokens, total_loss, total_words = zero_tensor(), zero_tensor(), zero_tensor()
-        total_non_pads = zero_tensor()
+        total_correct = zero_tensor()
+        report_mpc_loss, report_mpc_numel = zero_tensor(), zero_tensor()
         report_loss, report_tgt_words = zero_tensor(), zero_tensor()
-        report_ctc_loss = zero_tensor()
+        report_correct = zero_tensor()
         report_src_words = zero_tensor()
         report_rec_loss, report_rev_loss, report_mirror_loss = zero_tensor(), zero_tensor(), zero_tensor()
         start = time.time()
@@ -523,16 +528,9 @@ class ClassifierTrainer(object):
         num_accumulated_sents = zero_tensor()
         grad_div = 1
 
-        nan = False
-        nan_counter = zero_tensor()
-
-        if opt.streaming:
-            streaming_state = self.model.init_stream()
-        else:
-            streaming_state = None
-
         i = data_iterator.iterations_in_epoch if not isinstance(train_data, list) else epoch_iterator.n_yielded
         i = i * self.world_size
+        numel = 0
 
         while not data_iterator.end_of_epoch():
 
@@ -575,13 +573,22 @@ class ClassifierTrainer(object):
                         loss_data = loss_dict['data']
                         loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
                         numel = loss_dict['numel']
+                        n_correct = loss_dict['n_correct']
                         full_loss = loss
 
-                        # optimizer = self.optim.optimizer
+                        # # Todo: MPC loss
+                        if self.opt.mpc:
 
-                        # When the batch size is large, each gradient step is very easy to explode on fp16
-                        # Normalizing the loss to grad scaler ensures this will not happen
-                        full_loss.div_(grad_div)
+                            mpc_loss_dict = self.mpc_loss(outputs)
+                            mpc_loss_data = mpc_loss_dict['data']
+                            mpc_loss = mpc_loss_dict['loss']
+                            mpc_numel = mpc_loss_dict['numel']
+                            # mpc_loss_data = 0
+                            # mpc_numel = 0
+                            full_loss = full_loss + mpc_loss
+                        else:
+                            mpc_loss_data = 0
+                            mpc_numel = 0
 
                     # grad scaler has to be done outside of the autocast
                     # this line basically equals full_loss.mul_(some_scale).backward()
@@ -677,10 +684,13 @@ class ClassifierTrainer(object):
 
             num_words = tgt_size
             report_loss.add_(loss_data)
+            report_correct.add_(n_correct)
             report_tgt_words.add_(numel)
             report_src_words.add_(src_size)
             total_loss.add_(loss_data)
             total_words.add_(num_words)
+            report_mpc_loss.add_(mpc_loss_data)
+            report_mpc_numel.add_(mpc_numel)
             # total_tokens += batch.get('target_output').nelement()
             # total_non_pads += batch.get('target_output').ne(onmt.constants.PAD).sum().item()
             # batch_efficiency = total_non_pads / total_tokens
@@ -696,6 +706,13 @@ class ClassifierTrainer(object):
                     log_string = ("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; " %
                                   (epoch, i + 1, len(data_iterator),
                                    math.exp(report_loss.item() / report_tgt_words.item())))
+
+                    assert report_correct.item() <= report_tgt_words.item()
+                    log_string += ("accuracy: %6.4f; " %
+                                   (report_correct.item() / report_tgt_words.item()))
+
+                    log_string += ("mpc loss: %6.6f; " %
+                                   (report_mpc_loss.item() / report_mpc_numel.item() ))
 
                     log_string += ("lr: %.7f ; updates: %7d; " %
                                    (self.optim.getLearningRate(),
@@ -716,8 +733,11 @@ class ClassifierTrainer(object):
                 report_rec_loss.zero_()
                 report_rev_loss.zero_()
                 report_mirror_loss.zero_()
-                report_ctc_loss.zero_()
+                report_correct.zero_()
+                report_mpc_loss.zero_()
+                report_mpc_numel.zero_()
                 start = time.time()
+                report_correct.zero_()
 
             # increase i by world size
             i = i + self.world_size
@@ -770,12 +790,12 @@ class ClassifierTrainer(object):
         if self.cuda:
             self.warm_up()
 
-        if self.is_main():
-            valid_output = self.eval(self.valid_data)
-            valid_ppl = math.exp(min(valid_output['loss'], 100))
-
-            print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
-            print('[INFO] Validation accuracy: %g' % valid_output['accuracy'], flush=True)
+        # if self.is_main():
+        #     valid_output = self.eval(self.valid_data)
+        #     valid_ppl = math.exp(min(valid_output['loss'], 100))
+        #
+        #     print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
+        #     print('[INFO] Validation accuracy: %g' % valid_output['accuracy'], flush=True)
 
         self.start_time = time.time()
 

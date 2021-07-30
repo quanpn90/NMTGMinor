@@ -65,7 +65,7 @@ def build_classifier(opt, dicts):
 
     encoder = SpeechTransformerEncoder(opt, None, None, opt.encoder_type)
 
-    model = TransformerClassifier(encoder, nn.ModuleList(generators))
+    model = TransformerClassifier(encoder, nn.ModuleList(generators), mpc=opt.mpc)
 
     return model
 
