@@ -441,6 +441,9 @@ def make_parser(parser):
     parser.add_argument('-dec_gradient_checkpointing', action='store_true',
                         help='use gradient checkpointing on decoder')
 
+    parser.add_argument('-find_unused_parameters', action='store_true',
+                        help='find unused parameters for torch DistributedDataParallel')
+
     # special tokens
     parser.add_argument('-src_pad_word', type=str, default="<blank>",
                         help='SRC PAD Token. Default is <blank>.')

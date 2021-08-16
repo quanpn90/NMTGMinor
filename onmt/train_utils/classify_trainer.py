@@ -585,7 +585,7 @@ class ClassifierTrainer(object):
                             mpc_numel = mpc_loss_dict['numel']
                             # mpc_loss_data = 0
                             # mpc_numel = 0
-                            full_loss = full_loss + mpc_loss
+                            full_loss = full_loss + 0.0004 * mpc_loss
                         else:
                             mpc_loss_data = 0
                             mpc_numel = 0
@@ -701,6 +701,7 @@ class ClassifierTrainer(object):
                 self.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
                 self.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
                 self.all_reduce(report_src_words, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(report_correct, op=dist.ReduceOp.SUM, group=self.group)
 
                 if self.is_main():
                     log_string = ("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; " %
@@ -710,9 +711,9 @@ class ClassifierTrainer(object):
                     assert report_correct.item() <= report_tgt_words.item()
                     log_string += ("accuracy: %6.4f; " %
                                    (report_correct.item() / report_tgt_words.item()))
-
-                    log_string += ("mpc loss: %6.6f; " %
-                                   (report_mpc_loss.item() / report_mpc_numel.item() ))
+                    if opt.mpc:
+                        log_string += ("mpc loss: %6.6f; " %
+                                       (report_mpc_loss.item() / report_mpc_numel.item() ))
 
                     log_string += ("lr: %.7f ; updates: %7d; " %
                                    (self.optim.getLearningRate(),

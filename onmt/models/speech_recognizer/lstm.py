@@ -76,6 +76,14 @@ class SpeechLSTMEncoder(nn.Module):
             self.rnn = WeightFactoredLSTM(self.rnn, dropout=opt.weight_drop, n_languages=opt.n_languages,
                                           rank=self.mfw_rank, multiplicative=opt.mfw_multiplicative,
                                           activation=opt.mfw_activation)
+        elif opt.weight_drop > 0:
+            from onmt.modules.weight_control_lstm import WeightDrop
+            weight_list = list()
+            for i in range(self.layers):
+                weight_list.append('weight_hh_l%d' % i)
+                weight_list.append('weight_hh_l%d_reverse' % i)
+
+            self.rnn = WeightDrop(self.rnn, weight_list, dropout=opt.weight_drop)
 
         self.preprocess_layer = PrePostProcessing(self.model_size, self.emb_dropout, sequence='d',
                                                   variational=self.varitional_dropout)
@@ -171,6 +179,13 @@ class SpeechLSTMDecoder(nn.Module):
             from onmt.modules.weight_control_lstm import WeightFactoredLSTM
             self.lstm = WeightFactoredLSTM(self.lstm, dropout=opt.weight_drop, n_languages=opt.n_languages,
                                            rank=self.mfw_rank)
+        elif opt.weight_drop > 0:
+            from onmt.modules.weight_control_lstm import WeightDrop
+            # todo: change so that dropout applied on all layers
+            weight_list = list()
+            for i in range(self.layers):
+                weight_list.append('weight_hh_l%d' % i)
+            self.lstm = WeightDrop(self.lstm, weight_list, dropout=opt.weight_drop)
 
         self.fast_xattention = opt.fast_xattention
         self.n_head = 1  # fixed to always use 1 head

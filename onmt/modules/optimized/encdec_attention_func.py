@@ -29,8 +29,6 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     encdec_multihead_attn_cuda = None
 
-from einops import rearrange, repeat
-
 
 def rotate_half(x):
     x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]

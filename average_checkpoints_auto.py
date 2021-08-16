@@ -133,6 +133,7 @@ def main():
             del checkpoint['optim']
 
         current_model = custom_build_model(model_opt, checkpoint['dicts'], lm=opt.lm)
+        current_model.eval()
 
         print("Loading model from %s ..." % models[i])
         current_model.load_state_dict(checkpoint['model'])

@@ -48,6 +48,7 @@ class SpeechTransformerEncoder(TransformerEncoder):
         self.mln = opt.multilingual_layer_norm
         self.no_input_scale = opt.no_input_scale
         self.learnable_position_encoding = opt.learnable_position_encoding
+        self.rotary_position_encoding = opt.rotary_position_encoding
         self.max_pos_length = opt.max_pos_length
 
         # TODO: multilingually linear transformation
@@ -57,8 +58,11 @@ class SpeechTransformerEncoder(TransformerEncoder):
 
         # learnable position encoding
         if self.learnable_position_encoding:
-            # raise NotImplementedError
+            assert not self.rotary_position_encoding
             self.positional_encoder = None
+        elif self.rotary_position_encoding:
+            from onmt.modules.rotary_postional_encodings import SinusoidalEmbeddings
+            self.positional_encoder = SinusoidalEmbeddings(opt.model_size // opt.n_heads)
         else:
             # or using pre-set sinusoidal
             self.positional_encoder = SinusoidalPositionalEmbedding(opt.model_size)

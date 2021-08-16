@@ -258,7 +258,7 @@ class MPCLoss(_Loss):
         mpc_rec = clean_rec.index_select(0, clean_masked_positions)
         source = clean_source.index_select(0, clean_masked_positions)
 
-        loss = F.l1_loss(mpc_rec, source, reduction='sum')
+        loss = F.l1_loss(mpc_rec.float(), source.float(), reduction='sum')
         loss_data = loss.item()
 
         output_dict = {"loss": loss, "data": loss_data, "numel": mpc_rec.size(0)}

@@ -7,6 +7,51 @@ from functools import wraps
 import math
 
 
+class WeightDrop(torch.nn.Module):
+    def __init__(self, module, weights, dropout=0,):
+        """
+        :param module: a LSTM module
+        :param weights:
+        :param dropout:
+        :param n_languages:
+        :param rank:
+        """
+        super(WeightDrop, self).__init__()
+        self.module = module
+        self.weights = weights
+        self.dropout = dropout
+        self._setup()
+
+    def trails_in_the_sky(*args, **kwargs):
+        # We need to replace flatten_parameters with a nothing function
+        # It must be a function rather than a lambda as otherwise pickling explodes
+        # We can't write boring code though, so ... TRAILS IN THE SKY ftw!!
+        # (╯°□°）╯︵ ┻━┻
+        return
+
+    def _setup(self):
+        # Terrible temporary solution to an issue regarding compacting weights re: CUDNN RNN
+        if issubclass(type(self.module), torch.nn.RNNBase):
+            self.module.flatten_parameters = self.trails_in_the_sky
+        print(self.weights)
+
+        for name_w in self.weights:
+            print('Applying weight drop of {} to {}'.format(self.dropout, name_w))
+            w = getattr(self.module, name_w)
+            # del self.module._parameters[name_w]  # don't delete so we can load :))
+            self.module.register_parameter(name_w + '_raw', Parameter(w.data))
+
+    def _setweights(self):
+        for name_w in self.weights:
+            raw_w = getattr(self.module, name_w + '_raw')
+            w = torch.nn.functional.dropout(raw_w, p=self.dropout, training=self.training)
+            setattr(self.module, name_w, Parameter(w))
+
+    def forward(self, *args, **kwargs):
+        self._setweights()
+        return self.module.forward(*args, **kwargs)
+
+
 class WeightFactoredLSTM(torch.nn.Module):
     def __init__(self, module, dropout=0, n_languages=1, rank=1, multiplicative=False, activation='none'):
         """
@@ -41,8 +86,6 @@ class WeightFactoredLSTM(torch.nn.Module):
             for l in range(self.module.num_layers):
                 self.weights.append("weight_ih_l%d" % l)
                 self.weights.append("weight_hh_l%d" % l)
-                # add weight_ih_l{i} and weight_hh_l_{i}
-                # pass
         else:
             # this code only supports nn.LSTM
             raise NotImplementedError
@@ -108,8 +151,6 @@ class WeightFactoredLSTM(torch.nn.Module):
                 w = w * scale
 
             w = w + torch.bmm(s_vector.unsqueeze(-1), r_vector.unsqueeze(1)).sum(dim=0)
-
-            # TODO: adding multiplicative option
 
             setattr(self.module, name_w, w)
 
