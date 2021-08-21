@@ -585,7 +585,7 @@ class ClassifierTrainer(object):
                             mpc_numel = mpc_loss_dict['numel']
                             # mpc_loss_data = 0
                             # mpc_numel = 0
-                            full_loss = full_loss + 0.0004 * mpc_loss
+                            full_loss = full_loss + 0.0001  * mpc_loss
                         else:
                             mpc_loss_data = 0
                             mpc_numel = 0
@@ -680,7 +680,7 @@ class ClassifierTrainer(object):
                         print('Validation perplexity: %g' % valid_ppl)
                         print('Validation accuracy: %g' % valid_output['accuracy'])
                         ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
-                        self.save(ep, valid_ppl, itr=data_iterator)
+                        self.save(ep, 1 - valid_output['accuracy'], itr=data_iterator)
 
             num_words = tgt_size
             report_loss.add_(loss_data)
@@ -815,7 +815,7 @@ class ClassifierTrainer(object):
             if self.is_main():
                 print('[INFO] Validation perplexity: %g' % valid_ppl)
                 print('[INFO] Validation accuracy: %g' % valid_output['accuracy'], flush=True)
-                self.save(epoch, valid_ppl)
+                self.save(epoch, 1 - valid_output['accuracy'])
 
             itr_progress = None
             resume = False

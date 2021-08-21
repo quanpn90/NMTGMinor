@@ -69,6 +69,21 @@ class TransformerClassifier(nn.Module):
 
         return output_dict
 
+    def encode(self, batch):
 
+        src = batch.get('source')
+
+        src_pos = batch.get('source_pos')
+        src_lang = batch.get('source_lang')
+
+        src_lengths = batch.src_lengths
+
+        src = src.transpose(0, 1)  # transpose to have batch first
+        encoder_output = self.encoder(src, input_pos=src_pos, input_lang=src_lang, src_lengths=src_lengths,
+                                      return_states=True)
+
+        layer_states = encoder_output['layer_states']
+
+        return layer_states
 
 

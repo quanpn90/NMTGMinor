@@ -63,11 +63,19 @@ def build_classifier(opt, dicts):
 
     from onmt.models.speech_recognizer.classifier import TransformerClassifier
 
-    encoder = SpeechTransformerEncoder(opt, None, None, opt.encoder_type)
+    if opt.model in ["LSTM", 'lstm']:
+        # print("LSTM")
+        onmt.constants.init_value = opt.param_init
+        from onmt.models.speech_recognizer.lstm import SpeechLSTMDecoder, SpeechLSTMEncoder, SpeechLSTMSeq2Seq
+
+        encoder = SpeechLSTMEncoder(opt, None, opt.encoder_type)
+    else:
+        encoder = SpeechTransformerEncoder(opt, None, None, opt.encoder_type)
 
     model = TransformerClassifier(encoder, nn.ModuleList(generators), mpc=opt.mpc)
 
     return model
+
 
 def build_tm_model(opt, dicts):
     onmt.constants = add_tokenidx(opt, onmt.constants, dicts)

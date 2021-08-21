@@ -113,7 +113,8 @@ class SpeechLSTMEncoder(nn.Module):
 
         return seq, hid
 
-    def forward(self, input, input_pos=None, input_lang=None, hid=None, **kwargs):
+    def forward(self, input, input_pos=None, input_lang=None, hid=None,
+                return_states=False, pretrained_layer_states=None, **kwargs):
 
         if not self.cnn_downsampling:
             mask_src = input.narrow(2, 0, 1).squeeze(2).gt(onmt.constants.PAD)
@@ -140,16 +141,28 @@ class SpeechLSTMEncoder(nn.Module):
             # the size seems to be B x T ?
             emb = input
 
+        layer_states = dict()
+
         seq, hid = self.rnn_fwd(emb, mask_src, hid, src_lang=input_lang)
 
         if not self.unidirect:
             hidden_size = seq.size(2) // 2
             seq = seq[:, :, :hidden_size] + seq[:, :, hidden_size:]
 
+        if return_states:
+            layer_states[0] = seq
+
+        # Summing the context
+        if pretrained_layer_states is not None:
+            seq = seq + pretrained_layer_states[0]
+
         # layer norm
         seq = self.postprocess_layer(seq)
 
         output_dict = {'context': seq.transpose(0, 1), 'src_mask': dec_attn_mask}
+
+        if return_states:
+            output_dict['layer_states'] = layer_states
 
         return output_dict
 
@@ -432,7 +445,7 @@ class SpeechLSTMSeq2Seq(NMTModel):
         return
 
     def forward(self, batch, target_mask=None, streaming=False, zero_encoder=False,
-                mirror=False, streaming_state=None, nce=False):
+                mirror=False, streaming_state=None, nce=False, pretrained_layer_states=None):
 
         src = batch.get('source')
         tgt = batch.get('target_input')
@@ -448,7 +461,8 @@ class SpeechLSTMSeq2Seq(NMTModel):
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
-        encoder_output = self.encoder(src, input_pos=src_pos, input_lang=src_lang, src_lengths=src_lengths)
+        encoder_output = self.encoder(src, input_pos=src_pos, input_lang=src_lang, src_lengths=src_lengths,
+                                      pretrained_layer_states=pretrained_layer_states)
         encoder_output = defaultdict(lambda: None, encoder_output)
 
         context = encoder_output['context']

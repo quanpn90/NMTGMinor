@@ -55,16 +55,16 @@ def add_tokenidx(opt, cons, dicts):
     elif 'tgt' in dicts:
 
         src_dict = dicts['tgt']
-        cons.SRC_PAD = src_dict.labelToIdx[opt.src_pad_word]
-        cons.SRC_UNK = src_dict.labelToIdx[opt.src_unk_word]
-        cons.SRC_BOS = src_dict.labelToIdx[opt.src_bos_word]
-        cons.SRC_EOS = src_dict.labelToIdx[opt.src_eos_word]
+        cons.SRC_PAD = src_dict.labelToIdx[opt.src_pad_word] if opt.src_pad_word in src_dict.labelToIdx else 0
+        cons.SRC_UNK = src_dict.labelToIdx[opt.src_unk_word] if opt.src_unk_word in src_dict.labelToIdx else 1
+        cons.SRC_BOS = src_dict.labelToIdx[opt.src_bos_word] if opt.src_bos_word in src_dict.labelToIdx else 2
+        cons.SRC_EOS = src_dict.labelToIdx[opt.src_eos_word] if opt.src_eos_word in src_dict.labelToIdx else 3
 
         tgt_dict = dicts['tgt']
-        cons.TGT_PAD = tgt_dict.labelToIdx[opt.tgt_pad_word]
-        cons.TGT_UNK = tgt_dict.labelToIdx[opt.tgt_unk_word]
-        cons.TGT_BOS = tgt_dict.labelToIdx[opt.tgt_bos_word]
-        cons.TGT_EOS = tgt_dict.labelToIdx[opt.tgt_eos_word]
+        cons.TGT_PAD = tgt_dict.labelToIdx[opt.tgt_pad_word] if opt.tgt_pad_word in tgt_dict.labelToIdx else 0
+        cons.TGT_UNK = tgt_dict.labelToIdx[opt.tgt_unk_word] if opt.tgt_unk_word in tgt_dict.labelToIdx else 1
+        cons.TGT_BOS = tgt_dict.labelToIdx[opt.tgt_bos_word] if opt.tgt_bos_word in tgt_dict.labelToIdx else 2
+        cons.TGT_EOS = tgt_dict.labelToIdx[opt.tgt_eos_word] if opt.tgt_eos_word in tgt_dict.labelToIdx else 3
 
     else:
         raise NotImplementedError

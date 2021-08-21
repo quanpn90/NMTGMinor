@@ -483,6 +483,9 @@ def make_parser(parser):
                         help='Do not scale the embeddings of the speech (the features) before transformer.')
     parser.add_argument('-mpc', action='store_true',
                         help='Using masked predictive coding for speech models')
+    parser.add_argument('-load_pretrained_classifier', default='', type=str,
+                        help="""If training from a checkpoint then this is the
+                        path to the pretrained model.""")
 
     return parser
 

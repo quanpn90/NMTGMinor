@@ -178,42 +178,45 @@ class Trainer(object):
 
         self.start_time = 0
 
-        # setting up models and others
-        if opt.lfv_multilingual:
-            from onmt.models.speech_recognizer.lid_loss import CrossEntropyLIDLoss
-            lid_loss = CrossEntropyLIDLoss(opt.n_languages, opt.label_smoothing, opt.fast_xentropy)
-            self.loss_function.add_loss_function(lid_loss, 'lid_loss')
-
         torch.manual_seed(self.opt.seed)
 
         # note: we must start creating models after ccreating the processes
         # for some reason passing a pre-created model to a process creates a "pickle" error
-        if not opt.fusion:
 
-            if self.is_main():
-                print("[INFO] Building models .... ", flush=True)
-            model = build_model(opt, dicts)
+        if self.is_main():
+            print("[INFO] Building models .... ", flush=True)
+        model = build_model(opt, dicts)
 
-            """ Building the loss function """
-            if opt.ctc_loss > 0.0:
-                from onmt.speech.ctc_loss import CTC
-                self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True)
+        """ Building the loss function """
+        if opt.ctc_loss > 0.0:
+            from onmt.speech.ctc_loss import CTC
+            self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True)
 
-            if opt.nce:
-                from onmt.modules.nce.nce_loss import NCELoss
-                loss_function = NCELoss(opt.model_size, dicts['tgt'].size(), noise_ratio=opt.nce_noise,
-                                        logz=9, label_smoothing=opt.label_smoothing)
-            else:
-                loss_function = NMTLossFunc(opt.model_size, dicts['tgt'].size(),
-                                            label_smoothing=opt.label_smoothing,
-                                            mirror=opt.mirror_loss,
-                                            fast_xentropy=opt.fast_xentropy)
+        if opt.nce:
+            from onmt.modules.nce.nce_loss import NCELoss
+            loss_function = NCELoss(opt.model_size, dicts['tgt'].size(), noise_ratio=opt.nce_noise,
+                                    logz=9, label_smoothing=opt.label_smoothing)
+        else:
+            loss_function = NMTLossFunc(opt.model_size, dicts['tgt'].size(),
+                                        label_smoothing=opt.label_smoothing,
+                                        mirror=opt.mirror_loss,
+                                        fast_xentropy=opt.fast_xentropy)
 
-            # This function replaces modules with the more optimized counterparts so that it can run faster
-            # Currently exp with LayerNorm
-            if not opt.memory_profiling:
-                # distributed is required to convert BatchNorm to SyncBatchNorm for DDP
-                optimize_model(model, distributed=(self.world_size > 1))
+        # This function replaces modules with the more optimized counterparts so that it can run faster
+        # Currently exp with LayerNorm
+        if not opt.memory_profiling:
+            # distributed is required to convert BatchNorm to SyncBatchNorm for DDP
+            optimize_model(model, distributed=(self.world_size > 1))
+
+        if opt.load_pretrained_classifier:
+            from onmt.model_factory import build_classifier
+            self.print("Loading pretrained external classifier ...", flush=True)
+            classifier_checkpoint = torch.load(opt.load_pretrained_classifier, map_location=lambda storage, loc: storage)
+            classifier_opt = classifier_checkpoint['opt']
+            classifier_dicts = classifier_checkpoint['dicts']
+            self.classifier = build_classifier(classifier_opt, classifier_dicts)
+            self.classifier.load_state_dict(classifier_checkpoint['model'])
+
 
         init_model_parameters(model, opt)
         self.model = model
@@ -233,6 +236,8 @@ class Trainer(object):
             self.model = self.model.cuda(device=self.device)
             if opt.ctc_loss > 0.0:
                 self.ctc_loss_function = self.ctc_loss_function.cuda(device=self.device)
+            if opt.load_pretrained_classifier:
+                self.classifier = self.classifier.cuda(device=self.device)
 
             # Ensure that the distributed copies have the same initial parameters
             # Manual seed may not work the same for different GPU models.
@@ -553,7 +558,8 @@ class Trainer(object):
 
         self.model.eval()
         self.loss_function.eval()
-        # self.model.module.reset_states()
+        if opt.load_pretrained_classifier:
+            self.classifier.eval()
 
         total_loss = zero_tensor()
         total_words = zero_tensor()
@@ -572,8 +578,15 @@ class Trainer(object):
                         batch = prepare_sample(samples, device=self.device)
                         targets = batch.get('target_output')
                         tgt_mask = targets.ne(onmt.constants.PAD)
+
+                        if opt.load_pretrained_classifier:
+                            layer_states = self.classifier.encode(batch)
+                        else:
+                            layer_states = None
+
                         outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                             mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce)
+                                             mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce,
+                                             pretrained_layer_states=layer_states)
 
                         outputs['tgt_mask'] = tgt_mask
                         loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True)
@@ -589,6 +602,8 @@ class Trainer(object):
 
         self.model.train()
         self.loss_function.train()
+        if opt.load_pretrained_classifier:
+            self.classifier.train()
 
         return total_loss / total_words
 
@@ -677,10 +692,16 @@ class Trainer(object):
                     with autocast():
                         targets = batch.get('target_output')
                         tgt_mask = targets.ne(onmt.constants.PAD)
+                        if opt.load_pretrained_classifier:
+                            with torch.no_grad():
+                                layer_states = self.classifier.encode(batch)
+                        else:
+                            layer_states = None
+
                         outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                              zero_encoder=opt.zero_encoder,
                                              mirror=opt.mirror_loss, streaming_state=streaming_state,
-                                             nce=opt.nce)
+                                             nce=opt.nce, pretrained_layer_states=layer_states)
 
                         batch_size = batch.size
                         outputs['tgt_mask'] = tgt_mask

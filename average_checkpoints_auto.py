@@ -7,7 +7,7 @@ import argparse
 import math
 import numpy
 import os, sys
-from onmt.model_factory import build_model, build_language_model
+from onmt.model_factory import build_model, build_language_model, build_classifier
 from copy import deepcopy
 from onmt.utils import checkpoint_paths, normalize_gradients
 import glob
@@ -18,6 +18,7 @@ onmt.markdown.add_md_help_argument(parser)
 
 parser.add_argument('-models', required=True,
                     help='Path to model .pt file')
+parser.add_argument('-type', default='seq2seq', help="""Type of models""")
 parser.add_argument('-lm', action='store_true',
                     help='Language model (default is seq2seq model')
 parser.add_argument('-sort_by_date', action='store_true',
@@ -32,12 +33,15 @@ parser.add_argument('-method', default='mean',
                     help="method to average: mean|gmean")
 
 
-def custom_build_model(opt, dict, lm=False):
+def custom_build_model(opt, dict, lm=False, type='seq2seq'):
 
-    if not lm:
-        model = build_model(opt, dict)
-    else:
-        model = build_language_model(opt, dict)
+    if type == 'seq2seq':
+        if not lm:
+            model = build_model(opt, dict)
+        else:
+            model = build_language_model(opt, dict)
+    elif type == 'classifier':
+        model = build_classifier(opt, dict)
 
     return model
 
@@ -62,9 +66,6 @@ def main():
 
     # print(existed_save_files)
     models = existed_save_files
-    # # opt.model should be a string of models, split by |
-    # models = list()
-    #
 
     # take the top
     models = models[:opt.top]
@@ -107,7 +108,7 @@ def main():
 
     print(model_opt.layers)
 
-    main_model = custom_build_model(model_opt, checkpoint['dicts'], lm=opt.lm)
+    main_model = custom_build_model(model_opt, checkpoint['dicts'], lm=opt.lm, type=opt.type)
 
     print("Loading main model from %s ..." % models[0])
     main_model.load_state_dict(checkpoint['model'])
@@ -132,7 +133,7 @@ def main():
         if 'optim' in checkpoint:
             del checkpoint['optim']
 
-        current_model = custom_build_model(model_opt, checkpoint['dicts'], lm=opt.lm)
+        current_model = custom_build_model(model_opt, checkpoint['dicts'], lm=opt.lm, type=opt.type)
         current_model.eval()
 
         print("Loading model from %s ..." % models[i])

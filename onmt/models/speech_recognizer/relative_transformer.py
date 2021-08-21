@@ -99,8 +99,11 @@ class SpeechTransformerEncoder(TransformerEncoder):
             block = RelativeTransformerEncoderLayer(self.opt, death_rate=death_r)
             self.layer_modules.append(block)
 
-    def forward(self, input, input_pos=None, input_lang=None, streaming=False, factorize=True, **kwargs):
+    def forward(self, input, input_pos=None, input_lang=None, streaming=False, factorize=True,
+                return_states=False, pretrained_layer_states=None, **kwargs):
         """
+        :param pretrained_layer_states:
+        :param return_states: also return the (unnormalized) outputs of each state
         :param factorize:
         :param input: [B x T x Input_Size]
         :param input_pos: [B x T] positions
@@ -184,6 +187,7 @@ class SpeechTransformerEncoder(TransformerEncoder):
 
         # Apply dropout to both context and pos_emb
         context = self.preprocess_layer(context)
+        layer_states = dict()
 
         if self.mpw:
             input_lang = self.factor_embeddings(input_lang).squeeze(0)
@@ -202,6 +206,13 @@ class SpeechTransformerEncoder(TransformerEncoder):
                 mems_i = mems[i] if mems is not None and streaming and self.max_memory_size > 0 else None
 
                 context = layer(context, pos_emb, mask_src, mems=mems_i, src_lang=input_lang, factorize=factorize)
+
+                # Summing the context
+                if pretrained_layer_states is not None and i == (self.layers - 1):
+                    context = context + pretrained_layer_states[i]
+
+                if return_states:
+                    layer_states[i] = context
 
                 if streaming:
                     hids.append(context)
@@ -222,6 +233,9 @@ class SpeechTransformerEncoder(TransformerEncoder):
 
         output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask,
                                                  'src': input, 'pos_emb': pos_emb})
+
+        if return_states:
+            output_dict['layer_states'] = layer_states
 
         if streaming:
             # streaming_state.prev_src_mem_size += sum(input_length.tolist())
