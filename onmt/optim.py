@@ -290,14 +290,15 @@ class Optim(object):
 
             fast_adam = True
             try:
-                import apex
+                import fused_optim
                 if self.amsgrad:
                     print("Note: AMSGRAD is not compatible with Fused Adam")
-                self.optimizer = apex.optimizers.FusedAdam(self.params, lr=self.lr,
-                                                           betas=(self.beta1, self.beta2), eps=1e-9,
-                                                           weight_decay=self.weight_decay, amsgrad=False,
-                                                           set_grad_none=False)
-            except RuntimeError:
+                from onmt.modules.optimized.fused_adam import FusedAdam
+                self.optimizer = FusedAdam(self.params, lr=self.lr,
+                                           betas=(self.beta1, self.beta2), eps=1e-9,
+                                           weight_decay=self.weight_decay, amsgrad=False,
+                                           set_grad_none=False)
+            except (RuntimeError, ModuleNotFoundError):
                 fast_adam = False
 
             if not fast_adam:

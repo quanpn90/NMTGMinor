@@ -9,9 +9,6 @@ from .self_attention_func import self_attn_func
 from onmt.constants import double_precision
 
 
-from einops import rearrange, repeat
-
-
 def rotate_half(x):
     x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
     return torch.cat((-x2, x1), dim=x1.ndim - 1) # dim=-1 triggers a bug in torch < 1.8.0

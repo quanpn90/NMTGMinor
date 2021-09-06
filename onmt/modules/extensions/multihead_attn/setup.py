@@ -36,6 +36,10 @@ _, bare_metal_major, _ = get_cuda_bare_metal_version(cpp_extension.CUDA_HOME)
 
 cc_flag.append('-gencode')
 cc_flag.append('arch=compute_75,code=sm_75')
+cc_flag.append('-gencode')
+cc_flag.append('arch=compute_80,code=sm_80')
+cc_flag.append('-gencode')
+cc_flag.append('arch=compute_86,code=sm_86')
 
 # subprocess.run(["git", "submodule", "update", "--init", "cutlass"])
 subprocess.run(["git", "clone", "https://github.com/NVIDIA/cutlass.git", "cutlass"])
@@ -82,18 +86,18 @@ ext_modules.append(
                                                '--expt-extended-lambda',
                                                '--use_fast_math'] + cc_flag}))
 
-ext_modules.append(
-    CUDAExtension(name='rel_self_attn_cuda',
-                  sources=['relative_self_attn.cpp',
-                           'relative_self_attn_cuda.cu'],
-                  extra_compile_args={'cxx': ['-O3',],
-                                      'nvcc':['-O3',
-                                              '-I./cutlass/',
-                                              '-U__CUDA_NO_HALF_OPERATORS__',
-                                              '-U__CUDA_NO_HALF_CONVERSIONS__',
-                                              '--expt-relaxed-constexpr',
-                                              '--expt-extended-lambda',
-                                              '--use_fast_math'] + cc_flag}))
+# ext_modules.append(
+#     CUDAExtension(name='rel_self_attn_cuda',
+#                   sources=['relative_self_attn.cpp',
+#                            'relative_self_attn_cuda.cu'],
+#                   extra_compile_args={'cxx': ['-O3',],
+#                                       'nvcc':['-O3',
+#                                               '-I./cutlass/',
+#                                               '-U__CUDA_NO_HALF_OPERATORS__',
+#                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
+#                                               '--expt-relaxed-constexpr',
+#                                               '--expt-extended-lambda',
+#                                               '--use_fast_math'] + cc_flag}))
 
 
 setup(

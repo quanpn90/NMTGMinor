@@ -187,6 +187,12 @@ class SpeechTransformerEncoder(TransformerEncoder):
 
         # Apply dropout to both context and pos_emb
         context = self.preprocess_layer(context)
+
+        # maybe try multiplicative ...
+        # adding the speech represetation into the first input
+        if pretrained_layer_states is not None:
+            context = context + pretrained_layer_states
+
         layer_states = dict()
 
         if self.mpw:
@@ -197,7 +203,6 @@ class SpeechTransformerEncoder(TransformerEncoder):
             context = torch.cat([context, context], dim=-1)
 
             assert streaming is not True, "Streaming and Reversible is not usable yet."
-            # print(context.size(), pos_emb.size())
             context = ReversibleEncoderFunction.apply(context, pos_emb, self.layer_modules, mask_src)
         else:
             for i, layer in enumerate(self.layer_modules):
@@ -208,14 +213,14 @@ class SpeechTransformerEncoder(TransformerEncoder):
                 context = layer(context, pos_emb, mask_src, mems=mems_i, src_lang=input_lang, factorize=factorize)
 
                 # Summing the context
-                if pretrained_layer_states is not None and i == (self.layers - 1):
-                    context = context + pretrained_layer_states[i]
-
-                if return_states:
-                    layer_states[i] = context
+                # if pretrained_layer_states is not None and i == (self.layers - 1):
+                #     context = context + pretrained_layer_states[i]
 
                 if streaming:
                     hids.append(context)
+
+        if return_states:
+            layer_states = context
 
         # final layer norm
         context = self.postprocess_layer(context, factor=input_lang)
@@ -226,10 +231,6 @@ class SpeechTransformerEncoder(TransformerEncoder):
             t, b = context.size(0), context.size(1)
             context = torch.mm(context.view(-1, context.size(-1)), language_linear_weight_)
             context = context.view(t, b, context.size(-1))
-
-        # nan_mask = torch.logical_or(torch.isnan(context), torch.isinf(context))
-        # if nan_mask.any():
-        #     context.masked_fill_(nan_mask, 0)
 
         output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask,
                                                  'src': input, 'pos_emb': pos_emb})
@@ -528,9 +529,12 @@ class SpeechTransformerDecoder(TransformerDecoder):
 class RelativeTransformer(Transformer):
 
     def create_decoder_state(self, batch, beam_size=1, type=1, streaming=False, previous_decoding_state=None,
-                             **kwargs):
+                             factorize=True,
+                             pretrained_layer_states=None, **kwargs):
         """
         Generate a new decoder state based on the batch input
+        :param factorize:
+        :param pretrained_layer_states:
         :param previous_decoding_state:
         :param streaming:
         :param type:
@@ -557,7 +561,8 @@ class RelativeTransformer(Transformer):
 
             encoder_output = self.encoder(src_transposed, input_pos=src_pos,
                                           input_lang=src_lang, src_lengths=src_lengths,
-                                          streaming=streaming, streaming_state=streaming_state)
+                                          streaming=streaming, streaming_state=streaming_state,
+                                          factorize=factorize, pretrained_layer_states=pretrained_layer_states)
 
             if streaming:
                 decoder_state = StreamDecodingState(src, tgt_lang, encoder_output['context'],

@@ -831,11 +831,13 @@ class RelativeTransformerDecoder(TransformerDecoder):
 
 class RelativeTransformer(Transformer):
 
-    def create_decoder_state(self, batch, beam_size=1, type=2,
-                             buffering=True, streaming=False, previous_decoding_state=None,
-                             **kwargs):
+    def create_decoder_state(self, batch, beam_size=1, type=1, streaming=False, previous_decoding_state=None,
+                             factorize=True,
+                             pretrained_layer_states=None, **kwargs):
         """
         Generate a new decoder state based on the batch input
+        :param factorize:
+        :param pretrained_layer_states:
         :param previous_decoding_state:
         :param streaming:
         :param type:
@@ -858,21 +860,21 @@ class RelativeTransformer(Transformer):
             # if the previous stream is None (the first segment in the stream)
             # then proceed normally like normal translation
             # init a new stream state
-            # if streaming:
-            streaming_state = self.init_stream() if streaming else None
+            streaming_state = self.init_stream()
 
             encoder_output = self.encoder(src_transposed, input_pos=src_pos,
                                           input_lang=src_lang, src_lengths=src_lengths,
-                                          streaming=streaming, streaming_state=streaming_state)
+                                          streaming=streaming, streaming_state=streaming_state,
+                                          factorize=factorize, pretrained_layer_states=pretrained_layer_states)
 
             if streaming:
                 decoder_state = StreamDecodingState(src, tgt_lang, encoder_output['context'],
-                                                    src_lang,
+                                                    encoder_output['src_mask'],
                                                     beam_size=beam_size, model_size=self.model_size, type=type,
                                                     cloning=True, streaming_state=streaming_state)
             else:
                 decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'],
-                                                         src_lang, buffering=buffering,
+                                                         encoder_output['src_mask'],
                                                          beam_size=beam_size, model_size=self.model_size, type=type)
         else:
             streaming_state = previous_decoding_state.streaming_state

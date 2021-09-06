@@ -25,10 +25,6 @@ class FastTranslator(Translator):
 
         super().__init__(opt)
 
-        # self.eos = onmt.constants.EOS
-        # self.pad = onmt.constants.PAD
-        # self.bos = self.bos_id
-
         self.src_bos = onmt.constants.SRC_BOS
         self.src_eos = onmt.constants.SRC_EOS
         self.src_pad = onmt.constants.SRC_PAD
@@ -46,7 +42,6 @@ class FastTranslator(Translator):
         self.normalize_scores = opt.normalize
         self.len_penalty = opt.alpha
         self.buffering = not opt.no_buffering
-        # self.buffering = False  # buffering is currently bugged
 
         if hasattr(opt, 'no_repeat_ngram_size'):
             self.no_repeat_ngram_size = opt.no_repeat_ngram_size
@@ -87,7 +82,6 @@ class FastTranslator(Translator):
                     self.filter[idx] = 1
 
             self.filter = self.filter.bool()
-            # print(self.filter)
             if opt.cuda:
                 self.filter = self.filter.cuda()
 
@@ -95,6 +89,7 @@ class FastTranslator(Translator):
         else:
             self.use_filter = False
 
+        # Sub-model is used for ensembling Speech and Text models
         if opt.sub_model:
             self.sub_models = list()
             self.sub_model_types = list()
@@ -128,17 +123,6 @@ class FastTranslator(Translator):
                 if i == 0:
                     if "src" in checkpoint['dicts']:
                         self.src_dict = checkpoint['dicts']['src']
-                #     else:
-                #         self._type = "audio"
-                #     self.tgt_dict = checkpoint['dicts']['tgt']
-                #
-                #     if "langs" in checkpoint["dicts"]:
-                #         self.lang_dict = checkpoint['dicts']['langs']
-                #
-                #     else:
-                #         self.lang_dict = {'src': 0, 'tgt': 1}
-                #
-                #     self.bos_id = self.tgt_dict.labelToIdx[self.bos_token]
                 if opt.verbose:
                     print('Loading sub-model from %s' % model_path)
 
@@ -197,6 +181,62 @@ class FastTranslator(Translator):
             self.ensemble_weight = [ item / total for item in ensemble_weight]
         else:
             self.ensemble_weight = None
+
+        # Pretrained Classifier is used for combining classifier and speech models
+        if opt.pretrained_classifier:
+            self.pretrained_clfs = list()
+
+            # models are string with | as delimiter
+            clfs_models = opt.pretrained_classifier.split("|")
+
+            self.n_clfs = len(clfs_models)
+
+            for i, model_path in enumerate(clfs_models):
+                checkpoint = torch.load(model_path,
+                                        map_location=lambda storage, loc: storage)
+
+                model_opt = checkpoint['opt']
+                model_opt = backward_compatible(model_opt)
+                clf_dicts = checkpoint['dicts']
+
+                if opt.verbose:
+                    print('Loading pretrained classifier from %s' % model_path)
+
+                from onmt.model_factory import build_classifier
+                model = build_classifier(model_opt, clf_dicts)
+                optimize_model(model)
+                model.load_state_dict(checkpoint['model'])
+
+                if opt.fp16:
+                    model = model.half()
+
+                if opt.cuda:
+                    model = model.cuda()
+                else:
+                    model = model.cpu()
+
+                if opt.dynamic_quantile == 1:
+
+                    engines = torch.backends.quantized.supported_engines
+                    if 'fbgemm' in engines:
+                        torch.backends.quantized.engine = 'fbgemm'
+                    else:
+                        print(
+                            "[INFO] fbgemm is not found in the available engines. "
+                            " Possibly the CPU does not support AVX2."
+                            " It is recommended to disable Quantization (set to 0).")
+                        torch.backends.quantized.engine = 'qnnpack'
+
+                    model = torch.quantization.quantize_dynamic(
+                        model, {torch.nn.LSTM, torch.nn.Linear}, dtype=torch.qint8
+                    )
+
+                model.eval()
+
+                self.pretrained_clfs.append(model)
+        else:
+            self.n_clfs = 0
+            self.pretrained_clfs = list()
 
         print(self.main_model_opt)
 
@@ -355,11 +395,18 @@ class FastTranslator(Translator):
         # initialize the decoder state, including:
         # - expanding the context over the batch dimension len_src x (B*beam) x H
         # - expanding the mask over the batch dimension    (B*beam) x len_src
+
+
         decoder_states = dict()
         sub_decoder_states = dict()  # for sub-model
         for i in range(self.n_models):
+            if self.opt.pretrained_classifier:
+                pretrained_layer_states = self.pretrained_clfs[i].encode(batches[i])
+            else:
+                pretrained_layer_states = None
             decoder_states[i] = self.models[i].create_decoder_state(batches[i], beam_size, type=2,
-                                                                    buffering=self.buffering)
+                                                                    buffering=self.buffering,
+                                                                    pretrained_layer_states=pretrained_layer_states)
         if self.opt.sub_model:
             for i in range(self.n_sub_models):
                 sub_decoder_states[i] = self.sub_models[i].create_decoder_state(sub_batches[i], beam_size, type=2,

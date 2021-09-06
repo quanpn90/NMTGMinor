@@ -64,7 +64,6 @@ def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint):
 
 
 def main():
-    print('HELLO WORLD')
     if not opt.multi_dataset:
         if opt.data_format in ['bin', 'raw']:
             start = time.time()
@@ -156,7 +155,6 @@ def main():
 
         # Loading asr data structures
         elif opt.data_format in ['scp', 'scpmem', 'mmem']:
-            print("HELLO 2")
             print("Loading memory mapped data files ....")
             start = time.time()
             from onmt.data.mmap_indexed_dataset import MMapIndexedDataset

@@ -33,14 +33,17 @@ version_dependent_macros = version_ge_1_1 + version_ge_1_3 + version_ge_1_5
 
 
 ext_modules.append(
-    CUDAExtension(name='silu_cuda',
-                  sources=['swish.cpp',
-                           'swish_cuda.cu'],
-                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                      'nvcc': ['-O3'] + version_dependent_macros + ['--expt-extended-lambda']}))
+            CUDAExtension(name='fused_optim',
+                          sources=['frontend.cpp',
+                                   'multi_tensor_adam.cu'],
+                          extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                                              'nvcc':['-lineinfo',
+                                                      '-O3',
+                                                      # '--resource-usage',
+                                                      '--use_fast_math'] + version_dependent_macros}))
 
 setup(
-    name="cuda_activation_functions",
+    name="fused_optim",
     ext_modules=ext_modules,
     cmdclass={"build_ext": BuildExtension},
 )

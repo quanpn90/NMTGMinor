@@ -677,7 +677,7 @@ class Transformer(NMTModel):
         self.encoder.load_state_dict(encoder_state_dict)
         self.encoder.language_embedding = enc_language_embedding
 
-    def decode(self, batch):
+    def decode(self, batch, pretrained_layer_states=None):
         """
         :param batch: (onmt.Dataset.Batch) an object containing tensors needed for training
         :return: gold_scores (torch.Tensor) log probs for each sentence
@@ -699,7 +699,8 @@ class Transformer(NMTModel):
         tgt_input = tgt_input.transpose(0, 1)
         batch_size = tgt_input.size(0)
 
-        context = self.encoder(src, input_pos=src_pos, input_lang=src_lang)['context']
+        context = self.encoder(src, input_pos=src_pos, input_lang=src_lang,
+                               pretrained_layer_states=pretrained_layer_states)['context']
 
         if hasattr(self, 'autoencoder') and self.autoencoder \
                 and self.autoencoder.representation == "EncoderHiddenState":
@@ -779,11 +780,12 @@ class Transformer(NMTModel):
 
         return output_dict
 
-    def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True, **kwargs):
+    def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True,
+                             pretrained_layer_states=None, **kwargs):
         """
         Generate a new decoder state based on the batch input
+        :param pretrained_layer_states:
         :param buffering:
-        :param streaming:
         :param type:
         :param batch: Batch object (may not contain target during decoding)
         :param beam_size: Size of beam used in beam search
@@ -796,7 +798,8 @@ class Transformer(NMTModel):
         tgt_lang = batch.get('target_lang')
 
         src_transposed = src.transpose(0, 1)
-        encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
+        encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang,
+                                      pretrained_layer_states=pretrained_layer_states)
 
         print("[INFO] create Transformer decoding state with buffering", buffering)
         decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], src_lang,
@@ -817,7 +820,8 @@ class Transformer(NMTModel):
 class TransformerDecodingState(DecoderState):
 
     def __init__(self, src, tgt_lang, context, src_lang, beam_size=1, model_size=512, type=2,
-                 cloning=True, buffering=False, src_mask=None, dec_pretrained_model=""):
+                 cloning=True, buffering=False, src_mask=None,
+                 dec_pretrained_model="", ):
 
         """
         :param src:
