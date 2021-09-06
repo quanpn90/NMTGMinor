@@ -1,6 +1,6 @@
 import torch
 from torch import nn, einsum
-from einops import rearrange, repeat
+# from einops import rearrange, repeat
 
 
 class SinusoidalEmbeddings(torch.nn.Module):
@@ -46,35 +46,3 @@ class SinusoidalEmbeddings(torch.nn.Module):
             self.sin_cached = emb.sin()[:, None, :]
         return (self.cos_cached, self.sin_cached)
 
-
-def rotate_every_two(x):
-
-    # splits the last dimension in half
-    x = rearrange(x, '... (d j) -> ... d j', j=2)
-    x1, x2 = x.unbind(dim=-1)
-
-    # stack negative x2 with x1
-    x = torch.stack((-x2, x1), dim=-1)
-
-    return rearrange(x, '... d j -> ... (d j)')
-
-
-# more like encodings because the position values are not learnablew weights
-def apply_rotary_emb(q, k, sinu_pos):
-    """
-    :param q:  [bsz x time x hidden]
-    :param k:  [bsz x time x hidden]
-    :param sinu_pos:
-    :return: q and k with applied position encoding
-    """
-    # splits the last dimension of the sinu_pos in half and grab sin and cos terms
-    sinu_pos = rearrange(sinu_pos, '() n (j d) -> n j d', j=2)
-    sin, cos = sinu_pos.unbind(dim=-2)
-
-    # repeat the sin and cos terms with 2?
-    sin, cos = map(lambda t: repeat(t, 'b n -> b (n j)', j=2), (sin, cos))
-
-    # q' = (q * cos) + (rotate_every_two(q) * sin)
-    # dl_dq = dl_dq' * (cos + sin * rotate'(q))
-    q, k = map(lambda t: (t * cos) + (rotate_every_two(t) * sin), (q, k))
-    return q, k
