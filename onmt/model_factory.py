@@ -137,8 +137,8 @@ def build_tm_model(opt, dicts):
     else:
         language_embeddings = None
 
-    if opt.ctc_loss != 0:
-        generators.append(onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size() + 1))
+    # if opt.ctc_loss != 0:
+    #     generators.append(onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size() + 1))
 
     if opt.model in ['discourse_speech_transformer']:
         from onmt.models.discourse.discourse_transformer import DiscourseTransformerEncoder, DiscourseTransformer

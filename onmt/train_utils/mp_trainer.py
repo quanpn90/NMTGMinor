@@ -540,13 +540,15 @@ class Trainer(object):
 
     def eval(self, data):
 
-        if self.rank != 0:
-            return 0
+        # using one process for evaluation only
+        # if self.rank != 0:
+        #     return 0
 
         self.print("[INFO] Running cross-entropy evaluation...", flush=True)
         opt = self.opt
         rank = 0
         world_size = 1
+        finished = zero_tensor()
 
         # the data iterator creates an epoch iterator
         data_iterator = generate_data_iterator(data, rank, world_size, seed=self.opt.seed,
@@ -573,24 +575,31 @@ class Trainer(object):
             while not data_iterator.end_of_epoch():
                 samples = next(epoch_iterator)
 
+                def maybe_no_sync():
+                    if isinstance(self.model, DDP_model):
+                        return self.model.no_sync()
+                    else:
+                        return contextlib.ExitStack()  # dummy contextmanager
+
                 if samples:
-                    with autocast():
-                        batch = prepare_sample(samples, device=self.device)
-                        targets = batch.get('target_output')
-                        tgt_mask = targets.ne(onmt.constants.PAD)
+                    with maybe_no_sync():
+                        with autocast():
+                            batch = prepare_sample(samples, device=self.device)
+                            targets = batch.get('target_output')
+                            tgt_mask = targets.ne(onmt.constants.PAD)
 
-                        if opt.load_pretrained_classifier:
-                            layer_states = self.classifier.encode(batch)
-                        else:
-                            layer_states = None
+                            if opt.load_pretrained_classifier:
+                                layer_states = self.classifier.encode(batch)
+                            else:
+                                layer_states = None
 
-                        outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                             mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce,
-                                             pretrained_layer_states=layer_states)
+                            outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                                                 mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce,
+                                                 pretrained_layer_states=layer_states)
 
-                        outputs['tgt_mask'] = tgt_mask
-                        loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True)
-                        loss_data = loss_dict['data']
+                            outputs['tgt_mask'] = tgt_mask
+                            loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True)
+                            loss_data = loss_dict['data']
 
                     total_loss.add_(loss_data)
                     total_words.add_(batch.tgt_size)
@@ -599,6 +608,9 @@ class Trainer(object):
         # allreduce the total loss and total words from other processes
         # self.all_reduce(total_loss, op=dist.ReduceOp.SUM, group=self.group)
         # self.all_reduce(total_words, op=dist.ReduceOp.SUM, group=self.group)
+        finished.fill_(1)
+        # one synchronization call to avoid deadlock 
+        self.all_reduce(finished, op=dist.ReduceOp.SUM, group=self.group)
 
         self.model.train()
         self.loss_function.train()
@@ -674,10 +686,8 @@ class Trainer(object):
             oom = zero_tensor()
 
             try:
-                # outputs is a dictionary containing keys/values necessary for loss function
-                # can be flexibly controlled within models for easier extensibility
+
                 counter = counter + 1
-                # reduction_disabled = False if counter >= opt.update_frequency or i == (n_samples - 1) else True
                 reduce = True if counter >= opt.update_frequency or i == (n_samples - 1) else False
 
                 def maybe_no_sync():
@@ -704,6 +714,8 @@ class Trainer(object):
                                              nce=opt.nce, pretrained_layer_states=layer_states)
 
                         batch_size = batch.size
+                        # outputs is a dictionary containing keys/values necessary for loss function
+                        # can be flexibly controlled within models for easier extensibility
                         outputs['tgt_mask'] = tgt_mask
 
                         loss_dict = self.loss_function(outputs, targets, model=self.model)

@@ -3,6 +3,8 @@ from kaldiio import load_mat
 from functools import lru_cache
 import numpy as np
 from .audio_utils import _parse_arkpath, ArkLoader
+import warnings
+warnings.filterwarnings("ignore", message="The given NumPy array is not writeable ")
 
 
 class SCPIndexDataset(torch.utils.data.Dataset):
