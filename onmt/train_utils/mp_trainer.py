@@ -27,10 +27,6 @@ from onmt.model_factory import build_model, optimize_model, init_model_parameter
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP_model
 from torch.cuda.amp import autocast
-import warnings
-
-# ignore the pytorch -> numpy conversion warnings
-warnings.filterwarnings("ignore", category=UserWarning)
 
 
 def varname(p):
@@ -552,7 +548,7 @@ class Trainer(object):
 
         # the data iterator creates an epoch iterator
         data_iterator = generate_data_iterator(data, rank, world_size, seed=self.opt.seed,
-                                               num_workers=1, epoch=1, buffer_size=opt.buffer_size)
+                                               num_workers=opt.num_workers, epoch=1, buffer_size=opt.buffer_size)
         epoch_iterator = data_iterator.next_epoch_itr(False, pin_memory=False)
 
         data_size = len(epoch_iterator)
@@ -609,7 +605,7 @@ class Trainer(object):
         # self.all_reduce(total_loss, op=dist.ReduceOp.SUM, group=self.group)
         # self.all_reduce(total_words, op=dist.ReduceOp.SUM, group=self.group)
         finished.fill_(1)
-        # one synchronization call to avoid deadlock 
+        # one synchronization call to avoid deadlock
         self.all_reduce(finished, op=dist.ReduceOp.SUM, group=self.group)
 
         self.model.train()
@@ -770,6 +766,9 @@ class Trainer(object):
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
+                    del loss
+                    gc.collect()
+
                     loss = 0
                     for p in self.model.parameters():
                         if p.grad is not None:
@@ -812,7 +811,7 @@ class Trainer(object):
 
             if update_flag:
                 # accumulated gradient case, in this case the update frequency
-                # self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
 
                 grad_denom = 1.0 / grad_div
 
@@ -883,12 +882,12 @@ class Trainer(object):
                                    math.exp(report_loss.item() / report_tgt_words.item())))
 
                     if opt.reconstruct:
-                        self.all_reduce(report_rec_loss, op=dist.ReduceOp.SUM, group=self.group)
+                        # self.all_reduce(report_rec_loss, op=dist.ReduceOp.SUM, group=self.group)
                         rec_ppl = math.exp(report_rec_loss.item() / report_src_words.item())
                         log_string += (" rec_ppl: %6.2f ; " % rec_ppl)
 
                     if opt.mirror_loss:
-                        self.all_reduce(report_rev_loss, op=dist.ReduceOp.SUM, group=self.group)
+                        # self.all_reduce(report_rev_loss, op=dist.ReduceOp.SUM, group=self.group)
                         rev_ppl = math.exp(report_rev_loss.item() / report_tgt_words.item())
                         log_string += (" rev_ppl: %6.2f ; " % rev_ppl)
                         log_string += (" mir_loss: %6.2f ; " % (report_mirror_loss / report_tgt_words))

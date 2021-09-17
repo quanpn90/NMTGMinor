@@ -6,18 +6,21 @@ import onmt.modules
 import argparse
 import torch
 import time, datetime
-from onmt.train_utils.trainer import XETrainer
+from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
+from onmt.data.scp_dataset import SCPIndexDataset
+from onmt.data.wav_dataset import WavDataset
 from onmt.modules.loss import NMTLossFunc, NMTAndCTCLossFunc
-from onmt.model_factory import build_model, optimize_model
+from onmt.model_factory import build_model, optimize_model, init_model_parameters
 from onmt.bayesian_factory import build_model as build_bayesian_model
-from onmt.constants import add_tokenidx
 from options import make_parser
 from collections import defaultdict
+from onmt.constants import add_tokenidx
 import os
 import numpy as np
+import warnings
+warnings.filterwarnings("ignore", message="The given NumPy array is not writeable ")
 
-
-parser = argparse.ArgumentParser(description='train.py')
+parser = argparse.ArgumentParser(description='train_distributed.py')
 onmt.markdown.add_md_help_argument(parser)
 
 # Please look at the options file to see the options regarding models and data
@@ -25,13 +28,10 @@ parser = make_parser(parser)
 
 opt = parser.parse_args()
 
-
 # An ugly hack to have weight norm on / off
 onmt.constants.weight_norm = opt.weight_norm
 onmt.constants.checkpointing = opt.checkpointing
-onmt.constants.recompute = opt.checkpointing > 0
 onmt.constants.max_position_length = opt.max_position_length
-
 
 # Use static dropout if checkpointing > 0
 if opt.checkpointing > 0:
@@ -56,6 +56,14 @@ def numpy_to_torch(tensor_list):
     return out_list
 
 
+def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint):
+
+    from onmt.train_utils.mp_trainer import Trainer
+
+    trainer = Trainer(gpu, train_data, valid_data, dicts, opt)
+    trainer.run(checkpoint=checkpoint)
+
+
 def main():
 
     if not opt.multi_dataset:
@@ -73,6 +81,7 @@ def main():
             print("Done after %s" % elapse)
 
             dicts = dataset['dicts']
+            onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
 
             # For backward compatibility
             train_dict = defaultdict(lambda: None, dataset['train'])
@@ -101,8 +110,7 @@ def main():
                                           multiplier=opt.batch_size_multiplier,
                                           augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
                                           upsampling=opt.upsampling,
-                                          num_split=len(opt.gpus),
-                                          cleaning=True)
+                                          num_split=1)
             else:
                 train_data = onmt.StreamDataset(train_dict['src'], train_dict['tgt'],
                                                 train_src_langs, train_tgt_langs,
@@ -111,8 +119,7 @@ def main():
                                                 batch_size_sents=opt.batch_size_sents,
                                                 multiplier=opt.batch_size_multiplier,
                                                 augment=opt.augment_speech,
-                                                upsampling=opt.upsampling
-                                                )
+                                                upsampling=opt.upsampling)
 
             if valid_dict['src_lang'] is not None:
                 assert 'langs' in dicts
@@ -134,8 +141,9 @@ def main():
                                           batch_size_words=opt.batch_size_words,
                                           data_type=dataset.get("type", "text"), sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
-                                          upsampling=opt.upsampling,
-                                          cleaning=True)
+                                          multiplier=opt.batch_size_multiplier,
+                                          cleaning=True,
+                                          upsampling=opt.upsampling)
             else:
                 valid_data = onmt.StreamDataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
                                                 valid_src_langs, valid_tgt_langs,
@@ -147,15 +155,25 @@ def main():
             print(' * number of training sentences. %d' % len(dataset['train']['src']))
             print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
 
-        elif opt.data_format in ['scp', 'scpmem', 'mmem']:
+        # Loading asr data structures
+        elif opt.data_format in ['scp', 'scpmem', 'mmem', 'wav']:
             print("Loading memory mapped data files ....")
             start = time.time()
             from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
             from onmt.data.scp_dataset import SCPIndexDataset
 
             dicts = torch.load(opt.data + ".dict.pt")
+            onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
+
             if opt.data_format in ['scp', 'scpmem']:
                 audio_data = torch.load(opt.data + ".scp_path.pt")
+            elif opt.data_format in ['wav']:
+                audio_data = torch.load(opt.data + ".wav_path.pt")
+                # # TODO: maybe having another option like -past_context
+                # if os.path.exists(opt.data + '.prev_src_path.pt'):
+                #     prev_audio_data = torch.load(opt.data + '.prev_src_path.pt')
+                # else:
+                #     prev_audio_data = None
 
             # allocate languages if not
             if 'langs' not in dicts:
@@ -166,8 +184,17 @@ def main():
             train_path = opt.data + '.train'
             if opt.data_format in ['scp', 'scpmem']:
                 train_src = SCPIndexDataset(audio_data['train'], concat=opt.concat)
+                if 'train_past' in audio_data:
+                    past_train_src = SCPIndexDataset(audio_data['train_past'],
+                                                     concat=opt.concat, shared_object=train_src)
+                else:
+                    past_train_src = None
+            elif opt.data_format in ['wav']:
+                train_src = WavDataset(audio_data['train'])
+                past_train_src = None
             else:
                 train_src = MMapIndexedDataset(train_path + '.src')
+                past_train_src = None
 
             train_tgt = MMapIndexedDataset(train_path + '.tgt')
 
@@ -190,8 +217,16 @@ def main():
             else:
                 train_src_sizes, train_tgt_sizes = None, None
 
+            # check the length files if they exist
+            if os.path.exists(train_path + '.past_src_sizes.npy'):
+                past_train_src_sizes = np.load(train_path + '.past_src_sizes.npy')
+            else:
+                past_train_src_sizes = None
+
             if opt.encoder_type == 'audio':
                 data_type = 'audio'
+            elif opt.encoder_type == 'wav2vec2':
+                data_type = 'wav'
             else:
                 data_type = 'text'
 
@@ -205,9 +240,12 @@ def main():
                                           batch_size_sents=opt.batch_size_sents,
                                           multiplier=opt.batch_size_multiplier,
                                           src_align_right=opt.src_align_right,
-                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
                                           upsampling=opt.upsampling,
-                                          cleaning=True, verbose=True)
+                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
+                                          cleaning=True, verbose=True,
+                                          num_split=1,
+                                          past_src_data=past_train_src,
+                                          past_src_data_sizes=past_train_src_sizes)
             else:
                 train_data = onmt.StreamDataset(train_src,
                                                 train_tgt,
@@ -221,8 +259,18 @@ def main():
             valid_path = opt.data + '.valid'
             if opt.data_format in ['scp', 'scpmem']:
                 valid_src = SCPIndexDataset(audio_data['valid'], concat=opt.concat)
+                if 'valid_past' in audio_data:
+                    past_valid_src = SCPIndexDataset(audio_data['valid_past'],
+                                                     concat=opt.concat, shared_object=valid_src)
+                else:
+                    past_valid_src = None
+            elif opt.data_format in ['wav']:
+                valid_src = WavDataset(audio_data['valid'])
+                past_valid_src = None
             else:
                 valid_src = MMapIndexedDataset(valid_path + '.src')
+                past_valid_src = None
+
             valid_tgt = MMapIndexedDataset(valid_path + '.tgt')
 
             if os.path.exists(valid_path + '.src_lang.bin'):
@@ -244,16 +292,24 @@ def main():
             else:
                 valid_src_sizes, valid_tgt_sizes = None, None
 
+            # check the length files if they exist
+            if os.path.exists(valid_path + '.past_src_sizes.npy'):
+                past_valid_src_sizes = np.load(valid_path + '.past_src_sizes.npy')
+            else:
+                past_valid_src_sizes = None
+
             if not opt.streaming:
                 valid_data = onmt.Dataset(valid_src, valid_tgt,
                                           valid_src_sizes, valid_tgt_sizes,
                                           valid_src_langs, valid_tgt_langs,
                                           batch_size_words=opt.batch_size_words,
+                                          multiplier=opt.batch_size_multiplier,
                                           data_type=data_type, sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
                                           src_align_right=opt.src_align_right,
                                           cleaning=True, verbose=True, debug=True,
-                                          num_split=len(opt.gpus))
+                                          past_src_data=past_valid_src,
+                                          past_src_data_sizes=past_valid_src_sizes)
             else:
                 # for validation data, we have to go through sentences (very slow but to ensure correctness)
                 valid_data = onmt.StreamDataset(valid_src, valid_tgt,
@@ -276,6 +332,7 @@ def main():
         # raise NotImplementedError
 
         dicts = torch.load(opt.data + ".dict.pt")
+        onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
 
         root_dir = os.path.dirname(opt.data)
 
@@ -326,6 +383,8 @@ def main():
 
                 if opt.encoder_type == 'audio':
                     data_type = 'audio'
+                elif opt.encoder_type == 'wav2vec2':
+                    data_type = 'wav'
                 else:
                     data_type = 'text'
 
@@ -339,10 +398,9 @@ def main():
                                               batch_size_sents=opt.batch_size_sents,
                                               multiplier=opt.batch_size_multiplier,
                                               src_align_right=opt.src_align_right,
-                                              augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
                                               upsampling=opt.upsampling,
                                               cleaning=True, verbose=True,
-                                              num_split=len(opt.gpus))
+                                              num_split=1)
 
                     train_sets.append(train_data)
 
@@ -380,6 +438,8 @@ def main():
 
                 if opt.encoder_type == 'audio':
                     data_type = 'audio'
+                elif opt.encoder_type == 'wav2vec2':
+                    data_type = 'wav'
                 else:
                     data_type = 'text'
 
@@ -388,11 +448,11 @@ def main():
                                               src_sizes, tgt_sizes,
                                               src_lang_data, tgt_lang_data,
                                               batch_size_words=opt.batch_size_words,
+                                              multiplier=opt.batch_size_multiplier,
                                               data_type=data_type, sorting=True,
                                               batch_size_sents=opt.batch_size_sents,
                                               src_align_right=opt.src_align_right,
-                                              cleaning=True, verbose=True, debug=True,
-                                              num_split=len(opt.gpus))
+                                              cleaning=True, verbose=True, debug=True)
 
                     valid_sets.append(valid_data)
 
@@ -405,79 +465,30 @@ def main():
     if opt.load_from:
         checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
         print("* Loading dictionaries from the checkpoint")
+        del checkpoint['model']
+        del checkpoint['optim']
         dicts = checkpoint['dicts']
     else:
         dicts['tgt'].patch(opt.patch_vocab_multiplier)
         checkpoint = None
 
-    # Put the vocab mask from dicts to the datasets
-    for data in [train_data, valid_data]:
-        if isinstance(data, list):
-            for i, data_ in enumerate(data):
-                data_.set_mask(dicts['tgt'].vocab_mask)
-                data[i] = data_
-        else:
-            data.set_mask(dicts['tgt'].vocab_mask)
-
     if "src" in dicts:
         print(' * vocabulary size. source = %d; target = %d' %
               (dicts['src'].size(), dicts['tgt'].size()))
     else:
-        print('[INFO] vocabulary size. target = %d' %
+        print(' * vocabulary size. target = %d' %
               (dicts['tgt'].size()))
 
-    print('* Building model...')
+    os.environ['MASTER_ADDR'] = opt.master_addr  # default 'localhost'
+    os.environ['MASTER_PORT'] = opt.master_port  # default '8888'
 
-    # update special tokens
-    onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
-
-    if not opt.fusion:
-        if opt.bayes_by_backprop:
-            model = build_bayesian_model(opt, dicts)
-        else:
-            model = build_model(opt, dicts)
-
-        """ Building the loss function """
-        if opt.nce:
-            from onmt.modules.nce.nce_loss import NCELoss
-            loss_function = NCELoss(opt.model_size, dicts['tgt'].size(), noise_ratio=opt.nce_noise,
-                                    logz=9, label_smoothing=opt.label_smoothing)
-        else:
-            loss_function = NMTLossFunc(opt.model_size, dicts['tgt'].size(),
-                                        label_smoothing=opt.label_smoothing,
-                                        mirror=opt.mirror_loss,
-                                        fast_xentropy=opt.fast_xentropy)
-
-        # This function replaces modules with the more optimized counterparts so that it can run faster
-        # Currently exp with LayerNorm
-        if not opt.memory_profiling:
-            optimize_model(model, fp16=opt.fp16)
-
+    # spawn N processes for N gpus
+    # each process has a different trainer
+    if len(opt.gpus) > 1:
+        torch.multiprocessing.spawn(run_process, nprocs=len(opt.gpus),
+                                    args=(train_data, valid_data, dicts, opt, checkpoint))
     else:
-        from onmt.model_factory import build_fusion
-        from onmt.modules.loss import FusionLoss
-
-        model = build_fusion(opt, dicts)
-
-        loss_function = FusionLoss(dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
-
-    n_params = sum([p.nelement() for p in model.parameters()])
-    print('* number of parameters: %d' % n_params)
-
-    if not opt.debugging and len(opt.gpus) == 1:
-        if opt.bayes_by_backprop:
-
-            from onmt.train_utils.bayes_by_backprop_trainer import BayesianTrainer
-            trainer = BayesianTrainer(model, loss_function, train_data, valid_data, dicts, opt)
-
-        else:
-            trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
-    else:
-        print("MultiGPU is not supported by this train.py. Use train_distributed.py with the same arguments "
-              "for MultiGPU training")
-        raise NotImplementedError
-
-    trainer.run(checkpoint=checkpoint)
+        run_process(0, train_data, valid_data, dicts, opt, checkpoint)
 
 
 if __name__ == "__main__":

@@ -194,7 +194,9 @@ class MFWEncdecMultiheadAttn(nn.Module):
                                             self.num_heads, query, key,
                                             in_proj_weight_q, in_proj_weight_kv,
                                             out_proj_weight, attn_mask, self.dropout,
-                                            incremental, incremental_cache, False, True)
+                                            incremental, incremental_cache,
+                                            False, None, None,
+                                            False, True)
 
         # TODO: add incremental cache
 

@@ -7,12 +7,6 @@ import unittest
 from time import time
 import numpy as np
 
-try:
-    import apex.amp as amp
-    from apex.amp import half_function
-except (ModuleNotFoundError, ImportError) as e:
-    amp = None
-    from ..optimized.compat import half_function
 
 try:
     from torch.cuda.amp import custom_fwd, custom_bwd
@@ -81,7 +75,7 @@ class MlpReluFunction(torch.autograd.Function):
 
 
 if fused_mlp_relu:
-    mlp_relu_function = half_function(MlpReluFunction.apply)
+    mlp_relu_function = MlpReluFunction.apply
 else:
     mlp_relu_function = None
 
@@ -107,7 +101,7 @@ class MlpSiluFunction(torch.autograd.Function):
 
 
 if fused_mlp_silu:
-    mlp_silu_function = half_function(MlpSiluFunction.apply)
+    mlp_silu_function = MlpSiluFunction.apply
 else:
     mlp_silu_function = None
 
@@ -133,7 +127,7 @@ class MlpGELUFunction(torch.autograd.Function):
 
 
 if fused_mlp_gelu:
-    mlp_gelu_function = half_function(MlpGELUFunction.apply)
+    mlp_gelu_function = MlpGELUFunction.apply
 else:
     mlp_gelu_function = None
 
@@ -159,7 +153,7 @@ class MlpAGELUFunction(torch.autograd.Function):
 
 
 if fused_mlp_gelu:
-    mlp_agelu_function = half_function(MlpAGELUFunction.apply)
+    mlp_agelu_function = MlpAGELUFunction.apply
 else:
     mlp_agelu_function = None
 
@@ -185,7 +179,7 @@ class MlpGELUFunction(torch.autograd.Function):
 
 
 if fused_mlp_gelu:
-    mlp_gelu_function = half_function(MlpGELUFunction.apply)
+    mlp_gelu_function = MlpGELUFunction.apply
 else:
     mlp_gelu_function = None
 
@@ -214,6 +208,6 @@ class MlpGeLUDropoutAddFunction(torch.autograd.Function):
 
 
 if fused_mlp_gelu_dropout_add:
-    mlp_gelu_dropout_add_function = half_function(MlpGeLUDropoutAddFunction.apply)
+    mlp_gelu_dropout_add_function = MlpGeLUDropoutAddFunction.apply
 else:
     mlp_gelu_dropout_add_function = None

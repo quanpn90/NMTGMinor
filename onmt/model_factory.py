@@ -137,10 +137,20 @@ def build_tm_model(opt, dicts):
     else:
         language_embeddings = None
 
-    # if opt.ctc_loss != 0:
-    #     generators.append(onmt.modules.base_seq2seq.Generator(opt.model_size, dicts['tgt'].size() + 1))
+    if opt.model in ['wav2vec2_transformer']:
+        from onmt.models.speech_recognizer.wav2vec2 import HuggingFaceWav2Vec, Wav2vecTransformer
+        from onmt.models.speech_recognizer.relative_transformer import SpeechTransformerDecoder
 
-    if opt.model in ['discourse_speech_transformer']:
+        print("HUGGING FACE")
+        encoder = HuggingFaceWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model)
+
+        decoder = SpeechTransformerDecoder(opt, embedding_tgt, positional_encoder,
+                                           language_embeddings=language_embeddings)
+
+        model = Wav2vecTransformer(encoder, decoder, nn.ModuleList(generators),
+                                    mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
+
+    elif opt.model in ['discourse_speech_transformer']:
         from onmt.models.discourse.discourse_transformer import DiscourseTransformerEncoder, DiscourseTransformer
         from onmt.models.speech_recognizer.relative_transformer import \
             SpeechTransformerEncoder, SpeechTransformerDecoder
@@ -476,6 +486,7 @@ def init_model_parameters(model, opt):
                 init_weight(m.weight)
             if hasattr(m, 'bias') and m.bias is not None:
                 init_bias(m.bias)
+            # pass
         elif classname.find('Embedding') != -1:
 
             initialize = True
@@ -496,7 +507,7 @@ def init_model_parameters(model, opt):
                 nn.init.constant_(m.weight, 1.0)
             if hasattr(m, 'bias') and m.bias is not None:
                 init_bias(m.bias)
-            pass
+            # pass
         elif classname.find('RelativeTransformerEncoder') != -1:
             if hasattr(m, 'r_emb'):
                 init_weight(m.r_emb)
@@ -527,9 +538,12 @@ def init_model_parameters(model, opt):
         elif classname.find('PositionWiseFeedForward') != -1:
             m.reset_parameters(init=opt.init)
 
-    if opt.model != "pretrain_transformer":
+    if opt.model not in ["pretrain_transformer", "wav2vec2_transformer"]:
         print('Initializing entire model parameters')
         model.apply(weights_init)
+    elif opt.model in ['wav2vec2_transformer']:
+        print('Initializing only decoder parameters')
+        model.decoder.apply(weights_init)
     else:
         if opt.enc_pretrained_model and not opt.dec_pretrained_model:
             print('Initializing only decoder parameters')

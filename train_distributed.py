@@ -8,6 +8,7 @@ import torch
 import time, datetime
 from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
 from onmt.data.scp_dataset import SCPIndexDataset
+from onmt.data.wav_dataset import WavDataset
 from onmt.modules.loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.model_factory import build_model, optimize_model, init_model_parameters
 from onmt.bayesian_factory import build_model as build_bayesian_model
@@ -16,6 +17,8 @@ from collections import defaultdict
 from onmt.constants import add_tokenidx
 import os
 import numpy as np
+import warnings
+warnings.filterwarnings("ignore", message="The given NumPy array is not writeable ")
 
 parser = argparse.ArgumentParser(description='train_distributed.py')
 onmt.markdown.add_md_help_argument(parser)
@@ -153,7 +156,7 @@ def main():
             print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
 
         # Loading asr data structures
-        elif opt.data_format in ['scp', 'scpmem', 'mmem']:
+        elif opt.data_format in ['scp', 'scpmem', 'mmem', 'wav']:
             print("Loading memory mapped data files ....")
             start = time.time()
             from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
@@ -164,6 +167,8 @@ def main():
 
             if opt.data_format in ['scp', 'scpmem']:
                 audio_data = torch.load(opt.data + ".scp_path.pt")
+            elif opt.data_format in ['wav']:
+                audio_data = torch.load(opt.data + ".wav_path.pt")
                 # # TODO: maybe having another option like -past_context
                 # if os.path.exists(opt.data + '.prev_src_path.pt'):
                 #     prev_audio_data = torch.load(opt.data + '.prev_src_path.pt')
@@ -184,6 +189,9 @@ def main():
                                                      concat=opt.concat, shared_object=train_src)
                 else:
                     past_train_src = None
+            elif opt.data_format in ['wav']:
+                train_src = WavDataset(audio_data['train'])
+                past_train_src = None
             else:
                 train_src = MMapIndexedDataset(train_path + '.src')
                 past_train_src = None
@@ -217,6 +225,8 @@ def main():
 
             if opt.encoder_type == 'audio':
                 data_type = 'audio'
+            elif opt.encoder_type == 'wav2vec2':
+                data_type = 'wav'
             else:
                 data_type = 'text'
 
@@ -254,6 +264,9 @@ def main():
                                                      concat=opt.concat, shared_object=valid_src)
                 else:
                     past_valid_src = None
+            elif opt.data_format in ['wav']:
+                valid_src = WavDataset(audio_data['valid'])
+                past_valid_src = None
             else:
                 valid_src = MMapIndexedDataset(valid_path + '.src')
                 past_valid_src = None
@@ -370,6 +383,8 @@ def main():
 
                 if opt.encoder_type == 'audio':
                     data_type = 'audio'
+                elif opt.encoder_type == 'wav2vec2':
+                    data_type = 'wav'
                 else:
                     data_type = 'text'
 
@@ -423,6 +438,8 @@ def main():
 
                 if opt.encoder_type == 'audio':
                     data_type = 'audio'
+                elif opt.encoder_type == 'wav2vec2':
+                    data_type = 'wav'
                 else:
                     data_type = 'text'
 

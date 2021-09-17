@@ -45,12 +45,16 @@ parser.add_argument('-format', default="raw",
 
 parser.add_argument('-train_src', required=True,
                     help="Path to the training source data")
+parser.add_argument('-past_train_src', default="",
+                    help="Path to the training source data")
 parser.add_argument('-train_tgt', required=True,
                     help="Path to the training target data")
 parser.add_argument('-valid_src', required=True,
                     help="Path to the validation source data")
 parser.add_argument('-valid_tgt', required=True,
                     help="Path to the validation target data")
+parser.add_argument('-past_valid_src', default="",
+                    help="Path to the validation source data")
 
 parser.add_argument('-train_src_lang', default="src",
                     help="Language(s) of the source sequences.")
@@ -494,7 +498,7 @@ def main():
         src_langs = opt.train_src_lang.split("|")
         tgt_langs = opt.train_tgt_lang.split("|")
 
-        past_src_files = opt.prev_train_src.split("|")
+        past_src_files = opt.past_train_src.split("|")
 
         assert len(src_input_files) == len(src_langs)
         assert len(src_input_files) == len(tgt_input_files)
@@ -541,7 +545,7 @@ def main():
             data['tgt_lang'] = tgt_lang_data
 
             # processing the previous segment
-            if len(past_src_files) > 0:
+            if opt.past_train_src and len(past_src_files) == len(src_input_files):
                 past_src_file = past_src_files[i]
 
                 prev_src_data, _, _, _ = make_asr_data(past_src_file, None, None, None,
@@ -571,7 +575,7 @@ def main():
 
         src_input_files = opt.valid_src.split("|")
         tgt_input_files = opt.valid_tgt.split("|")
-        past_src_files = opt.prev_valid_src.split("|")
+        past_src_files = opt.past_valid_src.split("|")
 
         src_langs = opt.valid_src_lang.split("|")
         tgt_langs = opt.valid_tgt_lang.split("|")

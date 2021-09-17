@@ -1,6 +1,9 @@
 import logging, traceback
 import os, re
 import torch
+import torchaudio
+import math
+import soundfile as sf
 
 
 # this function is borrowed from Facebook
@@ -13,6 +16,21 @@ def safe_readline(f):
         except UnicodeDecodeError:
             pos -= 1
             f.seek(pos)  # search where this character begins
+
+
+# this function reads wav file based on the timestamp in seconds
+def safe_readaudio(wav_path, start=0.0, end=0.0, sample_rate=16000):
+
+    offset = math.floor(sample_rate * start)
+    # num_frames = -1 if end <= start else math.ceil(sample_rate * (end - start))
+    stop = -1 if end <= start else math.ceil(sample_rate * end)
+    # by default torchaudio normalizes the read tensor -> manually normalize later
+    # tensor, _ = torchaudio.load(wav_path, frame_offset=offset, num_frames=num_frames,
+    #                             normalize=True, channels_first=False)
+    tensor, _ = sf.read(wav_path, start=offset, stop=stop)
+
+    # tensor has size [length, num_channel] in which channel = 1
+    return tensor
 
 
 # this function is borrowed from fairseq

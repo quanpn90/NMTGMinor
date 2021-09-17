@@ -5,7 +5,7 @@
 
 from collections import Counter
 import os
-from onmt.utils import safe_readline
+from onmt.utils import safe_readline, safe_readaudio
 # from multiprocessing import Pool
 import torch.multiprocessing as mp
 import torch
@@ -46,12 +46,15 @@ class SpeechBinarizer:
         raise NotImplementedError
 
     @staticmethod
-    def binarize_file_single_thread(filename, ark_loader, offset=0, end=-1, worker_id=0, input_format='scp', output_format='raw',
-                                    prev_context=0, concat=4, stride=1, fp16=False):
+    def binarize_file_single_thread(filename, ark_loader, offset=0, end=-1, worker_id=0,
+                                    input_format='scp', output_format='raw',
+                                    prev_context=0, concat=4, stride=1, fp16=False, sample_rate=16000):
         # if output_format is scp, we only read the length for sorting
 
         if output_format == 'scp':
             assert input_format in ['kaldi', 'scp']
+        if output_format == 'wav':
+            input_format = 'wav'
 
         # audio_data = iter(ReadHelper('scp:' + filename))
         # data_file = open(filename)
@@ -83,45 +86,44 @@ class SpeechBinarizer:
                     line = f.readline()
                     continue
 
-                path = parts[1]
-                # read numpy array from the ark here
-                feature_vector = ark_loader.load_mat(path)
+                if input_format in ['scp', 'kaldi']:
+                    # an scp file has the format: uttid path:mem
+                    path = parts[1]
+                    # read numpy array from the ark here
+                    feature_vector = ark_loader.load_mat(path)
 
-                # feature_vector.setflags(write=True)
-                if stride == 1:
-                    feature_vector = torch.from_numpy(feature_vector)
-                else:
-                    feature_vector = torch.from_numpy(feature_vector[0::opt.stride])
+                    if stride == 1:
+                        feature_vector = torch.from_numpy(feature_vector)
+                    else:
+                        feature_vector = torch.from_numpy(feature_vector[0::opt.stride])
 
-                if concat > 1:
-                    add = (concat - feature_vector.size()[0] % concat) % concat
-                    z = torch.FloatTensor(add, feature_vector.size()[1]).zero_()
-                    feature_vector = torch.cat((feature_vector, z), 0)
-                    feature_vector = feature_vector.reshape((int(feature_vector.size()[0] / concat),
-                                                             feature_vector.size()[1] * concat))
+                    if concat > 1:
+                        add = (concat - feature_vector.size()[0] % concat) % concat
+                        z = torch.FloatTensor(add, feature_vector.size()[1]).zero_()
+                        feature_vector = torch.cat((feature_vector, z), 0)
+                        feature_vector = feature_vector.reshape((int(feature_vector.size()[0] / concat),
+                                                                 feature_vector.size()[1] * concat))
 
-                if prev_context > 0:
-                    print("Multiple ASR context isn't supported at the moment   ")
-                    raise NotImplementedError
+                    if prev_context > 0:
+                        print("Multiple ASR context isn't supported at the moment   ")
+                        raise NotImplementedError
 
-                    # s_prev_context.append(feature_vector)
-                    # t_prev_context.append(tline)
-                    # for i in range(1,prev_context+1):
-                    #     if i < len(s_prev_context):
-                    #         feature_vector = torch.cat((torch.cat((s_prev_context[-i-1],
-                    #         torch.zeros(1,feature_vector.size()[1]))),feature_vector))
-                    #         tline = t_prev_context[-i-1]+" # "+tline
-                    # if len(s_prev_context) > prev_context:
-                    #     s_prev_context = s_prev_context[-1*prev_context:]
-                    #     t_prev_context = t_prev_context[-1*prev_context:]
+                    if fp16 and output_format not in ['scp', 'scpmem']:
+                        feature_vector = feature_vector.half()
 
-                if fp16:
-                    feature_vector = feature_vector.half()
+                    if output_format not in ['scp', 'scpmem']:
+                        data.append(feature_vector.numpy())  # convert to numpy for serialization
+                    else:
+                        data.append(path)
 
-                if output_format not in ['scp', 'scpmem']:
-                    data.append(feature_vector.numpy())  # convert to numpy for serialization
-                else:
-                    data.append(path)
+                elif input_format == 'wav':
+
+                    # an wav input file should have format uttid wav_file start end
+                    # in which the start and end (by second) can be 0 0
+                    wavpath, start_time, end_time = parts[1], float(parts[2]), float(parts[3])
+                    feature_vector = safe_readaudio(wavpath, start_time, end_time, sample_rate=sample_rate)
+                    # store a tuple of data and information to load the wav again during training
+                    data.append((wavpath, start_time, end_time, sample_rate))
 
                 lengths.append(feature_vector.size(0))
 
@@ -257,6 +259,7 @@ class Binarizer:
             line = safe_readline(f)
 
             while line:
+
                 if 0 < end < f.tell():
                     break
 

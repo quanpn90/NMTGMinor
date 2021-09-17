@@ -19,7 +19,7 @@ Two basic classes:
 
 
 def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=False,
-               feature_size=40, dataname="source"):
+               feature_size=40, dataname="source", wav_preprocessor=None):
     """
             Assembling the individual sequences into one single tensor, included padding
             :param dataname:
@@ -94,10 +94,35 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
             offset = max_length - data_length if align_right else 0
 
             tensor[i].narrow(0, offset, data_length).narrow(1, 1, sample.size(1)).copy_(sample)
-            # in padding dimension: 0 is not padded, 1 is padded
+            # in padding dimension: 1 is not padded, 0 is padded
             tensor[i].narrow(0, offset, data_length).narrow(1, 0, 1).fill_(1)
 
         return tensor, None, lengths
+    elif type == 'wav':
+        samples = data
+        lengths = [x.size(0) for x in samples]
+
+        max_length = max(lengths)
+        # allocate data for the batch speech
+        feature_size = samples[0].size(1)  # most likely 1
+        batch_size = len(data)
+
+        # feature size + 1 because the last dimension is created for padding
+        tensor = data[0].float().new(batch_size, max_length, feature_size + 1).fill_(0)
+
+        for i in range(len(samples)):
+            sample = samples[i]
+
+            # normalize
+            data_length = sample.size(0)
+            offset = max_length - data_length if align_right else 0
+
+            tensor[i].narrow(0, offset, data_length).narrow(1, 1, sample.size(1)).copy_(sample)
+            # in padding dimension: 1 is not padded, 0 is padded
+            tensor[i].narrow(0, offset, data_length).narrow(1, 0, 1).fill_(1)
+
+        return tensor, None, lengths
+
     else:
         raise NotImplementedError
 
@@ -332,9 +357,12 @@ class Dataset(torch.utils.data.Dataset):
         if self.max_src_len is None:
             if self._type == 'text':
                 self.max_src_len = 256
-            else:
+            elif self._type == 'audio':
                 # for audio set this to 2048 frames
                 self.max_src_len = 2048 if not self.use_past_src else 4096
+            else:
+                # for wav
+                self.max_src_len = 160000
 
         # self.reshape_speech = reshape_speech
         if tgt_data:
@@ -376,7 +404,7 @@ class Dataset(torch.utils.data.Dataset):
 
             if self._type == 'text':
                 sorted_order = np.lexsort((self.src_sizes, self.tgt_sizes))
-            elif self._type == 'audio':
+            elif self._type in ['audio', 'wav']:
                 sorted_order = np.lexsort((self.tgt_sizes, self.src_sizes))
 
             self.order = sorted_order
@@ -428,7 +456,7 @@ class Dataset(torch.utils.data.Dataset):
 
         # the second to last mini-batch is likely the largest
         # (the last one can be the remnant after grouping samples which has less than max size)
-        self.largest_batch_id = len(self.batches) - 2
+        self.largest_batch_id = 10  # len(self.batches) - 100
 
         self.num_batches = len(self.batches)
 

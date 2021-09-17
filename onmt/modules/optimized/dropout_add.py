@@ -4,13 +4,6 @@ import numpy as np
 from time import time
 
 try:
-    import apex.amp as amp
-    from apex.amp import half_function
-except (ModuleNotFoundError, ImportError) as e:
-    amp = None
-    from .compat import half_function
-
-try:
     from torch.cuda.amp import custom_fwd, custom_bwd
 except (ModuleNotFoundError, ImportError) as e:
     from .compat import custom_fwd, custom_bwd
@@ -58,7 +51,6 @@ class FusedDropoutAdd(torch.autograd.Function):
         return grad_input, output_grads, None, None
 
 
-@half_function
 def fused_dropout_add(input, residual, dropout, is_training):
 
     return FusedDropoutAdd.apply(input, residual, dropout, is_training)

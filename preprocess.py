@@ -304,7 +304,7 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
 def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
                   max_src_length=64, max_tgt_length=64, add_bos=True, data_type='int64', num_workers=1, verbose=False,
                   input_type='word', stride=1, concat=4, prev_context=0, fp16=False, reshape=True,
-                  asr_format="h5", output_format="raw"):
+                  asr_format="scp", output_format="raw"):
     src, tgt = [], []
     src_sizes = []
     tgt_sizes = []
@@ -684,7 +684,7 @@ def main():
         torch.save(save_data, opt.save_data + '.train.pt')
         print("Done")
 
-    elif opt.format in ['scp', 'scpmem']:
+    elif opt.format in ['scp', 'scpmem', 'wav']:
         print('Saving target data to memory indexed data files. Source data is stored only as scp path.')
         from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
 
@@ -767,7 +767,10 @@ def main():
             save_data['train_past'] = train['past_src']
             save_data['valid_past'] = valid['past_src']
 
-        torch.save(save_data, opt.save_data + '.scp_path.pt')
+        if opt.format in ['wav']:
+            torch.save(save_data, opt.save_data + '.wav_path.pt')
+        else:
+            torch.save(save_data, opt.save_data + '.scp_path.pt')
 
         print("Done")
 

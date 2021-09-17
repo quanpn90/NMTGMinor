@@ -55,26 +55,24 @@ if (TORCH_MAJOR > 1) or (TORCH_MAJOR == 1 and TORCH_MINOR > 4):
     version_ge_1_5 = ['-DVERSION_GE_1_5']
 version_dependent_macros = version_ge_1_1 + version_ge_1_3 + version_ge_1_5
 
-
-
 # subprocess.run(["git", "submodule", "update", "--init", "cutlass"])
 subprocess.run(["git", "clone", "https://github.com/NVIDIA/cutlass.git", "multihead_attn/cutlass"])
 # subprocess.run(["git", "-C", "cutlass", "checkout", "ed2ed4d667ce95e1371bd62db32b6a114e774336"])
 subprocess.run(["git", "-C", "cutlass", "checkout", "fe3438a3c1ccbdd03dc1aca3bb68099a9e2a58bd"])
 
-ext_modules.append(
-    CUDAExtension(name='encdec_multihead_attn_cuda',
-                  sources=['multihead_attn/encdec_multihead_attn.cpp',
-                           'multihead_attn/encdec_multihead_attn_cuda.cu'],
-                  include_dirs=[os.path.join(this_dir, 'multihead_attn/cutlass')],
-                  extra_compile_args={'cxx': ['-O3', ],
-                                      'nvcc': ['-O3',
-                                               '-I./cutlass/',
-                                               '-U__CUDA_NO_HALF_OPERATORS__',
-                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
-                                               '--expt-relaxed-constexpr',
-                                               '--expt-extended-lambda',
-                                               '--use_fast_math'] + cc_flag}))
+# ext_modules.append(
+#     CUDAExtension(name='encdec_multihead_attn_cuda',
+#                   sources=['multihead_attn/encdec_multihead_attn.cpp',
+#                            'multihead_attn/encdec_multihead_attn_cuda.cu'],
+#                   include_dirs=[os.path.join(this_dir, 'multihead_attn/cutlass')],
+#                   extra_compile_args={'cxx': ['-O3', ],
+#                                       'nvcc': ['-O3',
+#                                                '-I./cutlass/',
+#                                                '-U__CUDA_NO_HALF_OPERATORS__',
+#                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
+#                                                '--expt-relaxed-constexpr',
+#                                                '--expt-extended-lambda',
+#                                                '--use_fast_math'] + cc_flag}))
 
 # ext_modules.append(
 #     CUDAExtension(name='fused_dropout_add_cuda',
@@ -89,19 +87,19 @@ ext_modules.append(
 #                                                '--use_fast_math'] + cc_flag}))
 
 
-ext_modules.append(
-    CUDAExtension(name='mask_softmax_dropout_cuda',
-                  sources=['multihead_attn/masked_softmax_dropout.cpp',
-                           'multihead_attn/masked_softmax_dropout_cuda.cu'],
-                  include_dirs=[os.path.join(this_dir, 'multihead_attn/cutlass')],
-                  extra_compile_args={'cxx': ['-O3', ],
-                                      'nvcc': ['-O3',
-                                               '-I./cutlass/include',
-                                               '-U__CUDA_NO_HALF_OPERATORS__',
-                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
-                                               '--expt-relaxed-constexpr',
-                                               '--expt-extended-lambda',
-                                               '--use_fast_math'] + cc_flag}))
+# ext_modules.append(
+#     CUDAExtension(name='mask_softmax_dropout_cuda',
+#                   sources=['multihead_attn/masked_softmax_dropout.cpp',
+#                            'multihead_attn/masked_softmax_dropout_cuda.cu'],
+#                   include_dirs=[os.path.join(this_dir, 'multihead_attn/cutlass')],
+#                   extra_compile_args={'cxx': ['-O3', ],
+#                                       'nvcc': ['-O3',
+#                                                '-I./cutlass/include',
+#                                                '-U__CUDA_NO_HALF_OPERATORS__',
+#                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
+#                                                '--expt-relaxed-constexpr',
+#                                                '--expt-extended-lambda',
+#                                                '--use_fast_math'] + cc_flag}))
 
 # ext_modules.append(
 #     CUDAExtension(name='rel_self_attn_cuda',

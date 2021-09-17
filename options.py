@@ -487,6 +487,9 @@ def make_parser(parser):
                         help="""If training from a checkpoint then this is the
                         path to the pretrained model.""")
 
+    parser.add_argument('-wav2vec2_pretrained_model', default='wav2vec2-large-lv60', type=str,
+                        help="""Wav2vec2 model from HuggingFace. """)
+
     return parser
 
 
