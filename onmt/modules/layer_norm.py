@@ -160,6 +160,40 @@ def tiny_value_of_dtype(dtype: torch.dtype):
         raise TypeError("Does not support dtype " + str(dtype))
 
 
+class FP32LayerNorm(torch.nn.Module):
+
+    def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True):
+        super().__init__()
+
+        if isinstance(normalized_shape, numbers.Integral):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = torch.Size(normalized_shape)
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+        if self.elementwise_affine:
+            self.weight = Parameter(torch.Tensor(*normalized_shape))
+            self.bias = Parameter(torch.Tensor(*normalized_shape))
+        else:
+            self.register_parameter('weight', None)
+            self.register_parameter('bias', None)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        if self.elementwise_affine:
+            init.ones_(self.weight)
+            init.zeros_(self.bias)
+
+    def forward(self, input):
+
+        eps = self.eps
+
+        return F.layer_norm(
+            input.float(), self.normalized_shape, self.weight, self.bias, eps).type_as(input)
+
+    def extra_repr(self):
+        return '{normalized_shape}, eps={eps}, ' \
+               'elementwise_affine={elementwise_affine}'.format(**self.__dict__)
+
 class LayerNorm(torch.nn.Module):
     """
     See LayerNorm for details.

@@ -347,7 +347,7 @@ class Dataset(torch.utils.data.Dataset):
         self.upsampling = kwargs.get('upsampling', False)
 
         self.max_src_len = kwargs.get('max_src_len', None)
-        self.max_tgt_len = kwargs.get('max_tgt_len', 256)
+        self.max_tgt_len = kwargs.get('max_tgt_len', 1024)
         self.cleaning = int(cleaning)
         self.debug = debug
         self.num_split = num_split
@@ -357,12 +357,11 @@ class Dataset(torch.utils.data.Dataset):
         if self.max_src_len is None:
             if self._type == 'text':
                 self.max_src_len = 256
-            elif self._type == 'audio':
-                # for audio set this to 2048 frames
-                self.max_src_len = 2048 if not self.use_past_src else 4096
-            else:
-                # for wav
+            elif self._type == 'wav':
                 self.max_src_len = 160000
+            else:
+                # for audio set this to 2048 frames
+                self.max_src_len = 8192 if not self.use_past_src else 16384
 
         # self.reshape_speech = reshape_speech
         if tgt_data:
@@ -459,6 +458,8 @@ class Dataset(torch.utils.data.Dataset):
         self.largest_batch_id = 10  # len(self.batches) - 100
 
         self.num_batches = len(self.batches)
+        lengths = [len(x) for x in self.batches]
+        print(sum(lengths))
 
         self.cur_index = 0
         self.batchOrder = None

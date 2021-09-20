@@ -123,6 +123,12 @@ class NMTModel(nn.Module):
             for k in removed_keys:
                 filtered.pop(k)
 
+        # ctc weights can be ignored:
+        if 'ctc_linear.weight' not in model_dict and 'ctc_linear.weight' in filtered:
+            filtered.pop('ctc_linear.weight')
+            if 'ctc_linear.bias' in filtered:
+                filtered.pop('ctc_linear.bias')
+
         super().load_state_dict(filtered)   
 
         # in case using multiple generators
