@@ -5,7 +5,6 @@ from onmt.utils import safe_readaudio
 import numpy as np
 
 
-
 class WavDataset(torch.utils.data.Dataset):
     def __init__(self, wav_path_list, cache=False):
         """
@@ -43,12 +42,11 @@ class WavDataset(torch.utils.data.Dataset):
 
         # mean normalization
         # x = data.numpy()
-        x = data
-        x = (x - x.mean()) / np.sqrt(x.var() + 1e-7)
-        data = torch.from_numpy(x).unsqueeze(-1)
+        # x = data
+        # x = (x - x.mean()) / np.sqrt(x.var() + 1e-7)
+        # data = torch.from_numpy(x).unsqueeze(-1)
 
         if self.cache is not None:
             self.cache[wav_info] = data
 
         return data
-

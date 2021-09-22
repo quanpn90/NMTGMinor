@@ -1086,10 +1086,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
             residual = x
 
-            # x = self.activation_fn(self.fc1(x))
-            # x = self.dropout2(x)
-            # x = self.fc2(x)
-            print(self.fused, x.is_cuda)
             if self.fused and x.is_cuda:
                 with autocast(enabled=False):
                     weights = [self.fc1.weight.half(), self.fc2.weight.half()]

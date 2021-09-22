@@ -217,7 +217,6 @@ class Trainer(object):
             self.classifier = build_classifier(classifier_opt, classifier_dicts)
             self.classifier.load_state_dict(classifier_checkpoint['model'])
 
-
         init_model_parameters(model, opt)
         self.model = model
         self.loss_function = loss_function

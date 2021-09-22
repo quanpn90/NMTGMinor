@@ -218,6 +218,8 @@ def main():
         from onmt.data.audio_utils import ArkLoader
         audio_data = open(opt.src)
         scp_reader = ArkLoader()
+    elif opt.asr_format == 'wav':
+        audio_data = open(opt.src)
 
     else:
         in_file = open(opt.src)
@@ -234,15 +236,12 @@ def main():
         else:
             translator = StreamTranslator(opt)
     else:
-        if opt.fast_translate:
-            translator = FastTranslator(opt)
-
-            # TODO: load sub model
-        else:
-            translator = onmt.Translator(opt)
+        translator = FastTranslator(opt)
+        # The old Translator is now deprecated
+        #     translator = onmt.Translator(opt)
 
     # Audio processing for the source batch
-    if opt.encoder_type == "audio":
+    if opt.encoder_type == "audio" and opt.asr_format in ['scp', 'kaldi']:
 
         """
         For Audio we will have to group samples by the total number of frames in the source
@@ -405,6 +404,141 @@ def main():
                 if past_audio_data: past_src_batches[j] = []
 
     # Text processing for MT
+    elif opt.asr_format == 'wav':
+        from onmt.utils import safe_readaudio
+
+        past_audio_data = open(opt.past_src) if opt.past_src else None
+        past_src_batches = list()
+        s_prev_context = []
+        t_prev_context = []
+
+        i = 0
+
+        n_models = len(opt.model.split("|"))
+
+        for j in range(n_models):
+            src_batches.append(list())  # We assign different inputs for each model in the ensemble
+            if past_audio_data:
+                past_src_batches.append(list())
+
+        sub_src = open(opt.sub_src) if opt.sub_src else None
+        sub_src_batch = list()
+
+        while True:
+            try:
+                line = next(audio_data).strip().split()
+                wav_path, start, end = line[1], float(line[2]), float(line[3])
+                line = safe_readaudio(wav_path, start=start, end=end, sample_rate=16000)
+
+                if past_audio_data:
+                    past_line = next(past_audio_data).strip().split()[1:]
+                    wav_path, start, end = past_line[1], float(past_line[2]), float(past_line[3])
+                    past_line = safe_readaudio(wav_path, start=start, end=end, sample_rate=16000)
+                else:
+                    past_line = None
+
+            except StopIteration:
+                break
+
+            original_line = line
+            src_length = line.size(0)
+
+            """
+            Handling different concatenation size for different models, to make ensembling possible
+            """
+
+            if _is_oversized(src_batches[0], src_length, opt.batch_size):
+                # If adding a new sentence will make the batch oversized
+                # Then do translation now, and then free the list
+                if past_audio_data:
+                    print("Batch sizes :", len(src_batches[0]), len(tgt_batch), len(sub_src_batch),
+                          len(past_src_batches[0]))
+                else:
+                    print("Batch sizes :", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
+                pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
+                    src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr')
+                print("Result:", len(pred_batch))
+                count, pred_score, pred_words, gold_score, goldWords = \
+                    translate_batch(opt, tgtF, count, outF, translator,
+                                    src_batches[0], tgt_batch, pred_batch,
+                                    pred_score,
+                                    pred_length, gold_score,
+                                    num_gold_words,
+                                    all_gold_scores, opt.input_type)
+
+                pred_score_total += pred_score
+                pred_words_total += pred_words
+                gold_score_total += gold_score
+                gold_words_total += goldWords
+                src_batch, tgt_batch, sub_src_batch = [], [], []
+                for j, _ in enumerate(src_batches):
+                    src_batches[j] = []
+                    if past_audio_data: past_src_batches[j] = []
+
+            # handling different concatenation settings (for example 4|1|4)
+            for j in range(n_models):
+
+                src_batches[j].append(line)
+                if past_audio_data: past_src_batches[j].append(past_line)
+
+            if tgtF:
+                # ~ tgt_tokens = tgtF.readline().split() if tgtF else None
+                tline = tgtF.readline().strip()
+                if opt.previous_context > 0:
+                    t_prev_context.append(tline)
+                    for i in range(1, opt.previous_context + 1):
+                        if i < len(s_prev_context):
+                            tline = t_prev_context[-i - 1] + " # " + tline
+                    if len(t_prev_context) > opt.previous_context:
+                        t_prev_context = t_prev_context[-1 * opt.previous_context:]
+
+                if opt.input_type == 'word':
+                    tgt_tokens = tline.split() if tgtF else None
+                elif opt.input_type == 'char':
+                    tgt_tokens = list(tline.strip()) if tgtF else None
+                else:
+                    raise NotImplementedError("Input type unknown")
+
+                tgt_batch += [tgt_tokens]
+
+            # read the "sub" input which is text based
+            # this is done for ensemble between a speech model and a text based model
+            if opt.sub_src:
+                sline = sub_src.readline().strip()
+
+                if opt.input_type == 'word':
+                    src_tokens = sline.split()
+                elif opt.input_type == 'char':
+                    src_tokens = list(sline.strip())
+
+                sub_src_batch += [src_tokens]
+
+        # catch the last batch
+        if len(src_batches[0]) != 0:
+            print("Batch size:", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
+            pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
+                src_batches,
+                tgt_batch,
+                past_src_data=past_src_batches,
+                sub_src_data=sub_src_batch, type='asr')
+            print("Result:", len(pred_batch))
+            count, pred_score, pred_words, gold_score, goldWords \
+                = translate_batch(opt, tgtF, count, outF, translator,
+                                  src_batches[0], tgt_batch, pred_batch,
+                                  pred_score,
+                                  pred_length, gold_score,
+                                  num_gold_words,
+                                  all_gold_scores, opt.input_type)
+
+            pred_score_total += pred_score
+            pred_words_total += pred_words
+            gold_score_total += gold_score
+            gold_words_total += goldWords
+            src_batch, tgt_batch = [], []
+            for j, _ in enumerate(src_batches):
+                src_batches[j] = []
+                if past_audio_data: past_src_batches[j] = []
+
     else:
         for line in addone(in_file):
             if line is not None:

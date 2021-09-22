@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from onmt.models.transformers import Transformer
+from onmt.models.transformers import Transformer, TransformerDecodingState
 from typing import List, Optional, Union
 from collections import defaultdict
 
@@ -222,3 +222,5 @@ class Wav2vecTransformer(Transformer):
         decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], src_lang,
                                                  beam_size=beam_size, model_size=self.model_size,
                                                  type=type, buffering=buffering)
+
+        return decoder_state

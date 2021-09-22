@@ -194,6 +194,7 @@ class FP32LayerNorm(torch.nn.Module):
         return '{normalized_shape}, eps={eps}, ' \
                'elementwise_affine={elementwise_affine}'.format(**self.__dict__)
 
+
 class LayerNorm(torch.nn.Module):
     """
     See LayerNorm for details.

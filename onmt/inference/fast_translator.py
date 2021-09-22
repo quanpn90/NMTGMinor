@@ -721,6 +721,11 @@ class FastTranslator(Translator):
             src_data = src_sents
             past_src_data = past_sents
             data_type = 'audio'
+        elif type == 'asr_wav':
+            from onmt.data.wav_dataset import WavDataset
+            src_data = src_sents
+            past_src_data = past_sents
+            data_type = 'wav'
         else:
             raise NotImplementedError
 
@@ -740,6 +745,7 @@ class FastTranslator(Translator):
         return onmt.Dataset(src_data, tgt_data,
                             src_langs=src_lang_data, tgt_langs=tgt_lang_data,
                             batch_size_words=sys.maxsize,
+                            max_src_len=sys.maxsize,
                             data_type=data_type,
                             batch_size_sents=self.opt.batch_size,
                             src_align_right=self.opt.src_align_right,
@@ -750,7 +756,7 @@ class FastTranslator(Translator):
             past_src_data = None
 
         #  (1) convert words to indexes
-        if isinstance(src_data[0], list) and type == 'asr':
+        if isinstance(src_data[0], list) and type in ['asr', 'asr_wav']:
             batches = list()
             for i, src_data_ in enumerate(src_data):
                 if past_src_data is not None:

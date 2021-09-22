@@ -496,7 +496,8 @@ class SpeechTransformerDecoder(TransformerDecoder):
                 else:
                     mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
             elif self.encoder_type == "wav2vec2":
-                mask_src = src.transpose(0, 1)
+                mask_src = src
+                # print(mask_src.size())
             else:
 
                 mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
