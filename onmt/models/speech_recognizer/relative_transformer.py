@@ -349,6 +349,8 @@ class SpeechTransformerDecoder(TransformerDecoder):
                 else:
                     long_mask = src.data.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD)
                     mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
+            elif self.encoder_type == "wav2vec2":
+                mask_src = src
             else:
                 mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
         else:
@@ -493,6 +495,8 @@ class SpeechTransformerDecoder(TransformerDecoder):
                     mask_src = long_mask[:, 0:context.size(0) * 4:4].unsqueeze(1)
                 else:
                     mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
+            elif self.encoder_type == "wav2vec2":
+                mask_src = src.transpose(0, 1)
             else:
 
                 mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)

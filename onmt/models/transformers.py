@@ -874,7 +874,7 @@ class TransformerDecodingState(DecoderState):
             new_order = new_order.to(src.device)
 
             if cloning:
-                self.src = src.index_select(1, new_order)  # because src is batch first
+                self.src = src.index_select(1, new_order)  # because src is time first
 
                 if context is not None:
                     self.context = context.index_select(1, new_order)

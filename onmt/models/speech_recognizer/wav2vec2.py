@@ -1,66 +1,48 @@
 import torch
 import torch.nn as nn
-from transformers import Wav2Vec2Model
 from onmt.models.transformers import Transformer
 from typing import List, Optional, Union
 from collections import defaultdict
 
+
 # defining a Wav2vec2 encoder wrapping the HuggingFace model here
 
 
-class HuggingFaceWav2Vec(nn.Module):
+class FairseqWav2Vec(nn.Module):
 
     def __init__(self, opt, model_path="facebook/wav2vec2-large-lv60"):
 
         super().__init__()
         # do we need opt for this?
-        self.model_path = model_path
-        self.wav2vec_encoder = Wav2Vec2Model.from_pretrained(model_path, gradient_checkpointing=False)
-        # print(self.wav2vec_encoder)
-        self.wav2vec_encoder.feature_extractor._freeze_parameters()
         self.opt = opt
-        assert self.opt.encoder_type == 'wav2vec2', "expecting wav2vec2 but get %s" % self.opt.encoder_type
-        # assert self.opt.model_size == 1024
+        self.model_path = model_path
+        import fairseq
+        from fairseq.checkpoint_utils import load_model_ensemble_and_task, load_checkpoint_to_cpu
+        # from fairseq.models.wav2vec.wav2vec2 import Wav2Vec2Model
+        from .fairseq_wav2vec2.wav2vec2 import Wav2Vec2Model
+        state = load_checkpoint_to_cpu(model_path)
+        self.cfg = state['cfg']
+        self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg['model'])
+        self.wav2vec_encoder.load_state_dict(state['model'])
+        self.wav2vec_encoder.remove_pretraining_modules()
+
+        # model, _, _ = fairseq.checkpoint_utils.load_model_ensemble_and_task([model_path])
+        # self.wav2vec_encoder = model[0]
+
+        cfg = self.wav2vec_encoder.cfg
+        assert self.opt.model_size == cfg.encoder_embed_dim
         self.input_type = self.opt.encoder_type
-        self.model_size = self.wav2vec_encoder.config.hidden_size
-        self.wav2vec_encoder.config.mask_time_prob = 0.0
+        self.model_size = cfg.encoder_embed_dim
+        self.wav2vec_encoder.feature_grad_mult = 0.0
+        self.time = None
 
-        assert self.model_size == self.opt.model_size
-
-        for param in self.wav2vec_encoder.parameters():
+        for param in self.wav2vec_encoder.feature_extractor.parameters():
+        # for param in self.wav2vec_encoder.parameters():
             param.requires_grad = False
         # for i, layer in enumerate(self.wav2vec_encoder.encoder.layers):
         #     if i >= 0.5 *  self.wav2vec_encoder.config.num_hidden_layers:
         #         for param in layer.parameters():
         #             param.requires_grad = True
-
-
-    def _get_feat_extract_output_lengths(self, input_lengths: Union[torch.LongTensor, int]):
-        """
-        Computes the output length of the convolutional layers
-        """
-
-        def _conv_out_length(input_length, kernel_size, stride):
-            # 1D convolutional layer output length formula taken
-            # from https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
-            return (input_length - kernel_size) // stride + 1
-
-        for kernel_size, stride in zip(self.wav2vec_encoder.config.conv_kernel, self.wav2vec_encoder.config.conv_stride):
-            input_lengths = _conv_out_length(input_lengths, kernel_size, stride)
-
-        return input_lengths
-
-    def _get_feature_vector_attention_mask(self, feature_vector_length: int, attention_mask: torch.LongTensor):
-        output_lengths = self._get_feat_extract_output_lengths(attention_mask.sum(-1)).to(torch.long)
-        batch_size = attention_mask.shape[0]
-
-        attention_mask = torch.zeros(
-            (batch_size, feature_vector_length), dtype=attention_mask.dtype, device=attention_mask.device
-        )
-        # these two operations makes sure that all values before the output lengths idxs are attended to
-        attention_mask[(torch.arange(attention_mask.shape[0], device=attention_mask.device), output_lengths - 1)] = 1
-        attention_mask = attention_mask.flip([-1]).cumsum(-1).flip([-1]).bool()
-        return attention_mask
 
     def forward(self, input, **kwargs):
         """
@@ -69,23 +51,25 @@ class HuggingFaceWav2Vec(nn.Module):
         :return:
         """
 
-        with torch.no_grad():
-            # 1 for tokens that are not masked, 0 for tokens that are masked
-            long_mask = input.narrow(2, 0, 1).squeeze(2).eq(1).long()
-            input = input.narrow(2, 1, input.size(2) - 1).squeeze(-1)
+        # 0 for tokens that are not masked, 1 for tokens that are masked
+        long_mask = input.narrow(2, 0, 1).squeeze(2).eq(0).long()
+        input = input.narrow(2, 1, input.size(2) - 1).squeeze(-1)
 
-            attn_mask = long_mask
-            wav2vec_attn_mask = attn_mask if 'base' not in self.model_path else None
-            wav2vec_encoder_states = self.wav2vec_encoder(input, wav2vec_attn_mask).last_hidden_state
-            context = wav2vec_encoder_states.transpose(0, 1).contiguous()
+        attn_mask = long_mask
+        wav2vec_output = self.wav2vec_encoder.extract_features(input, attn_mask)
 
-            dec_attn_mask = self._get_feature_vector_attention_mask(context.size(0), attn_mask).bool()
-            # 1 for tokens that are masked, 0 for non-masked tokens
-            dec_attn_mask = ~dec_attn_mask
+        context = wav2vec_output['x'].transpose(0, 1).contiguous()
+        batch_size, time = context.size(1), context.size(0)
 
-            # how to get the correct attention mask?
-            output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask,
-                                                     'src': dec_attn_mask, 'pos_emb': None})
+        dec_attn_mask = wav2vec_output['padding_mask']
+        if dec_attn_mask is None:
+            dec_attn_mask = context.new_zeros(batch_size, time).byte()
+        else:
+            dec_attn_mask = (dec_attn_mask).byte()
+
+        # how to get the correct attention mask?
+        output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask,
+                                                 'src': dec_attn_mask, 'pos_emb': None})
 
         return output_dict
 
@@ -111,10 +95,6 @@ class Wav2vecTransformer(Transformer):
             self.mirror_generator = copy.deepcopy(self.generator)
             self.mirror_generator[0].linear.weight = self.decoder.word_lut.weight
 
-        # if self.reconstruct:
-        #     self.rec_linear = nn.Linear(decoder.model_size, decoder.model_size)
-        #
-        #
         if self.ctc:
             self.ctc_linear = nn.Linear(encoder.model_size, self.tgt_vocab_size)
 
@@ -144,18 +124,18 @@ class Wav2vecTransformer(Transformer):
         tgt = tgt.transpose(0, 1)
 
         encoder_output = self.encoder(src)
+        # src = src.new(src.size(0), 100).zero_()
+        # context = src.new_zeros(100, src.size(0), 1024)
 
         encoder_output = defaultdict(lambda: None, encoder_output)
+        # encoder_output['context'] = context
+        # encoder_output['src'] = src
+        # context = encoder_output['context']
         context = encoder_output['context']
-
-        # zero out the encoder part for pre-training
-        # # if zero_encoder:
-        # #     context.zero_()
-        # print(context)
-        # context.zero_()
+        src = encoder_output['src']
 
         # pass the mask ('src') from the encoder output the decoder as the attention mask
-        decoder_output = self.decoder(tgt, context, encoder_output['src'],
+        decoder_output = self.decoder(tgt, context, src,
                                       src_lang=src_lang, tgt_lang=tgt_lang, input_pos=tgt_pos,
                                       src_lengths=src_lengths, tgt_lengths=tgt_lengths,
                                       factorize=factorize)
@@ -215,3 +195,30 @@ class Wav2vecTransformer(Transformer):
 
     def load_encoder_weights(self, pretrained_model):
         super().load_encoder_weights(pretrained_model)
+
+    def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True,
+                             pretrained_layer_states=None, **kwargs):
+        """
+        Generate a new decoder state based on the batch input
+        :param pretrained_layer_states:
+        :param buffering:
+        :param type:
+        :param batch: Batch object (may not contain target during decoding)
+        :param beam_size: Size of beam used in beam search
+        :return:
+        """
+        src = batch.get('source')
+        src_pos = batch.get('source_pos')
+        tgt_atb = batch.get('target_atb')
+        src_lang = batch.get('source_lang')
+        tgt_lang = batch.get('target_lang')
+
+        src_transposed = src.transpose(0, 1)  # transpose -> batch first
+        encoder_output = self.encoder(src_transposed)
+
+        src = encoder_output['src'].transpose(0, 1)
+
+        print("[INFO] create Transformer decoding state with buffering", buffering)
+        decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], src_lang,
+                                                 beam_size=beam_size, model_size=self.model_size,
+                                                 type=type, buffering=buffering)

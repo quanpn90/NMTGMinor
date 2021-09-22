@@ -7,12 +7,6 @@ https://github.com/NVIDIA/apex/tree/master/apex/contrib/csrc/multihead_attn
 import torch
 import torch.nn.functional as F
 
-try:
-    import apex.amp as amp
-    from apex.amp import half_function
-except (ModuleNotFoundError, ImportError) as e:
-    amp = None
-    from .compat import half_function
 
 try:
     from torch.cuda.amp import custom_fwd, custom_bwd
@@ -785,7 +779,6 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                None, None, None, None, None, None, None, None
 
 
-@half_function
 def relative_self_attn_func(input, pos, use_mask, is_training, num_heads,
                             in_proj_weight, out_proj_weight, pos_proj_weight,
                             in_proj_bias, out_proj_bias, pos_proj_bias,

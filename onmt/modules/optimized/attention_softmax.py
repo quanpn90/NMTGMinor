@@ -1,12 +1,6 @@
 import torch
 import torch.nn.functional as F
 
-try:
-    import apex.amp as amp
-    from apex.amp import half_function
-except (ModuleNotFoundError, ImportError) as e:
-    amp = None
-    from .compat import half_function
 
 try:
     from torch.cuda.amp import custom_fwd, custom_bwd

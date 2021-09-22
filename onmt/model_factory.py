@@ -138,11 +138,10 @@ def build_tm_model(opt, dicts):
         language_embeddings = None
 
     if opt.model in ['wav2vec2_transformer']:
-        from onmt.models.speech_recognizer.wav2vec2 import HuggingFaceWav2Vec, Wav2vecTransformer
+        from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecTransformer
         from onmt.models.speech_recognizer.relative_transformer import SpeechTransformerDecoder
 
-        print("HUGGING FACE")
-        encoder = HuggingFaceWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model)
+        encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model)
 
         decoder = SpeechTransformerDecoder(opt, embedding_tgt, positional_encoder,
                                            language_embeddings=language_embeddings)

@@ -459,7 +459,6 @@ class Dataset(torch.utils.data.Dataset):
 
         self.num_batches = len(self.batches)
         lengths = [len(x) for x in self.batches]
-        print(sum(lengths))
 
         self.cur_index = 0
         self.batchOrder = None

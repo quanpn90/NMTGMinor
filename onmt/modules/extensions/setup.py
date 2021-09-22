@@ -124,7 +124,7 @@ ext_modules.append(
                           extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                               'nvcc':['-maxrregcount=50',
                                                       '-O3',
-                                                      '--use_fast_math'] + version_dependent_macros}))
+                                                      '--use_fast_math'] + cc_flag + version_dependent_macros}))
 
 
 ext_modules.append(
@@ -136,7 +136,7 @@ ext_modules.append(
                                               'nvcc':['-lineinfo',
                                                       '-O3',
                                                       # '--resource-usage',
-                                                      '--use_fast_math'] + version_dependent_macros}))
+                                                      '--use_fast_math'] + cc_flag + version_dependent_macros}))
 
 
 # MLP functions
@@ -147,14 +147,14 @@ ext_modules.append(
                   sources=['mlp/mlp_relu.cpp',
                            'mlp/mlp_relu_cuda.cu'],
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                      'nvcc': ['-O3'] + version_dependent_macros}))
+                                      'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
 
 ext_modules.append(
     CUDAExtension(name='fused_mlp_silu',
                   sources=['mlp/mlp_silu.cpp',
                            'mlp/mlp_silu_cuda.cu'],
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                      'nvcc': ['-O3'] + version_dependent_macros}))
+                                      'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
 
 # Approximated GELU function
 ext_modules.append(
@@ -162,14 +162,14 @@ ext_modules.append(
                   sources=['mlp/mlp_agelu.cpp',
                            'mlp/mlp_agelu_cuda.cu'],
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                      'nvcc': ['-O3'] + version_dependent_macros}))
+                                      'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
 
 ext_modules.append(
     CUDAExtension(name='fused_mlp_gelu',
                   sources=['mlp/mlp_gelu.cpp',
                            'mlp/mlp_gelu_cuda.cu'],
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                      'nvcc': ['-O3'] + version_dependent_macros}))
+                                      'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
 
 
 ext_modules.append(
@@ -178,7 +178,7 @@ ext_modules.append(
                                    'xentropy/xentropy_kernel.cu'],
                           include_dirs=[os.path.join(this_dir, 'include')],
                           extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                              'nvcc':['-O3'] + version_dependent_macros}))
+                                              'nvcc':['-O3'] + cc_flag + version_dependent_macros}))
 
 
 setup(

@@ -702,72 +702,72 @@ class Trainer(object):
                         # thus disabling the backward grad sync to improve speed
                         return contextlib.ExitStack()  # dummy contextmanager
 
-                with maybe_no_sync():
-                    with autocast():
-                        targets = batch.get('target_output')
-                        tgt_mask = targets.ne(onmt.constants.PAD)
-                        if opt.load_pretrained_classifier:
-                            with torch.no_grad():
-                                layer_states = self.classifier.encode(batch)
-                        else:
-                            layer_states = None
+                # with maybe_no_sync():
+                with autocast():
+                    targets = batch.get('target_output')
+                    tgt_mask = targets.ne(onmt.constants.PAD)
+                    if opt.load_pretrained_classifier:
+                        with torch.no_grad():
+                            layer_states = self.classifier.encode(batch)
+                    else:
+                        layer_states = None
 
-                        outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                             zero_encoder=opt.zero_encoder,
-                                             mirror=opt.mirror_loss, streaming_state=streaming_state,
-                                             nce=opt.nce, pretrained_layer_states=layer_states)
+                    outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                                         zero_encoder=opt.zero_encoder,
+                                         mirror=opt.mirror_loss, streaming_state=streaming_state,
+                                         nce=opt.nce, pretrained_layer_states=layer_states)
 
-                        batch_size = batch.size
-                        # outputs is a dictionary containing keys/values necessary for loss function
-                        # can be flexibly controlled within models for easier extensibility
-                        outputs['tgt_mask'] = tgt_mask
+                    batch_size = batch.size
+                    # outputs is a dictionary containing keys/values necessary for loss function
+                    # can be flexibly controlled within models for easier extensibility
+                    outputs['tgt_mask'] = tgt_mask
 
-                        loss_dict = self.loss_function(outputs, targets, model=self.model)
-                        loss_data = loss_dict['data']
-                        loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-                        full_loss = loss
+                    loss_dict = self.loss_function(outputs, targets, model=self.model)
+                    loss_data = loss_dict['data']
+                    loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
+                    full_loss = loss
 
-                        if opt.ctc_loss > 0.0:
-                            ctc_loss = self.ctc_loss_function(outputs, targets)
-                            ctc_loss_data = ctc_loss.item()
-                            full_loss = full_loss + opt.ctc_loss * ctc_loss
+                    if opt.ctc_loss > 0.0:
+                        ctc_loss = self.ctc_loss_function(outputs, targets)
+                        ctc_loss_data = ctc_loss.item()
+                        full_loss = full_loss + opt.ctc_loss * ctc_loss
 
-                        if opt.mirror_loss:
-                            rev_loss = loss_dict['rev_loss']
-                            rev_loss_data = loss_dict['rev_loss_data']
-                            mirror_loss = loss_dict['mirror_loss']
-                            full_loss = full_loss + rev_loss + mirror_loss
-                            mirror_loss_data = loss_dict['mirror_loss'].item()
-                        else:
-                            rev_loss_data = None
-                            mirror_loss_data = 0
+                    if opt.mirror_loss:
+                        rev_loss = loss_dict['rev_loss']
+                        rev_loss_data = loss_dict['rev_loss_data']
+                        mirror_loss = loss_dict['mirror_loss']
+                        full_loss = full_loss + rev_loss + mirror_loss
+                        mirror_loss_data = loss_dict['mirror_loss'].item()
+                    else:
+                        rev_loss_data = None
+                        mirror_loss_data = 0
 
-                        # reconstruction loss
-                        if opt.reconstruct:
-                            rec_loss = loss_dict['rec_loss']
-                            rec_loss = rec_loss
-                            full_loss = full_loss + rec_loss
-                            rec_loss_data = loss_dict['rec_loss_data']
-                        else:
-                            rec_loss_data = None
+                    # reconstruction loss
+                    if opt.reconstruct:
+                        rec_loss = loss_dict['rec_loss']
+                        rec_loss = rec_loss
+                        full_loss = full_loss + rec_loss
+                        rec_loss_data = loss_dict['rec_loss_data']
+                    else:
+                        rec_loss_data = None
 
-                        if opt.lfv_multilingual:
-                            lid_logits = outputs['lid_logits']
-                            lid_labels = batch.get('target_lang')
-                            lid_loss_function = self.loss_function.get_loss_function('lid_loss')
-                            lid_loss = lid_loss_function(lid_logits, lid_labels)
-                            full_loss = full_loss + lid_loss
+                    if opt.lfv_multilingual:
+                        lid_logits = outputs['lid_logits']
+                        lid_labels = batch.get('target_lang')
+                        lid_loss_function = self.loss_function.get_loss_function('lid_loss')
+                        lid_loss = lid_loss_function(lid_logits, lid_labels)
+                        full_loss = full_loss + lid_loss
 
-                        optimizer = self.optim.optimizer
+                    optimizer = self.optim.optimizer
 
-                        # When the batch size is large, each gradient step is very easy to explode on fp16
-                        # Normalizing the loss to grad scaler ensures this will not happen
-                        full_loss.div_(grad_div)
+                    # When the batch size is large, each gradient step is very easy to explode on fp16
+                    # Normalizing the loss to grad scaler ensures this will not happen
+                    full_loss.div_(grad_div)
 
-                    # grad scaler has to be done outside of the autocast
-                    # this line basically equals full_loss.mul_(some_scale).backward()
-                    # which means the grad scaler doesn't internally change
-                    self.grad_scaler.scale(full_loss).backward()
+                # grad scaler has to be done outside of the autocast
+                # this line basically equals full_loss.mul_(some_scale).backward()
+                # which means the grad scaler doesn't internally change
+                self.grad_scaler.scale(full_loss).backward()
 
                 del outputs
 
@@ -775,30 +775,31 @@ class Trainer(object):
                 if 'out of memory' in str(e):
                     print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
                     loss = 0
-                    for p in self.model.parameters():
-                        if p.grad is not None:
-                            del p.grad  # free some memory
-                        loss = loss + p.sum() * 0
+                    # for p in self.model.parameters():
+                    #     if p.grad is not None:
+                    #         del p.grad  # free some memory
+                    #     loss = loss + p.sum() * 0
 
                     torch.cuda.empty_cache()
 
                     if opt.streaming:  # reset stream in this case ...
                         streaming_state = self.model.init_stream()
 
+
                     # backward to actually free the graph
-                    self.grad_scaler.scale(loss).backward()
+                    # self.grad_scaler.scale(loss).backward()
                     oom.add_(1)
 
             # connecting the oom signal from different gpus
-            self.all_reduce(oom, op=dist.ReduceOp.SUM, group=self.group)
-            # if OOM: all gpus reset grad and reset counter
-            # or maybe all-reduce grad?
-            if oom.item() > 0:
-                # reset counter
-                self.model.zero_grad()
-                self.optim.zero_grad()
-                counter = 0
-                oom.zero_()
+            # self.all_reduce(oom, op=dist.ReduceOp.SUM, group=self.group)
+            # # if OOM: all gpus reset grad and reset counter
+            # # or maybe all-reduce grad?
+            # if oom.item() > 0:
+            #     # reset counter
+            #     self.model.zero_grad()
+            #     self.optim.zero_grad()
+            #     counter = 0
+            #     oom.zero_()
 
             batch_size = batch.size
 
@@ -827,10 +828,11 @@ class Trainer(object):
 
                 # the gradient is scaled by world size, so in order to match the model without multiGPU
                 # we rescale the model parameters w.r.t the world size
-                grad_denom = grad_denom / self.world_size
+                # grad_denom = grad_denom / self.world_size
 
                 # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
-                normalize_gradients(self.model.parameters(), grad_denom)
+                if grad_denom > 1.0:
+                    normalize_gradients(self.model.parameters(), grad_denom)
 
                 # Update the parameters.
                 if self.opt.max_grad_norm > 0:
