@@ -286,7 +286,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
 
     def build_modules(self):
 
-        # self.death_rate = 0.0
+        self.death_rate = 0.0
         e_length = expected_length(self.layers, self.death_rate)
         self.opt.ignore_source = self.ignore_source
         opt = self.opt

@@ -440,7 +440,7 @@ class Wav2Vec2Model(torch.nn.Module):
                     min_space=self.mask_min_space,
                 )
                 mask_indices = torch.from_numpy(mask_indices).to(x.device)
-            x = index_put(x, mask_indices, self.mask_emb)
+            x = index_put(x, mask_indices, self.mask_emb.type_as(x))
         else:
             mask_indices = None
 
@@ -1092,7 +1092,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
                     biases = [self.fc1.bias.half(), self.fc2.bias.half()]
 
                     seq_len, bsz, hidden_size = x.size(0), x.size(1), x.size(2)
-                    dropout = 0.0
+                    dropout = self.dropout2.p if self.training else 0.0
                     x = self.fused_function(dropout, False, x.half().view(seq_len * bsz, -1),
                                                  *weights, *biases).type_as(x)
 

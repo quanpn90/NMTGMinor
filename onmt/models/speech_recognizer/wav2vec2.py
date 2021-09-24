@@ -10,7 +10,7 @@ from collections import defaultdict
 
 class FairseqWav2Vec(nn.Module):
 
-    def __init__(self, opt, model_path="facebook/wav2vec2-large-lv60"):
+    def __init__(self, opt, model_path="wav2vec_vox_new.pt"):
 
         super().__init__()
         # do we need opt for this?
@@ -21,8 +21,15 @@ class FairseqWav2Vec(nn.Module):
         # from fairseq.models.wav2vec.wav2vec2 import Wav2Vec2Model
         from .fairseq_wav2vec2.wav2vec2 import Wav2Vec2Model
         state = load_checkpoint_to_cpu(model_path)
-        self.cfg = state['cfg']
-        self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg['model'])
+        self.cfg = state['cfg']['model']
+
+        self.cfg.dropout = self.opt.residual_dropout
+        self.cfg.activation_dropout = self.opt.ffn_dropout
+        self.cfg.attention_dropout = self.opt.attn_dropout
+        self.cfg.encoder_layerdrop = self.opt.death_rate / 2
+        self.cfg.dropout_features = self.opt.emb_dropout
+
+        self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg)
         self.wav2vec_encoder.load_state_dict(state['model'])
         self.wav2vec_encoder.remove_pretraining_modules()
 
