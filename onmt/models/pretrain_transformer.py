@@ -114,7 +114,7 @@ class PretrainTransformer(NMTModel):
                                           token_type_ids=tgt_token_type,
                                           encoder_hidden_states=context,
                                           encoder_attention_mask=src_attention_mask,
-                                          no_offset=True)
+                                          )
 
             decoder_output = decoder_output[0]
             output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]

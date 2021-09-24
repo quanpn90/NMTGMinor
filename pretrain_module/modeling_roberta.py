@@ -40,9 +40,12 @@ class RobertaEmbeddings(nn.Module):
     Same as BertEmbeddings with a tiny tweak for positional embeddings indexing.
     """
 
-    def __init__(self, config):
+    def __init__(self, config, **kwargs):
         super().__init__()
         self.padding_idx = config.pad_token_id
+        self.no_emb_offset = config.no_emb_offset # by default it is false, for example, for EN roberta
+        print("* emb_offset:", not self.no_emb_offset)
+
         self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=self.padding_idx)
         self.position_embeddings = nn.Embedding(
             config.max_position_embeddings, config.hidden_size, padding_idx=self.padding_idx
@@ -52,11 +55,11 @@ class RobertaEmbeddings(nn.Module):
         self.emb_dropout = nn.Dropout(config.bert_emb_dropout)
         self.emb_layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
 
-    def forward(self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None, no_emb_offset=False):
+    def forward(self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None):
 
-        # ther is no offset for Zh pretrained model
+        # ther is no offset for Zh pretrained model, also we set the zh "roberta" model type bert 
         seq_length = input_ids.size(1)
-        if no_emb_offset:
+        if self.no_emb_offset :
             position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
             if seq_length > self.max_position_id:
                 position_ids = torch.clamp(position_ids, 0, self.max_position_id - 1)
@@ -90,10 +93,21 @@ class RobertaEmbeddings(nn.Module):
         return embeddings
 
     def emb_step(self, tgt_len, input_ids, token_type_ids=None):
-        position_ids = torch.tensor(tgt_len-1, dtype=torch.long, device=input_ids.device)
-        if tgt_len > self.max_position_id:
-            position_ids = torch.tensor(self.max_position_id-1, dtype=torch.long, device=input_ids.device)
-        position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
+        if self.no_emb_offset :
+            if tgt_len > self.max_position_id:
+                position_ids = torch.tensor(self.max_position_id-1, dtype=torch.long, device=input_ids.device)
+            else:
+                position_ids = torch.tensor(tgt_len-1, dtype=torch.long, device=input_ids.device)
+            position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
+        else:
+            # tgt_len + self.padding_idx = (tgt_len-1) + (self.padding_idx + 1)
+            if tgt_len + self.padding_idx+1 > self.max_position_id:
+                position_ids = torch.tensor(self.max_position_id-1, 0, self.max_position_id - 1)
+            else:
+                position_ids = torch.tensor(tgt_len + self.padding_idx, dtype=torch.long, device=input_ids.device)
+
+            position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
+
 
         embed = self.word_embeddings
         masked_embed_weight = embed.weight
@@ -124,55 +138,6 @@ class RobertaEmbeddings(nn.Module):
         )
         return position_ids.unsqueeze(0).expand(input_shape)
 
-
-ROBERTA_START_DOCSTRING = r"""
-    This model is a PyTorch `torch.nn.Module <https://pytorch.org/docs/stable/nn.html#torch.nn.Module>`_ sub-class.
-    Use it as a regular PyTorch Module and refer to the PyTorch documentation for all matter related to general
-    usage and behavior.
-    Parameters:
-        config (:class:`~transformers.RobertaConfig`): Model configuration class with all the parameters of the
-            model. Initializing with a config file does not load the weights associated with the model, only the configuration.
-            Check out the :meth:`~transformers.PreTrainedModel.from_pretrained` method to load the model weights.
-"""
-
-ROBERTA_INPUTS_DOCSTRING = r"""
-    Args:
-        input_ids (:obj:`torch.LongTensor` of shape :obj:`{0}`):
-            Indices of input sequence tokens in the vocabulary.
-            Indices can be obtained using :class:`transformers.RobertaTokenizer`.
-            See :func:`transformers.PreTrainedTokenizer.encode` and
-            :func:`transformers.PreTrainedTokenizer.__call__` for details.
-            `What are input IDs? <../glossary.html#input-ids>`__
-        attention_mask (:obj:`torch.FloatTensor` of shape :obj:`{0}`, `optional`, defaults to :obj:`None`):
-            Mask to avoid performing attention on padding token indices.
-            Mask values selected in ``[0, 1]``:
-            ``1`` for tokens that are NOT MASKED, ``0`` for MASKED tokens.
-            `What are attention masks? <../glossary.html#attention-mask>`__
-        token_type_ids (:obj:`torch.LongTensor` of shape :obj:`{0}`, `optional`, defaults to :obj:`None`):
-            Segment token indices to indicate first and second portions of the inputs.
-            Indices are selected in ``[0, 1]``: ``0`` corresponds to a `sentence A` token, ``1``
-            corresponds to a `sentence B` token
-            `What are token type IDs? <../glossary.html#token-type-ids>`_
-        position_ids (:obj:`torch.LongTensor` of shape :obj:`{0}`, `optional`, defaults to :obj:`None`):
-            Indices of positions of each input sequence tokens in the position embeddings.
-            Selected in the range ``[0, config.max_position_embeddings - 1]``.
-            `What are position IDs? <../glossary.html#position-ids>`_
-        head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_heads,)` or :obj:`(num_layers, num_heads)`, `optional`, defaults to :obj:`None`):
-            Mask to nullify selected heads of the self-attention modules.
-            Mask values selected in ``[0, 1]``:
-            :obj:`1` indicates the head is **not masked**, :obj:`0` indicates the head is **masked**.
-        inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`, defaults to :obj:`None`):
-            Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
-            This is useful if you want more control over how to convert `input_ids` indices into associated vectors
-            than the model's internal embedding lookup matrix.
-        output_attentions (:obj:`bool`, `optional`, defaults to :obj:`None`):
-            If set to ``True``, the attentions tensors of all attention layers are returned. See ``attentions`` under returned tensors for more detail.
-        output_hidden_states (:obj:`bool`, `optional`, defaults to :obj:`None`):
-            If set to ``True``, the hidden states of all layers are returned. See ``hidden_states`` under returned tensors for more detail.
-        return_dict (:obj:`bool`, `optional`, defaults to :obj:`None`):
-            If set to ``True``, the model will return a :class:`~transformers.file_utils.ModelOutput` instead of a
-            plain tuple.
-"""
 
 
 class RobertaModel(BertModel):
@@ -208,6 +173,7 @@ class RobertaModel(BertModel):
                          )
 
         # replace the original bert embedding with roberta embedding
+        config.no_emb_offset = kwargs.pop('no_emb_offset', False) # by default it is false, for example, for EN roberta
         roberta_embeddings = RobertaEmbeddings(config)
         self.add_module('embeddings', roberta_embeddings)
 
