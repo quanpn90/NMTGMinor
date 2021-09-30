@@ -15,15 +15,12 @@
 # limitations under the License.
 """PyTorch RoBERTa model. """
 
-
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .configuration_roberta import RobertaConfig
 from .modeling_bert import BertModel
-
 
 _CONFIG_FOR_DOC = "RobertaConfig"
 _TOKENIZER_FOR_DOC = "RobertaTokenizer"
@@ -33,6 +30,7 @@ ROBERTA_PRETRAINED_MODEL_ARCHIVE_LIST = [
     "distilroberta-base",
     # See all RoBERTa models at https://huggingface.co/models?filter=roberta
 ]
+
 
 # consistant with Fairseq
 class RobertaEmbeddings(nn.Module):
@@ -90,9 +88,9 @@ class RobertaEmbeddings(nn.Module):
         return embeddings
 
     def emb_step(self, tgt_len, input_ids, token_type_ids=None):
-        position_ids = torch.tensor(tgt_len-1, dtype=torch.long, device=input_ids.device)
+        position_ids = torch.tensor(tgt_len - 1, dtype=torch.long, device=input_ids.device)
         if tgt_len > self.max_position_id:
-            position_ids = torch.tensor(self.max_position_id-1, dtype=torch.long, device=input_ids.device)
+            position_ids = torch.tensor(self.max_position_id - 1, dtype=torch.long, device=input_ids.device)
         position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
 
         embed = self.word_embeddings
@@ -195,7 +193,6 @@ class RobertaModel(BertModel):
                  gradient_checkpointing=False,
                  **kwargs,
                  ):
-
         super().__init__(config, bert_word_dropout,
                          bert_emb_dropout,
                          bert_atten_dropout,
@@ -231,4 +228,3 @@ def create_position_ids_from_input_ids(input_ids, padding_idx):
     mask = input_ids.ne(padding_idx).int()
     incremental_indices = torch.cumsum(mask, dim=1).type_as(mask) * mask
     return incremental_indices.long() + padding_idx
-

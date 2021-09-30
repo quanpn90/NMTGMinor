@@ -101,10 +101,10 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
     elif type == 'wav':
         samples = data
         lengths = [x.size(0) for x in samples]
-
         max_length = max(lengths)
         # allocate data for the batch speech
-        feature_size = samples[0].size(1)  # most likely 1
+        feature_size = 1  # samples[0].size(1)  # most likely 1
+        assert feature_size == 1, "expecting feature size = 1 but get %2.f" % feature_size
         batch_size = len(data)
 
         # feature size + 1 because the last dimension is created for padding
@@ -117,7 +117,8 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
             data_length = sample.size(0)
             offset = max_length - data_length if align_right else 0
 
-            tensor[i].narrow(0, offset, data_length).narrow(1, 1, sample.size(1)).copy_(sample)
+            channels = 1
+            tensor[i].narrow(0, offset, data_length).narrow(1, 1, channels).copy_(sample)
             # in padding dimension: 1 is not padded, 0 is padded
             tensor[i].narrow(0, offset, data_length).narrow(1, 0, 1).fill_(1)
 
@@ -266,7 +267,8 @@ class Batch(object):
             # p drop -> 1 - p keeping probability
             masked_positions = source.new(source.size(0), source.size(1)).bernoulli_(1 - p)
             self.tensors['original_source'] = source.clone()
-            source.mul_(masked_positions.unsqueeze(-1))  # in-place multiplication that will change the underlying storage
+            source.mul_(
+                masked_positions.unsqueeze(-1))  # in-place multiplication that will change the underlying storage
 
             # remember the positions to be used later in losses
             self.tensors['masked_positions'] = masked_positions
@@ -347,12 +349,13 @@ class Dataset(torch.utils.data.Dataset):
         self.upsampling = kwargs.get('upsampling', False)
 
         self.max_src_len = kwargs.get('max_src_len', None)
-        self.max_tgt_len = kwargs.get('max_tgt_len', 1024)
+        self.max_tgt_len = kwargs.get('max_tgt_len', 256)
         self.cleaning = int(cleaning)
         self.debug = debug
         self.num_split = num_split
         self.vocab_mask = None
         self.use_past_src = self.past_src is not None
+        # self.max_tgt_len = 128  # try to hard code this ... so tired of datasets with crappy samples
 
         if self.max_src_len is None:
             if self._type == 'text':
@@ -455,10 +458,11 @@ class Dataset(torch.utils.data.Dataset):
 
         # the second to last mini-batch is likely the largest
         # (the last one can be the remnant after grouping samples which has less than max size)
-        self.largest_batch_id = 10  # len(self.batches) - 100
+        self.largest_batch_id = len(self.batches) - 3
 
         self.num_batches = len(self.batches)
         lengths = [len(x) for x in self.batches]
+        print("Number of sentences after cleaning and sorting: %d" % sum(lengths) )
 
         self.cur_index = 0
         self.batchOrder = None

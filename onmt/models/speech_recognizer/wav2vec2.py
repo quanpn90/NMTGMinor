@@ -28,6 +28,10 @@ class FairseqWav2Vec(nn.Module):
         self.cfg.attention_dropout = self.opt.attn_dropout
         self.cfg.encoder_layerdrop = self.opt.death_rate / 2
         self.cfg.dropout_features = self.opt.emb_dropout
+        # self.cfg.mask_channel_before = True
+        # self.cfg.mask_channel_prob = 0.2
+        # self.cfg.mask_channel_length = 64
+        # self.cfg.mask_prob = 0.5
 
         self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg)
         self.wav2vec_encoder.load_state_dict(state['model'])
@@ -63,7 +67,7 @@ class FairseqWav2Vec(nn.Module):
         input = input.narrow(2, 1, input.size(2) - 1).squeeze(-1)
 
         attn_mask = long_mask
-        wav2vec_output = self.wav2vec_encoder.extract_features(input, attn_mask)
+        wav2vec_output = self.wav2vec_encoder.extract_features(input, attn_mask, mask=False)
 
         context = wav2vec_output['x'].transpose(0, 1).contiguous()
         batch_size, time = context.size(1), context.size(0)

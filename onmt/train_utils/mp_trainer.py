@@ -978,11 +978,11 @@ class Trainer(object):
         if self.cuda:
             self.warm_up()
 
-        valid_loss = self.eval(self.valid_data)
-        valid_ppl = math.exp(min(valid_loss, 100))
-
-        if self.is_main():
-            print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
+        # valid_loss = self.eval(self.valid_data)
+        # valid_ppl = math.exp(min(valid_loss, 100))
+        #
+        # if self.is_main():
+        #     print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
 
         self.start_time = time.time()
 

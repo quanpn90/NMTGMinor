@@ -120,7 +120,12 @@ class SpeechBinarizer:
 
                     # an wav input file should have format uttid wav_file start end
                     # in which the start and end (by second) can be 0 0
-                    wavpath, start_time, end_time = parts[1], float(parts[2]), float(parts[3])
+                    if len(parts) >= 4:
+                        wavpath, start_time, end_time = parts[1], float(parts[2]), float(parts[3])
+                    else:
+                        wavpath = parts[1]
+                        start_time = 0
+                        end_time = -1
                     feature_vector = safe_readaudio(wavpath, start_time, end_time, sample_rate=sample_rate)
                     # store a tuple of data and information to load the wav again during training
                     data.append((wavpath, start_time, end_time, sample_rate))

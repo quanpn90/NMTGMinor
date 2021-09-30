@@ -40,12 +40,6 @@ class WavDataset(torch.utils.data.Dataset):
         wavpath, start, end, sample_rate = wav_info
         data = safe_readaudio(wavpath, start, end, sample_rate)
 
-        # mean normalization
-        # x = data.numpy()
-        # x = data
-        # x = (x - x.mean()) / np.sqrt(x.var() + 1e-7)
-        # data = torch.from_numpy(x).unsqueeze(-1)
-
         if self.cache is not None:
             self.cache[wav_info] = data
 

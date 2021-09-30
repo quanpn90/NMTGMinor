@@ -1,10 +1,10 @@
 from __future__ import division
 
+import torch
 import onmt
 import onmt.markdown
 import onmt.modules
 import argparse
-import torch
 import time, datetime
 from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
 from onmt.data.scp_dataset import SCPIndexDataset

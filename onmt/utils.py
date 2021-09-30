@@ -28,6 +28,7 @@ def safe_readaudio(wav_path, start=0.0, end=0.0, sample_rate=16000):
     tensor, _ = torchaudio.load(wav_path, frame_offset=offset, num_frames=num_frames,
                                 normalize=True, channels_first=False)
     # tensor, _ = sf.read(wav_path, start=offset, stop=stop)
+    tensor = tensor[:, 0].unsqueeze(1)
 
     # tensor has size [length, num_channel] in which channel = 1
     return tensor

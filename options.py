@@ -163,6 +163,8 @@ def make_parser(parser):
                         with support (-param_init, param_init)""")
     parser.add_argument('-optim', default='adam',
                         help="Optimization method. [sgd|adagrad|adadelta|adam]")
+    parser.add_argument('-zeror_optim', action="store_true",
+                        help="""Use Zero redundancy optimizer""")
     parser.add_argument('-max_grad_norm', type=float, default=0,
                         help="""If the norm of the gradient vector exceeds this,
                         renormalize it to have the norm equal to max_grad_norm""")

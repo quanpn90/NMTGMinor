@@ -137,7 +137,34 @@ def build_tm_model(opt, dicts):
     else:
         language_embeddings = None
 
-    if opt.model in ['wav2vec2_transformer']:
+    if opt.model in ['wav2vec2_roberta']:
+        from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecTransformer
+
+        encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model)
+
+        from pretrain_module.configuration_roberta import RobertaConfig
+        from pretrain_module.modeling_roberta import RobertaModel
+
+        dec_roberta_config = RobertaConfig.from_json_file(opt.dec_config_file)
+
+        decoder = RobertaModel(dec_roberta_config,
+                               bert_word_dropout=opt.dec_pretrain_word_dropout,
+                               bert_emb_dropout=opt.dec_pretrain_emb_dropout,
+                               bert_atten_dropout=opt.dec_pretrain_attn_dropout,
+                               bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
+                               bert_hidden_size=opt.dec_pretrain_hidden_size,
+                               is_decoder=True,
+                               gradient_checkpointing=opt.dec_gradient_checkpointing,
+                               max_pos_len=opt.max_pos_length,
+                               diff_head_pos=opt.diff_head_pos,
+                               pos_emb_type=opt.pos_emb_type,
+                               )
+
+        model = Wav2vecRoberta(encoder, decoder, nn.ModuleList(generators))
+
+        raise NotImplementedError
+
+    elif opt.model in ['wav2vec2_transformer']:
         from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecTransformer
         from onmt.models.speech_recognizer.relative_transformer import SpeechTransformerDecoder
 

@@ -24,11 +24,12 @@ from .fairseq_modules import (
     Fp32LayerNorm,
     GradMultiply,
     GumbelVectorQuantizer,
-    LayerNorm,
     MultiheadAttention,
     SamePad,
     TransposeLast,
 )
+
+from onmt.modules.layer_norm import LayerNorm
 
 from .utils import buffered_arange, index_put, is_xla_tensor
 
@@ -584,7 +585,8 @@ class Wav2Vec2Model(torch.nn.Module):
             with torch.no_grad():
                 features = self.feature_extractor(source)
 
-        features_pen = features.float().pow(2).mean()
+        if not features_only:
+            features_pen = features.float().pow(2).mean()
 
         features = features.transpose(1, 2)
         features = self.layer_norm(features)
@@ -999,9 +1001,9 @@ class TransformerSentenceEncoderLayer(nn.Module):
             self_attention=True,
         )
 
-        self.dropout1 = nn.Dropout(dropout)
+        self.dropout1 = nn.Dropout(dropout, inplace=False)
         self.dropout2 = nn.Dropout(self.activation_dropout)
-        self.dropout3 = nn.Dropout(dropout)
+        self.dropout3 = nn.Dropout(dropout, inplace=False)
 
         self.layer_norm_first = layer_norm_first
 
