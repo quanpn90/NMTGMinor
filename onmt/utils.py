@@ -23,14 +23,13 @@ def safe_readaudio(wav_path, start=0.0, end=0.0, sample_rate=16000):
 
     offset = math.floor(sample_rate * start)
     num_frames = -1 if end <= start else math.ceil(sample_rate * (end - start))
-    # stop = -1 if end <= start else math.ceil(sample_rate * end)
-    # by default torchaudio normalizes the read tensor -> manually normalize later
+
+    # by default torchaudio normalizes the read tensor
     tensor, _ = torchaudio.load(wav_path, frame_offset=offset, num_frames=num_frames,
                                 normalize=True, channels_first=False)
-    # tensor, _ = sf.read(wav_path, start=offset, stop=stop)
     tensor = tensor[:, 0].unsqueeze(1)
 
-    # tensor has size [length, num_channel] in which channel = 1
+    # tensor has size [length, num_channel] in which channel should be 1 for wav2vec
     return tensor
 
 

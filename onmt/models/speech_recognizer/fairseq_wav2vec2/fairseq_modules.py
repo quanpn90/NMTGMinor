@@ -6,6 +6,8 @@ import math
 from typing import Dict, Optional, Tuple
 import torch
 
+from onmt.modules.performer import Performer, ProjectionUpdater
+
 
 class Fp32GroupNorm(nn.GroupNorm):
     def __init__(self, *args, **kwargs):
@@ -77,21 +79,19 @@ class GradMultiply(torch.autograd.Function):
         return grad * ctx.scale, None
 
 
-
-
 class GumbelVectorQuantizer(nn.Module):
     def __init__(
-        self,
-        dim,
-        num_vars,
-        temp,
-        groups,
-        combine_groups,
-        vq_dim,
-        time_first,
-        activation=nn.GELU(),
-        weight_proj_depth=1,
-        weight_proj_factor=1,
+            self,
+            dim,
+            num_vars,
+            temp,
+            groups,
+            combine_groups,
+            vq_dim,
+            time_first,
+            activation=nn.GELU(),
+            weight_proj_depth=1,
+            weight_proj_factor=1,
     ):
         """Vector quantization using gumbel softmax
         Args:
@@ -116,7 +116,7 @@ class GumbelVectorQuantizer(nn.Module):
         self.time_first = time_first
 
         assert (
-            vq_dim % groups == 0
+                vq_dim % groups == 0
         ), f"dim {vq_dim} must be divisible by groups {groups} for concatenation"
 
         var_dim = vq_dim // groups
@@ -180,8 +180,8 @@ class GumbelVectorQuantizer(nn.Module):
         indices = self.get_codebook_indices()
         return (
             self.vars.squeeze(0)
-            .index_select(0, indices)
-            .view(self.num_vars ** self.groups, -1)
+                .index_select(0, indices)
+                .view(self.num_vars ** self.groups, -1)
         )
 
     def sample_from_codebook(self, b, n):
@@ -189,7 +189,7 @@ class GumbelVectorQuantizer(nn.Module):
         indices = indices.view(-1, self.groups)
         cb_size = indices.size(0)
         assert (
-            n < cb_size
+                n < cb_size
         ), f"sample size {n} is greater than size of codebook {cb_size}"
         sample_idx = torch.randint(low=0, high=cb_size, size=(b * n,))
         indices = indices[sample_idx]
@@ -223,8 +223,8 @@ class GumbelVectorQuantizer(nn.Module):
         _, k = x.max(-1)
         hard_x = (
             x.new_zeros(*x.shape)
-            .scatter_(-1, k.view(-1, 1), 1.0)
-            .view(bsz * tsz, self.groups, -1)
+                .scatter_(-1, k.view(-1, 1), 1.0)
+                .view(bsz * tsz, self.groups, -1)
         )
         hard_probs = torch.mean(hard_x.float(), dim=0)
         result["code_perplexity"] = torch.exp(
@@ -254,9 +254,9 @@ class GumbelVectorQuantizer(nn.Module):
         if produce_targets:
             result["targets"] = (
                 x.view(bsz * tsz * self.groups, -1)
-                .argmax(dim=-1)
-                .view(bsz, tsz, self.groups)
-                .detach()
+                    .argmax(dim=-1)
+                    .view(bsz, tsz, self.groups)
+                    .detach()
             )
 
         x = x.unsqueeze(-1) * vars
@@ -303,19 +303,22 @@ class MultiheadAttention(nn.Module):
     """
 
     def __init__(
-        self,
-        embed_dim,
-        num_heads,
-        kdim=None,
-        vdim=None,
-        dropout=0.0,
-        bias=True,
-        add_bias_kv=False,
-        add_zero_attn=False,
-        self_attention=False,
-        encoder_decoder_attention=False,
-        q_noise=0.0,
-        qn_block_size=8,
+            self,
+            embed_dim,
+            num_heads,
+            kdim=None,
+            vdim=None,
+            dropout=0.0,
+            bias=True,
+            add_bias_kv=False,
+            add_zero_attn=False,
+            self_attention=False,
+            encoder_decoder_attention=False,
+            q_noise=0.0,
+            qn_block_size=8,
+            fast_attention=False,
+            generalized_attention=False,
+            nb_features=256,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -331,7 +334,7 @@ class MultiheadAttention(nn.Module):
 
         self.head_dim = embed_dim // num_heads
         assert (
-            self.head_dim * num_heads == self.embed_dim
+                self.head_dim * num_heads == self.embed_dim
         ), "embed_dim must be divisible by num_heads"
         self.scaling = self.head_dim ** -0.5
 
@@ -357,8 +360,20 @@ class MultiheadAttention(nn.Module):
         self.add_zero_attn = add_zero_attn
 
         self.reset_parameters()
+        self.fast_attention = fast_attention
+        if self.fast_attention:
+            self.performer = Performer(self.head_dim, nb_features, generalized_attention=generalized_attention)
+            self.proj_updater = ProjectionUpdater(self.net, feature_redraw_interval)
+        else:
+            self.performer = None
+            self.proj_updater = None
 
         self.onnx_trace = False
+
+    def fix_projection_matrices_(self):
+        if self.proj_updater:
+            self.proj_updater.feature_redraw_interval = None
+
 
     def reset_parameters(self):
         if self.qkv_same_dim:
@@ -381,17 +396,17 @@ class MultiheadAttention(nn.Module):
             nn.init.xavier_normal_(self.bias_v)
 
     def forward(
-        self,
-        query,
-        key: Optional[Tensor],
-        value: Optional[Tensor],
-        key_padding_mask: Optional[Tensor] = None,
-        incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
-        need_weights: bool = True,
-        static_kv: bool = False,
-        attn_mask: Optional[Tensor] = None,
-        before_softmax: bool = False,
-        need_head_weights: bool = False,
+            self,
+            query,
+            key: Optional[Tensor],
+            value: Optional[Tensor],
+            key_padding_mask: Optional[Tensor] = None,
+            incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
+            need_weights: bool = True,
+            static_kv: bool = False,
+            attn_mask: Optional[Tensor] = None,
+            before_softmax: bool = False,
+            need_head_weights: bool = False,
     ) -> Tuple[Tensor, Optional[Tensor]]:
         """Input shape: Time x Batch x Channel
         Args:
@@ -427,37 +442,45 @@ class MultiheadAttention(nn.Module):
 
         assert key is not None and value is not None
 
-        return F.multi_head_attention_forward(
-            query,
-            key,
-            value,
-            self.embed_dim,
-            self.num_heads,
-            torch.empty([0]),
-            torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias)),
-            self.bias_k,
-            self.bias_v,
-            self.add_zero_attn,
-            self.dropout_p,
-            self.out_proj.weight,
-            self.out_proj.bias,
-            self.training,
-            key_padding_mask,
-            need_weights,
-            attn_mask,
-            use_separate_proj_weight=True,
-            q_proj_weight=self.q_proj.weight,
-            k_proj_weight=self.k_proj.weight,
-            v_proj_weight=self.v_proj.weight,
-        )
+        if not self.fast_attention:
 
+            return F.multi_head_attention_forward(
+                query,
+                key,
+                value,
+                self.embed_dim,
+                self.num_heads,
+                torch.empty([0]),
+                torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias)),
+                self.bias_k,
+                self.bias_v,
+                self.add_zero_attn,
+                self.dropout_p,
+                self.out_proj.weight,
+                self.out_proj.bias,
+                self.training,
+                key_padding_mask,
+                need_weights,
+                attn_mask,
+                use_separate_proj_weight=True,
+                q_proj_weight=self.q_proj.weight,
+                k_proj_weight=self.k_proj.weight,
+                v_proj_weight=self.v_proj.weight,
+            )
+        else:
+            # using performer attention
+            q = self.q_proj(query)
+            k = self.k_proj(key)
+            v = self.v_proj(v)
+
+            raise NotImplementedError
 
 
 def gelu_accurate(x):
     if not hasattr(gelu_accurate, "_a"):
         gelu_accurate._a = math.sqrt(2 / math.pi)
     return (
-        0.5 * x * (1 + torch.tanh(gelu_accurate._a * (x + 0.044715 * torch.pow(x, 3))))
+            0.5 * x * (1 + torch.tanh(gelu_accurate._a * (x + 0.044715 * torch.pow(x, 3))))
     )
 
 

@@ -128,7 +128,8 @@ def build_tm_model(opt, dicts):
                                      opt.model_size,
                                      padding_idx=onmt.constants.TGT_PAD)
     else:
-        assert opt.model == "pretrain_transformer"
+        assert opt.model in ["pretrain_transformer", "wav2vec2_bert"], "Expecting a pretrained model that has a " \
+                                                                      "separate Embedding initialization"
         embedding_tgt = None
 
     if opt.use_language_embedding:
@@ -137,32 +138,91 @@ def build_tm_model(opt, dicts):
     else:
         language_embeddings = None
 
-    if opt.model in ['wav2vec2_roberta']:
-        from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecTransformer
+    if opt.model in ['wav2vec2_bert']:
+        from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecBERT
 
         encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model)
 
-        from pretrain_module.configuration_roberta import RobertaConfig
-        from pretrain_module.modeling_roberta import RobertaModel
+        # from pretrain_module.configuration_roberta import RobertaConfig
+        # from pretrain_module.modeling_roberta import RobertaModel
+        #
+        # dec_roberta_config = RobertaConfig.from_json_file(opt.dec_config_file)
+        #
+        # decoder = RobertaModel(dec_roberta_config,
+        #                        bert_word_dropout=opt.dec_pretrain_word_dropout,
+        #                        bert_emb_dropout=opt.dec_pretrain_emb_dropout,
+        #                        bert_atten_dropout=opt.dec_pretrain_attn_dropout,
+        #                        bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
+        #                        bert_hidden_size=opt.dec_pretrain_hidden_size,
+        #                        is_decoder=True,
+        #                        gradient_checkpointing=opt.dec_gradient_checkpointing,
+        #                        max_pos_len=opt.max_pos_length,
+        #                        diff_head_pos=opt.diff_head_pos,
+        #                        pos_emb_type=opt.pos_emb_type,
+        #                        )
 
-        dec_roberta_config = RobertaConfig.from_json_file(opt.dec_config_file)
+        if opt.dec_pretrained_model == "bert":
+            from pretrain_module.configuration_bert import BertConfig
+            from pretrain_module.modeling_bert import BertModel
+            dec_bert_config = BertConfig.from_json_file(opt.dec_config_file)
+            decoder = BertModel(dec_bert_config,
+                                bert_word_dropout=opt.dec_pretrain_word_dropout,
+                                bert_emb_dropout=opt.dec_pretrain_emb_dropout,
+                                bert_atten_dropout=opt.dec_pretrain_attn_dropout,
+                                bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
+                                bert_hidden_size=opt.dec_pretrain_hidden_size,
+                                is_decoder=True,
+                                gradient_checkpointing=opt.dec_gradient_checkpointing,
+                                max_pos_len=opt.max_pos_length,
+                                diff_head_pos=opt.diff_head_pos,
+                                pos_emb_type=opt.pos_emb_type,
+                                )
 
-        decoder = RobertaModel(dec_roberta_config,
-                               bert_word_dropout=opt.dec_pretrain_word_dropout,
-                               bert_emb_dropout=opt.dec_pretrain_emb_dropout,
-                               bert_atten_dropout=opt.dec_pretrain_attn_dropout,
-                               bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
-                               bert_hidden_size=opt.dec_pretrain_hidden_size,
-                               is_decoder=True,
-                               gradient_checkpointing=opt.dec_gradient_checkpointing,
-                               max_pos_len=opt.max_pos_length,
-                               diff_head_pos=opt.diff_head_pos,
-                               pos_emb_type=opt.pos_emb_type,
-                               )
+        elif opt.dec_pretrained_model == "roberta":
+            from pretrain_module.configuration_roberta import RobertaConfig
+            from pretrain_module.modeling_roberta import RobertaModel
 
-        model = Wav2vecRoberta(encoder, decoder, nn.ModuleList(generators))
+            dec_roberta_config = RobertaConfig.from_json_file(opt.dec_config_file)
 
-        raise NotImplementedError
+            decoder = RobertaModel(dec_roberta_config,
+                                   bert_word_dropout=opt.dec_pretrain_word_dropout,
+                                   bert_emb_dropout=opt.dec_pretrain_emb_dropout,
+                                   bert_atten_dropout=opt.dec_pretrain_attn_dropout,
+                                   bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
+                                   bert_hidden_size=opt.dec_pretrain_hidden_size,
+                                   is_decoder=True,
+                                   gradient_checkpointing=opt.dec_gradient_checkpointing,
+                                   max_pos_len=opt.max_pos_length,
+                                   diff_head_pos=opt.diff_head_pos,
+                                   pos_emb_type=opt.pos_emb_type,
+                                   )
+
+        elif opt.dec_pretrained_model == "bart":
+            from pretrain_module.configuration_bart import BartConfig
+            from pretrain_module.modeling_bart import BartDecoder
+
+            dec_bart_config = BartConfig.from_json_file(opt.dec_config_file)
+
+            decoder = BartDecoder(dec_bart_config)
+
+        if opt.load_from or not opt.dec_state_dict:
+            if opt.verbose:
+                print("[INFO] No weights loading from {} for decoder".format(opt.dec_pretrained_model))
+        else:
+            print("[INFO] Loading weights for decoder from: %s ..." % opt.dec_state_dict)
+            dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
+
+            # load parameters from state dict to model (using huggingface's approach)
+            decoder.from_pretrained(state_dict=dec_model_state_dict,
+                                    model=decoder,
+                                    output_loading_info=opt.verbose,
+                                    model_prefix=opt.dec_pretrained_model
+                                    )
+            print("[INFO] ... Done")
+
+        decoder.dec_pretrained_model = opt.dec_pretrained_model
+
+        model = Wav2vecBERT(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
 
     elif opt.model in ['wav2vec2_transformer']:
         from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecTransformer
@@ -564,18 +624,20 @@ def init_model_parameters(model, opt):
         elif classname.find('PositionWiseFeedForward') != -1:
             m.reset_parameters(init=opt.init)
 
-    if opt.model not in ["pretrain_transformer", "wav2vec2_transformer"]:
-        print('Initializing entire model parameters')
+    if opt.model not in ["pretrain_transformer", "wav2vec2_transformer", "wav2vec2_bert"]:
+        print('[INFO] Initializing entire model parameters')
         model.apply(weights_init)
     elif opt.model in ['wav2vec2_transformer']:
-        print('Initializing only decoder parameters')
+        print('[INFO] Initializing only decoder parameters')
         model.decoder.apply(weights_init)
+    elif opt.model in ['wav2vec2_bert']:
+        print("[INFO] Both encoder and decoder are using pretrained weights")
     else:
         if opt.enc_pretrained_model and not opt.dec_pretrained_model:
-            print('Initializing only decoder parameters')
+            print('[INFO] Initializing only decoder parameters')
             model.decoder.apply(weights_init)
         if not opt.enc_pretrained_model and opt.dec_pretrained_model:
-            print('Initializing only encoder parameters')
+            print('[INFO] Initializing only encoder parameters')
             model.encoder.apply(weights_init)
 
     if hasattr(model, 'decoder'):

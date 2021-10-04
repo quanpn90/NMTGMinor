@@ -23,8 +23,6 @@ def make_parser(parser):
                         help='Number of extra workers for data fetching. 0=uses the main process. ')
     parser.add_argument('-pin_memory', action="store_true",
                         help='The data loader pins memory into the GPU to reduce the bottleneck between GPU-CPU')
-    parser.add_argument('-memory_profiling', action="store_true",
-                        help='Analyze memory consumption for the model')
 
     parser.add_argument('-bayes_by_backprop', action='store_true',
                         help="""Using Bayes-By-Backprop models in training""")
@@ -359,17 +357,6 @@ def make_parser(parser):
 
     parser.add_argument('-ffn_glu', action='store_true',
                         help='Gated Linear Unit application at the FFN')
-    # for Reformer
-    # parser.add_argument('-lsh_src_attention', action='store_true',
-    #                     help='Using LSH for source attention')
-    # parser.add_argument('-chunk_length', type=int, default=32,
-    #                     help="Length of chunk which attends to itself in LSHSelfAttention.")
-    # parser.add_argument('-lsh_num_chunks_after', type=int, default=0,
-    #                     help="Length of chunk which attends to itself in LSHSelfAttention.")
-    # parser.add_argument('-lsh_num_chunks_before', type=int, default=1,
-    #                     help="Length of chunk which attends to itself in LSHSelfAttention.")
-    # parser.add_argument('-num_hashes', type=int, default=4,
-    #                     help="Number of hasing rounds.")
 
     # for Reversible Transformer
     parser.add_argument('-src_reversible', action='store_true',

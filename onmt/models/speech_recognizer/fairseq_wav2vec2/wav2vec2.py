@@ -303,7 +303,7 @@ class Wav2Vec2Model(torch.nn.Module):
         self.mask_min_space = cfg.mask_min_space
 
         self.mask_channel_prob = cfg.mask_channel_prob
-        self.mask_channel_before = cfg.mask_channel_before
+        self.mask_channel_before = cfg.mask_channel_before if hasattr(cfg, 'mask_channel_before') else True
         self.mask_channel_selection = cfg.mask_channel_selection
         self.mask_channel_other = cfg.mask_channel_other
         self.mask_channel_length = cfg.mask_channel_length
@@ -337,8 +337,8 @@ class Wav2Vec2Model(torch.nn.Module):
                 combine_groups=False,
                 vq_dim=vq_dim,
                 time_first=True,
-                weight_proj_depth=cfg.quantizer_depth,
-                weight_proj_factor=cfg.quantizer_factor,
+                weight_proj_depth=cfg.quantizer_depth if hasattr(cfg, 'quantizer_depth') else 1,
+                weight_proj_factor=cfg.quantizer_factor if hasattr(cfg, 'quantizer_factor') else 3,
             )
             self.project_q = nn.Linear(vq_dim, final_dim)
         else:

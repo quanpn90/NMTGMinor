@@ -82,6 +82,9 @@ def main():
             tokenizer = RobertaTokenizer.from_pretrained(opt.pretrain_tokenizer)
         else:
             tokenizer = FullTokenizer(opt.plm_vocab_file)
+    elif opt.plm_type.lower() == "bart":
+        from transformers import BartTokenizer
+        tokenizer = BartTokenizer.from_pretrained(opt.pretrain_tokenizer)
     else:
         print("Tokenization with this pretrained model is not supported right now.")
         exit(-1)

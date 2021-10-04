@@ -452,6 +452,7 @@ def main():
                                                                      stride=opt.stride, concat=opt.concat,
                                                                      prev_context=opt.previous_context,
                                                                      fp16=opt.fp16,
+                                                                     add_bos=not opt.no_bos,
                                                                      asr_format=opt.asr_format,
                                                                      output_format=opt.format,
                                                                      num_workers=opt.num_threads)
@@ -475,6 +476,7 @@ def main():
                                                                     input_type=opt.input_type,
                                                                     stride=opt.stride, concat=opt.concat,
                                                                     prev_context=opt.previous_context,
+                                                                    add_bos=not opt.no_bos,
                                                                     fp16=opt.fp16,
                                                                     asr_format=opt.asr_format,
                                                                     output_format=opt.format,
@@ -527,6 +529,7 @@ def main():
                                                                      stride=opt.stride, concat=opt.concat,
                                                                      prev_context=opt.previous_context,
                                                                      fp16=opt.fp16,
+                                                                     add_bos=not opt.no_bos,
                                                                      asr_format=opt.asr_format,
                                                                      output_format=opt.format)
 
@@ -550,6 +553,7 @@ def main():
                                                                     stride=opt.stride, concat=opt.concat,
                                                                     prev_context=opt.previous_context,
                                                                     fp16=opt.fp16,
+                                                                    add_bos=not opt.no_bos,
                                                                     asr_format=opt.asr_format,
                                                                     output_format=opt.format,
                                                                     num_workers=opt.num_threads)

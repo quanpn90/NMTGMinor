@@ -27,6 +27,7 @@ from .file_utils import (
     WEIGHTS_NAME,
 
 )
+
 # from .generation_utils import GenerationMixin
 
 
@@ -46,7 +47,7 @@ except ImportError:
 
 
 def find_pruneable_heads_and_indices(
-    heads: List[int], n_heads: int, head_size: int, already_pruned_heads: Set[int]
+        heads: List[int], n_heads: int, head_size: int, already_pruned_heads: Set[int]
 ) -> Tuple[Set[int], torch.LongTensor]:
     """
     Finds the heads and their indices taking :obj:`already_pruned_heads` into account.
@@ -249,7 +250,7 @@ class ModuleUtilsMixin:
         return extended_attention_mask
 
     def get_head_mask(
-        self, head_mask: Optional[Tensor], num_hidden_layers: int, is_attention_chunked: bool = False
+            self, head_mask: Optional[Tensor], num_hidden_layers: int, is_attention_chunked: bool = False
     ) -> Tensor:
         """
         Prepare the head mask if needed.
@@ -283,7 +284,6 @@ class ModuleUtilsMixin:
         assert head_mask.dim() == 5, f"head_mask.dim != 5, instead {head_mask.dim()}"
         head_mask = head_mask.to(dtype=self.dtype)  # switch to fload if need + fp16 compatibility
         return head_mask
-
 
 
 # class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin):
@@ -435,7 +435,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
         return self.get_input_embeddings()
 
     def _get_resized_embeddings(
-        self, old_embeddings: torch.nn.Embedding, new_num_tokens: Optional[int] = None
+            self, old_embeddings: torch.nn.Embedding, new_num_tokens: Optional[int] = None
     ) -> torch.nn.Embedding:
         """
         Build a resized Embedding Module from a provided token Embedding Module. Increasing the size will add newly
@@ -587,7 +587,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
 
         has_prefix_module = any(s.startswith(model_prefix) for s in state_dict.keys())
 
-        if not hasattr(model,  model_prefix) and has_prefix_module:
+        if not hasattr(model, model_prefix) and has_prefix_module:
             start_prefix = model_prefix + "."
         if hasattr(model, model_prefix) and not has_prefix_module:
             model_to_load = getattr(model, model_prefix)
@@ -613,19 +613,19 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin):
                 print("missing_keys:", missing_keys)
             else:
                 print("All the weights of the model were initialized from the pretrained model")
-    
+
             if len(unexpected_keys) > 0:
                 print("Some weights of the pretrained model were not used")
                 print("unexpected_keys:", unexpected_keys)
             else:
                 print("All the weights of the pretrained model checkpoint were used")
-    
+
         if len(error_msgs) > 0:
             print("error_msgs:", error_msgs)
             raise RuntimeError('Error(s) in loading state_dict for {}:\n\t{}'.format(
-                               model.__class__.__name__, "\n\t".join(error_msgs)))
+                model.__class__.__name__, "\n\t".join(error_msgs)))
 
-        # When we use it as an Enocder ,no weight to tie
+        # When we use it as an Encoder ,no weight to tie
         model.tie_weights()  # make sure token embedding weights are still tied if needed
 
         # Set model in evaluation mode to deactivate DropOut modules by default

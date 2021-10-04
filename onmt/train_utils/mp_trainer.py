@@ -2,7 +2,6 @@ from __future__ import division
 
 import datetime
 import gc
-import inspect
 import math
 import os
 import re
@@ -31,13 +30,6 @@ import warnings
 
 # ignore the pytorch -> numpy conversion warnings
 warnings.filterwarnings("ignore", category=UserWarning)
-
-
-def varname(p):
-    for line in inspect.getframeinfo(inspect.currentframe().f_back)[3]:
-        m = re.search(r'\bvarname\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)', line)
-        if m:
-            return m.group(1)
 
 
 def prepare_sample(batch, device=None):
@@ -204,9 +196,12 @@ class Trainer(object):
 
         # This function replaces modules with the more optimized counterparts so that it can run faster
         # Currently exp with LayerNorm
-        if not opt.memory_profiling:
-            # distributed is required to convert BatchNorm to SyncBatchNorm for DDP
-            optimize_model(model, distributed=(self.world_size > 1))
+        if self.is_main():
+            nparams = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            print("[INFO] Total number of paramaters: %d" % nparams)
+
+        # distributed is required to convert BatchNorm to SyncBatchNorm for DDP
+        optimize_model(model, distributed=(self.world_size > 1))
 
         if opt.load_pretrained_classifier:
             from onmt.model_factory import build_classifier
@@ -307,17 +302,23 @@ class Trainer(object):
         else:
             return
 
-    def load_encoder_weight(self, checkpoint_file):
+    def load_encoder_weight(self, checkpoint_file, wav2vec=False):
 
-        print("Loading pretrained Encoder Weights from %s" % checkpoint_file, flush=True)
-        checkpoint = torch.load(checkpoint_file, map_location=lambda storage, loc: storage)
+        if not wav2vec:
+            print("Loading pretrained Encoder Weights from %s" % checkpoint_file, flush=True)
+            checkpoint = torch.load(checkpoint_file, map_location=lambda storage, loc: storage)
 
-        pretrained_model = build_model(checkpoint['opt'], checkpoint['dicts'])
-        pretrained_model.load_state_dict(checkpoint['model'])
+            pretrained_model = build_model(checkpoint['opt'], checkpoint['dicts'])
+            pretrained_model.load_state_dict(checkpoint['model'])
 
-        model = self.model.module if self.world_size > 1 else self.model
+            model = self.model.module if self.world_size > 1 else self.model
 
-        model.load_encoder_weights(pretrained_model)
+            model.load_encoder_weights(pretrained_model)
+
+        else:
+            checkpoint = torch.load(checkpoint_file, map_location=lambda storage, loc: storage)
+            model = self.model.module if self.world_size > 1 else self.model
+            model.load_encoder_weights(checkpoint)
 
         return
 
@@ -381,10 +382,6 @@ class Trainer(object):
         :return:
         """
 
-        # if self.opt.memory_profiling:
-        #     from pytorch_memlab import MemReporter
-        #     reporter = MemReporter()
-        #
         batch = self.train_data[0].get_largest_batch() if isinstance(self.train_data, list) \
             else self.train_data.get_largest_batch()
         opt = self.opt
@@ -396,10 +393,6 @@ class Trainer(object):
         self.loss_function.train()
         self.model.zero_grad()
         oom = False
-
-        if self.opt.memory_profiling:
-            self.print("Input size: ")
-            self.print(batch.size, batch.src_size, batch.tgt_size)
 
         if opt.streaming:
             streaming_state = self.model.init_stream()
@@ -447,37 +440,7 @@ class Trainer(object):
 
                 optimizer = self.optim.optimizer
 
-                if self.opt.memory_profiling:
-                    reporter.report(verbose=True)
-
-                # for obj in gc.get_objects():
-                #     try:
-                #         if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-                #             # print(varname(obj))
-                #             # we can rule out parameter cost later
-                #             # if 'parameter' not in type(obj):
-                #             # if len(obj.shape) == 3:
-                #             # if not isinstance(obj, torch.nn.parameter.Parameter):
-                #             #     tensor = obj
-                #             #     numel = tensor.
-                #             print(type(obj), obj.type(), obj.size())
-                #     except:
-                #         pass
-
-                # print("Memory profiling complete.")
-                # print(torch.cuda.memory_summary())
-                # exit()
-
             self.grad_scaler.scale(full_loss).backward()
-            # if self.cuda:
-            #     with amp.scale_loss(full_loss, optimizer) as scaled_loss:
-            #         scaled_loss.backward()
-            # else:
-            #     loss.div_(batch.tgt_size).backward()
-
-            if self.opt.memory_profiling:
-                print('========= after backward =========')
-                reporter.report(verbose=True)
 
             self.model.zero_grad()
             self.optim.zero_grad()
@@ -497,10 +460,6 @@ class Trainer(object):
         else:
             self.print("[INFO] Warming up successfully.", flush=True)
 
-        if self.opt.memory_profiling:
-            if hasattr(torch.cuda, 'memory_summary'):
-                print(torch.cuda.memory_summary())
-            exit()
 
     def save(self, epoch, valid_ppl, itr=None):
 
@@ -656,10 +615,6 @@ class Trainer(object):
         counter = 0
         num_accumulated_words = zero_tensor()
         num_accumulated_sents = zero_tensor()
-        grad_div = 1
-
-        nan = False
-        nan_counter = zero_tensor()
 
         if opt.streaming:
             streaming_state = self.model.init_stream()
@@ -671,7 +626,7 @@ class Trainer(object):
 
         while not data_iterator.end_of_epoch():
 
-            curriculum = (epoch < opt.curriculum)
+            # curriculum = (epoch < opt.curriculum)
 
             # this batch generator is not very clean atm
             # TODO: move everything to the multiGPU trainer
@@ -759,13 +714,7 @@ class Trainer(object):
 
                     optimizer = self.optim.optimizer
 
-                    # When the batch size is large, each gradient step is very easy to explode on fp16
-                    # Normalizing the loss to grad scaler ensures this will not happen
-                    full_loss.div_(grad_div)
-
                 # grad scaler has to be done outside of the autocast
-                # this line basically equals full_loss.mul_(some_scale).backward()
-                # which means the grad scaler doesn't internally change
                 self.grad_scaler.scale(full_loss).backward()
 
                 del outputs
@@ -818,7 +767,7 @@ class Trainer(object):
                 # accumulated gradient case, in this case the update frequency
                 # self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
 
-                grad_denom = 1.0 / grad_div
+                grad_denom = 1.0
 
                 if self.opt.normalize_gradient:
                     grad_denom = num_accumulated_words.item() * grad_denom
@@ -932,7 +881,6 @@ class Trainer(object):
 
         return total_loss / total_words
 
-    # def run(self, save_file=None):
     def run(self, checkpoint=None):
 
         opt = self.opt
@@ -944,10 +892,6 @@ class Trainer(object):
 
             if not opt.reset_optim:
 
-                # Only load the progress when we use the same optimizer
-                # if 'itr' in checkpoint:
-                #     itr_progress = checkpoint['itr']
-                # else:
                 itr_progress = None
 
                 resume = True
