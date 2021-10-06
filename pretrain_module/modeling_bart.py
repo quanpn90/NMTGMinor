@@ -45,6 +45,8 @@ from .modeling_outputs import (
 from .modeling_utils import PreTrainedModel
 # from ...utils import logging
 from .configuration_bart import BartConfig
+import onmt
+from collections import defaultdict
 
 
 _CHECKPOINT_FOR_DOC = "facebook/bart-large"
@@ -890,7 +892,6 @@ class BartDecoder(BartPretrainedModel):
         self.word_lut = self.embed_tokens
         self.config.bert_hidden_size = config.d_model
 
-
     def get_input_embeddings(self):
         return self.embed_tokens
 
@@ -1130,6 +1131,94 @@ class BartDecoder(BartPretrainedModel):
             attentions=all_self_attns,
             cross_attentions=all_cross_attentions,
         )
+
+    def step(self, input, decoder_state, **kwargs):
+
+        # context is stored in the decoder state in [T B H] format
+        encoder_hidden_states = decoder_state.context.transpose(0, 1)
+
+        # buffers = decoder_state.attention_buffers
+        lang = decoder_state.tgt_lang
+        src_lang = decoder_state.src_lang
+        buffering = decoder_state.buffering
+
+        # decoder_state.input_seq = torch.cat([decoder_state.input_seq, input], 0)
+        # input_ids = decoder_state.input_seq.transpose(0, 1)  # T x B -> B x T
+        input_ids = input
+        input_shape = input_ids.size()
+        inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
+
+        # TODO: adding buffers
+        past_key_values_length = 0
+
+        attention_mask = input_ids.ne(onmt.constants.TGT_PAD).long()
+
+        attention_mask = self._prepare_decoder_attention_mask(
+            attention_mask, input_shape, inputs_embeds, past_key_values_length
+        )
+
+        # expand encoder attention mask
+        encoder_attention_mask = decoder_state.src_mask
+        if encoder_hidden_states is not None and encoder_attention_mask is not None:
+            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+            encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
+
+        # embed positions
+        positions = self.embed_positions(input_shape, past_key_values_length)
+
+        hidden_states = inputs_embeds + positions
+        hidden_states = self.layernorm_embedding(hidden_states)
+
+        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+
+        # decoder layers
+        all_cross_attentions = ()
+
+        head_mask, cross_attn_head_mask = None, None
+        # check if head_mask/cross_attn_head_mask has a correct number of layers specified if desired
+        for attn_mask, mask_name in zip([head_mask, cross_attn_head_mask], ["head_mask", "cross_attn_head_mask"]):
+            if attn_mask is not None:
+                assert attn_mask.size()[0] == (
+                    len(self.layers)
+                ), f"The `{mask_name}` should be specified for {len(self.layers)} layers, but it is for {head_mask.size()[0]}."
+        for idx, decoder_layer in enumerate(self.layers):
+
+            # past_key_value = past_key_values[idx] if past_key_values is not None else None
+
+            layer_outputs = decoder_layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+                layer_head_mask=(head_mask[idx] if head_mask is not None else None),
+                cross_attn_layer_head_mask=(
+                    cross_attn_head_mask[idx] if cross_attn_head_mask is not None else None
+                ),
+                past_key_value=None,
+                output_attentions=True,
+                use_cache=False,
+            )
+            hidden_states = layer_outputs[0]
+
+            all_cross_attentions += (layer_outputs[2],)
+
+        output = hidden_states.transpose(0, 1).contiguous()[-1].unsqueeze(0)
+        all_cross_attentions = ()
+        # if use_cache:
+        #     next_decoder_cache += (layer_outputs[3 if output_attentions else 1],)
+        #
+        # if output_attentions:
+        #     all_self_attns += (layer_outputs[1],)
+        #
+        coverage = all_cross_attentions
+
+        # raise NotImplementedError
+        output_dict = defaultdict(lambda: None)
+        output_dict['hidden'] = output
+        output_dict['coverage'] = coverage
+        output_dict['context'] = encoder_hidden_states.transpose(0, 1)
+
+        return output_dict
 
 
 # @add_start_docstrings(

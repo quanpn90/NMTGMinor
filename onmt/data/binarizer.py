@@ -243,7 +243,8 @@ class Binarizer:
 
     @staticmethod
     def binarize_file_single_thread(filename, tokenizer, vocab, worker_id=0, bos_word=None, eos_word=None,
-                                    offset=0, end=-1, data_type='int64', verbose=False):
+                                    offset=0, end=-1, data_type='int64', verbose=False,
+                                    external_tokenizer=""):
         """
         This function should read in the lines, convert sentences to tensors
         And then finalize into a dataset?
@@ -257,6 +258,18 @@ class Binarizer:
 
         count = 0
 
+        if "bart" in external_tokenizer.lower():
+            if worker_id == 0:
+                print("[INFO] Using the external BART tokenizer...")
+
+            from transformers import BartTokenizer
+            ext_tokenizer = BartTokenizer.from_pretrained(external_tokenizer)
+
+        elif external_tokenizer is None or len(external_tokenizer) == 0:
+            ext_tokenizer = None
+        else:
+            raise NotImplementedError
+
         with open(filename, 'r', encoding='utf-8') as f:
             f.seek(offset)
 
@@ -268,15 +281,20 @@ class Binarizer:
                 if 0 < end < f.tell():
                     break
 
-                tokenized_sent = tokenizer.tokenize(line)
+                if ext_tokenizer is None:
+                    tokenized_sent = tokenizer.tokenize(line)
 
-                binarized_line = vocab.convertToIdx(tokenized_sent, unk_word,
-                                                    bos_word=bos_word, eos_word=eos_word, type=data_type)
+                    binarized_line = vocab.convertToIdx(tokenized_sent, unk_word,
+                                                        bos_word=bos_word, eos_word=eos_word, type=data_type)
 
-                # move to shared_memory to transfer between threads
-                # conversion to numpy is necessary because torch.Tensor is not serializable by the mprocess
-                data += [binarized_line.numpy()]
-                sizes += [len(tokenized_sent)]
+                    # move to shared_memory to transfer between threads
+                    # conversion to numpy is necessary because torch.Tensor is not serializable by the mprocess
+                    data += [binarized_line.numpy()]
+                    sizes += [len(tokenized_sent)]
+                else:
+                    tensor = ext_tokenizer(line)['input_ids']
+                    sizes += [len(tensor)]
+                    data += [np.asarray(tensor)]
 
                 line = f.readline()
 
@@ -296,7 +314,7 @@ class Binarizer:
 
     @staticmethod
     def binarize_file(filename, vocab, tokenizer, bos_word=None, eos_word=None,
-                      data_type='int64', num_workers=1, verbose=False):
+                      data_type='int64', num_workers=1, verbose=False, external_tokenizer=""):
 
         result = dict()
 
@@ -320,7 +338,7 @@ class Binarizer:
                 mp_results.append(pool.apply_async(
                     Binarizer.binarize_file_single_thread,
                     args=(filename, tokenizer, vocab, worker_id, bos_word, eos_word,
-                          offsets[worker_id], offsets[worker_id + 1], data_type, verbose),
+                          offsets[worker_id], offsets[worker_id + 1], data_type, verbose, external_tokenizer),
                 ))
 
             pool.close()
@@ -331,7 +349,8 @@ class Binarizer:
 
         else:
             sp_result = Binarizer.binarize_file_single_thread(filename, tokenizer, vocab, 0, bos_word, eos_word,
-                                                              offsets[0], offsets[1], data_type)
+                                                              offsets[0], offsets[1], data_type,
+                                                              external_tokenizer=external_tokenizer)
             merge_result(sp_result)
 
         final_result['data'] = list()

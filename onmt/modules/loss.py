@@ -126,11 +126,17 @@ class NMTLossFunc(CrossEntropyLossBase):
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.padding_idx = onmt.constants.TGT_PAD
-        self.smoothing_value = label_smoothing / (output_size - 2)
+        self.smoothing_value = label_smoothing / output_size
         self.confidence = 1.0 - label_smoothing
         self.label_smoothing = label_smoothing
         self.mirror = mirror
         self.extra_modules = nn.ModuleDict()
+
+    def set_label_smoothing(self, new_value):
+
+        self.label_smoothing = new_value
+        self.confidence = 1.0 - self.label_smoothing
+        self.smoothing_value = self.label_smoothing / self.output_size
 
     def add_loss_function(self, loss_function, name):
         self.extra_modules[name] = loss_function
@@ -201,8 +207,6 @@ class NMTLossFunc(CrossEntropyLossBase):
             bwd_hiddens = bwd_hiddens.index_select(0, bwd_mask)
 
             mirror_loss_2 = F.mse_loss(fwd_hiddens, bwd_hiddens, reduction='sum')
-
-            # print(mirror_loss_2.item(), mirror_loss.item())
 
             mirror_loss = mirror_loss_2.div(outputs.size(-1))
 

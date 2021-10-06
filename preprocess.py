@@ -40,6 +40,8 @@ parser.add_argument('-data_type', default="int64",
                     help="Input type for storing text (int64|int32|int|int16) to reduce memory load")
 parser.add_argument('-format', default="raw",
                     help="Save data format: binary or raw. Binary should be used to load faster")
+parser.add_argument('-external_tokenizer', default="",
+                    help="External tokenizer from Huggingface. Currently supports barts.")
 
 parser.add_argument('-train_src', required=True,
                     help="Path to the training source data")
@@ -304,21 +306,13 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
 def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
                   max_src_length=64, max_tgt_length=64, add_bos=True, data_type='int64', num_workers=1, verbose=False,
                   input_type='word', stride=1, concat=4, prev_context=0, fp16=False, reshape=True,
-                  asr_format="scp", output_format="raw"):
+                  asr_format="scp", output_format="raw",
+                  external_tokenizer=None):
     src, tgt = [], []
     src_sizes = []
     tgt_sizes = []
     count, ignored = 0, 0
     n_unk_words = 0
-
-    print('[INFO] Processing %s  ...' % src_file)
-    binarized_src = SpeechBinarizer.binarize_file(src_file, input_format=asr_format,
-                                                  output_format=output_format, concat=concat,
-                                                  stride=stride, fp16=fp16, prev_context=prev_context,
-                                                  num_workers=num_workers)
-
-    src = binarized_src['data']
-    src_sizes = binarized_src['sizes']
 
     if add_bos:
         tgt_bos_word = opt.tgt_bos_token
@@ -331,19 +325,31 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
         binarized_tgt = Binarizer.binarize_file(tgt_file, tgt_dicts, tokenizer,
                                                 bos_word=tgt_bos_word, eos_word=opt.tgt_eos_token,
                                                 data_type=data_type,
-                                                num_workers=num_workers, verbose=verbose)
+                                                num_workers=num_workers, verbose=verbose,
+                                                external_tokenizer=external_tokenizer)
 
         tgt = binarized_tgt['data']
         tgt_sizes = binarized_tgt['sizes']
 
         ignored = 0
 
-        if len(src_sizes) != len(tgt_sizes):
-            print("Warning: data size mismatched.")
+
 
     else:
         tgt = None
         tgt_sizes = None
+
+    print('[INFO] Processing %s  ...' % src_file)
+    binarized_src = SpeechBinarizer.binarize_file(src_file, input_format=asr_format,
+                                                  output_format=output_format, concat=concat,
+                                                  stride=stride, fp16=fp16, prev_context=prev_context,
+                                                  num_workers=num_workers)
+
+    if len(src_sizes) != len(tgt_sizes) and tgt_file is not None:
+        print("Warning: data size mismatched.")
+
+    src = binarized_src['data']
+    src_sizes = binarized_src['sizes']
 
     print(('Prepared %d sentences ' +
            '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
@@ -455,7 +461,8 @@ def main():
                                                                      add_bos=not opt.no_bos,
                                                                      asr_format=opt.asr_format,
                                                                      output_format=opt.format,
-                                                                     num_workers=opt.num_threads)
+                                                                     num_workers=opt.num_threads,
+                                                                     external_tokenizer=opt.external_tokenizer)
 
             n_samples = len(src_data)
             if n_input_files == 1:
@@ -480,7 +487,8 @@ def main():
                                                                     fp16=opt.fp16,
                                                                     asr_format=opt.asr_format,
                                                                     output_format=opt.format,
-                                                                    num_workers=opt.num_threads)
+                                                                    num_workers=opt.num_threads,
+                                                                    external_tokenizer=opt.external_tokenizer)
 
                 train['past_src'] += past_src_data
                 train['past_src_sizes'] += past_src_sizes
@@ -531,7 +539,8 @@ def main():
                                                                      fp16=opt.fp16,
                                                                      add_bos=not opt.no_bos,
                                                                      asr_format=opt.asr_format,
-                                                                     output_format=opt.format)
+                                                                     output_format=opt.format,
+                                                                     external_tokenizer=opt.external_tokenizer)
 
             n_samples = len(src_data)
             if n_input_files == 1:
@@ -556,7 +565,8 @@ def main():
                                                                     add_bos=not opt.no_bos,
                                                                     asr_format=opt.asr_format,
                                                                     output_format=opt.format,
-                                                                    num_workers=opt.num_threads)
+                                                                    num_workers=opt.num_threads,
+                                                                    external_tokenizer=opt.external_tokenizer)
 
                 valid['past_src'] += past_src_data
                 valid['past_src_sizes'] += past_src_sizes

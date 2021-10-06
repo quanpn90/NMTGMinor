@@ -773,7 +773,11 @@ class Transformer(NMTModel):
             log_prob = F.log_softmax(log_prob, dim=-1, dtype=torch.float32)
 
         coverage = output_dict['coverage']
-        last_coverage = coverage[:, -1, :].squeeze(1)
+
+        try:
+            last_coverage = coverage[:, -1, :].squeeze(1)
+        except TypeError:
+            last_coverage = None
 
         output_dict['log_prob'] = log_prob
         output_dict['coverage'] = last_coverage

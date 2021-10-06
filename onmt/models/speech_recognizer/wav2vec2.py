@@ -398,9 +398,8 @@ class Wav2vecBERT(Wav2vecTransformer):
         src_lang = batch.get('source_lang')
         tgt_lang = batch.get('target_lang')
 
+        encoder_output = self.encoder(src.transpose(0, 1), batch_first_output=False)
         src_attention_mask = encoder_output['src']
-
-        encoder_output = self.encoder(src, batch_first_output=True)
 
         dec_pretrained_model = self.decoder.dec_pretrained_model
         if not dec_pretrained_model:
@@ -408,13 +407,15 @@ class Wav2vecBERT(Wav2vecTransformer):
         elif dec_pretrained_model in ["bert", "roberta"]:
             mask_src = src_attention_mask.unsqueeze(
                 1)  # batch_size  x 1 x len_src for broadcasting
+        elif dec_pretrained_model in ["bart"]:
+            src_attention_mask = 1 - (src_attention_mask.long())
         else:
             print("Warning: unknown dec_pretrained_model")
             raise NotImplementedError
 
         decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], src_lang,
                                                  beam_size=beam_size, model_size=self.model_size,
-                                                 type=type, buffering=buffering, src_mask=mask_src,
+                                                 type=type, buffering=buffering, src_mask=src_attention_mask,
                                                  dec_pretrained_model=self.decoder.dec_pretrained_model)
 
         return decoder_state
