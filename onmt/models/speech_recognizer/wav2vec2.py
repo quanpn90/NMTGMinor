@@ -25,15 +25,15 @@ class FairseqWav2Vec(nn.Module):
         # state = torch.load()
         self.cfg = state['cfg']['model']
 
-        self.cfg.dropout = self.opt.residual_dropout
-        self.cfg.activation_dropout = self.opt.ffn_dropout
-        self.cfg.attention_dropout = self.opt.attn_dropout
+        # self.cfg.dropout = self.opt.residual_dropout
+        # self.cfg.activation_dropout = self.opt.ffn_dropout
+        # self.cfg.attention_dropout = self.opt.attn_dropout
         self.cfg.encoder_layerdrop = self.opt.death_rate / 2
-        self.cfg.dropout_features = self.opt.emb_dropout
+        # self.cfg.dropout_features = self.opt.emb_dropout
         # self.cfg.mask_channel_before = True
-        # self.cfg.mask_channel_prob = 0.2
-        # self.cfg.mask_channel_length = 64
-        # self.cfg.mask_prob = 0.0
+        self.cfg.mask_channel_prob = 0.2 if self.opt.augment_speech else 0.0
+        self.cfg.mask_channel_length = 64
+        self.cfg.mask_prob = 0.0
 
         self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg)
         self.wav2vec_encoder.load_state_dict(state['model'])
@@ -76,7 +76,7 @@ class FairseqWav2Vec(nn.Module):
         if dec_attn_mask is None:
             dec_attn_mask = context.new_zeros(batch_size, time).byte()
         else:
-            dec_attn_mask = (dec_attn_mask).byte()
+            dec_attn_mask = dec_attn_mask.byte()
 
         # how to get the correct attention mask?
         output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask,
@@ -229,13 +229,39 @@ class Wav2vecTransformer(Transformer):
         encoder_output = self.encoder(src_transposed)
 
         src = encoder_output['src'].transpose(0, 1)
+        src_mask = encoder_output['src']
 
         print("[INFO] create Transformer decoding state with buffering", buffering)
         decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], src_lang,
                                                  beam_size=beam_size, model_size=self.model_size,
-                                                 type=type, buffering=buffering)
+                                                 type=type, buffering=buffering, src_mask=src_mask)
 
         return decoder_state
+
+    def step(self, input_t, decoder_state, streaming=False):
+        """
+        Decoding function:
+        generate new decoder output based on the current input and current decoder state
+        the decoder state is updated in the process
+        :param streaming:
+        :param input_t: the input word index at time t
+        :param decoder_state: object DecoderState containing the buffers required for decoding
+        :return: a dictionary containing: log-prob output and the attention coverage
+        """
+
+        output_dict = self.decoder.step(input_t, decoder_state, streaming=streaming)
+        output_dict['src'] = decoder_state.src.transpose(0, 1)
+
+        log_prob = self.generator[0](output_dict)['logits'].squeeze(0)
+        log_prob = torch.nn.functional.log_softmax(log_prob, dim=-1, dtype=torch.float32)
+
+        coverage = output_dict['coverage']
+        last_coverage = coverage[:, -1, :].squeeze(1)
+
+        output_dict['log_prob'] = log_prob
+        output_dict['coverage'] = last_coverage
+
+        return output_dict
 
 
 class Wav2vecBERT(Wav2vecTransformer):

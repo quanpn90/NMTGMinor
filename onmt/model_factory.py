@@ -203,7 +203,7 @@ def build_tm_model(opt, dicts):
 
             dec_bart_config = BartConfig.from_json_file(opt.dec_config_file)
 
-            decoder = BartDecoder(dec_bart_config)
+            decoder = BartDecoder(dec_bart_config, opt)
 
         if opt.load_from or not opt.dec_state_dict:
             if opt.verbose:

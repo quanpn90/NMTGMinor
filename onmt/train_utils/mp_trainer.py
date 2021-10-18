@@ -450,16 +450,13 @@ class Trainer(object):
         except RuntimeError as e:
             if 'out of memory' in str(e):
                 oom = True
-            else:
+            # else:
+                print("[INFO] Warning: out-of-memory in warming up. "
+                      "This is due to the largest batch is too big for the GPU.",
+                      flush=True)
                 raise e
-
-        if oom:
-            print("[INFO] Warning: out-of-memory in warming up. "
-                  "This is due to the largest batch is too big for the GPU.",
-                  flush=True)
         else:
             self.print("[INFO] Warming up successfully.", flush=True)
-
 
     def save(self, epoch, valid_ppl, itr=None):
 
@@ -527,6 +524,7 @@ class Trainer(object):
 
         total_loss = zero_tensor()
         total_words = zero_tensor()
+        total_correct = zero_tensor()
 
         if opt.streaming:
             streaming_state = self.model.init_stream()
@@ -562,6 +560,9 @@ class Trainer(object):
                             outputs['tgt_mask'] = tgt_mask
                             loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True)
                             loss_data = loss_dict['data']
+                            correct, total = loss_dict['correct'], loss_dict['total']
+                            total_correct.add_(correct)
+                            assert(total == batch.tgt_size)
 
                     total_loss.add_(loss_data)
                     total_words.add_(batch.tgt_size)
@@ -579,7 +580,7 @@ class Trainer(object):
         if opt.load_pretrained_classifier:
             self.classifier.train()
 
-        return total_loss / total_words
+        return total_loss / total_words, total_correct / total_words
 
     def train_epoch(self, epoch, resume=False, itr_progress=None):
 
@@ -705,13 +706,7 @@ class Trainer(object):
                     else:
                         rec_loss_data = None
 
-                    if opt.lfv_multilingual:
-                        lid_logits = outputs['lid_logits']
-                        lid_labels = batch.get('target_lang')
-                        lid_loss_function = self.loss_function.get_loss_function('lid_loss')
-                        lid_loss = lid_loss_function(lid_logits, lid_labels)
-                        full_loss = full_loss + lid_loss
-
+                    correct, total = loss_dict['correct'], loss_dict['total']
                     optimizer = self.optim.optimizer
 
                 # grad scaler has to be done outside of the autocast
@@ -722,21 +717,22 @@ class Trainer(object):
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
+                    raise e
                     loss = 0
                     # for p in self.model.parameters():
                     #     if p.grad is not None:
                     #         del p.grad  # free some memory
                     #     loss = loss + p.sum() * 0
 
-                    torch.cuda.empty_cache()
-
-                    if opt.streaming:  # reset stream in this case ...
-                        streaming_state = self.model.init_stream()
-
-
-                    # backward to actually free the graph
-                    # self.grad_scaler.scale(loss).backward()
-                    oom.add_(1)
+                    # torch.cuda.empty_cache()
+                    #
+                    # if opt.streaming:  # reset stream in this case ...
+                    #     streaming_state = self.model.init_stream()
+                    #
+                    #
+                    # # backward to actually free the graph
+                    # # self.grad_scaler.scale(loss).backward()
+                    # oom.add_(1)
 
             # connecting the oom signal from different gpus
             # self.all_reduce(oom, op=dist.ReduceOp.SUM, group=self.group)
@@ -796,13 +792,15 @@ class Trainer(object):
 
                 num_updates = self.optim._step
                 if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every:
-                    valid_loss = self.eval(self.valid_data)
+                    valid_loss, valid_accuracy = self.eval(self.valid_data)
                     valid_ppl = math.exp(min(valid_loss, 100))
 
                     if self.is_main():
                         print('Validation perplexity: %g' % valid_ppl)
+                        print('Validation accuracy: %g percent' % (100 * valid_accuracy)    )
                         ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
-                        self.save(ep, valid_ppl, itr=data_iterator)
+                        self.save(ep, valid_ppl if opt.save_metrics in ['ppl', 'perplexity'] else 1 - valid_accuracy,
+                                  itr=data_iterator)
 
             num_words = tgt_size
             report_loss.add_(loss_data)
@@ -922,11 +920,14 @@ class Trainer(object):
         if self.cuda:
             self.warm_up()
 
-        # valid_loss = self.eval(self.valid_data)
-        # valid_ppl = math.exp(min(valid_loss, 100))
-        #
-        # if self.is_main():
-        #     print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
+        if opt.load_from:
+            valid_loss, valid_accuracy  = self.eval(self.valid_data)
+            valid_ppl = math.exp(min(valid_loss, 100))
+
+            if self.is_main():
+                print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
+                # percent is never used in plural :)
+                print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
 
         self.start_time = time.time()
 
@@ -939,12 +940,13 @@ class Trainer(object):
             self.print('[INFO] Train perplexity: %g' % train_ppl)
 
             #  (2) evaluate on the validation set
-            valid_loss = self.eval(self.valid_data)
+            valid_loss, valid_accuracy  = self.eval(self.valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
 
             if self.is_main():
                 print('[INFO] Validation perplexity: %g' % valid_ppl)
-                self.save(epoch, valid_ppl)
+                print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
+                self.save(epoch, valid_ppl if opt.save_metrics in ['ppl', 'perplexity'] else 1 - valid_accuracy)
 
             itr_progress = None
             resume = False

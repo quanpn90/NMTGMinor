@@ -245,6 +245,8 @@ def make_parser(parser):
                         help='Adding pos encodings to embedding (like Transformer)')
     parser.add_argument('-batch_ensemble', type=int, default=0,
                         help='To use batch ensemble algorithm')
+    parser.add_argument('-save_metrics', default='ppl',
+                        help="Type of update rule to use. Options are [perplexity|ppl|accuracy|acc].")
 
     # GPU
     parser.add_argument('-gpus', default=[], nargs='+', type=int,

@@ -70,13 +70,6 @@ class CrossEntropyLossBase(_Loss):
         """
         label_smoothing = self.label_smoothing if self.training else 0.0
 
-        # if vocab_mask is not None:
-        #     if vocab_mask.any():
-        #         vocab_mask = vocab_mask.to(logits.device)
-        #         while vocab_mask.dim() < logits.dim():
-        #             vocab_mask = vocab_mask.unsqueeze(0)
-        #         logits = logits.float() + (~vocab_mask + tiny_value_of_dtype(logits.dtype)).log()
-
         gtruth = targets.view(-1)  # B*T
         logits = logits.view(-1, logits.size(-1))  # B*T x V
 
@@ -162,6 +155,17 @@ class NMTLossFunc(CrossEntropyLossBase):
         logits = model_outputs['logprobs']
         mirror = self.mirror
 
+        with torch.no_grad():
+            targets_ = targets.view(-1)
+            non_pad_mask = torch.nonzero(targets_.ne(self.padding_idx)).squeeze(1)
+            # print(non_pad_mask)
+            labels = targets_.index_select(0, non_pad_mask)
+            logits_ = F.log_softmax(logits.view(-1, logits.size(-1)).index_select(0, non_pad_mask), dim=1)
+            preds = torch.argmax(logits_, dim=1)
+
+            correct = (preds == labels).sum().item()
+            total = labels.numel()
+
         if mirror:
             reverse_outputs = model_outputs['reverse_hidden']
             reverse_logits = model_outputs['reverse_logprobs']
@@ -229,7 +233,8 @@ class NMTLossFunc(CrossEntropyLossBase):
 
         output_dict = {"loss": loss, "data": loss_data,
                        "rev_loss": rev_loss, "rev_loss_data": rev_loss_data, "mirror_loss": mirror_loss,
-                       "rec_loss": rec_loss, "rec_loss_data": rec_loss_data}
+                       "rec_loss": rec_loss, "rec_loss_data": rec_loss_data,
+                       "correct": correct, "total": total}
 
         # return loss, loss_data, None
         return output_dict

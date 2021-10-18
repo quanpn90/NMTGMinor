@@ -408,6 +408,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
             coverage: batch_size x len_tgt x src_len
 
         """
+
         context = decoder_state.context
         buffers = decoder_state.attention_buffers
         lang = decoder_state.tgt_lang
@@ -423,6 +424,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
             input = decoder_state.input_seq.transpose(0, 1)  # B x T
 
         src = decoder_state.src.transpose(0, 1) if decoder_state.src is not None else None
+        src_mask = decoder_state.src_mask if decoder_state.src_mask is not None else None
 
         if buffering:
             # use the last value of input to continue decoding
@@ -496,8 +498,8 @@ class SpeechTransformerDecoder(TransformerDecoder):
                 else:
                     mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)
             elif self.encoder_type == "wav2vec2":
-                mask_src = src
-                # print(mask_src.size())
+                # mask_src = src
+                mask_src = src_mask
             else:
 
                 mask_src = src.eq(onmt.constants.PAD).unsqueeze(1)

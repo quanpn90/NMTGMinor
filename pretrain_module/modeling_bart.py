@@ -862,14 +862,17 @@ class BartDecoder(BartPretrainedModel):
         embed_tokens (nn.Embedding): output embedding
     """
 
-    def __init__(self, config: BartConfig, embed_tokens: Optional[nn.Embedding] = None):
+    def __init__(self, config: BartConfig, opt, embed_tokens: Optional[nn.Embedding] = None):
         super().__init__(config)
-        self.dropout = config.dropout
-        self.layerdrop = config.decoder_layerdrop
+        self.dropout = opt.dropout
+        self.layerdrop = opt.death_rate / 2
         self.padding_idx = config.pad_token_id
         self.max_target_positions = config.max_position_embeddings
         self.embed_scale = math.sqrt(config.d_model) if config.scale_embedding else 1.0
         self.dec_pretrained_model = 'bart'
+
+        config.attention_dropout = opt.attn_dropout if opt.attn_dropout > 0 else opt.dropout
+        config.activation_dropout = opt.ffn_dropout if opt.ffn_dropout > 0 else opt.dropout
 
         if embed_tokens is not None:
             self.embed_tokens = embed_tokens
@@ -1168,8 +1171,6 @@ class BartDecoder(BartPretrainedModel):
 
         hidden_states = inputs_embeds + positions
         hidden_states = self.layernorm_embedding(hidden_states)
-
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
         # decoder layers
         all_cross_attentions = ()

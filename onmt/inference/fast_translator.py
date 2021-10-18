@@ -795,6 +795,7 @@ class FastTranslator(Translator):
 
         #  (3) convert indexes to words
         pred_batch = []
+        pred_ids = []
         src_data = src_data[0]
         for b in range(batch_size):
 
@@ -805,11 +806,13 @@ class FastTranslator(Translator):
                     [self.build_target_tokens([], src_data[b], None)
                      for n in range(self.opt.n_best)]
                 )
+                pred_ids.append([[] for n in range(self.opt.n_best)])
             else:
                 pred_batch.append(
                     [self.build_target_tokens(finalized[b][n]['tokens'], src_data[b], None)
                      for n in range(self.opt.n_best)]
                 )
+                pred_ids.append([finalized[b][n]['tokens'] for n in range(self.opt.n_best)])
         pred_score = []
         for b in range(batch_size):
             if len(finalized[b]) == 0:
@@ -823,4 +826,4 @@ class FastTranslator(Translator):
                      for n in range(self.opt.n_best)]
                 )
 
-        return pred_batch, pred_score, pred_length, gold_score, gold_words, allgold_words
+        return pred_batch, pred_ids, pred_score, pred_length, gold_score, gold_words, allgold_words

@@ -333,8 +333,6 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
 
         ignored = 0
 
-
-
     else:
         tgt = None
         tgt_sizes = None
@@ -345,11 +343,11 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
                                                   stride=stride, fp16=fp16, prev_context=prev_context,
                                                   num_workers=num_workers)
 
-    if len(src_sizes) != len(tgt_sizes) and tgt_file is not None:
-        print("Warning: data size mismatched.")
-
     src = binarized_src['data']
     src_sizes = binarized_src['sizes']
+
+    if len(src_sizes) != len(tgt_sizes) and tgt_file is not None:
+        print("Warning: data size mismatched. Src: %d . Tgt: %d" % len(src_sizes), len(tgt_sizes))
 
     print(('Prepared %d sentences ' +
            '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
@@ -499,8 +497,6 @@ def main():
             train['tgt_sizes'] += tgt_sizes
             train['src_lang'] += src_lang_data
             train['tgt_lang'] += tgt_lang_data
-        # train = dict()
-        # train['src'], train['tgt'] =
 
         print('Preparing validation ...')
 

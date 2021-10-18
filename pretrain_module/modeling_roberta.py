@@ -91,13 +91,8 @@ class RobertaEmbeddings(nn.Module):
         return embeddings
 
     def emb_step(self, tgt_len, input_ids, token_type_ids=None):
-<<<<<<< HEAD
-        position_ids = torch.tensor(tgt_len - 1, dtype=torch.long, device=input_ids.device)
-        if tgt_len > self.max_position_id:
-            position_ids = torch.tensor(self.max_position_id - 1, dtype=torch.long, device=input_ids.device)
-        position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
-=======
-        if self.no_emb_offset :
+
+        if self.no_emb_offset:
             if tgt_len > self.max_position_id:
                 position_ids = torch.tensor(self.max_position_id-1, dtype=torch.long, device=input_ids.device)
             else:
@@ -111,8 +106,6 @@ class RobertaEmbeddings(nn.Module):
                 position_ids = torch.tensor(tgt_len + self.padding_idx, dtype=torch.long, device=input_ids.device)
 
             position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
-
->>>>>>> 6cc1731c2a2241cc965326bcad65fd10e6076bdf
 
         embed = self.word_embeddings
         masked_embed_weight = embed.weight

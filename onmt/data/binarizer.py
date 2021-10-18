@@ -292,7 +292,7 @@ class Binarizer:
                     data += [binarized_line.numpy()]
                     sizes += [len(tokenized_sent)]
                 else:
-                    tensor = ext_tokenizer(line)['input_ids']
+                    tensor = ext_tokenizer(line.strip())['input_ids']
                     sizes += [len(tensor)]
                     data += [np.asarray(tensor)]
 

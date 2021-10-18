@@ -131,6 +131,8 @@ parser.add_argument('-dynamic_max_len_scale', type=float, default=5.0,
                     help='Using the fast decoder')
 parser.add_argument('-dynamic_min_len_scale', type=float, default=0.0,
                     help='Using the fast decoder')
+parser.add_argument('-external_tokenizer', default="",
+                    help="External tokenizer from Huggingface. Currently supports barts.")
 
 
 def _is_oversized(batch, new_sent_size, batch_size):
@@ -172,13 +174,19 @@ def len_penalty(s, l, alpha):
     return s / l_term
 
 
-def get_sentence_from_tokens(tokens, input_type):
-    if input_type == 'word':
-        sent = " ".join(tokens)
-    elif input_type == 'char':
-        sent = "".join(tokens)
+def get_sentence_from_tokens(tokens, ids, input_type, external_tokenizer=None):
+
+    if external_tokenizer is None:
+        if input_type == 'word':
+            sent = " ".join(tokens)
+        elif input_type == 'char':
+            sent = "".join(tokens)
+        else:
+            raise NotImplementedError
+
     else:
-        raise NotImplementedError
+        sent = external_tokenizer.decode(ids, True, True).strip()
+
     return sent
 
 
@@ -237,8 +245,17 @@ def main():
             translator = StreamTranslator(opt)
     else:
         translator = FastTranslator(opt)
-        # The old Translator is now deprecated
-        #     translator = onmt.Translator(opt)
+
+    if "bart" in opt.external_tokenizer.lower():
+        print("[INFO] Using the external BART tokenizer...")
+
+        from transformers import BartTokenizer
+        external_tokenizer = BartTokenizer.from_pretrained(opt.external_tokenizer)
+
+    elif opt.external_tokenizer is None or len(opt.external_tokenizer) == 0:
+        external_tokenizer = None
+    else:
+        raise NotImplementedError
 
     # Audio processing for the source batch
     if opt.encoder_type == "audio" and opt.asr_format in ['scp', 'kaldi']:
@@ -305,16 +322,17 @@ def main():
                           len(past_src_batches[0]))
                 else:
                     print("Batch sizes :", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
-                pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
-                    src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr')
+                pred_batch, pred_ids, \
+                    pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
+                        src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr')
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
                     translate_batch(opt, tgtF, count, outF, translator,
-                                    src_batches[0], tgt_batch, pred_batch,
+                                    src_batches[0], tgt_batch, pred_batch, pred_ids,
                                     pred_score,
                                     pred_length, gold_score,
                                     num_gold_words,
-                                    all_gold_scores, opt.input_type)
+                                    all_gold_scores, opt.input_type, external_tokenizer=external_tokenizer)
 
                 pred_score_total += pred_score
                 pred_words_total += pred_words
@@ -380,19 +398,20 @@ def main():
         # catch the last batch
         if len(src_batches[0]) != 0:
             print("Batch size:", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
-            pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
-                src_batches,
-                tgt_batch,
-                past_src_data=past_src_batches,
-                sub_src_data=sub_src_batch, type='asr')
+            pred_batch, pred_ids, pred_score, pred_length, \
+                gold_score, num_gold_words, all_gold_scores = translator.translate(
+                    src_batches,
+                    tgt_batch,
+                    past_src_data=past_src_batches,
+                    sub_src_data=sub_src_batch, type='asr')
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
                 = translate_batch(opt, tgtF, count, outF, translator,
-                                  src_batches[0], tgt_batch, pred_batch,
+                                  src_batches[0], tgt_batch, pred_batch, pred_ids,
                                   pred_score,
                                   pred_length, gold_score,
                                   num_gold_words,
-                                  all_gold_scores, opt.input_type)
+                                  all_gold_scores, opt.input_type, external_tokenizer=external_tokenizer)
 
             pred_score_total += pred_score
             pred_words_total += pred_words
@@ -427,12 +446,23 @@ def main():
         while True:
             try:
                 line = next(audio_data).strip().split()
-                wav_path, start, end = line[1], float(line[2]), float(line[3])
+
+                if len(line) == 2:
+                    wav_path = line[1]
+                    start = 0
+                    end = 0
+                else:
+                    wav_path, start, end = line[1], float(line[2]), float(line[3])
                 line = safe_readaudio(wav_path, start=start, end=end, sample_rate=16000)
 
                 if past_audio_data:
-                    past_line = next(past_audio_data).strip().split()[1:]
-                    wav_path, start, end = past_line[1], float(past_line[2]), float(past_line[3])
+                    past_line = next(past_audio_data).strip().split()
+                    if len(past_line) == 2:
+                        wav_path = past_line[1]
+                        start = 0
+                        end = 0
+                    else:
+                        wav_path, start, end = past_line[1], float(past_line[2]), float(past_line[3])
                     past_line = safe_readaudio(wav_path, start=start, end=end, sample_rate=16000)
                 else:
                     past_line = None
@@ -455,16 +485,17 @@ def main():
                           len(past_src_batches[0]))
                 else:
                     print("Batch sizes :", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
-                pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
-                    src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr')
+                pred_batch, pred_ids, pred_score, pred_length, \
+                    gold_score, num_gold_words, all_gold_scores = translator.translate(
+                        src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr')
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
                     translate_batch(opt, tgtF, count, outF, translator,
-                                    src_batches[0], tgt_batch, pred_batch,
+                                    src_batches[0], tgt_batch, pred_batch, pred_ids,
                                     pred_score,
                                     pred_length, gold_score,
                                     num_gold_words,
-                                    all_gold_scores, opt.input_type)
+                                    all_gold_scores, opt.input_type, external_tokenizer=external_tokenizer)
 
                 pred_score_total += pred_score
                 pred_words_total += pred_words
@@ -516,19 +547,20 @@ def main():
         # catch the last batch
         if len(src_batches[0]) != 0:
             print("Batch size:", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
-            pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
-                src_batches,
-                tgt_batch,
-                past_src_data=past_src_batches,
-                sub_src_data=sub_src_batch, type='asr')
+            pred_batch, pred_ids, pred_score, pred_length, \
+                gold_score, num_gold_words, all_gold_scores = translator.translate(
+                    src_batches,
+                    tgt_batch,
+                    past_src_data=past_src_batches,
+                    sub_src_data=sub_src_batch, type='asr')
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
                 = translate_batch(opt, tgtF, count, outF, translator,
-                                  src_batches[0], tgt_batch, pred_batch,
+                                  src_batches[0], tgt_batch, pred_batch, pred_ids,
                                   pred_score,
                                   pred_length, gold_score,
                                   num_gold_words,
-                                  all_gold_scores, opt.input_type)
+                                  all_gold_scores, opt.input_type, external_tokenizer=external_tokenizer)
 
             pred_score_total += pred_score
             pred_words_total += pred_words
@@ -573,16 +605,19 @@ def main():
                     break
 
             # actually done beam search from the model
-            pred_batch, pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
-                src_batch,
-                tgt_batch)
+            pred_batch, pred_ids, pred_score, pred_length, \
+                gold_score, num_gold_words, all_gold_scores = translator.translate(
+                    src_batch,
+                    tgt_batch)
 
             # convert output tensor to words
             count, pred_score, pred_words, gold_score, goldWords = translate_batch(opt, tgtF, count, outF, translator,
                                                                                    src_batch, tgt_batch,
-                                                                                   pred_batch, pred_score, pred_length,
+                                                                                   pred_batch, pred_ids,
+                                                                                   pred_score, pred_length,
                                                                                    gold_score, num_gold_words,
-                                                                                   all_gold_scores, opt.input_type)
+                                                                                   all_gold_scores, opt.input_type,
+                                                                                   external_tokenizer=external_tokenizer)
             pred_score_total += pred_score
             pred_words_total += pred_words
             gold_score_total += gold_score
@@ -600,9 +635,10 @@ def main():
         json.dump(translator.beam_accum, open(opt.dump_beam, 'w'))
 
 
-def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch, pred_batch, pred_score, pred_length,
+def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch,
+                    pred_batch, pred_ids, pred_score, pred_length,
                     gold_score,
-                    num_gold_words, all_gold_scores, input_type):
+                    num_gold_words, all_gold_scores, input_type, external_tokenizer=None):
     original_pred_batch = pred_batch
     original_pred_score = pred_score
 
@@ -638,12 +674,12 @@ def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch, pr
         count += 1
 
         if not opt.print_nbest:
-            outF.write(get_sentence_from_tokens(pred_batch[b][0], input_type) + '\n')
+            outF.write(get_sentence_from_tokens(pred_batch[b][0], pred_ids[b][0], input_type, external_tokenizer) + '\n')
             outF.flush()
         else:
             for n in range(opt.n_best):
                 idx = n
-                output_sent = get_sentence_from_tokens(pred_batch[b][idx], input_type)
+                output_sent = get_sentence_from_tokens(pred_batch[b][idx], pred_ids[b][idx], input_type, external_tokenizer)
                 out_str = "%s ||| %.4f" % (output_sent, pred_score[b][idx])
                 outF.write(out_str + '\n')
                 outF.flush()
@@ -652,7 +688,7 @@ def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch, pr
             if opt.encoder_type == "text":
                 src_sent = " ".join(src_batch[b])
                 print('SRC %d: %s' % (count, src_sent))
-            print('PRED %d: %s' % (count, get_sentence_from_tokens(pred_batch[b][0], input_type)))
+            print('PRED %d: %s' % (count, get_sentence_from_tokens(pred_batch[b][0], pred_ids[b][0], input_type, external_tokenizer)))
             print("PRED SCORE: %.4f" % pred_score[b][0])
 
             if tgtF is not None:

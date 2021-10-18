@@ -495,8 +495,9 @@ class Translator(object):
                 [self.build_target_tokens(pred[b][n], src_data[b], attn[b][n])
                  for n in range(self.opt.n_best)]
             )
+        pred_ids = pred
 
-        return pred_batch, pred_score, pred_length, gold_score, gold_words, allgold_words
+        return pred_batch, pred_score, pred_length, pred, gold_score, gold_words, allgold_words
 
     def translate_asr(self, src_data, tgt_data):
         #  (1) convert words to indexes
@@ -512,6 +513,7 @@ class Translator(object):
 
         #  (3) convert indexes to words
         pred_batch = []
+
         for b in range(batch_size):
             pred_batch.append(
                 [self.build_target_tokens(pred[b][n], src_data[b], attn[b][n])
