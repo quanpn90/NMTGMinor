@@ -35,7 +35,21 @@ class FairseqWav2Vec(nn.Module):
         self.cfg.mask_channel_length = 64
         self.cfg.mask_prob = 0.0
 
-        self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg)
+        self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg, favor=opt.favor_attention)
+        self.favor = opt.favor_attention
+        if self.favor:
+            from onmt.modules.performer import ProjectionUpdater
+            self.proj_updater = ProjectionUpdater(self.wav2vec_encoder.encoder,
+                                                  feature_redraw_interval=1000)
+            self.auto_check_redraw = True
+
+        wav2vec_weights = state['model']
+        existed_weights = self.wav2vec_encoder.state_dict()
+        keys = existed_weights.keys()
+        for key in keys:
+            if key not in wav2vec_weights:
+                wav2vec_weights[key] = existed_weights[key]
+
         self.wav2vec_encoder.load_state_dict(state['model'])
         self.wav2vec_encoder.remove_pretraining_modules()
 
@@ -50,6 +64,13 @@ class FairseqWav2Vec(nn.Module):
         for param in self.wav2vec_encoder.feature_extractor.parameters():
             param.requires_grad = False
 
+    def fix_projection_matrices_(self):
+        if self.favor:
+            self.proj_updater.fix_projections_()
+
+    def convert_fast_attention(self):
+        self.wav2vec_encoder.convert_fast_attention()
+
     def forward(self, input, batch_first_output=False, **kwargs):
         """
         :param batch_first_output: [bsz, seq_len, hidden_size] as output size, else transpose(0, 1)
@@ -63,6 +84,10 @@ class FairseqWav2Vec(nn.Module):
         input = input.narrow(2, 1, input.size(2) - 1).squeeze(-1)
 
         attn_mask = long_mask
+        if self.favor:
+            if self.auto_check_redraw:
+                # print("Redraw projection ....")
+                self.proj_updater.redraw_projections()
         wav2vec_output = self.wav2vec_encoder.extract_features(input, attn_mask, mask=self.training)
 
         if not batch_first_output:

@@ -860,7 +860,7 @@ class RelativeTransformer(Transformer):
             # if the previous stream is None (the first segment in the stream)
             # then proceed normally like normal translation
             # init a new stream state
-            self.init_stream() if streaming else None
+            streaming_state = self.init_stream() if streaming else None
 
             encoder_output = self.encoder(src_transposed, input_pos=src_pos,
                                           input_lang=src_lang, src_lengths=src_lengths,

@@ -396,7 +396,6 @@ class FastTranslator(Translator):
         # - expanding the context over the batch dimension len_src x (B*beam) x H
         # - expanding the mask over the batch dimension    (B*beam) x len_src
 
-
         decoder_states = dict()
         sub_decoder_states = dict()  # for sub-model
         for i in range(self.n_models):

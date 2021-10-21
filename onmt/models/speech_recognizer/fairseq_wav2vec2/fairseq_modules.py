@@ -316,7 +316,7 @@ class MultiheadAttention(nn.Module):
             encoder_decoder_attention=False,
             q_noise=0.0,
             qn_block_size=8,
-            fast_attention=False,
+            favor=False,
             generalized_attention=False,
             nb_features=256,
     ):
@@ -360,20 +360,56 @@ class MultiheadAttention(nn.Module):
         self.add_zero_attn = add_zero_attn
 
         self.reset_parameters()
-        self.fast_attention = fast_attention
-        if self.fast_attention:
+        self.favor = favor
+        if self.favor:
             self.performer = Performer(self.head_dim, nb_features, generalized_attention=generalized_attention)
-            self.proj_updater = ProjectionUpdater(self.net, feature_redraw_interval)
+            # self.proj_updater = ProjectionUpdater(self.net, feature_redraw_interval)
         else:
             self.performer = None
-            self.proj_updater = None
+            # self.proj_updater = None
 
         self.onnx_trace = False
+        self.fast_attention = False
 
     def fix_projection_matrices_(self):
         if self.proj_updater:
             self.proj_updater.feature_redraw_interval = None
 
+    def convert_fast_attention(self):
+
+        print("Convert from vanilla to fast attention module ...")
+        if self.fast_attention:
+            return
+        self.fast_attention = True
+        assert self.qkv_same_dim, "Only works with QKV same dim."
+        w_q = self.q_proj.weight.clone()
+        w_k = self.k_proj.weight.clone()
+        w_v = self.v_proj.weight.clone()
+        weights = [w_q, w_k, w_v]
+        weight_ = torch.cat(weights, dim=0).contiguous()
+
+        b_q = self.q_proj.bias.clone()
+        b_k = self.k_proj.bias.clone()
+        b_v = self.v_proj.bias.clone()
+        biases = [b_q, b_k, b_v]
+        bias_ = torch.cat(biases, dim=0).contiguous()
+
+        head_dim = self.head_dim
+        heads = self.num_heads
+        input_dim = self.embed_dim
+
+        weight_ = weight_.reshape(3 * head_dim * heads, input_dim).view(3, heads, head_dim, input_dim).transpose(0, 1).\
+            reshape(-1, input_dim)
+
+        bias_ = bias_.reshape(3 * head_dim * heads).view(3, heads, head_dim).transpose(0, 1).reshape(-1)
+
+        weight_t = torch.Tensor(3 * input_dim, input_dim)
+        bias_t = torch.Tensor(3 * input_dim)
+        weight_t.copy_(weight_)
+        bias_t.copy_(bias_)
+        self.proj_weight = Parameter(weight_t)
+        self.proj_bias = Parameter(bias_t)
+        del self.q_proj, self.k_proj, self.v_proj
 
     def reset_parameters(self):
         if self.qkv_same_dim:
@@ -394,6 +430,12 @@ class MultiheadAttention(nn.Module):
             nn.init.xavier_normal_(self.bias_k)
         if self.bias_v is not None:
             nn.init.xavier_normal_(self.bias_v)
+
+    # def split_by_head(self, x, B, L):
+    #     return x.view(B, L, self.h, -1).permute(0, 2, 1, 3).reshape(B * self.h, L, -1)
+    #
+    # def concat_by_head(self, x, B, L):
+    #     return x.reshape(B, self.h, L, -1).permute(0, 2, 1, 3).reshape(B, L, -1)
 
     def forward(
             self,
@@ -429,51 +471,125 @@ class MultiheadAttention(nn.Module):
 
         is_tpu = query.device.type == "xla"
 
-        tgt_len, bsz, embed_dim = query.size()
-        src_len = tgt_len
-        assert embed_dim == self.embed_dim, f"query dim {embed_dim} != {self.embed_dim}"
-        assert list(query.size()) == [tgt_len, bsz, embed_dim]
-        # if key is not None:
-        #     src_len, key_bsz, _ = key.size()
-        #     if not torch.jit.is_scripting():
-        #         assert key_bsz == bsz
-        #         assert value is not None
-        #         assert src_len, bsz == value.shape[:2]
+        if not self.favor:
 
-        assert key is not None and value is not None
+            tgt_len, bsz, embed_dim = query.size()
+            src_len = tgt_len
+            assert embed_dim == self.embed_dim, f"query dim {embed_dim} != {self.embed_dim}"
+            assert list(query.size()) == [tgt_len, bsz, embed_dim]
+            # if key is not None:
+            #     src_len, key_bsz, _ = key.size()
+            #     if not torch.jit.is_scripting():
+            #         assert key_bsz == bsz
+            #         assert value is not None
+            #         assert src_len, bsz == value.shape[:2]
 
-        if not self.fast_attention:
+            assert key is not None and value is not None
 
-            return F.multi_head_attention_forward(
-                query,
-                key,
-                value,
-                self.embed_dim,
-                self.num_heads,
-                torch.empty([0]),
-                torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias)),
-                self.bias_k,
-                self.bias_v,
-                self.add_zero_attn,
-                self.dropout_p,
-                self.out_proj.weight,
-                self.out_proj.bias,
-                self.training,
-                key_padding_mask,
-                need_weights,
-                attn_mask,
-                use_separate_proj_weight=True,
-                q_proj_weight=self.q_proj.weight,
-                k_proj_weight=self.k_proj.weight,
-                v_proj_weight=self.v_proj.weight,
-            )
+            if not self.fast_attention:
+
+                return F.multi_head_attention_forward(
+                    query,
+                    key,
+                    value,
+                    self.embed_dim,
+                    self.num_heads,
+                    torch.empty([0]),
+                    torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias)),
+                    self.bias_k,
+                    self.bias_v,
+                    self.add_zero_attn,
+                    self.dropout_p,
+                    self.out_proj.weight,
+                    self.out_proj.bias,
+                    self.training,
+                    key_padding_mask,
+                    need_weights,
+                    attn_mask,
+                    use_separate_proj_weight=True,
+                    q_proj_weight=self.q_proj.weight,
+                    k_proj_weight=self.k_proj.weight,
+                    v_proj_weight=self.v_proj.weight,
+                )
+            else:
+                inputs = query
+
+                heads = self.num_heads
+                head_dim = self.head_dim
+                bsz = query.size(1)
+                len_q = query.size(0)
+                # input_lin_results = torch.addmm(self.proj_bias,
+                #                                 query.view(query.size(0) * query.size(1), query.size(2)),
+                #                                 self.proj_weight.transpose(0, 1),
+                #                                 beta=1., alpha=1.)
+                #
+                # input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), self.proj_weight.size(0))
+                input_lin_results = F.linear(inputs, self.proj_weight, self.proj_bias)
+                input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1) * heads, 3, head_dim)
+                queries = input_lin_results[:, :, 0, :]
+                keys = input_lin_results[:, :, 1, :]
+                values = input_lin_results[:, :, 2, :]
+
+                scale_t = torch.tensor([head_dim ** -0.5])
+                matmul1_results = torch.empty((queries.size(1), queries.size(0), keys.size(0)), dtype=queries.dtype,
+                                              device=queries.device)
+                torch.baddbmm(matmul1_results, queries.transpose(0, 1),
+                                                keys.transpose(0, 1).transpose(1, 2),
+                                                out=matmul1_results, beta=0.0, alpha=scale_t[0])
+
+                # print("mm1 output]", torch.any(torch.isnan(matmul1_results)))
+                if key_padding_mask is not None:
+                    mask = key_padding_mask
+                    batches, seql_q, seql_k = matmul1_results.size()
+                    seqs = int(batches / heads)
+                    matmul1_results = matmul1_results.view(seqs, heads, seql_q, seql_k)
+                    mask = mask.to(torch.bool)
+                    matmul1_results = matmul1_results.masked_fill_(mask.unsqueeze(1).unsqueeze(2), float('-inf'))
+                    matmul1_results = matmul1_results.view(seqs * heads, seql_q, seql_k)
+
+                # print("softmax input]", torch.any(torch.isnan(matmul1_results)))
+                softmax_results = F.softmax(matmul1_results , dim=-1)
+                # print("[softmax output]", torch.any(torch.isnan(softmax_results)))
+                softmax_results = softmax_results.type_as(matmul1_results)
+                dropout_results = softmax_results
+                # dropout_results = F.dropout(softmax_results, self.dropout_p, training=self.training)
+                matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1))
+                matmul2_results = matmul2_results.transpose(0, 1).contiguous().view(inputs.size(0), inputs.size(1),
+                                                                                    inputs.size(2))
+
+                outputs = self.out_proj(matmul2_results)
+
+                # print(outputs.size())
+                return outputs, dropout_results
+
         else:
             # using performer attention
             q = self.q_proj(query)
             k = self.k_proj(key)
-            v = self.v_proj(v)
+            v = self.v_proj(value)
 
-            raise NotImplementedError
+            bsz, len_q, hidden = q.size(0), q.size(1), q.size(2)
+            h, d = self.num_heads, self.head_dim
+            len_k, len_v = k.size(1), v.size(1)
+
+            q = q.view(bsz, len_q, self.num_heads, self.head_dim).permute(0, 2, 1, 3).reshape(bsz * h, len_q, d)
+            k = k.view(bsz, len_q, self.num_heads, self.head_dim).permute(0, 2, 1, 3).reshape(bsz * h, len_k, d)
+            v = v.view(bsz, len_q, self.num_heads, self.head_dim).permute(0, 2, 1, 3)  # .reshape(bsz * h, len_v, d)
+
+            # 1 for padded positions, 0 for non-padded positions
+            if key_padding_mask is not None:
+                key_padding_mask = key_padding_mask[:, None, :, None]
+                v.masked_fill_(key_padding_mask, 0)
+
+            v = v.reshape(bsz * h, len_v, d)
+
+            out, attn = self.performer(q, k, v)
+            # out = out.transpose(1, 2).view(bsz, out.size(-2), -1)
+            out = out.reshape(bsz, h, len_q, -1).permute(0, 2, 1, 3).reshape(bsz, len_v, -1)
+
+            out = self.out_proj(out)
+
+            return out, attn
 
 
 def gelu_accurate(x):

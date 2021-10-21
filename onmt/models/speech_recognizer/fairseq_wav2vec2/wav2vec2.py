@@ -70,9 +70,12 @@ def init_bert_params(module):
         if module.padding_idx is not None:
             module.weight.data[module.padding_idx].zero_()
     if isinstance(module, MultiheadAttention):
-        normal_(module.q_proj.weight.data)
-        normal_(module.k_proj.weight.data)
-        normal_(module.v_proj.weight.data)
+        if not module.fast_attention:
+            normal_(module.q_proj.weight.data)
+            normal_(module.k_proj.weight.data)
+            normal_(module.v_proj.weight.data)
+        else:
+            normal_(module.proj_weight.data)
 
 
 #
@@ -275,7 +278,8 @@ def init_bert_params(module):
 
 # @register_model("wav2vec2", dataclass=Wav2Vec2Config)
 class Wav2Vec2Model(torch.nn.Module):
-    def __init__(self, cfg: Wav2Vec2Config):
+    def __init__(self, cfg: Wav2Vec2Config,
+                 favor=False, feature_redraw_interval=1000, auto_check_redraw=True):
         super().__init__()
         self.cfg = cfg
 
@@ -367,7 +371,7 @@ class Wav2Vec2Model(torch.nn.Module):
             torch.FloatTensor(cfg.encoder_embed_dim).uniform_()
         )
 
-        self.encoder = TransformerEncoder(cfg)
+        self.encoder = TransformerEncoder(cfg, favor=favor)
         self.layer_norm = LayerNorm(self.embed)
 
         self.target_glu = None
@@ -377,6 +381,7 @@ class Wav2Vec2Model(torch.nn.Module):
             )
 
         self.final_proj = nn.Linear(cfg.encoder_embed_dim, final_dim)
+        self.favor = favor
 
     def upgrade_state_dict_named(self, state_dict, name):
         super().upgrade_state_dict_named(state_dict, name)
@@ -588,6 +593,7 @@ class Wav2Vec2Model(torch.nn.Module):
         if not features_only:
             features_pen = features.float().pow(2).mean()
 
+        # transpose from B x C x T to B x T x C (because conv takes input as B x 1 x T)
         features = features.transpose(1, 2)
         features = self.layer_norm(features)
         unmasked_features = features.clone()
@@ -787,6 +793,17 @@ class Wav2Vec2Model(torch.nn.Module):
         self.target_glu = None
         self.final_proj = None
 
+    def convert_fast_attention(self):
+
+        model = self.encoder
+
+        def find_modules(nn_module, type):
+            return [module for module in nn_module.modules() if isinstance(module, type)]
+
+        fast_attentions = find_modules(model, MultiheadAttention)
+        for fast_attention in fast_attentions:
+            fast_attention.convert_fast_attention()
+
 
 class ConvFeatureExtractionModel(nn.Module):
     def __init__(
@@ -860,7 +877,7 @@ class ConvFeatureExtractionModel(nn.Module):
 
     def forward(self, x):
 
-        # BxT -> BxCxT
+        # BxT -> BxCxT (only for waveforms with 1 channel)
         x = x.unsqueeze(1)
 
         for conv in self.conv_layers:
@@ -870,11 +887,16 @@ class ConvFeatureExtractionModel(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, args):
+    def __init__(self, args, favor=False):
+        """
+        :param args:
+        :param favor: Performer Attention
+        """
         super().__init__()
 
         self.dropout = args.dropout
         self.embedding_dim = args.encoder_embed_dim
+        self.favor = favor
 
         self.pos_conv = nn.Conv1d(
             self.embedding_dim,
@@ -902,6 +924,7 @@ class TransformerEncoder(nn.Module):
                     activation_dropout=args.activation_dropout,
                     activation_fn=args.activation_fn,
                     layer_norm_first=args.layer_norm_first,
+                    favor=favor
                 )
                 for _ in range(args.encoder_layers)
             ]
@@ -935,8 +958,9 @@ class TransformerEncoder(nn.Module):
 
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # B x T x C -> T x B x C
-        x = x.transpose(0, 1)
+        if not self.favor:
+            # B x T x C -> T x B x C  (only for vanilla self-attention)
+            x = x.transpose(0, 1)
 
         layer_results = []
         r = None
@@ -954,7 +978,8 @@ class TransformerEncoder(nn.Module):
             x = r
 
         # T x B x C -> B x T x C
-        x = x.transpose(0, 1)
+        if not self.favor:
+            x = x.transpose(0, 1)
 
         return x, layer_results
 
@@ -983,6 +1008,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         activation_dropout: float = 0.1,
         activation_fn: str = "relu",
         layer_norm_first: bool = False,
+        favor=False
     ) -> None:
 
         super().__init__()
@@ -990,6 +1016,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.embedding_dim = embedding_dim
         self.dropout = dropout
         self.activation_dropout = activation_dropout
+        self.favor = favor
 
         # Initialize blocks
         self.activation_fn = get_activation_fn(activation_fn)
@@ -999,6 +1026,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             num_attention_heads,
             dropout=attention_dropout,
             self_attention=True,
+            favor=favor
         )
 
         self.dropout1 = nn.Dropout(dropout, inplace=False)
@@ -1034,7 +1062,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self_attn_mask: torch.Tensor = None,
         self_attn_padding_mask: torch.Tensor = None,
         need_weights: bool = False,
-        att_args=None,
+        att_args=None
     ):
         """
         LayerNorm is applied either before or after the self-attention/ffn
@@ -1044,6 +1072,8 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
         if self.layer_norm_first:
             x = self.self_attn_layer_norm(x)
+
+            # print("[attn input]", torch.any(torch.isnan(x)))
             x, attn = self.self_attn(
                 query=x,
                 key=x,
@@ -1051,11 +1081,16 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 key_padding_mask=self_attn_padding_mask,
                 attn_mask=self_attn_mask,
             )
+
+            # print("[attn output]", torch.any(torch.isnan(x)))
             x = self.dropout1(x)
             x = residual + x
 
             residual = x
             x = self.final_layer_norm(x)
+            # print("[ffn input]", torch.any(torch.isnan(x)))
+
+            # print("[FFN input]", torch.any(torch.isnan(x)))
 
             if self.fused and x.is_cuda:
                 with autocast(enabled=False):
@@ -1071,6 +1106,8 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 x = self.activation_fn(self.fc1(x))
                 x = self.dropout2(x)
                 x = self.fc2(x)
+
+            # print("[ffn output]", torch.any(torch.isnan(x)))
             x = self.dropout3(x)
             x = residual + x
         else:

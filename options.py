@@ -281,6 +281,8 @@ def make_parser(parser):
                         help='Macaron style network with 2 FFN per block.')
     parser.add_argument('-fused_ffn', action="store_true",
                         help="""Fast feedforward""")
+    parser.add_argument('-favor_attention', action="store_true",
+                        help="""Use Favor+ Attention for faster self-attention""")
 
     # for FUSION
     parser.add_argument('-lm_checkpoint', default='', type=str,
@@ -735,5 +737,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'post_norm'):
         opt.post_norm = False
+
+    if not hasattr(opt, 'favor_attention'):
+        opt.favor_attention = False
 
     return opt

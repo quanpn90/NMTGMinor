@@ -399,64 +399,64 @@ class Trainer(object):
         else:
             streaming_state = None
 
-        try:
-            with autocast():
-                targets = batch.get('target_output')
-                tgt_mask = None
-                outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                     zero_encoder=opt.zero_encoder,
-                                     mirror=opt.mirror_loss, streaming_state=streaming_state,
-                                     nce=opt.nce)
+        # try:
+        with autocast():
+            targets = batch.get('target_output')
+            tgt_mask = None
+            outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                                 zero_encoder=opt.zero_encoder,
+                                 mirror=opt.mirror_loss, streaming_state=streaming_state,
+                                 nce=opt.nce)
 
-                outputs['tgt_mask'] = tgt_mask
+            outputs['tgt_mask'] = tgt_mask
 
-                loss_dict = self.loss_function(outputs, targets, model=self.model)
-                loss_data = loss_dict['data']
-                loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-                full_loss = loss
+            loss_dict = self.loss_function(outputs, targets, model=self.model)
+            loss_data = loss_dict['data']
+            loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
+            full_loss = loss
 
-                if opt.ctc_loss > 0.0:
-                    ctc_loss = self.ctc_loss_function(outputs, targets)
-                    ctc_loss_data = ctc_loss.item()
-                    full_loss = full_loss + opt.ctc_loss * ctc_loss
+            if opt.ctc_loss > 0.0:
+                ctc_loss = self.ctc_loss_function(outputs, targets)
+                ctc_loss_data = ctc_loss.item()
+                full_loss = full_loss + opt.ctc_loss * ctc_loss
 
-                if opt.mirror_loss:
-                    rev_loss = loss_dict['rev_loss']
-                    mirror_loss = loss_dict['mirror_loss']
-                    full_loss = full_loss + rev_loss + mirror_loss
+            if opt.mirror_loss:
+                rev_loss = loss_dict['rev_loss']
+                mirror_loss = loss_dict['mirror_loss']
+                full_loss = full_loss + rev_loss + mirror_loss
 
-                # reconstruction loss
-                if opt.reconstruct:
-                    rec_loss = loss_dict['rec_loss']
-                    rec_loss = rec_loss
-                    full_loss = full_loss + rec_loss
+            # reconstruction loss
+            if opt.reconstruct:
+                rec_loss = loss_dict['rec_loss']
+                rec_loss = rec_loss
+                full_loss = full_loss + rec_loss
 
-                if opt.lfv_multilingual:
-                    lid_logits = outputs['lid_logits']
-                    lid_labels = batch.get('target_lang')
-                    lid_loss_function = self.loss_function.get_loss_function('lid_loss')
-                    lid_loss = lid_loss_function(lid_logits, lid_labels)
-                    full_loss = full_loss + lid_loss
+            if opt.lfv_multilingual:
+                lid_logits = outputs['lid_logits']
+                lid_labels = batch.get('target_lang')
+                lid_loss_function = self.loss_function.get_loss_function('lid_loss')
+                lid_loss = lid_loss_function(lid_logits, lid_labels)
+                full_loss = full_loss + lid_loss
 
-                optimizer = self.optim.optimizer
+            optimizer = self.optim.optimizer
 
-            self.grad_scaler.scale(full_loss).backward()
+        self.grad_scaler.scale(full_loss).backward()
 
-            self.model.zero_grad()
-            self.optim.zero_grad()
-            # self.optim.step()
+        self.model.zero_grad()
+        self.optim.zero_grad()
+        # self.optim.step()
             # self.optim.reset()
 
-        except RuntimeError as e:
-            if 'out of memory' in str(e):
-                oom = True
-            # else:
-                print("[INFO] Warning: out-of-memory in warming up. "
-                      "This is due to the largest batch is too big for the GPU.",
-                      flush=True)
-                raise e
-        else:
-            self.print("[INFO] Warming up successfully.", flush=True)
+        # except RuntimeError as e:
+        #     if 'out of memory' in str(e):
+        #         oom = True
+        #     # else:
+        #         print("[INFO] Warning: out-of-memory in warming up. "
+        #               "This is due to the largest batch is too big for the GPU.",
+        #               flush=True)
+        #         raise e
+        # else:
+        self.print("[INFO] Warming up successfully.", flush=True)
 
     def save(self, epoch, valid_ppl, itr=None):
 

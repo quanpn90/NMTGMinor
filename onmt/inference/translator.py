@@ -76,10 +76,12 @@ class Translator(object):
                 self.bos_id = self.tgt_dict.labelToIdx[self.bos_token]
 
             model = build_model(model_opt, checkpoint['dicts'])
-            optimize_model(model)
+
             if opt.verbose:
                 print('Loading model from %s' % model_path)
             model.load_state_dict(checkpoint['model'])
+
+            optimize_model(model)
 
             if model_opt.model in model_list:
                 # if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:

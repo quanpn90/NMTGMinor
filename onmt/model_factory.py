@@ -753,7 +753,17 @@ def optimize_model(model, fp16=True, distributed=False):
 
                 setattr(m, attr_str, target_attr)
 
+    def convert_fast_attention(m, name):
+
+        def convert(m_):
+            classname = m_.__class__.__name__
+            if classname.find('MultiheadAttention') != -1:
+                m_.convert_fast_attention()
+
+        m.apply(convert)
+
     # replace_layer_norm(model, "Transformer")
+    convert_fast_attention(model, "Transformer")
 
 
 def freeze_model_specialized_weights(model):
