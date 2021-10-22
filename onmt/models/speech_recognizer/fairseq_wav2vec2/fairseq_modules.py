@@ -7,6 +7,7 @@ from typing import Dict, Optional, Tuple
 import torch
 
 from onmt.modules.performer import Performer, ProjectionUpdater
+from onmt.modules.optimized.self_attention_func import self_attn_func
 
 
 class Fp32GroupNorm(nn.GroupNorm):
@@ -377,7 +378,7 @@ class MultiheadAttention(nn.Module):
 
     def convert_fast_attention(self):
 
-        print("Convert from vanilla to fast attention module ...")
+        # print("Convert from vanilla to fast attention module ...")
         if self.fast_attention:
             return
         self.fast_attention = True
@@ -513,54 +514,60 @@ class MultiheadAttention(nn.Module):
                 )
             else:
                 inputs = query
-
                 heads = self.num_heads
                 head_dim = self.head_dim
                 bsz = query.size(1)
                 len_q = query.size(0)
-                # input_lin_results = torch.addmm(self.proj_bias,
-                #                                 query.view(query.size(0) * query.size(1), query.size(2)),
-                #                                 self.proj_weight.transpose(0, 1),
-                #                                 beta=1., alpha=1.)
+                # # input_lin_results = torch.addmm(self.proj_bias,
+                # #                                 query.view(query.size(0) * query.size(1), query.size(2)),
+                # #                                 self.proj_weight.transpose(0, 1),
+                # #                                 beta=1., alpha=1.)
+                # #
+                # # input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), self.proj_weight.size(0))
+                # input_lin_results = F.linear(inputs, self.proj_weight, self.proj_bias)
+                # input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1) * heads, 3, head_dim)
+                # queries = input_lin_results[:, :, 0, :]
+                # keys = input_lin_results[:, :, 1, :]
+                # values = input_lin_results[:, :, 2, :]
                 #
-                # input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), self.proj_weight.size(0))
-                input_lin_results = F.linear(inputs, self.proj_weight, self.proj_bias)
-                input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1) * heads, 3, head_dim)
-                queries = input_lin_results[:, :, 0, :]
-                keys = input_lin_results[:, :, 1, :]
-                values = input_lin_results[:, :, 2, :]
-
-                scale_t = torch.tensor([head_dim ** -0.5])
-                matmul1_results = torch.empty((queries.size(1), queries.size(0), keys.size(0)), dtype=queries.dtype,
-                                              device=queries.device)
-                torch.baddbmm(matmul1_results, queries.transpose(0, 1),
-                                                keys.transpose(0, 1).transpose(1, 2),
-                                                out=matmul1_results, beta=0.0, alpha=scale_t[0])
-
-                # print("mm1 output]", torch.any(torch.isnan(matmul1_results)))
-                if key_padding_mask is not None:
-                    mask = key_padding_mask
-                    batches, seql_q, seql_k = matmul1_results.size()
-                    seqs = int(batches / heads)
-                    matmul1_results = matmul1_results.view(seqs, heads, seql_q, seql_k)
-                    mask = mask.to(torch.bool)
-                    matmul1_results = matmul1_results.masked_fill_(mask.unsqueeze(1).unsqueeze(2), float('-inf'))
-                    matmul1_results = matmul1_results.view(seqs * heads, seql_q, seql_k)
-
-                # print("softmax input]", torch.any(torch.isnan(matmul1_results)))
-                softmax_results = F.softmax(matmul1_results , dim=-1)
-                # print("[softmax output]", torch.any(torch.isnan(softmax_results)))
-                softmax_results = softmax_results.type_as(matmul1_results)
-                dropout_results = softmax_results
-                # dropout_results = F.dropout(softmax_results, self.dropout_p, training=self.training)
-                matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1))
-                matmul2_results = matmul2_results.transpose(0, 1).contiguous().view(inputs.size(0), inputs.size(1),
-                                                                                    inputs.size(2))
-
-                outputs = self.out_proj(matmul2_results)
+                # scale_t = torch.tensor([head_dim ** -0.5])
+                # matmul1_results = torch.empty((queries.size(1), queries.size(0), keys.size(0)), dtype=queries.dtype,
+                #                               device=queries.device)
+                # torch.baddbmm(matmul1_results, queries.transpose(0, 1),
+                #                                 keys.transpose(0, 1).transpose(1, 2),
+                #                                 out=matmul1_results, beta=0.0, alpha=scale_t[0])
+                #
+                # # print("mm1 output]", torch.any(torch.isnan(matmul1_results)))
+                # if key_padding_mask is not None:
+                #     mask = key_padding_mask
+                #     batches, seql_q, seql_k = matmul1_results.size()
+                #     seqs = int(batches / heads)
+                #     matmul1_results = matmul1_results.view(seqs, heads, seql_q, seql_k)
+                #     mask = mask.to(torch.bool)
+                #     matmul1_results = matmul1_results.masked_fill_(mask.unsqueeze(1).unsqueeze(2), float('-inf'))
+                #     matmul1_results = matmul1_results.view(seqs * heads, seql_q, seql_k)
+                #
+                # # print("softmax input]", torch.any(torch.isnan(matmul1_results)))
+                # softmax_results = F.softmax(matmul1_results , dim=-1)
+                # # print("[softmax output]", torch.any(torch.isnan(softmax_results)))
+                # softmax_results = softmax_results.type_as(matmul1_results)
+                # dropout_results = softmax_results
+                # # dropout_results = F.dropout(softmax_results, self.dropout_p, training=self.training)
+                # matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1))
+                # matmul2_results = matmul2_results.transpose(0, 1).contiguous().view(inputs.size(0), inputs.size(1),
+                #                                                                     inputs.size(2))
+                #
+                # outputs = self.out_proj(matmul2_results)
+                is_training = self.training
+                outputs, coverage = self_attn_func(False, is_training, self.num_heads, inputs,
+                                                   self.proj_weight, self.out_proj.weight,
+                                                   self.proj_bias, self.out_proj.bias,
+                                                   key_padding_mask, self.dropout_p,
+                                                   False, None,
+                                                   False, None, True)
 
                 # print(outputs.size())
-                return outputs, dropout_results
+                return outputs, coverage
 
         else:
             # using performer attention

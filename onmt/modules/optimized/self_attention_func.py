@@ -250,6 +250,8 @@ class SelfAttnFunc(torch.autograd.Function):
         # Input2: (weights)     [ embed_dim, embed_dim ]
         # Output:               [ seql_q, seqs, embed_dim ]
         # GEMM: ( seql_q*seqs x embed_dim ) x ( embed_dim x embed_dim ) = ( seql_q*seqs x embed_dim )
+        output_grads = output_grads.contiguous()
+
         output_lin_grads = torch.mm(
             output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), output_weights)
         output_lin_grads = output_lin_grads.view(output_grads.size(0), output_grads.size(1), output_weights.size(1))

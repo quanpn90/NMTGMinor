@@ -311,7 +311,7 @@ class Dataset(torch.utils.data.Dataset):
                  src_align_right=False, tgt_align_right=False,
                  verbose=False, cleaning=False, debug=False,
                  num_split=1,
-                 sa_f=8, sa_t=64,
+                 sa_f=8, sa_t=64, input_size=40,
                  past_src_data=None,
                  past_src_data_sizes=None,
                  **kwargs):
@@ -468,7 +468,7 @@ class Dataset(torch.utils.data.Dataset):
         self.batchOrder = None
 
         if augment:
-            self.augmenter = Augmenter(F=sa_f, T=sa_t)
+            self.augmenter = Augmenter(F=sa_f, T=sa_t, input_size=input_size)
         else:
             self.augmenter = None
 

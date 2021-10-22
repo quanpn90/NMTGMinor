@@ -7,6 +7,40 @@ import onmt
 
 
 # defining a Wav2vec2 encoder wrapping the HuggingFace model here
+class FairseqWav2VecExtractor(nn.Module):
+
+    def __init__(self, model_path="wav2vec_vox_new.pt"):
+        self.model_path = model_path
+        import fairseq
+        from fairseq.checkpoint_utils import load_model_ensemble_and_task, load_checkpoint_to_cpu
+        from .fairseq_wav2vec2.wav2vec2 import Wav2Vec2Model
+
+        super().__init__()
+        state = load_checkpoint_to_cpu(model_path)
+
+        self.cfg = state['cfg']['model']
+        self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg)
+        self.wav2vec_encoder.load_state_dict(state['model'])
+        self.wav2vec_encoder.remove_pretraining_modules()
+
+    def forward(self, batch, **kwargs):
+        """
+        :param batch_first_output: [bsz, seq_len, hidden_size] as output size, else transpose(0, 1)
+        :param input: torch.Tensor [batch_size, sequence_length, 2]
+        :param kwargs:
+        :return:
+        """
+        input = batch.get('source').transpose(0, 1)  # T x B x H -> B x T x H
+
+        # 0 for tokens that are not masked, 1 for tokens that are masked
+        long_mask = input.narrow(2, 0, 1).squeeze(2).eq(0).long()
+        input = input.narrow(2, 1, input.size(2) - 1).squeeze(-1)
+
+        attn_mask = long_mask
+        # wav2vec_output = self.wav2vec_encoder.extract_features(input, attn_mask, mask=self.training)
+        features, padding_mask = self.wav2vec_encoder.extract_conv_features(input, attn_mask)
+
+        return features, padding_mask
 
 
 class FairseqWav2Vec(nn.Module):
@@ -22,9 +56,9 @@ class FairseqWav2Vec(nn.Module):
         # from fairseq.models.wav2vec.wav2vec2 import Wav2Vec2Model
         from .fairseq_wav2vec2.wav2vec2 import Wav2Vec2Model
         state = load_checkpoint_to_cpu(model_path)
-        # state = torch.load()
         self.cfg = state['cfg']['model']
 
+        # don't override the options for wav2vec yet (some of them can create NaN)
         # self.cfg.dropout = self.opt.residual_dropout
         # self.cfg.activation_dropout = self.opt.ffn_dropout
         # self.cfg.attention_dropout = self.opt.attn_dropout
@@ -43,15 +77,18 @@ class FairseqWav2Vec(nn.Module):
                                                   feature_redraw_interval=1000)
             self.auto_check_redraw = True
 
+        # load wav2vec weights
         wav2vec_weights = state['model']
         existed_weights = self.wav2vec_encoder.state_dict()
+
+        # if we add new weights/buffers to new model then put them into the state_dict
         keys = existed_weights.keys()
         for key in keys:
             if key not in wav2vec_weights:
                 wav2vec_weights[key] = existed_weights[key]
 
         self.wav2vec_encoder.load_state_dict(state['model'])
-        self.wav2vec_encoder.remove_pretraining_modules()
+        self.wav2vec_encoder.remove_pretraining_modules()  # remove the quantization modules
 
         cfg = self.wav2vec_encoder.cfg
         assert self.opt.model_size == cfg.encoder_embed_dim
@@ -81,14 +118,24 @@ class FairseqWav2Vec(nn.Module):
 
         # 0 for tokens that are not masked, 1 for tokens that are masked
         long_mask = input.narrow(2, 0, 1).squeeze(2).eq(0).long()
-        input = input.narrow(2, 1, input.size(2) - 1).squeeze(-1)
+        input = input.narrow(2, 1, input.size(2) - 1)
+
+        if input.size(-1) == 1:
+            precomputed_tdnn = False
+            input = input.squeeze(-1)
+        else:
+            precomputed_tdnn = True
 
         attn_mask = long_mask
-        if self.favor:
+        if self.favor:  # favor+ attention
             if self.auto_check_redraw:
                 # print("Redraw projection ....")
                 self.proj_updater.redraw_projections()
-        wav2vec_output = self.wav2vec_encoder.extract_features(input, attn_mask, mask=self.training)
+
+        # don't mask when precomputed tdnn is used, because spec augmentation is used in the dataset
+        wav2vec_output = self.wav2vec_encoder.extract_features(input, attn_mask,
+                                                               mask=self.training and not precomputed_tdnn,
+                                                               precomputed_tdnn=precomputed_tdnn)
 
         if not batch_first_output:
             context = wav2vec_output['x'].transpose(0, 1).contiguous()

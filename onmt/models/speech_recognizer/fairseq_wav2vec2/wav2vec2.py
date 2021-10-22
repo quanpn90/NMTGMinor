@@ -17,7 +17,6 @@ from .utils import compute_mask_indices, get_activation_fn, get_available_activa
 from .enum import ChoiceEnum
 from torch.cuda.amp import autocast
 
-
 # from fairseq.models import BaseFairseqModel, register_model
 from .fairseq_modules import (
     Fp32GroupNorm,
@@ -405,11 +404,11 @@ class Wav2Vec2Model(torch.nn.Module):
         return cls(cfg)
 
     def apply_mask(
-        self,
-        x,
-        padding_mask,
-        mask_indices=None,
-        mask_channel_indices=None,
+            self,
+            x,
+            padding_mask,
+            mask_indices=None,
+            mask_channel_indices=None,
     ):
         B, T, C = x.shape
 
@@ -426,9 +425,9 @@ class Wav2Vec2Model(torch.nn.Module):
             )
             mask_channel_indices = (
                 torch.from_numpy(mask_channel_indices)
-                .to(x.device)
-                .unsqueeze(1)
-                .expand(-1, T, -1)
+                    .to(x.device)
+                    .unsqueeze(1)
+                    .expand(-1, T, -1)
             )
             x[mask_channel_indices] = 0
 
@@ -464,9 +463,9 @@ class Wav2Vec2Model(torch.nn.Module):
                 )
                 mask_channel_indices = (
                     torch.from_numpy(mask_channel_indices)
-                    .to(x.device)
-                    .unsqueeze(1)
-                    .expand(-1, T, -1)
+                        .to(x.device)
+                        .unsqueeze(1)
+                        .expand(-1, T, -1)
                 )
             x = index_put(x, mask_channel_indices, 0)
 
@@ -484,14 +483,14 @@ class Wav2Vec2Model(torch.nn.Module):
         cross_high = tsz * bsz
         high = tsz - (padding_count or 0)
         with torch.no_grad():
-            assert high > 1, f"{bsz,tsz,fsz}"
+            assert high > 1, f"{bsz, tsz, fsz}"
 
             if self.n_negatives > 0:
                 tszs = (
                     buffered_arange(num)
-                    .unsqueeze(-1)
-                    .expand(-1, self.n_negatives)
-                    .flatten()
+                        .unsqueeze(-1)
+                        .expand(-1, self.n_negatives)
+                        .flatten()
                 )
 
                 neg_idxs = torch.randint(
@@ -502,9 +501,9 @@ class Wav2Vec2Model(torch.nn.Module):
             if self.cross_sample_negatives > 0:
                 tszs = (
                     buffered_arange(num)
-                    .unsqueeze(-1)
-                    .expand(-1, self.cross_sample_negatives)
-                    .flatten()
+                        .unsqueeze(-1)
+                        .expand(-1, self.cross_sample_negatives)
+                        .flatten()
                 )
 
                 cross_neg_idxs = torch.randint(
@@ -571,59 +570,66 @@ class Wav2Vec2Model(torch.nn.Module):
         return input_lengths.to(torch.long)
 
     def forward(
-        self,
-        source,
-        padding_mask=None,
-        mask=True,
-        features_only=False,
-        layer=None,
-        mask_indices=None,
-        mask_channel_indices=None,
-        padding_count=None,
+            self,
+            source,
+            padding_mask=None,
+            mask=True,
+            features_only=False,
+            layer=None,
+            mask_indices=None,
+            mask_channel_indices=None,
+            padding_count=None,
+            precomputed_tdnn=False
     ):
-
-        if self.feature_grad_mult > 0:
-            features = self.feature_extractor(source)
-            if self.feature_grad_mult != 1.0:
-                features = GradMultiply.apply(features, self.feature_grad_mult)
-        else:
-            with torch.no_grad():
+        # if the tdnn features are precomputed then skip them
+        if not precomputed_tdnn:
+            if self.feature_grad_mult > 0:
                 features = self.feature_extractor(source)
+                if self.feature_grad_mult != 1.0:
+                    features = GradMultiply.apply(features, self.feature_grad_mult)
+            else:
+                with torch.no_grad():
+                    features = self.feature_extractor(source)
 
-        if not features_only:
-            features_pen = features.float().pow(2).mean()
+            if not features_only:
+                features_pen = features.float().pow(2).mean()
 
-        # transpose from B x C x T to B x T x C (because conv takes input as B x 1 x T)
-        features = features.transpose(1, 2)
-        features = self.layer_norm(features)
-        unmasked_features = features.clone()
-
-        if padding_mask is not None and padding_mask.any():
-            input_lengths = (1 - padding_mask.long()).sum(-1)
-            # apply conv formula to get real output_lengths
-            output_lengths = self._get_feat_extract_output_lengths(input_lengths)
-
-            padding_mask = torch.zeros(
-                features.shape[:2], dtype=features.dtype, device=features.device
-            )
-
-            # these two operations makes sure that all values
-            # before the output lengths indices are attended to
-            padding_mask[
-                (
-                    torch.arange(padding_mask.shape[0], device=padding_mask.device),
-                    output_lengths - 1,
-                )
-            ] = 1
-            padding_mask = (1 - padding_mask.flip([-1]).cumsum(-1).flip([-1])).bool()
+            # transpose from B x C x T to B x T x C (because conv takes input as B x 1 x T)
+            features = features.transpose(1, 2)
         else:
-            padding_mask = None
+            features = source
+
+        features = self.layer_norm(features)
+        unmasked_features = None
+        # unmasked_features = features.clone()
+
+        if not precomputed_tdnn:  # then compute the padding mask after the TDNN step
+            if padding_mask is not None and padding_mask.any():
+                input_lengths = (1 - padding_mask.long()).sum(-1)
+                # apply conv formula to get real output_lengths
+                output_lengths = self._get_feat_extract_output_lengths(input_lengths)
+
+                padding_mask = torch.zeros(
+                    features.shape[:2], dtype=features.dtype, device=features.device
+                )
+
+                # these two operations makes sure that all values
+                # before the output lengths indices are attended to
+                padding_mask[
+                    (
+                        torch.arange(padding_mask.shape[0], device=padding_mask.device),
+                        output_lengths - 1,
+                    )
+                ] = 1
+                padding_mask = (1 - padding_mask.flip([-1]).cumsum(-1).flip([-1])).bool()
+            else:
+                padding_mask = None
 
         if self.post_extract_proj is not None:
             features = self.post_extract_proj(features)
 
         features = self.dropout_input(features)
-        unmasked_features = self.dropout_features(unmasked_features)
+        # unmasked_features = self.dropout_features(unmasked_features)
 
         num_vars = None
         code_ppl = None
@@ -659,7 +665,6 @@ class Wav2Vec2Model(torch.nn.Module):
             y = unmasked_features
             mask_indices = None
 
-        # print(x.size())
         x, layer_results = self.encoder(x, padding_mask=padding_mask, layer=layer)
 
         if features_only:
@@ -757,9 +762,41 @@ class Wav2Vec2Model(torch.nn.Module):
         x = self.layer_norm(x)
         return self.quantizer.forward_idx(x)
 
-    def extract_features(self, source, padding_mask, mask=False, layer=None):
+    def extract_conv_features(self, source, padding_mask):
+
+        with torch.no_grad():
+            features = self.feature_extractor(source)
+
+        # transpose from B x C x T to B x T x C (because conv takes input as B x 1 x T)
+        features = features.transpose(1, 2).contiguous()
+
+        if padding_mask is not None and padding_mask.any():
+            input_lengths = (1 - padding_mask.long()).sum(-1)
+            # apply conv formula to get real output_lengths
+            output_lengths = self._get_feat_extract_output_lengths(input_lengths)
+
+            padding_mask = torch.zeros(
+                features.shape[:2], dtype=features.dtype, device=features.device
+            )
+
+            # these two operations makes sure that all values
+            # before the output lengths indices are attended to
+            padding_mask[
+                (
+                    torch.arange(padding_mask.shape[0], device=padding_mask.device),
+                    output_lengths - 1,
+                )
+            ] = 1
+            padding_mask = (1 - padding_mask.flip([-1]).cumsum(-1).flip([-1])).bool()
+        else:
+            bsz, seq_len = features.size(0), features.size(1)
+            padding_mask = features.new(bsz, seq_len).zero_()
+
+        return features, padding_mask.long()
+
+    def extract_features(self, source, padding_mask, mask=False, layer=None, precomputed_tdnn=False):
         res = self.forward(
-            source, padding_mask, mask=mask, features_only=True, layer=layer
+            source, padding_mask, mask=mask, features_only=True, layer=layer, precomputed_tdnn=precomputed_tdnn
         )
         return res
 
@@ -807,24 +844,24 @@ class Wav2Vec2Model(torch.nn.Module):
 
 class ConvFeatureExtractionModel(nn.Module):
     def __init__(
-        self,
-        conv_layers: List[Tuple[int, int, int]],
-        dropout: float = 0.0,
-        mode: str = "default",
-        conv_bias: bool = False,
+            self,
+            conv_layers: List[Tuple[int, int, int]],
+            dropout: float = 0.0,
+            mode: str = "default",
+            conv_bias: bool = False,
     ):
         super().__init__()
 
         assert mode in {"default", "layer_norm"}
 
         def block(
-            n_in,
-            n_out,
-            k,
-            stride,
-            is_layer_norm=False,
-            is_group_norm=False,
-            conv_bias=False,
+                n_in,
+                n_out,
+                k,
+                stride,
+                is_layer_norm=False,
+                is_group_norm=False,
+                conv_bias=False,
         ):
             def make_conv():
                 conv = nn.Conv1d(n_in, n_out, k, stride=stride, bias=conv_bias)
@@ -832,8 +869,8 @@ class ConvFeatureExtractionModel(nn.Module):
                 return conv
 
             assert (
-                is_layer_norm and is_group_norm
-            ) == False, "layer norm and group norm are exclusive"
+                           is_layer_norm and is_group_norm
+                   ) == False, "layer norm and group norm are exclusive"
 
             if is_layer_norm:
                 return nn.Sequential(
@@ -945,7 +982,6 @@ class TransformerEncoder(nn.Module):
         return x, layer_results
 
     def extract_features(self, x, padding_mask=None, tgt_layer=None):
-
         if padding_mask is not None:
             x = index_put(x, padding_mask, 0)
 
@@ -999,16 +1035,16 @@ class TransformerSentenceEncoderLayer(nn.Module):
     """
 
     def __init__(
-        self,
-        embedding_dim: float = 768,
-        ffn_embedding_dim: float = 3072,
-        num_attention_heads: float = 8,
-        dropout: float = 0.1,
-        attention_dropout: float = 0.1,
-        activation_dropout: float = 0.1,
-        activation_fn: str = "relu",
-        layer_norm_first: bool = False,
-        favor=False
+            self,
+            embedding_dim: float = 768,
+            ffn_embedding_dim: float = 3072,
+            num_attention_heads: float = 8,
+            dropout: float = 0.1,
+            attention_dropout: float = 0.1,
+            activation_dropout: float = 0.1,
+            activation_fn: str = "relu",
+            layer_norm_first: bool = False,
+            favor=False
     ) -> None:
 
         super().__init__()
@@ -1057,12 +1093,12 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 self.fused = True
 
     def forward(
-        self,
-        x: torch.Tensor,
-        self_attn_mask: torch.Tensor = None,
-        self_attn_padding_mask: torch.Tensor = None,
-        need_weights: bool = False,
-        att_args=None
+            self,
+            x: torch.Tensor,
+            self_attn_mask: torch.Tensor = None,
+            self_attn_padding_mask: torch.Tensor = None,
+            need_weights: bool = False,
+            att_args=None
     ):
         """
         LayerNorm is applied either before or after the self-attention/ffn
@@ -1133,7 +1169,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
                     seq_len, bsz, hidden_size = x.size(0), x.size(1), x.size(2)
                     dropout = self.dropout2.p if self.training else 0.0
                     x = self.fused_function(dropout, False, x.half().view(seq_len * bsz, -1),
-                                                 *weights, *biases).type_as(x)
+                                            *weights, *biases).type_as(x)
 
             else:
                 x = self.activation_fn(self.fc1(x))

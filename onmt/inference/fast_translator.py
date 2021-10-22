@@ -746,7 +746,7 @@ class FastTranslator(Translator):
                             batch_size_words=sys.maxsize,
                             max_src_len=sys.maxsize,
                             data_type=data_type,
-                            batch_size_sents=self.opt.batch_size,
+                            batch_size_sents=sys.maxsize,
                             src_align_right=self.opt.src_align_right,
                             past_src_data=past_src_data)
 

@@ -21,13 +21,13 @@ class Augmenter(object):
         self.mt = mt
         self.input_size = input_size
         self.concat = concat
-        print("[INFO] Spec-Augmentation with F=%d, T=%d" % (F, T))
+        print("[INFO] Spec-Augmentation with input size %d F=%d, T=%d" % (self.input_size, F, T))
 
     def augment(self, tensor):
 
         feat_size = tensor.size(1)
         original_len = tensor.size(0)
-        reshape_size = feat_size / self.input_size
+        # reshape_size = feat_size / self.input_size
 
         tensor = tensor.float()
         # First we have to upsample the tensor (if it was downsampled during preprocessing)

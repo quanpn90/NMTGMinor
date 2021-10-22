@@ -18,6 +18,7 @@ from onmt.constants import add_tokenidx
 import os
 import numpy as np
 import warnings
+
 warnings.filterwarnings("ignore", message="The given NumPy array is not writeable ")
 
 parser = argparse.ArgumentParser(description='train_distributed.py')
@@ -44,7 +45,6 @@ torch.manual_seed(opt.seed)
 
 
 def numpy_to_torch(tensor_list):
-
     out_list = list()
 
     for tensor in tensor_list:
@@ -57,7 +57,6 @@ def numpy_to_torch(tensor_list):
 
 
 def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint):
-
     from onmt.train_utils.mp_trainer import Trainer
 
     trainer = Trainer(gpu, train_data, valid_data, dicts, opt)
@@ -65,7 +64,6 @@ def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint):
 
 
 def main():
-
     if not opt.multi_dataset:
         if opt.data_format in ['bin', 'raw']:
             start = time.time()
@@ -108,7 +106,8 @@ def main():
                                           data_type=dataset.get("type", "text"), sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
                                           multiplier=opt.batch_size_multiplier,
-                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
+                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
+                                          input_size=opt.input_size,
                                           upsampling=opt.upsampling,
                                           num_split=1)
             else:
@@ -223,7 +222,7 @@ def main():
             else:
                 past_train_src_sizes = None
 
-            if opt.encoder_type == 'audio':
+            if opt.encoder_type in ['audio', 'wav2vec2_scp']:
                 data_type = 'audio'
             elif opt.encoder_type == 'wav2vec2':
                 data_type = 'wav'
@@ -241,9 +240,9 @@ def main():
                                           multiplier=opt.batch_size_multiplier,
                                           src_align_right=opt.src_align_right,
                                           upsampling=opt.upsampling,
-                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
+                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
                                           cleaning=True, verbose=True,
-                                          num_split=1,
+                                          input_size=opt.input_size,
                                           past_src_data=past_train_src,
                                           past_src_data_sizes=past_train_src_sizes)
             else:
@@ -381,7 +380,7 @@ def main():
                 else:
                     src_sizes, sizes = None, None
 
-                if opt.encoder_type == 'audio':
+                if opt.encoder_type in ['audio', 'wav2vec2_scp']:
                     data_type = 'audio'
                 elif opt.encoder_type == 'wav2vec2':
                     data_type = 'wav'
@@ -400,7 +399,8 @@ def main():
                                               src_align_right=opt.src_align_right,
                                               upsampling=opt.upsampling,
                                               cleaning=True, verbose=True,
-                                              num_split=1)
+                                              augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
+                                              input_size=opt.input_size)
 
                     train_sets.append(train_data)
 
@@ -436,7 +436,7 @@ def main():
                 else:
                     src_sizes, sizes = None, None
 
-                if opt.encoder_type == 'audio':
+                if opt.encoder_type in ['audio', 'wav2vec2_scp']:
                     data_type = 'audio'
                 elif opt.encoder_type == 'wav2vec2':
                     data_type = 'wav'
