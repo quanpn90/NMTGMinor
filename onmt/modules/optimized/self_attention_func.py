@@ -8,7 +8,6 @@ import torch
 import torch.nn.functional as F
 from onmt.constants import double_precision
 
-
 try:
     from torch.cuda.amp import custom_fwd, custom_bwd
 except (ModuleNotFoundError, ImportError) as e:
@@ -19,10 +18,15 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     mask_softmax_dropout_cuda = None
 
+try:
+    import self_multihead_attn_cuda
+except (ModuleNotFoundError, ImportError) as e:
+    self_multihead_attn_cuda = None
+
 
 def rotate_half(x):
     x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
-    return torch.cat((-x2, x1), dim=x1.ndim - 1) # dim=-1 triggers a bug in torch < 1.8.0
+    return torch.cat((-x2, x1), dim=x1.ndim - 1)  # dim=-1 triggers a bug in torch < 1.8.0
 
 
 def apply_rotary_pos_emb(q, k, cos, sin):
@@ -31,7 +35,7 @@ def apply_rotary_pos_emb(q, k, cos, sin):
 
 def rotate_backward(dx):
     dx2, dx1 = dx[..., :dx.shape[-1] // 2], dx[..., dx.shape[-1] // 2:]
-    return torch.cat((dx1, -dx2), dim=dx1.ndim-1)
+    return torch.cat((dx1, -dx2), dim=dx1.ndim - 1)
 
 
 class SelfAttnFunc(torch.autograd.Function):
@@ -54,6 +58,44 @@ class SelfAttnFunc(torch.autograd.Function):
         ctx.return_coverage = return_coverage
 
         bsz, len_q = inputs.size(1), inputs.size(0)
+
+        # if self_multihead_attn_cuda is not None and not incremental and len_q <= 2048 and not use_time_mask \
+        #         and inputs.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc:
+        #     ctx.fused = True
+        #
+        #     # additive mask
+        #     use_mask = True
+        #     if mask is not None:
+        #         mask = mask.half() * -10000
+        #     else:
+        #         mask = inputs.new(bsz, len_q).zero_()  # works
+        #
+        #     input_lin_results, \
+        #         bmm1_results, \
+        #         dropout_results, \
+        #         dropout_mask, \
+        #         matmul2_results, \
+        #         outputs = self_multihead_attn_cuda.forward(use_mask, False, is_training, heads,
+        #                                                    inputs, input_weights, output_weights,
+        #                                                    input_biases, output_biases,
+        #                                                    mask, dropout_prob)
+        #
+        #     ctx.save_for_backward(heads_t,
+        #                           scale_t,
+        #                           matmul2_results,
+        #                           dropout_results,
+        #                           bmm1_results,
+        #                           input_lin_results,
+        #                           inputs,
+        #                           input_weights,
+        #                           output_weights,
+        #                           dropout_mask,
+        #                           dropout_prob_t,
+        #                           mask)
+        #
+        #     return outputs, dropout_results
+
+        ctx.fused = False
 
         # Input Linear GEMM
         # input1: (activations) [seql_q, seqs, embed_dim(1024)]
@@ -209,6 +251,35 @@ class SelfAttnFunc(torch.autograd.Function):
     @staticmethod
     @custom_bwd
     def backward(ctx, output_grads, softmax_grads):
+
+        if ctx.fused:
+            heads_t, \
+                scale_t, \
+                matmul2_results, \
+                dropout_results, \
+                bmm1_results, \
+                input_lin_results, \
+                inputs, \
+                input_weights, \
+                output_weights, \
+                dropout_mask, \
+                dropout_prob_t, pad_mask  = ctx.saved_tensors
+
+            input_grads, \
+                input_weight_grads, \
+                output_weight_grads, \
+                input_bias_grads, \
+                output_bias_grads = self_multihead_attn_cuda.backward(heads_t[0], output_grads.contiguous(), matmul2_results,
+                                                                      dropout_results, bmm1_results, pad_mask,
+                                                                      input_lin_results, inputs, input_weights,
+                                                                      output_weights, dropout_mask, dropout_prob_t[0])
+
+            return None, None, None, \
+                   input_grads, \
+                   input_weight_grads, output_weight_grads, \
+                   input_bias_grads, output_bias_grads, \
+                   None, None, None, None, None, None, None
+
         heads_t, \
             scale_t, \
             matmul2_results, \
@@ -220,8 +291,7 @@ class SelfAttnFunc(torch.autograd.Function):
             output_weights, \
             dropout_mask, \
             dropout_prob_t, \
-            sin, cos \
-                = ctx.saved_tensors
+            sin, cos = ctx.saved_tensors
 
         head_dim = inputs.size(2) // heads_t[0]
 
@@ -299,14 +369,14 @@ class SelfAttnFunc(torch.autograd.Function):
         # Output:               [seqs*heads, seql_q, head_dim] transpose(0,1)
         # GEMM: Per batch: ( seql_q x seql_k ) x ( seql_k x head_dim ) = ( seql_q x head_dim )
         torch.baddbmm(queries_grads.transpose(0, 1), softmax_grads, keys.transpose(0, 1),
-                                      out=queries_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
+                      out=queries_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
         # Matmul1 - DGRAD2
         # Input1: (data grads)  [seqs*heads, seql_q, seql_k] transpose(1,2)
         # Input2: (activations) [seql_q, seqs*heads, head_dim] transpose(0,1)
         # Output:               [seqs*heads, seql_k, head_dim] transpose(0,1)
         # GEMM: Per batch: ( seql_k x seql_q ) x ( seql_q x head_dim ) = ( seql_k x head_dim )
         torch.baddbmm(keys_grads.transpose(0, 1), softmax_grads.transpose(1, 2), queries.transpose(0, 1),
-                                   out=keys_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
+                      out=keys_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
 
         if ctx.rotary_pos_enc:
             queries_grads_ = queries_grads * cos + rotate_backward(sin * queries_grads)
@@ -334,10 +404,10 @@ class SelfAttnFunc(torch.autograd.Function):
         input_bias_grads = torch.sum(input_lin_results_grads, 0)
 
         return None, None, None, \
-            input_grads, \
-            input_weight_grads, output_weight_grads, \
-            input_bias_grads, output_bias_grads, \
-            None, None, None, None, None, None, None
+               input_grads, \
+               input_weight_grads, output_weight_grads, \
+               input_bias_grads, output_bias_grads, \
+               None, None, None, None, None, None, None
 
 
 self_attn_func = SelfAttnFunc.apply

@@ -302,6 +302,8 @@ def make_parser(parser):
                         help="Input feature size.")
     parser.add_argument('-augment_speech', action='store_true',
                         help='Use f/t augmentation for speech')
+    parser.add_argument('-wav2vec_spec_augment', action='store_true',
+                        help='Use f/t augmentation for wav2vec')
     parser.add_argument('-upsampling', action='store_true',
                         help='In case the data is downsampled during preprocess. This option will upsample the '
                              'samples again')
@@ -740,5 +742,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'favor_attention'):
         opt.favor_attention = False
+
+    if not hasattr(opt, 'wav2vec_spec_augment'):
+        opt.wav2vec_spec_augment = False
 
     return opt

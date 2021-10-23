@@ -65,7 +65,7 @@ class FairseqWav2Vec(nn.Module):
         self.cfg.encoder_layerdrop = self.opt.death_rate / 2
         # self.cfg.dropout_features = self.opt.emb_dropout
         # self.cfg.mask_channel_before = True
-        self.cfg.mask_channel_prob = 0.2 if self.opt.augment_speech else 0.0
+        self.cfg.mask_channel_prob = 0.2 if self.opt.wav2vec_spec_augment else 0.0
         self.cfg.mask_channel_length = 64
         self.cfg.mask_prob = 0.0
 

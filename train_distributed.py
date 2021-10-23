@@ -107,6 +107,7 @@ def main():
                                           batch_size_sents=opt.batch_size_sents,
                                           multiplier=opt.batch_size_multiplier,
                                           augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
+                                          max_src_len=opt.max_src_length,
                                           input_size=opt.input_size,
                                           upsampling=opt.upsampling,
                                           num_split=1)
@@ -140,6 +141,7 @@ def main():
                                           batch_size_words=opt.batch_size_words,
                                           data_type=dataset.get("type", "text"), sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
+                                          max_src_len=opt.max_src_length,
                                           multiplier=opt.batch_size_multiplier,
                                           cleaning=True,
                                           upsampling=opt.upsampling)

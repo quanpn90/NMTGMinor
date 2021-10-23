@@ -9,9 +9,46 @@ import os
 
 from torch.utils.cpp_extension import CUDAExtension
 from torch.utils.cpp_extension import BuildExtension
+from torch.utils.cpp_extension import CUDA_HOME
 
 # ninja build does not work unless include_dirs are abs path
 this_dir = os.path.dirname(os.path.abspath(__file__))
+
+
+def get_cuda_bare_metal_version(cuda_dir):
+    raw_output = subprocess.check_output([cuda_dir + "/bin/nvcc", "-V"], universal_newlines=True)
+    output = raw_output.split()
+    release_idx = output.index("release") + 1
+    release = output[release_idx].split(".")
+    bare_metal_major = release[0]
+    bare_metal_minor = release[1][0]
+
+    return raw_output, bare_metal_major, bare_metal_minor
+
+
+def check_cuda_torch_binary_vs_bare_metal(cuda_dir):
+    raw_output, bare_metal_major, bare_metal_minor = get_cuda_bare_metal_version(cuda_dir)
+    torch_binary_major = torch.version.cuda.split(".")[0]
+    torch_binary_minor = torch.version.cuda.split(".")[1]
+
+    print("\nCompiling cuda extensions with")
+    print(raw_output + "from " + cuda_dir + "/bin\n")
+
+    if (bare_metal_major != torch_binary_major) or (bare_metal_minor != torch_binary_minor):
+        print("Cuda extensions are being compiled with a version of Cuda that does " +
+                           "not match the version used to compile Pytorch binaries.  " +
+                           "Pytorch binaries were compiled with Cuda {}.\n".format(torch.version.cuda) +
+                           "In some cases, a minor-version mismatch will not cause later errors:  " +
+                           "https://github.com/NVIDIA/apex/pull/323#discussion_r287021798.  "
+                           "You can try commenting out this check (at your own risk).")
+
+
+# Check, if ATen/CUDAGenerator.h is found, otherwise use the new
+# ATen/CUDAGeneratorImpl.h, due to breaking change in https://github.com/pytorch/pytorch/pull/36026
+generator_flag = []
+torch_dir = torch.__path__[0]
+if os.path.exists(os.path.join(torch_dir, 'include', 'ATen', 'CUDAGenerator.h')):
+    generator_flag = ['-DOLD_GENERATOR']
 
 
 def get_cuda_bare_metal_version(cuda_dir):
@@ -60,19 +97,39 @@ subprocess.run(["git", "clone", "https://github.com/NVIDIA/cutlass.git", "multih
 # subprocess.run(["git", "-C", "cutlass", "checkout", "ed2ed4d667ce95e1371bd62db32b6a114e774336"])
 subprocess.run(["git", "-C", "cutlass", "checkout", "fe3438a3c1ccbdd03dc1aca3bb68099a9e2a58bd"])
 
+
+check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)
+print(generator_flag)
+
 # ext_modules.append(
 #     CUDAExtension(name='encdec_multihead_attn_cuda',
 #                   sources=['multihead_attn/encdec_multihead_attn.cpp',
 #                            'multihead_attn/encdec_multihead_attn_cuda.cu'],
 #                   include_dirs=[os.path.join(this_dir, 'multihead_attn/cutlass')],
-#                   extra_compile_args={'cxx': ['-O3', ],
+#                   extra_compile_args={'cxx': ['-O3', ] + version_dependent_macros + generator_flag,
 #                                       'nvcc': ['-O3',
 #                                                '-I./cutlass/',
 #                                                '-U__CUDA_NO_HALF_OPERATORS__',
 #                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
 #                                                '--expt-relaxed-constexpr',
 #                                                '--expt-extended-lambda',
-#                                                '--use_fast_math'] + cc_flag}))
+#                                                '--use_fast_math'] + version_dependent_macros +
+#                                                                     generator_flag + cc_flag}))
+
+# ext_modules.append(
+#     CUDAExtension(name='self_multihead_attn_cuda',
+#                   sources=['multihead_attn/self_multihead_attn.cpp',
+#                            'multihead_attn/self_multihead_attn_cuda.cu'],
+#                   include_dirs=[os.path.join(this_dir, 'multihead_attn/cutlass')],
+#                   extra_compile_args={'cxx': ['-O3', ] + version_dependent_macros + generator_flag ,
+#                                       'nvcc': ['-O3',
+#                                                '-I./cutlass/',
+#                                                '-U__CUDA_NO_HALF_OPERATORS__',
+#                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
+#                                                '--expt-relaxed-constexpr',
+#                                                '--expt-extended-lambda',
+#                                                '--use_fast_math'] + version_dependent_macros +
+#                                                                     generator_flag + cc_flag}))
 
 # ext_modules.append(
 #     CUDAExtension(name='fused_dropout_add_cuda',
@@ -117,27 +174,25 @@ subprocess.run(["git", "-C", "cutlass", "checkout", "fe3438a3c1ccbdd03dc1aca3bb6
 # Layer Norm
 
 ext_modules.append(
-            CUDAExtension(name='fused_layer_norm_cuda',
-                          sources=['fused_layer_norm/layer_norm_cuda.cpp',
-                                   'fused_layer_norm/layer_norm_cuda_kernel.cu'],
-                          include_dirs=[os.path.join(this_dir, 'include')],
-                          extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                              'nvcc':['-maxrregcount=50',
-                                                      '-O3',
-                                                      '--use_fast_math'] + cc_flag + version_dependent_macros}))
-
+    CUDAExtension(name='fused_layer_norm_cuda',
+                  sources=['fused_layer_norm/layer_norm_cuda.cpp',
+                           'fused_layer_norm/layer_norm_cuda_kernel.cu'],
+                  include_dirs=[os.path.join(this_dir, 'include')],
+                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                                      'nvcc': ['-maxrregcount=50',
+                                               '-O3',
+                                               '--use_fast_math'] + cc_flag + version_dependent_macros}))
 
 ext_modules.append(
-            CUDAExtension(name='fused_optim',
-                          sources=['fused_optim/frontend.cpp',
-                                   'fused_optim/multi_tensor_adam.cu'],
-                          include_dirs=[os.path.join(this_dir, 'include')],
-                          extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                              'nvcc':['-lineinfo',
-                                                      '-O3',
-                                                      # '--resource-usage',
-                                                      '--use_fast_math'] + cc_flag + version_dependent_macros}))
-
+    CUDAExtension(name='fused_optim',
+                  sources=['fused_optim/frontend.cpp',
+                           'fused_optim/multi_tensor_adam.cu'],
+                  include_dirs=[os.path.join(this_dir, 'include')],
+                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                                      'nvcc': ['-lineinfo',
+                                               '-O3',
+                                               # '--resource-usage',
+                                               '--use_fast_math'] + cc_flag + version_dependent_macros}))
 
 # MLP functions
 
@@ -178,15 +233,13 @@ ext_modules.append(
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                       'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
 
-
 ext_modules.append(
-            CUDAExtension(name='xentropy_cuda',
-                          sources=['xentropy/interface.cpp',
-                                   'xentropy/xentropy_kernel.cu'],
-                          include_dirs=[os.path.join(this_dir, 'include')],
-                          extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                              'nvcc':['-O3'] + cc_flag + version_dependent_macros}))
-
+    CUDAExtension(name='xentropy_cuda',
+                  sources=['xentropy/interface.cpp',
+                           'xentropy/xentropy_kernel.cu'],
+                  include_dirs=[os.path.join(this_dir, 'include')],
+                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                                      'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
 
 setup(
     name='nmtgminor_cuda',

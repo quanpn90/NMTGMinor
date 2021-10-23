@@ -1,5 +1,5 @@
 #include "ATen/ATen.h"
-#include <THC/THCDeviceUtils.cuh>
+#include "ATen/cuda/DeviceUtils.cuh"
 
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -52,7 +52,7 @@ void cuWelfordMuSigma2(
   const int i1,
   U& mu,
   U& sigma2,
-  U* buf) 
+  U* buf)
 {
   // Assumptions:
   // 1) blockDim.x == warpSize
@@ -136,7 +136,7 @@ void cuWelfordMuSigma2(
   const int i1,
   float& mu,
   float& sigma2,
-  float* buf) 
+  float* buf)
 {
   // Assumptions:
   // 1) blockDim.x == warpSize
@@ -284,7 +284,7 @@ void cuApplyLayerNorm(
   const U epsilon,
   const T* __restrict__ gamma,
   const T* __restrict__ beta
-  ) 
+  )
 {
   // Assumptions:
   // 1) blockDim.x == warpSize
@@ -477,7 +477,7 @@ void cuComputeGradGammaBeta(
 {
     // sum partial gradients for gamma and beta
     SharedMemory<U> shared;
-    U* buf = shared.getPointer(); 
+    U* buf = shared.getPointer();
     int i2 = blockIdx.x * blockDim.x + threadIdx.x;
     if (i2 < n2) {
       // each warp does sequential reductions until reduced part_size is num_warps
@@ -580,7 +580,7 @@ void cuComputeGradInput(
     // inter-warp reductions
     if (blockDim.y > 1) {
       SharedMemory<U> shared;
-      U* buf = shared.getPointer(); 
+      U* buf = shared.getPointer();
       for (int offset = blockDim.y/2;  offset > 0;  offset /= 2) {
         // upper half of warps write to shared
         if (threadIdx.y >= offset && threadIdx.y < 2*offset) {
@@ -605,7 +605,7 @@ void cuComputeGradInput(
       if (threadIdx.y !=0) {
         sum_loss1 = buf[2*threadIdx.x];
         sum_loss2 = buf[2*threadIdx.x+1];
-      } 
+      }
     }
     // all threads now have the two sums over l
     U fH = (U)n2;
@@ -637,7 +637,7 @@ void cuComputeGradInput(
   }
 }
 
-template<typename T, typename U> 
+template<typename T, typename U>
 void HostApplyLayerNorm(
     T* output,
     U* mean,
@@ -654,9 +654,9 @@ void HostApplyLayerNorm(
     const dim3 threads(32,4,1);
     const uint64_t maxGridY = at::cuda::getCurrentDeviceProperties()->maxGridSize[1];
     const dim3 blocks(1, std::min((uint64_t)n1, maxGridY), 1);
-    int nshared = 
-        threads.y > 1 ? 
-	    threads.y*sizeof(U)+(threads.y/2)*sizeof(U) : 
+    int nshared =
+        threads.y > 1 ?
+	    threads.y*sizeof(U)+(threads.y/2)*sizeof(U) :
 	    0;
     cuApplyLayerNorm<<<blocks, threads, nshared, stream>>>(
 		    output,
@@ -668,7 +668,7 @@ void HostApplyLayerNorm(
             gamma,beta);
 }
 
-template<typename T, typename U> 
+template<typename T, typename U>
 void HostLayerNormGradient(
     const T* dout,
     const T* dout_resid,

@@ -800,7 +800,7 @@ class FastTranslator(Translator):
 
             # probably when the src is empty so beam search stops immediately
             if len(finalized[b]) == 0:
-                assert len(src_data[b]) == 0, "The target search result is empty, assuming that the source is empty."
+                # assert len(src_data[b]) == 0, "The target search result is empty, assuming that the source is empty."
                 pred_batch.append(
                     [self.build_target_tokens([], src_data[b], None)
                      for n in range(self.opt.n_best)]
