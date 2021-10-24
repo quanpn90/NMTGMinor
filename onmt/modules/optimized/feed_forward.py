@@ -141,36 +141,36 @@ class PositionWiseFeedForward(nn.Module):
 
             # if autocast is enabled: manually cast the function args into half manually
             # for some reason custom_fwd(...) doesn't work
-            with autocast(enabled=False):
-                weights = [self.in_proj_weight.half(), self.out_proj_weight.half()]
-                biases = [self.in_proj_bias.half(), self.out_proj_bias.half()]
+            # with autocast(enabled=False):
+            weights = [self.in_proj_weight, self.out_proj_weight]
+            biases = [self.in_proj_bias, self.out_proj_bias]
 
-                seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
+            seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
 
-                dropout = self.dropout if self.training else 0.0
+            dropout = self.dropout if self.training else 0.0
 
-                if self.fused_dropout_add:
-                    res_dropout = self.res_dropout if self.training else 0.0
-                    hidden = self.fused_function(dropout, res_dropout, input.half().view(seq_len * bsz, -1),
-                                                               *weights, *biases).type_as(input)
-                else:
-                    recompute = onmt.constants.recompute
-                    hidden = self.fused_function(dropout, recompute, input.half().view(seq_len * bsz, -1),
-                                                               *weights, *biases).type_as(input)
-                hidden = hidden.view(seq_len, bsz, hidden_size)
+            if self.fused_dropout_add:
+                res_dropout = self.res_dropout if self.training else 0.0
+                hidden = self.fused_function(dropout, res_dropout, input.view(seq_len * bsz, -1),
+                                                           *weights, *biases)
+            else:
+                recompute = onmt.constants.recompute
+                hidden = self.fused_function(dropout, recompute, input.view(seq_len * bsz, -1),
+                                                           *weights, *biases)
+            hidden = hidden.view(seq_len, bsz, hidden_size)
 
-                # verification code (only with dropout = 0.0)
-                # with torch.no_grad():
-                #     hidden_ = F.linear(self.act(F.linear(input, self.in_proj_weight, self.in_proj_bias)),
-                #                        self.out_proj_weight, self.out_proj_bias).type_as(hidden)
-                #
-                #     if self.fused_dropout_add:
-                #         hidden_.add_(input)
-                #
-                #     comp = torch.allclose(hidden, hidden_, rtol=1e-02, atol=1e-03)
-                #     if not comp:
-                #         print("Warning! The fused function doesn't match the PyTorch function.")
-                #         print(hidden - hidden_)
+            # verification code (only with dropout = 0.0)
+            # with torch.no_grad():
+            #     hidden_ = F.linear(self.act(F.linear(input, self.in_proj_weight, self.in_proj_bias)),
+            #                        self.out_proj_weight, self.out_proj_bias).type_as(hidden)
+            #
+            #     if self.fused_dropout_add:
+            #         hidden_.add_(input)
+            #
+            #     comp = torch.allclose(hidden, hidden_, rtol=1e-02, atol=1e-03)
+            #     if not comp:
+            #         print("Warning! The fused function doesn't match the PyTorch function.")
+            #         print(hidden - hidden_)
 
         else:
             if self.autograd:

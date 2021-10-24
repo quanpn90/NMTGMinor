@@ -1081,14 +1081,20 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
         # TODO: replacing this with fused MLP
         self.fused = False
+        self.fused_blaslt = False
         if self.activation_fn_name == 'relu':
             from onmt.modules.mlp.mlp import mlp_relu_function
             if mlp_relu_function is not None:
                 self.fused_function = mlp_relu_function
                 self.fused = True
         elif self.activation_fn_name == 'gelu':
-            from onmt.modules.mlp.mlp import mlp_gelu_function
-            if mlp_gelu_function is not None:
+            from onmt.modules.mlp.mlp import mlp_gelu_function, mlp_gelu_blaslt_function
+            if mlp_gelu_blaslt_function is not None:
+                self.fused_function = mlp_gelu_blaslt_function
+                self.fused = True
+                # self.fused_blaslt = True
+
+            if mlp_gelu_function is not None and not self.fused_blaslt:
                 self.fused_function = mlp_gelu_function
                 self.fused = True
 
@@ -1124,20 +1130,22 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
             residual = x
             x = self.final_layer_norm(x)
-            # print("[ffn input]", torch.any(torch.isnan(x)))
-
-            # print("[FFN input]", torch.any(torch.isnan(x)))
 
             if self.fused and x.is_cuda:
-                with autocast(enabled=False):
-                    weights = [self.fc1.weight.half(), self.fc2.weight.half()]
-                    biases = [self.fc1.bias.half(), self.fc2.bias.half()]
+                dropout = self.dropout2.p if self.training else 0.0
+                seq_len, bsz, hidden_size = x.size(0), x.size(1), x.size(2)
+                if self.fused_blaslt and dropout == 0.0:
+                    # print("[DEBUGGING] BLASLT")
+                    x = self.fused_function(x.view(seq_len * bsz, -1), self.fc1.weight, self.fc1.bias,
+                                            self.fc2.weight, self.fc2.bias)
+                else:
+                    weights = [self.fc1.weight, self.fc2.weight]
+                    biases = [self.fc1.bias, self.fc2.bias]
 
-                    seq_len, bsz, hidden_size = x.size(0), x.size(1), x.size(2)
-                    dropout = self.dropout2.p if self.training else 0.0
-                    x = self.fused_function(dropout, False, x.half().view(seq_len * bsz, -1),
-                                            *weights, *biases).type_as(x)
-                    x = x.view(seq_len, bsz, hidden_size)
+                    x = self.fused_function(dropout, False, x.view(seq_len * bsz, -1),
+                                            *weights, *biases)
+
+                x = x.view(seq_len, bsz, hidden_size)
             else:
                 x = self.activation_fn(self.fc1(x))
                 x = self.dropout2(x)
@@ -1162,15 +1170,22 @@ class TransformerSentenceEncoderLayer(nn.Module):
             residual = x
 
             if self.fused and x.is_cuda:
-                with autocast(enabled=False):
-                    weights = [self.fc1.weight.half(), self.fc2.weight.half()]
-                    biases = [self.fc1.bias.half(), self.fc2.bias.half()]
+                dropout = self.dropout2.p if self.training else 0.0
+                print(dropout)
+                if self.fused_blaslt and dropout == 0.0:
+                    print("[DEBUGGING] BLASLT")
+                    x = self.fused_function(x.view(seq_len * bsz, -1), self.fc1.weight, self.fc1.bias,
+                                            self.fc2.weight, self.fc2.bias)
+                else:
+                    weights = [self.fc1.weight, self.fc2.weight]
+                    biases = [self.fc1.bias, self.fc2.bias]
 
                     seq_len, bsz, hidden_size = x.size(0), x.size(1), x.size(2)
-                    dropout = self.dropout2.p if self.training else 0.0
-                    x = self.fused_function(dropout, False, x.half().view(seq_len * bsz, -1),
-                                            *weights, *biases).type_as(x)
 
+                    x = self.fused_function(dropout, False, x.view(seq_len * bsz, -1),
+                                            *weights, *biases)
+
+                x = x.view(seq_len, bsz, hidden_size)
             else:
                 x = self.activation_fn(self.fc1(x))
                 x = self.dropout2(x)

@@ -134,8 +134,7 @@ class FairseqWav2Vec(nn.Module):
 
         # don't mask when precomputed tdnn is used, because spec augmentation is used in the dataset
         wav2vec_output = self.wav2vec_encoder.extract_features(input, attn_mask,
-                                                               mask=self.training and not precomputed_tdnn,
-                                                               precomputed_tdnn=precomputed_tdnn)
+                                                               mask=self.training)
 
         if not batch_first_output:
             context = wav2vec_output['x'].transpose(0, 1).contiguous()

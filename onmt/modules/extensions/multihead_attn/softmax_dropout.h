@@ -133,7 +133,6 @@ float p)
             for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
     	        //masking_value is a large negative value
                 elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
-//                elements_input[i][it + element] = -10000;
             }
 
             if (element_index < batch_element_count) {

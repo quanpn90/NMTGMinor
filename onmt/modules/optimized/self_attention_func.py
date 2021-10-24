@@ -40,7 +40,7 @@ def rotate_backward(dx):
 
 class SelfAttnFunc(torch.autograd.Function):
     @staticmethod
-    @custom_fwd(cast_inputs=torch.float16)
+    # @custom_fwd(cast_inputs=torch.float16)
     def forward(ctx, use_time_mask, is_training, heads, inputs,
                 input_weights, output_weights,
                 input_biases, output_biases,
@@ -63,28 +63,32 @@ class SelfAttnFunc(torch.autograd.Function):
         #         and inputs.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc:
         #     ctx.fused = True
         #
-        #     # additive mask
         #     use_mask = True
         #     if mask is not None:
-        #         mask = mask.half() * -10000
+        #         mask = mask.bool()
         #     else:
-        #         mask = inputs.new(bsz, len_q).zero_()  # works
+        #         mask = inputs.new(bsz, len_q).zero_().bool()  # works
+        #
+        #     mask = mask.unsqueeze(1).unsqueeze(2)
         #
         #     input_lin_results, \
-        #         bmm1_results, \
+        #         softmax_results, \
         #         dropout_results, \
         #         dropout_mask, \
         #         matmul2_results, \
         #         outputs = self_multihead_attn_cuda.forward(use_mask, False, is_training, heads,
-        #                                                    inputs, input_weights, output_weights,
+        #                                                    inputs.contiguous(), input_weights, output_weights,
         #                                                    input_biases, output_biases,
         #                                                    mask, dropout_prob)
+        #     #
+        #     # print("[bmm1 check]", torch.any(torch.isnan(bmm1_results)))
+        #     # print("[softmax check]", torch.any(torch.isnan(dropout_results)))
         #
         #     ctx.save_for_backward(heads_t,
         #                           scale_t,
         #                           matmul2_results,
         #                           dropout_results,
-        #                           bmm1_results,
+        #                           softmax_results,
         #                           input_lin_results,
         #                           inputs,
         #                           input_weights,
@@ -249,36 +253,37 @@ class SelfAttnFunc(torch.autograd.Function):
             return (outputs,)
 
     @staticmethod
-    @custom_bwd
+    # @custom_bwd
     def backward(ctx, output_grads, softmax_grads):
 
-        if ctx.fused:
-            heads_t, \
-                scale_t, \
-                matmul2_results, \
-                dropout_results, \
-                bmm1_results, \
-                input_lin_results, \
-                inputs, \
-                input_weights, \
-                output_weights, \
-                dropout_mask, \
-                dropout_prob_t, pad_mask  = ctx.saved_tensors
+        # if ctx.fused:
+        #     heads_t, \
+        #         scale_t, \
+        #         matmul2_results, \
+        #         dropout_results, \
+        #         softmax_results, \
+        #         input_lin_results, \
+        #         inputs, \
+        #         input_weights, \
+        #         output_weights, \
+        #         dropout_mask, \
+        #         dropout_prob_t, pad_mask = ctx.saved_tensors
+        #
+        #     input_grads, \
+        #         input_weight_grads, \
+        #         output_weight_grads, \
+        #         input_bias_grads, \
+        #         output_bias_grads = self_multihead_attn_cuda.backward(heads_t[0], output_grads.contiguous(), matmul2_results,
+        #                                                               dropout_results, softmax_results, pad_mask,
+        #                                                               input_lin_results, inputs, input_weights,
+        #                                                               output_weights, dropout_mask, dropout_prob_t[0])
+        #
+        #     return None, None, None, \
+        #            input_grads, \
+        #            input_weight_grads, output_weight_grads, \
+        #            input_bias_grads, output_bias_grads, \
+        #            None, None, None, None, None, None, None
 
-            input_grads, \
-                input_weight_grads, \
-                output_weight_grads, \
-                input_bias_grads, \
-                output_bias_grads = self_multihead_attn_cuda.backward(heads_t[0], output_grads.contiguous(), matmul2_results,
-                                                                      dropout_results, bmm1_results, pad_mask,
-                                                                      input_lin_results, inputs, input_weights,
-                                                                      output_weights, dropout_mask, dropout_prob_t[0])
-
-            return None, None, None, \
-                   input_grads, \
-                   input_weight_grads, output_weight_grads, \
-                   input_bias_grads, output_bias_grads, \
-                   None, None, None, None, None, None, None
 
         heads_t, \
             scale_t, \
@@ -410,4 +415,17 @@ class SelfAttnFunc(torch.autograd.Function):
                None, None, None, None, None, None, None
 
 
-self_attn_func = SelfAttnFunc.apply
+def _cast_if_autocast_enabled(*args):
+    if not torch.is_autocast_enabled():
+        return args
+    else:
+        try:
+            return torch.cuda.amp.autocast_mode._cast(args, torch.get_autocast_gpu_dtype())
+        except AttributeError:
+            return torch.cuda.amp.autocast_mode._cast(args, torch.half)
+
+
+def self_attn_func(*args):
+    args = _cast_if_autocast_enabled(*args)
+    with torch.cuda.amp.autocast(enabled=False):
+        return SelfAttnFunc.apply(*args)

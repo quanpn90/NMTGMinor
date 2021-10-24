@@ -15,7 +15,7 @@ std::vector<torch::Tensor> fwd_cuda(
                                torch::Tensor const& output_weights,
                                torch::Tensor const& input_biases,
                                torch::Tensor const& output_biases,
-                               const half*       pad_mask,
+                               torch::Tensor const& pad_mask,
                                float                dropout_prob
                                                   );
 
@@ -24,7 +24,7 @@ std::vector<torch::Tensor> bwd_cuda(
                                torch::Tensor const& output_grads,
                                torch::Tensor const& matmul2_results,
                                torch::Tensor const& dropout_results,
-                               torch::Tensor const& bmm1_results,
+                               torch::Tensor const& softmax_results,
                                torch::Tensor const& pad_mask,
                                torch::Tensor const& input_lin_results,
                                torch::Tensor const& inputs,
@@ -62,8 +62,8 @@ std::vector<torch::Tensor> fwd(
   AT_ASSERTM(use_mask                                                  , "no mask is not supported");
 
   if (use_mask) {
-  	AT_ASSERTM(pad_mask.dim()                     == 2,                    "expected 2D tensor");
-  	AT_ASSERTM(pad_mask.type().scalarType()       == at::ScalarType::Half, "Only Half is supported");
+  	AT_ASSERTM(pad_mask.dim()                     == 4,                    "expected 2D tensor");
+//  	AT_ASSERTM(pad_mask.type().scalarType()       == at::ScalarType::Half, "Only Half is supported");
   }
 
   return fwd_cuda(
@@ -75,7 +75,7 @@ std::vector<torch::Tensor> fwd(
                                  output_weights,
                                  input_biases,
                                  output_biases,
-                                 use_mask ? static_cast<const half*>(pad_mask.data_ptr()) : nullptr,
+                                 pad_mask,
                                  dropout_prob
                                 );
 }
@@ -85,7 +85,7 @@ std::vector<torch::Tensor> bwd(
                                torch::Tensor const& output_grads,
                                torch::Tensor const& matmul2_results,
                                torch::Tensor const& dropout_results,
-                               torch::Tensor const& bmm1_results,
+                               torch::Tensor const& softmax_results,
                                torch::Tensor const& pad_mask,
                                torch::Tensor const& input_lin_results,
                                torch::Tensor const& inputs,
@@ -118,8 +118,8 @@ std::vector<torch::Tensor> bwd(
                                  output_grads,
                                  matmul2_results,
                                  dropout_results,
-				 bmm1_results,
-				 pad_mask,
+                                 softmax_results,
+                                 pad_mask,
                                  input_lin_results,
                                  inputs,
                                  input_weights,

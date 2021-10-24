@@ -93,9 +93,9 @@ if (TORCH_MAJOR > 1) or (TORCH_MAJOR == 1 and TORCH_MINOR > 4):
 version_dependent_macros = version_ge_1_1 + version_ge_1_3 + version_ge_1_5
 
 # subprocess.run(["git", "submodule", "update", "--init", "cutlass"])
-subprocess.run(["git", "clone", "https://github.com/NVIDIA/cutlass.git", "multihead_attn/cutlass"])
+# subprocess.run(["git", "clone", "https://github.com/NVIDIA/cutlass.git", "multihead_attn/cutlass"])
 # subprocess.run(["git", "-C", "cutlass", "checkout", "ed2ed4d667ce95e1371bd62db32b6a114e774336"])
-subprocess.run(["git", "-C", "cutlass", "checkout", "fe3438a3c1ccbdd03dc1aca3bb68099a9e2a58bd"])
+# subprocess.run(["git", "-C", "cutlass", "checkout", "fe3438a3c1ccbdd03dc1aca3bb68099a9e2a58bd"])
 
 
 check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)
@@ -116,6 +116,7 @@ print(generator_flag)
 #                                                '--use_fast_math'] + version_dependent_macros +
 #                                                                     generator_flag + cc_flag}))
 
+# This Module Is Not Working
 # ext_modules.append(
 #     CUDAExtension(name='self_multihead_attn_cuda',
 #                   sources=['multihead_attn/self_multihead_attn.cpp',
@@ -183,6 +184,22 @@ ext_modules.append(
                                                '-O3',
                                                '--use_fast_math'] + cc_flag + version_dependent_macros}))
 
+
+ext_modules.append(
+    CUDAExtension(name='fast_layer_norm_cuda',
+                  sources=['layer_norm/ln_api.cpp',
+                           'layer_norm/ln_fwd_cuda_kernel.cu',
+                           'layer_norm/ln_bwd_semi_cuda_kernel.cu'],
+                  include_dirs=[os.path.join(this_dir, 'include')],
+                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                                      'nvcc': ['-O3',
+                                               '-U__CUDA_NO_HALF_OPERATORS__',
+                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
+                                               '--expt-relaxed-constexpr',
+                                               '--expt-extended-lambda',
+                                               '--use_fast_math'] + cc_flag + version_dependent_macros + generator_flag}))
+#
+#
 ext_modules.append(
     CUDAExtension(name='fused_optim',
                   sources=['fused_optim/frontend.cpp',
@@ -191,9 +208,9 @@ ext_modules.append(
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                       'nvcc': ['-lineinfo',
                                                '-O3',
-                                               # '--resource-usage',
+                                               '--resource-usage',
                                                '--use_fast_math'] + cc_flag + version_dependent_macros}))
-
+#
 # MLP functions
 
 
@@ -210,14 +227,14 @@ ext_modules.append(
                            'mlp/mlp_silu_cuda.cu'],
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                       'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
-
+#
 # Approximated GELU function
-ext_modules.append(
-    CUDAExtension(name='fused_mlp_agelu',
-                  sources=['mlp/mlp_agelu.cpp',
-                           'mlp/mlp_agelu_cuda.cu'],
-                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                      'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
+# ext_modules.append(
+#     CUDAExtension(name='fused_mlp_agelu',
+#                   sources=['mlp/mlp_agelu.cpp',
+#                            'mlp/mlp_agelu_cuda.cu'],
+#                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+#                                       'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
 
 ext_modules.append(
     CUDAExtension(name='fused_mlp_gelu',
@@ -226,12 +243,12 @@ ext_modules.append(
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                       'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
 
-ext_modules.append(
-    CUDAExtension(name='fused_mlp_gelu_dropout_add',
-                  sources=['mlp/mlp_gelu_dropoutadd.cpp',
-                           'mlp/mlp_gelu_dropoutadd_cuda.cu'],
-                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                      'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
+# ext_modules.append(
+#     CUDAExtension(name='fused_mlp_gelu_dropout_add',
+#                   sources=['mlp/mlp_gelu_dropoutadd.cpp',
+#                            'mlp/mlp_gelu_dropoutadd_cuda.cu'],
+#                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+#                                       'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
 
 ext_modules.append(
     CUDAExtension(name='xentropy_cuda',
@@ -240,6 +257,13 @@ ext_modules.append(
                   include_dirs=[os.path.join(this_dir, 'include')],
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                       'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
+#
+ext_modules.append(
+    CUDAExtension(name='fused_mlp_gelu_blaslt',
+                  sources=['mlp_blaslt/fused_dense_gelu_dense.cpp',
+                           'mlp_blaslt/fused_dense_gelu_dense_cuda.cu'],
+                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                                      'nvcc': ['-O3'] + version_dependent_macros}))
 
 setup(
     name='nmtgminor_cuda',

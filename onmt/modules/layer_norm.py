@@ -7,13 +7,6 @@ from torch.nn import functional as F
 import importlib
 
 try:
-    import apex.amp as amp
-    from apex.amp import half_function
-except (ModuleNotFoundError, ImportError) as e:
-    amp = None
-    from .optimized.compat import half_function
-
-try:
     from torch.cuda.amp import custom_fwd, custom_bwd
 except (ModuleNotFoundError, ImportError) as e:
     from .optimized.compat import custom_fwd, custom_bwd
@@ -21,13 +14,23 @@ except (ModuleNotFoundError, ImportError) as e:
 global fused_layer_norm_cuda
 fused_layer_norm_cuda = None
 
+
+def _cast_if_autocast_enabled(*args):
+    if not torch.is_autocast_enabled():
+        return args
+    else:
+        try:
+            return torch.cuda.amp.autocast_mode._cast(args, torch.get_autocast_gpu_dtype())
+        except AttributeError:
+            return torch.cuda.amp.autocast_mode._cast(args, torch.half)
+
+
 """
 Faster version of Layer Norm from apex (new)
 """
 
 try:
-    import apex
-    import fast_layer_norm
+    import fast_layer_norm_cuda
 
     fast_fused = True
     # print("[INFO] Fast layer norm implementation detected.")
@@ -46,7 +49,7 @@ class FastLayerNormFN(torch.autograd.Function):
         beta = beta.contiguous()
         hidden_size = gamma.numel()
         xmat = x.view((-1, hidden_size))
-        ymat, mu, rsigma = fast_layer_norm.ln_fwd(xmat, gamma, beta, epsilon)
+        ymat, mu, rsigma = fast_layer_norm_cuda.ln_fwd(xmat, gamma, beta, epsilon)
         ctx.save_for_backward(x, gamma, mu, rsigma)
         return ymat.view(x.shape)
 
@@ -60,7 +63,7 @@ class FastLayerNormFN(torch.autograd.Function):
         hidden_size = gamma.numel()
         xmat = x.view((-1, hidden_size))
         dymat = dy.view(xmat.shape)
-        dxmat, dgamma, dbeta = fast_layer_norm.ln_bwd(dymat, xmat, mu, rsigma, gamma)
+        dxmat, dgamma, dbeta = fast_layer_norm_cuda.ln_bwd(dymat, xmat, mu, rsigma, gamma)
         dx = dxmat.view(x.shape)
         return dx, dgamma, dbeta, None
 
@@ -73,7 +76,6 @@ Fast version of Layer Norm from Apex
 class FusedLayerNormAffineFunction(torch.autograd.Function):
 
     @staticmethod
-    @custom_fwd(cast_inputs=torch.float16)
     def forward(ctx, input, weight, bias, normalized_shape, eps):
         global fused_layer_norm_cuda
         if fused_layer_norm_cuda is None:
@@ -89,7 +91,6 @@ class FusedLayerNormAffineFunction(torch.autograd.Function):
         return output
 
     @staticmethod
-    @custom_bwd
     def backward(ctx, grad_output):
         input_, weight_, bias_, mean, invvar = ctx.saved_tensors
         grad_input = grad_weight = grad_bias = None
@@ -103,7 +104,6 @@ class FusedLayerNormAffineFunction(torch.autograd.Function):
 class FusedLayerNormFunction(torch.autograd.Function):
 
     @staticmethod
-    @custom_fwd(cast_inputs=torch.float16)
     def forward(ctx, input, normalized_shape, eps):
         global fused_layer_norm_cuda
         if fused_layer_norm_cuda is None:
@@ -117,7 +117,6 @@ class FusedLayerNormFunction(torch.autograd.Function):
         return output
 
     @staticmethod
-    @custom_bwd
     def backward(ctx, grad_output):
         input_, mean, invvar = ctx.saved_tensors
         grad_input = None
@@ -128,36 +127,20 @@ class FusedLayerNormFunction(torch.autograd.Function):
         return grad_input, None, None
 
 
-@half_function
 def fast_layer_norm_affine(input, weight, bias, normalized_shape, eps=1e-6):
     return FastLayerNormFN.apply(input, weight, bias, eps)
 
 
-@half_function
 def fused_layer_norm_affine(input, weight, bias, normalized_shape, eps=1e-6):
-    return FusedLayerNormAffineFunction.apply(input, weight, bias, normalized_shape, eps)
+    args = _cast_if_autocast_enabled(input, weight, bias, normalized_shape, eps)
+    with torch.cuda.amp.autocast(enabled=False):
+        return FusedLayerNormAffineFunction.apply(*args)
 
 
-@half_function
 def fused_layer_norm(input, normalized_shape, eps=1e-6):
-    return FusedLayerNormFunction.apply(input, normalized_shape, eps)
-
-
-def tiny_value_of_dtype(dtype: torch.dtype):
-    """
-    Returns a moderately tiny value for a given PyTorch data type that is used to avoid numerical
-    issues such as division by zero.
-    This is different from `info_value_of_dtype(dtype).tiny` because it causes some NaN bugs.
-    Only supports floating point dtypes.
-    """
-    if not dtype.is_floating_point:
-        raise TypeError("Only supports floating point dtypes.")
-    if dtype == torch.float or dtype == torch.double:
-        return 1e-13
-    elif dtype == torch.half:
-        return 1e-4
-    else:
-        raise TypeError("Does not support dtype " + str(dtype))
+    args = _cast_if_autocast_enabled(input, normalized_shape, eps)
+    with torch.cuda.amp.autocast(enabled=False):
+        return FusedLayerNormFunction.apply(*args)
 
 
 class FP32LayerNorm(torch.nn.Module):
@@ -234,7 +217,7 @@ class LayerNorm(torch.nn.Module):
 
         eps = self.eps
 
-        if not (input.is_cuda and input.type() == 'torch.cuda.HalfTensor' ) or not self.fused:
+        if not (input.is_cuda and input.type() == 'torch.cuda.HalfTensor') or not self.fused:
             return F.layer_norm(
                 input, self.normalized_shape, self.weight, self.bias, eps)
         if self.elementwise_affine:
@@ -243,7 +226,7 @@ class LayerNorm(torch.nn.Module):
             if fast_fused and input.size(-1) == 1024:
                 return fast_layer_norm_affine(input, self.weight, self.bias, self.normalized_shape, eps)
 
-            return FusedLayerNormAffineFunction.apply(
+            return fused_layer_norm_affine(
                 input, self.weight, self.bias, self.normalized_shape, eps)
         else:
             return FusedLayerNormFunction.apply(input, self.normalized_shape, eps)
@@ -292,7 +275,6 @@ class MultilingualLayerNorm(torch.nn.Module):
 
     def forward(self, input, factor):
 
-        # eps = tiny_value_of_dtype(input.dtype)
         eps = self.eps
 
         if self.elementwise_affine:

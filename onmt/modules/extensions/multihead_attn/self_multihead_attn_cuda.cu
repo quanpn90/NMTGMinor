@@ -1,7 +1,7 @@
 #include <vector>
 #include <math.h>
 #include <iostream>
-
+#include "THC/THC.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
@@ -12,7 +12,7 @@
 #include <torch/extension.h>
 
 #include "strided_batched_gemm.h"
-#include "softmax_apex.h"
+#include "softmax.h"
 #include "dropout.h"
 #include "layer_norm.h"
 
@@ -32,7 +32,7 @@ std::vector<torch::Tensor> fwd_cuda(
                                torch::Tensor const& output_weights,
                                torch::Tensor const& input_biases,
                                torch::Tensor const& output_biases,
-                               const half*       pad_mask,
+                               torch::Tensor const& pad_mask,
                                float                dropout_prob
                                    )
 {
@@ -63,8 +63,9 @@ std::vector<torch::Tensor> fwd_cuda(
   auto mask_options = act_options.dtype(torch::kUInt8);
 
   torch::Tensor input_lin_results = torch::empty({q_seq_len, sequences, output_lin_dim}, act_options);
-  torch::Tensor bmm1_results   = torch::empty({attn_batches, q_seq_len, k_seq_len},   act_options);
+  torch::Tensor attn_scores          = torch::empty({attn_batches, q_seq_len, k_seq_len},      act_options);
   torch::Tensor dropout_results   = torch::empty({attn_batches, q_seq_len, k_seq_len},   act_options);
+  torch::Tensor softmax_results   = torch::empty({attn_batches, q_seq_len, k_seq_len},   act_options);
   torch::Tensor dropout_mask      = torch::empty({attn_batches, q_seq_len, k_seq_len},   mask_options);
   torch::Tensor matmul2_results   = torch::empty({q_seq_len, attn_batches, head_dim},    act_options);
   torch::Tensor outputs           = torch::empty_like(inputs, act_options);
@@ -75,8 +76,9 @@ std::vector<torch::Tensor> fwd_cuda(
   void* v_lin_results_ptr   = static_cast<void*>(static_cast<half*>(input_lin_results.data_ptr()) + 2*head_dim);
 
   // Softmax Intermediate Result Ptr (used by Matmul1 -> Softmax)
-  void* bmm1_results_ptr = static_cast<void*>(bmm1_results.data_ptr());
+  void* attn_scores_ptr = static_cast<void*>(attn_scores.data_ptr());
   void* dropout_results_ptr = static_cast<void*>(dropout_results.data_ptr());
+  void* softmax_results_ptr = static_cast<void*>(softmax_results.data_ptr());
 
   char a_layout_t{'t'};
   char a_layout_n{'n'};
@@ -120,35 +122,90 @@ std::vector<torch::Tensor> fwd_cuda(
                              lead_dim,
                              batch_stride,
                              beta_zero,
-                             static_cast<half*>(bmm1_results_ptr),
+                             static_cast<half*>(attn_scores_ptr),
                              k_seq_len,
                              k_seq_len*q_seq_len,
                              attn_batches);
   // Padded Softmax
-  bool softmax_success = false;
-  if (is_training && dropout_prob > 0.0f) {
-      softmax_success = dispatch_additive_masked_softmax_dropout<half, half, float>(
-                           reinterpret_cast<half*>(dropout_results_ptr),
-                           (is_training) ? reinterpret_cast<uint8_t*>(dropout_mask.data_ptr<uint8_t>()) : nullptr,
-                           reinterpret_cast<const half*>(bmm1_results_ptr),
-                           pad_mask,
-      		               attn_batches*q_seq_len*q_seq_len,
-                           k_seq_len,
-                           k_seq_len,
-                           attn_batches*q_seq_len,
-                           attn_batches*q_seq_len/sequences,
-      		               1.0f-dropout_prob,
-		                   stream);
+//  bool softmax_success = false;
+//  if (is_training && dropout_prob > 0.0f) {
+//      softmax_success = dispatch_additive_masked_softmax_dropout<half, half, float>(
+//                           reinterpret_cast<half*>(dropout_results_ptr),
+//                           (is_training) ? reinterpret_cast<uint8_t*>(dropout_mask.data_ptr<uint8_t>()) : nullptr,
+//                           reinterpret_cast<const half*>(attn_scores_ptr),
+//                               pad_mask,
+//      		               attn_batches*q_seq_len*q_seq_len,
+//                           k_seq_len,
+//                           k_seq_len,
+//                           attn_batches*q_seq_len,
+//                           attn_batches*q_seq_len/sequences,
+//      		               1.0f-dropout_prob,
+//		                   stream);
+//  } else {
+//      softmax_success = dispatch_additive_masked_softmax<half, half, float>(
+//                             reinterpret_cast<half*>(dropout_results_ptr), // this is actually softmax results, but making it consistent for the next function
+//                             reinterpret_cast<const half*>(attn_scores_ptr),
+//                             pad_mask,
+//                             k_seq_len,
+//                             k_seq_len,
+//                             attn_batches*q_seq_len,
+//                             attn_batches*q_seq_len/sequences);
+//  }
+
+//  softmax_results.copy_(attn_scores);
+  attn_scores.view({sequences*heads, q_seq_len, k_seq_len});
+  attn_scores.view({sequences, heads, q_seq_len, k_seq_len}).masked_fill_(pad_mask,
+                                                                          -std::numeric_limits<float>::infinity());
+
+//  bool softmax_success = false;
+
+//  softmax_success = dispatch_softmax<half, half, float>(
+//                             reinterpret_cast<half*>(softmax_results_ptr),
+//                             reinterpret_cast<const half*>(attn_scores_ptr),
+//                             k_seq_len,
+//                             k_seq_len,
+//                             attn_batches*q_seq_len);
+  softmax_results = at::softmax(attn_scores, -1);
+
+  if (is_training) {
+    apex_fused_dropout_cuda<at::Half,float,uint32_t>(
+                               static_cast<at::Half const*>(softmax_results.data_ptr()),
+                               static_cast<at::Half*>(dropout_results.data_ptr()),
+                               static_cast<uint8_t*>(dropout_mask.data_ptr()),
+                               dropout_elems,
+                               (1.0f - dropout_prob));
   } else {
-      softmax_success = dispatch_additive_masked_softmax<half, half, float>(
-                             reinterpret_cast<half*>(dropout_results_ptr), // this is actually softmax results, but making it consistent for the next function
-                             reinterpret_cast<const half*>(bmm1_results_ptr),
-                             pad_mask,
-                             k_seq_len,
-                             k_seq_len,
-                             attn_batches*q_seq_len,
-                             attn_batches*q_seq_len/sequences);
+    dropout_results.copy_(softmax_results);
   }
+
+//  assert(softmax_success);
+
+
+
+//  if (is_training && dropout_prob > 0.0) {
+//      softmax_success = dispatch_softmax_dropout<half, half, float>(
+//                             reinterpret_cast<half*>(dropout_results_ptr),
+//                             reinterpret_cast<half*>(softmax_results_ptr),
+//                             reinterpret_cast<uint8_t*>(dropout_mask.data_ptr<uint8_t>()),
+//                             reinterpret_cast<const half*>(attn_scores_ptr),
+//                             dropout_elems,
+//                             k_seq_len,
+//                             k_seq_len,
+//                             attn_batches*q_seq_len,
+//                             (1.0f - dropout_prob),
+//                             stream);
+//  } else {
+//      softmax_success = dispatch_softmax<half, half, float>(
+//                             reinterpret_cast<half*>(dropout_results_ptr),
+//                             reinterpret_cast<const half*>(attn_scores_ptr),
+//                             dropout_elems,
+//                             k_seq_len,
+//                             k_seq_len,
+//                             attn_batches*q_seq_len,
+//                             stream);
+
+
+//  }
 
   // Matmul2
   gemm_switch_fp32accum(     state,
@@ -198,7 +255,7 @@ std::vector<torch::Tensor> fwd_cuda(
 
   return {
            input_lin_results,
-           bmm1_results,
+           softmax_results,
            dropout_results,
            dropout_mask,
            matmul2_results,
@@ -211,7 +268,7 @@ std::vector<torch::Tensor> bwd_cuda(
                                torch::Tensor const& output_grads,
                                torch::Tensor const& matmul2_results,
                                torch::Tensor const& dropout_results,
-                               torch::Tensor const& bmm1_results,
+                               torch::Tensor const& softmax_results,
                                torch::Tensor const& pad_mask,
                                torch::Tensor const& input_lin_results,
                                torch::Tensor const& inputs,
@@ -307,7 +364,7 @@ std::vector<torch::Tensor> bwd_cuda(
                              CUDA_R_32F,
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
-  auto  output_bias_grads = output_grads.view({-1, embed_dim}) .sum(0, false);
+  auto  output_bias_grads = output_grads.view({-1, embed_dim}).sum(0, false);
   // MatMul2 Dgrad1
   gemm_switch_fp32accum(     state,
                              a_layout_t,
@@ -351,31 +408,50 @@ std::vector<torch::Tensor> bwd_cuda(
   // Apply Dropout Mask and Scale by Dropout Probability
   // Softmax Grad
 
-  if ( dropout_prob > 0.0f) {
-      dispatch_masked_scale_softmax_backward_recompute<half, half, float, false>(
-                                 static_cast<half*>(matmul2_grads.data_ptr()),
-                                 static_cast<half* const>(matmul2_grads.data_ptr()),
-                                 reinterpret_cast<half const*>(bmm1_results.data_ptr()),
-                                 reinterpret_cast<half const*>(pad_mask.data_ptr()),
-                                 static_cast<uint8_t const*>(dropout_mask.data_ptr()),
-                                 1.0/(1.0-dropout_prob),
-                                 k_seq_len,
-                                 k_seq_len,
-                                 attn_batches*q_seq_len/sequences,
-                                 attn_batches*q_seq_len,
-                                 stream);
-  } else {
-      // if dropout == 0 then we don't need to recompute (because dropout_results == softmax_results)
-      dispatch_softmax_backward_norecompute<half, half, float, false>(
-                                 static_cast<half*>(matmul2_grads.data_ptr()),
-                                 static_cast<half* const>(matmul2_grads.data_ptr()),
-                                 reinterpret_cast<half const*>(dropout_results.data_ptr()),
-                                 k_seq_len,
-                                 k_seq_len,
-                                 attn_batches*q_seq_len/sequences,
-                                 attn_batches*q_seq_len,
-                                 stream);
-  }
+//  if ( dropout_prob > 0.0f) {
+//      dispatch_masked_scale_softmax_backward_recompute<half, half, float, false>(
+//                                 static_cast<half*>(matmul2_grads.data_ptr()),
+//                                 static_cast<half* const>(matmul2_grads.data_ptr()),
+//                                 reinterpret_cast<half const*>(bmm1_results.data_ptr()),
+//                                 reinterpret_cast<half const*>(pad_mask.data_ptr()),
+//                                 static_cast<uint8_t const*>(dropout_mask.data_ptr()),
+//                                 1.0/(1.0-dropout_prob),
+//                                 k_seq_len,
+//                                 k_seq_len,
+//                                 attn_batches*q_seq_len/sequences,
+//                                 attn_batches*q_seq_len,
+//                                 stream);
+//  } else {
+//      // if dropout == 0 then we don't need to recompute (because dropout_results == softmax_results)
+//      dispatch_softmax_backward_norecompute<half, half, float, false>(
+//                                 static_cast<half*>(matmul2_grads.data_ptr()),
+//                                 static_cast<half* const>(matmul2_grads.data_ptr()),
+//                                 reinterpret_cast<half const*>(dropout_results.data_ptr()),
+//                                 k_seq_len,
+//                                 k_seq_len,
+//                                 attn_batches*q_seq_len/sequences,
+//                                 attn_batches*q_seq_len,
+//                                 stream);
+//  }
+//  dispatch_masked_scale_softmax_backward_recompute<half, half, float, false>(
+//                                 static_cast<half*>(matmul2_grads.data_ptr()),
+//                                 static_cast<half* const>(matmul2_grads.data_ptr()),
+//                                 reinterpret_cast<half const*>(softmax_results.data_ptr()),
+//                                 static_cast<uint8_t const*>(dropout_mask.data_ptr()),
+//                                 1.0/(1.0-dropout_prob),
+//                                 k_seq_len,
+//                                 k_seq_len,
+//                                 attn_batches*q_seq_len,
+//                                 stream);
+
+    bool softmax_success = dispatch_softmax_backward<half, half, float>(
+                             static_cast<half*>(matmul2_grads.data_ptr()),
+                             static_cast<half*>(matmul2_grads.data_ptr()),
+                             reinterpret_cast<half const*>(softmax_results.data_ptr()),
+                             k_seq_len,
+                             k_seq_len,
+                             attn_batches*q_seq_len);
+
 
   // Matmul1 Dgrad1
   gemm_switch_fp32accum(     state,

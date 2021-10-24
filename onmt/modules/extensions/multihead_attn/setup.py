@@ -42,9 +42,9 @@ cc_flag.append('-gencode')
 cc_flag.append('arch=compute_86,code=sm_86')
 
 # subprocess.run(["git", "submodule", "update", "--init", "cutlass"])
-subprocess.run(["git", "clone", "https://github.com/NVIDIA/cutlass.git", "cutlass"])
+# subprocess.run(["git", "clone", "https://github.com/NVIDIA/cutlass.git", "cutlass"])
 # subprocess.run(["git", "-C", "cutlass", "checkout", "ed2ed4d667ce95e1371bd62db32b6a114e774336"])
-subprocess.run(["git", "-C", "cutlass", "checkout", "fe3438a3c1ccbdd03dc1aca3bb68099a9e2a58bd"])
+# subprocess.run(["git", "-C", "cutlass", "checkout", "fe3438a3c1ccbdd03dc1aca3bb68099a9e2a58bd"])
 
 
 ext_modules.append(

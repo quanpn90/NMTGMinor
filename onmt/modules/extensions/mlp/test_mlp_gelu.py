@@ -8,15 +8,6 @@ from time import time
 import numpy as np
 import random
 
-import silu_cuda
-
-try:
-    import apex.amp as amp
-    from apex.amp import half_function
-except (ModuleNotFoundError, ImportError) as e:
-    amp = None
-    from ..optimized.compat import half_function
-
 try:
     from torch.cuda.amp import custom_fwd, custom_bwd
 except (ModuleNotFoundError, ImportError) as e:
@@ -37,7 +28,10 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     fused_mlp_gelu = None
 
-
+try:
+    import fused_mlp_gelu_blaslt
+except (ModuleNotFoundError, ImportError) as e:
+    fused_mlp_gelu = fused_mlp_gelu_blaslt
 #
 # class MlpReluFunction(torch.autograd.Function):
 #     @staticmethod
@@ -139,13 +133,13 @@ class MlpGeLUFunction(torch.autograd.Function):
 
 
 if fused_mlp_agelu:
-    mlp_agelu_function = half_function(MlpAGeLUFunction.apply)
+    mlp_agelu_function = MlpAGeLUFunction.apply
 else:
     mlp_agelu_function = None
 
 
 if fused_mlp_gelu:
-    mlp_gelu_function = half_function(MlpGeLUFunction.apply)
+    mlp_gelu_function = MlpGeLUFunction.apply
 else:
     mlp_gelu_function = None
 

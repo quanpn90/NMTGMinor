@@ -1,19 +1,26 @@
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <assert.h>
+#include <ATen/ATen.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <torch/torch.h>
+#include <cmath>
+#include <math.h>
 
 /* Includes, cuda */
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
+#include <ATen/CUDAGeneratorImpl.h>
+#include <curand_kernel.h>
 
-#if defined(CUBLAS_VERSION) && CUBLAS_VERSION >= 11000
+//#if defined(CUBLAS_VERSION) && CUBLAS_VERSION >= 11000
 // includes cublaslt
 #include <cublasLt.h>
-#endif
+//#endif
 // FP64 Wrapper around cublas GEMMEx
 cublasStatus_t gemm_bias(
     cublasHandle_t handle,
@@ -129,7 +136,7 @@ cublasStatus_t gemm_bias(
 }
 
 
-#if defined(CUBLAS_VERSION) && CUBLAS_VERSION >= 11600
+//#if defined(CUBLAS_VERSION) && CUBLAS_VERSION >= 11600
 
 
 int gemm_bias_lt(
@@ -1136,7 +1143,7 @@ CLEANUP:
   return status == CUBLAS_STATUS_SUCCESS ? 0 : 1;
 }
 
-#endif
+//#endif
 //
 //template <typename T>
 //int linear_bias_forward_cuda(at::Tensor input, T *weight, at::Tensor bias, int in_features, int batch_size, int out_features,
