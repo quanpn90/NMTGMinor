@@ -1283,7 +1283,7 @@ int linear_gelu_linear_forward_cuda(T *input, T *weight1, T *bias1, T *weight2, 
     const float alpha          = 1.0;
     const float beta_zero       = 0.0;
     int status = 1;
-#if defined(CUBLAS_VERSION) && CUBLAS_VERSION >= 11600
+//#if defined(CUBLAS_VERSION) && CUBLAS_VERSION >= 11600
 
     // first layer (with gelu)
     status = gemm_bias_gelu_lt(
@@ -1332,9 +1332,9 @@ int linear_gelu_linear_forward_cuda(T *input, T *weight1, T *bias1, T *weight2, 
     true,
     static_cast<const void*>(bias2));
     return status;
-#else
-    return 1;
-#endif
+//#else
+//    return 1;
+//#endif
 }
 
 template <typename T>
@@ -1346,7 +1346,7 @@ int linear_gelu_linear_backward_cuda(T *input, T *gelu_in, T *output1, T *weight
     const float alpha          = 1.0;
     const float beta_zero       = 0.0;
     int status = 1;
-#if defined(CUBLAS_VERSION) && CUBLAS_VERSION >= 11600
+//#if defined(CUBLAS_VERSION) && CUBLAS_VERSION >= 11600
 //wgrad for first gemm
     status = gemm_bgradb_lt(
     (cublasLtHandle_t)handle,
@@ -1424,7 +1424,7 @@ int linear_gelu_linear_backward_cuda(T *input, T *gelu_in, T *output1, T *weight
       &beta_zero,
       d_input,
       in_features);
-#endif
+//#endif
     return status;
 
 }

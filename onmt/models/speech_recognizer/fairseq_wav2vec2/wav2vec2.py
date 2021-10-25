@@ -1092,7 +1092,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             if mlp_gelu_blaslt_function is not None:
                 self.fused_function = mlp_gelu_blaslt_function
                 self.fused = True
-                # self.fused_blaslt = True
+                self.fused_blaslt = True
 
             if mlp_gelu_function is not None and not self.fused_blaslt:
                 self.fused_function = mlp_gelu_function

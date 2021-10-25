@@ -39,7 +39,7 @@ except (ModuleNotFoundError, ImportError) as e:
 try:
     import fused_mlp_gelu_blaslt
 except (ModuleNotFoundError, ImportError) as e:
-    fused_mlp_gelu = fused_mlp_gelu_blaslt
+    fused_mlp_gelu_blaslt = None
 
 
 def _cast_if_autocast_enabled(*args):

@@ -258,12 +258,13 @@ ext_modules.append(
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                       'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
 #
-ext_modules.append(
-    CUDAExtension(name='fused_mlp_gelu_blaslt',
-                  sources=['mlp_blaslt/fused_dense_gelu_dense.cpp',
-                           'mlp_blaslt/fused_dense_gelu_dense_cuda.cu'],
-                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                      'nvcc': ['-O3'] + version_dependent_macros}))
+# Wait until CUBLAS_VERSION >= 11600 to build. Otherwise have to build custom pytorch
+# ext_modules.append(
+#     CUDAExtension(name='fused_mlp_gelu_blaslt',
+#                   sources=['mlp_blaslt/fused_dense_gelu_dense.cpp',
+#                            'mlp_blaslt/fused_dense_gelu_dense_cuda.cu'],
+#                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+#                                       'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
 
 setup(
     name='nmtgminor_cuda',
