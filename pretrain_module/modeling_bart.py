@@ -892,8 +892,11 @@ class BartDecoder(BartPretrainedModel):
 
         self.model_size = config.d_model
         self.switchout = 0.0
-        self.word_lut = self.embed_tokens
         self.config.bert_hidden_size = config.d_model
+
+    @property
+    def word_lut(self):
+        return self.embed_tokens
 
     def get_input_embeddings(self):
         return self.embed_tokens

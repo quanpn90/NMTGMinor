@@ -1,4 +1,4 @@
-    # Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Facebook, Inc. and its affiliates.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
@@ -244,7 +244,7 @@ class Binarizer:
     @staticmethod
     def binarize_file_single_thread(filename, tokenizer, vocab, worker_id=0, bos_word=None, eos_word=None,
                                     offset=0, end=-1, data_type='int64', verbose=False,
-                                    external_tokenizer=""):
+                                    external_tokenizer="", lang=None):
         """
         This function should read in the lines, convert sentences to tensors
         And then finalize into a dataset?
@@ -258,7 +258,14 @@ class Binarizer:
 
         count = 0
 
-        if "bart" in external_tokenizer.lower():
+        if "mbart-large-50" in external_tokenizer.lower():
+            if worker_id == 0:
+                print("[INFO] Using the external mBART-50 tokenizer...")
+
+            from transformers import MBart50TokenizerFast
+            ext_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50", src_lang=lang)
+
+        elif "bart" in external_tokenizer.lower():
             if worker_id == 0:
                 print("[INFO] Using the external BART tokenizer...")
 
@@ -277,7 +284,6 @@ class Binarizer:
             line = safe_readline(f)
 
             while line:
-
                 if 0 < end < f.tell():
                     break
 
@@ -314,7 +320,8 @@ class Binarizer:
 
     @staticmethod
     def binarize_file(filename, vocab, tokenizer, bos_word=None, eos_word=None,
-                      data_type='int64', num_workers=1, verbose=False, external_tokenizer=""):
+                      data_type='int64', num_workers=1, verbose=False, external_tokenizer="",
+                      lang=None):
 
         result = dict()
 
@@ -350,7 +357,8 @@ class Binarizer:
         else:
             sp_result = Binarizer.binarize_file_single_thread(filename, tokenizer, vocab, 0, bos_word, eos_word,
                                                               offsets[0], offsets[1], data_type,
-                                                              external_tokenizer=external_tokenizer)
+                                                              external_tokenizer=external_tokenizer,
+                                                              lang=lang)
             merge_result(sp_result)
 
         final_result['data'] = list()

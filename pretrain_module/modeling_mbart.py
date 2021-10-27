@@ -47,13 +47,11 @@ import onmt
 from collections import defaultdict
 from .configuration_mbart import MBartConfig
 
-
-logger = logging.get_logger(__name__)
+# logger = logging.get_logger(__name__)
 
 _CHECKPOINT_FOR_DOC = "facebook/mbart-large-cc25"
 _CONFIG_FOR_DOC = "MBartConfig"
 _TOKENIZER_FOR_DOC = "MBartTokenizer"
-
 
 MBART_PRETRAINED_MODEL_ARCHIVE_LIST = [
     "facebook/mbart-large-cc25",
@@ -137,12 +135,12 @@ class MBartAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
     def __init__(
-        self,
-        embed_dim: int,
-        num_heads: int,
-        dropout: float = 0.0,
-        is_decoder: bool = False,
-        bias: bool = True,
+            self,
+            embed_dim: int,
+            num_heads: int,
+            dropout: float = 0.0,
+            is_decoder: bool = False,
+            bias: bool = True,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -150,7 +148,7 @@ class MBartAttention(nn.Module):
         self.dropout = dropout
         self.head_dim = embed_dim // num_heads
         assert (
-            self.head_dim * num_heads == self.embed_dim
+                self.head_dim * num_heads == self.embed_dim
         ), f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.embed_dim} and `num_heads`: {num_heads})."
         self.scaling = self.head_dim ** -0.5
         self.is_decoder = is_decoder
@@ -164,13 +162,13 @@ class MBartAttention(nn.Module):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
     def forward(
-        self,
-        hidden_states: torch.Tensor,
-        key_value_states: Optional[torch.Tensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        layer_head_mask: Optional[torch.Tensor] = None,
-        output_attentions: bool = False,
+            self,
+            hidden_states: torch.Tensor,
+            key_value_states: Optional[torch.Tensor] = None,
+            past_key_value: Optional[Tuple[torch.Tensor]] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            layer_head_mask: Optional[torch.Tensor] = None,
+            output_attentions: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
 
@@ -281,18 +279,32 @@ class MBartEncoderLayer(nn.Module):
         )
         self.self_attn_layer_norm = nn.LayerNorm(self.embed_dim)
         self.dropout = config.dropout
+
         self.activation_fn = ACT2FN[config.activation_function]
         self.activation_dropout = config.activation_dropout
         self.fc1 = nn.Linear(self.embed_dim, config.encoder_ffn_dim)
         self.fc2 = nn.Linear(config.encoder_ffn_dim, self.embed_dim)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim)
 
+        self.activation_fn_name = config.activation_function
+        self.fused = False
+        if self.activation_fn_name == 'relu':
+            from onmt.modules.mlp.mlp import mlp_relu_function
+            if mlp_relu_function is not None:
+                self.fused_function = mlp_relu_function
+                self.fused = True
+        elif self.activation_fn_name == 'gelu':
+            from onmt.modules.mlp.mlp import mlp_gelu_function
+            if mlp_gelu_function is not None:
+                self.fused_function = mlp_gelu_function
+                self.fused = True
+
     def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: torch.Tensor,
-        layer_head_mask: torch.Tensor,
-        output_attentions: bool = False,
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: torch.Tensor,
+            layer_head_mask: torch.Tensor,
+            output_attentions: bool = False,
     ):
         """
         Args:
@@ -325,7 +337,7 @@ class MBartEncoderLayer(nn.Module):
         hidden_states = residual + hidden_states
 
         if hidden_states.dtype == torch.float16 and (
-            torch.isinf(hidden_states).any() or torch.isnan(hidden_states).any()
+                torch.isinf(hidden_states).any() or torch.isnan(hidden_states).any()
         ):
             clamp_value = torch.finfo(hidden_states.dtype).max - 1000
             hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
@@ -360,22 +372,40 @@ class MBartDecoderLayer(nn.Module):
             dropout=config.attention_dropout,
             is_decoder=True,
         )
+
+        self.activation_fn_name = config.activation_function
+        self.fused = False
+        if self.activation_fn_name == 'relu':
+            from onmt.modules.mlp.mlp import mlp_relu_function
+            if mlp_relu_function is not None:
+                self.fused_function = mlp_relu_function
+                self.fused = True
+        elif self.activation_fn_name == 'gelu':
+            from onmt.modules.mlp.mlp import mlp_gelu_function
+            if mlp_gelu_function is not None:
+                self.fused_function = mlp_gelu_function
+                self.fused = True
+
         self.encoder_attn_layer_norm = nn.LayerNorm(self.embed_dim)
         self.fc1 = nn.Linear(self.embed_dim, config.decoder_ffn_dim)
         self.fc2 = nn.Linear(config.decoder_ffn_dim, self.embed_dim)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim)
 
+    @property
+    def word_lut(self):
+        return self.embed_tokens
+
     def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        layer_head_mask: Optional[torch.Tensor] = None,
-        cross_attn_layer_head_mask: Optional[torch.Tensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = True,
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: Optional[torch.Tensor] = None,
+            encoder_hidden_states: Optional[torch.Tensor] = None,
+            encoder_attention_mask: Optional[torch.Tensor] = None,
+            layer_head_mask: Optional[torch.Tensor] = None,
+            cross_attn_layer_head_mask: Optional[torch.Tensor] = None,
+            past_key_value: Optional[Tuple[torch.Tensor]] = None,
+            output_attentions: Optional[bool] = False,
+            use_cache: Optional[bool] = True,
     ):
         """
         Args:
@@ -437,9 +467,21 @@ class MBartDecoderLayer(nn.Module):
         # Fully Connected
         residual = hidden_states
         hidden_states = self.final_layer_norm(hidden_states)
-        hidden_states = self.activation_fn(self.fc1(hidden_states))
-        hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
-        hidden_states = self.fc2(hidden_states)
+
+        if self.fused and hidden_states.is_cuda:
+            weights = [self.fc1.weight, self.fc2.weight]
+            biases = [self.fc1.bias, self.fc2.bias]
+
+            seq_len, bsz, hidden_size = hidden_states.size(0), hidden_states.size(1), hidden_states.size(2)
+            dropout = self.activation_dropout if self.training else 0.0
+            hidden_states = self.fused_function(dropout, False, hidden_states.view(seq_len * bsz, -1),
+                                                *weights, *biases).type_as(hidden_states)
+            hidden_states = hidden_states.view(seq_len, bsz, hidden_size)
+        else:
+            hidden_states = self.activation_fn(self.fc1(hidden_states))
+            hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
+            hidden_states = self.fc2(hidden_states)
+
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
 
@@ -452,31 +494,6 @@ class MBartDecoderLayer(nn.Module):
             outputs += (present_key_value,)
 
         return outputs
-
-
-# Copied from transformers.models.bart.modeling_bart.BartClassificationHead with Bart->MBart
-class MBartClassificationHead(nn.Module):
-    """Head for sentence-level classification tasks."""
-
-    def __init__(
-        self,
-        input_dim: int,
-        inner_dim: int,
-        num_classes: int,
-        pooler_dropout: float,
-    ):
-        super().__init__()
-        self.dense = nn.Linear(input_dim, inner_dim)
-        self.dropout = nn.Dropout(p=pooler_dropout)
-        self.out_proj = nn.Linear(inner_dim, num_classes)
-
-    def forward(self, hidden_states: torch.Tensor):
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = self.dense(hidden_states)
-        hidden_states = torch.tanh(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = self.out_proj(hidden_states)
-        return hidden_states
 
 
 class MBartPreTrainedModel(PreTrainedModel):
@@ -696,14 +713,14 @@ class MBartEncoder(MBartPreTrainedModel):
         self.gradient_checkpointing = False
 
     def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        head_mask=None,
-        inputs_embeds=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
+            self,
+            input_ids=None,
+            attention_mask=None,
+            head_mask=None,
+            inputs_embeds=None,
+            output_attentions=None,
+            output_hidden_states=None,
+            return_dict=None,
     ):
         r"""
         Args:
@@ -837,7 +854,7 @@ class MBartDecoder(MBartPreTrainedModel):
         embed_tokens (nn.Embedding): output embedding
     """
 
-    def __init__(self, config: MBartConfig, embed_tokens: Optional[nn.Embedding] = None):
+    def __init__(self, config: MBartConfig, opt, embed_tokens: Optional[nn.Embedding] = None):
         super().__init__(config)
         self.dropout = config.dropout
         self.layerdrop = config.decoder_layerdrop
@@ -860,6 +877,16 @@ class MBartDecoder(MBartPreTrainedModel):
 
         self.init_weights()
         self.gradient_checkpointing = False
+
+        self.model_size = config.d_model
+        self.switchout = 0.0
+        # self.word_lut = self.embed_tokens
+        self.config.bert_hidden_size = config.d_model
+        self.layerdrop = opt.death_rate / 2
+        self.dec_pretrained_model = 'mbart'
+        self.embed_tokens.weight.requires_grad = False
+
+        # TODO: more options to freeze weights in each layer
 
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -887,19 +914,19 @@ class MBartDecoder(MBartPreTrainedModel):
         return combined_attention_mask
 
     def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        encoder_hidden_states=None,
-        encoder_attention_mask=None,
-        head_mask=None,
-        cross_attn_head_mask=None,
-        past_key_values=None,
-        inputs_embeds=None,
-        use_cache=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
+            self,
+            input_ids=None,
+            attention_mask=None,
+            encoder_hidden_states=None,
+            encoder_attention_mask=None,
+            head_mask=None,
+            cross_attn_head_mask=None,
+            past_key_values=None,
+            inputs_embeds=None,
+            use_cache=None,
+            output_attentions=None,
+            output_hidden_states=None,
+            return_dict=None,
     ):
         r"""
         Args:
@@ -1035,9 +1062,9 @@ class MBartDecoder(MBartPreTrainedModel):
             if self.gradient_checkpointing and self.training:
 
                 if use_cache:
-                    logger.warning(
-                        "`use_cache=True` is incompatible with gradient checkpointing`. Setting `use_cache=False`..."
-                    )
+                    # logger.warning(
+                    #     "`use_cache=True` is incompatible with gradient checkpointing`. Setting `use_cache=False`..."
+                    # )
                     use_cache = False
 
                 def create_custom_forward(module):
@@ -1104,732 +1131,731 @@ class MBartDecoder(MBartPreTrainedModel):
             cross_attentions=all_cross_attentions,
         )
 
-
-@add_start_docstrings(
-    "The bare MBART Model outputting raw hidden-states without any specific head on top.",
-    MBART_START_DOCSTRING,
-)
-class MBartModel(MBartPreTrainedModel):
-    def __init__(self, config: MBartConfig):
-        super().__init__(config)
-
-        padding_idx, vocab_size = config.pad_token_id, config.vocab_size
-        self.shared = nn.Embedding(vocab_size, config.d_model, padding_idx)
-
-        self.encoder = MBartEncoder(config, self.shared)
-        self.decoder = MBartDecoder(config, self.shared)
-
-        self.init_weights()
-
-    def get_input_embeddings(self):
-        return self.shared
-
-    def set_input_embeddings(self, value):
-        self.shared = value
-        self.encoder.embed_tokens = self.shared
-        self.decoder.embed_tokens = self.shared
-
-    def get_encoder(self):
-        return self.encoder
-
-    def get_decoder(self):
-        return self.decoder
-
-    @add_start_docstrings_to_model_forward(MBART_INPUTS_DOCSTRING)
-    @add_code_sample_docstrings(
-        processor_class=_TOKENIZER_FOR_DOC,
-        checkpoint=_CHECKPOINT_FOR_DOC,
-        output_type=Seq2SeqModelOutput,
-        config_class=_CONFIG_FOR_DOC,
-    )
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        decoder_input_ids=None,
-        decoder_attention_mask=None,
-        head_mask=None,
-        decoder_head_mask=None,
-        cross_attn_head_mask=None,
-        encoder_outputs=None,
-        past_key_values=None,
-        inputs_embeds=None,
-        decoder_inputs_embeds=None,
-        use_cache=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
-    ):
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        # different to other models, MBart automatically creates decoder_input_ids from
-        # input_ids if no decoder_input_ids are provided
-        if decoder_input_ids is None and decoder_inputs_embeds is None:
-            decoder_input_ids = shift_tokens_right(input_ids, self.config.pad_token_id)
-
-        if encoder_outputs is None:
-            encoder_outputs = self.encoder(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                head_mask=head_mask,
-                inputs_embeds=inputs_embeds,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
-        # If the user passed a tuple for encoder_outputs, we wrap it in a BaseModelOutput when return_dict=True
-        elif return_dict and not isinstance(encoder_outputs, BaseModelOutput):
-            encoder_outputs = BaseModelOutput(
-                last_hidden_state=encoder_outputs[0],
-                hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
-                attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
-            )
-
-        # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
-        decoder_outputs = self.decoder(
-            input_ids=decoder_input_ids,
-            attention_mask=decoder_attention_mask,
-            encoder_hidden_states=encoder_outputs[0],
-            encoder_attention_mask=attention_mask,
-            head_mask=decoder_head_mask,
-            cross_attn_head_mask=cross_attn_head_mask,
-            past_key_values=past_key_values,
-            inputs_embeds=decoder_inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-
-        if not return_dict:
-            return decoder_outputs + encoder_outputs
-
-        return Seq2SeqModelOutput(
-            last_hidden_state=decoder_outputs.last_hidden_state,
-            past_key_values=decoder_outputs.past_key_values,
-            decoder_hidden_states=decoder_outputs.hidden_states,
-            decoder_attentions=decoder_outputs.attentions,
-            cross_attentions=decoder_outputs.cross_attentions,
-            encoder_last_hidden_state=encoder_outputs.last_hidden_state,
-            encoder_hidden_states=encoder_outputs.hidden_states,
-            encoder_attentions=encoder_outputs.attentions,
-        )
-
-
-@add_start_docstrings(
-    "The MBART Model with a language modeling head. Can be used for summarization.", MBART_START_DOCSTRING
-)
-class MBartForConditionalGeneration(MBartPreTrainedModel):
-    base_model_prefix = "model"
-    _keys_to_ignore_on_load_missing = [
-        r"final_logits_bias",
-        r"encoder\.version",
-        r"decoder\.version",
-        r"lm_head\.weight",
-    ]
-
-    def __init__(self, config: MBartConfig):
-        super().__init__(config)
-        self.model = MBartModel(config)
-        self.register_buffer("final_logits_bias", torch.zeros((1, self.model.shared.num_embeddings)))
-        self.lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=False)
-
-        self.init_weights()
-
-    def get_encoder(self):
-        return self.model.get_encoder()
-
-    def get_decoder(self):
-        return self.model.get_decoder()
-
-    def resize_token_embeddings(self, new_num_tokens: int) -> nn.Embedding:
-        new_embeddings = super().resize_token_embeddings(new_num_tokens)
-        self._resize_final_logits_bias(new_num_tokens)
-        return new_embeddings
-
-    def _resize_final_logits_bias(self, new_num_tokens: int) -> None:
-        old_num_tokens = self.final_logits_bias.shape[-1]
-        if new_num_tokens <= old_num_tokens:
-            new_bias = self.final_logits_bias[:, :new_num_tokens]
-        else:
-            extra_bias = torch.zeros((1, new_num_tokens - old_num_tokens), device=self.final_logits_bias.device)
-            new_bias = torch.cat([self.final_logits_bias, extra_bias], dim=1)
-        self.register_buffer("final_logits_bias", new_bias)
-
-    def get_output_embeddings(self):
-        return self.lm_head
-
-    def set_output_embeddings(self, new_embeddings):
-        self.lm_head = new_embeddings
-
-    @add_start_docstrings_to_model_forward(MBART_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=Seq2SeqLMOutput, config_class=_CONFIG_FOR_DOC)
-    @add_end_docstrings(MBART_GENERATION_EXAMPLE)
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        decoder_input_ids=None,
-        decoder_attention_mask=None,
-        head_mask=None,
-        decoder_head_mask=None,
-        cross_attn_head_mask=None,
-        encoder_outputs=None,
-        past_key_values=None,
-        inputs_embeds=None,
-        decoder_inputs_embeds=None,
-        labels=None,
-        use_cache=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
-    ):
-        r"""
-        labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-            Labels for computing the masked language modeling loss. Indices should either be in ``[0, ...,
-            config.vocab_size]`` or -100 (see ``input_ids`` docstring). Tokens with indices set to ``-100`` are ignored
-            (masked), the loss is only computed for the tokens with labels in ``[0, ..., config.vocab_size]``.
-
-        Returns:
-
-        """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        if labels is not None:
-            if decoder_input_ids is None:
-                decoder_input_ids = shift_tokens_right(labels, self.config.pad_token_id)
-
-        outputs = self.model(
-            input_ids,
-            attention_mask=attention_mask,
-            decoder_input_ids=decoder_input_ids,
-            encoder_outputs=encoder_outputs,
-            decoder_attention_mask=decoder_attention_mask,
-            head_mask=head_mask,
-            decoder_head_mask=decoder_head_mask,
-            cross_attn_head_mask=cross_attn_head_mask,
-            past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
-            decoder_inputs_embeds=decoder_inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-        lm_logits = self.lm_head(outputs[0]) + self.final_logits_bias
-
-        masked_lm_loss = None
-        if labels is not None:
-            loss_fct = CrossEntropyLoss()
-            masked_lm_loss = loss_fct(lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
-
-        if not return_dict:
-            output = (lm_logits,) + outputs[1:]
-            return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
-
-        return Seq2SeqLMOutput(
-            loss=masked_lm_loss,
-            logits=lm_logits,
-            past_key_values=outputs.past_key_values,
-            decoder_hidden_states=outputs.decoder_hidden_states,
-            decoder_attentions=outputs.decoder_attentions,
-            cross_attentions=outputs.cross_attentions,
-            encoder_last_hidden_state=outputs.encoder_last_hidden_state,
-            encoder_hidden_states=outputs.encoder_hidden_states,
-            encoder_attentions=outputs.encoder_attentions,
-        )
-
-    def prepare_inputs_for_generation(
-        self,
-        decoder_input_ids,
-        past=None,
-        attention_mask=None,
-        head_mask=None,
-        decoder_head_mask=None,
-        cross_attn_head_mask=None,
-        use_cache=None,
-        encoder_outputs=None,
-        **kwargs
-    ):
-        # cut decoder_input_ids if past is used
-        if past is not None:
-            decoder_input_ids = decoder_input_ids[:, -1:]
-
-        return {
-            "input_ids": None,  # encoder_outputs is defined. input_ids not needed
-            "encoder_outputs": encoder_outputs,
-            "past_key_values": past,
-            "decoder_input_ids": decoder_input_ids,
-            "attention_mask": attention_mask,
-            "head_mask": head_mask,
-            "decoder_head_mask": decoder_head_mask,
-            "cross_attn_head_mask": cross_attn_head_mask,
-            "use_cache": use_cache,  # change this to avoid caching (presumably for debugging)
-        }
-
-    def prepare_decoder_input_ids_from_labels(self, labels: torch.Tensor):
-        return shift_tokens_right(labels, self.config.pad_token_id)
-
-    @staticmethod
-    def _reorder_cache(past, beam_idx):
-        reordered_past = ()
-        for layer_past in past:
-            # cached cross_attention states don't have to be reordered -> they are always the same
-            reordered_past += (
-                tuple(past_state.index_select(0, beam_idx) for past_state in layer_past[:2]) + layer_past[2:],
-            )
-        return reordered_past
-
-
-@add_start_docstrings(
-    """
-    MBart model with a sequence classification/head on top (a linear layer on top of the pooled output) e.g. for GLUE
-    tasks.
-    """,
-    MBART_START_DOCSTRING,
-)
-class MBartForSequenceClassification(MBartPreTrainedModel):
-    def __init__(self, config: MBartConfig, **kwargs):
-        super().__init__(config, **kwargs)
-        self.model = MBartModel(config)
-        self.classification_head = MBartClassificationHead(
-            config.d_model,
-            config.d_model,
-            config.num_labels,
-            config.classifier_dropout,
-        )
-        self.model._init_weights(self.classification_head.dense)
-        self.model._init_weights(self.classification_head.out_proj)
-
-    @add_start_docstrings_to_model_forward(MBART_INPUTS_DOCSTRING)
-    @add_code_sample_docstrings(
-        processor_class=_TOKENIZER_FOR_DOC,
-        checkpoint=_CHECKPOINT_FOR_DOC,
-        output_type=Seq2SeqSequenceClassifierOutput,
-        config_class=_CONFIG_FOR_DOC,
-    )
-    # Copied from transformers.models.bart.modeling_bart.BartForSequenceClassification.forward
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        decoder_input_ids=None,
-        decoder_attention_mask=None,
-        head_mask=None,
-        decoder_head_mask=None,
-        cross_attn_head_mask=None,
-        encoder_outputs=None,
-        inputs_embeds=None,
-        decoder_inputs_embeds=None,
-        labels=None,
-        use_cache=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
-    ):
-        r"""
-        labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
-            Labels for computing the sequence classification/regression loss. Indices should be in :obj:`[0, ...,
-            config.num_labels - 1]`. If :obj:`config.num_labels > 1` a classification loss is computed (Cross-Entropy).
-        """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-        if labels is not None:
-            use_cache = False
-
-        if input_ids is None and inputs_embeds is not None:
-            raise NotImplementedError(
-                f"Passing input embeddings is currently not supported for {self.__class__.__name__}"
-            )
-
-        outputs = self.model(
-            input_ids,
-            attention_mask=attention_mask,
-            decoder_input_ids=decoder_input_ids,
-            decoder_attention_mask=decoder_attention_mask,
-            head_mask=head_mask,
-            decoder_head_mask=decoder_head_mask,
-            cross_attn_head_mask=cross_attn_head_mask,
-            encoder_outputs=encoder_outputs,
-            inputs_embeds=inputs_embeds,
-            decoder_inputs_embeds=decoder_inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-        hidden_states = outputs[0]  # last hidden state
-
-        eos_mask = input_ids.eq(self.config.eos_token_id)
-
-        if len(torch.unique_consecutive(eos_mask.sum(1))) > 1:
-            raise ValueError("All examples must have the same number of <eos> tokens.")
-        sentence_representation = hidden_states[eos_mask, :].view(hidden_states.size(0), -1, hidden_states.size(-1))[
-            :, -1, :
-        ]
-        logits = self.classification_head(sentence_representation)
-
-        loss = None
-        if labels is not None:
-            if self.config.num_labels == 1:
-                # regression
-                loss_fct = MSELoss()
-                loss = loss_fct(logits.view(-1), labels.view(-1))
-            else:
-                loss_fct = CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
-
-        if not return_dict:
-            output = (logits,) + outputs[1:]
-            return ((loss,) + output) if loss is not None else output
-
-        return Seq2SeqSequenceClassifierOutput(
-            loss=loss,
-            logits=logits,
-            past_key_values=outputs.past_key_values,
-            decoder_hidden_states=outputs.decoder_hidden_states,
-            decoder_attentions=outputs.decoder_attentions,
-            cross_attentions=outputs.cross_attentions,
-            encoder_last_hidden_state=outputs.encoder_last_hidden_state,
-            encoder_hidden_states=outputs.encoder_hidden_states,
-            encoder_attentions=outputs.encoder_attentions,
-        )
-
-
-@add_start_docstrings(
-    """
-    MBART Model with a span classification head on top for extractive question-answering tasks like SQuAD (a linear
-    layer on top of the hidden-states output to compute `span start logits` and `span end logits`).
-    """,
-    MBART_START_DOCSTRING,
-)
-class MBartForQuestionAnswering(MBartPreTrainedModel):
-    def __init__(self, config):
-        super().__init__(config)
-
-        config.num_labels = 2
-        self.num_labels = config.num_labels
-
-        self.model = MBartModel(config)
-        self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
-
-        self.model._init_weights(self.qa_outputs)
-
-    @add_start_docstrings_to_model_forward(MBART_INPUTS_DOCSTRING)
-    @add_code_sample_docstrings(
-        processor_class=_TOKENIZER_FOR_DOC,
-        checkpoint=_CHECKPOINT_FOR_DOC,
-        output_type=Seq2SeqQuestionAnsweringModelOutput,
-        config_class=_CONFIG_FOR_DOC,
-    )
-    # Copied from transformers.models.bart.modeling_bart.BartForQuestionAnswering.forward
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        decoder_input_ids=None,
-        decoder_attention_mask=None,
-        head_mask=None,
-        decoder_head_mask=None,
-        cross_attn_head_mask=None,
-        encoder_outputs=None,
-        start_positions=None,
-        end_positions=None,
-        inputs_embeds=None,
-        decoder_inputs_embeds=None,
-        use_cache=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
-    ):
-        r"""
-        start_positions (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
-            Labels for position (index) of the start of the labelled span for computing the token classification loss.
-            Positions are clamped to the length of the sequence (`sequence_length`). Position outside of the sequence
-            are not taken into account for computing the loss.
-        end_positions (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
-            Labels for position (index) of the end of the labelled span for computing the token classification loss.
-            Positions are clamped to the length of the sequence (`sequence_length`). Position outside of the sequence
-            are not taken into account for computing the loss.
-        """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-        if start_positions is not None and end_positions is not None:
-            use_cache = False
-
-        outputs = self.model(
-            input_ids,
-            attention_mask=attention_mask,
-            decoder_input_ids=decoder_input_ids,
-            decoder_attention_mask=decoder_attention_mask,
-            head_mask=head_mask,
-            decoder_head_mask=decoder_head_mask,
-            cross_attn_head_mask=cross_attn_head_mask,
-            encoder_outputs=encoder_outputs,
-            inputs_embeds=inputs_embeds,
-            decoder_inputs_embeds=decoder_inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-
-        sequence_output = outputs[0]
-
-        logits = self.qa_outputs(sequence_output)
-        start_logits, end_logits = logits.split(1, dim=-1)
-        start_logits = start_logits.squeeze(-1).contiguous()
-        end_logits = end_logits.squeeze(-1).contiguous()
-
-        total_loss = None
-        if start_positions is not None and end_positions is not None:
-            # If we are on multi-GPU, split add a dimension
-            if len(start_positions.size()) > 1:
-                start_positions = start_positions.squeeze(-1)
-            if len(end_positions.size()) > 1:
-                end_positions = end_positions.squeeze(-1)
-            # sometimes the start/end positions are outside our model inputs, we ignore these terms
-            ignored_index = start_logits.size(1)
-            start_positions = start_positions.clamp(0, ignored_index)
-            end_positions = end_positions.clamp(0, ignored_index)
-
-            loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
-            start_loss = loss_fct(start_logits, start_positions)
-            end_loss = loss_fct(end_logits, end_positions)
-            total_loss = (start_loss + end_loss) / 2
-
-        if not return_dict:
-            output = (
-                start_logits,
-                end_logits,
-            ) + outputs[1:]
-            return ((total_loss,) + output) if total_loss is not None else output
-
-        return Seq2SeqQuestionAnsweringModelOutput(
-            loss=total_loss,
-            start_logits=start_logits,
-            end_logits=end_logits,
-            past_key_values=outputs.past_key_values,
-            decoder_hidden_states=outputs.decoder_hidden_states,
-            decoder_attentions=outputs.decoder_attentions,
-            cross_attentions=outputs.cross_attentions,
-            encoder_last_hidden_state=outputs.encoder_last_hidden_state,
-            encoder_hidden_states=outputs.encoder_hidden_states,
-            encoder_attentions=outputs.encoder_attentions,
-        )
-
-
-# Copied from transformers.models.bart.modeling_bart.BartDecoderWrapper with Bart->MBart
-class MBartDecoderWrapper(MBartPreTrainedModel):
-    """
-    This wrapper class is a helper class to correctly load pretrained checkpoints when the causal language model is
-    used in combination with the :class:`~transformers.EncoderDecoderModel` framework.
-    """
-
-    def __init__(self, config):
-        super().__init__(config)
-        self.decoder = MBartDecoder(config)
-
-    def forward(self, *args, **kwargs):
-        return self.decoder(*args, **kwargs)
-
-
-# Copied from transformers.models.bart.modeling_bart.BartForCausalLM with Bart->MBart
-class MBartForCausalLM(MBartPreTrainedModel):
-    def __init__(self, config):
-        super().__init__(config)
-        config = copy.deepcopy(config)
-        config.is_decoder = True
-        config.is_encoder_decoder = False
-        self.model = MBartDecoderWrapper(config)
-
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-
-        self.init_weights()
-
-    def get_input_embeddings(self):
-        return self.model.decoder.embed_tokens
-
-    def set_input_embeddings(self, value):
-        self.model.decoder.embed_tokens = value
-
-    def get_output_embeddings(self):
-        return self.lm_head
-
-    def set_output_embeddings(self, new_embeddings):
-        self.lm_head = new_embeddings
-
-    def set_decoder(self, decoder):
-        self.model.decoder = decoder
-
-    def get_decoder(self):
-        return self.model.decoder
-
-    @replace_return_docstrings(output_type=CausalLMOutputWithCrossAttentions, config_class=_CONFIG_FOR_DOC)
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        encoder_hidden_states=None,
-        encoder_attention_mask=None,
-        head_mask=None,
-        cross_attn_head_mask=None,
-        past_key_values=None,
-        inputs_embeds=None,
-        labels=None,
-        use_cache=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        return_dict=None,
-    ):
-        r"""
-        Args:
-            input_ids (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`):
-                Indices of input sequence tokens in the vocabulary. Padding will be ignored by default should you
-                provide it.
-
-                Indices can be obtained using :class:`~transformers.MBartTokenizer`. See
-                :meth:`transformers.PreTrainedTokenizer.encode` and :meth:`transformers.PreTrainedTokenizer.__call__`
-                for details.
-
-                `What are input IDs? <../glossary.html#input-ids>`__
-            attention_mask (:obj:`torch.Tensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-                Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
-
-                - 1 for tokens that are **not masked**,
-                - 0 for tokens that are **masked**.
-
-                `What are attention masks? <../glossary.html#attention-mask>`__
-            encoder_hidden_states  (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`):
-                Sequence of hidden-states at the output of the last layer of the encoder. Used in the cross-attention
-                if the model is configured as a decoder.
-            encoder_attention_mask (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-                Mask to avoid performing attention on the padding token indices of the encoder input. This mask is used
-                in the cross-attention if the model is configured as a decoder. Mask values selected in ``[0, 1]``:
-            head_mask (:obj:`torch.Tensor` of shape :obj:`(decoder_layers, decoder_attention_heads)`, `optional`):
-                Mask to nullify selected heads of the attention modules. Mask values selected in ``[0, 1]``:
-
-                - 1 indicates the head is **not masked**,
-                - 0 indicates the head is **masked**.
-
-            cross_attn_head_mask (:obj:`torch.Tensor` of shape :obj:`(decoder_layers, decoder_attention_heads)`, `optional`):
-                Mask to nullify selected heads of the cross-attention modules. Mask values selected in ``[0, 1]``:
-
-                - 1 indicates the head is **not masked**,
-                - 0 indicates the head is **masked**.
-
-            past_key_values (:obj:`tuple(tuple(torch.FloatTensor))`, `optional`, returned when ``use_cache=True`` is passed or when ``config.use_cache=True``):
-                Tuple of :obj:`tuple(torch.FloatTensor)` of length :obj:`config.n_layers`, with each tuple having 2
-                tensors of shape :obj:`(batch_size, num_heads, sequence_length, embed_size_per_head)`) and 2 additional
-                tensors of shape :obj:`(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`. The two
-                additional tensors are only required when the model is used as a decoder in a Sequence to Sequence
-                model.
-
-                Contains pre-computed hidden-states (key and values in the self-attention blocks and in the
-                cross-attention blocks) that can be used (see :obj:`past_key_values` input) to speed up sequential
-                decoding.
-
-                If :obj:`past_key_values` are used, the user can optionally input only the last ``decoder_input_ids``
-                (those that don't have their past key value states given to this model) of shape :obj:`(batch_size, 1)`
-                instead of all ``decoder_input_ids`` of shape :obj:`(batch_size, sequence_length)`.
-            labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-                Labels for computing the masked language modeling loss. Indices should either be in ``[0, ...,
-                config.vocab_size]`` or -100 (see ``input_ids`` docstring). Tokens with indices set to ``-100`` are
-                ignored (masked), the loss is only computed for the tokens with labels in ``[0, ...,
-                config.vocab_size]``.
-            use_cache (:obj:`bool`, `optional`):
-                If set to :obj:`True`, :obj:`past_key_values` key value states are returned and can be used to speed up
-                decoding (see :obj:`past_key_values`).
-
-                - 1 for tokens that are **not masked**,
-                - 0 for tokens that are **masked**.
-            output_attentions (:obj:`bool`, `optional`):
-                Whether or not to return the attentions tensors of all attention layers. See ``attentions`` under
-                returned tensors for more detail.
-            output_hidden_states (:obj:`bool`, `optional`):
-                Whether or not to return the hidden states of all layers. See ``hidden_states`` under returned tensors
-                for more detail.
-            return_dict (:obj:`bool`, `optional`):
-                Whether or not to return a :class:`~transformers.file_utils.ModelOutput` instead of a plain tuple.
-
-        Returns:
-
-        Example::
-
-            >>> from transformers import MBartTokenizer, MBartForCausalLM
-
-            >>> tokenizer = MBartTokenizer.from_pretrained('facebook/bart-large')
-            >>> model = MBartForCausalLM.from_pretrained('facebook/bart-large', add_cross_attention=False)
-            >>> assert model.config.is_decoder, f"{model.__class__} has to be configured as a decoder."
-            >>> inputs = tokenizer("Hello, my dog is cute", return_tensors="pt")
-            >>> outputs = model(**inputs)
-
-            >>> last_hidden_states = outputs.last_hidden_state
-        """
-
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        outputs = self.model.decoder(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            encoder_hidden_states=encoder_hidden_states,
-            encoder_attention_mask=encoder_attention_mask,
-            head_mask=head_mask,
-            cross_attn_head_mask=cross_attn_head_mask,
-            past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-
-        logits = self.lm_head(outputs[0])
-
-        loss = None
-        if labels is not None:
-            loss_fct = CrossEntropyLoss()
-            loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
-
-        if not return_dict:
-            output = (logits,) + outputs[1:]
-            return (loss,) + output if loss is not None else output
-
-        return CausalLMOutputWithCrossAttentions(
-            loss=loss,
-            logits=logits,
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-            cross_attentions=outputs.cross_attentions,
-        )
-
-    def prepare_inputs_for_generation(self, input_ids, past=None, attention_mask=None, use_cache=None, **kwargs):
-        # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
-        if attention_mask is None:
-            attention_mask = input_ids.new_ones(input_ids.shape)
-
-        if past:
-            input_ids = input_ids[:, -1:]
-        # first step, decoder_cached_states are empty
-        return {
-            "input_ids": input_ids,  # encoder_outputs is defined. input_ids not needed
-            "attention_mask": attention_mask,
-            "past_key_values": past,
-            "use_cache": use_cache,
-        }
-
-    @staticmethod
-    def _reorder_cache(past, beam_idx):
-        reordered_past = ()
-        for layer_past in past:
-            reordered_past += (tuple(past_state.index_select(0, beam_idx) for past_state in layer_past),)
-        return reordered_past
+# @add_start_docstrings(
+#     "The bare MBART Model outputting raw hidden-states without any specific head on top.",
+#     MBART_START_DOCSTRING,
+# )
+# class MBartModel(MBartPreTrainedModel):
+#     def __init__(self, config: MBartConfig):
+#         super().__init__(config)
+# 
+#         padding_idx, vocab_size = config.pad_token_id, config.vocab_size
+#         self.shared = nn.Embedding(vocab_size, config.d_model, padding_idx)
+# 
+#         self.encoder = MBartEncoder(config, self.shared)
+#         self.decoder = MBartDecoder(config, self.shared)
+# 
+#         self.init_weights()
+# 
+#     def get_input_embeddings(self):
+#         return self.shared
+# 
+#     def set_input_embeddings(self, value):
+#         self.shared = value
+#         self.encoder.embed_tokens = self.shared
+#         self.decoder.embed_tokens = self.shared
+# 
+#     def get_encoder(self):
+#         return self.encoder
+# 
+#     def get_decoder(self):
+#         return self.decoder
+# 
+#     @add_start_docstrings_to_model_forward(MBART_INPUTS_DOCSTRING)
+#     @add_code_sample_docstrings(
+#         processor_class=_TOKENIZER_FOR_DOC,
+#         checkpoint=_CHECKPOINT_FOR_DOC,
+#         output_type=Seq2SeqModelOutput,
+#         config_class=_CONFIG_FOR_DOC,
+#     )
+#     def forward(
+#         self,
+#         input_ids=None,
+#         attention_mask=None,
+#         decoder_input_ids=None,
+#         decoder_attention_mask=None,
+#         head_mask=None,
+#         decoder_head_mask=None,
+#         cross_attn_head_mask=None,
+#         encoder_outputs=None,
+#         past_key_values=None,
+#         inputs_embeds=None,
+#         decoder_inputs_embeds=None,
+#         use_cache=None,
+#         output_attentions=None,
+#         output_hidden_states=None,
+#         return_dict=None,
+#     ):
+#         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+#         output_hidden_states = (
+#             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+#         )
+#         use_cache = use_cache if use_cache is not None else self.config.use_cache
+#         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+# 
+#         # different to other models, MBart automatically creates decoder_input_ids from
+#         # input_ids if no decoder_input_ids are provided
+#         if decoder_input_ids is None and decoder_inputs_embeds is None:
+#             decoder_input_ids = shift_tokens_right(input_ids, self.config.pad_token_id)
+# 
+#         if encoder_outputs is None:
+#             encoder_outputs = self.encoder(
+#                 input_ids=input_ids,
+#                 attention_mask=attention_mask,
+#                 head_mask=head_mask,
+#                 inputs_embeds=inputs_embeds,
+#                 output_attentions=output_attentions,
+#                 output_hidden_states=output_hidden_states,
+#                 return_dict=return_dict,
+#             )
+#         # If the user passed a tuple for encoder_outputs, we wrap it in a BaseModelOutput when return_dict=True
+#         elif return_dict and not isinstance(encoder_outputs, BaseModelOutput):
+#             encoder_outputs = BaseModelOutput(
+#                 last_hidden_state=encoder_outputs[0],
+#                 hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
+#                 attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
+#             )
+# 
+#         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
+#         decoder_outputs = self.decoder(
+#             input_ids=decoder_input_ids,
+#             attention_mask=decoder_attention_mask,
+#             encoder_hidden_states=encoder_outputs[0],
+#             encoder_attention_mask=attention_mask,
+#             head_mask=decoder_head_mask,
+#             cross_attn_head_mask=cross_attn_head_mask,
+#             past_key_values=past_key_values,
+#             inputs_embeds=decoder_inputs_embeds,
+#             use_cache=use_cache,
+#             output_attentions=output_attentions,
+#             output_hidden_states=output_hidden_states,
+#             return_dict=return_dict,
+#         )
+# 
+#         if not return_dict:
+#             return decoder_outputs + encoder_outputs
+# 
+#         return Seq2SeqModelOutput(
+#             last_hidden_state=decoder_outputs.last_hidden_state,
+#             past_key_values=decoder_outputs.past_key_values,
+#             decoder_hidden_states=decoder_outputs.hidden_states,
+#             decoder_attentions=decoder_outputs.attentions,
+#             cross_attentions=decoder_outputs.cross_attentions,
+#             encoder_last_hidden_state=encoder_outputs.last_hidden_state,
+#             encoder_hidden_states=encoder_outputs.hidden_states,
+#             encoder_attentions=encoder_outputs.attentions,
+#         )
+# 
+# 
+# @add_start_docstrings(
+#     "The MBART Model with a language modeling head. Can be used for summarization.", MBART_START_DOCSTRING
+# )
+# class MBartForConditionalGeneration(MBartPreTrainedModel):
+#     base_model_prefix = "model"
+#     _keys_to_ignore_on_load_missing = [
+#         r"final_logits_bias",
+#         r"encoder\.version",
+#         r"decoder\.version",
+#         r"lm_head\.weight",
+#     ]
+# 
+#     def __init__(self, config: MBartConfig):
+#         super().__init__(config)
+#         self.model = MBartModel(config)
+#         self.register_buffer("final_logits_bias", torch.zeros((1, self.model.shared.num_embeddings)))
+#         self.lm_head = nn.Linear(config.d_model, self.model.shared.num_embeddings, bias=False)
+# 
+#         self.init_weights()
+# 
+#     def get_encoder(self):
+#         return self.model.get_encoder()
+# 
+#     def get_decoder(self):
+#         return self.model.get_decoder()
+# 
+#     def resize_token_embeddings(self, new_num_tokens: int) -> nn.Embedding:
+#         new_embeddings = super().resize_token_embeddings(new_num_tokens)
+#         self._resize_final_logits_bias(new_num_tokens)
+#         return new_embeddings
+# 
+#     def _resize_final_logits_bias(self, new_num_tokens: int) -> None:
+#         old_num_tokens = self.final_logits_bias.shape[-1]
+#         if new_num_tokens <= old_num_tokens:
+#             new_bias = self.final_logits_bias[:, :new_num_tokens]
+#         else:
+#             extra_bias = torch.zeros((1, new_num_tokens - old_num_tokens), device=self.final_logits_bias.device)
+#             new_bias = torch.cat([self.final_logits_bias, extra_bias], dim=1)
+#         self.register_buffer("final_logits_bias", new_bias)
+# 
+#     def get_output_embeddings(self):
+#         return self.lm_head
+# 
+#     def set_output_embeddings(self, new_embeddings):
+#         self.lm_head = new_embeddings
+# 
+#     @add_start_docstrings_to_model_forward(MBART_INPUTS_DOCSTRING)
+#     @replace_return_docstrings(output_type=Seq2SeqLMOutput, config_class=_CONFIG_FOR_DOC)
+#     @add_end_docstrings(MBART_GENERATION_EXAMPLE)
+#     def forward(
+#         self,
+#         input_ids=None,
+#         attention_mask=None,
+#         decoder_input_ids=None,
+#         decoder_attention_mask=None,
+#         head_mask=None,
+#         decoder_head_mask=None,
+#         cross_attn_head_mask=None,
+#         encoder_outputs=None,
+#         past_key_values=None,
+#         inputs_embeds=None,
+#         decoder_inputs_embeds=None,
+#         labels=None,
+#         use_cache=None,
+#         output_attentions=None,
+#         output_hidden_states=None,
+#         return_dict=None,
+#     ):
+#         r"""
+#         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
+#             Labels for computing the masked language modeling loss. Indices should either be in ``[0, ...,
+#             config.vocab_size]`` or -100 (see ``input_ids`` docstring). Tokens with indices set to ``-100`` are ignored
+#             (masked), the loss is only computed for the tokens with labels in ``[0, ..., config.vocab_size]``.
+# 
+#         Returns:
+# 
+#         """
+#         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+# 
+#         if labels is not None:
+#             if decoder_input_ids is None:
+#                 decoder_input_ids = shift_tokens_right(labels, self.config.pad_token_id)
+# 
+#         outputs = self.model(
+#             input_ids,
+#             attention_mask=attention_mask,
+#             decoder_input_ids=decoder_input_ids,
+#             encoder_outputs=encoder_outputs,
+#             decoder_attention_mask=decoder_attention_mask,
+#             head_mask=head_mask,
+#             decoder_head_mask=decoder_head_mask,
+#             cross_attn_head_mask=cross_attn_head_mask,
+#             past_key_values=past_key_values,
+#             inputs_embeds=inputs_embeds,
+#             decoder_inputs_embeds=decoder_inputs_embeds,
+#             use_cache=use_cache,
+#             output_attentions=output_attentions,
+#             output_hidden_states=output_hidden_states,
+#             return_dict=return_dict,
+#         )
+#         lm_logits = self.lm_head(outputs[0]) + self.final_logits_bias
+# 
+#         masked_lm_loss = None
+#         if labels is not None:
+#             loss_fct = CrossEntropyLoss()
+#             masked_lm_loss = loss_fct(lm_logits.view(-1, self.config.vocab_size), labels.view(-1))
+# 
+#         if not return_dict:
+#             output = (lm_logits,) + outputs[1:]
+#             return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
+# 
+#         return Seq2SeqLMOutput(
+#             loss=masked_lm_loss,
+#             logits=lm_logits,
+#             past_key_values=outputs.past_key_values,
+#             decoder_hidden_states=outputs.decoder_hidden_states,
+#             decoder_attentions=outputs.decoder_attentions,
+#             cross_attentions=outputs.cross_attentions,
+#             encoder_last_hidden_state=outputs.encoder_last_hidden_state,
+#             encoder_hidden_states=outputs.encoder_hidden_states,
+#             encoder_attentions=outputs.encoder_attentions,
+#         )
+# 
+#     def prepare_inputs_for_generation(
+#         self,
+#         decoder_input_ids,
+#         past=None,
+#         attention_mask=None,
+#         head_mask=None,
+#         decoder_head_mask=None,
+#         cross_attn_head_mask=None,
+#         use_cache=None,
+#         encoder_outputs=None,
+#         **kwargs
+#     ):
+#         # cut decoder_input_ids if past is used
+#         if past is not None:
+#             decoder_input_ids = decoder_input_ids[:, -1:]
+# 
+#         return {
+#             "input_ids": None,  # encoder_outputs is defined. input_ids not needed
+#             "encoder_outputs": encoder_outputs,
+#             "past_key_values": past,
+#             "decoder_input_ids": decoder_input_ids,
+#             "attention_mask": attention_mask,
+#             "head_mask": head_mask,
+#             "decoder_head_mask": decoder_head_mask,
+#             "cross_attn_head_mask": cross_attn_head_mask,
+#             "use_cache": use_cache,  # change this to avoid caching (presumably for debugging)
+#         }
+# 
+#     def prepare_decoder_input_ids_from_labels(self, labels: torch.Tensor):
+#         return shift_tokens_right(labels, self.config.pad_token_id)
+# 
+#     @staticmethod
+#     def _reorder_cache(past, beam_idx):
+#         reordered_past = ()
+#         for layer_past in past:
+#             # cached cross_attention states don't have to be reordered -> they are always the same
+#             reordered_past += (
+#                 tuple(past_state.index_select(0, beam_idx) for past_state in layer_past[:2]) + layer_past[2:],
+#             )
+#         return reordered_past
+# 
+# 
+# @add_start_docstrings(
+#     """
+#     MBart model with a sequence classification/head on top (a linear layer on top of the pooled output) e.g. for GLUE
+#     tasks.
+#     """,
+#     MBART_START_DOCSTRING,
+# )
+# class MBartForSequenceClassification(MBartPreTrainedModel):
+#     def __init__(self, config: MBartConfig, **kwargs):
+#         super().__init__(config, **kwargs)
+#         self.model = MBartModel(config)
+#         self.classification_head = MBartClassificationHead(
+#             config.d_model,
+#             config.d_model,
+#             config.num_labels,
+#             config.classifier_dropout,
+#         )
+#         self.model._init_weights(self.classification_head.dense)
+#         self.model._init_weights(self.classification_head.out_proj)
+# 
+#     @add_start_docstrings_to_model_forward(MBART_INPUTS_DOCSTRING)
+#     @add_code_sample_docstrings(
+#         processor_class=_TOKENIZER_FOR_DOC,
+#         checkpoint=_CHECKPOINT_FOR_DOC,
+#         output_type=Seq2SeqSequenceClassifierOutput,
+#         config_class=_CONFIG_FOR_DOC,
+#     )
+#     # Copied from transformers.models.bart.modeling_bart.BartForSequenceClassification.forward
+#     def forward(
+#         self,
+#         input_ids=None,
+#         attention_mask=None,
+#         decoder_input_ids=None,
+#         decoder_attention_mask=None,
+#         head_mask=None,
+#         decoder_head_mask=None,
+#         cross_attn_head_mask=None,
+#         encoder_outputs=None,
+#         inputs_embeds=None,
+#         decoder_inputs_embeds=None,
+#         labels=None,
+#         use_cache=None,
+#         output_attentions=None,
+#         output_hidden_states=None,
+#         return_dict=None,
+#     ):
+#         r"""
+#         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
+#             Labels for computing the sequence classification/regression loss. Indices should be in :obj:`[0, ...,
+#             config.num_labels - 1]`. If :obj:`config.num_labels > 1` a classification loss is computed (Cross-Entropy).
+#         """
+#         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+#         if labels is not None:
+#             use_cache = False
+# 
+#         if input_ids is None and inputs_embeds is not None:
+#             raise NotImplementedError(
+#                 f"Passing input embeddings is currently not supported for {self.__class__.__name__}"
+#             )
+# 
+#         outputs = self.model(
+#             input_ids,
+#             attention_mask=attention_mask,
+#             decoder_input_ids=decoder_input_ids,
+#             decoder_attention_mask=decoder_attention_mask,
+#             head_mask=head_mask,
+#             decoder_head_mask=decoder_head_mask,
+#             cross_attn_head_mask=cross_attn_head_mask,
+#             encoder_outputs=encoder_outputs,
+#             inputs_embeds=inputs_embeds,
+#             decoder_inputs_embeds=decoder_inputs_embeds,
+#             use_cache=use_cache,
+#             output_attentions=output_attentions,
+#             output_hidden_states=output_hidden_states,
+#             return_dict=return_dict,
+#         )
+#         hidden_states = outputs[0]  # last hidden state
+# 
+#         eos_mask = input_ids.eq(self.config.eos_token_id)
+# 
+#         if len(torch.unique_consecutive(eos_mask.sum(1))) > 1:
+#             raise ValueError("All examples must have the same number of <eos> tokens.")
+#         sentence_representation = hidden_states[eos_mask, :].view(hidden_states.size(0), -1, hidden_states.size(-1))[
+#             :, -1, :
+#         ]
+#         logits = self.classification_head(sentence_representation)
+# 
+#         loss = None
+#         if labels is not None:
+#             if self.config.num_labels == 1:
+#                 # regression
+#                 loss_fct = MSELoss()
+#                 loss = loss_fct(logits.view(-1), labels.view(-1))
+#             else:
+#                 loss_fct = CrossEntropyLoss()
+#                 loss = loss_fct(logits.view(-1, self.config.num_labels), labels.view(-1))
+# 
+#         if not return_dict:
+#             output = (logits,) + outputs[1:]
+#             return ((loss,) + output) if loss is not None else output
+# 
+#         return Seq2SeqSequenceClassifierOutput(
+#             loss=loss,
+#             logits=logits,
+#             past_key_values=outputs.past_key_values,
+#             decoder_hidden_states=outputs.decoder_hidden_states,
+#             decoder_attentions=outputs.decoder_attentions,
+#             cross_attentions=outputs.cross_attentions,
+#             encoder_last_hidden_state=outputs.encoder_last_hidden_state,
+#             encoder_hidden_states=outputs.encoder_hidden_states,
+#             encoder_attentions=outputs.encoder_attentions,
+#         )
+# 
+# 
+# @add_start_docstrings(
+#     """
+#     MBART Model with a span classification head on top for extractive question-answering tasks like SQuAD (a linear
+#     layer on top of the hidden-states output to compute `span start logits` and `span end logits`).
+#     """,
+#     MBART_START_DOCSTRING,
+# )
+# class MBartForQuestionAnswering(MBartPreTrainedModel):
+#     def __init__(self, config):
+#         super().__init__(config)
+# 
+#         config.num_labels = 2
+#         self.num_labels = config.num_labels
+# 
+#         self.model = MBartModel(config)
+#         self.qa_outputs = nn.Linear(config.hidden_size, config.num_labels)
+# 
+#         self.model._init_weights(self.qa_outputs)
+# 
+#     @add_start_docstrings_to_model_forward(MBART_INPUTS_DOCSTRING)
+#     @add_code_sample_docstrings(
+#         processor_class=_TOKENIZER_FOR_DOC,
+#         checkpoint=_CHECKPOINT_FOR_DOC,
+#         output_type=Seq2SeqQuestionAnsweringModelOutput,
+#         config_class=_CONFIG_FOR_DOC,
+#     )
+#     # Copied from transformers.models.bart.modeling_bart.BartForQuestionAnswering.forward
+#     def forward(
+#         self,
+#         input_ids=None,
+#         attention_mask=None,
+#         decoder_input_ids=None,
+#         decoder_attention_mask=None,
+#         head_mask=None,
+#         decoder_head_mask=None,
+#         cross_attn_head_mask=None,
+#         encoder_outputs=None,
+#         start_positions=None,
+#         end_positions=None,
+#         inputs_embeds=None,
+#         decoder_inputs_embeds=None,
+#         use_cache=None,
+#         output_attentions=None,
+#         output_hidden_states=None,
+#         return_dict=None,
+#     ):
+#         r"""
+#         start_positions (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
+#             Labels for position (index) of the start of the labelled span for computing the token classification loss.
+#             Positions are clamped to the length of the sequence (`sequence_length`). Position outside of the sequence
+#             are not taken into account for computing the loss.
+#         end_positions (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
+#             Labels for position (index) of the end of the labelled span for computing the token classification loss.
+#             Positions are clamped to the length of the sequence (`sequence_length`). Position outside of the sequence
+#             are not taken into account for computing the loss.
+#         """
+#         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+#         if start_positions is not None and end_positions is not None:
+#             use_cache = False
+# 
+#         outputs = self.model(
+#             input_ids,
+#             attention_mask=attention_mask,
+#             decoder_input_ids=decoder_input_ids,
+#             decoder_attention_mask=decoder_attention_mask,
+#             head_mask=head_mask,
+#             decoder_head_mask=decoder_head_mask,
+#             cross_attn_head_mask=cross_attn_head_mask,
+#             encoder_outputs=encoder_outputs,
+#             inputs_embeds=inputs_embeds,
+#             decoder_inputs_embeds=decoder_inputs_embeds,
+#             use_cache=use_cache,
+#             output_attentions=output_attentions,
+#             output_hidden_states=output_hidden_states,
+#             return_dict=return_dict,
+#         )
+# 
+#         sequence_output = outputs[0]
+# 
+#         logits = self.qa_outputs(sequence_output)
+#         start_logits, end_logits = logits.split(1, dim=-1)
+#         start_logits = start_logits.squeeze(-1).contiguous()
+#         end_logits = end_logits.squeeze(-1).contiguous()
+# 
+#         total_loss = None
+#         if start_positions is not None and end_positions is not None:
+#             # If we are on multi-GPU, split add a dimension
+#             if len(start_positions.size()) > 1:
+#                 start_positions = start_positions.squeeze(-1)
+#             if len(end_positions.size()) > 1:
+#                 end_positions = end_positions.squeeze(-1)
+#             # sometimes the start/end positions are outside our model inputs, we ignore these terms
+#             ignored_index = start_logits.size(1)
+#             start_positions = start_positions.clamp(0, ignored_index)
+#             end_positions = end_positions.clamp(0, ignored_index)
+# 
+#             loss_fct = CrossEntropyLoss(ignore_index=ignored_index)
+#             start_loss = loss_fct(start_logits, start_positions)
+#             end_loss = loss_fct(end_logits, end_positions)
+#             total_loss = (start_loss + end_loss) / 2
+# 
+#         if not return_dict:
+#             output = (
+#                 start_logits,
+#                 end_logits,
+#             ) + outputs[1:]
+#             return ((total_loss,) + output) if total_loss is not None else output
+# 
+#         return Seq2SeqQuestionAnsweringModelOutput(
+#             loss=total_loss,
+#             start_logits=start_logits,
+#             end_logits=end_logits,
+#             past_key_values=outputs.past_key_values,
+#             decoder_hidden_states=outputs.decoder_hidden_states,
+#             decoder_attentions=outputs.decoder_attentions,
+#             cross_attentions=outputs.cross_attentions,
+#             encoder_last_hidden_state=outputs.encoder_last_hidden_state,
+#             encoder_hidden_states=outputs.encoder_hidden_states,
+#             encoder_attentions=outputs.encoder_attentions,
+#         )
+# 
+# 
+# # Copied from transformers.models.bart.modeling_bart.BartDecoderWrapper with Bart->MBart
+# class MBartDecoderWrapper(MBartPreTrainedModel):
+#     """
+#     This wrapper class is a helper class to correctly load pretrained checkpoints when the causal language model is
+#     used in combination with the :class:`~transformers.EncoderDecoderModel` framework.
+#     """
+# 
+#     def __init__(self, config):
+#         super().__init__(config)
+#         self.decoder = MBartDecoder(config)
+# 
+#     def forward(self, *args, **kwargs):
+#         return self.decoder(*args, **kwargs)
+# 
+# 
+# # Copied from transformers.models.bart.modeling_bart.BartForCausalLM with Bart->MBart
+# class MBartForCausalLM(MBartPreTrainedModel):
+#     def __init__(self, config):
+#         super().__init__(config)
+#         config = copy.deepcopy(config)
+#         config.is_decoder = True
+#         config.is_encoder_decoder = False
+#         self.model = MBartDecoderWrapper(config)
+# 
+#         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+# 
+#         self.init_weights()
+# 
+#     def get_input_embeddings(self):
+#         return self.model.decoder.embed_tokens
+# 
+#     def set_input_embeddings(self, value):
+#         self.model.decoder.embed_tokens = value
+# 
+#     def get_output_embeddings(self):
+#         return self.lm_head
+# 
+#     def set_output_embeddings(self, new_embeddings):
+#         self.lm_head = new_embeddings
+# 
+#     def set_decoder(self, decoder):
+#         self.model.decoder = decoder
+# 
+#     def get_decoder(self):
+#         return self.model.decoder
+# 
+#     @replace_return_docstrings(output_type=CausalLMOutputWithCrossAttentions, config_class=_CONFIG_FOR_DOC)
+#     def forward(
+#         self,
+#         input_ids=None,
+#         attention_mask=None,
+#         encoder_hidden_states=None,
+#         encoder_attention_mask=None,
+#         head_mask=None,
+#         cross_attn_head_mask=None,
+#         past_key_values=None,
+#         inputs_embeds=None,
+#         labels=None,
+#         use_cache=None,
+#         output_attentions=None,
+#         output_hidden_states=None,
+#         return_dict=None,
+#     ):
+#         r"""
+#         Args:
+#             input_ids (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`):
+#                 Indices of input sequence tokens in the vocabulary. Padding will be ignored by default should you
+#                 provide it.
+# 
+#                 Indices can be obtained using :class:`~transformers.MBartTokenizer`. See
+#                 :meth:`transformers.PreTrainedTokenizer.encode` and :meth:`transformers.PreTrainedTokenizer.__call__`
+#                 for details.
+# 
+#                 `What are input IDs? <../glossary.html#input-ids>`__
+#             attention_mask (:obj:`torch.Tensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
+#                 Mask to avoid performing attention on padding token indices. Mask values selected in ``[0, 1]``:
+# 
+#                 - 1 for tokens that are **not masked**,
+#                 - 0 for tokens that are **masked**.
+# 
+#                 `What are attention masks? <../glossary.html#attention-mask>`__
+#             encoder_hidden_states  (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`):
+#                 Sequence of hidden-states at the output of the last layer of the encoder. Used in the cross-attention
+#                 if the model is configured as a decoder.
+#             encoder_attention_mask (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
+#                 Mask to avoid performing attention on the padding token indices of the encoder input. This mask is used
+#                 in the cross-attention if the model is configured as a decoder. Mask values selected in ``[0, 1]``:
+#             head_mask (:obj:`torch.Tensor` of shape :obj:`(decoder_layers, decoder_attention_heads)`, `optional`):
+#                 Mask to nullify selected heads of the attention modules. Mask values selected in ``[0, 1]``:
+# 
+#                 - 1 indicates the head is **not masked**,
+#                 - 0 indicates the head is **masked**.
+# 
+#             cross_attn_head_mask (:obj:`torch.Tensor` of shape :obj:`(decoder_layers, decoder_attention_heads)`, `optional`):
+#                 Mask to nullify selected heads of the cross-attention modules. Mask values selected in ``[0, 1]``:
+# 
+#                 - 1 indicates the head is **not masked**,
+#                 - 0 indicates the head is **masked**.
+# 
+#             past_key_values (:obj:`tuple(tuple(torch.FloatTensor))`, `optional`, returned when ``use_cache=True`` is passed or when ``config.use_cache=True``):
+#                 Tuple of :obj:`tuple(torch.FloatTensor)` of length :obj:`config.n_layers`, with each tuple having 2
+#                 tensors of shape :obj:`(batch_size, num_heads, sequence_length, embed_size_per_head)`) and 2 additional
+#                 tensors of shape :obj:`(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`. The two
+#                 additional tensors are only required when the model is used as a decoder in a Sequence to Sequence
+#                 model.
+# 
+#                 Contains pre-computed hidden-states (key and values in the self-attention blocks and in the
+#                 cross-attention blocks) that can be used (see :obj:`past_key_values` input) to speed up sequential
+#                 decoding.
+# 
+#                 If :obj:`past_key_values` are used, the user can optionally input only the last ``decoder_input_ids``
+#                 (those that don't have their past key value states given to this model) of shape :obj:`(batch_size, 1)`
+#                 instead of all ``decoder_input_ids`` of shape :obj:`(batch_size, sequence_length)`.
+#             labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
+#                 Labels for computing the masked language modeling loss. Indices should either be in ``[0, ...,
+#                 config.vocab_size]`` or -100 (see ``input_ids`` docstring). Tokens with indices set to ``-100`` are
+#                 ignored (masked), the loss is only computed for the tokens with labels in ``[0, ...,
+#                 config.vocab_size]``.
+#             use_cache (:obj:`bool`, `optional`):
+#                 If set to :obj:`True`, :obj:`past_key_values` key value states are returned and can be used to speed up
+#                 decoding (see :obj:`past_key_values`).
+# 
+#                 - 1 for tokens that are **not masked**,
+#                 - 0 for tokens that are **masked**.
+#             output_attentions (:obj:`bool`, `optional`):
+#                 Whether or not to return the attentions tensors of all attention layers. See ``attentions`` under
+#                 returned tensors for more detail.
+#             output_hidden_states (:obj:`bool`, `optional`):
+#                 Whether or not to return the hidden states of all layers. See ``hidden_states`` under returned tensors
+#                 for more detail.
+#             return_dict (:obj:`bool`, `optional`):
+#                 Whether or not to return a :class:`~transformers.file_utils.ModelOutput` instead of a plain tuple.
+# 
+#         Returns:
+# 
+#         Example::
+# 
+#             >>> from transformers import MBartTokenizer, MBartForCausalLM
+# 
+#             >>> tokenizer = MBartTokenizer.from_pretrained('facebook/bart-large')
+#             >>> model = MBartForCausalLM.from_pretrained('facebook/bart-large', add_cross_attention=False)
+#             >>> assert model.config.is_decoder, f"{model.__class__} has to be configured as a decoder."
+#             >>> inputs = tokenizer("Hello, my dog is cute", return_tensors="pt")
+#             >>> outputs = model(**inputs)
+# 
+#             >>> last_hidden_states = outputs.last_hidden_state
+#         """
+# 
+#         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+#         output_hidden_states = (
+#             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+#         )
+#         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+# 
+#         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+#         outputs = self.model.decoder(
+#             input_ids=input_ids,
+#             attention_mask=attention_mask,
+#             encoder_hidden_states=encoder_hidden_states,
+#             encoder_attention_mask=encoder_attention_mask,
+#             head_mask=head_mask,
+#             cross_attn_head_mask=cross_attn_head_mask,
+#             past_key_values=past_key_values,
+#             inputs_embeds=inputs_embeds,
+#             use_cache=use_cache,
+#             output_attentions=output_attentions,
+#             output_hidden_states=output_hidden_states,
+#             return_dict=return_dict,
+#         )
+# 
+#         logits = self.lm_head(outputs[0])
+# 
+#         loss = None
+#         if labels is not None:
+#             loss_fct = CrossEntropyLoss()
+#             loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
+# 
+#         if not return_dict:
+#             output = (logits,) + outputs[1:]
+#             return (loss,) + output if loss is not None else output
+# 
+#         return CausalLMOutputWithCrossAttentions(
+#             loss=loss,
+#             logits=logits,
+#             past_key_values=outputs.past_key_values,
+#             hidden_states=outputs.hidden_states,
+#             attentions=outputs.attentions,
+#             cross_attentions=outputs.cross_attentions,
+#         )
+# 
+#     def prepare_inputs_for_generation(self, input_ids, past=None, attention_mask=None, use_cache=None, **kwargs):
+#         # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
+#         if attention_mask is None:
+#             attention_mask = input_ids.new_ones(input_ids.shape)
+# 
+#         if past:
+#             input_ids = input_ids[:, -1:]
+#         # first step, decoder_cached_states are empty
+#         return {
+#             "input_ids": input_ids,  # encoder_outputs is defined. input_ids not needed
+#             "attention_mask": attention_mask,
+#             "past_key_values": past,
+#             "use_cache": use_cache,
+#         }
+# 
+#     @staticmethod
+#     def _reorder_cache(past, beam_idx):
+#         reordered_past = ()
+#         for layer_past in past:
+#             reordered_past += (tuple(past_state.index_select(0, beam_idx) for past_state in layer_past),)
+#         return reordered_past

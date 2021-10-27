@@ -165,12 +165,6 @@ class Wav2vecTransformer(Transformer):
         super().__init__(encoder, decoder, generator, None, None, ctc=ctc)
         self.model_size = self.decoder.model_size
         self.switchout = self.decoder.switchout
-        self.tgt_vocab_size = self.decoder.word_lut.weight.size(0)
-
-        if self.encoder.input_type == 'text':
-            self.src_vocab_size = self.encoder.word_lut.weight.size(0)
-        else:
-            self.src_vocab_size = 0
 
         if mirror:
             self.mirror_decoder = copy.deepcopy(self.decoder)
@@ -423,6 +417,18 @@ class Wav2vecBERT(Wav2vecTransformer):
             output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
             context = context.transpose(0, 1)
             output_dict = defaultdict(lambda: None)
+        elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["mbart", "mbart50"]:
+            src_attention_mask = 1 - (src_attention_mask.long())
+            tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
+            decoder_output = self.decoder(input_ids=tgt,
+                                          attention_mask=tgt_attention_mask,
+                                          encoder_hidden_states=context,
+                                          encoder_attention_mask=src_attention_mask)
+            decoder_output = decoder_output[0]
+            output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
+            context = context.transpose(0, 1)
+            output_dict = defaultdict(lambda: None)
+
         else:
             # pass the mask ('src') from the encoder output the decoder as the attention mask
             decoder_output = self.decoder(tgt, context, src,
@@ -516,7 +522,16 @@ class Wav2vecBERT(Wav2vecTransformer):
                                                  type=type, buffering=buffering, src_mask=src_attention_mask,
                                                  dec_pretrained_model=self.decoder.dec_pretrained_model)
 
-        return decoder_state
+        return
+
+    def tie_weights(self):
+        assert self.generator is not None, "The generator needs to be created before sharing weights"
+        if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bert", "roberta"]:
+            self.generator[0].linear.weight = self.decoder.embeddings.word_embeddings.weight
+        elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["mbart", "mbart50"]:
+            self.generator[0].linear.weight = self.decoder.embed_tokens.weight
+        else:
+            self.generator[0].linear.weight = self.decoder.word_lut.weight
 
     def decode(self, batch):
 

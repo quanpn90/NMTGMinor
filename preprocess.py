@@ -307,7 +307,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
                   max_src_length=64, max_tgt_length=64, add_bos=True, data_type='int64', num_workers=1, verbose=False,
                   input_type='word', stride=1, concat=4, prev_context=0, fp16=False, reshape=True,
                   asr_format="scp", output_format="raw",
-                  external_tokenizer=None):
+                  external_tokenizer=None, src_lang=None, tgt_lang=None):
     src, tgt = [], []
     src_sizes = []
     tgt_sizes = []
@@ -326,7 +326,8 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
                                                 bos_word=tgt_bos_word, eos_word=opt.tgt_eos_token,
                                                 data_type=data_type,
                                                 num_workers=num_workers, verbose=verbose,
-                                                external_tokenizer=external_tokenizer)
+                                                external_tokenizer=external_tokenizer,
+                                                lang=tgt_lang)
 
         tgt = binarized_tgt['data']
         tgt_sizes = binarized_tgt['sizes']

@@ -36,11 +36,11 @@ def check_cuda_torch_binary_vs_bare_metal(cuda_dir):
 
     if (bare_metal_major != torch_binary_major) or (bare_metal_minor != torch_binary_minor):
         print("Cuda extensions are being compiled with a version of Cuda that does " +
-                           "not match the version used to compile Pytorch binaries.  " +
-                           "Pytorch binaries were compiled with Cuda {}.\n".format(torch.version.cuda) +
-                           "In some cases, a minor-version mismatch will not cause later errors:  " +
-                           "https://github.com/NVIDIA/apex/pull/323#discussion_r287021798.  "
-                           "You can try commenting out this check (at your own risk).")
+              "not match the version used to compile Pytorch binaries.  " +
+              "Pytorch binaries were compiled with Cuda {}.\n".format(torch.version.cuda) +
+              "In some cases, a minor-version mismatch will not cause later errors:  " +
+              "https://github.com/NVIDIA/apex/pull/323#discussion_r287021798.  "
+              "You can try commenting out this check (at your own risk).")
 
 
 # Check, if ATen/CUDAGenerator.h is found, otherwise use the new
@@ -184,7 +184,6 @@ ext_modules.append(
                                                '-O3',
                                                '--use_fast_math'] + cc_flag + version_dependent_macros}))
 
-
 ext_modules.append(
     CUDAExtension(name='fast_layer_norm_cuda',
                   sources=['layer_norm/ln_api.cpp',
@@ -266,18 +265,36 @@ ext_modules.append(
 #                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
 #                                       'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
 
+ext_modules.append(
+    CUDAExtension(name='fmhalib',
+                  sources=[
+                      'fmha/fmha_api.cpp',
+                      'fmha/src/fmha_noloop_reduce.cu',
+                      'fmha/src/fmha_fprop_fp16_128_64_kernel.sm80.cu',
+                      'fmha/src/fmha_fprop_fp16_256_64_kernel.sm80.cu',
+                      'fmha/src/fmha_fprop_fp16_384_64_kernel.sm80.cu',
+                      'fmha/src/fmha_fprop_fp16_512_64_kernel.sm80.cu',
+                      # 'fmha/src/fmha_fprop_fp16_768_64_kernel.sm80.cu',
+                      'fmha/src/fmha_dgrad_fp16_128_64_kernel.sm80.cu',
+                      'fmha/src/fmha_dgrad_fp16_256_64_kernel.sm80.cu',
+                      'fmha/src/fmha_dgrad_fp16_384_64_kernel.sm80.cu',
+                      'fmha/src/fmha_dgrad_fp16_512_64_kernel.sm80.cu',
+                      # 'fmha/src/fmha_dgrad_fp16_768_64_kernel.sm80.cu',
+                  ],
+                  extra_compile_args={'cxx': ['-O3',
+                                              ] + version_dependent_macros + generator_flag,
+                                      'nvcc': ['-O3',
+                                               '-gencode', 'arch=compute_80,code=sm_80',
+                                               '-U__CUDA_NO_HALF_OPERATORS__',
+                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
+                                               '--expt-relaxed-constexpr',
+                                               '--expt-extended-lambda',
+                                               '--use_fast_math'] + version_dependent_macros + generator_flag},
+                  include_dirs=[os.path.join(this_dir, "fmha/src")]))
+
 setup(
     name='nmtgminor_cuda',
-    version='0.1',
-    # packages=find_packages(exclude=('build',
-    #                                 'csrc',
-    #                                 'include',
-    #                                 'tests',
-    #                                 'dist',
-    #                                 'docs',
-    #                                 'tests',
-    #                                 'examples',
-    #                                 'apex.egg-info',)),
+    version='0.1',\
     description='CUDA/C++ Pytorch extension for multi-head attention ported from NVIDIA apex',
     ext_modules=ext_modules,
     cmdclass=cmdclass,

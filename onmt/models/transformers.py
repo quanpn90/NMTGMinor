@@ -518,7 +518,8 @@ class Transformer(NMTModel):
         super().__init__(encoder, decoder, generator, rec_decoder, rec_generator, ctc=ctc)
         self.model_size = self.decoder.model_size
         self.switchout = self.decoder.switchout
-        self.tgt_vocab_size = self.decoder.word_lut.weight.size(0)
+        if hasattr(self.decoder, 'word_lut'):
+            self.tgt_vocab_size = self.decoder.word_lut.weight.size(0)
 
         if self.encoder.input_type == 'text':
             self.src_vocab_size = self.encoder.word_lut.weight.size(0)

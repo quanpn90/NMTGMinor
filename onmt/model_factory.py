@@ -128,7 +128,7 @@ def build_tm_model(opt, dicts):
                                      opt.model_size,
                                      padding_idx=onmt.constants.TGT_PAD)
     else:
-        assert opt.model in ["pretrain_transformer", "wav2vec2_bert"], "Expecting a pretrained model that has a " \
+        assert opt.model in ["pretrain_transformer", "wav2vec2_bert", "wav2vec_mbart50"], "Expecting a pretrained model that has a " \
                                                                       "separate Embedding initialization"
         embedding_tgt = None
 
@@ -196,6 +196,13 @@ def build_tm_model(opt, dicts):
                                    diff_head_pos=opt.diff_head_pos,
                                    pos_emb_type=opt.pos_emb_type,
                                    )
+        elif "mbart" in opt.dec_pretrained_model:
+            from pretrain_module.configuration_mbart import MBartConfig
+            from pretrain_module.modeling_mbart import MBartDecoder
+
+            dec_mbart_config = MBartConfig.from_json_file(opt.dec_config_file)
+
+            decoder = MBartDecoder(dec_mbart_config, opt)
 
         elif opt.dec_pretrained_model == "bart":
             from pretrain_module.configuration_bart import BartConfig
@@ -213,11 +220,12 @@ def build_tm_model(opt, dicts):
             dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
 
             # load parameters from state dict to model (using huggingface's approach)
-            decoder.from_pretrained(state_dict=dec_model_state_dict,
-                                    model=decoder,
-                                    output_loading_info=opt.verbose,
-                                    model_prefix=opt.dec_pretrained_model
-                                    )
+            # decoder.from_pretrained(state_dict=dec_model_state_dict,
+            #                         model=decoder,
+            #                         output_loading_info=opt.verbose,
+            #                         model_prefix=opt.dec_pretrained_model
+            #                         )
+            decoder.load_state_dict(dec_model_state_dict)
             print("[INFO] ... Done")
 
         decoder.dec_pretrained_model = opt.dec_pretrained_model
@@ -633,6 +641,7 @@ def init_model_parameters(model, opt):
         model.decoder.apply(weights_init)
     elif opt.model in ['wav2vec2_bert']:
         print("[INFO] Both encoder and decoder are using pretrained weights")
+        # freeze the embedding parameters?
     else:
         if opt.enc_pretrained_model and not opt.dec_pretrained_model:
             print('[INFO] Initializing only decoder parameters')

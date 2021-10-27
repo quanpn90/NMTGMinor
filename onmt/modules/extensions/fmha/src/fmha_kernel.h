@@ -27,7 +27,7 @@
 
 #pragma once
 
-#include <multihead_attn/philox.h>
+#include <fmha/philox.h>
 
 #include <fmha.h>
 #include <fmha/utils.h>
@@ -60,7 +60,7 @@ struct BlockInfoPadded {
 
     __device__ bool stop_early() const {
         return actual_seqlen == 0;
-    }
+    }   
 
     int actual_seqlen;
     int bidx;
