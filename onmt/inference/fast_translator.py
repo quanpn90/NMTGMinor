@@ -6,7 +6,7 @@ import torch
 import math
 from onmt.model_factory import build_model, optimize_model
 import torch.nn.functional as F
-from onmt.inference.search import BeamSearch, DiverseBeamSearch
+from onmt.inference.search import BeamSearch, DiverseBeamSearch, Sampling
 from onmt.inference.translator import Translator
 from onmt.constants import add_tokenidx
 from options import backward_compatible
@@ -35,7 +35,10 @@ class FastTranslator(Translator):
         self.tgt_eos = onmt.constants.TGT_EOS
         self.tgt_unk = onmt.constants.TGT_UNK
 
-        self.search = BeamSearch(self.tgt_dict)
+        if opt.sampling:
+            self.search = Sampling(self.tgt_dict)
+        else:
+            self.search = BeamSearch(self.tgt_dict)
 
         self.vocab_size = self.tgt_dict.size()
         self.min_len = 1
