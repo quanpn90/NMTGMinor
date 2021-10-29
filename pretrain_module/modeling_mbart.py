@@ -22,6 +22,7 @@ import torch
 import torch.utils.checkpoint
 from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
+from onmt.modules.layer_norm import LayerNorm
 
 from .activations import ACT2FN
 # from ...file_utils import (
@@ -277,14 +278,14 @@ class MBartEncoderLayer(nn.Module):
             num_heads=config.encoder_attention_heads,
             dropout=config.attention_dropout,
         )
-        self.self_attn_layer_norm = nn.LayerNorm(self.embed_dim)
+        self.self_attn_layer_norm = LayerNorm(self.embed_dim)
         self.dropout = config.dropout
 
         self.activation_fn = ACT2FN[config.activation_function]
         self.activation_dropout = config.activation_dropout
         self.fc1 = nn.Linear(self.embed_dim, config.encoder_ffn_dim)
         self.fc2 = nn.Linear(config.encoder_ffn_dim, self.embed_dim)
-        self.final_layer_norm = nn.LayerNorm(self.embed_dim)
+        self.final_layer_norm = LayerNorm(self.embed_dim)
 
         self.activation_fn_name = config.activation_function
         self.fused = False
@@ -365,7 +366,7 @@ class MBartDecoderLayer(nn.Module):
         self.activation_fn = ACT2FN[config.activation_function]
         self.activation_dropout = config.activation_dropout
 
-        self.self_attn_layer_norm = nn.LayerNorm(self.embed_dim)
+        self.self_attn_layer_norm = LayerNorm(self.embed_dim)
         self.encoder_attn = MBartAttention(
             self.embed_dim,
             config.decoder_attention_heads,
@@ -386,10 +387,10 @@ class MBartDecoderLayer(nn.Module):
                 self.fused_function = mlp_gelu_function
                 self.fused = True
 
-        self.encoder_attn_layer_norm = nn.LayerNorm(self.embed_dim)
+        self.encoder_attn_layer_norm = LayerNorm(self.embed_dim)
         self.fc1 = nn.Linear(self.embed_dim, config.decoder_ffn_dim)
         self.fc2 = nn.Linear(config.decoder_ffn_dim, self.embed_dim)
-        self.final_layer_norm = nn.LayerNorm(self.embed_dim)
+        self.final_layer_norm = LayerNorm(self.embed_dim)
 
     @property
     def word_lut(self):
@@ -484,6 +485,12 @@ class MBartDecoderLayer(nn.Module):
 
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
+
+        if hidden_states.dtype == torch.float16 and (
+                torch.isinf(hidden_states).any() or torch.isnan(hidden_states).any()
+        ):
+            clamp_value = torch.finfo(hidden_states.dtype).max - 1000
+            hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
 
         outputs = (hidden_states,)
 
@@ -706,8 +713,8 @@ class MBartEncoder(MBartPreTrainedModel):
             embed_dim,
         )
         self.layers = nn.ModuleList([MBartEncoderLayer(config) for _ in range(config.encoder_layers)])
-        self.layernorm_embedding = nn.LayerNorm(embed_dim)
-        self.layer_norm = nn.LayerNorm(config.d_model)
+        self.layernorm_embedding = LayerNorm(embed_dim)
+        self.layer_norm = LayerNorm(config.d_model)
 
         self.init_weights()
         self.gradient_checkpointing = False
@@ -872,8 +879,8 @@ class MBartDecoder(MBartPreTrainedModel):
             config.d_model,
         )
         self.layers = nn.ModuleList([MBartDecoderLayer(config) for _ in range(config.decoder_layers)])
-        self.layernorm_embedding = nn.LayerNorm(config.d_model)
-        self.layer_norm = nn.LayerNorm(config.d_model)
+        self.layernorm_embedding = LayerNorm(config.d_model)
+        self.layer_norm = LayerNorm(config.d_model)
 
         self.init_weights()
         self.gradient_checkpointing = False

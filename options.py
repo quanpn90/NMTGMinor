@@ -73,22 +73,22 @@ def make_parser(parser):
     parser.add_argument('-fix_norm_output_embedding', action='store_true',
                         help="""Normalize the output embedding""")
 
-    parser.add_argument('-asynchronous', action='store_true',
-                        help="""Different attention values for past and future""")
-    parser.add_argument('-nce_noise', type=int, default=0,
-                        help="""Use noise contrastive estimation for the output layer. 
-                        Default=0 (full softmax), increase to 100 to use 100 noise samples.""")
-    parser.add_argument('-unidirectional', action='store_true',
-                        help="""Unidirectional encoder""")
+    # parser.add_argument('-asynchronous', action='store_true',
+    #                     help="""Different attention values for past and future""")
+    # parser.add_argument('-nce_noise', type=int, default=0,
+    #                     help="""Use noise contrastive estimation for the output layer.
+    #                     Default=0 (full softmax), increase to 100 to use 100 noise samples.""")
+    # parser.add_argument('-unidirectional', action='store_true',
+    #                     help="""Unidirectional encoder""")
     parser.add_argument('-reconstruct', action='store_true',
                         help='Apply reconstruction with an additional decoder')
     parser.add_argument('-mirror_loss', action='store_true',
                         help='Using mirror loss')
 
-    parser.add_argument('-universal', action='store_true',
-                        help='Using one layer universally (recurrent)')
-    parser.add_argument('-act', action='store_true',
-                        help='Using ACT for Universal models (TODO)')
+    # parser.add_argument('-universal', action='store_true',
+    #                     help='Using one layer universally (recurrent)')
+    # parser.add_argument('-act', action='store_true',
+    #                     help='Using ACT for Universal models (TODO)')
 
     # Transforer Model options
     parser.add_argument('-use_language_embedding', action='store_true',
@@ -126,8 +126,8 @@ def make_parser(parser):
                         help='Deprecated.')
     parser.add_argument('-residual_type', default='regular',
                         help='Type of residual type. regular|gated')
-    parser.add_argument('-adaptive', type=str, default='shared',
-                        help='Universal adaptive layer. universal=UniversalTF|shared=factorized|unshared')
+    # parser.add_argument('-adaptive', type=str, default='shared',
+    #                     help='Universal adaptive layer. universal=UniversalTF|shared=factorized|unshared')
     # Optimization options
     parser.add_argument('-encoder_type', default='text',
                         help="Type of encoder to use. Options are [text|img].")
@@ -185,16 +185,16 @@ def make_parser(parser):
     parser.add_argument('-scheduled_sampling_rate', type=float, default=0.0,
                         help='Scheduled sampling rate.')
 
-    parser.add_argument('-curriculum', type=int, default=-1,
-                        help="""For this many epochs, order the minibatches based
-                        on source sequence length. Sometimes setting this to 1 will
-                        increase convergence speed.""")
+    # parser.add_argument('-curriculum', type=int, default=-1,
+    #                     help="""For this many epochs, order the minibatches based
+    #                     on source sequence length. Sometimes setting this to 1 will
+    #                     increase convergence speed.""")
 
     parser.add_argument('-normalize_gradient', action="store_true",
                         help="""Normalize the gradients by number of tokens before updates""")
 
-    parser.add_argument('-gradient_scaler', type=int, default=1,
-                        help='avoid gradient overflow with fp16')
+    # parser.add_argument('-gradient_scaler', type=int, default=1,
+    #                     help='avoid gradient overflow with fp16')
 
     # learning rate
     parser.add_argument('-learning_rate', type=float, default=1.0,
@@ -237,12 +237,12 @@ def make_parser(parser):
     # pretrained word vectors
     parser.add_argument('-tie_weights', action='store_true',
                         help='Tie the weights of the encoder and decoder layer')
-    parser.add_argument('-experimental', action='store_true',
-                        help='Set the model into the experimental mode (trying unverified features)')
+    # parser.add_argument('-experimental', action='store_true',
+    #                     help='Set the model into the experimental mode (trying unverified features)')
     parser.add_argument('-join_embedding', action='store_true',
                         help='Jointly train the embedding of encoder and decoder in one weight')
-    parser.add_argument('-add_position_encoding', action='store_true',
-                        help='Adding pos encodings to embedding (like Transformer)')
+    # parser.add_argument('-add_position_encoding', action='store_true',
+    #                     help='Adding pos encodings to embedding (like Transformer)')
     parser.add_argument('-batch_ensemble', type=int, default=0,
                         help='To use batch ensemble algorithm')
     parser.add_argument('-save_metrics', default='ppl',
@@ -313,8 +313,8 @@ def make_parser(parser):
                         help='Zero-out encoders during training')
     parser.add_argument('-ctc_loss', type=float, default=0.0,
                         help='CTC Loss as additional loss function with this weight')
-    parser.add_argument('-lfv_multilingual', action='store_true',
-                        help='Use multilingual language identifier to get LFV for each language')
+    # parser.add_argument('-lfv_multilingual', action='store_true',
+    #                     help='Use multilingual language identifier to get LFV for each language')
     parser.add_argument('-bottleneck_size', type=int, default=64,
                         help="Bottleneck size for the LFV vector).")
     parser.add_argument('-conv_kernel', type=int, default=31,
@@ -378,10 +378,10 @@ def make_parser(parser):
                         help="""""")
 
     # for DISCOURSE-AWARE models
-    parser.add_argument('-n_past', type=int, default=0,
-                        help='number of segments / utterances in the past')
-    parser.add_argument('-n_future', type=int, default=0,
-                        help='number of segments / utterances in the future')
+    # parser.add_argument('-n_past', type=int, default=0,
+    #                     help='number of segments / utterances in the past')
+    # parser.add_argument('-n_future', type=int, default=0,
+    #                     help='number of segments / utterances in the future')
 
     # For pretraining
     # pretrained encoder
@@ -484,6 +484,15 @@ def make_parser(parser):
 
     parser.add_argument('-wav2vec2_pretrained_model', default='wav2vec2-large-lv60', type=str,
                         help="""Wav2vec2 model from HuggingFace. """)
+
+    parser.add_argument('-freeze_encoder_self_attn', action='store_true',
+                        help='Freeze the wav2vec self-attention weight.')
+    parser.add_argument('-freeze_encoder_ffn', action='store_true',
+                        help='Freeze the wav2vec self-attention weight.')
+    parser.add_argument('-freeze_decoder_self_attn', action='store_true',
+                        help='Freeze the wav2vec self-attention weight.')
+    parser.add_argument('-freeze_decoder_ffn', action='store_true',
+                        help='Freeze the wav2vec self-attention weight.')
 
     return parser
 
