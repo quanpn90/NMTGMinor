@@ -63,8 +63,6 @@ class Translator(object):
                     self.src_dict = checkpoint['dicts']['src']
                 else:
                     self._type = "audio"
-                    # self.src_dict = self.tgt_dict
-
                 self.tgt_dict = checkpoint['dicts']['tgt']
 
                 if "langs" in checkpoint["dicts"]:

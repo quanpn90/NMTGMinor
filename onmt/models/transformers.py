@@ -997,9 +997,9 @@ class TransformerDecodingState(DecoderState):
                 for k in buffer_.keys():
                     t_, br_, d_ = buffer_[k].size()
                     if not self.dec_pretrained_model:
-                        buffer_[k] = buffer_[k].index_select(1, reorder_state)  # 1 for time first
-                    elif self.dec_pretrained_model in ["bert", "roberta"]:
-                        buffer_[k] = buffer_[k].index_select(0, reorder_state)  # 0 for time first
+                        buffer_[k] = buffer_[k].index_select(1, reorder_state)  # beam/batch is the 2nd dim
+                    elif self.dec_pretrained_model in ["bert", "roberta", "mbart", "mbart50", "bart"]:
+                        buffer_[k] = buffer_[k].index_select(0, reorder_state)  # beam/batch is the first dim
                     else:
                         print("Warning: check dec_pretrained_model type")
-                        exit(-1)
+                        raise NotImplementedError
