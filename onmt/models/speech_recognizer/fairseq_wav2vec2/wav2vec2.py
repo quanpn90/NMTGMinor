@@ -583,7 +583,7 @@ class Wav2Vec2Model(torch.nn.Module):
     ):
         # if the tdnn features are precomputed then skip them
         if not precomputed_tdnn:
-            if self.feature_grad_mult > 0:
+            if self.feature_grad_mult > 0 or source.requires_grad:
                 features = self.feature_extractor(source)
                 if self.feature_grad_mult != 1.0:
                     features = GradMultiply.apply(features, self.feature_grad_mult)
@@ -1135,7 +1135,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 dropout = self.dropout2.p if self.training else 0.0
                 seq_len, bsz, hidden_size = x.size(0), x.size(1), x.size(2)
                 if self.fused_blaslt and dropout == 0.0:
-                    # print("[DEBUGGING] BLASLT")
                     x = self.fused_function(x.view(seq_len * bsz, -1), self.fc1.weight, self.fc1.bias,
                                             self.fc2.weight, self.fc2.bias)
                 else:
@@ -1173,7 +1172,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 dropout = self.dropout2.p if self.training else 0.0
                 print(dropout)
                 if self.fused_blaslt and dropout == 0.0:
-                    print("[DEBUGGING] BLASLT")
                     x = self.fused_function(x.view(seq_len * bsz, -1), self.fc1.weight, self.fc1.bias,
                                             self.fc2.weight, self.fc2.bias)
                 else:

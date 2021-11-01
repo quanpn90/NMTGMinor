@@ -277,11 +277,22 @@ class Optim(object):
         self.params = list(params_)  # careful: params may be a generator
         if self.method == 'sgd':
             self.optimizer = optim.SGD(self.params, lr=self.lr, weight_decay=self.weight_decay, momentum=0.0)
+        elif self.method == 'multi_adam':
+            from torch.optim._multi_tensor import Adam, AdamW
+            if self.weight_decay > 0:
+                self.optimizer = AdamW(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                                             weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+            else:
+                self.optimizer = Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                                            weight_decay=0.0, amsgrad=self.amsgrad)
         elif self.method == 'adam':
-            self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-                                        weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+            if self.weight_decay > 0:
+                self.optimizer = optim.AdamW(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                                             weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+            else:
+                self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                                            weight_decay=0.0, amsgrad=self.amsgrad)
         elif self.method == 'adafactor':
-
             relative_step = False if self.lr > 0 else True
             self.optimizer = Adafactor(self.params, lr=self.lr if self.lr > 0 else None,
                                        eps=(1e-30, 1e-3), beta1=None,
@@ -353,7 +364,7 @@ class Optim(object):
             self.lr = self.init_lr
         self._step = 0
         self._first_step = 0
-        if self.update_method == 'noam2':
+        if self.update_method == 'noam_nowarmup':
             self._step = opt.warmup_steps
         if self.update_method == 'cosine':
             self.min_lr = 0.00
@@ -387,7 +398,7 @@ class Optim(object):
         if not overflow:
             self._step += 1
             if 'noam' in self.update_method or 'cosine' in self.update_method:
-                self.updateLearningRate()
+                self.update_learning_rate()
 
         if scaler is not None:
             scaler.step(self.optimizer)
@@ -405,7 +416,7 @@ class Optim(object):
 
         normalize_gradients(self.params, denom)
 
-    def updateLearningRate(self):
+    def update_learning_rate(self):
         """
         Decay learning rate if val perf does not improve
         or we hit the start_decay_at limit.
@@ -413,7 +424,7 @@ class Optim(object):
         if self.lr < 0:
             return
 
-        if self.update_method in ['noam', 'noam2']:
+        if self.update_method in ['noam', 'noam_nowarmup']:
             if self._step <= self.warmup_steps:
                 self.lr = self.init_lr * self._step * self.warmup_steps ** (-1.5)
             else:
@@ -439,11 +450,11 @@ class Optim(object):
             self.lr = self.optimizer.param_groups[0]['lr']
             self.optimizer.param_groups[0]['lr'] = self.lr
 
-    def setLearningRate(self, lr):
+    def set_learning_rate(self, lr):
         self.optimizer.param_groups[0]['lr'] = lr
         self.lr = lr
 
-    def getLearningRate(self):
+    def get_learning_rate(self):
 
         if self.optimizer.param_groups[0]['lr'] is None:
             return self.lr

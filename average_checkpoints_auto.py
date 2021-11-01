@@ -7,7 +7,7 @@ import argparse
 import math
 import numpy
 import os, sys
-from onmt.model_factory import build_model, build_language_model, build_classifier
+from onmt.model_factory import build_model, build_language_model, build_classifier, optimize_model
 from copy import deepcopy
 from onmt.utils import checkpoint_paths, normalize_gradients
 import glob
@@ -42,6 +42,8 @@ def custom_build_model(opt, dict, lm=False, type='seq2seq'):
             model = build_language_model(opt, dict)
     elif type == 'classifier':
         model = build_classifier(opt, dict)
+
+    optimize_model(model)
 
     return model
 

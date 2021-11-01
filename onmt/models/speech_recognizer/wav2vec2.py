@@ -1,9 +1,28 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from onmt.models.transformers import Transformer, TransformerDecodingState
 from typing import List, Optional, Union
 from collections import defaultdict
 import onmt
+
+
+# # the input should have size [b x t x d]
+#
+# #
+# #
+
+#
+# # maybe just need d / F.normalize(d, p=2, dim=2)
+#
+# def norm_vec_sentence_level(d, xp):
+#     # d         : (max_len, batchsize, emb_dim)
+#     # trans_d   : (batchsize, max_len, emb_dim)
+#     trans_d = xp.transpose(d, (1, 0, 2))
+#     norm_term = xp.linalg.norm(trans_d, axis=(1, 2), keepdims=True) + 1e-12
+#     trans_d = trans_d / norm_term
+#     d_sent_norm = xp.transpose(trans_d, (1, 0, 2))
+#     return d_sent_norm
 
 
 # defining a Wav2vec2 encoder wrapping the HuggingFace model here
@@ -108,8 +127,10 @@ class FairseqWav2Vec(nn.Module):
     def convert_fast_attention(self):
         self.wav2vec_encoder.convert_fast_attention()
 
-    def forward(self, input, batch_first_output=False, **kwargs):
+    def forward(self, input, batch_first_output=False, adv_ptb_grad=False, input_ptb=None, **kwargs):
         """
+        :param input_ptb: perturbation added to the input itself
+        :param adv_ptb_grad: adversarial perturbation step which we need the gradients w.r.t the input (wavs)
         :param batch_first_output: [bsz, seq_len, hidden_size] as output size, else transpose(0, 1)
         :param input: torch.Tensor [batch_size, sequence_length, 2]
         :param kwargs:
@@ -117,8 +138,23 @@ class FairseqWav2Vec(nn.Module):
         """
 
         # 0 for tokens that are not masked, 1 for tokens that are masked
-        long_mask = input.narrow(2, 0, 1).squeeze(2).eq(0).long()
-        input = input.narrow(2, 1, input.size(2) - 1)
+        with torch.no_grad():
+            long_mask = input.narrow(2, 0, 1).squeeze(2).eq(0).long()
+            input = input.narrow(2, 1, input.size(2) - 1)
+
+        if adv_ptb_grad:
+            input.requires_grad = True
+
+        if input_ptb is not None:
+            assert not adv_ptb_grad
+            with torch.no_grad():
+                # normalize and add to input / maybe scale over input length?
+                # do this under fp32
+                with torch.cuda.amp.autocast(enabled=False):
+                    epsilon = 1.0
+                    input_ptb = input_ptb.float()
+                    input_ptb = input_ptb / F.normalize(input_ptb, p=2.0, dim=2)
+                    input = input.float() + input_ptb * epsilon
 
         if input.size(-1) == 1:
             precomputed_tdnn = False
@@ -151,7 +187,7 @@ class FairseqWav2Vec(nn.Module):
             dec_attn_mask = dec_attn_mask.byte()
 
         # how to get the correct attention mask?
-        output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask,
+        output_dict = defaultdict(lambda: None, {'source': input, 'context': context, 'src_mask': dec_attn_mask,
                                                  'src': dec_attn_mask, 'pos_emb': None})
 
         return output_dict
@@ -178,8 +214,13 @@ class Wav2vecTransformer(Transformer):
     def reset_states(self):
         return
 
-    def forward(self, batch, zero_encoder=False, factorize=False, target_mask=None, mirror=False, **kwargs):
+    def forward(self, batch, adv_ptb_grad=False, input_ptb=None, factorize=False,
+                mirror=False, target_mask=None, **kwargs):
         """
+        :param factorize:
+        :param mirror:
+        :param adv_ptb_grad: If we need to tell the model to set input.requires_grad=True (1st step)
+        :param input_ptb: 2nd step of adversarial: add the perturbation to input
         :param batch: data object sent from the dataset
         :return:
         """
@@ -188,7 +229,6 @@ class Wav2vecTransformer(Transformer):
 
         src = batch.get('source')
         tgt = batch.get('target_input')
-        src_pos = batch.get('source_pos')
         tgt_pos = batch.get('target_pos')
         src_lang = batch.get('source_lang')
         tgt_lang = batch.get('target_lang')
@@ -200,14 +240,9 @@ class Wav2vecTransformer(Transformer):
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
-        encoder_output = self.encoder(src)
-        # src = src.new(src.size(0), 100).zero_()
-        # context = src.new_zeros(100, src.size(0), 1024)
+        encoder_output = self.encoder(src, adv_ptb_grad=adv_ptb_grad, input_ptb=input_ptb)
 
         encoder_output = defaultdict(lambda: None, encoder_output)
-        # encoder_output['context'] = context
-        # encoder_output['src'] = src
-        # context = encoder_output['context']
         context = encoder_output['context']
         src = encoder_output['src']
 
@@ -228,6 +263,7 @@ class Wav2vecTransformer(Transformer):
         output_dict['src'] = src
         output_dict['target_mask'] = target_mask
         output_dict['target'] = batch.get('target_output')
+        output_dict['source'] = encoder_output['source']
 
         # final layer: computing softmax
         logprobs = self.generator[0](output_dict)['logits']
@@ -369,7 +405,6 @@ class Wav2vecBERT(Wav2vecTransformer):
 
         src = batch.get('source')
         tgt = batch.get('target_input')
-        src_pos = batch.get('source_pos')
         tgt_pos = batch.get('target_pos')
         src_lang = batch.get('source_lang')
         tgt_lang = batch.get('target_lang')
@@ -509,20 +544,20 @@ class Wav2vecBERT(Wav2vecTransformer):
         if not dec_pretrained_model:
             mask_src = None
         elif dec_pretrained_model in ["bert", "roberta"]:
-            mask_src = src_attention_mask.unsqueeze(
-                1)  # batch_size  x 1 x len_src for broadcasting
-        elif dec_pretrained_model in ["bart"]:
-            src_attention_mask = 1 - (src_attention_mask.long())
+            mask_src = src_attention_mask.unsqueeze(1)  # batch_size  x 1 x len_src for broadcasting
+
+        elif dec_pretrained_model in ["bart", "mbart", "mbart50"]:
+            mask_src = 1 - (src_attention_mask.long())
         else:
             print("Warning: unknown dec_pretrained_model")
             raise NotImplementedError
 
         decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], src_lang,
                                                  beam_size=beam_size, model_size=self.model_size,
-                                                 type=type, buffering=buffering, src_mask=src_attention_mask,
+                                                 type=type, buffering=buffering, src_mask=mask_src,
                                                  dec_pretrained_model=self.decoder.dec_pretrained_model)
 
-        return
+        return decoder_state
 
     def tie_weights(self):
         assert self.generator is not None, "The generator needs to be created before sharing weights"

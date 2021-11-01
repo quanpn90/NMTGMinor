@@ -23,7 +23,7 @@ class Translator(object):
         self.start_with_bos = opt.start_with_bos
         self.fp16 = opt.fp16
         self.attributes = opt.attributes  # attributes split by |. for example: de|domain1
-        # self.bos_token = opt.bos_token
+        self.bos_token = opt.bos_token
         self.sampling = opt.sampling
         self.src_lang = opt.src_lang
         self.tgt_lang = opt.tgt_lang
@@ -56,7 +56,7 @@ class Translator(object):
 
             # update special tokens
             onmt.constants = add_tokenidx(model_opt, onmt.constants, dicts)
-            self.bos_token = model_opt.tgt_bos_word
+            # self.bos_token = model_opt.tgt_bos_word
 
             if i == 0:
                 if "src" in checkpoint['dicts']:
@@ -74,14 +74,15 @@ class Translator(object):
                     self.lang_dict = {'src': 0, 'tgt': 1}
 
                 self.bos_id = self.tgt_dict.labelToIdx[self.bos_token]
+                print("[INFO] Bos Token: %s Bos_ID: %d" % (self.bos_token, self.bos_id))
 
             model = build_model(model_opt, checkpoint['dicts'])
 
             if opt.verbose:
                 print('Loading model from %s' % model_path)
-            model.load_state_dict(checkpoint['model'])
-
             optimize_model(model)
+
+            model.load_state_dict(checkpoint['model'])
 
             if model_opt.model in model_list:
                 # if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:

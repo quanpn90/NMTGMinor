@@ -175,7 +175,6 @@ def len_penalty(s, l, alpha):
 
 
 def get_sentence_from_tokens(tokens, ids, input_type, external_tokenizer=None):
-
     if external_tokenizer is None:
         if input_type == 'word':
             sent = " ".join(tokens)
@@ -246,7 +245,13 @@ def main():
     else:
         translator = FastTranslator(opt)
 
-    if "bart" in opt.external_tokenizer.lower():
+    if "mbart-large-50" in opt.external_tokenizer.lower():
+        print("[INFO] Using the external MBART50 tokenizer...")
+
+        from transformers import MBart50TokenizerFast
+        external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50", src_lang=opt.src_lang)
+
+    elif "bart" in opt.external_tokenizer.lower():
         print("[INFO] Using the external BART tokenizer...")
 
         from transformers import BartTokenizer
@@ -323,8 +328,8 @@ def main():
                 else:
                     print("Batch sizes :", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
                 pred_batch, pred_ids, \
-                    pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
-                        src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr')
+                pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
+                    src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr')
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
                     translate_batch(opt, tgtF, count, outF, translator,
@@ -399,11 +404,11 @@ def main():
         if len(src_batches[0]) != 0:
             print("Batch size:", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
             pred_batch, pred_ids, pred_score, pred_length, \
-                gold_score, num_gold_words, all_gold_scores = translator.translate(
-                    src_batches,
-                    tgt_batch,
-                    past_src_data=past_src_batches,
-                    sub_src_data=sub_src_batch, type='asr')
+            gold_score, num_gold_words, all_gold_scores = translator.translate(
+                src_batches,
+                tgt_batch,
+                past_src_data=past_src_batches,
+                sub_src_data=sub_src_batch, type='asr')
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
                 = translate_batch(opt, tgtF, count, outF, translator,
@@ -486,8 +491,8 @@ def main():
                 else:
                     print("Batch sizes :", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
                 pred_batch, pred_ids, pred_score, pred_length, \
-                    gold_score, num_gold_words, all_gold_scores = translator.translate(
-                        src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr')
+                gold_score, num_gold_words, all_gold_scores = translator.translate(
+                    src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr')
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
                     translate_batch(opt, tgtF, count, outF, translator,
@@ -548,11 +553,11 @@ def main():
         if len(src_batches[0]) != 0:
             print("Batch size:", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
             pred_batch, pred_ids, pred_score, pred_length, \
-                gold_score, num_gold_words, all_gold_scores = translator.translate(
-                    src_batches,
-                    tgt_batch,
-                    past_src_data=past_src_batches,
-                    sub_src_data=sub_src_batch, type='asr')
+            gold_score, num_gold_words, all_gold_scores = translator.translate(
+                src_batches,
+                tgt_batch,
+                past_src_data=past_src_batches,
+                sub_src_data=sub_src_batch, type='asr')
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
                 = translate_batch(opt, tgtF, count, outF, translator,
@@ -606,9 +611,9 @@ def main():
 
             # actually done beam search from the model
             pred_batch, pred_ids, pred_score, pred_length, \
-                gold_score, num_gold_words, all_gold_scores = translator.translate(
-                    src_batch,
-                    tgt_batch)
+            gold_score, num_gold_words, all_gold_scores = translator.translate(
+                src_batch,
+                tgt_batch)
 
             # convert output tensor to words
             count, pred_score, pred_words, gold_score, goldWords = translate_batch(opt, tgtF, count, outF, translator,
@@ -674,12 +679,14 @@ def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch,
         count += 1
 
         if not opt.print_nbest:
-            outF.write(get_sentence_from_tokens(pred_batch[b][0], pred_ids[b][0], input_type, external_tokenizer) + '\n')
+            outF.write(
+                get_sentence_from_tokens(pred_batch[b][0], pred_ids[b][0], input_type, external_tokenizer) + '\n')
             outF.flush()
         else:
             for n in range(opt.n_best):
                 idx = n
-                output_sent = get_sentence_from_tokens(pred_batch[b][idx], pred_ids[b][idx], input_type, external_tokenizer)
+                output_sent = get_sentence_from_tokens(pred_batch[b][idx], pred_ids[b][idx], input_type,
+                                                       external_tokenizer)
                 out_str = "%s ||| %.4f" % (output_sent, pred_score[b][idx])
                 outF.write(out_str + '\n')
                 outF.flush()
@@ -688,7 +695,8 @@ def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch,
             if opt.encoder_type == "text":
                 src_sent = " ".join(src_batch[b])
                 print('SRC %d: %s' % (count, src_sent))
-            print('PRED %d: %s' % (count, get_sentence_from_tokens(pred_batch[b][0], pred_ids[b][0], input_type, external_tokenizer)))
+            print('PRED %d: %s' % (
+            count, get_sentence_from_tokens(pred_batch[b][0], pred_ids[b][0], input_type, external_tokenizer)))
             print("PRED SCORE: %.4f" % pred_score[b][0])
 
             if tgtF is not None:

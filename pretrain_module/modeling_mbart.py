@@ -48,7 +48,6 @@ import onmt
 from collections import defaultdict
 from .configuration_mbart import MBartConfig
 
-# logger = logging.get_logger(__name__)
 
 _CHECKPOINT_FOR_DOC = "facebook/mbart-large-cc25"
 _CONFIG_FOR_DOC = "MBartConfig"
@@ -1138,7 +1137,68 @@ class MBartDecoder(MBartPreTrainedModel):
             cross_attentions=all_cross_attentions,
         )
 
-# @add_start_docstrings(
+    def step(self, input, decoder_state, **kwargs):
+
+        # context is stored in the decoder state in [T B H] format
+        encoder_hidden_states = decoder_state.context.transpose(0, 1)
+
+        # buffers = decoder_state.attention_buffers
+        lang = decoder_state.tgt_lang
+        src_lang = decoder_state.src_lang
+        buffering = decoder_state.buffering
+
+        input_ids = input
+        input_shape = input_ids.size()
+        past_key_values_length = 0
+
+        inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
+
+        attention_mask = input_ids.ne(onmt.constants.TGT_PAD).long()
+
+        attention_mask = self._prepare_decoder_attention_mask(
+            attention_mask, input_shape, inputs_embeds, past_key_values_length
+        )
+
+        encoder_attention_mask = decoder_state.src_mask
+        encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
+
+        # embed positions
+        positions = self.embed_positions(input_shape, past_key_values_length)
+
+        hidden_states = inputs_embeds + positions
+        hidden_states = self.layernorm_embedding(hidden_states)
+
+        for idx, decoder_layer in enumerate(self.layers):
+            # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
+
+            layer_outputs = decoder_layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+                layer_head_mask=None,
+                cross_attn_layer_head_mask=None,
+                past_key_value=None,
+                output_attentions=None,
+                use_cache=None,
+            )
+
+            hidden_states = layer_outputs[0]
+
+        hidden_states = self.layer_norm(hidden_states)
+        output = hidden_states.transpose(0, 1).contiguous()[-1].unsqueeze(0)
+
+        # just a fake coverage
+        coverage = hidden_states.new(hidden_states.size(0), 1, encoder_hidden_states.size(1)).zero_()
+
+        output_dict = defaultdict(lambda: None)
+        output_dict['hidden'] = output
+        output_dict['coverage'] = coverage
+        output_dict['context'] = encoder_hidden_states.transpose(0, 1)
+
+        return output_dict
+
+    # @add_start_docstrings(
 #     "The bare MBART Model outputting raw hidden-states without any specific head on top.",
 #     MBART_START_DOCSTRING,
 # )

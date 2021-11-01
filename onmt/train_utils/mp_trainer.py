@@ -196,9 +196,6 @@ class Trainer(object):
 
         # This function replaces modules with the more optimized counterparts so that it can run faster
         # Currently exp with LayerNorm
-        if self.is_main():
-            nparams = sum(p.numel() for p in model.parameters() if p.requires_grad)
-            print("[INFO] Total number of paramaters: %d" % nparams)
 
         # distributed is required to convert BatchNorm to SyncBatchNorm for DDP
         optimize_model(model, distributed=(self.world_size > 1))
@@ -206,7 +203,8 @@ class Trainer(object):
         if opt.load_pretrained_classifier:
             from onmt.model_factory import build_classifier
             self.print("Loading pretrained external classifier ...", flush=True)
-            classifier_checkpoint = torch.load(opt.load_pretrained_classifier, map_location=lambda storage, loc: storage)
+            classifier_checkpoint = torch.load(opt.load_pretrained_classifier,
+                                               map_location=lambda storage, loc: storage)
             classifier_opt = classifier_checkpoint['opt']
             classifier_dicts = classifier_checkpoint['dicts']
             self.classifier = build_classifier(classifier_opt, classifier_dicts)
@@ -275,18 +273,21 @@ class Trainer(object):
                                                                    output_device=self.rank,
                                                                    find_unused_parameters=find_unused_parameters)
 
+        if self.is_main():
+            nparams = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            print("[INFO] Total number of trainable paramaters: %d" % nparams)
+            nparams = sum(p.numel() for p in model.parameters())
+            print("[INFO] Total number of paramaters: %d" % nparams)
+
         print("[INFO] Process %d ready." % self.rank, flush=True)
 
     def is_main(self):
-
         return self.rank == 0
 
     def all_reduce(self, tensor, **kwargs):
-
         if self.world_size > 1:
             dist.all_reduce(tensor, **kwargs)
 
-        # otherwise, do nothing
         return
 
     def print(self, *content, flush=False):
@@ -440,12 +441,16 @@ class Trainer(object):
 
             optimizer = self.optim.optimizer
 
-        self.grad_scaler.scale(full_loss).backward()
+        # Warning: self-defined parameter list
+        parameter_list = [p for p in self.model.parameters() if p.requires_grad]
+        # Later if we need to do Adversarial Perturbation:
+
+        self.grad_scaler.scale(full_loss).backward(inputs=parameter_list)
 
         self.model.zero_grad()
         self.optim.zero_grad()
         # self.optim.step()
-            # self.optim.reset()
+        # self.optim.reset()
 
         # except RuntimeError as e:
         #     if 'out of memory' in str(e):
@@ -562,7 +567,7 @@ class Trainer(object):
                             loss_data = loss_dict['data']
                             correct, total = loss_dict['correct'], loss_dict['total']
                             total_correct.add_(correct)
-                            assert(total == batch.tgt_size)
+                            assert (total == batch.tgt_size)
 
                     total_loss.add_(loss_data)
                     total_words.add_(batch.tgt_size)
@@ -634,6 +639,7 @@ class Trainer(object):
             samples = next(epoch_iterator)
 
             batch = prepare_sample(samples, device=self.device)
+            targets = batch.get('target_output')
 
             if opt.streaming:
                 if train_data.is_new_stream():
@@ -645,7 +651,6 @@ class Trainer(object):
             oom = zero_tensor()
 
             try:
-
                 counter = counter + 1
                 reduce = True if counter >= opt.update_frequency or i == (n_samples - 1) else False
 
@@ -659,7 +664,7 @@ class Trainer(object):
 
                 # with maybe_no_sync():
                 with autocast():
-                    targets = batch.get('target_output')
+
                     tgt_mask = targets.ne(onmt.constants.PAD)
                     if opt.load_pretrained_classifier:
                         with torch.no_grad():
@@ -670,7 +675,8 @@ class Trainer(object):
                     outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                          zero_encoder=opt.zero_encoder,
                                          mirror=opt.mirror_loss, streaming_state=streaming_state,
-                                         nce=opt.nce, pretrained_layer_states=layer_states)
+                                         nce=opt.nce, pretrained_layer_states=layer_states,
+                                         adv_ptb_grad=opt.virtual_adversarial_training_mode > 0)
 
                     batch_size = batch.size
                     # outputs is a dictionary containing keys/values necessary for loss function
@@ -710,9 +716,62 @@ class Trainer(object):
                     optimizer = self.optim.optimizer
 
                 # grad scaler has to be done outside of the autocast
-                self.grad_scaler.scale(full_loss).backward()
 
-                del outputs
+                # TODO for adversarial:
+
+                grad_list = [p for p in self.model.parameters() if p.requires_grad]
+                if opt.virtual_adversarial_training_mode > 0:
+                    # if we use virtual adversarial training: add the input to the list of gradient to take
+                    model_input = outputs['source']
+                    vanilla_logits = outputs['logprobs']
+                    grad_list += [model_input]
+                else:
+                    model_input = None
+                    vanilla_logits = None
+
+                self.grad_scaler.scale(full_loss).backward(inputs=grad_list)
+
+                # del outputs
+                if opt.virtual_adversarial_training_mode > 0:
+                    # run forward pass one more time
+                    # the perturbation is the gradient of the model w.r.t the input
+                    perturb = model_input.grad.data.new(*model_input.size()).copy_(model_input.grad.data)
+
+                    with autocast():
+                        assert model_input.grad is not None
+                        outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                                             pretrained_layer_states=layer_states,
+                                             input_ptb=perturb)
+
+                        full_loss = None
+                        # compute loss for mode 2 3
+                        # In this mode, we add noise to the input and minimise the loss given the noisy inputs
+                        if opt.virtual_adversarial_training_mode in [2, 3]:
+                            loss_dict = self.loss_function(outputs, targets, model=self.model)
+                            full_loss = loss_dict['loss']
+
+                        # for mode 1, 3 compute kl divergence
+                        # In this mode, we minimise the kl divergence between the model output with and without noise
+                        if opt.virtual_adversarial_training_mode in [1, 3]:
+                            logits = outputs['logprobs']
+
+                            with torch.no_grad():
+                                vanilla_probs = \
+                                    F.softmax(vanilla_logits.float().view(-1, vanilla_logits.size(-1)), dim=-1)
+                                vanilla_probs.detach_()
+                            noisy_probs = F.softmax(logits.float().view(-1, logits.view(-1, logits.size(-1))), dim=-1)
+
+                            # Note: with the kl_div_loss we don't backward w.r.t the vanilla probs
+                            kl_div_loss = F.kl_div(noisy_probs, vanilla_probs, reduction='sum')
+                            if full_loss is None:
+                                full_loss = kl_div_loss
+                            else:
+                                full_loss += kl_div_loss
+
+                    # Now we only get the gradients for the weights of the network
+                    grad_list = [p for p in self.model.parameters() if p.requires_grad]
+                    self.grad_scaler.scale(full_loss).backward(inputs=grad_list)
+                    del outputs
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
@@ -772,7 +831,7 @@ class Trainer(object):
 
                 # the gradient is scaled by world size, so in order to match the model without multiGPU
                 # we rescale the model parameters w.r.t the world size
-                # grad_denom = grad_denom / self.world_size
+                grad_denom = grad_denom / self.world_size
 
                 # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
                 if grad_denom > 1.0:
@@ -797,7 +856,7 @@ class Trainer(object):
 
                     if self.is_main():
                         print('Validation perplexity: %g' % valid_ppl)
-                        print('Validation accuracy: %g percent' % (100 * valid_accuracy)    )
+                        print('Validation accuracy: %g percent' % (100 * valid_accuracy))
                         ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
                         self.save(ep, valid_ppl if opt.save_metrics in ['ppl', 'perplexity'] else 1 - valid_accuracy,
                                   itr=data_iterator)
@@ -853,7 +912,7 @@ class Trainer(object):
                         log_string += (" ctcloss: %8.2f ; " % ctc_loss)
 
                     log_string += ("lr: %.7f ; updates: %7d; " %
-                                   (self.optim.getLearningRate(),
+                                   (self.optim.get_learning_rate(),
                                     self.optim._step))
 
                     log_string += ("%5.0f src tok/s; %5.0f tgt tok/s; " %
@@ -921,7 +980,7 @@ class Trainer(object):
             self.warm_up()
 
         if opt.load_from:
-            valid_loss, valid_accuracy  = self.eval(self.valid_data)
+            valid_loss, valid_accuracy = self.eval(self.valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
 
             if self.is_main():
@@ -940,7 +999,7 @@ class Trainer(object):
             self.print('[INFO] Train perplexity: %g' % train_ppl)
 
             #  (2) evaluate on the validation set
-            valid_loss, valid_accuracy  = self.eval(self.valid_data)
+            valid_loss, valid_accuracy = self.eval(self.valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
 
             if self.is_main():

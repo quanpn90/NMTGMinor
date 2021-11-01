@@ -494,6 +494,9 @@ def make_parser(parser):
     parser.add_argument('-freeze_decoder_ffn', action='store_true',
                         help='Freeze the wav2vec self-attention weight.')
 
+    parser.add_argument('-virtual_adversarial_training_mode', type=int, default=0,
+                        help='Virtual Adversarial Training. 0=disabled. 1=kl_loss. 2=ce. 3=kl_loss + ce.')
+
     return parser
 
 
