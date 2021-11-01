@@ -461,7 +461,8 @@ def main():
                                                                      asr_format=opt.asr_format,
                                                                      output_format=opt.format,
                                                                      num_workers=opt.num_threads,
-                                                                     external_tokenizer=opt.external_tokenizer)
+                                                                     external_tokenizer=opt.external_tokenizer,
+                                                                     tgt_lang=tgt_lang)
 
             n_samples = len(src_data)
             if n_input_files == 1:
@@ -487,7 +488,8 @@ def main():
                                                                     asr_format=opt.asr_format,
                                                                     output_format=opt.format,
                                                                     num_workers=opt.num_threads,
-                                                                    external_tokenizer=opt.external_tokenizer)
+                                                                    external_tokenizer=opt.external_tokenizer,
+                                                                    tgt_lang=tgt_lang)
 
                 train['past_src'] += past_src_data
                 train['past_src_sizes'] += past_src_sizes
@@ -537,7 +539,8 @@ def main():
                                                                      add_bos=not opt.no_bos,
                                                                      asr_format=opt.asr_format,
                                                                      output_format=opt.format,
-                                                                     external_tokenizer=opt.external_tokenizer)
+                                                                     external_tokenizer=opt.external_tokenizer,
+                                                                     tgt_lang=tgt_lang)
 
             n_samples = len(src_data)
             if n_input_files == 1:
@@ -563,7 +566,8 @@ def main():
                                                                     asr_format=opt.asr_format,
                                                                     output_format=opt.format,
                                                                     num_workers=opt.num_threads,
-                                                                    external_tokenizer=opt.external_tokenizer)
+                                                                    external_tokenizer=opt.external_tokenizer,
+                                                                    tgt_lang=tgt_lang)
 
                 valid['past_src'] += past_src_data
                 valid['past_src_sizes'] += past_src_sizes

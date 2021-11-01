@@ -264,6 +264,8 @@ class Binarizer:
 
             from transformers import MBart50TokenizerFast
             ext_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50", src_lang=lang)
+            if ext_tokenizer.src_lang != lang:
+                raise RuntimeError("The language %s does not exist in mBART50." % lang)
 
         elif "bart" in external_tokenizer.lower():
             if worker_id == 0:
@@ -297,6 +299,10 @@ class Binarizer:
                     # conversion to numpy is necessary because torch.Tensor is not serializable by the mprocess
                     data += [binarized_line.numpy()]
                     sizes += [len(tokenized_sent)]
+
+                    # assert that the mbart50 tokenizer uses the correct language ID
+                    if "mbart-large-50" in external_tokenizer.lower():
+                        assert binarized_line[0] == vocab.convertToIdx([lang])[0]
                 else:
                     tensor = ext_tokenizer(line.strip())['input_ids']
                     sizes += [len(tensor)]
@@ -345,7 +351,7 @@ class Binarizer:
                 mp_results.append(pool.apply_async(
                     Binarizer.binarize_file_single_thread,
                     args=(filename, tokenizer, vocab, worker_id, bos_word, eos_word,
-                          offsets[worker_id], offsets[worker_id + 1], data_type, verbose, external_tokenizer),
+                          offsets[worker_id], offsets[worker_id + 1], data_type, verbose, external_tokenizer, lang),
                 ))
 
             pool.close()

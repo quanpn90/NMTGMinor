@@ -953,6 +953,9 @@ class MBartDecoder(MBartPreTrainedModel):
         self.max_target_positions = config.max_position_embeddings
         self.embed_scale = math.sqrt(config.d_model) if config.scale_embedding else 1.0
 
+        config.dropout = opt.residual_dropout if opt.residual_dropout > 0 else opt.dropout
+        config.activation_dropout = opt.ffn_dropout if opt.ffn_dropout > 0 else opt.dropout
+
         if embed_tokens is not None:
             self.embed_tokens = embed_tokens
         else:
@@ -976,6 +979,10 @@ class MBartDecoder(MBartPreTrainedModel):
         self.layerdrop = opt.death_rate / 2
         self.dec_pretrained_model = 'mbart'
         self.embed_tokens.weight.requires_grad = False
+        self.word_dropout = opt.word_dropout
+
+
+
 
         # TODO: more options to freeze weights in each layer
 
@@ -1109,7 +1116,9 @@ class MBartDecoder(MBartPreTrainedModel):
         past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
 
         if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
+            inputs_embeds = embedded_dropout(self.embed_tokens, input_ids,
+                                             dropout=self.word_dropout if self.training else 0)
+            inputs_embeds = inputs_embeds * self.embed_scale
 
         attention_mask = self._prepare_decoder_attention_mask(
             attention_mask, input_shape, inputs_embeds.dtype, past_key_values_length

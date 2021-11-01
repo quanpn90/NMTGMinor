@@ -78,9 +78,13 @@ class Translator(object):
 
             if opt.verbose:
                 print('Loading model from %s' % model_path)
-            optimize_model(model)
 
-            model.load_state_dict(checkpoint['model'])
+            try:
+                model.load_state_dict(checkpoint['model'])
+                optimize_model(model)
+            except RuntimeError:
+                optimize_model(model)
+                model.load_state_dict(checkpoint['model'])
 
             if model_opt.model in model_list:
                 # if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:
