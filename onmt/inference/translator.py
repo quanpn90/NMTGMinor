@@ -86,16 +86,11 @@ class Translator(object):
                 optimize_model(model)
                 model.load_state_dict(checkpoint['model'])
 
-            # Test
-            optimize_model_test(model)
-
             if model_opt.model in model_list:
                 # if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:
                 #     print("Not enough len to decode. Renewing .. ")
                 #     model.decoder.renew_buffer(self.opt.max_sent_length)
                 model.renew_buffer(self.opt.max_sent_length)
-
-            # model.convert_autograd()
 
             if opt.fp16:
                 model = model.half()
