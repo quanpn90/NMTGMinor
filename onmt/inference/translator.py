@@ -3,7 +3,7 @@ import onmt.modules
 import torch.nn as nn
 import torch
 import math
-from onmt.model_factory import build_model, build_language_model, optimize_model
+from onmt.model_factory import build_model, build_language_model, optimize_model, optimize_model_test
 from ae.Autoencoder import Autoencoder
 import torch.nn.functional as F
 import sys
@@ -85,6 +85,9 @@ class Translator(object):
             except RuntimeError:
                 optimize_model(model)
                 model.load_state_dict(checkpoint['model'])
+
+            # Test
+            optimize_model_test(model)
 
             if model_opt.model in model_list:
                 # if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:

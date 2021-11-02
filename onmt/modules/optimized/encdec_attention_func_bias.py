@@ -38,11 +38,12 @@ def rotate_backward(dx):
     return torch.cat((dx1, -dx2), dim=dx1.ndim - 1)
 
 
-class EncdecAttnFunc(torch.autograd.Function):
+class EncdecAttnBiasFunc(torch.autograd.Function):
     @staticmethod
     @custom_fwd(cast_inputs=torch.float16)
     def forward(ctx, recompute, is_training, heads, inputs_q, inputs_kv,
                 input_weights_q, input_weights_kv, output_weights,
+                input_bias_q, input_bias_kv, output_bias,
                 mask, dropout_prob,
                 incremental, incremental_cache,
                 rotary_pos_enc, pos_emb_q, pos_emb_k,
@@ -74,60 +75,62 @@ class EncdecAttnFunc(torch.autograd.Function):
             else:
                 mask = mask.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
 
-        if encdec_multihead_attn_cuda is not None and not incremental and len_k <= 2048 \
-                and inputs_q.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc:
-            input_lin_q_results, input_lin_kv_results, \
-            softmax_results, dropout_results, dropout_mask, \
-            matmul2_results, outputs \
-                = encdec_multihead_attn_cuda.forward(is_training, heads, inputs_q, inputs_kv,
-                                                     input_weights_q, input_weights_kv,
-                                                     output_weights, mask, dropout_prob)
-
-            sinq, cosq, = null_tensor, null_tensor
-            sink, cosk, = null_tensor, null_tensor
-
-            if not ctx.recompute:
-                ctx.save_for_backward(heads_t,
-                                      scale_t,
-                                      matmul2_results,
-                                      dropout_results,
-                                      softmax_results,
-                                      input_lin_q_results,
-                                      input_lin_kv_results,
-                                      inputs_q,
-                                      inputs_kv,
-                                      input_weights_q,
-                                      input_weights_kv,
-                                      output_weights,
-                                      dropout_mask,
-                                      dropout_prob_t,
-                                      sinq, cosq, sink, cosk)
-            else:
-                ctx.save_for_backward(heads_t,
-                                      scale_t,
-                                      inputs_q,
-                                      inputs_kv,
-                                      input_weights_q,
-                                      input_weights_kv,
-                                      output_weights,
-                                      dropout_mask,
-                                      dropout_prob_t,
-                                      mask,
-                                      sinq, cosq, sink, cosk)
-            ctx.fused_all = True
-
-            if return_coverage:
-                return outputs, softmax_results
-            else:
-                return (outputs,)
+        # if encdec_multihead_attn_cuda is not None and not incremental and len_k <= 2048 \
+        #         and inputs_q.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc:
+        #     input_lin_q_results, input_lin_kv_results, \
+        #     softmax_results, dropout_results, dropout_mask, \
+        #     matmul2_results, outputs \
+        #         = encdec_multihead_attn_cuda.forward(is_training, heads, inputs_q, inputs_kv,
+        #                                              input_weights_q, input_weights_kv,
+        #                                              output_weights, mask, dropout_prob)
+        #
+        #     sinq, cosq, = null_tensor, null_tensor
+        #     sink, cosk, = null_tensor, null_tensor
+        #
+        #     if not ctx.recompute:
+        #         ctx.save_for_backward(heads_t,
+        #                               scale_t,
+        #                               matmul2_results,
+        #                               dropout_results,
+        #                               softmax_results,
+        #                               input_lin_q_results,
+        #                               input_lin_kv_results,
+        #                               inputs_q,
+        #                               inputs_kv,
+        #                               input_weights_q,
+        #                               input_weights_kv,
+        #                               output_weights,
+        #                               dropout_mask,
+        #                               dropout_prob_t,
+        #                               sinq, cosq, sink, cosk)
+        #     else:
+        #         ctx.save_for_backward(heads_t,
+        #                               scale_t,
+        #                               inputs_q,
+        #                               inputs_kv,
+        #                               input_weights_q,
+        #                               input_weights_kv,
+        #                               output_weights,
+        #                               dropout_mask,
+        #                               dropout_prob_t,
+        #                               mask,
+        #                               sinq, cosq, sink, cosk)
+        #     ctx.fused_all = True
+        #
+        #     if return_coverage:
+        #         return outputs, softmax_results
+        #     else:
+        #         return (outputs,)
 
         # Input Linear GEMM Q
         # input1: (activations) [seql_q, bsz, embed_dim] -> [len_q * bsz, embed_dim]
         # input2: (weights)     [embed_dim, embed_dim]. transpose(0, 1)
         # output:               [len_q * bsz, embed_dim] -> [seql_q, bsz, embed_dim]
         # GEMM: ( (seql_q*seqs) x embed_dim ) x ( embed_dim x embed_dim ) = (seql_q*seqs x embed_dim)
-        input_lin_q_results = torch.mm(inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
-                                       input_weights_q.transpose(0, 1))
+        input_lin_q_results = torch.addmm(input_bias_q,
+                                          inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
+                                          input_weights_q.transpose(0, 1),
+                                          beta=1., alpha=1.)
         input_lin_q_results = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1), input_weights_q.size(0))
 
         queries = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1) * heads, head_dim)
@@ -148,8 +151,10 @@ class EncdecAttnFunc(torch.autograd.Function):
             values = values.view(len_k, bsz * heads, head_dim)
             input_lin_kv_results = torch.stack([keys, values], dim=-2)
         else:
-            input_lin_kv_results = torch.mm(inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)),
-                                            input_weights_kv.transpose(0, 1))
+            input_lin_kv_results = torch.addmm(input_bias_kv,
+                                               inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)),
+                                               input_weights_kv.transpose(0, 1),
+                                               beta=1., alpha=1.)
             input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1),
                                                              input_weights_kv.size(0))
 
@@ -268,8 +273,10 @@ class EncdecAttnFunc(torch.autograd.Function):
         # Input2: (weights)     [ embed_dim, embed_dim ] transpose(0,1)
         # Output:               [ seql_q, seqs, embed_dim ]
         # GEMM: ( seql_q*seqs x embed_dim ) x ( embed_dim x embed_dim ) = ( seql_q*seqs x embed_dim )
-        outputs = torch.mm(matmul2_results.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
-                           output_weights.transpose(0, 1))
+        outputs = torch.addmm(output_bias,
+                              matmul2_results.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
+                              output_weights.transpose(0, 1),
+                              beta=1., alpha=1.)
         outputs = outputs.view(inputs_q.size(0), inputs_q.size(1), output_weights.size(0))
 
         if not ctx.recompute:
@@ -390,14 +397,18 @@ class EncdecAttnFunc(torch.autograd.Function):
             heads = heads_t[0]
 
             # Recomputing the tensors in the forward pass here
-            input_lin_q_results = torch.mm(inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
-                                           input_weights_q.transpose(0, 1))
+            input_lin_q_results = torch.addmm(input_bias_q,
+                                              inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
+                                              input_weights_q.transpose(0, 1),
+                                              beta=1., alpha=1.)
             input_lin_q_results = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1), input_weights_q.size(0))
 
             queries = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1) * heads, head_dim)
 
-            input_lin_kv_results = torch.mm(inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)),
-                                            input_weights_kv.transpose(0, 1))
+            input_lin_kv_results = torch.addmm(input_bias_kv,
+                                               inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)),
+                                               input_weights_kv.transpose(0, 1),
+                                               beta=1., alpha=1.)
             input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1),
                                                              input_weights_kv.size(0))
 
@@ -471,6 +482,10 @@ class EncdecAttnFunc(torch.autograd.Function):
         output_weight_grads = torch.mm(
             output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)).transpose(0, 1),
             matmul2_results.view(matmul2_results.size(0) * matmul2_results.size(1), matmul2_results.size(2)))
+
+        output_bias_grads = torch.sum(
+            output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), 0)
+
         output_lin_grads = output_lin_grads.view(output_grads.size(0), output_grads.size(1) * heads_t[0],
                                                  head_dim).transpose(0, 1)
 
@@ -562,6 +577,8 @@ class EncdecAttnFunc(torch.autograd.Function):
         # GEMM: ( embed_dim x seql_q*seqs ) x ( seql_q*seqs x embed_dim ) = (embed_dim x embed_dim)
         input_weight_q_grads = torch.mm(queries_grads.transpose(0, 1),
                                         inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)))
+
+        input_bias_q_grads = torch.sum(queries_grads, 0)
         # Input KV Linear GEMM - WGRAD
         # input1: (data grads)  [seql_k*seqs, 2*embed_dim(2048)]
         # input2: (activations) [seql_k*seqs, embed_dim(1024)]
@@ -570,28 +587,13 @@ class EncdecAttnFunc(torch.autograd.Function):
         input_weight_kv_grads = torch.mm(input_lin_kv_results_grads.transpose(0, 1),
                                          inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)))
 
+        input_bias_kv_grads = torch.sum(input_lin_kv_results_grads, 0)
+
         return None, None, None \
             , input_q_grads, input_kv_grads \
             , input_weight_q_grads, input_weight_kv_grads, output_weight_grads \
+            , input_bias_q_grads, input_bias_kv_grads, output_bias_grads \
             , None, None, None, None, None, None, None, None, None
-
-
-# def encdec_attn_func(time_masking, is_training,
-#                      num_heads, query, key,
-#                      in_proj_weight_q, in_proj_weight_kv,
-#                      out_proj_weight, attn_mask, dropout,
-#                      incremental, incremental_cache,
-#                      use_rotary_enc, pos_emb_q, pos_emb_k,
-#                      double_precision, return_coverage):
-#     return EncdecAttnFunc.apply(time_masking, is_training,
-#                                 num_heads, query, key,
-#                                 in_proj_weight_q, in_proj_weight_kv,
-#                                 out_proj_weight, attn_mask, dropout,
-#                                 incremental, incremental_cache,
-#                                 use_rotary_enc, pos_emb_q, pos_emb_k,
-#                                 double_precision, return_coverage)
-#
-#     return output, coverage
 
 
 def _cast_if_autocast_enabled(*args):
@@ -604,10 +606,10 @@ def _cast_if_autocast_enabled(*args):
             return torch.cuda.amp.autocast_mode._cast(args, torch.half)
 
 
-def encdec_attn_func(*args):
+def encdec_attn_bias_func(*args):
     args = _cast_if_autocast_enabled(*args)
     with torch.cuda.amp.autocast(enabled=False):
-        return EncdecAttnFunc.apply(*args)
+        return EncdecAttnBiasFunc.apply(*args)
 
 
 if __name__ == "__main__":

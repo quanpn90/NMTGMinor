@@ -44,7 +44,7 @@ class MPEncdecMultiheadAttn(nn.Module):
 
         try:
             # the fast one requires apex and does not work with incremental so careful
-            from ..optimized.encdec_attention_func import fast_encdec_attn_func
+            from ..optimized.encdec_attention_func_bias import fast_encdec_attn_func
             self.attn_func_fast = fast_encdec_attn_func
             self.optimized = 1
 

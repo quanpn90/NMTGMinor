@@ -328,9 +328,6 @@ class MultiheadAttention(nn.Module):
         self.qkv_same_dim = self.kdim == embed_dim and self.vdim == embed_dim
 
         self.num_heads = num_heads
-        # self.dropout_module = FairseqDropout(
-        #     dropout, module_name=self.__class__.__name__
-        # )
         self.dropout_p = dropout
 
         self.head_dim = embed_dim // num_heads
@@ -364,10 +361,8 @@ class MultiheadAttention(nn.Module):
         self.favor = favor
         if self.favor:
             self.performer = Performer(self.head_dim, nb_features, generalized_attention=generalized_attention)
-            # self.proj_updater = ProjectionUpdater(self.net, feature_redraw_interval)
         else:
             self.performer = None
-            # self.proj_updater = None
 
         self.onnx_trace = False
         self.fast_attention = False
@@ -399,6 +394,8 @@ class MultiheadAttention(nn.Module):
         heads = self.num_heads
         input_dim = self.embed_dim
 
+        # when we concatenate the weights, the output has the size 3 * D (3 -> heads -> head_dim)
+        # the fast attention module requires (heads -> 3 -> head_dim)
         weight_ = weight_.reshape(3 * head_dim * heads, input_dim).view(3, heads, head_dim, input_dim).transpose(0, 1).\
             reshape(-1, input_dim)
 
@@ -453,6 +450,10 @@ class MultiheadAttention(nn.Module):
     ) -> Tuple[Tensor, Optional[Tensor]]:
         """Input shape: Time x Batch x Channel
         Args:
+            query
+            key
+            value
+            incremental_state
             key_padding_mask (ByteTensor, optional): mask to exclude
                 keys that are pads, of shape `(batch, src_len)`, where
                 padding elements are indicated by 1s.
@@ -478,12 +479,6 @@ class MultiheadAttention(nn.Module):
             src_len = tgt_len
             assert embed_dim == self.embed_dim, f"query dim {embed_dim} != {self.embed_dim}"
             assert list(query.size()) == [tgt_len, bsz, embed_dim]
-            # if key is not None:
-            #     src_len, key_bsz, _ = key.size()
-            #     if not torch.jit.is_scripting():
-            #         assert key_bsz == bsz
-            #         assert value is not None
-            #         assert src_len, bsz == value.shape[:2]
 
             assert key is not None and value is not None
 

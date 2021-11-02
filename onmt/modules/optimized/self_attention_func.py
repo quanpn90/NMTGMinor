@@ -284,7 +284,6 @@ class SelfAttnFunc(torch.autograd.Function):
         #            input_bias_grads, output_bias_grads, \
         #            None, None, None, None, None, None, None
 
-
         heads_t, \
             scale_t, \
             matmul2_results, \

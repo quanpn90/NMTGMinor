@@ -416,7 +416,10 @@ class Wav2vecBERT(Wav2vecTransformer):
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
-        encoder_output = self.encoder(src, batch_first_output=True)
+        batch_first_output = False
+        if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bart"]:
+            batch_first_output = True
+        encoder_output = self.encoder(src, batch_first_output=batch_first_output)
 
         encoder_output = defaultdict(lambda: None, encoder_output)
 
@@ -453,15 +456,15 @@ class Wav2vecBERT(Wav2vecTransformer):
             context = context.transpose(0, 1)
             output_dict = defaultdict(lambda: None)
         elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["mbart", "mbart50"]:
-            src_attention_mask = 1 - (src_attention_mask.long())
+            src_attention_mask = src_attention_mask   # new version
             tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
+
             decoder_output = self.decoder(input_ids=tgt,
                                           attention_mask=tgt_attention_mask,
                                           encoder_hidden_states=context,
                                           encoder_attention_mask=src_attention_mask)
             decoder_output = decoder_output[0]
-            output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
-            context = context.transpose(0, 1)
+            output = decoder_output
             output_dict = defaultdict(lambda: None)
 
         else:
@@ -546,8 +549,10 @@ class Wav2vecBERT(Wav2vecTransformer):
         elif dec_pretrained_model in ["bert", "roberta"]:
             mask_src = src_attention_mask.unsqueeze(1)  # batch_size  x 1 x len_src for broadcasting
 
-        elif dec_pretrained_model in ["bart", "mbart", "mbart50"]:
+        elif dec_pretrained_model in ["bart"]:
             mask_src = 1 - (src_attention_mask.long())
+        elif dec_pretrained_model in ["mbart", "mbart50"]:
+            mask_src = src_attention_mask
         else:
             print("Warning: unknown dec_pretrained_model")
             raise NotImplementedError

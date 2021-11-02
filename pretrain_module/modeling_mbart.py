@@ -20,9 +20,16 @@ from typing import Optional, Tuple
 
 import torch
 import torch.utils.checkpoint
-from torch import nn
+import torch.nn as nn
+import torch.nn.functional as F
+from torch import Tensor, nn
+from torch.nn import Parameter
+
 from torch.nn import CrossEntropyLoss, MSELoss
 from onmt.modules.layer_norm import LayerNorm
+from onmt.modules.optimized.self_attention_func import self_attn_func
+from onmt.modules.optimized.encdec_attention_func_bias import encdec_attn_bias_func
+from onmt.modules.dropout import embedded_dropout
 
 from .activations import ACT2FN
 # from ...file_utils import (
@@ -156,10 +163,47 @@ class MBartAttention(nn.Module):
         self.v_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        self.fast_attention = False
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
+    def convert_fast_attention(self):
+
+        if self.fast_attention:
+            return
+
+        # print("[INFO] Convert MBartAttention from slow to fast")
+        self.fast_attention = True
+        w_q = self.q_proj.weight.clone()
+        w_k = self.k_proj.weight.clone()
+        w_v = self.v_proj.weight.clone()
+        weights = [w_q, w_k, w_v]
+        weight_ = torch.cat(weights, dim=0).contiguous()
+
+        b_q = self.q_proj.bias.clone()
+        b_k = self.k_proj.bias.clone()
+        b_v = self.v_proj.bias.clone()
+        biases = [b_q, b_k, b_v]
+        bias_ = torch.cat(biases, dim=0).contiguous()
+
+        head_dim = self.head_dim
+        heads = self.num_heads
+        input_dim = self.embed_dim
+
+        weight_ = weight_.reshape(3 * head_dim * heads, input_dim).view(3, heads, head_dim, input_dim).transpose(0, 1). \
+            reshape(-1, input_dim)
+
+        bias_ = bias_.reshape(3 * head_dim * heads).view(3, heads, head_dim).transpose(0, 1).reshape(-1)
+
+        weight_t = torch.Tensor(3 * input_dim, input_dim)
+        bias_t = torch.Tensor(3 * input_dim)
+        weight_t.copy_(weight_)
+        bias_t.copy_(bias_)
+        self.proj_weight = Parameter(weight_t)
+        self.proj_bias = Parameter(bias_t)
+        del self.q_proj, self.k_proj, self.v_proj
+
     def forward(
             self,
             hidden_states: torch.Tensor,
@@ -174,90 +218,151 @@ class MBartAttention(nn.Module):
         # if key_value_states are provided this layer is used as a cross-attention layer
         # for the decoder
         # is_cross_attention = key_value_states is not None
-        assert key_value_states is None
-        bsz, tgt_len, embed_dim = hidden_states.size()
 
-        # get query proj
-        query_states = self.q_proj(hidden_states) * self.scaling
-        key_states = self.k_proj(hidden_states)
-        value_states = self.v_proj(hidden_states)
+        if not self.fast_attention:
+            raise NotImplementedError("Slow attention by HuggingFace not supported anymore.")
+            assert key_value_states is None
+            bsz, tgt_len, embed_dim = hidden_states.size()
 
-        if incremental:
-            if 'k' in incremental_cache and 'v' in incremental_cache:
-                key_states = torch.cat([incremental_cache['k'], key_states], dim=1)  # time first
-                value_states = torch.cat([incremental_cache['v'], value_states], dim=1)  # time first
+            # get query proj
+            query_states = self.q_proj(hidden_states) * self.scaling
+            key_states = self.k_proj(hidden_states)
+            value_states = self.v_proj(hidden_states)
 
-                incremental_cache['k'] = key_states
-                incremental_cache['v'] = value_states
+            if incremental:
+                if 'k' in incremental_cache and 'v' in incremental_cache:
+                    key_states = torch.cat([incremental_cache['k'], key_states], dim=1)  # time first
+                    value_states = torch.cat([incremental_cache['v'], value_states], dim=1)  # time first
+
+                    incremental_cache['k'] = key_states
+                    incremental_cache['v'] = value_states
+                else:
+                    incremental_cache['k'] = key_states
+                    incremental_cache['v'] = value_states
+
+            # reshape into B x H x T x D ?
+            key_states = self._shape(key_states, -1, bsz)
+            value_states = self._shape(value_states, -1, bsz)
+
+            proj_shape = (bsz * self.num_heads, -1, self.head_dim)
+            query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
+            key_states = key_states.view(*proj_shape)
+            value_states = value_states.view(*proj_shape)
+
+            src_len = key_states.size(1)
+            attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
+
+            if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
+                raise ValueError(
+                    f"Attention weights should be of size {(bsz * self.num_heads, tgt_len, src_len)}, but is {attn_weights.size()}"
+                )
+
+            if attention_mask is not None:
+                if attention_mask.size() != (bsz, 1, tgt_len, src_len):
+                    raise ValueError(
+                        f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.size()}"
+                    )
+                attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + attention_mask
+                attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+
+            attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+
+            if layer_head_mask is not None:
+                if layer_head_mask.size() != (self.num_heads,):
+                    raise ValueError(
+                        f"Head mask for a single layer should be of size {(self.num_heads,)}, but is {layer_head_mask.size()}"
+                    )
+                attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, self.num_heads, tgt_len,
+                                                                                     src_len)
+                attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+
+            if output_attentions:
+                # this operation is a bit awkward, but it's required to
+                # make sure that attn_weights keeps its gradient.
+                # In order to do so, attn_weights have to be reshaped
+                # twice and have to be reused in the following
+                attn_weights_reshaped = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
+                attn_weights = attn_weights_reshaped.view(bsz * self.num_heads, tgt_len, src_len)
             else:
-                incremental_cache['k'] = key_states
-                incremental_cache['v'] = value_states
+                attn_weights_reshaped = None
 
-        # reshape into B x H x T x D ?
-        key_states = self._shape(key_states, -1, bsz)
-        value_states = self._shape(value_states, -1, bsz)
+            attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
 
-        proj_shape = (bsz * self.num_heads, -1, self.head_dim)
-        query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
-        key_states = key_states.view(*proj_shape)
-        value_states = value_states.view(*proj_shape)
+            attn_output = torch.bmm(attn_probs, value_states)
 
-        src_len = key_states.size(1)
-        attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
-
-        if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
-            raise ValueError(
-                f"Attention weights should be of size {(bsz * self.num_heads, tgt_len, src_len)}, but is {attn_weights.size()}"
-            )
-
-        if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, tgt_len, src_len):
+            if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
                 raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.size()}"
+                    f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is {attn_output.size()}"
                 )
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + attention_mask
-            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+            attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
+            attn_output = attn_output.transpose(1, 2)
+            attn_output = attn_output.reshape(bsz, tgt_len, embed_dim)
 
-        if layer_head_mask is not None:
-            if layer_head_mask.size() != (self.num_heads,):
-                raise ValueError(
-                    f"Head mask for a single layer should be of size {(self.num_heads,)}, but is {layer_head_mask.size()}"
-                )
-            attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+            attn_output = self.out_proj(attn_output)
+            coverage = attn_weights_reshaped
 
-        if output_attentions:
-            # this operation is a bit awkward, but it's required to
-            # make sure that attn_weights keeps its gradient.
-            # In order to do so, attn_weights have to be reshaped
-            # twice and have to be reused in the following
-            attn_weights_reshaped = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            attn_weights = attn_weights_reshaped.view(bsz * self.num_heads, tgt_len, src_len)
         else:
-            attn_weights_reshaped = None
+            hidden_states = hidden_states
+            use_time_mask = self.is_decoder
+            qlen, klen = hidden_states.size(0), hidden_states.size(0)
+            # if use_time_mask:
+            #     mask = torch.triu(
+            #         hidden_states.new_ones(qlen, klen), diagonal=1).bool()
+            # else:
+            #     raise NotImplementedError  # LOL we are not working with BartEncoder yet
+            mask = attention_mask
 
-        attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+            attn_output, coverage = self_attn_func(use_time_mask, self.training, self.num_heads, hidden_states,
+                                                   self.proj_weight, self.out_proj.weight,
+                                                   self.proj_bias, self.out_proj.bias,
+                                                   mask, self.dropout,
+                                                   False, None,
+                                                   incremental, incremental_cache, True)
 
-        attn_output = torch.bmm(attn_probs, value_states)
+            attn_output = attn_output
 
-        if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
-            raise ValueError(
-                f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is {attn_output.size()}"
-            )
-
-        attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
-        attn_output = attn_output.transpose(1, 2)
-        attn_output = attn_output.reshape(bsz, tgt_len, embed_dim)
-
-        attn_output = self.out_proj(attn_output)
-
-        return attn_output, attn_weights_reshaped, incremental_cache
+        return attn_output, coverage, incremental_cache
 
 
 class MBartCrossAttention(MBartAttention):
 
+    def convert_fast_attention(self):
+
+        if self.fast_attention:
+            return
+
+        # print("[INFO] Convert MBartCrossAttention from slow to fast")
+        self.fast_attention = True
+        # w_q = self.q_proj.weight.clone()
+        w_k = self.k_proj.weight.clone()
+        w_v = self.v_proj.weight.clone()
+        weights = [w_k, w_v]
+        weight_ = torch.cat(weights, dim=0).contiguous()
+
+        # b_q = self.q_proj.bias.clone()
+        b_k = self.k_proj.bias.clone()
+        b_v = self.v_proj.bias.clone()
+        biases = [b_k, b_v]
+        bias_ = torch.cat(biases, dim=0).contiguous()
+
+        head_dim = self.head_dim
+        heads = self.num_heads
+        input_dim = self.embed_dim
+
+        weight_ = weight_.reshape(2 * head_dim * heads, input_dim).view(2, heads, head_dim, input_dim).transpose(0, 1). \
+            reshape(-1, input_dim)
+
+        bias_ = bias_.reshape(2 * head_dim * heads).view(2, heads, head_dim).transpose(0, 1).reshape(-1)
+
+        weight_t = torch.Tensor(2 * input_dim, input_dim)
+        bias_t = torch.Tensor(2 * input_dim)
+        weight_t.copy_(weight_)
+        bias_t.copy_(bias_)
+        self.proj_weight_kv = Parameter(weight_t)
+        self.proj_bias_kv = Parameter(bias_t)
+        del self.k_proj, self.v_proj
+
     def forward(
             self,
             hidden_states: torch.Tensor,
@@ -269,87 +374,108 @@ class MBartCrossAttention(MBartAttention):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
 
-        # if key_value_states are provided this layer is used as a cross-attention layer
-        # for the decoder
-        # is_cross_attention = key_value_states is not None
         assert key_value_states is not None
-        bsz, tgt_len, embed_dim = hidden_states.size()
+        if not self.fast_attention:
 
-        # get query proj
-        query_states = self.q_proj(hidden_states) * self.scaling
+            raise NotImplementedError("Slow Attention by HuggingFace not supported anymore")
 
-        if incremental and ('c_k' in incremental_cache and 'c_v' in incremental_cache):
-            # these are stored
-            key_states = incremental_cache['c_k']
-            value_states = incremental_cache['c_v']
-        else:
-            key_states = self.k_proj(key_value_states)
-            value_states = self.v_proj(key_value_states)
-            if incremental:
-                incremental_cache['c_k'] = key_states
-                incremental_cache['c_v'] = value_states
+            bsz, tgt_len, embed_dim = hidden_states.size()
 
-        # reshape into B x H x T x D ?
-        key_states = self._shape(key_states, -1, bsz)
-        value_states = self._shape(value_states, -1, bsz)
+            # get query proj
+            query_states = self.q_proj(hidden_states) * self.scaling
 
-        proj_shape = (bsz * self.num_heads, -1, self.head_dim)
-        query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
-        key_states = key_states.view(*proj_shape)
-        value_states = value_states.view(*proj_shape)
+            if incremental and ('c_k' in incremental_cache and 'c_v' in incremental_cache):
+                # these are stored
+                key_states = incremental_cache['c_k']
+                value_states = incremental_cache['c_v']
+            else:
+                key_states = self.k_proj(key_value_states)
+                value_states = self.v_proj(key_value_states)
+                if incremental:
+                    incremental_cache['c_k'] = key_states
+                    incremental_cache['c_v'] = value_states
 
-        src_len = key_states.size(1)
-        attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
+            # reshape into B x H x T x D ?
+            key_states = self._shape(key_states, -1, bsz)
+            value_states = self._shape(value_states, -1, bsz)
 
-        if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
-            raise ValueError(
-                f"Attention weights should be of size {(bsz * self.num_heads, tgt_len, src_len)}, but is {attn_weights.size()}"
-            )
+            proj_shape = (bsz * self.num_heads, -1, self.head_dim)
+            query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
+            key_states = key_states.view(*proj_shape)
+            value_states = value_states.view(*proj_shape)
 
-        if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, tgt_len, src_len):
+            src_len = key_states.size(1)
+            attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
+
+            if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
                 raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.size()}"
+                    f"Attention weights should be of size {(bsz * self.num_heads, tgt_len, src_len)}, but is {attn_weights.size()}"
                 )
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + attention_mask
-            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+            if attention_mask is not None:
+                if attention_mask.size() != (bsz, 1, tgt_len, src_len):
+                    raise ValueError(
+                        f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.size()}"
+                    )
+                attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + attention_mask
+                attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
-        if layer_head_mask is not None:
-            if layer_head_mask.size() != (self.num_heads,):
+            attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+
+            if layer_head_mask is not None:
+                if layer_head_mask.size() != (self.num_heads,):
+                    raise ValueError(
+                        f"Head mask for a single layer should be of size {(self.num_heads,)}, but is {layer_head_mask.size()}"
+                    )
+                attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, self.num_heads, tgt_len,
+                                                                                     src_len)
+                attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+
+            if output_attentions:
+                # this operation is a bit awkward, but it's required to
+                # make sure that attn_weights keeps its gradient.
+                # In order to do so, attn_weights have to be reshaped
+                # twice and have to be reused in the following
+                attn_weights_reshaped = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
+                attn_weights = attn_weights_reshaped.view(bsz * self.num_heads, tgt_len, src_len)
+            else:
+                attn_weights_reshaped = None
+
+            attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+
+            attn_output = torch.bmm(attn_probs, value_states)
+
+            if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
                 raise ValueError(
-                    f"Head mask for a single layer should be of size {(self.num_heads,)}, but is {layer_head_mask.size()}"
+                    f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is {attn_output.size()}"
                 )
-            attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
-        if output_attentions:
-            # this operation is a bit awkward, but it's required to
-            # make sure that attn_weights keeps its gradient.
-            # In order to do so, attn_weights have to be reshaped
-            # twice and have to be reused in the following
-            attn_weights_reshaped = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            attn_weights = attn_weights_reshaped.view(bsz * self.num_heads, tgt_len, src_len)
+            attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
+            attn_output = attn_output.transpose(1, 2)
+            attn_output = attn_output.reshape(bsz, tgt_len, embed_dim)
+
+            attn_output = self.out_proj(attn_output)
+            coverage = attn_weights_reshaped
+
         else:
-            attn_weights_reshaped = None
+            recompute = False
 
-        attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+            hidden_states = hidden_states
+            key_value_states = key_value_states
 
-        attn_output = torch.bmm(attn_probs, value_states)
+            # print("[DEBUGGING] Expecting mask <<< numel")
+            # print(attention_mask.long().sum(), attention_mask.numel())
 
-        if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
-            raise ValueError(
-                f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is {attn_output.size()}"
-            )
+            # attention_mask should have size Bxlen_k
+            attn_output, coverage = encdec_attn_bias_func(recompute, self.training, self.num_heads,
+                                                          hidden_states, key_value_states,
+                                                          self.q_proj.weight, self.proj_weight_kv, self.out_proj.weight,
+                                                          self.q_proj.bias, self.proj_bias_kv, self.out_proj.bias,
+                                                          attention_mask, self.dropout,
+                                                          incremental, incremental_cache,
+                                                          False, None, None, False, True)
 
-        attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
-        attn_output = attn_output.transpose(1, 2)
-        attn_output = attn_output.reshape(bsz, tgt_len, embed_dim)
-
-        attn_output = self.out_proj(attn_output)
-
-        return attn_output, attn_weights_reshaped, incremental_cache
+        return attn_output, coverage, incremental_cache
 
 
 class MBartEncoderLayer(nn.Module):
@@ -981,9 +1107,6 @@ class MBartDecoder(MBartPreTrainedModel):
         self.embed_tokens.weight.requires_grad = False
         self.word_dropout = opt.word_dropout
 
-
-
-
         # TODO: more options to freeze weights in each layer
 
     def get_input_embeddings(self):
@@ -1112,27 +1235,29 @@ class MBartDecoder(MBartPreTrainedModel):
         else:
             raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
 
-        # past_key_values_length
-        past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
+        past_key_values_length = 0
 
         if inputs_embeds is None:
             inputs_embeds = embedded_dropout(self.embed_tokens, input_ids,
                                              dropout=self.word_dropout if self.training else 0)
             inputs_embeds = inputs_embeds * self.embed_scale
 
-        attention_mask = self._prepare_decoder_attention_mask(
-            attention_mask, input_shape, inputs_embeds.dtype, past_key_values_length
-        )
+        qlen = input_ids.size(1)
+        klen = qlen
+        attention_mask = torch.triu(
+            inputs_embeds.new_ones(qlen, klen), diagonal=1).bool()
 
         # expand encoder attention mask
         if encoder_hidden_states is not None and encoder_attention_mask is not None:
             # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
+            # encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
+            encoder_attention_mask = encoder_attention_mask
 
         # embed positions
         positions = self.embed_positions(input_shape, past_key_values_length)
 
         hidden_states = inputs_embeds + positions
+        hidden_states = hidden_states.transpose(0, 1)
         hidden_states = self.layernorm_embedding(hidden_states)
 
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
@@ -1158,8 +1283,6 @@ class MBartDecoder(MBartPreTrainedModel):
             if self.training and (dropout_probability < self.layerdrop):
                 continue
 
-            past_key_value = past_key_values[idx] if past_key_values is not None else None
-
             if self.gradient_checkpointing and self.training and not incremental:
 
                 if use_cache:
@@ -1175,7 +1298,7 @@ class MBartDecoder(MBartPreTrainedModel):
 
                     return custom_forward
 
-                layer_outputs = torch.utils.checkpoint.checkpoint(
+                layer_outputs, _ = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(decoder_layer),
                     hidden_states,
                     attention_mask,
@@ -1186,8 +1309,7 @@ class MBartDecoder(MBartPreTrainedModel):
                     None,
                 )
             else:
-
-                layer_outputs = decoder_layer(
+                layer_outputs, _ = decoder_layer(
                     hidden_states,
                     attention_mask=attention_mask,
                     encoder_hidden_states=encoder_hidden_states,
@@ -1196,14 +1318,9 @@ class MBartDecoder(MBartPreTrainedModel):
                     cross_attn_layer_head_mask=(
                         cross_attn_head_mask[idx] if cross_attn_head_mask is not None else None
                     ),
-                    past_key_value=past_key_value,
                     output_attentions=output_attentions,
-                    use_cache=use_cache,
                 )
             hidden_states = layer_outputs[0]
-
-            if use_cache:
-                next_decoder_cache += (layer_outputs[3 if output_attentions else 1],)
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
@@ -1217,11 +1334,10 @@ class MBartDecoder(MBartPreTrainedModel):
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
-        next_cache = next_decoder_cache if use_cache else None
         if not return_dict:
             return tuple(
                 v
-                for v in [hidden_states, next_cache, all_hidden_states, all_self_attns, all_cross_attentions]
+                for v in [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions]
                 if v is not None
             )
         return BaseModelOutputWithPastAndCrossAttentions(
@@ -1235,7 +1351,7 @@ class MBartDecoder(MBartPreTrainedModel):
     def step(self, input, decoder_state, **kwargs):
 
         # context is stored in the decoder state in [T B H] format
-        encoder_hidden_states = decoder_state.context.transpose(0, 1)
+        encoder_hidden_states = decoder_state.context
 
         buffers = decoder_state.attention_buffers
         lang = decoder_state.tgt_lang
@@ -1245,6 +1361,7 @@ class MBartDecoder(MBartPreTrainedModel):
         input_ids = input
         input_shape = input_ids.size()
         time_step = input.size(1)
+        # print("[DEBUGGING] Current time step: %d" % time_step)
 
         input_ = input
         if buffering:
@@ -1258,33 +1375,40 @@ class MBartDecoder(MBartPreTrainedModel):
         inputs_embeds = self.embed_tokens(input_) * self.embed_scale
         # inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
 
-        # attention_mask = input_ids.ne(onmt.constants.TGT_PAD).long()
-        attention_mask = input_ids.new_ones(input_ids.size()).long()
+        qlen = input_ids.size(1)
+        klen = qlen
+        attention_mask = torch.triu(
+                inputs_embeds.new_ones(qlen, klen), diagonal=1).bool()
 
-        attention_mask = self._prepare_decoder_attention_mask(
-            attention_mask, input_ids.size(), inputs_embeds.dtype, 0
-        )
+        # attention_mask = self._prepare_decoder_attention_mask(
+        #     attention_mask, input_ids.size(), inputs_embeds.dtype, 0
+        # )
 
         if buffering:
-            attention_mask = attention_mask[:, :, -1:, :]
+            attention_mask = attention_mask[-1:, :]
 
         encoder_attention_mask = decoder_state.src_mask
-        encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_.size(-1))
+        if not self.layers[0].encoder_attn.fast_attention:
+            encoder_attention_mask = 1 - encoder_attention_mask
+            encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_.size(-1))
+        else:
+            encoder_attention_mask = encoder_attention_mask.bool()
 
         # embed positions
         positions = self.embed_positions(input_.size(), past_key_values_length)
-        # positions = self.embed_positions(input_ids.size(), 0)
 
         hidden_states = inputs_embeds + positions
-        hidden_states = hidden_states[:, -1:, :]
+        hidden_states = hidden_states.transpose(0, 1)
 
         hidden_states = self.layernorm_embedding(hidden_states)
 
         for idx, decoder_layer in enumerate(self.layers):
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
-            buffer = buffers[idx] if idx in buffers else None
+            if buffering:
+                buffer = buffers[idx] if idx in buffers else None
+            else:
+                buffer = None
 
-            # print("[DEBUGGING] Layer: %d" % idx)
             layer_outputs, buffer = decoder_layer(
                 hidden_states,
                 attention_mask=attention_mask,
@@ -1301,15 +1425,15 @@ class MBartDecoder(MBartPreTrainedModel):
             hidden_states = layer_outputs[0]
 
         hidden_states = self.layer_norm(hidden_states)
-        output = hidden_states.transpose(0, 1).contiguous()[-1].unsqueeze(0)
+        output = hidden_states[-1].unsqueeze(0)
 
         # just a fake coverage
-        coverage = hidden_states.new(hidden_states.size(0), 1, encoder_hidden_states.size(1)).zero_()
+        coverage = hidden_states.new(hidden_states.size(1), 1, encoder_hidden_states.size(0)).zero_()
 
         output_dict = defaultdict(lambda: None)
         output_dict['hidden'] = output
         output_dict['coverage'] = coverage
-        output_dict['context'] = encoder_hidden_states.transpose(0, 1)
+        output_dict['context'] = encoder_hidden_states
         return output_dict
 
     # @add_start_docstrings(

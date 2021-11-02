@@ -128,8 +128,9 @@ def build_tm_model(opt, dicts):
                                      opt.model_size,
                                      padding_idx=onmt.constants.TGT_PAD)
     else:
-        assert opt.model in ["pretrain_transformer", "wav2vec2_bert", "wav2vec_mbart50"], "Expecting a pretrained model that has a " \
-                                                                      "separate Embedding initialization"
+        assert opt.model in ["pretrain_transformer", "wav2vec2_bert",
+                             "wav2vec_mbart50"], "Expecting a pretrained model that has a " \
+                                                 "separate Embedding initialization"
         embedding_tgt = None
 
     if opt.use_language_embedding:
@@ -242,7 +243,7 @@ def build_tm_model(opt, dicts):
                                            language_embeddings=language_embeddings)
 
         model = Wav2vecTransformer(encoder, decoder, nn.ModuleList(generators),
-                                    mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
+                                   mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
 
     elif opt.model in ['discourse_speech_transformer']:
         from onmt.models.discourse.discourse_transformer import DiscourseTransformerEncoder, DiscourseTransformer
@@ -371,7 +372,8 @@ def build_tm_model(opt, dicts):
         model = RelativeTransformer(encoder, decoder, generator, rev_decoder, rev_generator, mirror=opt.mirror_loss)
 
     elif opt.model == 'universal_transformer':
-        from onmt.legacy.old_models.universal_transformer import UniversalTransformerDecoder, UniversalTransformerEncoder
+        from onmt.legacy.old_models.universal_transformer import UniversalTransformerDecoder, \
+            UniversalTransformerEncoder
 
         generator = nn.ModuleList(generators)
 
@@ -389,9 +391,9 @@ def build_tm_model(opt, dicts):
     elif opt.model == 'pretrain_transformer':
         assert (opt.enc_pretrained_model or opt.dec_pretrained_model)
         from onmt.models.pretrain_transformer import PretrainTransformer
-        if opt.pos_emb_type !="absolute":
+        if opt.pos_emb_type != "absolute":
             print(f"pos_emb_type: {opt.pos_emb_type}")
-            print(f"max_pos_length: {opt.max_pos_length }")
+            print(f"max_pos_length: {opt.max_pos_length}")
             print(f"Share position embeddings cross heads: {not opt.diff_head_pos}")
             print()
         if opt.enc_pretrained_model:
@@ -768,11 +770,23 @@ def optimize_model(model, fp16=True, distributed=False):
             classname = m_.__class__.__name__
             if classname.find('MultiheadAttention') != -1:
                 m_.convert_fast_attention()
+            elif classname.find('MBartAttention') != -1:
+                m_.convert_fast_attention()
+            elif classname.find('MBartCrossAttention') != -1:
+                m_.convert_fast_attention()
 
         m.apply(convert)
 
     # replace_layer_norm(model, "Transformer")
     convert_fast_attention(model, "Transformer")
+
+
+def optimize_model_test(model):
+    """
+    Used to potentially upgrade the components with more optimized counterparts in the future
+    """
+
+    pass
 
 
 def freeze_model_specialized_weights(model):
@@ -794,7 +808,6 @@ def freeze_model_specialized_weights(model):
 
 
 def unfreeze_model_speciailized_weights(model):
-
     def unfreeze(m):
         classname = m.__class__.__name__
 
