@@ -115,6 +115,8 @@ def make_parser(parser):
                         help='Apply weight normalization on linear modules')
     parser.add_argument('-death_rate', type=float, default=0.0,
                         help='Stochastic layer death rate')
+    parser.add_argument('-death_rate_decoder', type=float, default=0.0,
+                        help='Stochastic layer death rate')
     parser.add_argument('-stochastic_sublayer', action='store_true',
                         help='Apply stochastic death rate for each sub-layer')
     parser.add_argument('-activation_layer', default='linear_relu_linear', type=str,

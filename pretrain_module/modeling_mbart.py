@@ -1102,7 +1102,7 @@ class MBartDecoder(MBartPreTrainedModel):
         self.switchout = 0.0
         # self.word_lut = self.embed_tokens
         self.config.bert_hidden_size = config.d_model
-        self.layerdrop = opt.death_rate / 2
+        self.layerdrop = opt.death_rate_decoder / 2
         self.dec_pretrained_model = 'mbart'
         self.embed_tokens.weight.requires_grad = False
         self.word_dropout = opt.word_dropout

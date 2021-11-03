@@ -820,9 +820,11 @@ class Trainer(object):
 
             if update_flag:
                 # accumulated gradient case, in this case the update frequency
-                # self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
 
                 grad_denom = 1.0
+
+                self.grad_scaler.unscale_(self.optim.optimizer)
 
                 if self.opt.normalize_gradient:
                     grad_denom = num_accumulated_words.item() * grad_denom
@@ -831,15 +833,14 @@ class Trainer(object):
 
                 # the gradient is scaled by world size, so in order to match the model without multiGPU
                 # we rescale the model parameters w.r.t the world size
-                grad_denom = grad_denom / self.world_size
+                # grad_denom = grad_denom / self.world_size
 
                 # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
                 if grad_denom > 1.0:
-                    normalize_gradients(self.model.parameters(), grad_denom)
+                    normalize_gradients(self.model.parameters(), grad_denom, self.opt.max_grad_norm)
 
                 # Update the parameters.
                 if self.opt.max_grad_norm > 0:
-                    self.grad_scaler.unscale_(self.optim.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.opt.max_grad_norm)
                 self.optim.step(scaler=self.grad_scaler)
                 self.grad_scaler.update()

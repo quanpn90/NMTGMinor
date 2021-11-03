@@ -104,28 +104,52 @@ std::vector<torch::Tensor> fwd_cuda(
                              q_lin_results_ptr,
                              CUDA_R_16F,
                              output_lin_dim,
-                             CUDA_R_32F,
+                             CUBLAS_COMPUTE_16F,  // CUDA_R_32F
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
   // MatMul1 of Dot-Product Attention Plus scaling by 1/Sqrt(head size)
-  gemm_switch_fp32accum(     state,
-                             a_layout_t,
-                             b_layout_n,
+//  gemm_switch_fp32accum(     state,
+//                             a_layout_t,
+//                             b_layout_n,
+//                             k_seq_len,
+//                             q_seq_len,
+//                             head_dim,
+//                             scale,
+//                             static_cast<const half*>(k_lin_results_ptr),
+//                             lead_dim,
+//                             batch_stride,
+//                             static_cast<const half*>(q_lin_results_ptr),
+//                             lead_dim,
+//                             batch_stride,
+//                             beta_zero,
+//                             static_cast<half*>(attn_scores_ptr),
+//                             k_seq_len,
+//                             k_seq_len*q_seq_len,
+//                             attn_batches);
+
+  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+                             CUBLAS_OP_T,
+                             CUBLAS_OP_N,
                              k_seq_len,
                              q_seq_len,
                              head_dim,
-                             scale,
-                             static_cast<const half*>(k_lin_results_ptr),
+                             static_cast<const void*>(&scale),
+                             static_cast<const void*>(k_lin_results_ptr),
+                             CUDA_R_16F,
                              lead_dim,
                              batch_stride,
                              static_cast<const half*>(q_lin_results_ptr),
+                             CUDA_R_16F,
                              lead_dim,
                              batch_stride,
-                             beta_zero,
-                             static_cast<half*>(attn_scores_ptr),
+                             static_cast<const void*>(&beta_zero),
+                             static_cast<void*>(attn_scores_ptr),
+                             CUDA_R_16F,
                              k_seq_len,
                              k_seq_len*q_seq_len,
-                             attn_batches);
+                             attn_batches,
+                             CUBLAS_COMPUTE_16F,
+                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
   // Padded Softmax
 //  bool softmax_success = false;
 //  if (is_training && dropout_prob > 0.0f) {
@@ -153,9 +177,9 @@ std::vector<torch::Tensor> fwd_cuda(
 //  }
 
 //  softmax_results.copy_(attn_scores);
-  attn_scores.view({sequences*heads, q_seq_len, k_seq_len});
-  attn_scores.view({sequences, heads, q_seq_len, k_seq_len}).masked_fill_(pad_mask,
-                                                                          -std::numeric_limits<float>::infinity());
+//  attn_scores.view({sequences*heads, q_seq_len, k_seq_len});
+//  attn_scores.view({sequences, heads, q_seq_len, k_seq_len}).masked_fill_(pad_mask,
+//                                                                          -std::numeric_limits<float>::infinity());
 
 //  bool softmax_success = false;
 
@@ -165,47 +189,46 @@ std::vector<torch::Tensor> fwd_cuda(
 //                             k_seq_len,
 //                             k_seq_len,
 //                             attn_batches*q_seq_len);
-  softmax_results = at::softmax(attn_scores, -1);
-
-  if (is_training) {
-    apex_fused_dropout_cuda<at::Half,float,uint32_t>(
-                               static_cast<at::Half const*>(softmax_results.data_ptr()),
-                               static_cast<at::Half*>(dropout_results.data_ptr()),
-                               static_cast<uint8_t*>(dropout_mask.data_ptr()),
-                               dropout_elems,
-                               (1.0f - dropout_prob));
-  } else {
-    dropout_results.copy_(softmax_results);
-  }
+//  softmax_results = at::softmax(attn_scores, -1);
+//
+//  if (is_training) {
+//    apex_fused_dropout_cuda<at::Half,float,uint32_t>(
+//                               static_cast<at::Half const*>(softmax_results.data_ptr()),
+//                               static_cast<at::Half*>(dropout_results.data_ptr()),
+//                               static_cast<uint8_t*>(dropout_mask.data_ptr()),
+//                               dropout_elems,
+//                               (1.0f - dropout_prob));
+//  } else {
+//    dropout_results.copy_(softmax_results);
+//  }
 
 //  assert(softmax_success);
 
+  if (is_training && dropout_prob > 0.0) {
+      softmax_success = dispatch_softmax_dropout<half, half, float>(
+                             reinterpret_cast<half*>(dropout_results_ptr),
+                             reinterpret_cast<half*>(softmax_results_ptr),
+                             reinterpret_cast<uint8_t*>(dropout_mask.data_ptr<uint8_t>()),
+                             reinterpret_cast<const half*>(attn_scores_ptr),
+                             dropout_elems,
+                             k_seq_len,
+                             k_seq_len,
+                             attn_batches*q_seq_len,
+                             (1.0f - dropout_prob),
+                             stream);
+  } else {
+      softmax_success = dispatch_softmax<half, half, float>(
+                             reinterpret_cast<half*>(dropout_results_ptr),
+                             reinterpret_cast<const half*>(attn_scores_ptr),
+                             dropout_elems,
+                             k_seq_len,
+                             k_seq_len,
+                             attn_batches*q_seq_len,
+                             stream);
 
+  }
 
-//  if (is_training && dropout_prob > 0.0) {
-//      softmax_success = dispatch_softmax_dropout<half, half, float>(
-//                             reinterpret_cast<half*>(dropout_results_ptr),
-//                             reinterpret_cast<half*>(softmax_results_ptr),
-//                             reinterpret_cast<uint8_t*>(dropout_mask.data_ptr<uint8_t>()),
-//                             reinterpret_cast<const half*>(attn_scores_ptr),
-//                             dropout_elems,
-//                             k_seq_len,
-//                             k_seq_len,
-//                             attn_batches*q_seq_len,
-//                             (1.0f - dropout_prob),
-//                             stream);
-//  } else {
-//      softmax_success = dispatch_softmax<half, half, float>(
-//                             reinterpret_cast<half*>(dropout_results_ptr),
-//                             reinterpret_cast<const half*>(attn_scores_ptr),
-//                             dropout_elems,
-//                             k_seq_len,
-//                             k_seq_len,
-//                             attn_batches*q_seq_len,
-//                             stream);
-
-
-//  }
+  assert(softmax_success);
 
   // Matmul2
   gemm_switch_fp32accum(     state,

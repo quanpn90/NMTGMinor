@@ -42,7 +42,6 @@ except (ModuleNotFoundError, ImportError) as e:
 
 class FastLayerNormFN(torch.autograd.Function):
     @staticmethod
-    @custom_fwd(cast_inputs=torch.float16)
     def forward(ctx, x, gamma, beta, epsilon):
         x = x.contiguous()
         gamma = gamma.contiguous()
@@ -54,7 +53,6 @@ class FastLayerNormFN(torch.autograd.Function):
         return ymat.view(x.shape)
 
     @staticmethod
-    @custom_bwd
     def backward(ctx, dy):
         # assert dy.is_contiguous()
         dy = dy.contiguous()  # this happens!
@@ -63,7 +61,7 @@ class FastLayerNormFN(torch.autograd.Function):
         hidden_size = gamma.numel()
         xmat = x.view((-1, hidden_size))
         dymat = dy.view(xmat.shape)
-        dxmat, dgamma, dbeta = fast_layer_norm_cuda.ln_bwd(dymat, xmat, mu, rsigma, gamma)
+        dxmat, dgamma, dbeta, _, _ = fast_layer_norm_cuda.ln_bwd(dymat, xmat, mu, rsigma, gamma)
         dx = dxmat.view(x.shape)
         return dx, dgamma, dbeta, None
 
@@ -127,17 +125,19 @@ class FusedLayerNormFunction(torch.autograd.Function):
         return grad_input, None, None
 
 
-def fast_layer_norm_affine(input, weight, bias, normalized_shape, eps=1e-6):
-    return FastLayerNormFN.apply(input, weight, bias, eps)
+def fast_layer_norm_affine(input, weight, bias, normalized_shape, eps=1e-5):
+    args = _cast_if_autocast_enabled(input, weight, bias, eps)
+    with torch.cuda.amp.autocast(enabled=False):
+        return FastLayerNormFN.apply(*args)
 
 
-def fused_layer_norm_affine(input, weight, bias, normalized_shape, eps=1e-6):
+def fused_layer_norm_affine(input, weight, bias, normalized_shape, eps=1e-5):
     args = _cast_if_autocast_enabled(input, weight, bias, normalized_shape, eps)
     with torch.cuda.amp.autocast(enabled=False):
         return FusedLayerNormAffineFunction.apply(*args)
 
 
-def fused_layer_norm(input, normalized_shape, eps=1e-6):
+def fused_layer_norm(input, normalized_shape, eps=1e-5):
     args = _cast_if_autocast_enabled(input, normalized_shape, eps)
     with torch.cuda.amp.autocast(enabled=False):
         return FusedLayerNormFunction.apply(*args)
@@ -217,13 +217,13 @@ class LayerNorm(torch.nn.Module):
 
         eps = self.eps
 
-        if not (input.is_cuda and input.type() == 'torch.cuda.HalfTensor') or not self.fused:
+        if not input.is_cuda or not self.fused:
             return F.layer_norm(
                 input, self.normalized_shape, self.weight, self.bias, eps)
         if self.elementwise_affine:
 
             # at the moment the super fast layer norm only supports hidden size 1024 :)
-            if fast_fused and input.size(-1) == 1024:
+            if fast_fused and input.size(-1) in [768, 1024, 2048, 3072, 4096]:
                 return fast_layer_norm_affine(input, self.weight, self.bias, self.normalized_shape, eps)
 
             return fused_layer_norm_affine(

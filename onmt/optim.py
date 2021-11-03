@@ -4,6 +4,9 @@ import torch.optim as optim
 from torch.optim.optimizer import Optimizer
 
 
+
+
+
 class Adafactor(torch.optim.Optimizer):
     """Implements Adafactor algorithm.
     This implementation is based on:
@@ -378,14 +381,11 @@ class Optim(object):
     def step(self, scaler=None, grad_denom=None, warmup=False):
 
         "Normalize gradients by batch size"
-        self.normalize_grad(denom=grad_denom)
 
         "Compute gradients norm."
         # grad_norm = clip_grad_norm(self.params, self.max_grad_norm).item()
 
         overflow = False
-        if hasattr(self.optimizer, "_amp_stash.already_patched") and self.optimizer._amp_stash.already_patched:
-            overflow = True
 
         # if gradients have NaN/inf: return (which will be zeroed afterwards)
         # only do that if the scaler is None, i.e no mechanism to detect inf/nan implicitly
@@ -401,7 +401,7 @@ class Optim(object):
                 self.update_learning_rate()
 
         if scaler is not None:
-            scaler.step(self.optimizer)
+            result = scaler.step(self.optimizer)
         else:
             self.optimizer.step()
 
