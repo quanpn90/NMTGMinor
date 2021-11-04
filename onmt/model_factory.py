@@ -78,7 +78,7 @@ def build_classifier(opt, dicts):
 
 
 def build_tm_model(opt, dicts):
-    onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
+    # onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
 
     # BUILD POSITIONAL ENCODING
     if opt.time == 'positional_encoding':

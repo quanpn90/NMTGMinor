@@ -22,6 +22,30 @@ neg_log_sigma1 = 0
 neg_log_sigma2 = 4
 prior_pi = 0.5
 
+# global SRC_PAD
+# global TGT_PAD
+# global SRC_BOS
+# global TGT_BOS
+# global TGT_EOS
+# global TGT_UNK
+# global SRC_UNK
+SRC_PAD_WORD = PAD_WORD
+TGT_PAD_WORD = PAD_WORD
+SRC_BOS_WORD = BOS_WORD
+TGT_BOS_WORD = BOS_WORD
+SRC_UNK_WORD = UNK_WORD
+TGT_UNK_WORD = UNK_WORD
+SRC_EOS_WORD = EOS_WORD
+TGT_EOS_WORD = EOS_WORD
+
+SRC_PAD = PAD
+TGT_PAD = PAD
+SRC_BOS = BOS
+TGT_BOS = BOS
+TGT_EOS = EOS
+TGT_UNK = UNK
+SRC_UNK = UNK
+
 
 def add_tokenidx(opt, cons, dicts):
     # the src_pad_word, tgt_pad_word etc are by default the same as before
@@ -69,6 +93,11 @@ def add_tokenidx(opt, cons, dicts):
     else:
         raise NotImplementedError
 
+    # print('[INFO] Target pad token is %s and pad id is %d' % (opt.tgt_pad_word, cons.TGT_PAD))
+    # print('[INFO] Target <s> token is %s and <s> id is %d' % (opt.tgt_bos_word, cons.TGT_BOS))
+    # print('[INFO] Target </s> token is %s and </s> id is %d' % (opt.tgt_eos_word, cons.TGT_EOS))
+    # print('[INFO] Target <unk> token is %s and <unk> id is %d' % (opt.tgt_unk_word, cons.TGT_UNK))
+
     return cons
 
 
@@ -92,10 +121,5 @@ def add_tokenidx(opt, cons, dicts):
 # UNK_WORD = '<unk>'
 # BOS_WORD = '<s>'
 # EOS_WORD = '</s>'
-SRC_PAD = PAD
-TGT_PAD = PAD
-SRC_BOS = BOS
-TGT_BOS = BOS
-TGT_EOS = EOS
-TGT_UNK = UNK
-SRC_UNK = UNK
+
+

@@ -27,6 +27,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP_model
 from torch.cuda.amp import autocast
 import warnings
+from onmt.constants import add_tokenidx
 
 # ignore the pytorch -> numpy conversion warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -48,17 +49,17 @@ def prepare_sample(batch, device=None):
 
 
 def generate_data_iterator(dataset, rank, world_size, seed,
-                           num_workers=1, epoch=1., buffer_size=0):
+                           num_workers=1, epoch=1., buffer_size=0, split_even=True):
     # check if dataset is a list:
     if isinstance(dataset, list):
         # this is a multidataset
         data_iterator = MultiDataIterator(dataset, seed=seed, num_workers=num_workers,
                                           epoch=epoch, buffer_size=buffer_size,
-                                          num_shards=world_size, shard_id=rank)
+                                          num_shards=world_size, shard_id=rank, split_even=split_even)
     else:
         data_iterator = DataIterator(dataset, dataset.collater, dataset.batches, seed=seed,
                                      num_workers=num_workers, epoch=epoch, buffer_size=buffer_size,
-                                     num_shards=world_size, shard_id=rank)
+                                     num_shards=world_size, shard_id=rank, split_even=split_even)
 
     return data_iterator
 
@@ -136,7 +137,6 @@ class Trainer(object):
         :param dicts:
         :param opt:
         """
-
         self.device = device
         opt.node_rank = 0
         opt.nodes = 1
@@ -192,7 +192,7 @@ class Trainer(object):
             loss_function = NMTLossFunc(opt.model_size, dicts['tgt'].size(),
                                         label_smoothing=opt.label_smoothing,
                                         mirror=opt.mirror_loss,
-                                        fast_xentropy=opt.fast_xentropy)
+                                        padding_idx=self.train_data.tgt_pad)
 
         # This function replaces modules with the more optimized counterparts so that it can run faster
         # Currently exp with LayerNorm
@@ -504,22 +504,17 @@ class Trainer(object):
 
     def eval(self, data):
 
-        # using one process for evaluation only
-        # if self.rank != 0:
-        #     return 0
-
         self.print("[INFO] Running cross-entropy evaluation...", flush=True)
         opt = self.opt
-        rank = 0
-        world_size = 1
-        finished = zero_tensor()
 
+        rank = self.rank
+        world_size = self.world_size
         # the data iterator creates an epoch iterator
         data_iterator = generate_data_iterator(data, rank, world_size, seed=self.opt.seed,
-                                               num_workers=1, epoch=1, buffer_size=opt.buffer_size)
+                                               num_workers=1, epoch=1, buffer_size=opt.buffer_size, split_even=False)
         epoch_iterator = data_iterator.next_epoch_itr(False, pin_memory=False)
 
-        data_size = len(epoch_iterator)
+        data_size = len(data_iterator)
         i = 0
 
         self.model.eval()
@@ -537,7 +532,8 @@ class Trainer(object):
             streaming_state = None
 
         with torch.no_grad():
-            while not data_iterator.end_of_epoch():
+            # while not data_iterator.end_of_epoch():
+            while i < len(epoch_iterator):
                 samples = next(epoch_iterator)
 
                 def maybe_no_sync():
@@ -566,19 +562,31 @@ class Trainer(object):
                             loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True)
                             loss_data = loss_dict['data']
                             correct, total = loss_dict['correct'], loss_dict['total']
-                            total_correct.add_(correct)
-                            assert (total == batch.tgt_size)
+
+                            # if total != batch.tgt_size:
+                            #     # print(batch.get('target').size())
+                            #     # print(batch.get('target_output').size())
+                            #     targets = batch.get('target_output')
+                            #     targets_ = targets.view(-1)
+                            #     non_pad_mask = torch.nonzero(targets_.ne(self.loss_function.padding_idx)).squeeze(1)
+                            #     labels = targets_.index_select(0, non_pad_mask)
+                            #     print(labels, labels.numel(), batch.tgt_size)
+
+                            assert (total == batch.tgt_size), \
+                                "Process %i, Minibatch %d/%d: Expected %d tokens from the batch, got %d" \
+                                                              % (self.rank, i, data_size, batch.tgt_size, total)
+
+                            # print(i, len(data_iterator), total, batch.tgt_size, loss_data)
 
                     total_loss.add_(loss_data)
                     total_words.add_(batch.tgt_size)
+                    total_correct.add_(correct)
                     i = i + 1
 
         # allreduce the total loss and total words from other processes
-        # self.all_reduce(total_loss, op=dist.ReduceOp.SUM, group=self.group)
-        # self.all_reduce(total_words, op=dist.ReduceOp.SUM, group=self.group)
-        finished.fill_(1)
-        # one synchronization call to avoid deadlock
-        self.all_reduce(finished, op=dist.ReduceOp.SUM, group=self.group)
+        self.all_reduce(total_loss, op=dist.ReduceOp.SUM, group=self.group)
+        self.all_reduce(total_words, op=dist.ReduceOp.SUM, group=self.group)
+        self.all_reduce(total_correct, op=dist.ReduceOp.SUM, group=self.group)
 
         self.model.train()
         self.loss_function.train()
@@ -589,7 +597,6 @@ class Trainer(object):
 
     def train_epoch(self, epoch, resume=False, itr_progress=None):
 
-        global rec_ppl
         opt = self.opt
         train_data = self.train_data
         streaming = opt.streaming
@@ -598,10 +605,11 @@ class Trainer(object):
         self.model.zero_grad()
         # self.model.module.reset_states()
 
+        # note: for Training split_even=True
         dataset = train_data
         data_iterator = generate_data_iterator(dataset, self.rank, self.world_size,
                                                seed=self.opt.seed, num_workers=opt.num_workers,
-                                               epoch=epoch, buffer_size=opt.buffer_size)
+                                               epoch=epoch, buffer_size=opt.buffer_size, split_even=True)
 
         # TODO: fix resume which is currently buggy
         if resume:
@@ -894,10 +902,10 @@ class Trainer(object):
                                   (epoch, i + 1, len(data_iterator),
                                    math.exp(report_loss.item() / report_tgt_words.item())))
 
-                    if opt.reconstruct:
-                        self.all_reduce(report_rec_loss, op=dist.ReduceOp.SUM, group=self.group)
-                        rec_ppl = math.exp(report_rec_loss.item() / report_src_words.item())
-                        log_string += (" rec_ppl: %6.2f ; " % rec_ppl)
+                    # if opt.reconstruct:
+                    #     self.all_reduce(report_rec_loss, op=dist.ReduceOp.SUM, group=self.group)
+                    #     rec_ppl = math.exp(report_rec_loss.item() / report_src_words.item())
+                    #     log_string += (" rec_ppl: %6.2f ; " % rec_ppl)
 
                     if opt.mirror_loss:
                         self.all_reduce(report_rev_loss, op=dist.ReduceOp.SUM, group=self.group)
@@ -980,14 +988,13 @@ class Trainer(object):
         if self.cuda:
             self.warm_up()
 
-        if opt.load_from:
-            valid_loss, valid_accuracy = self.eval(self.valid_data)
-            valid_ppl = math.exp(min(valid_loss, 100))
+        valid_loss, valid_accuracy = self.eval(self.valid_data)
+        valid_ppl = math.exp(min(valid_loss, 100))
 
-            if self.is_main():
-                print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
-                # percent is never used in plural :)
-                print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
+        if self.is_main():
+            print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
+            # percent is never used in plural :)
+            print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
 
         self.start_time = time.time()
 

@@ -9,6 +9,7 @@ import os
 import queue
 import time
 from threading import Thread
+import random
 
 import numpy as np
 import torch
@@ -128,7 +129,7 @@ dataset (~torch.utils.data.Dataset)
 class DataIterator(EpochBatchIterating):
 
     def __init__(self, dataset, collate_fn, batch_sampler, seed=1, num_workers=0,
-                 epoch=1, buffer_size=0, timeout=0, num_shards=1, shard_id=0, fill_value=None):
+                 epoch=1, buffer_size=0, timeout=0, num_shards=1, shard_id=0, fill_value=None, split_even=True):
         """
         :param dataset:
         :param collate_fn:
@@ -160,10 +161,14 @@ class DataIterator(EpochBatchIterating):
         self._next_epoch_itr = None
         self._support_prefetch = False
         self.fill_value = fill_value
+        self.split_even = split_even
 
     def __len__(self):
         # number of minibatches, or ???
-        return len(self.frozen_batches)
+        if self.split_even:
+            return math.ceil(len(self.frozen_batches) / self.num_shards) * self.num_shards
+        else:
+            return len(self.frozen_batches)
 
     @property
     def next_epoch_idx(self):
@@ -175,10 +180,11 @@ class DataIterator(EpochBatchIterating):
         else:
             return self.epoch
 
-    def next_epoch_itr(self, shuffle=True, pin_memory=False):
+    def next_epoch_itr(self, shuffle=True, pin_memory=False, split_even=False):
         """
         Return a new iterator over the dataset
 
+        :param split_even:
         :param pin_memory:
         :param shuffle:
         :return:
@@ -189,8 +195,7 @@ class DataIterator(EpochBatchIterating):
             self._next_epoch_itr = None
         else:
             self._cur_epoch_itr = self._get_iterator_for_epoch(
-                self.epoch, shuffle, pin_memory=pin_memory
-            )
+                self.epoch, shuffle, pin_memory=pin_memory)
         self.dataset.set_epoch(self.epoch)
         self.shuffle = shuffle
         return self._cur_epoch_itr
@@ -251,9 +256,17 @@ class DataIterator(EpochBatchIterating):
         if shuffle:
             batches = shuffle_batches(list(self.frozen_batches), self.seed + epoch)
         else:
-            batches = self.frozen_batches
+            batches = list(self.frozen_batches)
 
         num_shards = self.num_shards
+
+        # if split even then fill the batch with random batches
+        if self.split_even:
+            if len(batches) % self.num_shards != 0:
+                for _ in range(num_shards - (len(batches) % num_shards)):
+                    rand_id = random.randint(0, len(batches) - 1)
+                    batches.append(batches[rand_id])
+
         batches = list(ShardedIterator(batches, num_shards, self.shard_id, fill_value=batches[0]))
 
         # catch the exception when the data is so small that one iterator is completely empty
@@ -301,17 +314,18 @@ class ShardedIterator(CountingIterator):
     """
 
     def __init__(self, iterable, num_shards, shard_id, fill_value=None):
-
-        # assert num_shards == 1
-        # assert shard_id == 0
-
         if shard_id < 0 or shard_id >= num_shards:
             raise ValueError('shard_id must be between 0 and num_shards')
+
         sharded_len = int(math.ceil(len(iterable) / float(num_shards)))
 
-        # first islice takes a list of minibatch-ids from shard_id to max, every num_shards
-        # next, zip_longest takes the zip between (0, 1, ... n) and the minibatches (longest, fill the latter with [])
-        # next, map will apply the function taking the minibatches to return the iterator
+        if shard_id == (num_shards - 1):  # last shard takes the remaining
+            sharded_len = len(iterable) - sharded_len * (num_shards - 1)
+
+        # # first islice takes a list of minibatch-ids from shard_id to max, every "num_shards"
+        # # next, zip_longest takes the zip between (0, 1, ... n) and
+        # # the minibatches (longest, fill the latter with [])
+        # # next, map will apply the function taking the minibatches to return the iterator
         itr = map(
             operator.itemgetter(1),
             itertools.zip_longest(
@@ -320,6 +334,7 @@ class ShardedIterator(CountingIterator):
                 fillvalue=fill_value,
             ),
         )
+
         super().__init__(
             itr,
             start=int(math.ceil(getattr(iterable, 'n', 0) / float(num_shards))),

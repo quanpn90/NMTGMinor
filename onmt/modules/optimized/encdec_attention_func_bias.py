@@ -435,6 +435,10 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
             else:
                 softmax_results = F.softmax(matmul1_results, dim=-1)
 
+            nan_mask = torch.isnan(softmax_results)
+            if nan_mask.any():
+                softmax_results.masked_fill_(nan_mask, 0)
+
             if dropout_prob_t[0] > 0:
                 pinv = 1.0 / (1.0 - dropout_prob_t[0])
                 dropout_results = softmax_results * dropout_mask * pinv

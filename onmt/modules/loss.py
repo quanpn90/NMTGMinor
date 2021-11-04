@@ -37,29 +37,25 @@ class CrossEntropyLossBase(_Loss):
         output_size: number of words in vocabulary()
     """
 
-    def __init__(self, output_size, label_smoothing, fast_xentropy=False):
+    def __init__(self, output_size, label_smoothing, padding_idx=0, **kwargs):
         super(CrossEntropyLossBase, self).__init__()
         self.output_size = output_size
-        self.padding_idx = onmt.constants.TGT_PAD
+        self.padding_idx = padding_idx
         self.smoothing_value = label_smoothing / (output_size - 2)
         self.confidence = 1.0 - label_smoothing
         self.label_smoothing = label_smoothing
 
         # use apex fast entropy implementation
-        self.fast_xentropy = fast_xentropy
-
-        if self.fast_xentropy:
-            try:
-                # from apex.contrib import xentropy as label_smoothing
-                import xentropy_cuda
-                from onmt.modules.optimized.softmax_xentropy import SoftmaxCrossEntropyLoss
-                self.softmax_xentropy = SoftmaxCrossEntropyLoss.apply
-            except (ModuleNotFoundError, AttributeError):
-                print("Fast xentropy cannot be found. Reinstalling xentropy in modules/extensions is probably required.")
-                self.softmax_xentropy = None
-                self.fast_xentropy = False
-        else:
+        self.fast_xentropy = False
+        try:
+            import xentropy_cuda
+            from onmt.modules.optimized.softmax_xentropy import SoftmaxCrossEntropyLoss
+            self.softmax_xentropy = SoftmaxCrossEntropyLoss.apply
+            self.fast_xentropy = True
+        except (ModuleNotFoundError, AttributeError):
+            print("[INFO] Fast xentropy cannot be found. Using PyTorch/Python based cross entropy loss.")
             self.softmax_xentropy = None
+            self.fast_xentropy = False
 
     def _compute_loss(self, logits, targets, vocab_mask=None, softmaxed=False):
         """
@@ -76,7 +72,39 @@ class CrossEntropyLossBase(_Loss):
         eps_i = self.smoothing_value if self.training else 0.0
         fast_entropy = self.fast_xentropy and not softmaxed
 
-        if not fast_entropy:
+        go_to_slow_code = False
+        if not softmaxed:
+            # Try the fastest softmax + loglikelihood implementation first
+            if fast_entropy:
+                half_to_float = (logits.dtype == torch.half)
+                loss = self.softmax_xentropy(logits, gtruth, label_smoothing, self.padding_idx, half_to_float)
+
+                bad_loss = torch.logical_or(torch.isinf(loss), torch.isnan(loss))
+                if bad_loss.any():
+                    loss.masked_fill_(bad_loss, 0)
+
+                loss = loss.sum()
+                loss_data = loss.data.item()
+            else:
+                try:
+                    # Then backoff to Pytorch (1.10+)
+                    loss = F.cross_entropy(logits.float(), gtruth, weight=None,
+                                           ignore_index=self.padding_idx, reduction='none',
+                                           label_smoothing=label_smoothing)
+
+                    bad_loss = torch.logical_or(torch.isinf(loss), torch.isnan(loss))
+                    if bad_loss.any():
+                        loss.masked_fill_(bad_loss, 0)
+
+                    loss = loss.sum()
+                    loss_data = loss.data.item()
+                except AttributeError:
+                    go_to_slow_code = True
+        else:
+            go_to_slow_code = True
+
+        # Then backoff to manual python code
+        if go_to_slow_code:
             if not softmaxed:
                 lprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
             else:
@@ -84,16 +112,10 @@ class CrossEntropyLossBase(_Loss):
 
             non_pad_mask = gtruth.ne(self.padding_idx)
             nll_loss = -lprobs.gather(1, gtruth.unsqueeze(1))[non_pad_mask]
-            smooth_loss = -lprobs.sum(dim=-1, keepdim=True)[non_pad_mask]
+            smooth_loss = -lprobs.sum(dim=-1, keepdim=True)[non_pad_mask] if eps_i > 0 else None
             nll_loss = nll_loss.sum()
-            smooth_loss = smooth_loss.sum()
-
-            loss = (1. - label_smoothing) * nll_loss + eps_i * smooth_loss
-            loss_data = loss.data.item()
-        else:
-            half_to_float = (logits.dtype == torch.half)
-            loss = self.softmax_xentropy(logits, gtruth, label_smoothing, self.padding_idx, half_to_float)
-            loss = loss.sum()
+            smooth_loss = smooth_loss.sum() if eps_i > 0 else None
+            loss = (1. - label_smoothing) * nll_loss + eps_i * smooth_loss if eps_i > 0 else nll_loss
             loss_data = loss.data.item()
 
         return loss, loss_data
@@ -107,18 +129,18 @@ class NMTLossFunc(CrossEntropyLossBase):
     Standard NMT Loss Computation.
     """
 
-    def __init__(self, hidden_size, output_size, label_smoothing, mirror=False, fast_xentropy=False):
+    def __init__(self, hidden_size, output_size, label_smoothing, mirror=False, padding_idx=0):
         """
         :param hidden_size:
         :param output_size:
         :param label_smoothing:
         :param mirror:
-        :param fast_xentropy:
+        :param padding_idx:
         """
-        super(NMTLossFunc, self).__init__(output_size, label_smoothing, fast_xentropy=fast_xentropy)
+        super(NMTLossFunc, self).__init__(output_size, label_smoothing, padding_idx=padding_idx)
         self.hidden_size = hidden_size
         self.output_size = output_size
-        self.padding_idx = onmt.constants.TGT_PAD
+        self.padding_idx = padding_idx
         self.smoothing_value = label_smoothing / output_size
         self.confidence = 1.0 - label_smoothing
         self.label_smoothing = label_smoothing
@@ -155,14 +177,17 @@ class NMTLossFunc(CrossEntropyLossBase):
         logits = model_outputs['logprobs']
         mirror = self.mirror
 
-        with torch.no_grad():
-            targets_ = targets.view(-1)
-            non_pad_mask = torch.nonzero(targets_.ne(self.padding_idx)).squeeze(1)
-            # print(non_pad_mask)
-            labels = targets_.index_select(0, non_pad_mask)
-            logits_ = F.log_softmax(logits.view(-1, logits.size(-1)).index_select(0, non_pad_mask), dim=1)
-            preds = torch.argmax(logits_, dim=1)
+        targets_ = targets.view(-1)
+        non_pad_mask = torch.nonzero(targets_.ne(self.padding_idx)).squeeze(1)
+        labels = targets_.index_select(0, non_pad_mask)
+        logits = logits.view(-1, logits.size(-1)).index_select(0, non_pad_mask)
 
+        with torch.no_grad():
+            if not softmaxed:
+                logprobs = F.log_softmax(logits, dim=1)
+            else:
+                logprobs = logits
+            preds = torch.argmax(logprobs, dim=1)
             correct = (preds == labels).sum().item()
             total = labels.numel()
 
@@ -174,7 +199,7 @@ class NMTLossFunc(CrossEntropyLossBase):
             reverse_targets = model_outputs['reverse_target']
             alpha = 1.0
 
-        loss, loss_data = self._compute_loss(logits, targets, vocab_mask=vocab_mask, softmaxed=softmaxed)
+        loss, loss_data = self._compute_loss(logits, labels, vocab_mask=vocab_mask, softmaxed=softmaxed)
 
         total_loss = loss
 

@@ -205,6 +205,10 @@ class SelfAttnFunc(torch.autograd.Function):
                 dropout_results = softmax_results
                 dropout_mask = null_tensor
 
+        nan_mask = torch.isnan(dropout_results)
+        if nan_mask.any():
+            dropout_results.masked_fill_(nan_mask, 0)
+
         # Matmul2 Batched GEMMs
         # The output tensor specification is needed here to specify the non-standard output.
         # Given that pytorch cannot currently perform autograd with an output tensor specified,

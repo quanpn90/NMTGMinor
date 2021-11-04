@@ -428,7 +428,7 @@ class Wav2vecBERT(Wav2vecTransformer):
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bert", "roberta"]:
             # src: [b, src_l]  context: [b, src_l, de_model]
             tgt_token_type = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
-            tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
+            tgt_attention_mask = tgt.new(*tgt.size()).fill_(1)  # [bsz, len]
             decoder_output = self.decoder(input_ids=tgt,
                                           attention_mask=tgt_attention_mask,
                                           token_type_ids=tgt_token_type,
@@ -442,7 +442,7 @@ class Wav2vecBERT(Wav2vecTransformer):
             context = context.transpose(0, 1)  # to [src_l, b, de_model]
         elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bart"]:
             tgt_token_type = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
-            tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
+            tgt_attention_mask = tgt.new(*tgt.size()).fill_(1)  # [bsz, len]
 
             # the wav2vec returned mask is 1 for masked and 0 for un-masked, which is opposite to huggingface
             src_attention_mask = 1 - (src_attention_mask.long())
@@ -457,7 +457,8 @@ class Wav2vecBERT(Wav2vecTransformer):
             output_dict = defaultdict(lambda: None)
         elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["mbart", "mbart50"]:
             src_attention_mask = src_attention_mask   # new version
-            tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
+            # tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
+            tgt_attention_mask = tgt.new(*tgt.size()).fill_(1)
 
             decoder_output = self.decoder(input_ids=tgt,
                                           attention_mask=tgt_attention_mask,

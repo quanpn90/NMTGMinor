@@ -19,9 +19,11 @@ Two basic classes:
 
 
 def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=False,
-               feature_size=40, dataname="source", wav_preprocessor=None):
+               feature_size=40, dataname="source", src_pad="<blank>", tgt_pad="<blank>" ):
     """
             Assembling the individual sequences into one single tensor, included padding
+            :param tgt_pad:
+            :param src_pad:
             :param dataname:
             :param feature_size:
             :param upsampling:
@@ -41,12 +43,12 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
         #     max_length = math.ceil(max_length / 8) * 8
 
         if dataname == "source":
-            tensor = data[0].new(len(data), max_length).fill_(onmt.constants.SRC_PAD)
+            tensor = data[0].new(len(data), max_length).fill_(src_pad)
         elif dataname == "target":
-            tensor = data[0].new(len(data), max_length).fill_(onmt.constants.TGT_PAD)
+            tensor = data[0].new(len(data), max_length).fill_(tgt_pad)
         else:
             print("Warning: check the dataname")
-            exit(-1)
+            raise NotImplementedError
         pos = None
 
         for i in range(len(data)):
@@ -85,7 +87,7 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
         batch_size = len(data)
 
         # feature size + 1 because the last dimension is created for padding
-        tensor = data[0].float().new(batch_size, max_length, feature_size + 1).fill_(onmt.constants.PAD)
+        tensor = data[0].float().new(batch_size, max_length, feature_size + 1).fill_(0)
 
         for i in range(len(samples)):
             sample = samples[i]
@@ -134,14 +136,15 @@ def collect_fn(src_data, tgt_data,
                src_type='text',
                augmenter=None, upsampling=False,
                bilingual=False, vocab_mask=None,
-               past_src_data=None):
+               past_src_data=None, src_pad="<blank>", tgt_pad="<blank>"):
     tensors = dict()
     if src_data is not None:
         tensors['source'], tensors['source_pos'], src_lengths = merge_data(src_data, align_right=src_align_right,
                                                                            type=src_type, augmenter=augmenter,
                                                                            upsampling=upsampling, feature_size=40,
-                                                                           dataname="source")
+                                                                           dataname="source", src_pad=src_pad)
         tensors['src_type'] = src_type
+        tensors['src_selfattn_mask'] = tensors['source'].ne(src_pad)
         tensors['source'] = tensors['source'].transpose(0, 1).contiguous()
         if tensors['source_pos'] is not None:
             tensors['source_pos'] = tensors['source_pos'].transpose(0, 1)
@@ -149,7 +152,8 @@ def collect_fn(src_data, tgt_data,
         tensors['src_size'] = sum(src_lengths)
 
     if tgt_data is not None:
-        target_full, target_pos, tgt_lengths = merge_data(tgt_data, align_right=tgt_align_right, dataname="target")
+        target_full, target_pos, tgt_lengths = merge_data(tgt_data, align_right=tgt_align_right,
+                                                          dataname="target", tgt_pad=tgt_pad)
         target_full = target_full.t().contiguous()  # transpose BxT to TxB
         tensors['target'] = target_full
         tensors['target_input'] = target_full[:-1]
@@ -170,7 +174,8 @@ def collect_fn(src_data, tgt_data,
                                                                                           augmenter=augmenter,
                                                                                           upsampling=upsampling,
                                                                                           feature_size=40,
-                                                                                          dataname="source")
+                                                                                          dataname="source",
+                                                                                          src_pad=src_pad)
 
         tensors['past_source'] = tensors['past_source'].transpose(0, 1).contiguous()
         if tensors['past_source_pos'] is not None:
@@ -248,10 +253,10 @@ class Batch(object):
 
         if self.has_target:
             self.tensors['target'] = switchout(self.tensors['target'], tgt_vocab_size, swrate, transpose=True, offset=1)
-            target_full = self.tensors['target']
-            self.tensors['target_input'] = target_full[:-1]
-            self.tensors['target_output'] = target_full[1:]
-            self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.constants.PAD)
+            # target_full = self.tensors['target']
+            # self.tensors['target_input'] = target_full[:-1]
+            # self.tensors['target_output'] = target_full[1:]
+            # self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.constants.PAD)
 
     # Masked Predictive Coding mask
     # Randomly choose positions and set features to Zero
@@ -314,6 +319,7 @@ class Dataset(torch.utils.data.Dataset):
                  sa_f=8, sa_t=64, input_size=40,
                  past_src_data=None,
                  past_src_data_sizes=None,
+                 constants=None,
                  **kwargs):
         """
         :param src_data: List of tensors for the source side (1D for text, 2 or 3Ds for other modalities)
@@ -338,6 +344,12 @@ class Dataset(torch.utils.data.Dataset):
         For models with absolute positional encoding, src and tgt should be aligned left (This is default)
         For models with relative positional encoding, src should be right and tgt should be left
         """
+        if constants is not None:
+            self.tgt_pad = constants.TGT_PAD
+            self.src_pad = constants.SRC_PAD
+        else:
+            self.tgt_pad = onmt.constants.TGT_PAD
+            self.src_pad = onmt.constants.SRC_PAD
 
         self.src = src_data
         self.past_src = past_src_data
@@ -355,6 +367,7 @@ class Dataset(torch.utils.data.Dataset):
         self.num_split = num_split
         self.vocab_mask = None
         self.use_past_src = self.past_src is not None
+
         # self.max_tgt_len = 128  # try to hard code this ... so tired of datasets with crappy samples
 
         if self.max_src_len is None:
@@ -570,7 +583,9 @@ class Dataset(torch.utils.data.Dataset):
                                   src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
                                   src_type=self._type,
                                   augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask,
-                                  past_src_data=past_src)
+                                  past_src_data=past_src,
+                                  src_pad=self.src_pad,
+                                  tgt_pad=self.tgt_pad)
                        )
         return batch
 
@@ -618,7 +633,7 @@ class Dataset(torch.utils.data.Dataset):
                                src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
                                src_type=self._type,
                                augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask,
-                               past_src_data=past_src_data)
+                               past_src_data=past_src_data, src_pad=self.src_pad, tgt_pad=self.tgt_pad)
 
             batches.append(batch)
 

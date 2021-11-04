@@ -300,11 +300,13 @@ class Binarizer:
                     data += [binarized_line.numpy()]
                     sizes += [len(tokenized_sent)]
 
-                    # assert that the mbart50 tokenizer uses the correct language ID
-                    if "mbart-large-50" in external_tokenizer.lower():
-                        assert binarized_line[0] == vocab.convertToIdx([lang])[0]
                 else:
                     tensor = ext_tokenizer(line.strip())['input_ids']
+                    # assert that the mbart50 tokenizer uses the correct language ID
+                    if "mbart-large-50" in external_tokenizer.lower():
+                        assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID"
+                        pad_id = vocab.convertToIdx(["<pad>"], None)[0]
+                        assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
                     sizes += [len(tensor)]
                     data += [np.asarray(tensor)]
 

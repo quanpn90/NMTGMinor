@@ -110,7 +110,8 @@ def main():
                                           max_src_len=opt.max_src_length,
                                           input_size=opt.input_size,
                                           upsampling=opt.upsampling,
-                                          num_split=1)
+                                          num_split=1,
+                                          constants=onmt.constants)
             else:
                 train_data = onmt.StreamDataset(train_dict['src'], train_dict['tgt'],
                                                 train_src_langs, train_tgt_langs,
@@ -143,8 +144,8 @@ def main():
                                           batch_size_sents=opt.batch_size_sents,
                                           max_src_len=opt.max_src_length,
                                           multiplier=opt.batch_size_multiplier,
-                                          cleaning=True,
-                                          upsampling=opt.upsampling)
+                                          upsampling=opt.upsampling,
+                                          constants=onmt.constants)
             else:
                 valid_data = onmt.StreamDataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
                                                 valid_src_langs, valid_tgt_langs,
@@ -246,7 +247,8 @@ def main():
                                           cleaning=True, verbose=True,
                                           input_size=opt.input_size,
                                           past_src_data=past_train_src,
-                                          past_src_data_sizes=past_train_src_sizes)
+                                          past_src_data_sizes=past_train_src_sizes,
+                                          constants=onmt.constants)
             else:
                 train_data = onmt.StreamDataset(train_src,
                                                 train_tgt,
@@ -310,7 +312,8 @@ def main():
                                           src_align_right=opt.src_align_right,
                                           cleaning=True, verbose=True, debug=True,
                                           past_src_data=past_valid_src,
-                                          past_src_data_sizes=past_valid_src_sizes)
+                                          past_src_data_sizes=past_valid_src_sizes,
+                                          constants=onmt.constants)
             else:
                 # for validation data, we have to go through sentences (very slow but to ensure correctness)
                 valid_data = onmt.StreamDataset(valid_src, valid_tgt,
@@ -402,7 +405,8 @@ def main():
                                               upsampling=opt.upsampling,
                                               cleaning=True, verbose=True,
                                               augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
-                                              input_size=opt.input_size)
+                                              input_size=opt.input_size,
+                                              constants=onmt.constants)
 
                     train_sets.append(train_data)
 
@@ -454,7 +458,7 @@ def main():
                                               data_type=data_type, sorting=True,
                                               batch_size_sents=opt.batch_size_sents,
                                               src_align_right=opt.src_align_right,
-                                              cleaning=True, verbose=True, debug=True)
+                                              cleaning=True, verbose=True, constants=onmt.constants)
 
                     valid_sets.append(valid_data)
 
