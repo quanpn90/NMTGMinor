@@ -242,6 +242,10 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
             else:
                 softmax_results = F.softmax(matmul1_results, dim=-1)
 
+            nan_mask = torch.isnan(softmax_results)
+            if nan_mask.any():
+                softmax_results.masked_fill_(nan_mask, 0)
+
             # Dropout - is not executed for inference
             if is_training:
                 dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
@@ -350,7 +354,7 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
 
             pad_mask = None
 
-        head_dim = inputs_q.size(2) // heads_t[0]
+        head_dim = inputs_q.size(2) // heads_t.item()
         bsz = inputs_q.size(1)
 
         if ctx.fused_all:
@@ -625,7 +629,7 @@ if __name__ == "__main__":
     parser.add_argument('-gpu', default=0, type=int,
                         help="Seed for deterministic runs.")
 
-    test_function = encdec_attn_func
+    test_function = encdec_attn_bias_func
 
     opt = parser.parse_args()
 
@@ -679,7 +683,8 @@ if __name__ == "__main__":
 
             self.function = test_function
 
-        def forward(self, in_proj_weight_q, input, context, in_proj_weight_kv, out_proj_weight, mask,
+        def forward(self, in_proj_weight_q, in_proj_bias_q, input, context, in_proj_weight_kv, in_proj_bias_kv,
+                    out_proj_weight, out_proj_bias, mask,
                     recompute=False, use_rotary_enc=False, pos_emb_q=None, pos_emb_k=None):
             is_training = True
             dropout = 0.0
@@ -694,6 +699,7 @@ if __name__ == "__main__":
 
             return self.function(recompute, is_training, self.heads, input, context,
                                  in_proj_weight_q, in_proj_weight_kv, out_proj_weight,
+                                 in_proj_bias_q, in_proj_bias_kv, out_proj_bias,
                                  mask, dropout,
                                  False, None,  # For the incremental stuff
                                  use_rotary_enc, pos_emb_q, pos_emb_k,
@@ -726,7 +732,6 @@ if __name__ == "__main__":
     out_proj_bias.requires_grad = True
 
     mask = input_states.new(*(bsz, len_r)).bernoulli_(p=0.25).bool()
-    # mask = None
 
     print("gradchecking start.")
     #
@@ -736,66 +741,13 @@ if __name__ == "__main__":
     recompute = False
 
     try:
-        torch.autograd.gradcheck(net, (in_proj_weight_q, input_states, context, in_proj_weight_kv,
-                                       out_proj_weight, mask, recompute), atol=1e-04, rtol=0.001)
+        torch.autograd.gradcheck(net, (in_proj_weight_q, in_proj_bias_q, input_states, context, in_proj_weight_kv,
+                                       in_proj_bias_kv,
+                                       out_proj_weight, out_proj_bias,
+                                       mask, recompute), atol=1e-04, rtol=0.001)
     except RuntimeError as e:
         print(e)
 
     print("gradchecking completed.")
 
 
-    # print("gradchecking w/ recomputation start.")
-    #
-    # # context = torch.randn(*(len_r, bsz, opt.model_size)).double().cuda()
-    # # context.requires_grad = True
-    #
-    # recompute = True
-    # torch.autograd.gradcheck(net, (input_states, context, in_proj_weight_q, in_proj_weight_kv,
-    #                                out_proj_weight, mask, recompute), atol=1e-05, rtol=0.001)
-    #
-    # print("gradchecking completed.")
-
-    class SinusoidalEmbeddings(torch.nn.Module):
-        def __init__(self, dim):
-            super().__init__()
-            inv_freq = 1. / (10000 ** (torch.arange(0, dim, 2).float() / dim))
-            self.register_buffer('inv_freq', inv_freq)
-
-        def forward(self, x=None, length=0, timestep=-1):
-            """
-            :param timestep:
-            :param length:
-            :param x: [time x bsz x hidden]
-            :return:
-            """
-            # actually this module doesn't care about anything of x except x.size(1)
-
-            if x is not None:
-                assert length == 0 and timestep == -1
-                n = x.shape[0]  # time dimension
-            elif length > 0:
-                assert timestep == -1
-                n = length
-            elif timestep >= 0:
-                n = timestep + 1
-
-            t = torch.arange(n, device=self.inv_freq.device).type_as(self.inv_freq)
-            sinusoid_inp = torch.einsum('i , j -> i j', t, self.inv_freq)
-            emb = torch.cat((sinusoid_inp.sin(), sinusoid_inp.cos()), dim=-1)
-            return emb
-
-
-    encoder = SinusoidalEmbeddings(opt.head_dim)
-    encoder = encoder.double().cuda()
-
-    pos_emb_q = encoder(length=len_q)
-    pos_emb_k = encoder(length=len_r)
-    pos_emb_q.requires_grads = False
-    pos_emb_k.requires_grads = False
-    recompute = False
-
-    print("gradchecking w/ rotary encoding start.")
-
-    torch.autograd.gradcheck(net, (in_proj_weight_q, input_states, context, in_proj_weight_kv,
-                                   out_proj_weight, mask, recompute, True, pos_emb_q, pos_emb_k), atol=1e-04,
-                             rtol=0.001)

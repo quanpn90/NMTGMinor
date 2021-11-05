@@ -703,14 +703,9 @@ class MBartDecoderLayer(nn.Module):
         # ):
         #     clamp_value = torch.finfo(hidden_states.dtype).max - 1000
         #     hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
-        mask = torch.isnan(hidden_states)
+        mask = torch.logical_or(torch.isnan(hidden_states), torch.isinf(hidden_states))
         if mask.any():
             hidden_states.masked_fill_(mask, 0)
-
-        mask = torch.isinf(hidden_states)
-        if mask.any():
-            clamp_value = torch.finfo(hidden_states.dtype).max - 1000
-            hidden_states.masked_fill_(mask, clamp_value)
 
         outputs = (hidden_states,)
 

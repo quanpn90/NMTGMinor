@@ -6,7 +6,6 @@ https://github.com/NVIDIA/apex/tree/master/apex/contrib/csrc/multihead_attn
 
 import torch
 import torch.nn.functional as F
-from onmt.constants import double_precision
 
 try:
     from torch.cuda.amp import custom_fwd, custom_bwd
@@ -258,7 +257,7 @@ class SelfAttnFunc(torch.autograd.Function):
 
     @staticmethod
     # @custom_bwd
-    def backward(ctx, output_grads, softmax_grads):
+    def backward(ctx, *output_grads):
 
         # if ctx.fused:
         #     heads_t, \
@@ -288,6 +287,11 @@ class SelfAttnFunc(torch.autograd.Function):
         #            input_bias_grads, output_bias_grads, \
         #            None, None, None, None, None, None, None
 
+        if ctx.return_coverage:
+            output_grads, coverage_grads = output_grads
+        else:
+            output_grads = output_grads[0]
+
         heads_t, \
             scale_t, \
             matmul2_results, \
@@ -301,7 +305,7 @@ class SelfAttnFunc(torch.autograd.Function):
             dropout_prob_t, \
             sin, cos = ctx.saved_tensors
 
-        head_dim = inputs.size(2) // heads_t[0]
+        head_dim = inputs.size(2) // heads_t.item()
 
         # Slice out q,k,v from one big Input Linear outuput (should only impact meta data, no copies!)
         # Sequences and heads are combined to make the batch of the Batched GEMM
@@ -432,3 +436,129 @@ def self_attn_func(*args):
     args = _cast_if_autocast_enabled(*args)
     with torch.cuda.amp.autocast(enabled=False):
         return SelfAttnFunc.apply(*args)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description='reversible transformer')
+    parser.add_argument('-model_size', type=int, default=32,
+                        help='Size of embedding / transformer hidden')
+    parser.add_argument('-gpu', default=0, type=int,
+                        help="Seed for deterministic runs.")
+
+    test_function = self_attn_func
+
+    opt = parser.parse_args()
+
+    torch.cuda.set_device(opt.gpu)
+
+    opt.layers = 2
+    opt.variational_dropout = False
+    opt.dropout = 0.0
+    opt.attn_dropout = 0.0
+    opt.n_heads = 4
+    opt.inner_size = 16
+    opt.head_dim = opt.model_size // opt.n_heads
+
+
+    class Parameters(torch.nn.Module):
+
+        def __init__(self, model_size=16, heads=1):
+            self.model_size = model_size
+            self.heads = heads
+            self.head_dim = model_size // heads
+
+            self.in_proj_weight = torch.Tensor(3 * model_size, model_size)
+            self.out_proj_weight = torch.Tensor(model_size, model_size)
+
+            self.in_proj_bias = torch.Tensor(3 * model_size)
+            self.out_proj_bias = torch.Tensor(model_size)
+
+            self.reset_parameters()
+
+        def reset_parameters(self):
+            std_ = 0.02
+            torch.nn.init.normal_(self.in_proj_weight, 0.0, std_)
+            torch.nn.init.normal_(self.out_proj_weight, 0.0, std_)
+
+            torch.nn.init.constant_(self.in_proj_bias, 0.)
+            torch.nn.init.constant_(self.out_proj_bias, 0.)
+
+
+    class TestAttention(torch.nn.Module):
+
+        def __init__(self, test_function, model_size=16, heads=1):
+            super().__init__()
+            self.model_size = model_size
+            self.heads = heads
+            self.head_dim = model_size // heads
+
+            self.function = test_function
+
+        def forward(self, input_weights, output_weights, input, input_biases, output_biases, mask,
+                    use_time_mask=False):
+            is_training = True
+            dropout = 0.0
+            double_precision = True
+            return_coverage = False
+
+            # use_time_mask, is_training, heads, inputs,
+            # input_weights, output_weights,
+            # input_biases, output_biases,
+            # mask, dropout_prob,
+            # rotary_pos_enc, pos_emb,
+            # incremental, incremental_cache,
+            # return_coverage
+
+            return self.function(use_time_mask, is_training, self.heads, input,
+                                 input_weights, output_weights,
+                                 input_biases, output_biases,
+                                 mask, dropout,
+                                 False, None,  # For the incremental stuff
+                                 False, None,
+                                 return_coverage)  # double precision set to true
+
+
+    bsz = 4
+    len_q = 15
+    len_r = len_q
+
+    input_states = torch.randn(*(len_q, bsz, opt.model_size)).double().cuda()
+    input_states.requires_grad = True
+    net = TestAttention(test_function, model_size=opt.model_size, heads=opt.n_heads)
+
+    parameters = Parameters(opt.model_size, opt.n_heads)
+
+    in_proj_weight = parameters.in_proj_weight.double().cuda()
+    out_proj_weight = parameters.out_proj_weight.double().cuda()
+
+    in_proj_bias = parameters.in_proj_bias.double().cuda()
+    out_proj_bias = parameters.out_proj_bias.double().cuda()
+
+    in_proj_weight.requires_grad = True
+    out_proj_weight.requires_grad = True
+    in_proj_bias.requires_grad = True
+    out_proj_bias.requires_grad = True
+
+    mask = input_states.new(*(bsz, len_r)).bernoulli_(p=0.25).bool()
+
+    print("gradchecking start.")
+
+    use_time_mask = False
+
+    torch.autograd.gradcheck(net, (in_proj_weight, out_proj_weight, input_states,
+                                   in_proj_bias, out_proj_bias,
+                                   mask, use_time_mask), atol=1e-04, rtol=0.001)
+
+    mask = input_states.new(*(len_q, len_r)).bernoulli_(p=0.25).bool()
+
+    print("gradchecking with time mask start.")
+
+    use_time_mask = True
+
+    torch.autograd.gradcheck(net, (in_proj_weight, out_proj_weight, input_states,
+                                   in_proj_bias, out_proj_bias,
+                                   mask, use_time_mask), atol=1e-04, rtol=0.001)
+
+    print("gradchecking completed.")

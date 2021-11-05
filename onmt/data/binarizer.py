@@ -262,8 +262,8 @@ class Binarizer:
             if worker_id == 0:
                 print("[INFO] Using the external mBART-50 tokenizer...")
 
-            from transformers import MBart50TokenizerFast
-            ext_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50", src_lang=lang)
+            from transformers import MBart50Tokenizer
+            ext_tokenizer = MBart50Tokenizer.from_pretrained("facebook/mbart-large-50", src_lang=lang)
             if ext_tokenizer.src_lang != lang:
                 raise RuntimeError("The language %s does not exist in mBART50." % lang)
 
@@ -307,6 +307,8 @@ class Binarizer:
                         assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID"
                         pad_id = vocab.convertToIdx(["<pad>"], None)[0]
                         assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
+                    if len(tensor) <= 2:
+                        print("[Warning] empty sentence with %d tokens including <bos> <eos>" % len(tensor))
                     sizes += [len(tensor)]
                     data += [np.asarray(tensor)]
 

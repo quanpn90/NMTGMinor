@@ -313,6 +313,7 @@ def main():
                                           cleaning=True, verbose=True, debug=True,
                                           past_src_data=past_valid_src,
                                           past_src_data_sizes=past_valid_src_sizes,
+                                          min_src_len=1, min_tgt_len=3,
                                           constants=onmt.constants)
             else:
                 # for validation data, we have to go through sentences (very slow but to ensure correctness)

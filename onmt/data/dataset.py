@@ -367,6 +367,8 @@ class Dataset(torch.utils.data.Dataset):
         self.num_split = num_split
         self.vocab_mask = None
         self.use_past_src = self.past_src is not None
+        self.min_tgt_len = kwargs.get('min_tgt_len', 4)
+        self.min_src_len = kwargs.get('min_src_len', 4)
 
         # self.max_tgt_len = 128  # try to hard code this ... so tired of datasets with crappy samples
 
@@ -467,7 +469,8 @@ class Dataset(torch.utils.data.Dataset):
         self.batches = allocate_batch(self.order, self.data_lengths,
                                       self.src_sizes, self.tgt_sizes,
                                       batch_size_words, batch_size_sents, self.multiplier,
-                                      self.max_src_len, self.max_tgt_len, self.cleaning)
+                                      self.max_src_len, self.max_tgt_len,
+                                      self.min_src_len, self.min_tgt_len, self.cleaning)
 
         # the second to last mini-batch is likely the largest
         # (the last one can be the remnant after grouping samples which has less than max size)

@@ -27,8 +27,8 @@ cpdef list fast_batch_allocate(
         np.ndarray[DTYPE_t, ndim=1] indices, np.ndarray[DTYPE_t, ndim=1] lengths,
         np.ndarray[DTYPE_t, ndim=1] src_sizes, np.ndarray[DTYPE_t, ndim=1] tgt_sizes,
         long batch_size_words, long batch_size_sents, long batch_size_multiplier,
-        long max_src_len, long max_tgt_len, int cleaning
-
+        long max_src_len, long max_tgt_len,
+        long min_src_len, long min_tgt_len, int cleaning
 ):
 
     cdef long batch_size = 0
@@ -56,7 +56,7 @@ cpdef list fast_batch_allocate(
         tgt_size = tgt_sizes[idx]
 
         if cleaning == 1:
-            if not (0 < src_size < max_src_len and 0 < tgt_size < max_tgt_len):
+            if not (min_src_len < src_size < max_src_len and min_tgt_len < tgt_size < max_tgt_len):
                 continue
 
         oversized = _oversized(batch, sent_length, cur_batch_sizes, batch_size_words, batch_size_sents)
