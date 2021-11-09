@@ -79,25 +79,32 @@ class CrossEntropyLossBase(_Loss):
                 half_to_float = (logits.dtype == torch.half)
                 loss = self.softmax_xentropy(logits, gtruth, label_smoothing, self.padding_idx, half_to_float)
 
+                # We need to return the loss data without masking bad positions
+                # Otherwise the values from "low" validation perplexities cannot be trusted
+                with torch.no_grad():
+                    loss_data = loss.sum().data.item()
+
                 bad_loss = torch.logical_or(torch.isinf(loss), torch.isnan(loss))
                 if bad_loss.any():
                     loss.masked_fill_(bad_loss, 0)
 
                 loss = loss.sum()
-                loss_data = loss.data.item()
             else:
                 try:
-                    # Then backoff to Pytorch (1.10+)
+                    # Otherwise backoff to Pytorch (1.10+)
                     loss = F.cross_entropy(logits.float(), gtruth, weight=None,
                                            ignore_index=self.padding_idx, reduction='none',
                                            label_smoothing=label_smoothing)
+
+                    with torch.no_grad():
+                        loss_data = loss.sum().data.item()
 
                     bad_loss = torch.logical_or(torch.isinf(loss), torch.isnan(loss))
                     if bad_loss.any():
                         loss.masked_fill_(bad_loss, 0)
 
                     loss = loss.sum()
-                    loss_data = loss.data.item()
+
                 except AttributeError:
                     go_to_slow_code = True
         else:
@@ -377,10 +384,6 @@ class ClassifierLoss(CrossEntropyLossBase):
         predictions = F.log_softmax(clean_logits.float()).topk(1, dim=1)[1].squeeze(1)
         #
         n_correct = (clean_targets.eq(predictions.long())).sum()
-        #
-        # # print(n_correct.size(), predictions.size(), clean_targets.size())
-        # # print(n_correct.int(), n_correct.numel(), n_correct.sum())
-        # assert n_correct.item() <= clean_targets.numel()
 
         output_dict = {"loss": loss, "data": loss_data, "numel": clean_targets.numel(),
                        "n_correct": n_correct}

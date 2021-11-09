@@ -140,6 +140,7 @@ class MultiDataIterator(EpochBatchIterating):
 
         self.datasets = datasets
         self.data_iterators = list()
+
         for dataset in datasets:
             self.data_iterators.append(DataIterator(dataset, dataset.collater, dataset.batches, seed=seed,
                                                     num_workers=num_workers, epoch=epoch, buffer_size=buffer_size,
@@ -155,8 +156,7 @@ class MultiDataIterator(EpochBatchIterating):
         self.n_samples = sum([len(dataset) for dataset in self.datasets])
 
     def __len__(self):
-
-        return sum([len(dataset) for dataset in self.datasets])
+        return sum([len(data_iterator) for data_iterator in self.data_iterators])
 
     @property
     def next_epoch_idx(self):

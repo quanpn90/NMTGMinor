@@ -8,15 +8,6 @@ from time import time
 import numpy as np
 import random
 
-import silu_cuda
-
-try:
-    import apex.amp as amp
-    from apex.amp import half_function
-except (ModuleNotFoundError, ImportError) as e:
-    amp = None
-    from ..optimized.compat import half_function
-
 try:
     from torch.cuda.amp import custom_fwd, custom_bwd
 except (ModuleNotFoundError, ImportError) as e:
@@ -51,7 +42,7 @@ class MlpReluFunction(torch.autograd.Function):
 
 
 if fused_mlp_relu:
-    mlp_relu_function = half_function(MlpReluFunction.apply)
+    mlp_relu_function = MlpReluFunction.apply
 else:
     mlp_relu_function = None
 
@@ -79,7 +70,7 @@ class MlpReluRecomputeFunction(torch.autograd.Function):
 
 
 if fused_mlp_relu:
-    mlp_relu_recompute_function = half_function(MlpReluRecomputeFunction.apply)
+    mlp_relu_recompute_function = MlpReluRecomputeFunction.apply
 else:
     mlp_relu_recompute_function = None
 

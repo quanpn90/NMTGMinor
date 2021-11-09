@@ -81,7 +81,7 @@ class FairseqWav2Vec(nn.Module):
         # self.cfg.dropout = self.opt.residual_dropout
         # self.cfg.activation_dropout = self.opt.ffn_dropout
         # self.cfg.attention_dropout = self.opt.attn_dropout
-        self.cfg.encoder_layerdrop = self.opt.death_rate / 2
+        self.cfg.encoder_layerdrop = self.opt.death_rate
         # self.cfg.dropout_features = self.opt.emb_dropout
         # self.cfg.mask_channel_before = True
         self.cfg.mask_channel_prob = 0.2 if self.opt.wav2vec_spec_augment else 0.0
@@ -120,6 +120,13 @@ class FairseqWav2Vec(nn.Module):
         for param in self.wav2vec_encoder.feature_extractor.parameters():
             param.requires_grad = False
 
+        if opt.wav2vec_adapter > 0:
+            print("[INFO] Adding adapters for Wav2vec model with %d languages" % opt.n_languages)
+            self.wav2vec_encoder.encoder.add_adapters(opt.n_languages, adapter_location=opt.wav2vec_adapter)
+
+        if opt.freeze_encoder_ffn:
+            self.wav2vec_encoder.encoder.freeze_or_unfreeze_ffn_params()
+
     def fix_projection_matrices_(self):
         if self.favor:
             self.proj_updater.fix_projections_()
@@ -127,8 +134,11 @@ class FairseqWav2Vec(nn.Module):
     def convert_fast_attention(self):
         self.wav2vec_encoder.convert_fast_attention()
 
-    def forward(self, input, batch_first_output=False, adv_ptb_grad=False, input_ptb=None, **kwargs):
+    def forward(self, input, batch_first_output=False, adv_ptb_grad=False, input_ptb=None,
+                lang=None, mixture=None, **kwargs):
         """
+        :param mixture:
+        :param lang:
         :param input_ptb: perturbation added to the input itself
         :param adv_ptb_grad: adversarial perturbation step which we need the gradients w.r.t the input (wavs)
         :param batch_first_output: [bsz, seq_len, hidden_size] as output size, else transpose(0, 1)
@@ -171,7 +181,8 @@ class FairseqWav2Vec(nn.Module):
         # don't mask when precomputed tdnn is used, because spec augmentation is used in the dataset
         wav2vec_output = self.wav2vec_encoder.extract_features(input, attn_mask,
                                                                mask=self.training,
-                                                               precomputed_tdnn=precomputed_tdnn)
+                                                               precomputed_tdnn=precomputed_tdnn,
+                                                               lang=lang, mixture=mixture)
 
         if not batch_first_output:
             context = wav2vec_output['x'].transpose(0, 1).contiguous()
@@ -419,7 +430,9 @@ class Wav2vecBERT(Wav2vecTransformer):
         batch_first_output = False
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bart"]:
             batch_first_output = True
-        encoder_output = self.encoder(src, batch_first_output=batch_first_output)
+
+        # during training mixture is always None
+        encoder_output = self.encoder(src, batch_first_output=batch_first_output, lang=src_lang, mixture=None)
 
         encoder_output = defaultdict(lambda: None, encoder_output)
 

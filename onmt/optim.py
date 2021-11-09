@@ -398,7 +398,7 @@ class Optim(object):
         if not overflow:
             self._step += 1
             if 'noam' in self.update_method or 'cosine' in self.update_method:
-                self.update_learning_rate()
+                    self.update_learning_rate()
 
         if scaler is not None:
             result = scaler.step(self.optimizer)
@@ -424,11 +424,13 @@ class Optim(object):
         if self.lr < 0:
             return
 
-        if self.update_method in ['noam', 'noam_nowarmup']:
+        if self.update_method in ['noam', 'noam_nowarmup', 'noam_half']:
             if self._step <= self.warmup_steps:
                 self.lr = self.init_lr * self._step * self.warmup_steps ** (-1.5)
             else:
                 self.lr = self.init_lr * self._step ** (-0.5)
+                if self.update_method == 'noam_half':
+                    self.lr = self.lr / 2
 
             self.optimizer.param_groups[0]['lr'] = self.lr
 

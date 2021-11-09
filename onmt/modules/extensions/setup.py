@@ -70,12 +70,12 @@ cmdclass['build_ext'] = BuildExtension.with_options(use_ninja=False)
 cc_flag = []
 _, bare_metal_major, _ = get_cuda_bare_metal_version(cpp_extension.CUDA_HOME)
 
-# cc_flag.append('-gencode')
-# cc_flag.append('arch=compute_75,code=sm_75')
+cc_flag.append('-gencode')
+cc_flag.append('arch=compute_75,code=sm_75')
 cc_flag.append('-gencode')
 cc_flag.append('arch=compute_80,code=sm_80')
-# cc_flag.append('-gencode')
-# cc_flag.append('arch=compute_86,code=sm_86')
+cc_flag.append('-gencode')
+cc_flag.append('arch=compute_86,code=sm_86')
 
 print("\n\ntorch.__version__  = {}\n\n".format(torch.__version__))
 TORCH_MAJOR = int(torch.__version__.split('.')[0])
@@ -266,8 +266,8 @@ ext_modules.append(
 #     CUDAExtension(name='fused_mlp_gelu_blaslt',
 #                   sources=['mlp_blaslt/fused_dense_gelu_dense.cpp',
 #                            'mlp_blaslt/fused_dense_gelu_dense_cuda.cu'],
-#                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-#                                       'nvcc': ['-O3'] + cc_flag + version_dependent_macros}))
+#                   extra_compile_args={'cxx': ['-O3'] + versi  on_dependent_macros,
+#                                       'nvcc': ['-O3'] + version_dependent_macros}))
 
 ext_modules.append(
     CUDAExtension(name='fmhalib',

@@ -11,13 +11,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# from fairseq import utils
 from .utils import compute_mask_indices, get_activation_fn, get_available_activation_fns
-# from fairseq.data.data_utils import compute_mask_indices
 from .enum import ChoiceEnum
 from torch.cuda.amp import autocast
 
-# from fairseq.models import BaseFairseqModel, register_model
 from .fairseq_modules import (
     Fp32GroupNorm,
     Fp32LayerNorm,
@@ -579,7 +576,9 @@ class Wav2Vec2Model(torch.nn.Module):
             mask_indices=None,
             mask_channel_indices=None,
             padding_count=None,
-            precomputed_tdnn=False
+            precomputed_tdnn=False,
+            lang=None,
+            mixture=None
     ):
         # if the tdnn features are precomputed then skip them
         if not precomputed_tdnn:
@@ -665,7 +664,7 @@ class Wav2Vec2Model(torch.nn.Module):
             y = unmasked_features
             mask_indices = None
 
-        x, layer_results = self.encoder(x, padding_mask=padding_mask, layer=layer)
+        x, layer_results = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, mixture=mixture)
 
         if features_only:
             return {
@@ -794,9 +793,11 @@ class Wav2Vec2Model(torch.nn.Module):
 
         return features, padding_mask.long()
 
-    def extract_features(self, source, padding_mask, mask=False, layer=None, precomputed_tdnn=False):
+    def extract_features(self, source, padding_mask, mask=False, layer=None, precomputed_tdnn=False,
+                         lang=None, mixture=None):
         res = self.forward(
-            source, padding_mask, mask=mask, features_only=True, layer=layer, precomputed_tdnn=precomputed_tdnn
+            source, padding_mask, mask=mask, features_only=True, layer=layer, precomputed_tdnn=precomputed_tdnn,
+            lang=lang, mixture=mixture
         )
         return res
 
@@ -973,15 +974,15 @@ class TransformerEncoder(nn.Module):
 
         self.apply(init_bert_params)
 
-    def forward(self, x, padding_mask=None, layer=None):
-        x, layer_results = self.extract_features(x, padding_mask, layer)
+    def forward(self, x, padding_mask=None, layer=None, lang=None, mixture=None):
+        x, layer_results = self.extract_features(x, padding_mask, layer, lang=lang, mixture=mixture)
 
         if self.layer_norm_first and layer is None:
             x = self.layer_norm(x)
 
         return x, layer_results
 
-    def extract_features(self, x, padding_mask=None, tgt_layer=None):
+    def extract_features(self, x, padding_mask=None, tgt_layer=None, lang=None, mixture=None):
         if padding_mask is not None:
             x = index_put(x, padding_mask, 0)
 
@@ -1003,7 +1004,8 @@ class TransformerEncoder(nn.Module):
         for i, layer in enumerate(self.layers):
             dropout_probability = np.random.random()
             if not self.training or (dropout_probability > self.layerdrop):
-                x, z = layer(x, self_attn_padding_mask=padding_mask, need_weights=False)
+                x, z = layer(x, self_attn_padding_mask=padding_mask, need_weights=False,
+                             lang=lang, mixture=mixture)
                 if tgt_layer is not None:
                     layer_results.append((x, z))
             if i == tgt_layer:
@@ -1026,6 +1028,19 @@ class TransformerEncoder(nn.Module):
     def upgrade_state_dict_named(self, state_dict, name):
         """Upgrade a (possibly old) state dict for new versions of fairseq."""
         return state_dict
+
+    def add_adapters(self, n_languages, adapter_location=1):
+
+        for layer in self.layers:
+            layer.add_adapters(n_languages, adapter_location=adapter_location)
+
+    def freeze_or_unfreeze_ffn_params(self):
+
+        for layer in self.layers:
+            for p in layer.fc1.parameters():
+                p.requires_grad = not p.requires_grad
+            for p in layer.fc2.parameters():
+                p.requires_grad = not p.requires_grad
 
 
 class TransformerSentenceEncoderLayer(nn.Module):
@@ -1053,6 +1068,8 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.dropout = dropout
         self.activation_dropout = activation_dropout
         self.favor = favor
+        self.has_adapter = False
+        self.is_factorized = False
 
         # Initialize blocks
         self.activation_fn = get_activation_fn(activation_fn)
@@ -1066,7 +1083,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         )
 
         self.dropout1 = nn.Dropout(dropout, inplace=False)
-        self.dropout2 = nn.Dropout(self.activation_dropout)
+        self.dropout2 = nn.Dropout(self.activation_dropout, inplace=True)
         self.dropout3 = nn.Dropout(dropout, inplace=False)
 
         self.layer_norm_first = layer_norm_first
@@ -1079,7 +1096,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
         # layer norm associated with the position wise feed-forward NN
         self.final_layer_norm = LayerNorm(self.embedding_dim)
 
-        # TODO: replacing this with fused MLP
         self.fused = False
         self.fused_blaslt = False
         if self.activation_fn_name == 'relu':
@@ -1087,24 +1103,41 @@ class TransformerSentenceEncoderLayer(nn.Module):
             if mlp_relu_function is not None:
                 self.fused_function = mlp_relu_function
                 self.fused = True
-        elif self.activation_fn_name == 'gelu':
-            from onmt.modules.mlp.mlp import mlp_gelu_function, mlp_gelu_blaslt_function
-            if mlp_gelu_blaslt_function is not None:
-                self.fused_function = mlp_gelu_blaslt_function
-                self.fused = True
-                self.fused_blaslt = True
+        # elif self.activation_fn_name == 'gelu':
+        #     from onmt.modules.mlp.mlp import mlp_gelu_function, mlp_gelu_blaslt_function
+        #     if mlp_gelu_blaslt_function is not None:
+        #         self.fused_function = mlp_gelu_blaslt_function
+        #         self.fused = True
+        #         self.fused_blaslt = True
+        #
+        #     if mlp_gelu_function is not None and not self.fused_blaslt:
+        #         self.fused_function = mlp_gelu_function
+        #         self.fused = True
 
-            if mlp_gelu_function is not None and not self.fused_blaslt:
-                self.fused_function = mlp_gelu_function
-                self.fused = True
+    def add_adapters(self, n_languages, downsampling_factor=4, adapter_location=1):
+        """
+        :param n_languages: one adapter per language
+        :param downsampling_factor: downsampling rate size for the hidden layer
+        :param adapter_location:
+        :return:
+        """
+
+        self.n_languages = n_languages
+        self.has_adapter = True
+        self.adapter_location = adapter_location
+        from .adapter import MultilingualAdapter
+        self.adapter = MultilingualAdapter(n_languages, self.embedding_dim, downsample_factor=downsampling_factor)
+
+        if adapter_location == 2:
+            self.mid_adapter = MultilingualAdapter(n_languages, self.embedding_dim, downsample_factor=downsampling_factor)
 
     def forward(
             self,
             x: torch.Tensor,
             self_attn_mask: torch.Tensor = None,
             self_attn_padding_mask: torch.Tensor = None,
-            need_weights: bool = False,
-            att_args=None
+            lang=None, mixture=None,
+            **kwargs
     ):
         """
         LayerNorm is applied either before or after the self-attention/ffn
@@ -1124,8 +1157,13 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 attn_mask=self_attn_mask,
             )
 
-            # print("[attn output]", torch.any(torch.isnan(x)))
             x = self.dropout1(x)
+
+            if self.has_adapter:
+                if self.adapter_location == 2:
+                    assert lang is not None or mixture is not None
+                    x = self.mid_adapter(x, lang=lang, mixture=mixture)
+
             x = residual + x
 
             residual = x
@@ -1150,9 +1188,14 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 x = self.dropout2(x)
                 x = self.fc2(x)
 
-            # print("[ffn output]", torch.any(torch.isnan(x)))
             x = self.dropout3(x)
-            x = residual + x
+            if self.has_adapter:
+                if self.adapter_location == 1:
+                    assert lang is not None or mixture is not None
+                    x = self.adapter(x, lang=lang, mixture=mixture)
+
+            x = residual + x  # residual is before the big FFN
+
         else:
             x, attn = self.self_attn(
                 query=x,

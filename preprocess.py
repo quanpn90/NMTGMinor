@@ -12,6 +12,8 @@ from onmt.data.indexed_dataset import IndexedDatasetBuilder
 import h5py as h5
 import numpy as np
 import warnings
+import os
+from os.path import dirname, abspath
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -19,7 +21,8 @@ parser = argparse.ArgumentParser(description='preprocess.py')
 onmt.markdown.add_md_help_argument(parser)
 
 # **Preprocess Options**
-
+parser.add_argument('-multi_dataset', action='store_true',
+                    help="Save each dataset separately instead of one joined dataset")
 parser.add_argument('-config', help="Read options from this file")
 
 parser.add_argument('-src_type', default="text",
@@ -211,6 +214,109 @@ def init_vocab(name, data_files, vocab_file, vocab_size, tokenizer, num_workers=
 def save_vocabulary(name, vocab, file):
     print('Saving ' + name + ' vocabulary to \'' + file + '\'...')
     vocab.writeFile(file)
+
+
+def save_dataset(path, data, format, dicts, src_type):
+    # Each dataset is comprised of the following components:
+    # src: tensors for the source vectors, or the scp_path (in ASR case)
+    # tgt: tensors for the target vectors
+    # src_lang: tensors for the source language ids (simplified)
+    # tgt_lang: tensors for the target language ids (simplified)
+
+    # convert all datasets to pytorch tensors and save to .pt
+    if format in ['raw', 'bin']:
+        print('Saving data to ' + os.path.join(path, 'data.pt') + '...')
+
+        save_data = {'type': opt.src_type   ,
+                     'data': data}
+        torch.save(save_data, os.path.join(path, 'data.pt'))
+        print("Done")
+
+    # for ASR only
+    elif format in ['scp', 'scpmem', 'wav']:
+        print('Saving target data to memory indexed data files. Source data is stored only as scp path.')
+        from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
+
+        assert opt.asr, "ASR data format is required for this memory indexed format"
+
+        # TODO: changing this to before saving everything
+        # torch.save(dicts, opt.save_data + '.dict.pt')
+
+        # binarize the training set first
+        for set_ in ['tgt', 'src_lang', 'tgt_lang']:
+            if data[set_] is None:
+                continue
+
+            if opt.data_type == 'int64':
+                dtype = np.int64
+            else:
+                dtype = np.int32
+
+            indexed_data = MMapIndexedDatasetBuilder(os.path.join(path, "data.%s.bin" % set_), dtype=dtype)
+
+            # add item from training data to the indexed data
+            for tensor in data[set_]:
+                indexed_data.add_item(tensor)
+
+            indexed_data.finalize(os.path.join(path, "data.%s.idx" % set_))
+
+            del indexed_data
+
+        for set_ in ['src_sizes', 'tgt_sizes']:
+
+            if data[set_] is not None:
+
+                np_array = np.asarray(data[set_])
+                np.save(os.path.join(path, "data.%s.npy") % set_, np_array)
+            else:
+                print("Training %s not found " % set_)
+
+        # Finally save the audio path
+        torch.save(data['src'], os.path.join(path, 'data.scp_path.pt'))
+        if 'prev_src' in data and data['prev_src'] is not None:
+            torch.save(data['prev_src'], os.path.join(path, 'data.prev_scp_path.pt'))
+
+        print("Done")
+
+    elif opt.format in ['mmap', 'mmem']:
+        # print('Saving data to memory indexed data files')
+        from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
+
+        if opt.asr:
+            print("ASR data format isn't compatible with memory indexed format")
+            raise AssertionError
+
+        # save dicts in this format
+        # torch.save(dicts, opt.save_data + '.dict.pt')
+
+        # binarize the training set first
+        for set_ in ['src', 'tgt', 'src_lang', 'tgt_lang']:
+            if data[set_] is None:
+                continue
+
+            if opt.data_type == 'int64':
+                dtype = np.int64
+            else:
+                dtype = np.int32
+
+            indexed_data = MMapIndexedDatasetBuilder(os.path.join(path, "data.%s.bin" % set_), dtype=dtype)
+
+            # add item from training data to the indexed data
+            for tensor in data[set_]:
+                indexed_data.add_item(tensor)
+
+            indexed_data.finalize(os.path.join(path, "data.%s.idx" % set_))
+
+            del indexed_data
+
+        for set_ in ['src_sizes', 'tgt_sizes']:
+
+            if data[set_] is not None:
+
+                np_array = np.asarray(data[set_])
+                np.save(os.path.join(path, "data.%s.npy" % set_), np_array)
+            else:
+                print("Set %s not found " % set_)
 
 
 def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', data_type='int32'):
@@ -434,13 +540,15 @@ def main():
         assert len(tgt_input_files) == len(tgt_langs)
 
         past_src_files = opt.past_train_src.split("|")
-
+        idx = 0
         n_input_files = len(src_input_files)
 
         train = dict()
         train['src'], train['tgt'] = list(), list()
         train['src_sizes'], train['tgt_sizes'] = list(), list()
         train['src_lang'], train['tgt_lang'] = list(), list()
+
+        data = dict()
 
         if opt.past_train_src and len(past_src_files) == len(src_input_files):
             train['past_src'] = list()
@@ -465,7 +573,7 @@ def main():
                                                                      tgt_lang=tgt_lang)
 
             n_samples = len(src_data)
-            if n_input_files == 1:
+            if n_input_files == 1 or opt.multi_dataset:
                 # For single-file cases we only need to have 1 language per file
                 # which will be broadcasted
                 src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
@@ -491,15 +599,39 @@ def main():
                                                                     external_tokenizer=opt.external_tokenizer,
                                                                     tgt_lang=tgt_lang)
 
-                train['past_src'] += past_src_data
-                train['past_src_sizes'] += past_src_sizes
+                if opt.multi_dataset:
+                    data['prev_src'] = prev_src_data
+                else:
+                    train['past_src'] += past_src_data
+                    train['past_src_sizes'] += past_src_sizes
 
-            train['src'] += src_data
-            train['tgt'] += tgt_data
-            train['src_sizes'] += src_sizes
-            train['tgt_sizes'] += tgt_sizes
-            train['src_lang'] += src_lang_data
-            train['tgt_lang'] += tgt_lang_data
+            if opt.multi_dataset:
+
+                data['src'] = src_data
+                data['tgt'] = tgt_data
+
+                data['src_sizes'] = src_sizes
+                data['tgt_sizes'] = tgt_sizes
+                data['src_lang'] = src_lang_data
+                data['tgt_lang'] = tgt_lang_data
+                print("Saving training set %i %s-%s to disk ..." % (idx, src_lang, tgt_lang))
+
+                # take basedir from opt.save_data
+                path = os.path.join(dirname(opt.save_data), "train.%i.%s-%s" % (idx, src_lang, tgt_lang))
+                os.makedirs(path, exist_ok=True)
+
+                # save data immediately
+                # TODO: save the prev src as well
+                save_dataset(path, data, opt.format, dicts, opt.src_type)
+                idx = idx + 1
+
+            else:
+                train['src'] += src_data
+                train['tgt'] += tgt_data
+                train['src_sizes'] += src_sizes
+                train['tgt_sizes'] += tgt_sizes
+                train['src_lang'] += src_lang_data
+                train['tgt_lang'] += tgt_lang_data
 
         print('Preparing validation ...')
 
@@ -513,9 +645,10 @@ def main():
         assert len(src_input_files) == len(src_langs)
         assert len(src_input_files) == len(tgt_input_files)
         assert len(tgt_input_files) == len(tgt_langs)
-
+        idx = 0
         n_input_files = len(src_input_files)
 
+        data = dict()
         valid = dict()
         valid['src'], valid['tgt'] = list(), list()
         valid['src_sizes'], valid['tgt_sizes'] = list(), list()
@@ -543,7 +676,7 @@ def main():
                                                                      tgt_lang=tgt_lang)
 
             n_samples = len(src_data)
-            if n_input_files == 1:
+            if n_input_files == 1 or opt.multi_dataset:
                 # For single-file cases we only need to have 1 language per file
                 # which will be broadcasted
                 src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
@@ -572,12 +705,33 @@ def main():
                 valid['past_src'] += past_src_data
                 valid['past_src_sizes'] += past_src_sizes
 
-            valid['src'] += src_data
-            valid['tgt'] += tgt_data
-            valid['src_sizes'] += src_sizes
-            valid['tgt_sizes'] += tgt_sizes
-            valid['src_lang'] += src_lang_data
-            valid['tgt_lang'] += tgt_lang_data
+            if opt.multi_dataset:
+                data['src'] = src_data
+                data['tgt'] = tgt_data
+
+                data['src_sizes'] = src_sizes
+                data['tgt_sizes'] = tgt_sizes
+                data['src_lang'] = src_lang_data
+                data['tgt_lang'] = tgt_lang_data
+
+                print("Saving validation set %i %s-%s to disk ..." % (idx, src_lang, tgt_lang))
+
+                # take basedir from opt.save_data
+                path = os.path.join(dirname(opt.save_data), "valid.%i.%s-%s" % (idx, src_lang, tgt_lang))
+                os.makedirs(path, exist_ok=True)
+
+                # save data immediately
+                save_dataset(path, data, opt.format, dicts, opt.src_type)
+                idx = idx + 1
+            else:
+                valid['src'] += src_data
+                valid['tgt'] += tgt_data
+                valid['src_sizes'] += src_sizes
+                valid['tgt_sizes'] += tgt_sizes
+                valid['src_lang'] += src_lang_data
+                valid['tgt_lang'] += tgt_lang_data
+
+
     else:
 
         src_input_files = opt.train_src.split("|")
@@ -687,170 +841,181 @@ def main():
     if opt.tgt_vocab is None:
         save_vocabulary('target', dicts['tgt'], opt.save_data + '.tgt.dict')
 
-    # SAVE DATA
-    if opt.format in ['raw', 'bin']:
-
-        print('Saving data to \'' + opt.save_data + '.train.pt\'...')
-
-        save_data = {'dicts': dicts,
-                     'type': opt.src_type,
-                     'train': train,
-                     'valid': valid}
-        torch.save(save_data, opt.save_data + '.train.pt')
-        print("Done")
-
-    elif opt.format in ['scp', 'scpmem', 'wav']:
-        print('Saving target data to memory indexed data files. Source data is stored only as scp path.')
-        from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
-
-        assert opt.asr, "ASR data format is required for this memory indexed format"
-
+    if opt.multi_dataset:
+        # SAVE DATA
+        print("Saving dictionary to %s" % (opt.save_data + '.dict.pt'))
         torch.save(dicts, opt.save_data + '.dict.pt')
 
-        # binarize the training set first
-        for set_ in ['tgt', 'src_lang', 'tgt_lang']:
-            if train[set_] is None:
-                continue
+        if opt.src_vocab is None and opt.asr == False and opt.lm == False:
+            save_vocabulary('source', dicts['src'], opt.save_data + '.src.dict')
+        if opt.tgt_vocab is None:
+            save_vocabulary('target', dicts['tgt'], opt.save_data + '.tgt.dict')
 
-            if opt.data_type == 'int64':
-                dtype = np.int64
-            else:
-                dtype = np.int32
-
-            train_data = MMapIndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set_, dtype=dtype)
-
-            # add item from training data to the indexed data
-            for tensor in train[set_]:
-                train_data.add_item(tensor)
-
-            train_data.finalize(opt.save_data + ".train.%s.idx" % set_)
-
-            del train_data
-
-            if valid[set_] is None:
-                continue
-
-            valid_data = MMapIndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set_, dtype=dtype)
-
-            # add item from training data to the indexed data
-            for tensor in valid[set_]:
-                valid_data.add_item(tensor)
-
-            valid_data.finalize(opt.save_data + ".valid.%s.idx" % set_)
-
-            del valid_data
-
-        for set_ in ['src_sizes', 'tgt_sizes']:
-
-            if train[set_] is not None:
-
-                np_array = np.asarray(train[set_])
-                np.save(opt.save_data + ".train.%s.npy" % set_, np_array)
-            else:
-                print("Training %s not found " % set_)
-
-            if valid[set_] is not None:
-
-                np_array = np.asarray(valid[set_])
-                np.save(opt.save_data + ".valid.%s.npy" % set_, np_array)
-            else:
-                print("Validation %s not found " % set_)
-
-        if 'past_src' in train and len(train['past_src']) > 0:
-            set_ = 'past_src_sizes'
-
-            if train[set_] is not None:
-
-                np_array = np.asarray(train[set_])
-                np.save(opt.save_data + ".train.%s.npy" % set_, np_array)
-            else:
-                print("Training %s not found " % set_)
-
-            if valid[set_] is not None:
-
-                np_array = np.asarray(valid[set_])
-                np.save(opt.save_data + ".valid.%s.npy" % set_, np_array)
-            else:
-                print("Validation %s not found " % set_)
-
-        # Finally save the audio path
-        save_data = {'train': train['src'],
-                     'valid': valid['src']}
-
-        # remember to take into account the past information
-        if 'past_src' in train and len(train['past_src']) > 0:
-            save_data['train_past'] = train['past_src']
-            save_data['valid_past'] = valid['past_src']
-
-        if opt.format in ['wav']:
-            torch.save(save_data, opt.save_data + '.wav_path.pt')
-        else:
-            torch.save(save_data, opt.save_data + '.scp_path.pt')
-
-        print("Done")
-
-    elif opt.format in ['mmap', 'mmem']:
-        print('Saving data to memory indexed data files')
-        from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
-
-        if opt.asr:
-            print("ASR data format isn't compatible with memory indexed format")
-            raise AssertionError
-
-        # save dicts in this format
-        torch.save(dicts, opt.save_data + '.dict.pt')
-
-        # binarize the training set first
-        for set_ in ['src', 'tgt', 'src_lang', 'tgt_lang']:
-            if train[set_] is None:
-                continue
-
-            if opt.data_type == 'int64':
-                dtype = np.int64
-            else:
-                dtype = np.int32
-
-            train_data = MMapIndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set_, dtype=dtype)
-
-            # add item from training data to the indexed data
-            for tensor in train[set_]:
-                train_data.add_item(tensor)
-
-            train_data.finalize(opt.save_data + ".train.%s.idx" % set_)
-
-            del train_data
-
-            if valid[set_] is None:
-                continue
-
-            valid_data = MMapIndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set_, dtype=dtype)
-
-            # add item from training data to the indexed data
-            for tensor in valid[set_]:
-                valid_data.add_item(tensor)
-
-            valid_data.finalize(opt.save_data + ".valid.%s.idx" % set_)
-
-            del valid_data
-
-        for set_ in ['src_sizes', 'tgt_sizes']:
-
-            if train[set_] is not None:
-
-                np_array = np.asarray(train[set_])
-                np.save(opt.save_data + ".train.%s.npy" % set_, np_array)
-            else:
-                print("Training %s not found " % set_)
-
-            if valid[set_] is not None:
-
-                np_array = np.asarray(valid[set_])
-                np.save(opt.save_data + ".valid.%s.npy" % set_, np_array)
-            else:
-                print("Validation %s not found " % set_)
-
+        print("Finished.")
     else:
-        raise NotImplementedError
+        if opt.format in ['raw', 'bin']:
+
+            print('Saving data to \'' + opt.save_data + '.train.pt\'...')
+
+            save_data = {'dicts': dicts,
+                         'type': opt.src_type,
+                         'train': train,
+                         'valid': valid}
+            torch.save(save_data, opt.save_data + '.train.pt')
+            print("Done")
+
+        elif opt.format in ['scp', 'scpmem', 'wav']:
+            print('Saving target data to memory indexed data files. Source data is stored only as scp path.')
+            from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
+
+            assert opt.asr, "ASR data format is required for this memory indexed format"
+
+            torch.save(dicts, opt.save_data + '.dict.pt')
+
+            # binarize the training set first
+            for set_ in ['tgt', 'src_lang', 'tgt_lang']:
+                if train[set_] is None:
+                    continue
+
+                if opt.data_type == 'int64':
+                    dtype = np.int64
+                else:
+                    dtype = np.int32
+
+                train_data = MMapIndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set_, dtype=dtype)
+
+                # add item from training data to the indexed data
+                for tensor in train[set_]:
+                    train_data.add_item(tensor)
+
+                train_data.finalize(opt.save_data + ".train.%s.idx" % set_)
+
+                del train_data
+
+                if valid[set_] is None:
+                    continue
+
+                valid_data = MMapIndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set_, dtype=dtype)
+
+                # add item from training data to the indexed data
+                for tensor in valid[set_]:
+                    valid_data.add_item(tensor)
+
+                valid_data.finalize(opt.save_data + ".valid.%s.idx" % set_)
+
+                del valid_data
+
+            for set_ in ['src_sizes', 'tgt_sizes']:
+
+                if train[set_] is not None:
+
+                    np_array = np.asarray(train[set_])
+                    np.save(opt.save_data + ".train.%s.npy" % set_, np_array)
+                else:
+                    print("Training %s not found " % set_)
+
+                if valid[set_] is not None:
+
+                    np_array = np.asarray(valid[set_])
+                    np.save(opt.save_data + ".valid.%s.npy" % set_, np_array)
+                else:
+                    print("Validation %s not found " % set_)
+
+            if 'past_src' in train and len(train['past_src']) > 0:
+                set_ = 'past_src_sizes'
+
+                if train[set_] is not None:
+
+                    np_array = np.asarray(train[set_])
+                    np.save(opt.save_data + ".train.%s.npy" % set_, np_array)
+                else:
+                    print("Training %s not found " % set_)
+
+                if valid[set_] is not None:
+
+                    np_array = np.asarray(valid[set_])
+                    np.save(opt.save_data + ".valid.%s.npy" % set_, np_array)
+                else:
+                    print("Validation %s not found " % set_)
+
+            # Finally save the audio path
+            save_data = {'train': train['src'],
+                         'valid': valid['src']}
+
+            # remember to take into account the past information
+            if 'past_src' in train and len(train['past_src']) > 0:
+                save_data['train_past'] = train['past_src']
+                save_data['valid_past'] = valid['past_src']
+
+            if opt.format in ['wav']:
+                torch.save(save_data, opt.save_data + '.wav_path.pt')
+            else:
+                torch.save(save_data, opt.save_data + '.scp_path.pt')
+
+            print("Done")
+
+        elif opt.format in ['mmap', 'mmem']:
+            print('Saving data to memory indexed data files')
+            from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
+
+            if opt.asr:
+                print("ASR data format isn't compatible with memory indexed format")
+                raise AssertionError
+
+            # save dicts in this format
+            torch.save(dicts, opt.save_data + '.dict.pt')
+
+            # binarize the training set first
+            for set_ in ['src', 'tgt', 'src_lang', 'tgt_lang']:
+                if train[set_] is None:
+                    continue
+
+                if opt.data_type == 'int64':
+                    dtype = np.int64
+                else:
+                    dtype = np.int32
+
+                train_data = MMapIndexedDatasetBuilder(opt.save_data + ".train.%s.bin" % set_, dtype=dtype)
+
+                # add item from training data to the indexed data
+                for tensor in train[set_]:
+                    train_data.add_item(tensor)
+
+                train_data.finalize(opt.save_data + ".train.%s.idx" % set_)
+
+                del train_data
+
+                if valid[set_] is None:
+                    continue
+
+                valid_data = MMapIndexedDatasetBuilder(opt.save_data + ".valid.%s.bin" % set_, dtype=dtype)
+
+                # add item from training data to the indexed data
+                for tensor in valid[set_]:
+                    valid_data.add_item(tensor)
+
+                valid_data.finalize(opt.save_data + ".valid.%s.idx" % set_)
+
+                del valid_data
+
+            for set_ in ['src_sizes', 'tgt_sizes']:
+
+                if train[set_] is not None:
+
+                    np_array = np.asarray(train[set_])
+                    np.save(opt.save_data + ".train.%s.npy" % set_, np_array)
+                else:
+                    print("Training %s not found " % set_)
+
+                if valid[set_] is not None:
+
+                    np_array = np.asarray(valid[set_])
+                    np.save(opt.save_data + ".valid.%s.npy" % set_, np_array)
+                else:
+                    print("Validation %s not found " % set_)
+
+        else:
+            raise NotImplementedError
 
 
 if __name__ == "__main__":

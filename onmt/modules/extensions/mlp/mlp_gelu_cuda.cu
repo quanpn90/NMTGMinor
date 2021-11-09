@@ -760,285 +760,115 @@ __global__ void biasAdd_bprop(
   }
 }
 
-// Addition done deterministically via a 2-pass approach. Each CTA writes out partial
-// sum, and the last CTA in grid Y dimension accumulates partials serially and writes to result.
-template <typename T, int UNROLL_FACTOR>
-__global__ void biasAddRelu_bprop(
-    T* Y,
-    T* dY,
-    int features,
-    int batch_size,
-    T* dX,
-    volatile float* intermediate,
-    int* semaphores,
-    T* db,
-    float p) {
-  // The feature that this thread is responsible for
-  int f = blockIdx.x * blockDim.x + threadIdx.x;
-  float pinv = 1.0f / (1.0f - p);
 
-  // Compute the span this thread is responsible for
-  // For this block
-  int b_chunkSize = (batch_size + gridDim.y - 1) / gridDim.y;
-  int b_nStart = blockIdx.y * b_chunkSize;
-  int b_nSpan = min(batch_size, b_nStart + b_chunkSize) - b_nStart;
-  // For this thread
-  int chunkSize = (b_chunkSize + blockDim.y - 1) / blockDim.y;
-  int nStart = threadIdx.y * chunkSize + b_nStart;
-  int nSpan = min(b_nStart + b_nSpan, nStart + chunkSize) - nStart;
 
-  volatile float* out = intermediate + blockIdx.y * features;
 
-  // Flag to trigger last reduction.
-  __shared__ bool isLastBlock;
-  // we know block size for now
-  __shared__ float smem[BIAS_RELU_BW_NTHREADS_X*BIAS_RELU_BW_NTHREADS_Y];
-
-  // Accumulate db in FP32 always
-  float db_local = 0;
-  if (f < features) {
-    int nidx = 0;
-    // Handle non-multiple of UNROLL_FACTOR residue
-    for (; nidx < nSpan % UNROLL_FACTOR; nidx++) {
-      int row, col, flat_idx;
-      row = f;
-      col = nStart + nidx;
-      flat_idx = col * features + row;
-      T y_val = Y[flat_idx];
-      T dy_val = dY[flat_idx];
-      T dx_val;
-      if ((float)y_val > 0.f)
-        dx_val = dy_val * pinv;
-      else
-        dx_val = 0;
-      dX[flat_idx] = dx_val;
-      db_local += (float)dx_val;
-    }
-
-    // Handle meat of work
-    for (; (nidx + UNROLL_FACTOR - 1) < nSpan; nidx += UNROLL_FACTOR) {
-      int row, col, flat_idx;
-      row = f;
-      col = nStart + nidx;
-      flat_idx = col * features + row;
-#pragma unroll 4
-      for (int u = 0; u < UNROLL_FACTOR; u++) {
-        T y_val = Y[flat_idx];
-        T dy_val = dY[flat_idx];
-        T dx_val;
-        if ((float)y_val > 0.f)
-          dx_val = dy_val * pinv;
-        else
-          dx_val = 0;
-        dX[flat_idx] = dx_val;
-        db_local += (float)dx_val;
-        flat_idx += features;
-      }
-    }
-
-    // naive block reduction on y-dim
-    int linear_idx = threadIdx.y * blockDim.x + threadIdx.x;
-    smem[linear_idx] = db_local;
-  }
-  __syncthreads();
-  if (f < features) {
-    if(threadIdx.y == 0) {
-      for(int yidx = 1; yidx < blockDim.y; yidx++){
-        db_local += smem[yidx * blockDim.x + threadIdx.x];
-      }
-
-      // block result is in db_local now for all threadIdx.y == 0
-      // Write out partial result
-      out[f] = db_local;
-    }
-  }
-  __threadfence();
-  __syncthreads();
-
-  // Increment semaphore and check if this is the last CTA in the grid_y dimension.
-  // Only thread (0,0) calls this
-  if (threadIdx.x == 0 && threadIdx.y == 0 && f < features) {
-    unsigned int sum_idx;
-    sum_idx = atomicAdd(&(semaphores[blockIdx.x]), 1);
-    isLastBlock = (sum_idx == (gridDim.y - 1));
-  }
-  __syncthreads();
-
-  db_local = 0;
-  // No block reduction for now, only thread (*,0) do grid reduction
-  if (isLastBlock && f < features) {
-    if(threadIdx.y == 0) {
-      for (int n = 0; n < gridDim.y; n++) {
-        int row, col;
-        row = f;
-        col = n;
-        db_local += (float)(intermediate[col * features + row]);
-      }
-      db[f] = (T)db_local;
-    }
-  }
-}
-
-// Addition done deterministically via a 2-pass approach. Each CTA writes out partial
-// sum, and the last CTA in grid Y dimension accumulates partials serially and writes to result.
-template <typename T, int UNROLL_FACTOR>
-__global__ void biasAddRelu_bprop_aligned(
-    T* Y,
-    T* dY,
-    int features,
-    int batch_size,
-    T* dX,
-    volatile float* intermediate,
-    int* semaphores,
-    T* db,
-    float p) {
-  // The feature that this thread is responsible for
-  int f = blockIdx.x * blockDim.x + threadIdx.x;
-  float pinv = 1.0f / (1.0f - p);
-
-  // Compute the span this thread is responsible for
-  // For this block
-  int b_chunkSize = (batch_size + gridDim.y - 1) / gridDim.y;
-  int b_nStart = blockIdx.y * b_chunkSize;
-  int b_nSpan = min(batch_size, b_nStart + b_chunkSize) - b_nStart;
-  // For this thread
-  int chunkSize = (b_chunkSize + blockDim.y - 1) / blockDim.y;
-  int nStart = threadIdx.y * chunkSize + b_nStart;
-  int nSpan = min(b_nStart + b_nSpan, nStart + chunkSize) - nStart;
-
-  volatile float* out = intermediate + blockIdx.y * features;
-
-  // Flag to trigger last reduction.
-  __shared__ bool isLastBlock;
-
-  // Accumulate db in FP32 always
-  float db_local[ILP];
-  T r_y[ILP];
+// ReLU. Assume input X is [features x batch size], column major.
+// Safe to call in-place.
+template <typename T>
+__global__ void Gelu_bprop(T *dY, T* H, T *Y, uint features, uint batch_size, T *dX) {
   T r_dy[ILP];
-#pragma unroll
-  for(int ii=0;ii<ILP;ii++){
-    db_local[ii] = 0.f;
-  }
-
-  // f always <= features in this case
-  //if (f < features) {
-  int nidx = 0;
-
-  // Handle non-multiple of UNROLL_FACTOR residue
-  for (; nidx < nSpan % UNROLL_FACTOR; nidx++) {
-    int row, col, flat_idx;
-    row = f;
-    col = nStart + nidx;
-    flat_idx = col * features / ILP + row;
-
-    load_store(r_y, Y, 0, flat_idx);
-    load_store(r_dy, dY, 0, flat_idx);
-#pragma unroll
-    for(int ii=0;ii<ILP;ii++){
-      if ((float)r_y[ii] <= 0.f)
-        r_dy[ii] = 0;
-      else {
-        r_dy[ii] = r_dy[ii] * pinv;
-      }
-      db_local[ii] += (float)r_dy[ii];
-    }
-    load_store(dX, r_dy, flat_idx, 0);
-  }
-
-  // Handle meat of work
-  for (; (nidx + UNROLL_FACTOR - 1) < nSpan; nidx += UNROLL_FACTOR) {
-    int row, col, flat_idx;
-    row = f;
-    col = nStart + nidx;
-    flat_idx = col * features / ILP + row; // total threads in x == features/ILP
-#pragma unroll
-    for (int u = 0; u < UNROLL_FACTOR; u++) {
-      load_store(r_y, Y, 0, flat_idx);
-      load_store(r_dy, dY, 0, flat_idx);
+//  T r_y[ILP];
+  T r_h[ILP];
+  if(is_aligned(dY) &&
+     is_aligned(Y) &&
+     is_aligned(H) &&
+     is_aligned(dX) &&
+     features % ILP ==0) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
+      load_store(r_dy, dY, 0 , tid);
+//      load_store(r_y, Y, 0 , tid);
+      load_store(r_h, H, 0 , tid);
 #pragma unroll
       for(int ii=0;ii<ILP;ii++){
-        if ((float)r_y[ii] <= 0.f)
-          r_dy[ii] = 0;
-        else
-          r_dy[ii] = r_dy[ii] * pinv;
-        db_local[ii] += (float)r_dy[ii];
+          r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]);
       }
-      load_store(dX, r_dy, flat_idx, 0);
-      flat_idx += features/ILP;
+      load_store(dX, r_dy, tid, 0);
     }
-  }
-
-  // we know block size for now
-  __shared__ float smem[BIAS_RELU_BW_NTHREADS_X*BIAS_RELU_BW_NTHREADS_Y*ILP];
-  // naive block reduction on y-dim
-  int linear_idx = threadIdx.y * blockDim.x + threadIdx.x;
-  float* smem_out = smem + ILP * linear_idx;
+  } else {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
 #pragma unroll
-  for(int ii=0;ii<ILP;ii++){
-    smem_out[ii] = db_local[ii]; // reuse local dy buffer
-  }
-  __syncthreads();
-  if(threadIdx.y == 0) {
-    for(int yidx = 1; yidx < blockDim.y; yidx++){
-      float* smem_in = smem + ILP * (yidx * blockDim.x + threadIdx.x);
-#pragma unroll
-      for(int ii=0;ii<ILP;ii++){
-        db_local[ii] += smem_in[ii]; // reuse local dy buffer
-      }
-    }
-
-    // block result is in db_local now for all threadIdx.y == 0
-    if(gridDim.y == 1) {
-#pragma unroll
-      for(int ii=0;ii<ILP;ii++){
-        r_dy[ii] = db_local[ii]; // reuse local dy buffer
-      }
-      load_store(db, r_dy, f, 0);
-      return;
-    }
-
-    // Write out partial result
-    load_store(out, db_local, f, 0);
-  }
-  __threadfence();
-  __syncthreads();
-
-  // Increment semaphore and check if this is the last CTA in the grid_y dimension.
-  // Only thread (0,0) calls this
-  if (threadIdx.x == 0 && threadIdx.y == 0) {
-    unsigned int sum_idx;
-    sum_idx = atomicAdd(&(semaphores[blockIdx.x]), 1);
-    isLastBlock = (sum_idx == (gridDim.y - 1));
-  }
-  __syncthreads();
-
-#pragma unroll
-  for(int ii=0;ii<ILP;ii++){
-    db_local[ii] = 0.f;
-  }
-  float r_db[ILP];
-
-  // No block reduction for now, only thread (*,0) do grid reduction
-  if (isLastBlock) {
-    if(threadIdx.y == 0){
-      for (int n = 0; n < gridDim.y; n++) {
-        int row, col;
-        row = f;
-        col = n;
-        load_store(r_db, intermediate, 0, col * features / ILP + row);
-#pragma unroll
-        for(int ii=0;ii<ILP;ii++){
-          db_local[ii] += r_db[ii];
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          r_dy[ii] = dY[idx];
+//          r_y[ii] = Y[idx];
+          r_h[ii] = H[idx];
         }
       }
 #pragma unroll
-      for(int ii=0;ii<ILP;ii++){
-        r_dy[ii] = db_local[ii]; // reuse local dy buffer
+      for(int ii = 0; ii < ILP; ii++) {
+        r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]);
       }
-      load_store(db, r_dy, f, 0);
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          dX[idx] = r_dy[ii];
+        }
+      }
     }
   }
 }
+
+
+// ReLU. Assume input X is [features x batch size], column major.
+// Safe to call in-place.
+template <typename T>
+__global__ void GeluDropout_bprop(T *dY, T* H, T *Y, uint8_t* mask, uint features, uint batch_size, T *dX, float p) {
+  T r_dy[ILP];
+//  T r_y[ILP];
+  T r_h[ILP];
+  uint8_t r_m[ILP];
+  float pinv = 1.0f / (1.0f - p);
+  if(is_aligned(dY) &&
+     is_aligned(Y) &&
+     is_aligned(H) &&
+     is_aligned(dX) &&
+     features % ILP ==0) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
+      load_store(r_dy, dY, 0 , tid);
+//      load_store(r_y, Y, 0 , tid);
+      load_store(r_h, H, 0 , tid);
+      load_store(r_m, mask, 0 , tid);
+#pragma unroll
+      for(int ii=0;ii<ILP;ii++){
+          r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii] * (float)r_m[ii] * pinv);
+      }
+      load_store(dX, r_dy, tid, 0);
+    }
+  } else {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          r_dy[ii] = dY[idx];
+//          r_y[ii] = Y[idx];
+          r_h[ii] = H[idx];
+          r_m[ii] = mask[idx];
+        }
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii] * (float)r_m[ii] * pinv);
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          dX[idx] = r_dy[ii];
+        }
+      }
+    }
+  }
+}
+
+
 
 // Addition done deterministically via a 2-pass approach. Each CTA writes out partial
 // sum, and the last CTA in grid Y dimension accumulates partials serially and writes to result.
@@ -1083,15 +913,11 @@ __global__ void biasAddGeLU_bprop(
       row = f;
       col = nStart + nidx;
       flat_idx = col * features + row;
-      T y_val = Y[flat_idx];
+//      T y_val = Y[flat_idx];
       T h_val = H[flat_idx];
       T dy_val = dY[flat_idx];
       T dx_val;
       dx_val = gelu_back((float)dy_val, (float)h_val);  // gelu backprop
-//      if ((float)y_val > 0.f)
-//        dx_val = dy_val;
-//      else
-//        dx_val = 0;
       dX[flat_idx] = dx_val;
       db_local += (float)dx_val;
     }
@@ -1104,15 +930,11 @@ __global__ void biasAddGeLU_bprop(
       flat_idx = col * features + row;
 #pragma unroll 4
       for (int u = 0; u < UNROLL_FACTOR; u++) {
-        T y_val = Y[flat_idx];
+//        T y_val = Y[flat_idx];
         T dy_val = dY[flat_idx];
         T h_val = H[flat_idx];
         T dx_val;
         dx_val = gelu_back((float)dy_val, (float)h_val);
-//        if ((float)y_val > 0.f)
-//          dx_val = dy_val * pinv;
-//        else
-//          dx_val = 0;
         dX[flat_idx] = dx_val;
         db_local += (float)dx_val;
         flat_idx += features;
@@ -1377,16 +1199,13 @@ __global__ void biasAddGeLUDropout_bprop(
       row = f;
       col = nStart + nidx;
       flat_idx = col * features + row;
-      T y_val = Y[flat_idx];
+//      T y_val = Y[flat_idx];
       T h_val = H[flat_idx];
       T dy_val = dY[flat_idx];
       uint8_t m_val = mask[flat_idx];
       T dx_val;
       dx_val = gelu_back((float)dy_val, (float)h_val) * float(m_val) * pinv ;  // gelu backprop
-//      if ((float)y_val > 0.f)
-//        dx_val = dy_val;
-//      else
-//        dx_val = 0;
+
       dX[flat_idx] = dx_val;
       db_local += (float)dx_val;
     }
@@ -1399,7 +1218,7 @@ __global__ void biasAddGeLUDropout_bprop(
       flat_idx = col * features + row;
 #pragma unroll 4
       for (int u = 0; u < UNROLL_FACTOR; u++) {
-        T y_val = Y[flat_idx];
+//        T y_val = Y[flat_idx];
         T dy_val = dY[flat_idx];
         T h_val = H[flat_idx];
         uint8_t m_val = mask[flat_idx];
@@ -2120,6 +1939,192 @@ int mlp_bp(
   return 0;
 }
 
+
+
+// Does a simple MLP bprop (GEMM+bias+ReLU).
+// Needs reserved space to come back exactly as it was populated in fprop.
+// Does dgrad and wgrad sequentially.
+template <typename T>
+int mlp_bp_input_only(
+    T* X,
+    T* Y,
+    int input_features,
+    int batch_size,
+    T** WPtr,
+    int num_layers,
+    int* output_features,
+    T* dY,
+    T* reserved_space,
+    T* reserved_activations,
+    uint8_t* reserved_mask,
+    T* work_space,
+    T* dX,
+    bool requires_grad,
+    float p) {
+  T* weight;
+//  T *dweight, *dx, *dy, *dbias *x;
+  T *dx, *dy;
+  T *y, *h, *x;
+  uint8_t *mask;
+
+  // Where the dx of the biasReLU (== dy of gemm) is stored. Can be thrown away
+  // after bp call.
+  T* dy_gemm_base;
+  // Where the dx after GEMM is stored.
+  T* dx_gemm_base;
+  // Where partial reduction results are stored.
+  float* db_scratch;
+  // Semaphores for reduction.
+  int* semaphores;
+
+  partition_mlp_bp_workspace<T>(
+      batch_size,
+      num_layers,
+      output_features,
+      work_space,
+      &dy_gemm_base,
+      &dx_gemm_base,
+      &db_scratch,
+      &semaphores);
+
+  size_t semaphore_size = get_semaphores_size(num_layers, output_features) * sizeof(int);
+
+  // Get cublas handle from Pytorch
+  cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
+  // Get the stream from cublas handle to reuse for biasReLU kernel.
+  cudaStream_t stream;
+  cublasGetStream(handle, &stream);
+
+  int* y_offsets = (int*)malloc(num_layers * sizeof(int));
+  get_y_offsets(batch_size, num_layers, output_features, y_offsets);
+
+  for (int layer = num_layers - 1; layer >= 0; layer--) {
+    weight = WPtr[layer];
+//    dweight = dwPtr[layer];
+
+    // x is read from reserved space
+    x = (layer == 0) ? X : reserved_space + y_offsets[layer - 1];  // gemm + bias output
+
+    // dx is written in workspace for all but layer==0
+    dx = (layer == 0) ? dX : dx_gemm_base + y_offsets[layer - 1];
+
+    // y is read from reserved space
+    y = (layer == num_layers - 1) ? Y : reserved_space + y_offsets[layer];
+
+    // note: last layer doesn't have h and mask
+    h = (layer == num_layers - 1) ? NULL : reserved_activations + y_offsets[layer];  // activation + dropout output
+    mask = (layer == num_layers - 1) ? NULL : reserved_mask + y_offsets[layer];  // mask
+
+    // dx from layer+1
+    dy = (layer == num_layers - 1) ? dY : dx_gemm_base + y_offsets[layer];
+    // dy_gemm is written to and read immediately
+    T* dy_gemm = dy_gemm_base + y_offsets[layer];
+
+//    dbias = dbPtr[layer];
+    int xfeat = (layer == 0) ? input_features : output_features[layer - 1];
+    int yfeat = output_features[layer];
+
+    float one = 1.f;
+    float zero = 0.f;
+
+    if (layer == (num_layers -1)) { // no activation
+
+        dy_gemm = dy;  // do nothing here because no need to backward to bias grad
+
+    } else  { // gelu
+//        dim3 block(BIAS_RELU_BW_NTHREADS_X, BIAS_RELU_BW_NTHREADS_Y);
+//        int grid_x, grid_y;
+//        cudaMemsetAsync(semaphores, 0, semaphore_size, stream);
+        int num_blocks = 0;
+        int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
+
+        if (p == 0) {
+            cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, Gelu_bprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+            Gelu_bprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(dy, h, y, yfeat, batch_size, dy_gemm);
+//            if(yfeat % (ILP * BIAS_RELU_BW_NTHREADS_X) == 0 &&
+//               is_aligned(y) &&
+//               is_aligned(h) &&
+//               is_aligned(dy) &&
+//               is_aligned(dy_gemm) &&
+//               is_aligned(dbias))
+//            {
+//              int block_x = ILP * BIAS_RELU_BW_NTHREADS_X;
+//              int block_y = BIAS_RELU_RED_PER_THREAD * BIAS_RELU_BW_NTHREADS_Y;
+//              // reusing the same grid size with biasAddRelu ... hopefully not a mistake
+//              get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
+//              dim3 grid(grid_x, grid_y);
+//              biasAddGeLU_bprop_aligned<T, 4><<<grid, block, 0, stream>>>(
+//                y, h, dy, yfeat, batch_size, dy_gemm, db_scratch, semaphores, dbias);
+//            } else {
+//              int block_x = BIAS_RELU_BW_NTHREADS_X;
+//              int block_y = BIAS_RELU_RED_PER_THREAD * BIAS_RELU_BW_NTHREADS_Y;
+//              get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
+//              dim3 grid(grid_x, grid_y);
+//              biasAddGeLU_bprop<T, 4><<<grid, block, 0, stream>>>(
+//                y, h, dy, yfeat, batch_size, dy_gemm, db_scratch, semaphores, dbias);
+//            }
+        } else {
+           cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, GeluDropout_bprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+           GeluDropout_bprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(dy, h, y, mask, yfeat,
+                                                                                       batch_size, dy_gemm, p);
+//            if(yfeat % (ILP * BIAS_RELU_BW_NTHREADS_X) == 0 &&
+//               is_aligned(y) &&
+//               is_aligned(h) &&
+//               is_aligned(dy) &&
+//               is_aligned(dy_gemm) &&
+//               is_aligned(dbias))
+//            {
+//              int block_x = ILP * BIAS_RELU_BW_NTHREADS_X;
+//              int block_y = BIAS_RELU_RED_PER_THREAD * BIAS_RELU_BW_NTHREADS_Y;
+//              // reusing the same grid size with biasAddRelu ... hopefully not a mistake
+//              get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
+//              dim3 grid(grid_x, grid_y);
+//              biasAddGeLUDropout_bprop_aligned<T, 4><<<grid, block, 0, stream>>>(
+//                y, h, dy, mask, yfeat, batch_size, dy_gemm, db_scratch, semaphores, dbias, p);
+//            } else {
+//              int block_x = BIAS_RELU_BW_NTHREADS_X;
+//              int block_y = BIAS_RELU_RED_PER_THREAD * BIAS_RELU_BW_NTHREADS_Y;
+//              get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
+//              dim3 grid(grid_x, grid_y);
+//              biasAddGeLUDropout_bprop<T, 4><<<grid, block, 0, stream>>>(
+//                y, h, dy, mask, yfeat, batch_size, dy_gemm, db_scratch, semaphores, dbias, p);
+//            }
+        }
+    }
+    cublasStatus_t cublas_status;
+    // Call GEMM dgrad only
+    if (layer > 0 || requires_grad == 1) {
+      cublas_status = mlp_gemm(
+        handle,
+        CUBLAS_OP_N,
+        CUBLAS_OP_N,
+        xfeat,
+        batch_size,
+        yfeat,
+        &one,
+        weight,
+        xfeat,
+        dy_gemm,
+        yfeat,
+        &zero,
+        dx,
+        xfeat);
+
+      if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+        printf("GEMM dgrad failed with %d\n", cublas_status);
+        return 1;
+      }
+    }
+
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM wgrad failed with %d\n", cublas_status);
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
 // Instantiate for floating point types
 template int mlp_fp<float>(
     float* X,
@@ -2152,6 +2157,23 @@ template int mlp_bp<float>(
     float* dX,
     float** dwPtr,
     float** dbPtr,
+    bool requires_grad,
+    float p);
+
+template int mlp_bp_input_only<float>(
+    float* X,
+    float* Y,
+    int input_features,
+    int batch_size,
+    float** WPtr,
+    int num_layers,
+    int* output_features,
+    float* dY,
+    float* reserved_space,
+    float* reserved_activations,
+    uint8_t* reserved_mask,
+    float* work_space,
+    float* dX,
     bool requires_grad,
     float p);
 
@@ -2189,6 +2211,23 @@ template int mlp_bp<at::Half>(
     bool requires_grad,
     float p);
 
+template int mlp_bp_input_only<at::Half>(
+    at::Half* X,
+    at::Half* Y,
+    int input_features,
+    int batch_size,
+    at::Half** WPtr,
+    int num_layers,
+    int* output_features,
+    at::Half* dY,
+    at::Half* reserved_space,
+    at::Half* reserved_activations,
+    uint8_t* reserved_mask,
+    at::Half* work_space,
+    at::Half* dX,
+    bool requires_grad,
+    float p);
+
 template int mlp_fp<double>(
     double* X,
     int input_features,
@@ -2222,6 +2261,25 @@ template int mlp_bp<double>(
     double** dbPtr,
     bool requires_grad,
     float p);
+
+template int mlp_bp_input_only<double>(
+    double* X,
+    double* Y,
+    int input_features,
+    int batch_size,
+    double** WPtr,
+    int num_layers,
+    int* output_features,
+    double* dY,
+    double* reserved_space,
+    double* reserved_activations,
+    uint8_t* reserved_mask,
+    double* work_space,
+    double* dX,
+    bool requires_grad,
+    float p);
+
+
 
 template size_t get_mlp_bp_workspace_in_bytes<float>(
     int batch_size,

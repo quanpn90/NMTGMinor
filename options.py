@@ -124,8 +124,6 @@ def make_parser(parser):
                              'linear_relu_linear|linear_swish_linear|maxout')
     parser.add_argument('-time', default='positional_encoding', type=str,
                         help='Type of time representation positional_encoding|gru|lstm')
-    parser.add_argument('-version', type=float, default=1.0,
-                        help='Deprecated.')
     parser.add_argument('-residual_type', default='regular',
                         help='Type of residual type. regular|gated')
     # parser.add_argument('-adaptive', type=str, default='shared',
@@ -498,6 +496,8 @@ def make_parser(parser):
 
     parser.add_argument('-virtual_adversarial_training_mode', type=int, default=0,
                         help='Virtual Adversarial Training. 0=disabled. 1=kl_loss. 2=ce. 3=kl_loss + ce.')
+    parser.add_argument('-wav2vec_adapter', type=int, default=0,
+                        help='Adapter for wav2vec model')
 
     return parser
 
@@ -759,5 +759,8 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'wav2vec_spec_augment'):
         opt.wav2vec_spec_augment = False
+
+    if not hasattr(opt, 'wav2vec_adapter'):
+        opt.wav2vec_adapter = 0
 
     return opt

@@ -189,10 +189,11 @@ class Trainer(object):
             loss_function = NCELoss(opt.model_size, dicts['tgt'].size(), noise_ratio=opt.nce_noise,
                                     logz=9, label_smoothing=opt.label_smoothing)
         else:
+            tgt_pad = self.train_data[0].tgt_pad if isinstance(self.train_data, list) else self.train_data.tgt_pad
             loss_function = NMTLossFunc(opt.model_size, dicts['tgt'].size(),
                                         label_smoothing=opt.label_smoothing,
                                         mirror=opt.mirror_loss,
-                                        padding_idx=self.train_data.tgt_pad)
+                                        padding_idx=tgt_pad)
 
         # This function replaces modules with the more optimized counterparts so that it can run faster
         # Currently exp with LayerNorm
@@ -593,7 +594,7 @@ class Trainer(object):
         if opt.load_pretrained_classifier:
             self.classifier.train()
 
-        return total_loss / total_words, total_correct / total_words
+        return total_loss.item() / total_words.item(), total_correct.item() / total_words.item()
 
     def train_epoch(self, epoch, resume=False, itr_progress=None):
 
@@ -844,7 +845,7 @@ class Trainer(object):
                 # grad_denom = grad_denom / self.world_size
 
                 # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
-                if grad_denom > 1.0:
+                if grad_denom != 1.0:
                     normalize_gradients(self.model.parameters(), grad_denom, self.opt.max_grad_norm)
 
                 # Update the parameters.
@@ -1017,3 +1018,4 @@ class Trainer(object):
 
             itr_progress = None
             resume = False
+

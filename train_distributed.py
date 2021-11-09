@@ -365,13 +365,16 @@ def main():
             if opt.data_format in ['bin', 'raw']:
                 raise NotImplementedError
 
-            elif opt.data_format in ['scp', 'scpmem', 'mmem']:
+            elif opt.data_format in ['scp', 'scpmem', 'mmem', 'wav']:
                 from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
                 from onmt.data.scp_dataset import SCPIndexDataset
 
                 if opt.data_format in ['scp', 'scpmem']:
                     audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
                     src_data = SCPIndexDataset(audio_data, concat=opt.concat)
+                elif opt.data_format in ['wav']:
+                    audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
+                    src_data = WavDataset(audio_data)
                 else:
                     src_data = MMapIndexedDataset(os.path.join(data_dir, "data.src"))
 
@@ -404,8 +407,8 @@ def main():
                                               multiplier=opt.batch_size_multiplier,
                                               src_align_right=opt.src_align_right,
                                               upsampling=opt.upsampling,
-                                              cleaning=True, verbose=True,
                                               augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
+                                              cleaning=True, verbose=True,
                                               input_size=opt.input_size,
                                               constants=onmt.constants)
 
@@ -424,11 +427,14 @@ def main():
             if opt.data_format in ['bin', 'raw']:
                 raise NotImplementedError
 
-            elif opt.data_format in ['scp', 'scpmem', 'mmem']:
+            elif opt.data_format in ['scp', 'scpmem', 'mmem', 'wav']:
 
                 if opt.data_format in ['scp', 'scpmem']:
                     audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
                     src_data = SCPIndexDataset(audio_data, concat=opt.concat)
+                elif opt.data_format in ['wav']:
+                    audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
+                    src_data = WavDataset(audio_data)
                 else:
                     src_data = MMapIndexedDataset(os.path.join(data_dir, "data.src"))
 
@@ -459,6 +465,7 @@ def main():
                                               data_type=data_type, sorting=True,
                                               batch_size_sents=opt.batch_size_sents,
                                               src_align_right=opt.src_align_right,
+                                              min_src_len=1, min_tgt_len=3,
                                               cleaning=True, verbose=True, constants=onmt.constants)
 
                     valid_sets.append(valid_data)

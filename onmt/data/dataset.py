@@ -416,8 +416,6 @@ class Dataset(torch.utils.data.Dataset):
 
         # sort data to have efficient mini-batching during training
         if sorting:
-            if verbose:
-                print("* Sorting data ...")
 
             if self._type == 'text':
                 sorted_order = np.lexsort((self.src_sizes, self.tgt_sizes))
@@ -464,8 +462,8 @@ class Dataset(torch.utils.data.Dataset):
         self.pad_count = True
 
         # group samples into mini-batches
-        if verbose:
-            print("* Allocating mini-batches ...")
+        # if verbose:
+        #     print("* Allocating mini-batches ...")
         self.batches = allocate_batch(self.order, self.data_lengths,
                                       self.src_sizes, self.tgt_sizes,
                                       batch_size_words, batch_size_sents, self.multiplier,
@@ -479,6 +477,7 @@ class Dataset(torch.utils.data.Dataset):
         self.num_batches = len(self.batches)
         lengths = [len(x) for x in self.batches]
         print("Number of sentences after cleaning and sorting: %d" % sum(lengths) )
+        print("Number of batches after cleaning and sorting: %d" % self.num_batches)
 
         self.cur_index = 0
         self.batchOrder = None
@@ -489,7 +488,6 @@ class Dataset(torch.utils.data.Dataset):
             self.augmenter = None
 
     def size(self):
-
         return self.full_size
 
     def switchout(self, batch):
@@ -642,7 +640,7 @@ class Dataset(torch.utils.data.Dataset):
 
         return batches
 
-    def __len__(self):
+    def full_size(self):
         return self.full_size
 
     # genereate a new batch - order (static)

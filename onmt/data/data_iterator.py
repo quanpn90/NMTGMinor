@@ -166,7 +166,7 @@ class DataIterator(EpochBatchIterating):
     def __len__(self):
         # number of minibatches, or ???
         if self.split_even:
-            return math.ceil(len(self.frozen_batches) /  self.num_shards) * self.num_shards
+            return math.ceil(len(self.frozen_batches) / self.num_shards) * self.num_shards
         else:
             return len(self.frozen_batches)
 
