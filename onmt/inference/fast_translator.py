@@ -717,7 +717,18 @@ class FastTranslator(Translator):
                                                        onmt.constants.UNK_WORD)
                             for b in src_sents]
             data_type = 'text'
-            past_src_data = None
+            if past_sents is not None:
+                if self.start_with_bos:
+                    past_src_data = [self.src_dict.convertToIdx(b,
+                                                                onmt.constants.UNK_WORD,
+                                                                onmt.constants.BOS_WORD)
+                                     for b in past_sents]
+                else:
+                    past_src_data = [self.src_dict.convertToIdx(b,
+                                                                onmt.constants.UNK_WORD)
+                                     for b in past_sents]
+            else:
+                past_src_data = None
         elif type == 'asr':
             # no need to deal with this
             src_data = src_sents
@@ -769,7 +780,7 @@ class FastTranslator(Translator):
                 batch = dataset.get_batch(0)
                 batches.append(batch)
         else:
-            dataset = self.build_data(src_data, tgt_data, type=type)
+            dataset = self.build_data(src_data, tgt_data, type=type, past_sents=past_src_data)
             batch = dataset.get_batch(0)  # this dataset has only one mini-batch
             batches = [batch] * self.n_models
             src_data = [src_data] * self.n_models

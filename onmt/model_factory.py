@@ -251,6 +251,21 @@ def build_tm_model(opt, dicts):
         model = DiscourseTransformer(encoder, decoder, nn.ModuleList(generators),
                                      None, None, mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
 
+    elif opt.model in ['discourse_translator']:
+        from onmt.models.discourse.discourse_transformer import DiscourseTransformerEncoder, DiscourseTransformer
+        onmt.constants.init_value = opt.param_init
+        from onmt.models.multilingual_translator.relative_transformer import \
+            RelativeTransformerEncoder, RelativeTransformerDecoder
+
+        encoder = RelativeTransformerEncoder(opt, embedding_src, None,
+                                             opt.encoder_type, language_embeddings=language_embeddings)
+        decoder = RelativeTransformerDecoder(opt, embedding_tgt, None, language_embeddings=language_embeddings)
+
+        encoder = DiscourseTransformerEncoder(opt, encoder=encoder)
+
+        model = DiscourseTransformer(encoder, decoder, nn.ModuleList(generators),
+                                     None, None, mirror=opt.mirror_loss)
+
     elif opt.model in ['conformer', 'speech_transformer', 'hybrid_transformer']:
         onmt.constants.init_value = opt.param_init
         from onmt.models.speech_recognizer.relative_transformer import \

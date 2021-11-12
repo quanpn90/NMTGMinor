@@ -193,7 +193,10 @@ def main():
                 past_train_src = None
             else:
                 train_src = MMapIndexedDataset(train_path + '.src')
-                past_train_src = None
+                if os.path.exists(train_path + '.past_src.bin'):
+                    past_train_src = MMapIndexedDataset(train_path + '.past_src')
+                else:
+                    past_train_src = None
 
             train_tgt = MMapIndexedDataset(train_path + '.tgt')
 
@@ -268,7 +271,10 @@ def main():
                 past_valid_src = None
             else:
                 valid_src = MMapIndexedDataset(valid_path + '.src')
-                past_valid_src = None
+                if os.path.exists(valid_path + '.past_src.bin'):
+                    past_valid_src = MMapIndexedDataset(valid_path + '.past_src')
+                else:
+                    past_valid_src = None
 
             valid_tgt = MMapIndexedDataset(valid_path + '.tgt')
 
