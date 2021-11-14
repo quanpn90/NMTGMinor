@@ -190,11 +190,8 @@ class NMTLossFunc(CrossEntropyLossBase):
         logits = logits.view(-1, logits.size(-1)).index_select(0, non_pad_mask)
 
         with torch.no_grad():
-            if not softmaxed:
-                logprobs = F.log_softmax(logits, dim=1)
-            else:
-                logprobs = logits
-            preds = torch.argmax(logprobs, dim=1)
+            # don't need softmax, just take argmax on unnormalized probabilities
+            preds = torch.argmax(logits, dim=1)
             correct = (preds == labels).sum().item()
             total = labels.numel()
 

@@ -29,9 +29,11 @@ except (ModuleNotFoundError, ImportError) as e:
     fused_mlp_gelu = None
 
 try:
-    import fused_mlp_gelu_blaslt
+    import mlp_gelu_blaslt
 except (ModuleNotFoundError, ImportError) as e:
-    fused_mlp_gelu_blaslt = None
+    mlp_gelu_blaslt = None
+
+
 #
 # class MlpReluFunction(torch.autograd.Function):
 #     @staticmethod
@@ -138,6 +140,26 @@ class MlpGeLUFunction(torch.autograd.Function):
         return (None, *grads)
 
 
+class MlpGeLUFunctionBLASLT(torch.autograd.Function):
+    @staticmethod
+    @custom_fwd(cast_inputs=torch.float16)
+    def forward(ctx, p, *args):
+        outputs = mlp_gelu_blaslt.forward(p, args)
+        ctx.save_for_backward(*args)
+        ctx.outputs = outputs
+        dropout_mask = outputs[-1]
+        ctx.p = p
+        return outputs[0], dropout_mask
+
+    @staticmethod
+    @custom_bwd
+    def backward(ctx, *grad_o):
+        p = ctx.p
+        grads = mlp_gelu_blaslt.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
+        del ctx.outputs
+        return (None, *grads)
+
+
 if fused_mlp_agelu:
     mlp_agelu_function = MlpAGeLUFunction.apply
 else:
@@ -148,6 +170,11 @@ if fused_mlp_gelu:
     mlp_gelu_function = MlpGeLUFunction.apply
 else:
     mlp_gelu_function = None
+
+if mlp_gelu_blaslt:
+    mlp_gelu_function_blaslt = MlpGeLUFunctionBLASLT.apply
+else:
+    mlp_gelu_function_blaslt = None
 
 
 class SwishFunction(torch.autograd.Function):
@@ -235,7 +262,7 @@ if __name__ == '__main__':
             relu (bool): Default True
         """
 
-        def __init__(self, mlp_sizes, activation='gelu', dropout=0.0):
+        def __init__(self, mlp_sizes, activation='gelu', dropout=0.5):
             super(MLP, self).__init__()
             self.num_layers = len(mlp_sizes) - 1
             self.mlp_sizes = copy(mlp_sizes)
@@ -271,9 +298,12 @@ if __name__ == '__main__':
                 nn.init.normal_(weight, 0., std)
             for bias in self.biases:
                 std = math.sqrt(1. / float(bias.size(0)))
-                nn.init.normal_(bias, 0., std)
+                nn.init.normal_(bias, 0., 0.0)
 
-        def forward(self, input, mask=None, ref=False):
+        def forward(self, input, mask=None, ref=False, fastest=False):
+
+            if fastest:
+                return mlp_gelu_function_blaslt(self.dropout, input, *self.weights, *self.biases)
 
             if ref:
                 return self.forward_ref(input, mask)
@@ -310,9 +340,8 @@ if __name__ == '__main__':
             return s
 
 
-    batch_size = 24568
-    mlp_sizes = [1024, 4096, 1024]
-    # mlp_sizes = [4, 7, 4]
+    batch_size = 128
+    mlp_sizes = [1024, 4096]
     num_iters = 10
 
 
@@ -322,16 +351,16 @@ if __name__ == '__main__':
             MLP(mlp_sizes)
 
         def test_numeric(self):
-            mlp = MLP(mlp_sizes, activation='relu').cuda()
+            mlp = MLP(mlp_sizes, activation='relu', dropout=0.5).cuda()
 
             print(mlp)
             ref_mlp = deepcopy(mlp)
 
             for _ in range(1):
-                bsz = random.randint(2850, batch_size // 8) * 8
+                bsz = random.randint(8, batch_size // 8) * 8
                 test_input = torch.empty(bsz, mlp_sizes[0], device="cuda").uniform_(-1., 1.).requires_grad_()
                 ref_input = test_input.clone().detach().requires_grad_()
-                mlp_out, dropout_mask = mlp(test_input)
+                mlp_out, dropout_mask = mlp(test_input, fastest=True)
                 ref_out = ref_mlp.forward(ref_input, dropout_mask, ref=True)
 
                 print(dropout_mask.sum() / dropout_mask.numel())
@@ -360,7 +389,7 @@ if __name__ == '__main__':
 
                 test_input = torch.empty(batch_size, mlp_sizes[0], device="cuda").uniform_(-1., 1.).requires_grad_()
                 ref_input = test_input.clone().detach().requires_grad_()
-                mlp_out, dropout_mask = mlp(test_input)
+                mlp_out, dropout_mask = mlp(test_input, fastest=True)
                 ref_out = ref_mlp(ref_input, dropout_mask, ref=True)
                 np.testing.assert_allclose(
                     mlp_out.detach().cpu().numpy(),
@@ -435,6 +464,7 @@ if __name__ == '__main__':
                 atol=1e-7, rtol=1e-5)
 
         def test_performance_half(self):
+            print("Testing performance ...")
             mlp = MLP(mlp_sizes).cuda().half()
 
             mlp_layers = []
@@ -446,7 +476,7 @@ if __name__ == '__main__':
                 if i < mlp.num_layers - 1:
                     # mlp_layers.append(nn.ReLU(inplace=True))
                     mlp_layers.append(torch.nn.GELU())
-                    mlp_layers.append(nn.Dropout(0.0))
+                    mlp_layers.append(nn.Dropout(0.5))
 
             ref_mlp = nn.Sequential(*mlp_layers).cuda().half()
 
@@ -490,7 +520,20 @@ if __name__ == '__main__':
             print(F"C++ MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
             torch.cuda.profiler.stop()
 
+            torch.cuda.synchronize()
+            start_time = time()
+            for _ in range(num_iters):
+                mlp_out, _ = mlp(test_input, fastest=True)
+                test_loss = mlp_out.mean()
+                mlp.zero_grad()
+                test_loss.backward()
+            torch.cuda.synchronize()
+            stop_time = time()
+            print(F"BLASLT MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+            torch.cuda.profiler.stop()
+
         def test_performance_half_no_grad_weight(self):
+            print("Testing performance without backward to weight ...")
             mlp = MLP(mlp_sizes).cuda().half()
 
             mlp_layers = []

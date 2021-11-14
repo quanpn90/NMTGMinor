@@ -33,6 +33,7 @@ def check_cuda_torch_binary_vs_bare_metal(cuda_dir):
 
     print("\nCompiling cuda extensions with")
     print(raw_output + "from " + cuda_dir + "/bin\n")
+    # print(bare_metal_minor, bare_metal_major)
 
     if (bare_metal_major != torch_binary_major) or (bare_metal_minor != torch_binary_minor):
         print("Cuda extensions are being compiled with a version of Cuda that does " +
@@ -41,6 +42,8 @@ def check_cuda_torch_binary_vs_bare_metal(cuda_dir):
               "In some cases, a minor-version mismatch will not cause later errors:  " +
               "https://github.com/NVIDIA/apex/pull/323#discussion_r287021798.  "
               "You can try commenting out this check (at your own risk).")
+
+    return int(bare_metal_minor), int(bare_metal_major)
 
 
 # Check, if ATen/CUDAGenerator.h is found, otherwise use the new
@@ -98,8 +101,8 @@ version_dependent_macros = version_ge_1_1 + version_ge_1_3 + version_ge_1_5
 # subprocess.run(["git", "-C", "cutlass", "checkout", "fe3438a3c1ccbdd03dc1aca3bb68099a9e2a58bd"])
 
 
-check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)
-print(generator_flag)
+bare_metal_minor, bare_metal_major = check_cuda_torch_binary_vs_bare_metal(CUDA_HOME)
+print("GENERATOR FLAG:", generator_flag)
 
 # ext_modules.append(
 #     CUDAExtension(name='encdec_multihead_attn_cuda',
@@ -117,20 +120,20 @@ print(generator_flag)
 #                                                                     generator_flag + cc_flag}))
 
 # This Module Is Not Working
-# ext_modules.append(
-#     CUDAExtension(name='self_multihead_attn_cuda',
-#                   sources=['multihead_attn/self_multihead_attn.cpp',
-#                            'multihead_attn/self_multihead_attn_cuda.cu'],
-#                   include_dirs=[os.path.join(this_dir, 'multihead_attn/cutlass')],
-#                   extra_compile_args={'cxx': ['-O3', ] + version_dependent_macros + generator_flag ,
-#                                       'nvcc': ['-O3',
-#                                                '-I./cutlass/',
-#                                                '-U__CUDA_NO_HALF_OPERATORS__',
-#                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
-#                                                '--expt-relaxed-constexpr',
-#                                                '--expt-extended-lambda',
-#                                                '--use_fast_math'] + version_dependent_macros +
-#                                                                     generator_flag + cc_flag}))
+ext_modules.append(
+    CUDAExtension(name='self_multihead_attn_cuda',
+                  sources=['multihead_attn/self_multihead_attn.cpp',
+                           'multihead_attn/self_multihead_attn_cuda.cu'],
+                  # include_dirs=[os.path.join(this_dir, 'multihead_attn/cutlass')],
+                  extra_compile_args={'cxx': ['-O3', ] + version_dependent_macros + generator_flag,
+                                      'nvcc': ['-O3',
+                                               '-I./cutlass/',
+                                               '-U__CUDA_NO_HALF_OPERATORS__',
+                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
+                                               '--expt-relaxed-constexpr',
+                                               '--expt-extended-lambda',
+                                               '--use_fast_math'] + version_dependent_macros +
+                                              generator_flag + cc_flag}))
 
 # ext_modules.append(
 #     CUDAExtension(name='fused_dropout_add_cuda',
@@ -260,6 +263,21 @@ ext_modules.append(
                   include_dirs=[os.path.join(this_dir, 'include')],
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                       'nvcc': ['-O3'] + version_dependent_macros}))
+
+# if bare_metal_minor >= 4 and bare_metal_major >= 11:
+# ext_modules.append(
+#     CUDAExtension(name='mlp_gelu_blaslt',
+#                   sources=['mlp_blaslt/mlp_gelu.cpp',
+#                            'mlp_blaslt/mlp_gelu_cuda.cu'],
+#                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+#                                       'nvcc': ['-O3',
+#                                                '-I./cutlass/',
+#                                                '-U__CUDA_NO_HALF_OPERATORS__',
+#                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
+#                                                '--expt-relaxed-constexpr',
+#                                                '--expt-extended-lambda',
+#                                                '--use_fast_math'] + version_dependent_macros +
+#                                               generator_flag + cc_flag}))
 #
 # Wait until CUBLAS_VERSION >= 11600 to build. Otherwise have to build custom pytorch
 # ext_modules.append(
@@ -298,7 +316,7 @@ ext_modules.append(
 
 setup(
     name='nmtgminor_cuda',
-    version='0.1',\
+    version='0.1', \
     description='CUDA/C++ Pytorch extension for multi-head attention ported from NVIDIA apex',
     ext_modules=ext_modules,
     cmdclass=cmdclass,

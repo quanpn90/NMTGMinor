@@ -42,8 +42,9 @@ class Adapter(torch.nn.Module):
             biases = [self.linear_in.bias, self.linear_out.bias]
 
             seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
+            input_norm = self.norm(input.view(seq_len * bsz, -1))
 
-            input = self.fused_function(0.0, False, input.view(seq_len * bsz, -1),
+            input = self.fused_function(0.0, False, input_norm,
                                         *weights, *biases)
 
             input = input.view(seq_len, bsz, hidden_size)
@@ -55,7 +56,7 @@ class Adapter(torch.nn.Module):
 
 class MultilingualAdapter(torch.nn.Module):
 
-    def __init__(self, n_languages, input_size, downsample_factor=2):
+    def __init__(self, n_languages, input_size, downsample_factor=4):
         self.n_languages = n_languages
         self.input_size = input_size
         super(MultilingualAdapter, self).__init__()

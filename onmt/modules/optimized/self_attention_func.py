@@ -58,45 +58,45 @@ class SelfAttnFunc(torch.autograd.Function):
 
         bsz, len_q = inputs.size(1), inputs.size(0)
 
-        # if self_multihead_attn_cuda is not None and not incremental and len_q <= 2048 and not use_time_mask \
-        #         and inputs.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc:
-        #     ctx.fused = True
-        #
-        #     use_mask = True
-        #     if mask is not None:
-        #         mask = mask.bool()
-        #     else:
-        #         mask = inputs.new(bsz, len_q).zero_().bool()  # works
-        #
-        #     mask = mask.unsqueeze(1).unsqueeze(2)
-        #
-        #     input_lin_results, \
-        #         softmax_results, \
-        #         dropout_results, \
-        #         dropout_mask, \
-        #         matmul2_results, \
-        #         outputs = self_multihead_attn_cuda.forward(use_mask, False, is_training, heads,
-        #                                                    inputs.contiguous(), input_weights, output_weights,
-        #                                                    input_biases, output_biases,
-        #                                                    mask, dropout_prob)
-        #     #
-        #     # print("[bmm1 check]", torch.any(torch.isnan(bmm1_results)))
+        if self_multihead_attn_cuda is not None and not incremental and len_q <= 2048 and not use_time_mask \
+                and inputs.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc:
+            ctx.fused = True
+
+            use_mask = True
+            if mask is not None:
+                mask = mask.half() * -16384
+            else:
+                mask = inputs.new(bsz, len_q).zero_()  # works
+
+            # print("[DDEBUGGING] CUDA SELF ATTENTION")
+
+            input_lin_results, \
+                attn_scores, \
+                dropout_results, \
+                dropout_mask, \
+                matmul2_results, \
+                outputs = self_multihead_attn_cuda.forward(use_mask, False, is_training, heads,
+                                                           inputs.contiguous(), input_weights, output_weights,
+                                                           input_biases, output_biases,
+                                                           mask, dropout_prob)
+
+            # print("[bmm1 check]", torch.any(torch.isnan(bmm1_results)))
         #     # print("[softmax check]", torch.any(torch.isnan(dropout_results)))
         #
-        #     ctx.save_for_backward(heads_t,
-        #                           scale_t,
-        #                           matmul2_results,
-        #                           dropout_results,
-        #                           softmax_results,
-        #                           input_lin_results,
-        #                           inputs,
-        #                           input_weights,
-        #                           output_weights,
-        #                           dropout_mask,
-        #                           dropout_prob_t,
-        #                           mask)
-        #
-        #     return outputs, dropout_results
+            ctx.save_for_backward(heads_t,
+                                  scale_t,
+                                  matmul2_results,
+                                  dropout_results,
+                                  attn_scores,
+                                  input_lin_results,
+                                  inputs,
+                                  input_weights,
+                                  output_weights,
+                                  dropout_mask,
+                                  dropout_prob_t,
+                                  mask)
+
+            return outputs, dropout_results
 
         ctx.fused = False
 
@@ -259,33 +259,33 @@ class SelfAttnFunc(torch.autograd.Function):
     # @custom_bwd
     def backward(ctx, *output_grads):
 
-        # if ctx.fused:
-        #     heads_t, \
-        #         scale_t, \
-        #         matmul2_results, \
-        #         dropout_results, \
-        #         softmax_results, \
-        #         input_lin_results, \
-        #         inputs, \
-        #         input_weights, \
-        #         output_weights, \
-        #         dropout_mask, \
-        #         dropout_prob_t, pad_mask = ctx.saved_tensors
-        #
-        #     input_grads, \
-        #         input_weight_grads, \
-        #         output_weight_grads, \
-        #         input_bias_grads, \
-        #         output_bias_grads = self_multihead_attn_cuda.backward(heads_t[0], output_grads.contiguous(), matmul2_results,
-        #                                                               dropout_results, softmax_results, pad_mask,
-        #                                                               input_lin_results, inputs, input_weights,
-        #                                                               output_weights, dropout_mask, dropout_prob_t[0])
-        #
-        #     return None, None, None, \
-        #            input_grads, \
-        #            input_weight_grads, output_weight_grads, \
-        #            input_bias_grads, output_bias_grads, \
-        #            None, None, None, None, None, None, None
+        if ctx.fused:
+            heads_t, \
+                scale_t, \
+                matmul2_results, \
+                dropout_results, \
+                attn_scores, \
+                input_lin_results, \
+                inputs, \
+                input_weights, \
+                output_weights, \
+                dropout_mask, \
+                dropout_prob_t, pad_mask = ctx.saved_tensors
+
+            input_grads, \
+                input_weight_grads, \
+                output_weight_grads, \
+                input_bias_grads, \
+                output_bias_grads = self_multihead_attn_cuda.backward(heads_t[0], output_grads.contiguous(), matmul2_results,
+                                                                      dropout_results, attn_scores, pad_mask,
+                                                                      input_lin_results, inputs, input_weights,
+                                                                      output_weights, dropout_mask, dropout_prob_t[0])
+
+            return None, None, None, \
+                   input_grads, \
+                   input_weight_grads, output_weight_grads, \
+                   input_bias_grads, output_bias_grads, \
+                   None, None, None, None, None, None, None
 
         if ctx.return_coverage:
             output_grads, coverage_grads = output_grads

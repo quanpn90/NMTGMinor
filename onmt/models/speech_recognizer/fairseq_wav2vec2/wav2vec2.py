@@ -998,6 +998,7 @@ class TransformerEncoder(nn.Module):
         if not self.favor:
             # B x T x C -> T x B x C  (only for vanilla self-attention)
             x = x.transpose(0, 1)
+        x = x.contiguous()
 
         layer_results = []
         r = None
@@ -1103,16 +1104,16 @@ class TransformerSentenceEncoderLayer(nn.Module):
             if mlp_relu_function is not None:
                 self.fused_function = mlp_relu_function
                 self.fused = True
-        # elif self.activation_fn_name == 'gelu':
-        #     from onmt.modules.mlp.mlp import mlp_gelu_function, mlp_gelu_blaslt_function
-        #     if mlp_gelu_blaslt_function is not None:
-        #         self.fused_function = mlp_gelu_blaslt_function
-        #         self.fused = True
-        #         self.fused_blaslt = True
-        #
-        #     if mlp_gelu_function is not None and not self.fused_blaslt:
-        #         self.fused_function = mlp_gelu_function
-        #         self.fused = True
+        elif self.activation_fn_name == 'gelu':
+            from onmt.modules.mlp.mlp import mlp_gelu_function, mlp_gelu_blaslt_function
+            # if mlp_gelu_blaslt_function is not None:
+            #     self.fused_function = mlp_gelu_blaslt_function
+            #     self.fused = True
+            #     self.fused_blaslt = True
+
+            if mlp_gelu_function is not None and not self.fused_blaslt:
+                self.fused_function = mlp_gelu_function
+                self.fused = True
 
     def add_adapters(self, n_languages, downsampling_factor=4, adapter_location=1):
         """
@@ -1131,6 +1132,10 @@ class TransformerSentenceEncoderLayer(nn.Module):
         if adapter_location == 2:
             self.mid_adapter = MultilingualAdapter(n_languages, self.embedding_dim, downsample_factor=downsampling_factor)
 
+    def add_factorized(self):
+
+        pass
+
     def forward(
             self,
             x: torch.Tensor,
@@ -1143,6 +1148,15 @@ class TransformerSentenceEncoderLayer(nn.Module):
         LayerNorm is applied either before or after the self-attention/ffn
         modules similar to the original Transformer imlementation.
         """
+        residual = x
+
+        if self.has_adapter:
+            if self.adapter_location == 1:
+                assert lang is not None or mixture is not None
+                x = self.adapter(x, lang=lang, mixture=mixture)
+
+        x = residual + x  # residual is before the big FFN
+
         residual = x
 
         if self.layer_norm_first:
@@ -1189,12 +1203,8 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 x = self.fc2(x)
 
             x = self.dropout3(x)
-            if self.has_adapter:
-                if self.adapter_location == 1:
-                    assert lang is not None or mixture is not None
-                    x = self.adapter(x, lang=lang, mixture=mixture)
+            x = residual + x
 
-            x = residual + x  # residual is before the big FFN
 
         else:
             x, attn = self.self_attn(

@@ -415,7 +415,6 @@ __global__ void additive_masked_softmax_dropout_warp_forward_vec4(output_t *dst,
                     out[element] = rands[i][it+element] * (pinv * (elements[i][it + element] / sum[i]));
                 }
                 copy_vector<output_t, ELEMENTS_PER_LDG_STG>(dst + i * element_count + it * WARP_SIZE, out);
-    
             }
             else {
                 break;
@@ -877,7 +876,9 @@ bool warp_additive_masked_softmax_kernel(int log2_elements, int &warp_size, int 
 }
  
 template<typename input_t, typename output_t, typename acc_t>
-bool dispatch_additive_masked_softmax(output_t *dst, const input_t *src, const input_t *pad_mask, int softmax_elements, int softmax_elements_stride, int batch_count, int pad_batch_stride)
+bool dispatch_additive_masked_softmax(output_t *dst, const input_t *src, const input_t *pad_mask,
+                                      int softmax_elements, int softmax_elements_stride,
+                                      int batch_count, int pad_batch_stride)
 {
     if (softmax_elements == 0) {
         return true;
@@ -911,7 +912,9 @@ bool dispatch_additive_masked_softmax(output_t *dst, const input_t *src, const i
 }
 
 template<typename input_t, typename output_t, typename acc_t>
-bool dispatch_additive_masked_softmax_stream(output_t *dst, const input_t *src, const input_t *pad_mask, int softmax_elements, int softmax_elements_stride, int batch_count, int pad_batch_stride, cudaStream_t streamid)
+bool dispatch_additive_masked_softmax_stream(output_t *dst, const input_t *src,
+const input_t *pad_mask, int softmax_elements, int softmax_elements_stride,
+int batch_count, int pad_batch_stride, cudaStream_t streamid)
 {
     if (softmax_elements == 0) {
         return true;

@@ -371,6 +371,12 @@ class MultiheadAttention(nn.Module):
         if self.proj_updater:
             self.proj_updater.feature_redraw_interval = None
 
+    def add_factorized_weights(self):
+
+        # input_proj
+        # output_proj
+        pass
+
     def convert_fast_attention(self):
 
         # print("Convert from vanilla to fast attention module ...")
