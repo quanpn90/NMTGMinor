@@ -306,19 +306,16 @@ class MBartAttention(nn.Module):
             hidden_states = hidden_states
             use_time_mask = self.is_decoder
             qlen, klen = hidden_states.size(0), hidden_states.size(0)
-            # if use_time_mask:
-            #     mask = torch.triu(
-            #         hidden_states.new_ones(qlen, klen), diagonal=1).bool()
-            # else:
-            #     raise NotImplementedError  # LOL we are not working with BartEncoder yet
+            
             mask = attention_mask
+            low_precision = False  # Use CUDA impl
 
             attn_output, coverage = self_attn_func(use_time_mask, self.training, self.num_heads, hidden_states,
                                                    self.proj_weight, self.out_proj.weight,
                                                    self.proj_bias, self.out_proj.bias,
                                                    mask, self.dropout,
                                                    False, None,
-                                                   incremental, incremental_cache, True)
+                                                   incremental, incremental_cache, low_precision, True)
 
             attn_output = attn_output
 

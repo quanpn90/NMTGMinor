@@ -170,7 +170,7 @@ std::vector<torch::Tensor> fwd_cuda(
   // need to call padding from torch interface here.
 
   bool softmax_success = false;
-  if (is_training && dropout_prob > 0.0f) {
+//  if (is_training && dropout_prob > 0.0f) {
       // This function fuses softmax-dropout-pad (and dropout inplace)
       softmax_success = dispatch_additive_masked_softmax_dropout<half, half, float>(
                            reinterpret_cast<half*>(dropout_results_ptr),
@@ -184,16 +184,16 @@ std::vector<torch::Tensor> fwd_cuda(
                            attn_batches*q_seq_len/sequences, // pad batch strides
       		               1.0f-dropout_prob,
 		                   stream);
-  } else {
-      softmax_success = dispatch_additive_masked_softmax<half, half, float>(
-                             reinterpret_cast<half*>(dropout_results_ptr), // this is actually softmax results, but making it consistent for the next function
-                             reinterpret_cast<const half*>(attn_scores_ptr),
-                             pad_mask,
-                             k_seq_len,
-                             k_seq_len,
-                             attn_batches*q_seq_len,
-                             attn_batches*q_seq_len/sequences);  // pad batch strides
-  }
+//  } else {
+//      softmax_success = dispatch_additive_masked_softmax<half, half, float>(
+//                             reinterpret_cast<half*>(dropout_results_ptr), // this is actually softmax results, but making it consistent for the next function
+//                             reinterpret_cast<const half*>(attn_scores_ptr),
+//                             pad_mask,
+//                             k_seq_len,
+//                             k_seq_len,
+//                             attn_batches*q_seq_len,
+//                             attn_batches*q_seq_len/sequences);  // pad batch strides
+//  }
 
   assert(softmax_success);
 
@@ -470,7 +470,7 @@ std::vector<torch::Tensor> bwd_cuda(
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
   // bool softmax_success = false;
 
-  if ( dropout_prob > 0.0f) {
+//  if ( dropout_prob > 0.0f) {
       dispatch_masked_scale_softmax_backward_recompute<half, half, float, false>(
                                  static_cast<half*>(matmul2_grads.data_ptr()),
                                  static_cast<half* const>(matmul2_grads.data_ptr()),
@@ -484,19 +484,19 @@ std::vector<torch::Tensor> bwd_cuda(
                                  attn_batches*q_seq_len/sequences,
                                  attn_batches*q_seq_len,
                                  stream);
-  } else {
-      // if dropout == 0 then we don't need to recompute (because dropout_results == softmax_results)
-      dispatch_softmax_backward_norecompute<half, half, float, false>(
-                                 static_cast<half*>(matmul2_grads.data_ptr()),
-                                 static_cast<half* const>(matmul2_grads.data_ptr()),
-                                 reinterpret_cast<half const*>(dropout_results.data_ptr()),
-                                 k_seq_len,
-                                 k_seq_len,
-                                 attn_batches*q_seq_len/sequences,
-                                 attn_batches*q_seq_len,
-                                 stream);
-  }
-
+//  } else {
+//       if dropout == 0 then we don't need to recompute (because dropout_results == softmax_results)
+//      dispatch_softmax_backward_norecompute<half, half, float, false>(
+//                                 static_cast<half*>(matmul2_grads.data_ptr()),
+//                                 static_cast<half* const>(matmul2_grads.data_ptr()),
+//                                 reinterpret_cast<half const*>(dropout_results.data_ptr()),
+//                                 k_seq_len,
+//                                 k_seq_len,
+//                                 attn_batches*q_seq_len/sequences,
+//                                 attn_batches*q_seq_len,
+//                                 stream);
+//  }
+//
   // Matmul1 Dgrad1
 //  gemm_switch_fp32accum(     state,
 //                             a_layout_n,

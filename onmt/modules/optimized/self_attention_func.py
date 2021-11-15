@@ -59,8 +59,10 @@ class SelfAttnFunc(torch.autograd.Function):
 
         bsz, len_q = inputs.size(1), inputs.size(0)
 
-        if low_precision and self_multihead_attn_cuda is not None and not incremental and len_q <= 2048 and not use_time_mask \
-                and inputs.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc:
+        if low_precision and self_multihead_attn_cuda is not None and not incremental and len_q <= 2048 \
+                and not use_time_mask \
+                and inputs.type() == 'torch.cuda.HalfTensor' \
+                and not rotary_pos_enc:
             ctx.fused = True
 
             use_mask = True
@@ -286,7 +288,7 @@ class SelfAttnFunc(torch.autograd.Function):
                    input_grads, \
                    input_weight_grads, output_weight_grads, \
                    input_bias_grads, output_bias_grads, \
-                   None, None, None, None, None, None, None
+                   None, None, None, None, None, None, None, None
 
         heads_t, \
             scale_t, \

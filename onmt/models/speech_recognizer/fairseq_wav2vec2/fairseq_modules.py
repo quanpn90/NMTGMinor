@@ -560,13 +560,14 @@ class MultiheadAttention(nn.Module):
                 #
                 # outputs = self.out_proj(matmul2_results)
                 is_training = self.training
+                low_precision = True
                 outputs, coverage = self_attn_func(False, is_training, self.num_heads, inputs,
                                                    self.proj_weight, self.out_proj.weight,
                                                    self.proj_bias, self.out_proj.bias,
                                                    key_padding_mask, self.dropout_p,
                                                    False, None,
                                                    False, None,  # incremental and state
-                                                   False, True)  # low-precision and return coverage
+                                                   low_precision, True)  # low-precision and return coverage
 
                 return outputs, coverage
 

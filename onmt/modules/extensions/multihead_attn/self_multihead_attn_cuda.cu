@@ -146,7 +146,7 @@ std::vector<torch::Tensor> fwd_cuda(
                            reinterpret_cast<half*>(dropout_results_ptr),
                            (is_training) ? reinterpret_cast<uint8_t*>(dropout_mask.data_ptr<uint8_t>()) : nullptr,
                            reinterpret_cast<const half*>(attn_scores_ptr),
-                               pad_mask,
+                           pad_mask,
       		               dropout_elems,
                            k_seq_len,
                            k_seq_len,
@@ -163,8 +163,9 @@ std::vector<torch::Tensor> fwd_cuda(
                              k_seq_len,
                              attn_batches*q_seq_len,
                              attn_batches*q_seq_len/sequences);
+      dropout_mask.fill_(1);
   }
-
+//
 //  softmax_results.copy_(attn_scores);
 //  attn_scores.view({sequences*heads, q_seq_len, k_seq_len});
 //  attn_scores.view({sequences, heads, q_seq_len, k_seq_len}).masked_fill_(pad_mask,
@@ -406,10 +407,10 @@ std::vector<torch::Tensor> bwd_cuda(
 //                             attn_batches);
   THCublasCheck(cublasGemmStridedBatchedEx(handle,
                              CUBLAS_OP_N,
-                             CUBLAS_OP_N,
+                             CUBLAS_OP_T,
                              head_dim,    // m
-                             q_seq_len,   // n
-                             k_seq_len,   // k
+                             k_seq_len,   // n
+                             q_seq_len,   // k
                              static_cast<const void*>(&alpha),
                              static_cast<const void*>(output_lin_grads.data_ptr()),  // A:
                              CUDA_R_16F,
@@ -431,7 +432,7 @@ std::vector<torch::Tensor> bwd_cuda(
   // Apply Dropout Mask and Scale by Dropout Probability
   // Softmax Grad
 
-  if ( dropout_prob > 0.0f) {
+//  if ( dropout_prob > 0.0f) {
       dispatch_masked_scale_softmax_backward_recompute<half, half, float, false>(
                                  static_cast<half*>(matmul2_grads.data_ptr()),
                                  static_cast<half* const>(matmul2_grads.data_ptr()),
@@ -445,18 +446,18 @@ std::vector<torch::Tensor> bwd_cuda(
                                  attn_batches*q_seq_len/sequences,
                                  attn_batches*q_seq_len,
                                  stream);
-  } else {
-      // if dropout == 0 then we don't need to recompute (because dropout_results == softmax_results)
-      dispatch_softmax_backward_norecompute<half, half, float, false>(
-                                 static_cast<half*>(matmul2_grads.data_ptr()),
-                                 static_cast<half* const>(matmul2_grads.data_ptr()),
-                                 reinterpret_cast<half const*>(dropout_results.data_ptr()),
-                                 k_seq_len,
-                                 k_seq_len,
-                                 attn_batches*q_seq_len/sequences,
-                                 attn_batches*q_seq_len,
-                                 stream);
-  }
+//  } else {
+//       if dropout == 0 then we don't need to recompute (because dropout_results == softmax_results)
+//      dispatch_softmax_backward_norecompute<half, half, float, false>(
+//                                 static_cast<half*>(matmul2_grads.data_ptr()),
+//                                 static_cast<half* const>(matmul2_grads.data_ptr()),
+//                                 reinterpret_cast<half const*>(dropout_results.data_ptr()),
+//                                 k_seq_len,
+//                                 k_seq_len,
+//                                 attn_batches*q_seq_len/sequences,
+//                                 attn_batches*q_seq_len,
+//                                 stream);
+//  }
 
 
   // Matmul1 Dgrad1
