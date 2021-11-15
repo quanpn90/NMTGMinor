@@ -565,9 +565,9 @@ class MultiheadAttention(nn.Module):
                                                    self.proj_bias, self.out_proj.bias,
                                                    key_padding_mask, self.dropout_p,
                                                    False, None,
-                                                   False, None, True)
+                                                   False, None,  # incremental and state
+                                                   False, True)  # low-precision and return coverage
 
-                # print(outputs.size())
                 return outputs, coverage
 
         else:

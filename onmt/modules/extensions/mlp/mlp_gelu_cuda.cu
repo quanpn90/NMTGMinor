@@ -9,7 +9,11 @@
 #include <math.h>
 
 /* Includes, cuda */
+#include <cuda.h>
 #include <cublas_v2.h>
+#include <cuda_runtime.h>
+#include <cuda_fp16.h>
+#include <cuda_profiler_api.h>
 #include <cuda_runtime.h>
 #include <ATen/CUDAGeneratorImpl.h>
 #include <curand_kernel.h>
@@ -81,12 +85,12 @@ cublasStatus_t mlp_gemm(
     int m,
     int n,
     int k,
-    float* alpha,
+    float alpha,
     const double* A,
     int lda,
     const double* B,
     int ldb,
-    const float* beta,
+    const float beta,
     double* C,
     int ldc) {
   return cublasGemmEx(
@@ -96,14 +100,14 @@ cublasStatus_t mlp_gemm(
       m,
       n,
       k,
-      alpha,
+      &alpha,
       A,
       CUDA_R_64F,
       lda,
       B,
       CUDA_R_64F,
       ldb,
-      beta,
+      &beta,
       C,
       CUDA_R_64F,
       ldc,
@@ -119,12 +123,12 @@ cublasStatus_t mlp_gemm(
     int m,
     int n,
     int k,
-    float* alpha,
+    float alpha,
     const float* A,
     int lda,
     const float* B,
     int ldb,
-    const float* beta,
+    const float beta,
     float* C,
     int ldc) {
   return cublasGemmEx(
@@ -134,14 +138,14 @@ cublasStatus_t mlp_gemm(
       m,
       n,
       k,
-      alpha,
+      &alpha,
       A,
       CUDA_R_32F,
       lda,
       B,
       CUDA_R_32F,
       ldb,
-      beta,
+      &beta,
       C,
       CUDA_R_32F,
       ldc,
@@ -157,14 +161,17 @@ cublasStatus_t mlp_gemm(
     int m,
     int n,
     int k,
-    float* alpha,
+    float alpha,
     const at::Half* A,
     int lda,
     const at::Half* B,
     int ldb,
-    float* beta,
+    float beta,
     at::Half* C,
     int ldc) {
+
+  const half halpha = __float2half_rn(alpha);
+  const half hbeta = __float2half_rn(beta);
   return cublasGemmEx(
       handle,
       transa,
@@ -172,18 +179,18 @@ cublasStatus_t mlp_gemm(
       m,
       n,
       k,
-      alpha,
+      &halpha,
       A,
       CUDA_R_16F,
       lda,
       B,
       CUDA_R_16F,
       ldb,
-      beta,
+      &hbeta,
       C,
       CUDA_R_16F,
       ldc,
-      CUDA_R_32F,
+      CUBLAS_COMPUTE_16F,
       CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 }
 
@@ -1637,86 +1644,54 @@ int mlp_fp(
     float one = 1.f;
     float zero = 0.f;
 
-    // try with cublaslt first for supported case with valid handle
-    int cublaslt_status = 1;
-//    if(activation < 1 && p == 0){
-//        cublaslt_status = mlp_gemm_lt(
-//          //ltHandle,
-//          (cublasLtHandle_t)handle,
-//          CUBLAS_OP_T,
-//          CUBLAS_OP_N,
-//          ofeat,
-//          batch_size,
-//          ifeat,
-//          &one,
-//          weight,
-//          ifeat,
-//          input,
-//          ifeat,
-//          &zero,
-//          output,
-//          ofeat,
-//          lt_workspace,
-//          1 << 22,
-//          stream,
-//          use_bias == 1,
-//          activation == 1,
-//          bias);
-//    }
+    cublasStatus_t cublas_status;
+    // Call GEMM: fprop is Y = W'X
+    cublas_status = mlp_gemm(
+                        handle,
+                        CUBLAS_OP_T,
+                        CUBLAS_OP_N,
+                        ofeat,
+                        batch_size,
+                        ifeat,
+                        one,
+                        weight,
+                        ifeat,
+                        input,
+                        ifeat,
+                        zero,
+                        output,
+                        ofeat);
 
-    // if cublaslt failed or not executed, fallback to cublas
-    if (cublaslt_status != 0) {
-      cublasStatus_t cublas_status;
-      // Call GEMM: fprop is Y = W'X
-      cublas_status = mlp_gemm(
-        handle,
-        CUBLAS_OP_T,
-        CUBLAS_OP_N,
-        ofeat,
-        batch_size,
-        ifeat,
-        &one,
-        weight,
-        ifeat,
-        input,
-        ifeat,
-        &zero,
-        output,
-        ofeat);
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+    printf("GEMM fprop failed with %d\n", cublas_status);
+    return 1;
+    }
 
-      if (cublas_status != CUBLAS_STATUS_SUCCESS) {
-        printf("GEMM fprop failed with %d\n", cublas_status);
-        return 1;
+    const uint &input_size = ofeat;
+    int num_blocks = 0;
+    int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
+    // Call biasReLU
+    if (layer == (num_layers -1)) { // no activation
+      cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAdd_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+      biasAdd_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
+    } else {  // GELU
+      if (p == 0) {
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAddGeLU_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+        biasAddGeLU_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, hidden, bias,
+                                                                                    batch_size, input_size);
+      } else {
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAddDropoutGeLU_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+        //number of times random will be generated per thread, to offset philox counter in thc random state
+        int64_t counter_offset = ((input_size*batch_size-1)/(BIAS_RELU_FW_NTHREADS*num_SMs*num_blocks*ILP)+1)*ILP;
+        std::pair<uint64_t, uint64_t> rng_engine_inputs;
+        {
+          std::lock_guard<std::mutex> lock(gen.mutex());
+          rng_engine_inputs = at::check_generator<at::CUDAGeneratorImpl>(gen)->philox_engine_inputs(counter_offset);
+        }
+        biasAddDropoutGeLU_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0,
+                             stream>>>(output, hidden, bias, mask, batch_size, input_size, p, rng_engine_inputs);
       }
 
-      const uint &input_size = ofeat;
-      int num_blocks = 0;
-      int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
-      // Call biasReLU
-      if (layer == (num_layers -1)) { // no activation
-//          printf("NO ACTIVATION\n");
-          cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAdd_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-          biasAdd_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
-      } else {  // GELU
-//          printf("RELU\n");
-          if (p == 0) {
-            cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAddGeLU_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-            biasAddGeLU_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, hidden, bias,
-                                                                                        batch_size, input_size);
-          } else {
-            cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAddDropoutGeLU_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-            //number of times random will be generated per thread, to offset philox counter in thc random state
-            int64_t counter_offset = ((input_size*batch_size-1)/(BIAS_RELU_FW_NTHREADS*num_SMs*num_blocks*ILP)+1)*ILP;
-            std::pair<uint64_t, uint64_t> rng_engine_inputs;
-            {
-              std::lock_guard<std::mutex> lock(gen.mutex());
-              rng_engine_inputs = at::check_generator<at::CUDAGeneratorImpl>(gen)->philox_engine_inputs(counter_offset);
-            }
-            biasAddDropoutGeLU_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0,
-                                 stream>>>(output, hidden, bias, mask, batch_size, input_size, p, rng_engine_inputs);
-          }
-
-        }
     }
 
     // Set current output (after activation) as next layer input
@@ -1898,12 +1873,12 @@ int mlp_bp(
         xfeat,
         batch_size,
         yfeat,
-        &one,
+        one,
         weight,
         xfeat,
         dy_gemm,
         yfeat,
-        &zero,
+        zero,
         dx,
         xfeat);
 
@@ -1921,12 +1896,12 @@ int mlp_bp(
         xfeat,
         yfeat,
         batch_size,
-        &one,
+        one,
         x,
         xfeat,
         dy_gemm,
         yfeat,
-        &zero,
+        zero,
         dweight,
         xfeat);
 
@@ -2101,12 +2076,12 @@ int mlp_bp_input_only(
         xfeat,
         batch_size,
         yfeat,
-        &one,
+        one,
         weight,
         xfeat,
         dy_gemm,
         yfeat,
-        &zero,
+        zero,
         dx,
         xfeat);
 

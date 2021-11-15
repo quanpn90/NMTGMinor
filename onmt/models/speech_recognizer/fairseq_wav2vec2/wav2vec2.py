@@ -1098,20 +1098,15 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.final_layer_norm = LayerNorm(self.embedding_dim)
 
         self.fused = False
-        self.fused_blaslt = False
         if self.activation_fn_name == 'relu':
             from onmt.modules.mlp.mlp import mlp_relu_function
             if mlp_relu_function is not None:
                 self.fused_function = mlp_relu_function
                 self.fused = True
         elif self.activation_fn_name == 'gelu':
-            from onmt.modules.mlp.mlp import mlp_gelu_function, mlp_gelu_blaslt_function
-            # if mlp_gelu_blaslt_function is not None:
-            #     self.fused_function = mlp_gelu_blaslt_function
-            #     self.fused = True
-            #     self.fused_blaslt = True
+            from onmt.modules.mlp.mlp import mlp_gelu_function
 
-            if mlp_gelu_function is not None and not self.fused_blaslt:
+            if mlp_gelu_function is not None:
                 self.fused_function = mlp_gelu_function
                 self.fused = True
 
@@ -1155,7 +1150,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 assert lang is not None or mixture is not None
                 x = self.adapter(x, lang=lang, mixture=mixture)
 
-        x = residual + x  # residual is before the big FFN
+            x = residual + x  # residual is before the big FFN
 
         residual = x
 
@@ -1186,17 +1181,13 @@ class TransformerSentenceEncoderLayer(nn.Module):
             if self.fused and x.is_cuda:
                 dropout = self.dropout2.p if self.training else 0.0
                 seq_len, bsz, hidden_size = x.size(0), x.size(1), x.size(2)
-                if self.fused_blaslt and dropout == 0.0:
-                    x = self.fused_function(x.view(seq_len * bsz, -1), self.fc1.weight, self.fc1.bias,
-                                            self.fc2.weight, self.fc2.bias)
-                else:
-                    weights = [self.fc1.weight, self.fc2.weight]
-                    biases = [self.fc1.bias, self.fc2.bias]
 
-                    x = self.fused_function(dropout, False, x.view(seq_len * bsz, -1),
-                                            *weights, *biases)
+                weights = [self.fc1.weight, self.fc2.weight]
+                biases = [self.fc1.bias, self.fc2.bias]
 
-                x = x.view(seq_len, bsz, hidden_size)
+                x = self.fused_function(dropout, False, x.view(seq_len * bsz, -1),
+                                        *weights, *biases)
+                x = x.view(seq_len, bsz, -1)
             else:
                 x = self.activation_fn(self.fc1(x))
                 x = self.dropout2(x)

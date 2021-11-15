@@ -37,9 +37,9 @@ except (ModuleNotFoundError, ImportError) as e:
     fused_mlp_gelu_dropout_add = None
 
 try:
-    import fused_mlp_gelu_blaslt
+    import mlp_gelu_blaslt
 except (ModuleNotFoundError, ImportError) as e:
-    fused_mlp_gelu_blaslt = None
+    mlp_gelu_blaslt = None
 
 
 def _cast_if_autocast_enabled(*args):
@@ -129,7 +129,10 @@ class MlpGELUFunction(torch.autograd.Function):
     @custom_fwd
     def forward(ctx, p, recompute, *args):
 
-        output = fused_mlp_gelu.forward(p, args)
+        if mlp_gelu_blaslt is not None:
+            output = mlp_gelu_blaslt.forward(p, args)
+        else:
+            output = fused_mlp_gelu.forward(p, args)
         ctx.save_for_backward(*args)
         ctx.outputs = output
         dropout_mask = output[-1]
@@ -142,52 +145,22 @@ class MlpGELUFunction(torch.autograd.Function):
     def backward(ctx, *grad_o):
         p = ctx.p
         if ctx.requires_grad_weight:
-            grads = fused_mlp_gelu.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
+            if mlp_gelu_blaslt is not None:
+                grads = mlp_gelu_blaslt.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
+            else:
+                grads = fused_mlp_gelu.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
         else:
-            grads = fused_mlp_gelu.backward_input_only(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
-            for i in range(len(ctx.saved_tensors) - 1):
+            if mlp_gelu_blaslt is not None:
+                grads = mlp_gelu_blaslt.backward_input_only(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
+            else:
+                grads = fused_mlp_gelu.backward_input_only(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
+            for _ in range(len(ctx.saved_tensors) - 1):
                 grads.append(None)
         del ctx.outputs
         return (None, None, *grads)
 
-if fused_mlp_gelu:
-    # mlp_gelu_function = MlpGELUFunction.apply
-    def mlp_gelu_function(*args):
-        args = _cast_if_autocast_enabled(*args)
-        with torch.cuda.amp.autocast(enabled=False):
-            return MlpGELUFunction.apply(*args)
-else:
-    mlp_gelu_function = None
 
-
-class MlpGELUBLASLTFunction(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input, in_weight, in_bias, out_weight, out_bias):
-        output1, output2, gelu_in = fused_mlp_gelu_blaslt.linear_gelu_linear_forward(input, in_weight, in_bias,
-                                                                                     out_weight, out_bias)
-        ctx.save_for_backward(input, in_weight, out_weight, gelu_in, output1)
-        return output2
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        input, in_weight, out_weight, gelu_in, output1 = ctx.saved_tensors
-        grad_input, grad_weight1, grad_bias1, grad_weight2, grad_bias2 = \
-            fused_mlp_gelu_blaslt.linear_gelu_linear_backward(input, gelu_in, output1,
-                                                              in_weight, out_weight, grad_output)
-
-        return grad_input, grad_weight1, grad_bias1, grad_weight2, grad_bias2
-
-
-if fused_mlp_gelu_blaslt:
-    def mlp_gelu_blaslt_function(*args):
-        args = _cast_if_autocast_enabled(*args)
-        with torch.cuda.amp.autocast(enabled=False):
-            return MlpGELUBLASLTFunction.apply(*args)
-else:
-    mlp_gelu_blaslt_function = None
-
-if fused_mlp_gelu:
-    # mlp_gelu_function = MlpGELUFunction.apply
+if fused_mlp_gelu or mlp_gelu_blaslt:
     def mlp_gelu_function(*args):
         args = _cast_if_autocast_enabled(*args)
         with torch.cuda.amp.autocast(enabled=False):

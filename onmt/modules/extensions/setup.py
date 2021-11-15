@@ -119,7 +119,6 @@ print("GENERATOR FLAG:", generator_flag)
 #                                                '--use_fast_math'] + version_dependent_macros +
 #                                                                     generator_flag + cc_flag}))
 
-# This Module Is Not Working
 ext_modules.append(
     CUDAExtension(name='self_multihead_attn_cuda',
                   sources=['multihead_attn/self_multihead_attn.cpp',
@@ -127,13 +126,26 @@ ext_modules.append(
                   # include_dirs=[os.path.join(this_dir, 'multihead_attn/cutlass')],
                   extra_compile_args={'cxx': ['-O3', ] + version_dependent_macros + generator_flag,
                                       'nvcc': ['-O3',
-                                               '-I./cutlass/',
                                                '-U__CUDA_NO_HALF_OPERATORS__',
                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
                                                '--expt-relaxed-constexpr',
                                                '--expt-extended-lambda',
                                                '--use_fast_math'] + version_dependent_macros +
-                                              generator_flag + cc_flag}))
+                                              generator_flag}))
+
+ext_modules.append(
+    CUDAExtension(name='encdec_multihead_attn_bias_cuda',
+                  sources=['multihead_attn/encdec_multihead_attn_bias.cpp',
+                           'multihead_attn/encdec_multihead_attn_bias_cuda.cu'],
+                  include_dirs=[os.path.join(this_dir, 'multihead_attn/cutlass')],
+                  extra_compile_args={'cxx': ['-O3', ] + version_dependent_macros + generator_flag,
+                                      'nvcc': ['-O3',
+                                               '-U__CUDA_NO_HALF_OPERATORS__',
+                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
+                                               '--expt-relaxed-constexpr',
+                                               '--expt-extended-lambda',
+                                               '--use_fast_math'] + version_dependent_macros +
+                                                                    generator_flag}))
 
 # ext_modules.append(
 #     CUDAExtension(name='fused_dropout_add_cuda',
@@ -175,17 +187,6 @@ ext_modules.append(
 #                                               '--expt-extended-lambda',
 #                                               '--use_fast_math'] + cc_flag}))
 
-# Layer Norm
-
-ext_modules.append(
-    CUDAExtension(name='fused_layer_norm_cuda',
-                  sources=['fused_layer_norm/layer_norm_cuda.cpp',
-                           'fused_layer_norm/layer_norm_cuda_kernel.cu'],
-                  include_dirs=[os.path.join(this_dir, 'include')],
-                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros + generator_flag,
-                                      'nvcc': ['-maxrregcount=50',
-                                               '-O3',
-                                               '--use_fast_math'] + version_dependent_macros}))
 
 ext_modules.append(
     CUDAExtension(name='fast_layer_norm_cuda',
@@ -270,15 +271,9 @@ ext_modules.append(
 #                   sources=['mlp_blaslt/mlp_gelu.cpp',
 #                            'mlp_blaslt/mlp_gelu_cuda.cu'],
 #                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-#                                       'nvcc': ['-O3',
-#                                                '-I./cutlass/',
-#                                                '-U__CUDA_NO_HALF_OPERATORS__',
-#                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
-#                                                '--expt-relaxed-constexpr',
-#                                                '--expt-extended-lambda',
-#                                                '--use_fast_math'] + version_dependent_macros +
+#                                       'nvcc': ['-O3'] + version_dependent_macros +
 #                                               generator_flag + cc_flag}))
-#
+# #
 # Wait until CUBLAS_VERSION >= 11600 to build. Otherwise have to build custom pytorch
 # ext_modules.append(
 #     CUDAExtension(name='fused_mlp_gelu_blaslt',
@@ -287,32 +282,32 @@ ext_modules.append(
 #                   extra_compile_args={'cxx': ['-O3'] + versi  on_dependent_macros,
 #                                       'nvcc': ['-O3'] + version_dependent_macros}))
 
-ext_modules.append(
-    CUDAExtension(name='fmhalib',
-                  sources=[
-                      'fmha/fmha_api.cpp',
-                      'fmha/src/fmha_noloop_reduce.cu',
-                      'fmha/src/fmha_fprop_fp16_128_64_kernel.sm80.cu',
-                      'fmha/src/fmha_fprop_fp16_256_64_kernel.sm80.cu',
-                      'fmha/src/fmha_fprop_fp16_384_64_kernel.sm80.cu',
-                      'fmha/src/fmha_fprop_fp16_512_64_kernel.sm80.cu',
-                      # 'fmha/src/fmha_fprop_fp16_768_64_kernel.sm80.cu',
-                      'fmha/src/fmha_dgrad_fp16_128_64_kernel.sm80.cu',
-                      'fmha/src/fmha_dgrad_fp16_256_64_kernel.sm80.cu',
-                      'fmha/src/fmha_dgrad_fp16_384_64_kernel.sm80.cu',
-                      'fmha/src/fmha_dgrad_fp16_512_64_kernel.sm80.cu',
-                      # 'fmha/src/fmha_dgrad_fp16_768_64_kernel.sm80.cu',
-                  ],
-                  extra_compile_args={'cxx': ['-O3',
-                                              ] + version_dependent_macros + generator_flag,
-                                      'nvcc': ['-O3',
-                                               '-gencode', 'arch=compute_80,code=sm_80',
-                                               '-U__CUDA_NO_HALF_OPERATORS__',
-                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
-                                               '--expt-relaxed-constexpr',
-                                               '--expt-extended-lambda',
-                                               '--use_fast_math'] + version_dependent_macros + generator_flag},
-                  include_dirs=[os.path.join(this_dir, "fmha/src")]))
+# ext_modules.append(
+#     CUDAExtension(name='fmhalib',
+#                   sources=[
+#                       'fmha/fmha_api.cpp',
+#                       'fmha/src/fmha_noloop_reduce.cu',
+#                       'fmha/src/fmha_fprop_fp16_128_64_kernel.sm80.cu',
+#                       'fmha/src/fmha_fprop_fp16_256_64_kernel.sm80.cu',
+#                       'fmha/src/fmha_fprop_fp16_384_64_kernel.sm80.cu',
+#                       'fmha/src/fmha_fprop_fp16_512_64_kernel.sm80.cu',
+#                       # 'fmha/src/fmha_fprop_fp16_768_64_kernel.sm80.cu',
+#                       'fmha/src/fmha_dgrad_fp16_128_64_kernel.sm80.cu',
+#                       'fmha/src/fmha_dgrad_fp16_256_64_kernel.sm80.cu',
+#                       'fmha/src/fmha_dgrad_fp16_384_64_kernel.sm80.cu',
+#                       'fmha/src/fmha_dgrad_fp16_512_64_kernel.sm80.cu',
+#                       # 'fmha/src/fmha_dgrad_fp16_768_64_kernel.sm80.cu',
+#                   ],
+#                   extra_compile_args={'cxx': ['-O3',
+#                                               ] + version_dependent_macros + generator_flag,
+#                                       'nvcc': ['-O3',
+#                                                '-gencode', 'arch=compute_80,code=sm_80',
+#                                                '-U__CUDA_NO_HALF_OPERATORS__',
+#                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
+#                                                '--expt-relaxed-constexpr',
+#                                                '--expt-extended-lambda',
+#                                                '--use_fast_math'] + version_dependent_macros + generator_flag},
+#                   include_dirs=[os.path.join(this_dir, "fmha/src")]))
 
 setup(
     name='nmtgminor_cuda',

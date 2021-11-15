@@ -1076,7 +1076,6 @@ class MBartDecoder(MBartPreTrainedModel):
 
     def __init__(self, config: MBartConfig, opt, embed_tokens: Optional[nn.Embedding] = None):
         super().__init__(config)
-        self.dropout = config.dropout
         self.layerdrop = config.decoder_layerdrop
         self.padding_idx = config.pad_token_id
         self.max_target_positions = config.max_position_embeddings
@@ -1084,6 +1083,7 @@ class MBartDecoder(MBartPreTrainedModel):
 
         config.dropout = opt.residual_dropout if opt.residual_dropout > 0 else opt.dropout
         config.activation_dropout = opt.ffn_dropout if opt.ffn_dropout > 0 else opt.dropout
+        self.dropout = config.dropout
 
         if embed_tokens is not None:
             self.embed_tokens = embed_tokens

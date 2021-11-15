@@ -46,7 +46,7 @@ class SelfAttnFunc(torch.autograd.Function):
                 mask, dropout_prob,
                 rotary_pos_enc, pos_emb,
                 incremental, incremental_cache,
-                return_coverage):
+                low_precision, return_coverage):
         heads_t = torch.tensor([heads])
         dropout_prob_t = torch.tensor([dropout_prob])
         null_tensor = torch.tensor([])
@@ -55,10 +55,11 @@ class SelfAttnFunc(torch.autograd.Function):
 
         ctx.rotary_pos_enc = rotary_pos_enc
         ctx.return_coverage = return_coverage
+        ctx.low_precision = low_precision
 
         bsz, len_q = inputs.size(1), inputs.size(0)
 
-        if self_multihead_attn_cuda is not None and not incremental and len_q <= 2048 and not use_time_mask \
+        if low_precision and self_multihead_attn_cuda is not None and not incremental and len_q <= 2048 and not use_time_mask \
                 and inputs.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc:
             ctx.fused = True
 
@@ -67,8 +68,6 @@ class SelfAttnFunc(torch.autograd.Function):
                 mask = mask.half() * -16384
             else:
                 mask = inputs.new(bsz, len_q).zero_()  # works
-
-            # print("[DDEBUGGING] CUDA SELF ATTENTION")
 
             input_lin_results, \
                 attn_scores, \
@@ -80,9 +79,6 @@ class SelfAttnFunc(torch.autograd.Function):
                                                            input_biases, output_biases,
                                                            mask, dropout_prob)
 
-            # print("[bmm1 check]", torch.any(torch.isnan(bmm1_results)))
-        #     # print("[softmax check]", torch.any(torch.isnan(dropout_results)))
-        #
             ctx.save_for_backward(heads_t,
                                   scale_t,
                                   matmul2_results,
@@ -259,6 +255,11 @@ class SelfAttnFunc(torch.autograd.Function):
     # @custom_bwd
     def backward(ctx, *output_grads):
 
+        if ctx.return_coverage:
+            output_grads, coverage_grads = output_grads
+        else:
+            output_grads = output_grads[0]
+
         if ctx.fused:
             heads_t, \
                 scale_t, \
@@ -286,11 +287,6 @@ class SelfAttnFunc(torch.autograd.Function):
                    input_weight_grads, output_weight_grads, \
                    input_bias_grads, output_bias_grads, \
                    None, None, None, None, None, None, None
-
-        if ctx.return_coverage:
-            output_grads, coverage_grads = output_grads
-        else:
-            output_grads = output_grads[0]
 
         heads_t, \
             scale_t, \
@@ -419,7 +415,7 @@ class SelfAttnFunc(torch.autograd.Function):
                input_grads, \
                input_weight_grads, output_weight_grads, \
                input_bias_grads, output_bias_grads, \
-               None, None, None, None, None, None, None
+               None, None, None, None, None, None, None, None
 
 
 def _cast_if_autocast_enabled(*args):

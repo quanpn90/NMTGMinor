@@ -118,6 +118,7 @@ class MlpGeLUFunction(torch.autograd.Function):
     @staticmethod
     @custom_fwd(cast_inputs=torch.float16)
     def forward(ctx, p, *args):
+
         outputs = fused_mlp_gelu.forward(p, args)
         ctx.save_for_backward(*args)
         ctx.outputs = outputs
@@ -300,9 +301,9 @@ if __name__ == '__main__':
                 std = math.sqrt(1. / float(bias.size(0)))
                 nn.init.normal_(bias, 0., 0.0)
 
-        def forward(self, input, mask=None, ref=False, fastest=False):
+        def forward(self, input, mask=None, ref=False, fastest=True):
 
-            if fastest:
+            if fastest and not ref:
                 return mlp_gelu_function_blaslt(self.dropout, input, *self.weights, *self.biases)
 
             if ref:
@@ -340,9 +341,9 @@ if __name__ == '__main__':
             return s
 
 
-    batch_size = 128
-    mlp_sizes = [1024, 4096]
-    num_iters = 10
+    batch_size = 24568
+    mlp_sizes = [1024, 4096, 1024]
+    num_iters = 32
 
 
     class TestMLP(unittest.TestCase):
@@ -360,7 +361,7 @@ if __name__ == '__main__':
                 bsz = random.randint(8, batch_size // 8) * 8
                 test_input = torch.empty(bsz, mlp_sizes[0], device="cuda").uniform_(-1., 1.).requires_grad_()
                 ref_input = test_input.clone().detach().requires_grad_()
-                mlp_out, dropout_mask = mlp(test_input, fastest=True)
+                mlp_out, dropout_mask = mlp(test_input)
                 ref_out = ref_mlp.forward(ref_input, dropout_mask, ref=True)
 
                 print(dropout_mask.sum() / dropout_mask.numel())
@@ -389,7 +390,7 @@ if __name__ == '__main__':
 
                 test_input = torch.empty(batch_size, mlp_sizes[0], device="cuda").uniform_(-1., 1.).requires_grad_()
                 ref_input = test_input.clone().detach().requires_grad_()
-                mlp_out, dropout_mask = mlp(test_input, fastest=True)
+                mlp_out, dropout_mask = mlp(test_input)
                 ref_out = ref_mlp(ref_input, dropout_mask, ref=True)
                 np.testing.assert_allclose(
                     mlp_out.detach().cpu().numpy(),
@@ -486,7 +487,7 @@ if __name__ == '__main__':
                 batch_size, mlp_sizes[0], device="cuda", dtype=torch.half).fill_(10.).requires_grad_()
 
             # Warm up GPU
-            for _ in range(100):
+            for _ in range(num_iters):
                 ref_out = ref_mlp(ref_input)
                 ref_loss = ref_out.mean()
                 ref_mlp.zero_grad()
@@ -520,17 +521,17 @@ if __name__ == '__main__':
             print(F"C++ MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
             torch.cuda.profiler.stop()
 
-            torch.cuda.synchronize()
-            start_time = time()
-            for _ in range(num_iters):
-                mlp_out, _ = mlp(test_input, fastest=True)
-                test_loss = mlp_out.mean()
-                mlp.zero_grad()
-                test_loss.backward()
-            torch.cuda.synchronize()
-            stop_time = time()
-            print(F"BLASLT MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
-            torch.cuda.profiler.stop()
+            # torch.cuda.synchronize()
+            # start_time = time()
+            # for _ in range(num_iters):
+            #     mlp_out, _ = mlp(test_input, fastest=True)
+            #     test_loss = mlp_out.mean()
+            #     mlp.zero_grad()
+            #     test_loss.backward()
+            # torch.cuda.synchronize()
+            # stop_time = time()
+            # print(F"BLASLT MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+            # torch.cuda.profiler.stop()
 
         def test_performance_half_no_grad_weight(self):
             print("Testing performance without backward to weight ...")
@@ -561,7 +562,7 @@ if __name__ == '__main__':
                 batch_size, mlp_sizes[0], device="cuda", dtype=torch.half).fill_(10.).requires_grad_()
 
             # Warm up GPU
-            for _ in range(100):
+            for _ in range(num_iters):
                 ref_out = ref_mlp(ref_input)
                 ref_loss = ref_out.mean()
                 ref_mlp.zero_grad()

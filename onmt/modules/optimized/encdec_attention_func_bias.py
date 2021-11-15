@@ -18,9 +18,9 @@ except (ModuleNotFoundError, ImportError) as e:
     mask_softmax_dropout_cuda = None
 
 try:
-    import encdec_multihead_attn_cuda
+    import encdec_multihead_attn_bias_cuda
 except (ModuleNotFoundError, ImportError) as e:
-    encdec_multihead_attn_cuda = None
+    encdec_multihead_attn_bias_cuda = None
 
 
 def rotate_half(x):
@@ -40,14 +40,14 @@ def rotate_backward(dx):
 
 class EncdecAttnBiasFunc(torch.autograd.Function):
     @staticmethod
-    @custom_fwd(cast_inputs=torch.float16)
+    @custom_fwd()
     def forward(ctx, recompute, is_training, heads, inputs_q, inputs_kv,
                 input_weights_q, input_weights_kv, output_weights,
                 input_bias_q, input_bias_kv, output_bias,
                 mask, dropout_prob,
                 incremental, incremental_cache,
                 rotary_pos_enc, pos_emb_q, pos_emb_k,
-                double_precision, return_coverage):
+                low_precision, return_coverage):
         heads_t = torch.tensor([heads])
         dropout_prob_t = torch.tensor([dropout_prob])
         null_tensor = torch.tensor([]).to(inputs_q.device)
@@ -61,48 +61,44 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         ctx.fused_all = False
         ctx.len_q = len_q
         ctx.len_k = len_k
-        ctx.double_precision = double_precision
+        ctx.low_precision = low_precision
         ctx.return_coverage = return_coverage
         ctx.recompute = recompute
         ctx.rotary_pos_enc = rotary_pos_enc
 
-        if mask is not None:
-            # Self Attention Pad Mask
-            mask = mask.to(torch.bool)
+        if encdec_multihead_attn_bias_cuda is not None and not incremental and len_k <= 2048 \
+                and inputs_q.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc and low_precision:
 
-            if len(mask.shape) == 3:
-                mask = mask.unsqueeze(1)  # for the head dimension
-            else:
-                mask = mask.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
+            # print("[DEBUGGING] FAST CUDA ENCDEC ATTENTION BIAS")
+            mask = mask.half() * -10000
 
-        # if encdec_multihead_attn_cuda is not None and not incremental and len_k <= 2048 \
-        #         and inputs_q.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc:
-        #     input_lin_q_results, input_lin_kv_results, \
-        #     softmax_results, dropout_results, dropout_mask, \
-        #     matmul2_results, outputs \
-        #         = encdec_multihead_attn_cuda.forward(is_training, heads, inputs_q, inputs_kv,
-        #                                              input_weights_q, input_weights_kv,
-        #                                              output_weights, mask, dropout_prob)
-        #
-        #     sinq, cosq, = null_tensor, null_tensor
-        #     sink, cosk, = null_tensor, null_tensor
+            input_lin_q_results, input_lin_kv_results, \
+                attn_scores, dropout_results, dropout_mask, \
+                matmul2_results, outputs \
+                = encdec_multihead_attn_bias_cuda.forward(is_training, heads, inputs_q, inputs_kv,
+                                                            input_weights_q, input_weights_kv,
+                                                            output_weights, input_bias_q, input_bias_kv, output_bias,
+                                                            mask, dropout_prob)
+
+            sinq, cosq, = null_tensor, null_tensor
+            sink, cosk, = null_tensor, null_tensor
         #
         #     if not ctx.recompute:
-        #         ctx.save_for_backward(heads_t,
-        #                               scale_t,
-        #                               matmul2_results,
-        #                               dropout_results,
-        #                               softmax_results,
-        #                               input_lin_q_results,
-        #                               input_lin_kv_results,
-        #                               inputs_q,
-        #                               inputs_kv,
-        #                               input_weights_q,
-        #                               input_weights_kv,
-        #                               output_weights,
-        #                               dropout_mask,
-        #                               dropout_prob_t,
-        #                               sinq, cosq, sink, cosk)
+            ctx.save_for_backward(heads_t,
+                                  scale_t,
+                                  matmul2_results,
+                                  dropout_results,
+                                  attn_scores,
+                                  input_lin_q_results,
+                                  input_lin_kv_results,
+                                  inputs_q,
+                                  inputs_kv,
+                                  input_weights_q,
+                                  input_weights_kv,
+                                  output_weights,
+                                  dropout_mask, mask,
+                                  dropout_prob_t,
+                                  sinq, cosq, sink, cosk)
         #     else:
         #         ctx.save_for_backward(heads_t,
         #                               scale_t,
@@ -115,12 +111,21 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         #                               dropout_prob_t,
         #                               mask,
         #                               sinq, cosq, sink, cosk)
-        #     ctx.fused_all = True
-        #
-        #     if return_coverage:
-        #         return outputs, softmax_results
-        #     else:
-        #         return (outputs,)
+            ctx.fused_all = True
+
+            if return_coverage:
+                return outputs, dropout_results
+            else:
+                return (outputs,)
+
+        if mask is not None:
+            # Self Attention Pad Mask
+            mask = mask.to(torch.bool)
+
+            if len(mask.shape) == 3:
+                mask = mask.unsqueeze(1)  # for the head dimension
+            else:
+                mask = mask.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
 
         # Input Linear GEMM Q
         # input1: (activations) [seql_q, bsz, embed_dim] -> [len_q * bsz, embed_dim]
@@ -210,7 +215,7 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
             matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
 
         if mask_softmax_dropout_cuda and len_k <= 2048 \
-                and matmul1_results.type() == 'torch.cuda.HalfTensor' and not double_precision:
+                and matmul1_results.type() == 'torch.cuda.HalfTensor' and not low_precision:
             dropout_mask, softmax_results, dropout_results = mask_softmax_dropout_cuda.forward(is_training, heads,
                                                                                                matmul1_results,
                                                                                                dropout_prob_t[0])
@@ -335,6 +340,62 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         else:
             output_grads = output_grads[0]
 
+        if ctx.fused_all:
+            assert encdec_multihead_attn_bias_cuda is not None and len_key <= 2048
+
+            heads_t, \
+                scale_t, \
+                matmul2_results, \
+                dropout_results, \
+                attn_scores,\
+                input_lin_q_results, \
+                input_lin_kv_results, \
+                inputs_q, \
+                inputs_kv, \
+                input_weights_q, \
+                input_weights_kv, \
+                output_weights, \
+                dropout_mask, mask,\
+                dropout_prob_t, \
+                sinq, cosq, sink, cosk = ctx.saved_tensors
+
+            input_q_grads, \
+                input_kv_grads, \
+                input_weight_q_grads, \
+                input_weight_kv_grads, \
+                output_weight_grads, \
+                input_bias_q_grads, input_bias_kv_grads, output_bias_grads \
+                = encdec_multihead_attn_bias_cuda.backward(heads_t[0], output_grads, matmul2_results,
+                                                           dropout_results,
+                                                           attn_scores, mask,
+                                                           input_lin_q_results,
+                                                           input_lin_kv_results,
+                                                           inputs_q, inputs_kv, input_weights_q,
+                                                           input_weights_kv,
+                                                           output_weights, dropout_mask,
+                                                           dropout_prob_t[0])
+
+            # else:
+            #
+            #     input_q_grads, \
+            #     input_kv_grads, \
+            #     input_weight_q_grads, \
+            #     input_weight_kv_grads, \
+            #     output_weight_grads \
+            #         = encdec_multihead_attn_cuda.backward_recompute(heads_t[0], output_grads,
+            #                                                         inputs_q, inputs_kv,
+            #                                                         input_weights_q,
+            #                                                         input_weights_kv,
+            #                                                         output_weights, dropout_mask,
+            #                                                         pad_mask,
+            #                                                         dropout_prob_t[0])
+
+            return None, None, None \
+                , input_q_grads, input_kv_grads \
+                , input_weight_q_grads, input_weight_kv_grads, output_weight_grads \
+                , input_bias_q_grads, input_bias_kv_grads, output_bias_grads \
+                , None, None, None, None, None, None, None, None, None
+
         if ctx.recompute:
             heads_t, scale_t, \
             inputs_q, inputs_kv, \
@@ -356,45 +417,6 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
 
         head_dim = inputs_q.size(2) // heads_t.item()
         bsz = inputs_q.size(1)
-
-        if ctx.fused_all:
-            assert encdec_multihead_attn_cuda is not None and len_key <= 2048
-
-            if not ctx.recompute:
-
-                input_q_grads, \
-                input_kv_grads, \
-                input_weight_q_grads, \
-                input_weight_kv_grads, \
-                output_weight_grads \
-                    = encdec_multihead_attn_cuda.backward(heads_t[0], output_grads, matmul2_results,
-                                                          dropout_results,
-                                                          softmax_results, input_lin_q_results,
-                                                          input_lin_kv_results,
-                                                          inputs_q, inputs_kv, input_weights_q,
-                                                          input_weights_kv,
-                                                          output_weights, dropout_mask,
-                                                          dropout_prob_t[0])
-
-            else:
-
-                input_q_grads, \
-                input_kv_grads, \
-                input_weight_q_grads, \
-                input_weight_kv_grads, \
-                output_weight_grads \
-                    = encdec_multihead_attn_cuda.backward_recompute(heads_t[0], output_grads,
-                                                                    inputs_q, inputs_kv,
-                                                                    input_weights_q,
-                                                                    input_weights_kv,
-                                                                    output_weights, dropout_mask,
-                                                                    pad_mask,
-                                                                    dropout_prob_t[0])
-
-            return None, None, None, \
-                   input_q_grads, input_kv_grads, \
-                   input_weight_q_grads, input_weight_kv_grads, output_weight_grads, \
-                   None, None, None, None, None, None, None, None, None
 
         if ctx.recompute:
             assert ctx.incremental is not True
@@ -688,7 +710,7 @@ if __name__ == "__main__":
                     recompute=False, use_rotary_enc=False, pos_emb_q=None, pos_emb_k=None):
             is_training = True
             dropout = 0.0
-            double_precision = True
+            low_precision = True
             return_coverage = False
 
             # .apply(time_masking, is_training,
@@ -703,7 +725,7 @@ if __name__ == "__main__":
                                  mask, dropout,
                                  False, None,  # For the incremental stuff
                                  use_rotary_enc, pos_emb_q, pos_emb_k,
-                                 double_precision, return_coverage)  # double precision set to true
+                                 low_precision, return_coverage)  # double precision set to true
 
 
     bsz = 4

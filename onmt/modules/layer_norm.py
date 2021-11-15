@@ -188,13 +188,6 @@ class LayerNorm(torch.nn.Module):
     def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True):
         super().__init__()
 
-        global fused_layer_norm_cuda
-        self.fused = True
-        try:
-            fused_layer_norm_cuda = importlib.import_module("fused_layer_norm_cuda")
-        except ModuleNotFoundError:
-            self.fused = False
-
         if isinstance(normalized_shape, numbers.Integral):
             normalized_shape = (normalized_shape,)
         self.normalized_shape = torch.Size(normalized_shape)
@@ -217,19 +210,11 @@ class LayerNorm(torch.nn.Module):
 
         eps = self.eps
 
-        if not input.is_cuda or not self.fused:
-            return F.layer_norm(
-                input, self.normalized_shape, self.weight, self.bias, eps)
-        if self.elementwise_affine:
+        if fast_fused and input.size(-1) in [768, 1024, 2048, 3072, 4096]:
+            return fast_layer_norm_affine(input, self.weight, self.bias, self.normalized_shape, eps)
 
-            # at the moment the super fast layer norm only supports hidden size 1024 :)
-            if fast_fused and input.size(-1) in [768, 1024, 2048, 3072, 4096]:
-                return fast_layer_norm_affine(input, self.weight, self.bias, self.normalized_shape, eps)
-
-            return fused_layer_norm_affine(
-                input, self.weight, self.bias, self.normalized_shape, eps)
-        else:
-            return FusedLayerNormFunction.apply(input, self.normalized_shape, eps)
+        return F.layer_norm(
+            input, self.normalized_shape, self.weight, self.bias, eps)
 
     def extra_repr(self):
         return '{normalized_shape}, eps={eps}, ' \

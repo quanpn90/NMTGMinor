@@ -44,6 +44,7 @@ int mlp_bp(
     T* dX,
     T** dwPtr,
     T** dbPtr,
+    void* lt_workspace,
     bool requires_grad,
     float p);
 
@@ -62,6 +63,7 @@ int mlp_bp_input_only(
     uint8_t* reserved_mask,
     T* work_space,
     T* dX,
+    void* lt_workspace,
     bool requires_grad,
     float p);
 
@@ -141,6 +143,7 @@ std::vector<torch::Tensor> mlp_backward(
   for (int i = 0; i < inputs.size(); i++) {
     outputs.push_back(torch::empty(inputs[i].sizes(), inputs[i].type()));  // clone for testing now
   }
+  auto lt_workspace = torch::empty({1 << 22}, inputs[0].type());
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(inputs[0].type(), "mlp_backward", [&] {
     std::vector<scalar_t*> w_ptr;
@@ -174,6 +177,7 @@ std::vector<torch::Tensor> mlp_backward(
         outputs_ptr[0],
         outputs_ptr.data() + 1,
         outputs_ptr.data() + 1 + num_layers,
+        (void*) (lt_workspace.data_ptr<scalar_t>()),
         requires_grad,
         p);
   });
@@ -206,6 +210,7 @@ std::vector<torch::Tensor> mlp_backward_input_only(
 //  for (int i = 0; i < inputs.size(); i++) {
     outputs.push_back(torch::empty(inputs[i].sizes(), inputs[i].type()));  // clone for testing now
   }
+  auto lt_workspace = torch::empty({1 << 22}, inputs[0].type());
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(inputs[0].type(), "mlp_backward", [&] {
     std::vector<scalar_t*> w_ptr;
@@ -240,6 +245,7 @@ std::vector<torch::Tensor> mlp_backward_input_only(
         outputs_ptr[0],
 //        outputs_ptr.data() + 1,
 //        outputs_ptr.data() + 1 + num_layers,
+        (void*) (lt_workspace.data_ptr<scalar_t>()),
         requires_grad,
         p);
   });
