@@ -544,7 +544,7 @@ class FastTranslator(Translator):
             torch.masked_select(
                 cand_bbsz_idx[:, :beam_size],
                 mask=eos_mask[:, :beam_size],
-                out=eos_bbsz_idx,
+                out=eos_bbsz_idx.resize_(0),
             )
 
             finalized_sents = set()
@@ -552,7 +552,7 @@ class FastTranslator(Translator):
                 torch.masked_select(
                     cand_scores[:, :beam_size],
                     mask=eos_mask[:, :beam_size],
-                    out=eos_scores,
+                    out=eos_scores.resize_(0),
                 )
                 finalized_sents = finalize_hypos(step, eos_bbsz_idx, eos_scores)
                 num_remaining_sent -= len(finalized_sents)
@@ -602,7 +602,7 @@ class FastTranslator(Translator):
             torch.add(
                 eos_mask.type_as(cand_offsets) * cand_size,
                 cand_offsets[:eos_mask.size(1)],
-                out=active_mask,
+                out=active_mask.resize_(0),
             )
 
             # get the top beam_size active hypotheses, which are just the hypos
@@ -610,7 +610,7 @@ class FastTranslator(Translator):
             active_hypos, new_blacklist = buffer('active_hypos'), buffer('new_blacklist')
             torch.topk(
                 active_mask, k=beam_size, dim=1, largest=False,
-                out=(new_blacklist, active_hypos)
+                out=(new_blacklist.resize_(0), active_hypos.resize_(0))
             )
 
             # update blacklist to ignore any finalized hypos
@@ -620,7 +620,7 @@ class FastTranslator(Translator):
             active_bbsz_idx = buffer('active_bbsz_idx')
             torch.gather(
                 cand_bbsz_idx, dim=1, index=active_hypos,
-                out=active_bbsz_idx,
+                out=active_bbsz_idx.resize_(0),
             )
             active_scores = torch.gather(
                 cand_scores, dim=1, index=active_hypos,
