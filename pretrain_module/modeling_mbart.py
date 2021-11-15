@@ -306,9 +306,9 @@ class MBartAttention(nn.Module):
             hidden_states = hidden_states
             use_time_mask = self.is_decoder
             qlen, klen = hidden_states.size(0), hidden_states.size(0)
-            
+
             mask = attention_mask
-            low_precision = False  # Use CUDA impl
+            low_precision = True  # Use CUDA impl
 
             attn_output, coverage = self_attn_func(use_time_mask, self.training, self.num_heads, hidden_states,
                                                    self.proj_weight, self.out_proj.weight,

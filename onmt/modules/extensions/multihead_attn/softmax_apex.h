@@ -1779,6 +1779,12 @@ int batch_size, int stride, int pad_batch_stride, int element_count)
         for (int it = 0;  it < WARP_ITERATIONS;  it += ELEMENTS_PER_LDG_STG) {
             int element_index = ELEMENTS_PER_LDG_STG * local_idx + it * WARP_SIZE;
 
+            #pragma unroll
+            for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
+    	        grad_reg_input[i][it+element] = acc_t(0);
+    	        output_reg_input[i][it+element] = acc_t(0);
+            }
+
             if (element_index < batch_element_count) {
                 int itr_jmp = it * WARP_SIZE;
                 int itr_idx = i * element_count + itr_jmp;

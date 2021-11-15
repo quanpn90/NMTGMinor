@@ -163,7 +163,7 @@ std::vector<torch::Tensor> fwd_cuda(
                              k_seq_len,
                              attn_batches*q_seq_len,
                              attn_batches*q_seq_len/sequences);
-      dropout_mask.fill_(1);
+//      dropout_mask.fill_(1);
   }
 //
 //  softmax_results.copy_(attn_scores);
@@ -432,11 +432,11 @@ std::vector<torch::Tensor> bwd_cuda(
   // Apply Dropout Mask and Scale by Dropout Probability
   // Softmax Grad
 
-//  if ( dropout_prob > 0.0f) {
+  if ( dropout_prob > 0.0f) {
       dispatch_masked_scale_softmax_backward_recompute<half, half, float, false>(
                                  static_cast<half*>(matmul2_grads.data_ptr()),
-                                 static_cast<half* const>(matmul2_grads.data_ptr()),
-                                 reinterpret_cast<half const*>(attn_scores.data_ptr()), // need this to recompute softmax
+                                 static_cast<const half*>(matmul2_grads.data_ptr()),
+                                 reinterpret_cast<const half*>(attn_scores.data_ptr()), // need this to recompute softmax
                                  pad_mask,
                                  //reinterpret_cast<half const*>(pad_mask.data_ptr()),
                                  static_cast<uint8_t const*>(dropout_mask.data_ptr()),
@@ -446,18 +446,18 @@ std::vector<torch::Tensor> bwd_cuda(
                                  attn_batches*q_seq_len/sequences,
                                  attn_batches*q_seq_len,
                                  stream);
-//  } else {
+  } else {
 //       if dropout == 0 then we don't need to recompute (because dropout_results == softmax_results)
-//      dispatch_softmax_backward_norecompute<half, half, float, false>(
-//                                 static_cast<half*>(matmul2_grads.data_ptr()),
-//                                 static_cast<half* const>(matmul2_grads.data_ptr()),
-//                                 reinterpret_cast<half const*>(dropout_results.data_ptr()),
-//                                 k_seq_len,
-//                                 k_seq_len,
-//                                 attn_batches*q_seq_len/sequences,
-//                                 attn_batches*q_seq_len,
-//                                 stream);
-//  }
+      dispatch_softmax_backward_norecompute<half, half, float, false>(
+                                 static_cast<half*>(matmul2_grads.data_ptr()),
+                                 static_cast<const half*>(matmul2_grads.data_ptr()),
+                                 reinterpret_cast<const half*>(dropout_results.data_ptr()),
+                                 k_seq_len,
+                                 k_seq_len,
+                                 attn_batches*q_seq_len/sequences,
+                                 attn_batches*q_seq_len,
+                                 stream);
+  }
 
 
   // Matmul1 Dgrad1

@@ -124,6 +124,7 @@ class SelfMultiheadAttnTest(unittest.TestCase):
 
     def test_performance(self):
         training = True
+        dropout=0.5
 
         mask = ((torch.randn(self.sequences, self.seq_length) > 0)).bool().cuda()
 
@@ -137,7 +138,7 @@ class SelfMultiheadAttnTest(unittest.TestCase):
                                                       self.ref_parameters.out_proj_weight,
                                                       self.ref_parameters.in_proj_bias,
                                                       self.ref_parameters.out_proj_bias,
-                                                      mask, 0.5,
+                                                      mask, dropout,
                                                       False, None, False, None,
                                                       False, True)
 
@@ -158,7 +159,7 @@ class SelfMultiheadAttnTest(unittest.TestCase):
                                                       self.tst_parameters.out_proj_weight,
                                                       self.tst_parameters.in_proj_bias,
                                                       self.tst_parameters.out_proj_bias,
-                                                      mask, 0.5,
+                                                      mask, dropout,
                                                       False, None, False, None,
                                                       True, True)
 
