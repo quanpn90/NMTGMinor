@@ -13,6 +13,7 @@ from onmt.modules.multilingual_factorized.encdec_attention import MFWEncdecMulti
 from onmt.modules.multilingual_factorized.relative_attention import MFWRelativeSelfMultiheadAttn
 from onmt.modules.dropout import variational_dropout
 from onmt.modules.identity import Identity
+from onmt.modules.optimized.dropout_add import fused_dropout_add
 
 
 def preprocessing(rezero, model_size, post_norm=False):
@@ -146,6 +147,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
                     ffn_scale = self.ffn_scale
 
                 input = self.postprocess_mcr_ffn(out * ffn_scale, input)
+                # input = fused_dropout_add(out * ffn_scale, input,self.residual_dropout, self.training)
 
         if self.stochastic_sublayer:  # re-toss-coin
             if self.training and self.death_rate > 0:
@@ -166,6 +168,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
                 out = out / (1 - self.death_rate)
 
             input = self.postprocess_attn(out, input)
+            # input = fused_dropout_add(out, input, self.residual_dropout, self.training)
 
         if self.stochastic_sublayer:  # re-toss-coin
             if self.training and self.death_rate > 0:
@@ -184,6 +187,7 @@ class RelativeTransformerEncoderLayer(nn.Module):
                 ffn_scale = self.ffn_scale
 
             input = self.postprocess_ffn(out * ffn_scale, input)
+            # input = fused_dropout_add(out * ffn_scale, input, self.residual_dropout, self.training)
 
         if incremental:
             return input, incremental_cache
@@ -315,7 +319,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 else:
                     ffn_scale = self.ffn_scale
 
-                input = self.postprocess_mcr_ffn(out * ffn_scale, input)
+                # input = self.postprocess_mcr_ffn(out * ffn_scale, input)
+                input = fused_dropout_add(out * ffn_scale, input, self.residual_dropout, self.training)
 
         if self.stochastic_sublayer:
             if self.training and self.death_rate > 0:
@@ -341,7 +346,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
             if self.training and self.death_rate > 0:
                 out = out / (1 - self.death_rate)
 
-            input = self.postprocess_attn(out, input)
+            # input = self.postprocess_attn(out, input)
+            input = fused_dropout_add(out, input, self.residual_dropout, self.training)
 
         if self.stochastic_sublayer:
             if self.training and self.death_rate > 0:
@@ -372,7 +378,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
                 if self.training and self.death_rate > 0:
                     out = out / (1 - self.death_rate)
 
-                input = self.postprocess_src_attn(out, input)
+                # input = self.postprocess_src_attn(out, input)
+                input = fused_dropout_add(out, input, self.residual_dropout, self.training)
 
             else:
                 coverage = None
@@ -397,7 +404,8 @@ class RelativeTransformerDecoderLayer(nn.Module):
             else:
                 ffn_scale = self.ffn_scale
 
-            input = self.postprocess_ffn(out * ffn_scale, input)
+            # input = self.postprocess_ffn(out * ffn_scale, input)
+            input = fused_dropout_add(out * ffn_scale, input, self.residual_dropout, self.training)
 
         if incremental_cache is None:
             return input, coverage

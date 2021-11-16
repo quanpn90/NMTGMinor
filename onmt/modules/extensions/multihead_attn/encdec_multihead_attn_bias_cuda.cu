@@ -192,7 +192,8 @@ std::vector<torch::Tensor> fwd_cuda(
                              k_seq_len,
                              k_seq_len,
                              attn_batches*q_seq_len,
-                             attn_batches*q_seq_len/sequences);  // pad batch strides
+                             attn_batches*q_seq_len/sequences,
+                             stream);  // pad batch strides
   }
 
   assert(softmax_success);
@@ -471,7 +472,7 @@ std::vector<torch::Tensor> bwd_cuda(
   // bool softmax_success = false;
 
   if ( dropout_prob > 0.0f) {
-      dispatch_masked_scale_softmax_backward_recompute<half, half, float, false>(
+      dispatch_masked_scale_softmax_backward_recompute<half, half, float, false, false>(
                                  static_cast<half*>(matmul2_grads.data_ptr()),
                                  static_cast<half* const>(matmul2_grads.data_ptr()),
                                  reinterpret_cast<half const*>(attn_scores.data_ptr()), // need this to recompute softmax

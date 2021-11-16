@@ -140,7 +140,8 @@ class SelfMultiheadAttn(nn.Module):
                                            input_bias, self.out_proj_bias,
                                            mask, self.dropout,
                                            self.rotary_pos_enc, pos,
-                                           incremental, incremental_cache, True)
+                                           incremental, incremental_cache,
+                                           False, True)
 
         return outputs, coverage
 

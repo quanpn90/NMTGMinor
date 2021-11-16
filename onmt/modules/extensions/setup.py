@@ -147,17 +147,17 @@ ext_modules.append(
                                                '--use_fast_math'] + version_dependent_macros +
                                                                     generator_flag}))
 
-# ext_modules.append(
-#     CUDAExtension(name='fused_dropout_add_cuda',
-#                   sources=['dropout_add.cpp',
-#                            'dropout_add_cuda.cu'],
-#                   extra_compile_args={'cxx': ['-O3', ],
-#                                       'nvcc': ['-O3',
-#                                                '-U__CUDA_NO_HALF_OPERATORS__',
-#                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
-#                                                '--expt-relaxed-constexpr',
-#                                                '--expt-extended-lambda',
-#                                                '--use_fast_math'] + cc_flag}))
+ext_modules.append(
+    CUDAExtension(name='fused_dropout_add_cuda',
+                  sources=['dropout_add/fused_dropout_add.cpp',
+                           'dropout_add/fused_dropout_add_cuda_kernel.cu'],
+                  extra_compile_args={'cxx': ['-O3', ],
+                                      'nvcc': ['-O3',
+                                               '-U__CUDA_NO_HALF_OPERATORS__',
+                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
+                                               '--expt-relaxed-constexpr',
+                                               '--expt-extended-lambda',
+                                               '--use_fast_math'] + cc_flag}))
 
 
 # ext_modules.append(

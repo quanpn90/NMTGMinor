@@ -124,6 +124,11 @@ class FairseqWav2Vec(nn.Module):
             print("[INFO] Adding adapters for Wav2vec model with %d languages" % opt.n_languages)
             self.wav2vec_encoder.encoder.add_adapters(opt.n_languages, adapter_location=opt.wav2vec_adapter)
 
+        if opt.multilingual_factorized_weights:
+            print("[INFO] Factorizing Wav2vec model into %d languages" % opt.n_languages)
+            self.wav2vec_encoder.encoder.add_factorize(opt.n_languages, rank=opt.mfw_rank,
+                                                       multiplicative=opt.mfw_multiplicative)
+
         if opt.freeze_encoder_ffn:
             self.wav2vec_encoder.encoder.freeze_or_unfreeze_ffn_params()
 

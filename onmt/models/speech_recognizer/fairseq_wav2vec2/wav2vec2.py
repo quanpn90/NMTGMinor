@@ -26,6 +26,7 @@ from .fairseq_modules import (
 )
 
 from onmt.modules.layer_norm import LayerNorm
+from onmt.modules.optimized.dropout_add import fused_dropout_add
 
 from .utils import buffered_arange, index_put, is_xla_tensor
 
@@ -1035,6 +1036,11 @@ class TransformerEncoder(nn.Module):
         for layer in self.layers:
             layer.add_adapters(n_languages, adapter_location=adapter_location)
 
+    def add_factorize(self, n_languages, rank=4, multiplicative=False):
+
+        for layer in self.layers:
+            layer.add_factorized(n_languages, rank=rank, multiplicative=multiplicative)
+
     def freeze_or_unfreeze_ffn_params(self):
 
         for layer in self.layers:
@@ -1066,6 +1072,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         super().__init__()
         # Initialize parameters
         self.embedding_dim = embedding_dim
+        self.ffn_embedding_dim = ffn_embedding_dim
         self.dropout = dropout
         self.activation_dropout = activation_dropout
         self.favor = favor
@@ -1083,6 +1090,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             favor=favor
         )
 
+        self.residual_dropout = dropout
         self.dropout1 = nn.Dropout(dropout, inplace=False)
         self.dropout2 = nn.Dropout(self.activation_dropout, inplace=True)
         self.dropout3 = nn.Dropout(dropout, inplace=False)
@@ -1127,9 +1135,67 @@ class TransformerSentenceEncoderLayer(nn.Module):
         if adapter_location == 2:
             self.mid_adapter = MultilingualAdapter(n_languages, self.embedding_dim, downsample_factor=downsampling_factor)
 
-    def add_factorized(self):
+    def add_factorized(self, n_languages, rank=4, multiplicative=True):
 
-        pass
+        self.self_attn.add_factorized_weights(n_languages, rank=rank, multiplicative=multiplicative)
+        self.multiplicative_factorize = multiplicative
+        self.is_factorized = True
+
+        embed_dim = self.embedding_dim
+        ffn_dim = self.ffn_embedding_dim
+        self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
+        self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
+        self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
+        self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
+
+        nn.init.normal_(self.r_i, 0.0, 0.02)
+        nn.init.normal_(self.s_i, 0.0, 0.02)
+        nn.init.normal_(self.r_o, 0.0, 0.02)
+        nn.init.normal_(self.s_o, 0.0, 0.02)
+
+        if multiplicative:
+            rank = 1
+            self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
+            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
+
+            nn.init.constant_(self.rm_i, 1.0)
+            nn.init.constant_(self.sm_i, 1.0)
+            nn.init.constant_(self.rm_o, 1.0)
+            nn.init.constant_(self.sm_o, 1.0)
+
+    def get_mlp_weights(self, lang=None, mixture=None):
+
+        in_weight = self.fc1.weight
+        out_weight = self.fc2.weight
+        in_bias = self.fc1.bias
+        out_bias = self.fc2.bias
+
+        if lang is not None:
+            assert mixture is None
+
+            if self.is_factorized:
+                if self.multiplicative_factorize:
+                    rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
+                    sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
+                    rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
+                    sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+                    in_weight = in_weight * torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
+                    out_weight = out_weight * torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+
+                r_i = torch.index_select(self.r_i, 0, lang).squeeze(0)
+                s_i = torch.index_select(self.s_i, 0, lang).squeeze(0)
+                r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
+                s_o = torch.index_select(self.s_o, 0, lang).squeeze(0)
+
+                in_weight = in_weight + torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
+                out_weight = out_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+
+        if mixture is not None:
+            raise NotImplementedError
+
+        return in_weight, out_weight, in_bias, out_bias
 
     def forward(
             self,
@@ -1145,14 +1211,35 @@ class TransformerSentenceEncoderLayer(nn.Module):
         """
         residual = x
 
+        def call_mlp(x, in_weight, out_weight, in_bias, out_bias, activation_fn, dropout_p, training_,
+                     fused, fused_function):
+
+            if fused and x.is_cuda:
+                dropout_p_ = dropout_p if training_ else 0.0
+                seq_len, bsz, hidden_size = x.size(0), x.size(1), x.size(2)
+
+                weights = [in_weight, out_weight]
+                biases = [in_bias, out_bias]
+
+                x = fused_function(dropout_p_, False, x.view(seq_len * bsz, -1),
+                                        *weights, *biases)
+                x = x.view(seq_len, bsz, -1)
+
+            else:
+                x = F.linear(x, in_weight, in_bias)
+                x = activation_fn(x)
+                x = F.dropout(x, dropout_p, training=training_)
+                x = F.linear(x, out_weight, out_bias)
+
+            return x
+
         if self.has_adapter:
             if self.adapter_location == 1:
                 assert lang is not None or mixture is not None
                 x = self.adapter(x, lang=lang, mixture=mixture)
 
-            x = residual + x  # residual is before the big FFN
-
-        residual = x
+            x.add_(residual)  # residual is before the big FFN
+            residual = x
 
         if self.layer_norm_first:
             x = self.self_attn_layer_norm(x)
@@ -1164,38 +1251,46 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 value=x,
                 key_padding_mask=self_attn_padding_mask,
                 attn_mask=self_attn_mask,
+                lang=lang, mixture=mixture
             )
 
-            x = self.dropout1(x)
+            # x = self.dropout1(x)
+            #
+            # x.add_(residual)
+            x = fused_dropout_add(x, residual, self.residual_dropout, self.training)
+            residual = x
 
             if self.has_adapter:
                 if self.adapter_location == 2:
                     assert lang is not None or mixture is not None
                     x = self.mid_adapter(x, lang=lang, mixture=mixture)
+                    x.add_(residual)
+                    residual = x
 
-            x = residual + x
-
-            residual = x
             x = self.final_layer_norm(x)
 
-            if self.fused and x.is_cuda:
-                dropout = self.dropout2.p if self.training else 0.0
-                seq_len, bsz, hidden_size = x.size(0), x.size(1), x.size(2)
+            in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, mixture=mixture)
+            x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
+                         self.dropout2.p, self.training,
+                         self.fused, self.fused_function)
+            # if self.fused and x.is_cuda:
+            #     dropout = self.dropout2.p if self.training else 0.0
+            #     seq_len, bsz, hidden_size = x.size(0), x.size(1), x.size(2)
+            #
+            #     weights = [self.fc1.weight, self.fc2.weight]
+            #     biases = [self.fc1.bias, self.fc2.bias]
+            #
+            #     x = self.fused_function(dropout, False, x.view(seq_len * bsz, -1),
+            #                             *weights, *biases)
+            #     x = x.view(seq_len, bsz, -1)
+            # else:
+            #     x = self.activation_fn(self.fc1(x))
+            #     x = self.dropout2(x)
+            #     x = self.fc2(x)
 
-                weights = [self.fc1.weight, self.fc2.weight]
-                biases = [self.fc1.bias, self.fc2.bias]
-
-                x = self.fused_function(dropout, False, x.view(seq_len * bsz, -1),
-                                        *weights, *biases)
-                x = x.view(seq_len, bsz, -1)
-            else:
-                x = self.activation_fn(self.fc1(x))
-                x = self.dropout2(x)
-                x = self.fc2(x)
-
-            x = self.dropout3(x)
-            x = residual + x
-
+            # x = self.dropout3(x)
+            # x = residual + x
+            x = fused_dropout_add(x, residual, self.residual_dropout, self.training)
 
         else:
             x, attn = self.self_attn(

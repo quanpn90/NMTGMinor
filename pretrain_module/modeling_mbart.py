@@ -30,6 +30,7 @@ from onmt.modules.layer_norm import LayerNorm
 from onmt.modules.optimized.self_attention_func import self_attn_func
 from onmt.modules.optimized.encdec_attention_func_bias import encdec_attn_bias_func
 from onmt.modules.dropout import embedded_dropout
+from onmt.modules.optimized.dropout_add import fused_dropout_add
 
 from .activations import ACT2FN
 # from ...file_utils import (
@@ -460,17 +461,16 @@ class MBartCrossAttention(MBartAttention):
             hidden_states = hidden_states
             key_value_states = key_value_states
 
-            # print("[DEBUGGING] Expecting mask <<< numel")
-            # print(attention_mask.long().sum(), attention_mask.numel())
-
             # attention_mask should have size Bxlen_k
+            low_precision = True
             attn_output, coverage = encdec_attn_bias_func(recompute, self.training, self.num_heads,
                                                           hidden_states, key_value_states,
                                                           self.q_proj.weight, self.proj_weight_kv, self.out_proj.weight,
                                                           self.q_proj.bias, self.proj_bias_kv, self.out_proj.bias,
                                                           attention_mask, self.dropout,
                                                           incremental, incremental_cache,
-                                                          False, None, None, False, True)
+                                                          False, None, None,   # no rotary encodings
+                                                          low_precision, True)
 
         return attn_output, coverage, incremental_cache
 
@@ -648,8 +648,9 @@ class MBartDecoderLayer(nn.Module):
             output_attentions=output_attentions,
             incremental=incremental, incremental_cache=incremental_cache
         )
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states = residual + hidden_states
+        # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        # hidden_states = residual + hidden_states
+        hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
 
         # Cross-Attention Block
         # cross_attn_present_key_value = None
@@ -668,8 +669,9 @@ class MBartDecoderLayer(nn.Module):
                 output_attentions=output_attentions,
                 incremental=incremental, incremental_cache=incremental_cache
             )
-            hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-            hidden_states = residual + hidden_states
+            # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+            # hidden_states = residual + hidden_states
+            hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
 
             # add cross-attn to positions 3,4 of present_key_value tuple
             # present_key_value = present_key_value + cross_attn_present_key_value
@@ -692,8 +694,9 @@ class MBartDecoderLayer(nn.Module):
             hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
             hidden_states = self.fc2(hidden_states)
 
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states = residual + hidden_states
+        hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
+        # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        # hidden_states = residual + hidden_states
 
         # if hidden_states.dtype == torch.float16 and (
         #         torch.isinf(hidden_states).any() or torch.isnan(hidden_states).any()

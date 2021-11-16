@@ -56,27 +56,30 @@ class SelfAttnFunc(torch.autograd.Function):
         ctx.rotary_pos_enc = rotary_pos_enc
         ctx.return_coverage = return_coverage
         ctx.low_precision = low_precision
+        ctx.use_time_mask = use_time_mask
 
         bsz, len_q = inputs.size(1), inputs.size(0)
 
         if low_precision and self_multihead_attn_cuda is not None and not incremental and len_q <= 2048 \
-                and not use_time_mask \
                 and inputs.type() == 'torch.cuda.HalfTensor' \
                 and not rotary_pos_enc:
             ctx.fused = True
 
-            use_mask = True
+            # use_mask = True
             if mask is not None:
                 mask = mask.half() * -16384
             else:
-                mask = inputs.new(bsz, len_q).zero_()  # works
+                if use_time_mask:
+                    mask = inputs.new(len_q, len_q).zero_()
+                else:
+                    mask = inputs.new(bsz, len_q).zero_()  # works
 
             input_lin_results, \
                 attn_scores, \
                 dropout_results, \
                 dropout_mask, \
                 matmul2_results, \
-                outputs = self_multihead_attn_cuda.forward(use_mask, False, is_training, heads,
+                outputs = self_multihead_attn_cuda.forward(use_time_mask, is_training, heads,
                                                            inputs.contiguous(), input_weights, output_weights,
                                                            input_biases, output_biases,
                                                            mask, dropout_prob)
@@ -180,27 +183,15 @@ class SelfAttnFunc(torch.autograd.Function):
                 matmul1_results = matmul1_results.view(seqs * heads, seql_q, seql_k)
 
         # Softmax and Dropout attention
-        if mask_softmax_dropout_cuda and len_k <= 2048 \
-                and matmul1_results.type() == 'torch.cuda.HalfTensor':
-            dropout_mask, softmax_results, dropout_results = mask_softmax_dropout_cuda.forward(is_training, heads,
-                                                                                               matmul1_results,
-                                                                                               dropout_prob_t[0])
-            if not is_training:
-                dropout_results = softmax_results  # because the cuda returns empty craps
+        softmax_results = F.softmax(matmul1_results, dim=-1)
 
-            ctx.fused_softmax_dropout = True
+        # Dropout - is not executed for inference
+        if is_training:
+            dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
         else:
-            if matmul1_results.type() == 'torch.cuda.HalfTensor':
-                softmax_results = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
-            else:
-                softmax_results = F.softmax(matmul1_results, dim=-1)
+            dropout_results = softmax_results
+            dropout_mask = null_tensor
 
-            # Dropout - is not executed for inference
-            if is_training:
-                dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
-            else:
-                dropout_results = softmax_results
-                dropout_mask = null_tensor
 
         nan_mask = torch.isnan(dropout_results)
         if nan_mask.any():
@@ -279,7 +270,8 @@ class SelfAttnFunc(torch.autograd.Function):
                 input_weight_grads, \
                 output_weight_grads, \
                 input_bias_grads, \
-                output_bias_grads = self_multihead_attn_cuda.backward(heads_t[0], output_grads.contiguous(), matmul2_results,
+                output_bias_grads = self_multihead_attn_cuda.backward(ctx.use_time_mask, heads_t[0],
+                                                                      output_grads.contiguous(), matmul2_results,
                                                                       dropout_results, attn_scores, pad_mask,
                                                                       input_lin_results, inputs, input_weights,
                                                                       output_weights, dropout_mask, dropout_prob_t[0])

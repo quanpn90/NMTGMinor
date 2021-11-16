@@ -684,83 +684,83 @@ int softmax_elements_stride, int batch_count, int pad_batch_stride, float p, cud
     return false;
 }
 
-// WARP_BATCH number of batches.
-// WARP_ITERATOINS The number of iterations required for one warp to iterate over all data.
-// WARP_SIZE number of elements working on a single batch, has to be a power of two.
-// ELEMENTS_PER_LDG_STG has to be 1.
-template <typename input_t, typename output_t, typename acc_t, int WARP_BATCH, int WARP_ITERATIONS, int WARP_SIZE = 32, int ELEMENTS_PER_LDG_STG=1>
-__global__ void additive_masked_softmax_warp_forward(input_t *dst, const output_t *src, const input_t *pad_mask, int batch_size, int stride, int element_count, int pad_batch_stride)
+template <typename input_t, typename output_t, typename acc_t, int WARP_BATCH, int WARP_ITERATIONS, int WARP_SIZE, int ELEMENTS_PER_LDG_STG>
+__global__ void additive_masked_softmax_warp_forward_vec4(output_t *dst, const input_t *src,
+const input_t *pad_mask, int batch_size, int stride,
+int element_count, int pad_batch_stride)
 {
-    assert(ELEMENTS_PER_LDG_STG==1);
- 
+
+    assert(ELEMENTS_PER_LDG_STG==4);
     int first_batch = (blockDim.y * blockIdx.x + threadIdx.y) * WARP_BATCH;
- 
+//    int tid = blockIdx.x * blockDim.x * blockDim.y + threadIdx.y * blockDim.x + threadIdx.x;
+//    acc_t pinv = acc_t(1)/p;
     // batch_size might not be a multiple of WARP_BATCH. Check how
     // many batches have to computed within this WARP.
     int local_batches = batch_size - first_batch;
     if (local_batches > WARP_BATCH)
         local_batches = WARP_BATCH;
- 
+
     // there might be multiple batches per warp. compute the index within the batch
     int local_idx = threadIdx.x;
+    //vectorize if element_count is multiple of 4, else don't vectorize
+    input_t elements_input[WARP_BATCH][WARP_ITERATIONS];
 
     int thread_offset =  first_batch * stride + ELEMENTS_PER_LDG_STG * local_idx;
     src += thread_offset;
     dst += thread_offset;
- 
+//    dropout_mask += thread_offset;
+
     // load data from global memory
-    input_t elements_input[WARP_BATCH][WARP_ITERATIONS];
     for (int i = 0;i < WARP_BATCH;++i) {
         int batch_element_count = (i >= local_batches) ? 0 : element_count;
         int pad_thread_offset = ( (first_batch + i) / pad_batch_stride) * stride + ELEMENTS_PER_LDG_STG * local_idx;
         const half* curr_mask    = pad_mask + pad_thread_offset;
+        #pragma unroll
         for (int it = 0;it < WARP_ITERATIONS;it += ELEMENTS_PER_LDG_STG) {
             int element_index = ELEMENTS_PER_LDG_STG * local_idx + it * WARP_SIZE;
             #pragma unroll
             for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
-		//masking_value is a large negative value
+    	//masking_value is a large negative value
                 elements_input[i][it + element] = -10000;
             }
- 
+
             if (element_index < batch_element_count) {
                 int itr_jmp = it * WARP_SIZE;
                 int itr_idx = i * element_count + itr_jmp;
                 copy_vector<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], src + itr_idx);
-                //apply_mask<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], 
-                //                                          (__half)-std::numeric_limits<float>::infinity(), 
-                //                                          curr_mask + itr_jmp);
-                elements_input[i][it] += *(curr_mask + itr_jmp);
-	    } 
- 
+                apply_additive_mask<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], curr_mask + itr_jmp); //(__half)-std::numeric_limits<float>::infinity()
+            }
+
         }
     }
- 
     // convert input_t to acc_t
     acc_t elements[WARP_BATCH][WARP_ITERATIONS];
+    #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
+        #pragma unroll
         for (int it = 0;it < WARP_ITERATIONS;++it) {
             elements[i][it] = elements_input[i][it];
         }
     }
- 
+
     constexpr uint32_t  FULL_MASK = 0xffffffff;
- 
+
     // compute local max_value
- 
+
     // take the max_value of the first element to avoid one max call
     acc_t max_value[WARP_BATCH];
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
         max_value[i] = elements[i][0];
     }
- 
+
     #pragma unroll
     for (int it = 1;it < WARP_ITERATIONS;++it) {
         for (int i = 0;i < WARP_BATCH;++i) {
             max_value[i] = (max_value[i] > elements[i][it]) ? max_value[i] : elements[i][it];
         }
     }
- 
+
     // reduction max_value
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
@@ -774,19 +774,18 @@ __global__ void additive_masked_softmax_warp_forward(input_t *dst, const output_
             max_value[i] = max_value[i] > val[i] ? max_value[i] : val[i];
         }
     }
- 
+
     // compute local sum
     acc_t sum[WARP_BATCH] { 0.0f };
- 
+
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
         for (int it = 0;it < WARP_ITERATIONS;++it) {
-            //elements[i][it] = expf(elements[i][it] - max_value[i]);
             elements[i][it] = std::exp(elements[i][it] - max_value[i]);
             sum[i] += elements[i][it];
         }
     }
- 
+
     // reduction sum
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
@@ -795,7 +794,8 @@ __global__ void additive_masked_softmax_warp_forward(input_t *dst, const output_
             sum[i] += __shfl_xor_sync(FULL_MASK, sum[i], offset, WARP_SIZE);
         }
     }
- 
+
+
     // store result
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -805,12 +805,162 @@ __global__ void additive_masked_softmax_warp_forward(input_t *dst, const output_
         for (int it = 0;it < WARP_ITERATIONS;it += ELEMENTS_PER_LDG_STG) {
             int element_index = ELEMENTS_PER_LDG_STG * local_idx + it * WARP_SIZE;
             if (element_index < element_count) {
-                //dst[i * element_count + it * WARP_SIZE] = elements[i][it] / sum[i];
                 output_t out[ELEMENTS_PER_LDG_STG];
+                #pragma unroll
                 for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
-                    out[element] = elements[i][it + element] / sum[i];
+                    out[element] =  (elements[i][it + element] / sum[i]);
                 }
                 copy_vector<output_t, ELEMENTS_PER_LDG_STG>(dst + i * element_count + it * WARP_SIZE, out);
+            }
+            else {
+                break;
+            }
+        }
+    }
+}
+
+
+template <typename input_t, typename output_t, typename acc_t, int WARP_BATCH, int WARP_ITERATIONS, int WARP_SIZE, int ELEMENTS_PER_LDG_STG>
+__global__ void additive_masked_softmax_warp_forward(output_t *dst, const input_t *src,
+const input_t *pad_mask, int batch_size, int stride, int element_count, int pad_batch_stride)
+{
+    assert(ELEMENTS_PER_LDG_STG==1);
+    int first_batch = (blockDim.y * blockIdx.x + threadIdx.y) * WARP_BATCH;
+//    int tid = blockIdx.x * blockDim.x * blockDim.y + threadIdx.y * blockDim.x + threadIdx.x;
+//    acc_t pinv = acc_t(1)/p;
+    // batch_size might not be a multiple of WARP_BATCH. Check how
+    // many batches have to computed within this WARP.
+    int local_batches = batch_size - first_batch;
+    if (local_batches > WARP_BATCH)
+        local_batches = WARP_BATCH;
+
+    // there might be multiple batches per warp. compute the index within the batch
+    int local_idx = threadIdx.x;
+    //vectorize if element_count is multiple of 4, else don't vectorize
+    input_t elements_input[WARP_BATCH][WARP_ITERATIONS];
+
+    int thread_offset =  first_batch * stride + local_idx;
+    src += thread_offset;
+    dst += thread_offset;
+//    dropout_mask += thread_offset;
+
+    // load data from global memory
+    for (int i = 0;i < WARP_BATCH;++i) {
+        int batch_element_count = (i >= local_batches) ? 0 : element_count;
+        int pad_thread_offset = ( (first_batch + i) / pad_batch_stride) * stride + local_idx;
+        const half* curr_mask    = pad_mask + pad_thread_offset;
+        #pragma unroll
+        for (int it = 0;it < WARP_ITERATIONS;it += 1) {
+            int element_index = local_idx + it * WARP_SIZE;
+            #pragma unroll
+            for (int element = 0;element < 1;++element) {
+    	//masking_value is a large negative value
+                elements_input[i][it + element] = -10000;
+            }
+
+            if (element_index < batch_element_count) {
+                int itr_jmp = it * WARP_SIZE;
+                int itr_idx = i * element_count + itr_jmp;
+                copy_vector<input_t, 1>(&elements_input[i][it], src + itr_idx);
+                apply_additive_mask<input_t, 1>(&elements_input[i][it], curr_mask + itr_jmp);
+            }
+
+        }
+    }
+    // convert input_t to acc_t
+    acc_t elements[WARP_BATCH][WARP_ITERATIONS];
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        #pragma unroll
+        for (int it = 0;it < WARP_ITERATIONS;++it) {
+            elements[i][it] = elements_input[i][it];
+        }
+    }
+
+    constexpr uint32_t  FULL_MASK = 0xffffffff;
+
+    // compute local max_value
+
+    // take the max_value of the first element to avoid one max call
+    acc_t max_value[WARP_BATCH];
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        max_value[i] = elements[i][0];
+    }
+
+    #pragma unroll
+    for (int it = 1;it < WARP_ITERATIONS;++it) {
+        for (int i = 0;i < WARP_BATCH;++i) {
+            max_value[i] = (max_value[i] > elements[i][it]) ? max_value[i] : elements[i][it];
+        }
+    }
+
+    // reduction max_value
+    #pragma unroll
+    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
+        float val[WARP_BATCH];
+        #pragma unroll
+        for (int i = 0;i < WARP_BATCH;++i) {
+            val[i] = __shfl_xor_sync(FULL_MASK, max_value[i], offset, WARP_SIZE);
+        }
+        #pragma unroll
+        for (int i = 0;i < WARP_BATCH;++i) {
+            max_value[i] = max_value[i] > val[i] ? max_value[i] : val[i];
+        }
+    }
+
+    // compute local sum
+    acc_t sum[WARP_BATCH] { 0.0f };
+
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        for (int it = 0;it < WARP_ITERATIONS;++it) {
+            elements[i][it] = std::exp(elements[i][it] - max_value[i]);
+            sum[i] += elements[i][it];
+        }
+    }
+
+    // reduction sum
+    #pragma unroll
+    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
+        #pragma unroll
+        for (int i = 0;i < WARP_BATCH;++i) {
+            sum[i] += __shfl_xor_sync(FULL_MASK, sum[i], offset, WARP_SIZE);
+        }
+    }
+//    curandStatePhilox4_32_10_t state;
+//    auto seeds = at::cuda::philox::unpack(philox_args);
+//    curand_init(
+//      std::get<0>(seeds),
+//      tid,
+//      std::get<1>(seeds),
+//      &state);
+
+    // store result
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        if (i >= local_batches)
+            break;
+        #pragma unroll
+        for (int it = 0;it < WARP_ITERATIONS;it += 1) {
+            int element_index = local_idx + it * WARP_SIZE;
+            if (element_index < element_count) {
+                output_t out[1];
+                acc_t softmax_out[1];
+//                uint8_t dropout_mask_temp[1];
+                //generate a vector of random numbers here
+//                float rand = curand_uniform(&state);
+//                float *rand_ptr = (float*)(&rand);
+                #pragma unroll
+                for (int element = 0;element < 1;++element) {
+    	            softmax_out[element] = (elements[i][it + element] / sum[i]);
+//                    rand_ptr[element] = rand_ptr[element] <= p;
+                    out[element] = softmax_out[element];
+//    	            dropout_mask_temp[element] = rand_ptr[element] > 0.5; // just to distinguish 0.0f and 1.0f
+                }
+                copy_vector<output_t, 1>(dst + i * element_count + it * WARP_SIZE, out);
+//                copy_vector<uint8_t, 1>(dropout_mask + i * element_count + it * WARP_SIZE, dropout_mask_temp);
+
             }
             else {
                 break;
@@ -823,18 +973,19 @@ __global__ void additive_masked_softmax_warp_forward(input_t *dst, const output_
 // WARP_ITERATOINS The number of iterations required for one warp to iterate over all data.
 // WARP_SIZE number of elements working on a single batch, has to be a power of two.
 // ELEMENTS_PER_LDG_STG has to be 1.
-template <typename input_t, typename output_t>
-using additive_masked_softmax_forward_func = void(*)(input_t *dst, const output_t *src, const half *pad_mask, int batch_size, int stride, int element_count, int pad_batch_stride);
- 
 template <typename input_t, typename output_t, typename acc_t>
-bool warp_additive_masked_softmax_kernel(int log2_elements, int &warp_size, int &batches_per_warp, additive_masked_softmax_forward_func<input_t, output_t> &kernel) {
+using additive_masked_softmax_forward_func = void(*)(output_t *dst, const input_t *src, const input_t *pad_mask, int batch_size, int stride, int element_count, int pad_batch_stride);
+
+
+template <typename input_t, typename output_t, typename acc_t>
+bool warp_additive_masked_softmax_kernel(int element_count, int log2_elements, int &warp_size, int &batches_per_warp, additive_masked_softmax_forward_func<input_t, output_t, acc_t> &kernel) {
     // determine size of a warp
     const int next_power_of_two = 1 << log2_elements;
     warp_size = (next_power_of_two < 32) ? next_power_of_two : 32;
- 
+
     // determine how many batches a warp should process.
     batches_per_warp = (next_power_of_two <= 128) ? 2 : 1;
- 
+    bool flag_vec4 = (element_count % 4 == 0);
     switch (log2_elements) {
     case 0: // 1
         kernel = &additive_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,1,1>;
@@ -858,83 +1009,71 @@ bool warp_additive_masked_softmax_kernel(int log2_elements, int &warp_size, int 
         kernel = &additive_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,2,32,1>;
         break;
     case 7: // 128
-        kernel = &additive_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,4,32,1>;
+	if (flag_vec4) kernel = &additive_masked_softmax_warp_forward_vec4<input_t, output_t, acc_t, 2,4,32,4>;
+	else kernel = &additive_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,4,32,1>;
         break;
     case 8: // 256
-        kernel = &additive_masked_softmax_warp_forward<input_t, output_t, acc_t, 1,8,32,1>;
+	if (flag_vec4) kernel = &additive_masked_softmax_warp_forward_vec4<input_t, output_t, acc_t, 1,8,32,4>;
+	else kernel = &additive_masked_softmax_warp_forward<input_t, output_t, acc_t, 1,8,32,1>;
         break;
     case 9: // 512
-        kernel = &additive_masked_softmax_warp_forward<input_t, output_t, acc_t, 1,16,32,1>;
+        if (flag_vec4) kernel = &additive_masked_softmax_warp_forward_vec4<input_t, output_t, acc_t, 1,16,32,4>;
+	else kernel = &additive_masked_softmax_warp_forward<input_t, output_t, acc_t, 1,16,32,1>;
         break;
     case 10: // 1024
-        kernel = &additive_masked_softmax_warp_forward<input_t, output_t, acc_t, 1,32,32,1>;
+        if (flag_vec4) kernel = &additive_masked_softmax_warp_forward_vec4<input_t, output_t, acc_t, 1,32,32,4>;
+	else kernel = &additive_masked_softmax_warp_forward<input_t, output_t, acc_t, 1,32,32,1>;
+        break;
+    case 11: // 2048
+        if (flag_vec4) kernel = &additive_masked_softmax_warp_forward_vec4<input_t, output_t, acc_t, 1,64,32,4>;
+	else kernel = &additive_masked_softmax_warp_forward<input_t, output_t, acc_t, 1,64,32,1>;
         break;
     default:
         return false;
     }
     return true;
 }
- 
-template<typename input_t, typename output_t, typename acc_t>
-bool dispatch_additive_masked_softmax(output_t *dst, const input_t *src, const input_t *pad_mask,
-                                      int softmax_elements, int softmax_elements_stride,
-                                      int batch_count, int pad_batch_stride)
-{
-    if (softmax_elements == 0) {
-        return true;
-    } else if (softmax_elements <= 1024) {
-        // compute function index. there's a function for each power of two size up to 1024.
-        int log2_elements = 0;
-        while ((1 << log2_elements) < softmax_elements) ++log2_elements;
- 
-        additive_masked_softmax_forward_func<input_t, output_t> kernel;
-        int warp_size, batches_per_warp;
-        if (!warp_additive_masked_softmax_kernel<input_t, output_t, acc_t>(log2_elements, warp_size, batches_per_warp, kernel)) {
-            return false;
-        }
- 
-        // use 128 threads per block to maximimize gpu utilization
-        constexpr int threads_per_block = 128;
- 
-        // compute warps per block.
-        int warps_per_block = (threads_per_block / warp_size);
- 
-        // compute launch size
-        int batches_per_block = warps_per_block * batches_per_warp;
-        int blocks = (batch_count + batches_per_block - 1) / batches_per_block;
-        dim3 threads(warp_size, warps_per_block, 1);
- 
-        // launch
-        kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(dst, src, pad_mask, batch_count, softmax_elements_stride, softmax_elements, pad_batch_stride);
-        return true;
-    }
-    return false;
-}
+
+
 
 template<typename input_t, typename output_t, typename acc_t>
-bool dispatch_additive_masked_softmax_stream(output_t *dst, const input_t *src,
-const input_t *pad_mask, int softmax_elements, int softmax_elements_stride,
-int batch_count, int pad_batch_stride, cudaStream_t streamid)
+bool dispatch_additive_masked_softmax(output_t *dst,
+const input_t *src, const input_t *pad_mask, int softmax_elements,
+int softmax_elements_stride, int batch_count, int pad_batch_stride, cudaStream_t streamid)
+// p is the probability to keep, not drop
 {
+
     if (softmax_elements == 0) {
         return true;
-    } else if (softmax_elements <= 1024) {
+    } else if (softmax_elements <= 2048) {
         // compute function index. there's a function for each power of two size up to 1024.
         int log2_elements = 0;
         while ((1 << log2_elements) < softmax_elements) ++log2_elements;
-        additive_masked_softmax_forward_func<input_t, output_t> kernel;
+
+        additive_masked_softmax_forward_func<input_t, output_t, acc_t> kernel;
         int warp_size, batches_per_warp;
-        if (!warp_additive_masked_softmax_kernel<input_t, output_t, acc_t>(log2_elements, warp_size, batches_per_warp, kernel)) {
+        if (!warp_additive_masked_softmax_kernel<input_t, output_t, acc_t>(softmax_elements, log2_elements, warp_size, batches_per_warp, kernel)) {
             return false;
         }
+
         // use 128 threads per block to maximimize gpu utilization
         constexpr int threads_per_block = 128;
         // compute warps per block.
         int warps_per_block = (threads_per_block / warp_size);
-        // compute launch size
         int batches_per_block = warps_per_block * batches_per_warp;
         int blocks = (batch_count + batches_per_block - 1) / batches_per_block;
+//	c10::optional<at::Generator> gen_;
+//        auto gen = at::get_generator_or_default<at::CUDAGeneratorImpl>(gen_, at::cuda::detail::getDefaultCUDAGenerator());
+//        int64_t counter_offset = (totalElements/(blocks*threads_per_block)+1);
+//        at::PhiloxCudaState rng_engine_inputs;
+//	{
+//          std::lock_guard<std::mutex> lock(gen->mutex_);
+//	  rng_engine_inputs = gen->philox_cuda_state(counter_offset);
+//        }
+
+        // compute launch size
         dim3 threads(warp_size, warps_per_block, 1);
+
         // launch
         kernel<<<blocks, threads, 0, streamid>>>(dst, src, pad_mask, batch_count, softmax_elements_stride, softmax_elements, pad_batch_stride);
         return true;
@@ -942,307 +1081,87 @@ int batch_count, int pad_batch_stride, cudaStream_t streamid)
     return false;
 }
 
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////// TIME MASKED /////////////////////////////////
+/////////////////////////////////////////////////////////
 
-
-
-// WARP_BATCH number of batches.
-// WARP_ITERATOINS The number of iterations required for one warp to iterate over all data.
-// WARP_SIZE number of elements working on a single batch, has to be a power of two.
-// ELEMENTS_PER_LDG_STG has to be 1.
-template <typename input_t, typename output_t, typename acc_t, int WARP_BATCH, int WARP_ITERATIONS, int WARP_SIZE = 32, int ELEMENTS_PER_LDG_STG=1>
-__global__ void masked_softmax_warp_forward(input_t *dst, const output_t *src, const uint8_t *pad_mask, int batch_size, int stride, int element_count, int pad_batch_stride)
+template <typename input_t, typename output_t, typename acc_t, int WARP_BATCH, int WARP_ITERATIONS, int WARP_SIZE, int ELEMENTS_PER_LDG_STG>
+__global__ void additive_time_masked_softmax_dropout_warp_forward_vec4(output_t *dst, uint8_t *dropout_mask,
+const input_t *src, const input_t *pad_mask, int batch_size, int stride, int element_count,
+int mod_seq_len, at::PhiloxCudaState philox_args, float p)
 {
-    assert(ELEMENTS_PER_LDG_STG==1);
- 
+
+    assert(ELEMENTS_PER_LDG_STG==4);
     int first_batch = (blockDim.y * blockIdx.x + threadIdx.y) * WARP_BATCH;
- 
+    int tid = blockIdx.x * blockDim.x * blockDim.y + threadIdx.y * blockDim.x + threadIdx.x;
+    acc_t pinv = acc_t(1)/p;
     // batch_size might not be a multiple of WARP_BATCH. Check how
     // many batches have to computed within this WARP.
     int local_batches = batch_size - first_batch;
     if (local_batches > WARP_BATCH)
         local_batches = WARP_BATCH;
- 
+
     // there might be multiple batches per warp. compute the index within the batch
     int local_idx = threadIdx.x;
+    //vectorize if element_count is multiple of 4, else don't vectorize
+    input_t elements_input[WARP_BATCH][WARP_ITERATIONS];
 
     int thread_offset =  first_batch * stride + ELEMENTS_PER_LDG_STG * local_idx;
     src += thread_offset;
     dst += thread_offset;
- 
+    dropout_mask += thread_offset;
+
     // load data from global memory
-    input_t elements_input[WARP_BATCH][WARP_ITERATIONS];
-    for (int i = 0;i < WARP_BATCH;++i) {
-        int batch_element_count = (i >= local_batches) ? 0 : element_count;
-        int pad_thread_offset = ( (first_batch + i) / pad_batch_stride) * stride + ELEMENTS_PER_LDG_STG * local_idx;
-        const uint8_t* curr_mask    = pad_mask + pad_thread_offset;
-        for (int it = 0;it < WARP_ITERATIONS;it += ELEMENTS_PER_LDG_STG) {
-            int element_index = ELEMENTS_PER_LDG_STG * local_idx + it * WARP_SIZE;
-            #pragma unroll
-            for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
-                elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
-            }
- 
-            if (element_index < batch_element_count) {
-                int itr_jmp = it * WARP_SIZE;
-                int itr_idx = i * element_count + itr_jmp;
-                copy_vector<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], src + itr_idx);
-                apply_mask<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], 
-                                                          (__half)-std::numeric_limits<float>::infinity(), 
-                                                          curr_mask + itr_jmp);
-            }
- 
-        }
-    }
- 
-    // convert input_t to acc_t
-    acc_t elements[WARP_BATCH][WARP_ITERATIONS];
-    for (int i = 0;i < WARP_BATCH;++i) {
-        for (int it = 0;it < WARP_ITERATIONS;++it) {
-            elements[i][it] = elements_input[i][it];
-        }
-    }
- 
-    constexpr uint32_t  FULL_MASK = 0xffffffff;
- 
-    // compute local max_value
- 
-    // take the max_value of the first element to avoid one max call
-    acc_t max_value[WARP_BATCH];
-    #pragma unroll
-    for (int i = 0;i < WARP_BATCH;++i) {
-        max_value[i] = elements[i][0];
-    }
- 
-    #pragma unroll
-    for (int it = 1;it < WARP_ITERATIONS;++it) {
-        for (int i = 0;i < WARP_BATCH;++i) {
-            max_value[i] = (max_value[i] > elements[i][it]) ? max_value[i] : elements[i][it];
-        }
-    }
- 
-    // reduction max_value
-    #pragma unroll
-    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
-        float val[WARP_BATCH];
-        #pragma unroll
-        for (int i = 0;i < WARP_BATCH;++i) {
-            val[i] = __shfl_xor_sync(FULL_MASK, max_value[i], offset, WARP_SIZE);
-        }
-        #pragma unroll
-        for (int i = 0;i < WARP_BATCH;++i) {
-            max_value[i] = max_value[i] > val[i] ? max_value[i] : val[i];
-        }
-    }
- 
-    // compute local sum
-    acc_t sum[WARP_BATCH] { 0.0f };
- 
-    #pragma unroll
-    for (int i = 0;i < WARP_BATCH;++i) {
-        for (int it = 0;it < WARP_ITERATIONS;++it) {
-            //elements[i][it] = expf(elements[i][it] - max_value[i]);
-            elements[i][it] = std::exp(elements[i][it] - max_value[i]);
-            sum[i] += elements[i][it];
-        }
-    }
- 
-    // reduction sum
-    #pragma unroll
-    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
-        #pragma unroll
-        for (int i = 0;i < WARP_BATCH;++i) {
-            sum[i] += __shfl_xor_sync(FULL_MASK, sum[i], offset, WARP_SIZE);
-        }
-    }
- 
-    // store result
-    #pragma unroll
-    for (int i = 0;i < WARP_BATCH;++i) {
-        if (i >= local_batches)
-            break;
-        #pragma unroll
-        for (int it = 0;it < WARP_ITERATIONS;it += ELEMENTS_PER_LDG_STG) {
-            int element_index = ELEMENTS_PER_LDG_STG * local_idx + it * WARP_SIZE;
-            if (element_index < element_count) {
-                //dst[i * element_count + it * WARP_SIZE] = elements[i][it] / sum[i];
-                output_t out[ELEMENTS_PER_LDG_STG];
-                for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
-                    out[element] = elements[i][it + element] / sum[i];
-                }
-                copy_vector<output_t, ELEMENTS_PER_LDG_STG>(dst + i * element_count + it * WARP_SIZE, out);
-            }
-            else {
-                break;
-            }
-        }
-    }
-}
-
-// WARP_BATCH number of batches.
-// WARP_ITERATOINS The number of iterations required for one warp to iterate over all data.
-// WARP_SIZE number of elements working on a single batch, has to be a power of two.
-// ELEMENTS_PER_LDG_STG has to be 1.
-template <typename input_t, typename output_t>
-using masked_softmax_forward_func = void(*)(input_t *dst, const output_t *src, const uint8_t *pad_mask, int batch_size, int stride, int element_count, int pad_batch_stride);
- 
-template <typename input_t, typename output_t, typename acc_t>
-bool warp_masked_softmax_kernel(int log2_elements, int &warp_size, int &batches_per_warp, masked_softmax_forward_func<input_t, output_t> &kernel) {
-    // determine size of a warp
-    const int next_power_of_two = 1 << log2_elements;
-    warp_size = (next_power_of_two < 32) ? next_power_of_two : 32;
- 
-    // determine how many batches a warp should process.
-    batches_per_warp = (next_power_of_two <= 128) ? 2 : 1;
- 
-    switch (log2_elements) {
-    case 0: // 1
-        kernel = &masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,1,1>;
-        break;
-    case 1: // 2
-        kernel = &masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,2,1>;
-        break;
-    case 2: // 4
-        kernel = &masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,4,1>;
-        break;
-    case 3: // 8
-        kernel = &masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,8,1>;
-        break;
-    case 4: // 16
-        kernel = &masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,16,1>;
-        break;
-    case 5: // 32
-        kernel = &masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,32,1>;
-        break;
-    case 6: // 64
-        kernel = &masked_softmax_warp_forward<input_t, output_t, acc_t, 2,2,32,1>;
-        break;
-    case 7: // 128
-        kernel = &masked_softmax_warp_forward<input_t, output_t, acc_t, 2,4,32,1>;
-        break;
-    case 8: // 256
-        kernel = &masked_softmax_warp_forward<input_t, output_t, acc_t, 1,8,32,1>;
-        break;
-    case 9: // 512
-        kernel = &masked_softmax_warp_forward<input_t, output_t, acc_t, 1,16,32,1>;
-        break;
-    case 10: // 1024
-        kernel = &masked_softmax_warp_forward<input_t, output_t, acc_t, 1,32,32,1>;
-        break;
-    default:
-        return false;
-    }
-    return true;
-}
- 
-template<typename input_t, typename output_t, typename acc_t>
-bool dispatch_masked_softmax(output_t *dst, const input_t *src, const uint8_t *pad_mask, int softmax_elements, int softmax_elements_stride, int batch_count, int pad_batch_stride)
-{
-    if (softmax_elements == 0) {
-        return true;
-    } else if (softmax_elements <= 1024) {
-        // compute function index. there's a function for each power of two size up to 1024.
-        int log2_elements = 0;
-        while ((1 << log2_elements) < softmax_elements) ++log2_elements;
- 
-        masked_softmax_forward_func<input_t, output_t> kernel;
-        int warp_size, batches_per_warp;
-        if (!warp_masked_softmax_kernel<input_t, output_t, acc_t>(log2_elements, warp_size, batches_per_warp, kernel)) {
-            return false;
-        }
- 
-        // use 128 threads per block to maximimize gpu utilization
-        constexpr int threads_per_block = 128;
- 
-        // compute warps per block.
-        int warps_per_block = (threads_per_block / warp_size);
- 
-        // compute launch size
-        int batches_per_block = warps_per_block * batches_per_warp;
-        int blocks = (batch_count + batches_per_block - 1) / batches_per_block;
-        dim3 threads(warp_size, warps_per_block, 1);
- 
-        // launch
-        kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(dst, src, pad_mask, batch_count, softmax_elements_stride, softmax_elements, pad_batch_stride);
-        return true;
-    }
-    return false;
-}
-
-// WARP_BATCH number of batches.
-// WARP_ITERATOINS The number of iterations required for one warp to iterate over all data.
-// WARP_SIZE number of elements working on a single batch, has to be a power of two.
-// ELEMENTS_PER_LDG_STG has to be 1.
-template <typename input_t, typename output_t, typename acc_t, int WARP_BATCH, int WARP_ITERATIONS, int WARP_SIZE = 32, int ELEMENTS_PER_LDG_STG=1>
-__global__ void time_masked_softmax_warp_forward(input_t *dst, const output_t *src, const uint8_t *pad_mask, int batch_size, int stride, int element_count, int mod_seq_len)
-{
-    assert(ELEMENTS_PER_LDG_STG==1);
- 
-    int first_batch = (blockDim.y * blockIdx.x + threadIdx.y) * WARP_BATCH;
- 
-    // batch_size might not be a multiple of WARP_BATCH. Check how
-    // many batches have to computed within this WARP.
-    int local_batches = batch_size - first_batch;
-    if (local_batches > WARP_BATCH)
-        local_batches = WARP_BATCH;
- 
-    // there might be multiple batches per warp. compute the index within the batch
-    int local_idx = threadIdx.x;
-
-    int thread_offset =  first_batch * stride + ELEMENTS_PER_LDG_STG * local_idx;
-    src += thread_offset;
-    dst += thread_offset;
- 
-    // load data from global memory
-    input_t elements_input[WARP_BATCH][WARP_ITERATIONS];
     for (int i = 0;i < WARP_BATCH;++i) {
         int batch_element_count = (i >= local_batches) ? 0 : element_count;
         int pad_thread_offset = ( (first_batch + i) % mod_seq_len) * stride + ELEMENTS_PER_LDG_STG * local_idx;
-        const uint8_t* curr_mask    = pad_mask + pad_thread_offset;
+        const half* curr_mask    = pad_mask + pad_thread_offset;
+        #pragma unroll
         for (int it = 0;it < WARP_ITERATIONS;it += ELEMENTS_PER_LDG_STG) {
             int element_index = ELEMENTS_PER_LDG_STG * local_idx + it * WARP_SIZE;
             #pragma unroll
             for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
+    	//masking_value is a large negative value
                 elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
             }
- 
+
             if (element_index < batch_element_count) {
                 int itr_jmp = it * WARP_SIZE;
                 int itr_idx = i * element_count + itr_jmp;
                 copy_vector<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], src + itr_idx);
-                apply_mask<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], 
-                                                          (__half)-std::numeric_limits<float>::infinity(), 
-                                                          curr_mask + itr_jmp);
+                apply_additive_mask<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], curr_mask + itr_jmp); //(__half)-std::numeric_limits<float>::infinity()
             }
- 
+
         }
     }
- 
     // convert input_t to acc_t
     acc_t elements[WARP_BATCH][WARP_ITERATIONS];
+    #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
+        #pragma unroll
         for (int it = 0;it < WARP_ITERATIONS;++it) {
             elements[i][it] = elements_input[i][it];
         }
     }
- 
+
     constexpr uint32_t  FULL_MASK = 0xffffffff;
- 
+
     // compute local max_value
- 
+
     // take the max_value of the first element to avoid one max call
     acc_t max_value[WARP_BATCH];
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
         max_value[i] = elements[i][0];
     }
- 
+
     #pragma unroll
     for (int it = 1;it < WARP_ITERATIONS;++it) {
         for (int i = 0;i < WARP_BATCH;++i) {
             max_value[i] = (max_value[i] > elements[i][it]) ? max_value[i] : elements[i][it];
         }
     }
- 
+
     // reduction max_value
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
@@ -1256,19 +1175,18 @@ __global__ void time_masked_softmax_warp_forward(input_t *dst, const output_t *s
             max_value[i] = max_value[i] > val[i] ? max_value[i] : val[i];
         }
     }
- 
+
     // compute local sum
     acc_t sum[WARP_BATCH] { 0.0f };
- 
+
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
         for (int it = 0;it < WARP_ITERATIONS;++it) {
-            //elements[i][it] = expf(elements[i][it] - max_value[i]);
             elements[i][it] = std::exp(elements[i][it] - max_value[i]);
             sum[i] += elements[i][it];
         }
     }
- 
+
     // reduction sum
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
@@ -1277,7 +1195,28 @@ __global__ void time_masked_softmax_warp_forward(input_t *dst, const output_t *s
             sum[i] += __shfl_xor_sync(FULL_MASK, sum[i], offset, WARP_SIZE);
         }
     }
- 
+    auto seeds = at::cuda::philox::unpack(philox_args);
+    Philox ph(std::get<0>(seeds), tid, std::get<1>(seeds));
+    uint8_t rands[WARP_BATCH][WARP_ITERATIONS];
+    float4 rand_num;
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        if (i >= local_batches)
+            break;
+	#pragma unroll
+        for (int it = 0;it < WARP_ITERATIONS;it+=ELEMENTS_PER_LDG_STG) {
+            int element_index = ELEMENTS_PER_LDG_STG * local_idx + it * WARP_SIZE;
+            if (element_index < element_count) {
+		rand_num = uniform4(ph());
+                rands[i][it] = (rand_num.x <= p) > 0.5;
+                rands[i][it+1] = (rand_num.y <= p) > 0.5;
+                rands[i][it+2] = (rand_num.z <= p) > 0.5;
+                rands[i][it+3] = (rand_num.w <= p) > 0.5;
+                copy_vector<uint8_t, ELEMENTS_PER_LDG_STG>(dropout_mask + i * element_count + it * WARP_SIZE, &rands[i][it]);
+	    }
+        }
+    }
+
     // store result
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -1287,10 +1226,10 @@ __global__ void time_masked_softmax_warp_forward(input_t *dst, const output_t *s
         for (int it = 0;it < WARP_ITERATIONS;it += ELEMENTS_PER_LDG_STG) {
             int element_index = ELEMENTS_PER_LDG_STG * local_idx + it * WARP_SIZE;
             if (element_index < element_count) {
-                //dst[i * element_count + it * WARP_SIZE] = elements[i][it] / sum[i];
                 output_t out[ELEMENTS_PER_LDG_STG];
+                #pragma unroll
                 for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
-                    out[element] = elements[i][it + element] / sum[i];
+                    out[element] = rands[i][it+element] * (pinv * (elements[i][it + element] / sum[i]));
                 }
                 copy_vector<output_t, ELEMENTS_PER_LDG_STG>(dst + i * element_count + it * WARP_SIZE, out);
             }
@@ -1301,95 +1240,675 @@ __global__ void time_masked_softmax_warp_forward(input_t *dst, const output_t *s
     }
 }
 
+
+template <typename input_t, typename output_t, typename acc_t, int WARP_BATCH, int WARP_ITERATIONS, int WARP_SIZE, int ELEMENTS_PER_LDG_STG>
+__global__ void additive_time_masked_softmax_dropout_warp_forward(output_t *dst, uint8_t *dropout_mask,
+const input_t *src, const input_t *pad_mask,
+int batch_size, int stride, int element_count,
+int mod_seq_len, at::PhiloxCudaState philox_args, float p)
+{
+    assert(ELEMENTS_PER_LDG_STG==1);
+    int first_batch = (blockDim.y * blockIdx.x + threadIdx.y) * WARP_BATCH;
+    int tid = blockIdx.x * blockDim.x * blockDim.y + threadIdx.y * blockDim.x + threadIdx.x;
+    acc_t pinv = acc_t(1)/p;
+    // batch_size might not be a multiple of WARP_BATCH. Check how
+    // many batches have to computed within this WARP.
+    int local_batches = batch_size - first_batch;
+    if (local_batches > WARP_BATCH)
+        local_batches = WARP_BATCH;
+
+    // there might be multiple batches per warp. compute the index within the batch
+    int local_idx = threadIdx.x;
+    //vectorize if element_count is multiple of 4, else don't vectorize
+    input_t elements_input[WARP_BATCH][WARP_ITERATIONS];
+
+    int thread_offset =  first_batch * stride + local_idx;
+    src += thread_offset;
+    dst += thread_offset;
+    dropout_mask += thread_offset;
+
+    // load data from global memory
+    for (int i = 0;i < WARP_BATCH;++i) {
+        int batch_element_count = (i >= local_batches) ? 0 : element_count;
+        int pad_thread_offset = ( (first_batch + i) % mod_seq_len) * stride + local_idx;
+        const half* curr_mask    = pad_mask + pad_thread_offset;
+        #pragma unroll
+        for (int it = 0;it < WARP_ITERATIONS;it += 1) {
+            int element_index = local_idx + it * WARP_SIZE;
+            #pragma unroll
+            for (int element = 0;element < 1;++element) {
+    	        //masking_value is a large negative value
+                elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
+            }
+
+            if (element_index < batch_element_count) {
+                int itr_jmp = it * WARP_SIZE;
+                int itr_idx = i * element_count + itr_jmp;
+                copy_vector<input_t, 1>(&elements_input[i][it], src + itr_idx);
+                apply_additive_mask<input_t, 1>(&elements_input[i][it], curr_mask + itr_jmp);
+            }
+
+        }
+    }
+    // convert input_t to acc_t
+    acc_t elements[WARP_BATCH][WARP_ITERATIONS];
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        #pragma unroll
+        for (int it = 0;it < WARP_ITERATIONS;++it) {
+            elements[i][it] = elements_input[i][it];
+        }
+    }
+
+    constexpr uint32_t  FULL_MASK = 0xffffffff;
+
+    // compute local max_value
+
+    // take the max_value of the first element to avoid one max call
+    acc_t max_value[WARP_BATCH];
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        max_value[i] = elements[i][0];
+    }
+
+    #pragma unroll
+    for (int it = 1;it < WARP_ITERATIONS;++it) {
+        for (int i = 0;i < WARP_BATCH;++i) {
+            max_value[i] = (max_value[i] > elements[i][it]) ? max_value[i] : elements[i][it];
+        }
+    }
+
+    // reduction max_value
+    #pragma unroll
+    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
+        float val[WARP_BATCH];
+        #pragma unroll
+        for (int i = 0;i < WARP_BATCH;++i) {
+            val[i] = __shfl_xor_sync(FULL_MASK, max_value[i], offset, WARP_SIZE);
+        }
+        #pragma unroll
+        for (int i = 0;i < WARP_BATCH;++i) {
+            max_value[i] = max_value[i] > val[i] ? max_value[i] : val[i];
+        }
+    }
+
+    // compute local sum
+    acc_t sum[WARP_BATCH] { 0.0f };
+
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        for (int it = 0;it < WARP_ITERATIONS;++it) {
+            elements[i][it] = std::exp(elements[i][it] - max_value[i]);
+            sum[i] += elements[i][it];
+        }
+    }
+
+    // reduction sum
+    #pragma unroll
+    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
+        #pragma unroll
+        for (int i = 0;i < WARP_BATCH;++i) {
+            sum[i] += __shfl_xor_sync(FULL_MASK, sum[i], offset, WARP_SIZE);
+        }
+    }
+    curandStatePhilox4_32_10_t state;
+    auto seeds = at::cuda::philox::unpack(philox_args);
+    curand_init(
+      std::get<0>(seeds),
+      tid,
+      std::get<1>(seeds),
+      &state);
+
+    // store result
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        if (i >= local_batches)
+            break;
+        #pragma unroll
+        for (int it = 0;it < WARP_ITERATIONS;it += 1) {
+            int element_index = local_idx + it * WARP_SIZE;
+            if (element_index < element_count) {
+                output_t out[1];
+                acc_t softmax_out[1];
+                uint8_t dropout_mask_temp[1];
+                //generate a vector of random numbers here
+                float rand = curand_uniform(&state);
+                float *rand_ptr = (float*)(&rand);
+                #pragma unroll
+                for (int element = 0;element < 1;++element) {
+    	        softmax_out[element] = (elements[i][it + element] / sum[i]);
+                    rand_ptr[element] = rand_ptr[element] <= p;
+                    out[element] = rand_ptr[element] * pinv * softmax_out[element];
+    	            dropout_mask_temp[element] = rand_ptr[element] > 0.5; // just to distinguish 0.0f and 1.0f
+                }
+                copy_vector<output_t, 1>(dst + i * element_count + it * WARP_SIZE, out);
+                copy_vector<uint8_t, 1>(dropout_mask + i * element_count + it * WARP_SIZE, dropout_mask_temp);
+
+            }
+            else {
+                break;
+            }
+        }
+    }
+}
+
+
 // WARP_BATCH number of batches.
 // WARP_ITERATOINS The number of iterations required for one warp to iterate over all data.
 // WARP_SIZE number of elements working on a single batch, has to be a power of two.
 // ELEMENTS_PER_LDG_STG has to be 1.
-template <typename input_t, typename output_t>
-using time_masked_softmax_forward_func = void(*)(input_t *dst, const output_t *src, const uint8_t *pad_mask, int batch_size, int stride, int element_count, int mod_seq_len);
- 
 template <typename input_t, typename output_t, typename acc_t>
-bool warp_time_masked_softmax_kernel(int log2_elements, int &warp_size, int &batches_per_warp, time_masked_softmax_forward_func<input_t, output_t> &kernel) {
+using additive_time_masked_softmax_dropout_forward_func = void(*)(output_t *dst, uint8_t *dropout_mask,
+const input_t *src, const input_t *pad_mask, int batch_size, int stride, int element_count, int mod_seq_len, at::PhiloxCudaState philox_args, float p);
+
+
+template <typename input_t, typename output_t, typename acc_t>
+bool warp_additive_time_masked_softmax_dropout_kernel(int element_count, int log2_elements, int &warp_size, int &batches_per_warp, additive_time_masked_softmax_dropout_forward_func<input_t, output_t, acc_t> &kernel) {
     // determine size of a warp
     const int next_power_of_two = 1 << log2_elements;
     warp_size = (next_power_of_two < 32) ? next_power_of_two : 32;
- 
+
     // determine how many batches a warp should process.
     batches_per_warp = (next_power_of_two <= 128) ? 2 : 1;
- 
+    bool flag_vec4 = (element_count % 4 == 0);
     switch (log2_elements) {
     case 0: // 1
-        kernel = &time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,1,1>;
+        kernel = &additive_time_masked_softmax_dropout_warp_forward<input_t, output_t, acc_t, 2,1,1,1>;
         break;
     case 1: // 2
-        kernel = &time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,2,1>;
+        kernel = &additive_time_masked_softmax_dropout_warp_forward<input_t, output_t, acc_t, 2,1,2,1>;
         break;
     case 2: // 4
-        kernel = &time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,4,1>;
+        kernel = &additive_time_masked_softmax_dropout_warp_forward<input_t, output_t, acc_t, 2,1,4,1>;
         break;
     case 3: // 8
-        kernel = &time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,8,1>;
+        kernel = &additive_time_masked_softmax_dropout_warp_forward<input_t, output_t, acc_t, 2,1,8,1>;
         break;
     case 4: // 16
-        kernel = &time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,16,1>;
+        kernel = &additive_time_masked_softmax_dropout_warp_forward<input_t, output_t, acc_t, 2,1,16,1>;
         break;
     case 5: // 32
-        kernel = &time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,32,1>;
+        kernel = &additive_time_masked_softmax_dropout_warp_forward<input_t, output_t, acc_t, 2,1,32,1>;
         break;
     case 6: // 64
-        kernel = &time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,2,32,1>;
+        kernel = &additive_time_masked_softmax_dropout_warp_forward<input_t, output_t, acc_t, 2,2,32,1>;
         break;
     case 7: // 128
-        kernel = &time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,4,32,1>;
+	if (flag_vec4) kernel = &additive_time_masked_softmax_dropout_warp_forward_vec4<input_t, output_t, acc_t, 2,4,32,4>;
+	else kernel = &additive_time_masked_softmax_dropout_warp_forward<input_t, output_t, acc_t, 2,4,32,1>;
         break;
     case 8: // 256
-        kernel = &time_masked_softmax_warp_forward<input_t, output_t, acc_t, 1,8,32,1>;
+	if (flag_vec4) kernel = &additive_time_masked_softmax_dropout_warp_forward_vec4<input_t, output_t, acc_t, 1,8,32,4>;
+	else kernel = &additive_time_masked_softmax_dropout_warp_forward<input_t, output_t, acc_t, 1,8,32,1>;
         break;
     case 9: // 512
-        kernel = &time_masked_softmax_warp_forward<input_t, output_t, acc_t, 1,16,32,1>;
+        if (flag_vec4) kernel = &additive_time_masked_softmax_dropout_warp_forward_vec4<input_t, output_t, acc_t, 1,16,32,4>;
+	else kernel = &additive_time_masked_softmax_dropout_warp_forward<input_t, output_t, acc_t, 1,16,32,1>;
         break;
     case 10: // 1024
-        kernel = &time_masked_softmax_warp_forward<input_t, output_t, acc_t, 1,32,32,1>;
+        if (flag_vec4) kernel = &additive_time_masked_softmax_dropout_warp_forward_vec4<input_t, output_t, acc_t, 1,32,32,4>;
+	else kernel = &additive_time_masked_softmax_dropout_warp_forward<input_t, output_t, acc_t, 1,32,32,1>;
+        break;
+    case 11: // 2048
+        if (flag_vec4) kernel = &additive_time_masked_softmax_dropout_warp_forward_vec4<input_t, output_t, acc_t, 1,64,32,4>;
+	else kernel = &additive_time_masked_softmax_dropout_warp_forward<input_t, output_t, acc_t, 1,64,32,1>;
         break;
     default:
         return false;
     }
     return true;
 }
- 
+
+
+
 template<typename input_t, typename output_t, typename acc_t>
-bool dispatch_time_masked_softmax(output_t *dst, const input_t *src, const uint8_t *pad_mask, int softmax_elements, int softmax_elements_stride, int batch_count, int mod_seq_len)
+bool dispatch_additive_time_masked_softmax_dropout(output_t *dst, uint8_t *dropout_mask,
+const input_t *src, const input_t *pad_mask, int totalElements, int softmax_elements,
+int softmax_elements_stride, int batch_count, int mod_seq_len, float p, cudaStream_t streamid)
+// p is the probability to keep, not drop
 {
+
     if (softmax_elements == 0) {
         return true;
-    } else if (softmax_elements <= 1024) {
+    } else if (softmax_elements <= 2048) {
         // compute function index. there's a function for each power of two size up to 1024.
         int log2_elements = 0;
         while ((1 << log2_elements) < softmax_elements) ++log2_elements;
- 
-        time_masked_softmax_forward_func<input_t, output_t> kernel;
+
+        additive_time_masked_softmax_dropout_forward_func<input_t, output_t, acc_t> kernel;
         int warp_size, batches_per_warp;
-        if (!warp_time_masked_softmax_kernel<input_t, output_t, acc_t>(log2_elements, warp_size, batches_per_warp, kernel)) {
+        if (!warp_additive_time_masked_softmax_dropout_kernel<input_t, output_t, acc_t>(softmax_elements, log2_elements, warp_size, batches_per_warp, kernel)) {
             return false;
         }
- 
+
         // use 128 threads per block to maximimize gpu utilization
         constexpr int threads_per_block = 128;
- 
         // compute warps per block.
         int warps_per_block = (threads_per_block / warp_size);
- 
-        // compute launch size
         int batches_per_block = warps_per_block * batches_per_warp;
         int blocks = (batch_count + batches_per_block - 1) / batches_per_block;
+	c10::optional<at::Generator> gen_;
+        auto gen = at::get_generator_or_default<at::CUDAGeneratorImpl>(gen_, at::cuda::detail::getDefaultCUDAGenerator());
+        int64_t counter_offset = (totalElements/(blocks*threads_per_block)+1);
+        at::PhiloxCudaState rng_engine_inputs;
+	{
+          std::lock_guard<std::mutex> lock(gen->mutex_);
+	      rng_engine_inputs = gen->philox_cuda_state(counter_offset);
+        }
+
+        // compute launch size
         dim3 threads(warp_size, warps_per_block, 1);
- 
+
         // launch
-        kernel<<<blocks, threads, 0, at::cuda::getCurrentCUDAStream()>>>(dst, src, pad_mask, batch_count, softmax_elements_stride, softmax_elements, mod_seq_len);
+        kernel<<<blocks, threads, 0, streamid>>>(dst, dropout_mask, src, pad_mask, batch_count, softmax_elements_stride,
+        softmax_elements, mod_seq_len, rng_engine_inputs, p);
         return true;
     }
     return false;
 }
+
+
+///////////// NO DROPOUT /////////////
+
+template <typename input_t, typename output_t, typename acc_t, int WARP_BATCH, int WARP_ITERATIONS, int WARP_SIZE, int ELEMENTS_PER_LDG_STG>
+__global__ void additive_time_masked_softmax_warp_forward_vec4(output_t *dst,
+const input_t *src, const input_t *pad_mask, int batch_size, int stride, int element_count,
+int mod_seq_len)
+{
+
+    assert(ELEMENTS_PER_LDG_STG==4);
+    int first_batch = (blockDim.y * blockIdx.x + threadIdx.y) * WARP_BATCH;
+//    int tid = blockIdx.x * blockDim.x * blockDim.y + threadIdx.y * blockDim.x + threadIdx.x;
+//    acc_t pinv = acc_t(1)/p;
+    // batch_size might not be a multiple of WARP_BATCH. Check how
+    // many batches have to computed within this WARP.
+    int local_batches = batch_size - first_batch;
+    if (local_batches > WARP_BATCH)
+        local_batches = WARP_BATCH;
+
+    // there might be multiple batches per warp. compute the index within the batch
+    int local_idx = threadIdx.x;
+    //vectorize if element_count is multiple of 4, else don't vectorize
+    input_t elements_input[WARP_BATCH][WARP_ITERATIONS];
+
+    int thread_offset =  first_batch * stride + ELEMENTS_PER_LDG_STG * local_idx;
+    src += thread_offset;
+    dst += thread_offset;
+//    dropout_mask += thread_offset;
+
+    // load data from global memory
+    for (int i = 0;i < WARP_BATCH;++i) {
+        int batch_element_count = (i >= local_batches) ? 0 : element_count;
+        int pad_thread_offset = ( (first_batch + i) % mod_seq_len) * stride + ELEMENTS_PER_LDG_STG * local_idx;
+        const half* curr_mask    = pad_mask + pad_thread_offset;
+        #pragma unroll
+        for (int it = 0;it < WARP_ITERATIONS;it += ELEMENTS_PER_LDG_STG) {
+            int element_index = ELEMENTS_PER_LDG_STG * local_idx + it * WARP_SIZE;
+            #pragma unroll
+            for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
+    	//masking_value is a large negative value
+                elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
+            }
+
+            if (element_index < batch_element_count) {
+                int itr_jmp = it * WARP_SIZE;
+                int itr_idx = i * element_count + itr_jmp;
+                copy_vector<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], src + itr_idx);
+                apply_additive_mask<input_t, ELEMENTS_PER_LDG_STG>(&elements_input[i][it], curr_mask + itr_jmp); //(__half)-std::numeric_limits<float>::infinity()
+            }
+
+        }
+    }
+    // convert input_t to acc_t
+    acc_t elements[WARP_BATCH][WARP_ITERATIONS];
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        #pragma unroll
+        for (int it = 0;it < WARP_ITERATIONS;++it) {
+            elements[i][it] = elements_input[i][it];
+        }
+    }
+
+    constexpr uint32_t  FULL_MASK = 0xffffffff;
+
+    // compute local max_value
+
+    // take the max_value of the first element to avoid one max call
+    acc_t max_value[WARP_BATCH];
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        max_value[i] = elements[i][0];
+    }
+
+    #pragma unroll
+    for (int it = 1;it < WARP_ITERATIONS;++it) {
+        for (int i = 0;i < WARP_BATCH;++i) {
+            max_value[i] = (max_value[i] > elements[i][it]) ? max_value[i] : elements[i][it];
+        }
+    }
+
+    // reduction max_value
+    #pragma unroll
+    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
+        float val[WARP_BATCH];
+        #pragma unroll
+        for (int i = 0;i < WARP_BATCH;++i) {
+            val[i] = __shfl_xor_sync(FULL_MASK, max_value[i], offset, WARP_SIZE);
+        }
+        #pragma unroll
+        for (int i = 0;i < WARP_BATCH;++i) {
+            max_value[i] = max_value[i] > val[i] ? max_value[i] : val[i];
+        }
+    }
+
+    // compute local sum
+    acc_t sum[WARP_BATCH] { 0.0f };
+
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        for (int it = 0;it < WARP_ITERATIONS;++it) {
+            elements[i][it] = std::exp(elements[i][it] - max_value[i]);
+            sum[i] += elements[i][it];
+        }
+    }
+
+    // reduction sum
+    #pragma unroll
+    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
+        #pragma unroll
+        for (int i = 0;i < WARP_BATCH;++i) {
+            sum[i] += __shfl_xor_sync(FULL_MASK, sum[i], offset, WARP_SIZE);
+        }
+    }
+
+
+    // store result
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        if (i >= local_batches)
+            break;
+        #pragma unroll
+        for (int it = 0;it < WARP_ITERATIONS;it += ELEMENTS_PER_LDG_STG) {
+            int element_index = ELEMENTS_PER_LDG_STG * local_idx + it * WARP_SIZE;
+            if (element_index < element_count) {
+                output_t out[ELEMENTS_PER_LDG_STG];
+                #pragma unroll
+                for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
+                    out[element] = (elements[i][it + element] / sum[i]);
+                }
+                copy_vector<output_t, ELEMENTS_PER_LDG_STG>(dst + i * element_count + it * WARP_SIZE, out);
+            }
+            else {
+                break;
+            }
+        }
+    }
+}
+
+
+template <typename input_t, typename output_t, typename acc_t, int WARP_BATCH, int WARP_ITERATIONS, int WARP_SIZE, int ELEMENTS_PER_LDG_STG>
+__global__ void additive_time_masked_softmax_warp_forward(output_t *dst,
+const input_t *src, const input_t *pad_mask,
+int batch_size, int stride, int element_count,
+int mod_seq_len)
+{
+    assert(ELEMENTS_PER_LDG_STG==1);
+    int first_batch = (blockDim.y * blockIdx.x + threadIdx.y) * WARP_BATCH;
+//    int tid = blockIdx.x * blockDim.x * blockDim.y + threadIdx.y * blockDim.x + threadIdx.x;
+//    acc_t pinv = acc_t(1)/p;
+    // batch_size might not be a multiple of WARP_BATCH. Check how
+    // many batches have to computed within this WARP.
+    int local_batches = batch_size - first_batch;
+    if (local_batches > WARP_BATCH)
+        local_batches = WARP_BATCH;
+
+    // there might be multiple batches per warp. compute the index within the batch
+    int local_idx = threadIdx.x;
+    //vectorize if element_count is multiple of 4, else don't vectorize
+    input_t elements_input[WARP_BATCH][WARP_ITERATIONS];
+
+    int thread_offset =  first_batch * stride + local_idx;
+    src += thread_offset;
+    dst += thread_offset;
+//    dropout_mask += thread_offset;
+
+    // load data from global memory
+    for (int i = 0;i < WARP_BATCH;++i) {
+        int batch_element_count = (i >= local_batches) ? 0 : element_count;
+        int pad_thread_offset = ( (first_batch + i) % mod_seq_len) * stride + local_idx;
+        const half* curr_mask    = pad_mask + pad_thread_offset;
+        #pragma unroll
+        for (int it = 0;it < WARP_ITERATIONS;it += 1) {
+            int element_index = local_idx + it * WARP_SIZE;
+            #pragma unroll
+            for (int element = 0;element < 1;++element) {
+    	        //masking_value is a large negative value
+                elements_input[i][it + element] = -std::numeric_limits<float>::infinity();
+            }
+
+            if (element_index < batch_element_count) {
+                int itr_jmp = it * WARP_SIZE;
+                int itr_idx = i * element_count + itr_jmp;
+                copy_vector<input_t, 1>(&elements_input[i][it], src + itr_idx);
+                apply_additive_mask<input_t, 1>(&elements_input[i][it], curr_mask + itr_jmp);
+            }
+
+        }
+    }
+    // convert input_t to acc_t
+    acc_t elements[WARP_BATCH][WARP_ITERATIONS];
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        #pragma unroll
+        for (int it = 0;it < WARP_ITERATIONS;++it) {
+            elements[i][it] = elements_input[i][it];
+        }
+    }
+
+    constexpr uint32_t  FULL_MASK = 0xffffffff;
+
+    // compute local max_value
+
+    // take the max_value of the first element to avoid one max call
+    acc_t max_value[WARP_BATCH];
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        max_value[i] = elements[i][0];
+    }
+
+    #pragma unroll
+    for (int it = 1;it < WARP_ITERATIONS;++it) {
+        for (int i = 0;i < WARP_BATCH;++i) {
+            max_value[i] = (max_value[i] > elements[i][it]) ? max_value[i] : elements[i][it];
+        }
+    }
+
+    // reduction max_value
+    #pragma unroll
+    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
+        float val[WARP_BATCH];
+        #pragma unroll
+        for (int i = 0;i < WARP_BATCH;++i) {
+            val[i] = __shfl_xor_sync(FULL_MASK, max_value[i], offset, WARP_SIZE);
+        }
+        #pragma unroll
+        for (int i = 0;i < WARP_BATCH;++i) {
+            max_value[i] = max_value[i] > val[i] ? max_value[i] : val[i];
+        }
+    }
+
+    // compute local sum
+    acc_t sum[WARP_BATCH] { 0.0f };
+
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        for (int it = 0;it < WARP_ITERATIONS;++it) {
+            elements[i][it] = std::exp(elements[i][it] - max_value[i]);
+            sum[i] += elements[i][it];
+        }
+    }
+
+    // reduction sum
+    #pragma unroll
+    for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
+        #pragma unroll
+        for (int i = 0;i < WARP_BATCH;++i) {
+            sum[i] += __shfl_xor_sync(FULL_MASK, sum[i], offset, WARP_SIZE);
+        }
+    }
+//    curandStatePhilox4_32_10_t state;
+//    auto seeds = at::cuda::philox::unpack(philox_args);
+//    curand_init(
+//      std::get<0>(seeds),
+//      tid,
+//      std::get<1>(seeds),
+//      &state);
+
+    // store result
+    #pragma unroll
+    for (int i = 0;i < WARP_BATCH;++i) {
+        if (i >= local_batches)
+            break;
+        #pragma unroll
+        for (int it = 0;it < WARP_ITERATIONS;it += 1) {
+            int element_index = local_idx + it * WARP_SIZE;
+            if (element_index < element_count) {
+                output_t out[1];
+                acc_t softmax_out[1];
+//                uint8_t dropout_mask_temp[1];
+                //generate a vector of random numbers here
+//                float rand = curand_uniform(&state);
+//                float *rand_ptr = (float*)(&rand);
+                #pragma unroll
+                for (int element = 0;element < 1;++element) {
+    	            softmax_out[element] = (elements[i][it + element] / sum[i]);
+//                    rand_ptr[element] = rand_ptr[element] <= p;
+                    out[element] = softmax_out[element];
+//    	            dropout_mask_temp[element] = rand_ptr[element] > 0.5; // just to distinguish 0.0f and 1.0f
+                }
+                copy_vector<output_t, 1>(dst + i * element_count + it * WARP_SIZE, out);
+//                copy_vector<uint8_t, 1>(dropout_mask + i * element_count + it * WARP_SIZE, dropout_mask_temp);
+
+            }
+            else {
+                break;
+            }
+        }
+    }
+}
+
+
+// WARP_BATCH number of batches.
+// WARP_ITERATOINS The number of iterations required for one warp to iterate over all data.
+// WARP_SIZE number of elements working on a single batch, has to be a power of two.
+// ELEMENTS_PER_LDG_STG has to be 1.
+template <typename input_t, typename output_t, typename acc_t>
+using additive_time_masked_softmax_forward_func = void(*)(output_t *dst,
+const input_t *src, const input_t *pad_mask, int batch_size, int stride, int element_count, int mod_seq_len);
+
+
+template <typename input_t, typename output_t, typename acc_t>
+bool warp_additive_time_masked_softmax_kernel(int element_count, int log2_elements, int &warp_size, int &batches_per_warp, additive_time_masked_softmax_forward_func<input_t, output_t, acc_t> &kernel) {
+    // determine size of a warp
+    const int next_power_of_two = 1 << log2_elements;
+    warp_size = (next_power_of_two < 32) ? next_power_of_two : 32;
+
+    // determine how many batches a warp should process.
+    batches_per_warp = (next_power_of_two <= 128) ? 2 : 1;
+    bool flag_vec4 = (element_count % 4 == 0);
+    switch (log2_elements) {
+    case 0: // 1
+        kernel = &additive_time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,1,1>;
+        break;
+    case 1: // 2
+        kernel = &additive_time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,2,1>;
+        break;
+    case 2: // 4
+        kernel = &additive_time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,4,1>;
+        break;
+    case 3: // 8
+        kernel = &additive_time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,8,1>;
+        break;
+    case 4: // 16
+        kernel = &additive_time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,16,1>;
+        break;
+    case 5: // 32
+        kernel = &additive_time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,1,32,1>;
+        break;
+    case 6: // 64
+        kernel = &additive_time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,2,32,1>;
+        break;
+    case 7: // 128
+	if (flag_vec4) kernel = &additive_time_masked_softmax_warp_forward_vec4<input_t, output_t, acc_t, 2,4,32,4>;
+	else kernel = &additive_time_masked_softmax_warp_forward<input_t, output_t, acc_t, 2,4,32,1>;
+        break;
+    case 8: // 256
+	if (flag_vec4) kernel = &additive_time_masked_softmax_warp_forward_vec4<input_t, output_t, acc_t, 1,8,32,4>;
+	else kernel = &additive_time_masked_softmax_warp_forward<input_t, output_t, acc_t, 1,8,32,1>;
+        break;
+    case 9: // 512
+        if (flag_vec4) kernel = &additive_time_masked_softmax_warp_forward_vec4<input_t, output_t, acc_t, 1,16,32,4>;
+	else kernel = &additive_time_masked_softmax_warp_forward<input_t, output_t, acc_t, 1,16,32,1>;
+        break;
+    case 10: // 1024
+        if (flag_vec4) kernel = &additive_time_masked_softmax_warp_forward_vec4<input_t, output_t, acc_t, 1,32,32,4>;
+	else kernel = &additive_time_masked_softmax_warp_forward<input_t, output_t, acc_t, 1,32,32,1>;
+        break;
+    case 11: // 2048
+        if (flag_vec4) kernel = &additive_time_masked_softmax_warp_forward_vec4<input_t, output_t, acc_t, 1,64,32,4>;
+	else kernel = &additive_time_masked_softmax_warp_forward<input_t, output_t, acc_t, 1,64,32,1>;
+        break;
+    default:
+        return false;
+    }
+    return true;
+}
+
+
+
+template<typename input_t, typename output_t, typename acc_t>
+bool dispatch_additive_time_masked_softmax(output_t *dst,
+const input_t *src, const input_t *pad_mask, int softmax_elements,
+int softmax_elements_stride, int batch_count, int mod_seq_len, cudaStream_t streamid)
+// p is the probability to keep, not drop
+{
+
+    if (softmax_elements == 0) {
+        return true;
+    } else if (softmax_elements <= 2048) {
+        // compute function index. there's a function for each power of two size up to 1024.
+        int log2_elements = 0;
+        while ((1 << log2_elements) < softmax_elements) ++log2_elements;
+
+        additive_time_masked_softmax_forward_func<input_t, output_t, acc_t> kernel;
+        int warp_size, batches_per_warp;
+        if (!warp_additive_time_masked_softmax_kernel<input_t, output_t, acc_t>(softmax_elements, log2_elements, warp_size, batches_per_warp, kernel)) {
+            return false;
+        }
+
+        // use 128 threads per block to maximimize gpu utilization
+        constexpr int threads_per_block = 128;
+        // compute warps per block.
+        int warps_per_block = (threads_per_block / warp_size);
+        int batches_per_block = warps_per_block * batches_per_warp;
+        int blocks = (batch_count + batches_per_block - 1) / batches_per_block;
+
+        // compute launch size
+        dim3 threads(warp_size, warps_per_block, 1);
+
+        // launch
+        kernel<<<blocks, threads, 0, streamid>>>(dst, src, pad_mask, batch_count, softmax_elements_stride,
+        softmax_elements, mod_seq_len);
+        return true;
+    }
+    return false;
+}
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////// END TIME MASK ////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////////////////
 
 int log2_ceil_native(int value) {
     int log2_value = 0;
@@ -1945,8 +2464,11 @@ bool dispatch_softmax_backward_norecompute(output_t *grad_input, const input_t *
 
 
 
-template <typename input_t, typename output_t, typename acc_t, int WARP_BATCH, int WARP_ITERATIONS, int WARP_SIZE=32, int ELEMENTS_PER_LDG_STG, bool is_log_softmax>
-__global__ void masked_scale_softmax_warp_backward_recompute(output_t *gradInput, const input_t *grad, const input_t *softmax_input, const input_t *pad_mask, const uint8_t *mask, acc_t scale, int batch_size, int stride, int pad_batch_stride, int element_count)
+template <typename input_t, typename output_t, typename acc_t, int WARP_BATCH, int WARP_ITERATIONS,
+int WARP_SIZE=32, int ELEMENTS_PER_LDG_STG, bool is_log_softmax, bool use_time_mask>
+__global__ void masked_scale_softmax_warp_backward_recompute(output_t *gradInput, const input_t *grad,
+const input_t *softmax_input, const input_t *pad_mask, const uint8_t *mask, acc_t scale,
+int batch_size, int stride, int pad_batch_stride, int element_count)
 {
     int first_batch = (blockDim.y * blockIdx.x + threadIdx.y) * WARP_BATCH;
 
@@ -1979,7 +2501,12 @@ __global__ void masked_scale_softmax_warp_backward_recompute(output_t *gradInput
     // load data from global memory
     for (int i = 0;  i < WARP_BATCH;  ++i) {
         int batch_element_count = (i >= local_batches) ? 0 : element_count;
-        int pad_thread_offset = ( (first_batch + i) / pad_batch_stride) * stride + ELEMENTS_PER_LDG_STG * local_idx;
+        int pad_thread_offset;
+        if (use_time_mask)
+            pad_thread_offset = ( (first_batch + i) % pad_batch_stride) * stride + ELEMENTS_PER_LDG_STG * local_idx;
+        else {
+            pad_thread_offset = ( (first_batch + i) / pad_batch_stride) * stride + ELEMENTS_PER_LDG_STG * local_idx;
+        }
         const input_t* curr_mask    = pad_mask + pad_thread_offset;
         #pragma unroll
         for (int it = 0;  it < WARP_ITERATIONS;  it += ELEMENTS_PER_LDG_STG) {
@@ -2129,7 +2656,7 @@ __global__ void masked_scale_softmax_warp_backward_recompute(output_t *gradInput
 template<typename input_t, typename output_t, typename acc_t, bool is_log_softmax>
 using masked_scale_softmax_warp_backward_recompute_func = void(*)(output_t *gradInput, const input_t *grad, const input_t *softmax_input, const input_t *pad_mask, const uint8_t *mask, acc_t scale, int batch_size, int stride, int pad_batch_stride, int element_count);
 
-template <typename input_t, typename output_t, typename acc_t, bool is_log_softmax>
+template <typename input_t, typename output_t, typename acc_t, bool is_log_softmax, bool use_time_mask>
 bool masked_scale_softmax_warp_backward_recompute_kernel(int element_count, int log2_elements, int &warp_size, int &batches_per_warp, masked_scale_softmax_warp_backward_recompute_func<input_t, output_t, acc_t, is_log_softmax> &kernel) {
     // determine size of a warp
     const int next_power_of_two = 1 << log2_elements;
@@ -2140,44 +2667,44 @@ bool masked_scale_softmax_warp_backward_recompute_kernel(int element_count, int 
     bool flag_vec4 = (element_count % 4 == 0); 
     switch (log2_elements) {
     case 0: // 1
-        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,1,1,1, is_log_softmax>;
+        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,1,1,1, is_log_softmax, use_time_mask>;
         break;
     case 1: // 2
-        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,1,2,1, is_log_softmax>;
+        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,1,2,1, is_log_softmax, use_time_mask>;
         break;
     case 2: // 4
-        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,1,4,1, is_log_softmax>;
+        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,1,4,1, is_log_softmax, use_time_mask>;
         break;
     case 3: // 8
-        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,1,8,1, is_log_softmax>;
+        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,1,8,1, is_log_softmax, use_time_mask>;
         break;
     case 4: // 16
-        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,1,16,1, is_log_softmax>;
+        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,1,16,1, is_log_softmax, use_time_mask>;
         break;
     case 5: // 32
-        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,1,32,1, is_log_softmax>;
+        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,1,32,1, is_log_softmax, use_time_mask>;
         break;
     case 6: // 64
-        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,2,32,1, is_log_softmax>;
+        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,2,32,1, is_log_softmax, use_time_mask>;
         break;
     case 7: // 128
-        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,4,32,1, is_log_softmax>;
+        kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 2,4,32,1, is_log_softmax, use_time_mask>;
         break;
     case 8: // 256
-	if (flag_vec4) kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,8,32,4, is_log_softmax>;
-	else kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,8,32,1, is_log_softmax>;
+	if (flag_vec4) kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,8,32,4, is_log_softmax, use_time_mask>;
+	else kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,8,32,1, is_log_softmax, use_time_mask>;
         break;
     case 9: // 512
-        if (flag_vec4) kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,16,32,4, is_log_softmax>;
-	else kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,16,32,1, is_log_softmax>;
+        if (flag_vec4) kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,16,32,4, is_log_softmax, use_time_mask>;
+	else kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,16,32,1, is_log_softmax, use_time_mask>;
         break;
     case 10: // 1024
-        if (flag_vec4) kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,32,32,4, is_log_softmax>;
-	else kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,32,32,1, is_log_softmax>;
+        if (flag_vec4) kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,32,32,4, is_log_softmax, use_time_mask>;
+	else kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,32,32,1, is_log_softmax, use_time_mask>;
         break;
     case 11: // 2048
-        if (flag_vec4) kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,64,32,4, is_log_softmax>;
-	else kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,64,32,1, is_log_softmax>;
+        if (flag_vec4) kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,64,32,4, is_log_softmax, use_time_mask>;
+	else kernel = &masked_scale_softmax_warp_backward_recompute<input_t, output_t, acc_t, 1,64,32,1, is_log_softmax, use_time_mask>;
         break;
     default:
         return false;
@@ -2185,8 +2712,11 @@ bool masked_scale_softmax_warp_backward_recompute_kernel(int element_count, int 
     return true;
 }
 
-template<typename input_t, typename output_t, typename acc_t, bool is_log_softmax>
-bool dispatch_masked_scale_softmax_backward_recompute(output_t *grad_input, const input_t *grad, const input_t *softmax_input, const input_t *pad_mask, const uint8_t *mask, acc_t scale, int softmax_elements, int softmax_elements_stride, int pad_batch_stride, int batch_count, cudaStream_t streamid)
+template<typename input_t, typename output_t, typename acc_t, bool is_log_softmax, bool use_time_mask>
+bool dispatch_masked_scale_softmax_backward_recompute(output_t *grad_input, const input_t *grad,
+const input_t *softmax_input, const input_t *pad_mask,
+const uint8_t *mask, acc_t scale, int softmax_elements, int softmax_elements_stride,
+int pad_batch_stride, int batch_count, cudaStream_t streamid)
 {
 	
     if (softmax_elements == 0) {
@@ -2198,7 +2728,7 @@ bool dispatch_masked_scale_softmax_backward_recompute(output_t *grad_input, cons
  
         masked_scale_softmax_warp_backward_recompute_func<input_t, output_t, acc_t, is_log_softmax> kernel;
         int warp_size, batches_per_warp;
-        if (!masked_scale_softmax_warp_backward_recompute_kernel<input_t, output_t, acc_t, is_log_softmax>(softmax_elements, log2_elements, warp_size, batches_per_warp, kernel)) {
+        if (!masked_scale_softmax_warp_backward_recompute_kernel<input_t, output_t, acc_t, is_log_softmax, use_time_mask>(softmax_elements, log2_elements, warp_size, batches_per_warp, kernel)) {
             return false;
         }
  

@@ -20,6 +20,7 @@ std::vector<torch::Tensor> fwd_cuda(
                                                   );
 
 std::vector<torch::Tensor> bwd_cuda(
+                               bool use_time_mask,
                                int                  heads,
                                torch::Tensor const& output_grads,
                                torch::Tensor const& matmul2_results,
@@ -41,7 +42,6 @@ std::vector<torch::Tensor> bwd_cuda(
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
 std::vector<torch::Tensor> fwd(
- 							   bool 				use_mask,
                                bool                 use_time_mask,
                                bool                 is_training,
                                int                  heads,
@@ -59,12 +59,7 @@ std::vector<torch::Tensor> fwd(
   AT_ASSERTM(inputs.type().scalarType()         == at::ScalarType::Half, "Only HALF is supported");
   AT_ASSERTM(input_weights.type().scalarType()  == at::ScalarType::Half, "Only HALF is supported");
   AT_ASSERTM(output_weights.type().scalarType() == at::ScalarType::Half, "Only HALF is supported");
-  AT_ASSERTM(use_mask                                                  , "no mask is not supported");
-
-  if (use_mask) {
-  	AT_ASSERTM(pad_mask.dim()                     == 2,                    "expected 2D tensor");
-//  	AT_ASSERTM(pad_mask.type().scalarType()       == at::ScalarType::Half, "Only Half is supported");
-  }
+  AT_ASSERTM(pad_mask.dim()                     == 2,                    "expected 2D tensor");
 
   return fwd_cuda(
                                  use_time_mask,
@@ -81,6 +76,7 @@ std::vector<torch::Tensor> fwd(
 }
 
 std::vector<torch::Tensor> bwd(
+                               bool use_time_mask,
                                int                  heads,
                                torch::Tensor const& output_grads,
                                torch::Tensor const& matmul2_results,
@@ -114,6 +110,7 @@ std::vector<torch::Tensor> bwd(
   AT_ASSERTM(dropout_mask.type().scalarType()      == at::ScalarType::Byte, "Only BYTE is supported");
 
   return bwd_cuda(
+                                 use_time_mask,
                                  heads,
                                  output_grads,
                                  matmul2_results,

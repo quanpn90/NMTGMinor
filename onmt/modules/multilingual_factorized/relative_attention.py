@@ -173,7 +173,6 @@ class MFWRelativeSelfMultiheadAttn(nn.Module):
             else:
                 pos_proj_weight = None
 
-
             if self.use_multiplicative:
                 rm_i = torch.index_select(self.rm_i, 0, indices).squeeze(0)
                 sm_i = torch.index_select(self.sm_i, 0, indices).squeeze(0)
