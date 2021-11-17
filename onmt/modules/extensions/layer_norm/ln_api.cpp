@@ -95,10 +95,12 @@ std::vector<at::Tensor> ln_fwd(const at::Tensor &x,      // BxSxhidden_size
 
     TORCH_CHECK(x.is_contiguous());
     auto sizes = x.sizes();
-    TORCH_CHECK(sizes.size() == 2);
+//    TORCH_CHECK(sizes.size() == 2 || sizes.size() == 3);
 
-    const int rows = sizes[0];
-    const int cols = sizes[1];
+    int rows = 1;
+    int cols = sizes.back();
+    for (unsigned i=0; i < sizes.size() - 1 ; i++)
+        rows = rows * sizes[i];
     auto hidden_size = gamma.numel();
 
     TORCH_CHECK(gamma.sizes() == beta.sizes());
@@ -180,10 +182,12 @@ std::vector<at::Tensor> ln_bwd(const at::Tensor &dz,     // BxSxhidden_size
     TORCH_CHECK(dz.is_contiguous());
 
     auto sizes = x.sizes();
-    TORCH_CHECK(sizes.size() == 2);
+//    TORCH_CHECK(sizes.size() == 2 || sizes.size() == 3);
     TORCH_CHECK(dz.sizes() == sizes);
-    auto rows = sizes[0];
-    auto cols = sizes[1];
+    int rows = 1;
+    int cols = sizes.back();
+    for (unsigned i=0; i < sizes.size() - 1 ; i++)
+        rows = rows * sizes[i];
 
     auto hidden_size = gamma.numel();
 

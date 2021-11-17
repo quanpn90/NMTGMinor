@@ -12,10 +12,7 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/extension.h>
 
-//#include "strided_batched_gemm.h"
 #include "softmax_apex.h"
-//#include "dropout.h"
-//#include "layer_norm.h"
 
 // symbol to be automatically resolved by PyTorch libs
 extern THCState *state;

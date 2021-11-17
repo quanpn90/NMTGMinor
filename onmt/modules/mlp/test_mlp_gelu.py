@@ -94,26 +94,6 @@ class MlpSiluFunction(torch.autograd.Function):
         return (None, *grads)
 
 
-class MlpAGeLUFunction(torch.autograd.Function):
-    @staticmethod
-    @custom_fwd(cast_inputs=torch.float16)
-    def forward(ctx, p, *args):
-        outputs = fused_mlp_agelu.forward(p, args)
-        ctx.save_for_backward(*args)
-        ctx.outputs = outputs
-        dropout_mask = outputs[-1]
-        ctx.p = p
-        return outputs[0], dropout_mask
-
-    @staticmethod
-    @custom_bwd
-    def backward(ctx, *grad_o):
-        p = ctx.p
-        grads = fused_mlp_agelu.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
-        del ctx.outputs
-        return (None, *grads)
-
-
 class MlpGeLUFunction(torch.autograd.Function):
     @staticmethod
     @custom_fwd(cast_inputs=torch.float16)
@@ -133,11 +113,13 @@ class MlpGeLUFunction(torch.autograd.Function):
         p = ctx.p
         if ctx.weight_requires_grad:
             grads = fused_mlp_gelu.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
+
         else:
             grads = fused_mlp_gelu.backward_input_only(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
             for i in range(len(ctx.saved_tensors) - 1):
                 grads.append(None)
         del ctx.outputs
+        del ctx.p
         return (None, *grads)
 
 
@@ -161,12 +143,6 @@ class MlpGeLUFunctionBLASLT(torch.autograd.Function):
         return (None, *grads)
 
 
-if fused_mlp_agelu:
-    mlp_agelu_function = MlpAGeLUFunction.apply
-else:
-    mlp_agelu_function = None
-
-
 if fused_mlp_gelu:
     mlp_gelu_function = MlpGeLUFunction.apply
 else:
@@ -176,81 +152,6 @@ if mlp_gelu_blaslt:
     mlp_gelu_function_blaslt = MlpGeLUFunctionBLASLT.apply
 else:
     mlp_gelu_function_blaslt = None
-
-
-class SwishFunction(torch.autograd.Function):
-    @staticmethod
-    @custom_fwd
-    def forward(ctx, inp):
-        ctx.save_for_backward(inp)
-        return silu_cuda.forward(inp)
-
-    @staticmethod
-    @custom_bwd
-    def backward(ctx, grad_out):
-        inp, = ctx.saved_tensors
-        if not ctx.needs_input_grad[0]: return (None,)
-        return silu_cuda.backward(inp, grad_out)
-
-
-def fast_silu(input):
-    return SwishFunction.apply(input)
-
-
-class FastSiLU(torch.nn.Module):
-
-    def forward(self, input):
-        return fast_silu(input)
-
-
-class AGELUFunction(torch.autograd.Function):
-    @staticmethod
-    @custom_fwd
-    def forward(ctx, x):
-        ctx.save_for_backward(x)
-        SQRT_M2_PI = 0.7978845608
-        COEFF = 0.044715
-        return 0.5 * x * (1.0 + torch.tanh(SQRT_M2_PI * (x + COEFF * torch.pow(x, 3))))
-
-    @staticmethod
-    @custom_bwd
-    def backward(ctx, grad_out):
-        x, = ctx.saved_tensors
-        SQRT_M2_PI = 0.7978845608
-        COEFF = 0.044715
-        BACKCOEFF = 0.1070322243
-
-        tanh_outf = torch.tanh(SQRT_M2_PI * (x + COEFF * torch.pow(x, 3)))
-        retf = 0.5 * x * (1.0 - torch.pow(tanh_outf, 2)) * (SQRT_M2_PI + BACKCOEFF * torch.pow(x, 2)) + 0.5 * (
-                1.0 + tanh_outf)
-        return grad_out * retf
-
-
-class AGELU(torch.nn.Module):
-
-    def forward(self, input):
-        return AGELUFunction.apply(input)
-
-
-def agelu(x):
-    SQRT_M2_PI = 0.7978845608
-    COEFF = 0.044715
-    BACKCOEFF = SQRT_M2_PI * COEFF * 3
-
-    return 0.5 * x * (1.0 + torch.tanh(SQRT_M2_PI * (x + COEFF * torch.pow(x, 3))))
-
-
-def agelu_backward(x, dy):
-    SQRT_M2_PI = 0.7978845608
-    COEFF = 0.044715
-    BACKCOEFF = 0.1070322243
-
-    tanh_outf = torch.tanh(SQRT_M2_PI * (x + COEFF * torch.pow(x, 3)))
-    retf = 0.5 * x * (1.0 - torch.pow(tanh_outf, 2)) * (SQRT_M2_PI + BACKCOEFF * torch.pow(x, 2)) + 0.5 * (
-            1.0 + tanh_outf)
-
-    return dy * retf
-
 
 if __name__ == '__main__':
 
@@ -301,7 +202,7 @@ if __name__ == '__main__':
                 std = math.sqrt(1. / float(bias.size(0)))
                 nn.init.normal_(bias, 0., 0.0)
 
-        def forward(self, input, mask=None, ref=False, fastest=True):
+        def forward(self, input, mask=None, ref=False, fastest=False):
 
             if fastest and not ref:
                 return mlp_gelu_function_blaslt(self.dropout, input, *self.weights, *self.biases)
@@ -327,7 +228,7 @@ if __name__ == '__main__':
                     # output = fast_silu(output) * dropout_mask.view(output.size(0), -1) * pinv
                     # output = GELUFunction.apply(output) * dropout_mask.view(output.size(0), -1) * pinv
                     if self.dropout > 0:
-                        output = F.gelu(output) * dropout_mask.view(output.size(0), -1) * pinv
+                        output = F.gelu(output) * dropout_mask.view_as(output) * pinv
                     else:
                         output = F.gelu(output)
 
@@ -337,11 +238,12 @@ if __name__ == '__main__':
 
         def extra_repr(self):
             # TODO add dropout probability
-            s = F"MLP sizes: {self.mlp_sizes},  activation={self.activation}"
+            s = F"MLP sizes: {self.mlp_sizes},  activation={self.activation}, dropout={self.dropout}"
             return s
 
 
-    batch_size = 24568
+    seq_len = 64
+    batch_size = 1024
     mlp_sizes = [1024, 4096, 1024]
     num_iters = 32
 
@@ -352,35 +254,38 @@ if __name__ == '__main__':
             MLP(mlp_sizes)
 
         def test_numeric(self):
-            mlp = MLP(mlp_sizes, activation='relu', dropout=0.5).cuda()
+            print("Test numeric 3D ....")
+            for dropout in [0.0, 0.2, 0.5, 0.7]:
+                mlp = MLP(mlp_sizes, activation='relu', dropout=dropout).cuda()
 
-            print(mlp)
-            ref_mlp = deepcopy(mlp)
+                print(mlp)
+                ref_mlp = deepcopy(mlp)
 
-            for _ in range(1):
-                bsz = random.randint(8, batch_size // 8) * 8
-                test_input = torch.empty(bsz, mlp_sizes[0], device="cuda").uniform_(-1., 1.).requires_grad_()
-                ref_input = test_input.clone().detach().requires_grad_()
-                mlp_out, dropout_mask = mlp(test_input)
-                ref_out = ref_mlp.forward(ref_input, dropout_mask, ref=True)
+                for _ in range(1):
+                    bsz = random.randint(8, batch_size // 8) * 8
+                    test_input = torch.empty(seq_len, bsz, mlp_sizes[0], device="cuda").uniform_(-1.,
+                                                                                                 1.).requires_grad_()
+                    ref_input = test_input.clone().detach().requires_grad_()
+                    mlp_out, dropout_mask = mlp(test_input)
+                    ref_out = ref_mlp.forward(ref_input, dropout_mask, ref=True)
 
-                print(dropout_mask.sum() / dropout_mask.numel())
-                np.testing.assert_allclose(
-                    mlp_out.detach().cpu().numpy(),
-                    ref_out.detach().cpu().numpy(),
-                    atol=1e-5, rtol=1e-4)
+                    print(dropout_mask.sum() / dropout_mask.numel())
+                    np.testing.assert_allclose(
+                        mlp_out.detach().cpu().numpy(),
+                        ref_out.detach().cpu().numpy(),
+                        atol=1e-5, rtol=1e-4)
 
-                # Use mean value as scalar loss. Multiply 10 to make it big enough not zero out
-                mlp_out.mean().mul(10.).backward()
-                ref_out.mean().mul(10.).backward()
-                np.testing.assert_allclose(
-                    test_input.grad.detach().cpu().numpy(),
-                    ref_input.grad.detach().cpu().numpy(),
-                    atol=1e-7, rtol=1e-5)
-                np.testing.assert_allclose(
-                    mlp.biases[0].grad.detach().cpu().numpy(),
-                    ref_mlp.biases[0].grad.detach().cpu().numpy(),
-                    atol=1e-7, rtol=1e-5)
+                    # Use mean value as scalar loss. Multiply 10 to make it big enough not zero out
+                    mlp_out.mean().mul(10.).backward()
+                    ref_out.mean().mul(10.).backward()
+                    np.testing.assert_allclose(
+                        test_input.grad.detach().cpu().numpy(),
+                        ref_input.grad.detach().cpu().numpy(),
+                        atol=1e-7, rtol=1e-5)
+                    np.testing.assert_allclose(
+                        mlp.biases[0].grad.detach().cpu().numpy(),
+                        ref_mlp.biases[0].grad.detach().cpu().numpy(),
+                        atol=1e-7, rtol=1e-5)
 
         def test_with_bias(self):
             for use_activation in ['relu']:
@@ -388,7 +293,8 @@ if __name__ == '__main__':
 
                 ref_mlp = deepcopy(mlp)
 
-                test_input = torch.empty(batch_size, mlp_sizes[0], device="cuda").uniform_(-1., 1.).requires_grad_()
+                test_input = torch.empty(seq_len, batch_size, mlp_sizes[0], device="cuda").uniform_(-1.,
+                                                                                                    1.).requires_grad_()
                 ref_input = test_input.clone().detach().requires_grad_()
                 mlp_out, dropout_mask = mlp(test_input)
                 ref_out = ref_mlp(ref_input, dropout_mask, ref=True)
@@ -416,14 +322,18 @@ if __name__ == '__main__':
                         atol=1e-7, rtol=1e-5)
 
         def test_no_weight_grad(self):
-            for use_activation in ['relu']:
-                mlp = MLP(mlp_sizes, activation=use_activation).cuda()
+
+            print("Test backward no weight grad ...")
+            for dropout in [0.0, 0.35]:
+                mlp = MLP(mlp_sizes, activation="gelu", dropout=dropout).cuda()
+                print(mlp)
                 for p in mlp.parameters():
                     p.requires_grad = False
 
                 ref_mlp = deepcopy(mlp)
 
-                test_input = torch.empty(batch_size, mlp_sizes[0], device="cuda").uniform_(-1., 1.).requires_grad_()
+                test_input = torch.empty(seq_len, batch_size, mlp_sizes[0], device="cuda").uniform_(-1.,
+                                                                                                    1.).requires_grad_()
                 ref_input = test_input.clone().detach().requires_grad_()
                 mlp_out, dropout_mask = mlp(test_input)
                 ref_out = ref_mlp(ref_input, dropout_mask, ref=True)
@@ -454,7 +364,7 @@ if __name__ == '__main__':
             mlp = MLP(mlp_sizes).cuda()
             ref_mlp = deepcopy(mlp)
 
-            test_input = torch.empty(batch_size, mlp_sizes[0], device="cuda").uniform_(-1., 1.)
+            test_input = torch.empty(seq_len, batch_size, mlp_sizes[0], device="cuda").uniform_(-1., 1.)
             ref_input = test_input.clone().detach()
             mlp_out, dropout_mask = mlp(test_input)
 
@@ -466,60 +376,73 @@ if __name__ == '__main__':
 
         def test_performance_half(self):
             print("Testing performance ...")
-            mlp = MLP(mlp_sizes).cuda().half()
+            for dropout in [0.0, 0.5]:
+                mlp = MLP(mlp_sizes, dropout=dropout).cuda().half()
+                print(mlp)
 
-            mlp_layers = []
-            for i in range(mlp.num_layers):
-                linear = nn.Linear(mlp_sizes[i], mlp_sizes[i + 1])
-                mlp.weights[i].data.copy_(linear.weight)
-                mlp.biases[i].data.copy_(linear.bias)
-                mlp_layers.append(linear)
-                if i < mlp.num_layers - 1:
-                    # mlp_layers.append(nn.ReLU(inplace=True))
-                    mlp_layers.append(torch.nn.GELU())
-                    mlp_layers.append(nn.Dropout(0.5))
+                mlp_layers = []
+                for i in range(mlp.num_layers):
+                    linear = nn.Linear(mlp_sizes[i], mlp_sizes[i + 1])
+                    mlp.weights[i].data.copy_(linear.weight)
+                    mlp.biases[i].data.copy_(linear.bias)
+                    mlp_layers.append(linear)
+                    if i < mlp.num_layers - 1:
+                        mlp_layers.append(torch.nn.GELU())
+                        mlp_layers.append(nn.Dropout(dropout))
 
-            ref_mlp = nn.Sequential(*mlp_layers).cuda().half()
+                ref_mlp = nn.Sequential(*mlp_layers).cuda().half()
 
-            test_input = torch.empty(
-                batch_size, mlp_sizes[0], device="cuda", dtype=torch.half).fill_(10.).requires_grad_()
-            ref_input = torch.empty(
-                batch_size, mlp_sizes[0], device="cuda", dtype=torch.half).fill_(10.).requires_grad_()
+                test_input = torch.empty(
+                    seq_len, batch_size, mlp_sizes[0], device="cuda", dtype=torch.half).fill_(10.).requires_grad_()
+                ref_input = torch.empty(
+                    seq_len, batch_size, mlp_sizes[0], device="cuda", dtype=torch.half).fill_(10.).requires_grad_()
 
-            # Warm up GPU
-            for _ in range(num_iters):
-                ref_out = ref_mlp(ref_input)
-                ref_loss = ref_out.mean()
-                ref_mlp.zero_grad()
-                ref_loss.backward()
-                mlp_out, _ = mlp(test_input)
-                test_loss = mlp_out.mean()
-                mlp.zero_grad()
-                test_loss.backward()
+                # Warm up GPU
+                for _ in range(num_iters):
+                    ref_out = ref_mlp(ref_input)
+                    ref_loss = ref_out.mean()
+                    ref_mlp.zero_grad()
+                    ref_loss.backward()
+                    mlp_out, _ = mlp(test_input)
+                    test_loss = mlp_out.mean()
+                    mlp.zero_grad()
+                    test_loss.backward()
 
-            torch.cuda.profiler.start()
-            torch.cuda.synchronize()
-            start_time = time()
-            for _ in range(num_iters):
-                ref_out = ref_mlp(ref_input)
-                ref_loss = ref_out.mean()
-                ref_mlp.zero_grad()
-                ref_loss.backward()
-            torch.cuda.synchronize()
-            stop_time = time()
-            print(F"\nPytorch MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+                torch.cuda.profiler.start()
+                torch.cuda.synchronize()
+                start_time = time()
+                for _ in range(num_iters):
+                    ref_out = ref_mlp(ref_input)
+                    ref_loss = ref_out.mean()
+                    ref_mlp.zero_grad()
+                    ref_loss.backward()
+                torch.cuda.synchronize()
+                stop_time = time()
+                print(F"\nPytorch MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
 
-            torch.cuda.synchronize()
-            start_time = time()
-            for _ in range(num_iters):
-                mlp_out, _ = mlp(test_input)
-                test_loss = mlp_out.mean()
-                mlp.zero_grad()
-                test_loss.backward()
-            torch.cuda.synchronize()
-            stop_time = time()
-            print(F"C++ MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
-            torch.cuda.profiler.stop()
+                torch.cuda.synchronize()
+                start_time = time()
+                for _ in range(num_iters):
+                    mlp_out, _ = mlp(test_input)
+                    test_loss = mlp_out.mean()
+                    mlp.zero_grad()
+                    test_loss.backward()
+                torch.cuda.synchronize()
+                stop_time = time()
+                print(F"C++ MLP 3D time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+                torch.cuda.profiler.stop()
+
+                torch.cuda.synchronize()
+                start_time = time()
+                for _ in range(num_iters):
+                    mlp_out, _ = mlp(test_input.view(-1, test_input.size(-1)))
+                    test_loss = mlp_out.mean()
+                    mlp.zero_grad()
+                    test_loss.backward()
+                torch.cuda.synchronize()
+                stop_time = time()
+                print(F"C++ MLP 2D time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+                torch.cuda.profiler.stop()
 
             # torch.cuda.synchronize()
             # start_time = time()
@@ -535,66 +458,67 @@ if __name__ == '__main__':
 
         def test_performance_half_no_grad_weight(self):
             print("Testing performance without backward to weight ...")
-            mlp = MLP(mlp_sizes).cuda().half()
+            for dropout in [0.0, 0.5]:
+                mlp = MLP(mlp_sizes, dropout=dropout).cuda().half()
 
-            mlp_layers = []
-            for i in range(mlp.num_layers):
-                linear = nn.Linear(mlp_sizes[i], mlp_sizes[i + 1])
-                mlp.weights[i].data.copy_(linear.weight)
-                mlp.biases[i].data.copy_(linear.bias)
-                mlp_layers.append(linear)
-                if i < mlp.num_layers - 1:
-                    # mlp_layers.append(nn.ReLU(inplace=True))
-                    mlp_layers.append(torch.nn.GELU())
-                    mlp_layers.append(nn.Dropout(0.0))
+                mlp_layers = []
+                for i in range(mlp.num_layers):
+                    linear = nn.Linear(mlp_sizes[i], mlp_sizes[i + 1])
+                    mlp.weights[i].data.copy_(linear.weight)
+                    mlp.biases[i].data.copy_(linear.bias)
+                    mlp_layers.append(linear)
+                    if i < mlp.num_layers - 1:
+                        # mlp_layers.append(nn.ReLU(inplace=True))
+                        mlp_layers.append(torch.nn.GELU())
+                        mlp_layers.append(nn.Dropout(dropout))
 
-            ref_mlp = nn.Sequential(*mlp_layers).cuda().half()
+                ref_mlp = nn.Sequential(*mlp_layers).cuda().half()
 
-            for p in mlp.parameters():
-                p.requires_grad = False
+                for p in mlp.parameters():
+                    p.requires_grad = False
 
-            for p in ref_mlp.parameters():
-                p.requires_grad = False
+                for p in ref_mlp.parameters():
+                    p.requires_grad = False
 
-            test_input = torch.empty(
-                batch_size, mlp_sizes[0], device="cuda", dtype=torch.half).fill_(10.).requires_grad_()
-            ref_input = torch.empty(
-                batch_size, mlp_sizes[0], device="cuda", dtype=torch.half).fill_(10.).requires_grad_()
+                test_input = torch.empty(
+                    batch_size, seq_len, mlp_sizes[0], device="cuda", dtype=torch.half).fill_(10.).requires_grad_()
+                ref_input = torch.empty(
+                    batch_size, seq_len, mlp_sizes[0], device="cuda", dtype=torch.half).fill_(10.).requires_grad_()
 
-            # Warm up GPU
-            for _ in range(num_iters):
-                ref_out = ref_mlp(ref_input)
-                ref_loss = ref_out.mean()
-                ref_mlp.zero_grad()
-                ref_loss.backward()
-                mlp_out, _ = mlp(test_input)
-                test_loss = mlp_out.mean()
-                mlp.zero_grad()
-                test_loss.backward()
+                # Warm up GPU
+                for _ in range(num_iters):
+                    ref_out = ref_mlp(ref_input)
+                    ref_loss = ref_out.mean()
+                    ref_mlp.zero_grad()
+                    ref_loss.backward()
+                    mlp_out, _ = mlp(test_input)
+                    test_loss = mlp_out.mean()
+                    mlp.zero_grad()
+                    test_loss.backward()
 
-            torch.cuda.profiler.start()
-            torch.cuda.synchronize()
-            start_time = time()
-            for _ in range(num_iters):
-                ref_out = ref_mlp(ref_input)
-                ref_loss = ref_out.mean()
-                ref_mlp.zero_grad()
-                ref_loss.backward()
-            torch.cuda.synchronize()
-            stop_time = time()
-            print(F"\nPytorch MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+                torch.cuda.profiler.start()
+                torch.cuda.synchronize()
+                start_time = time()
+                for _ in range(num_iters):
+                    ref_out = ref_mlp(ref_input)
+                    ref_loss = ref_out.mean()
+                    ref_mlp.zero_grad()
+                    ref_loss.backward()
+                torch.cuda.synchronize()
+                stop_time = time()
+                print(F"\nPytorch MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
 
-            torch.cuda.synchronize()
-            start_time = time()
-            for _ in range(num_iters):
-                mlp_out, _ = mlp(test_input)
-                test_loss = mlp_out.mean()
-                mlp.zero_grad()
-                test_loss.backward()
-            torch.cuda.synchronize()
-            stop_time = time()
-            print(F"C++ MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
-            torch.cuda.profiler.stop()
+                torch.cuda.synchronize()
+                start_time = time()
+                for _ in range(num_iters):
+                    mlp_out, _ = mlp(test_input)
+                    test_loss = mlp_out.mean()
+                    mlp.zero_grad()
+                    test_loss.backward()
+                torch.cuda.synchronize()
+                stop_time = time()
+                print(F"C++ MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+                torch.cuda.profiler.stop()
 
 
     unittest.main()

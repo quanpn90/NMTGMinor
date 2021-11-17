@@ -67,6 +67,8 @@ __device__ __inline__ float gelu(float a) {
 
 // Keep gelu in float only. When using half, cast to float before calling.
 __device__ __inline__ float gelu_back(float dy, float a) {
+
+  // dy is the gradient w.r.t the gelu output
   float cdf = normcdff(a);
   float pdf = BACKCOEFF * expf(-0.5f * a * a);
   float retf = cdf + a * pdf;
@@ -194,252 +196,6 @@ cublasStatus_t mlp_gemm(
       CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 }
 
-int mlp_gemm_lt(
-    cublasLtHandle_t ltHandle,
-    cublasOperation_t transa,
-    cublasOperation_t transb,
-    int m,
-    int n,
-    int k,
-    float *alpha, /* host pointer */
-    const at::Half* A,
-    int lda,
-    const at::Half* B,
-    int ldb,
-    float *beta, /* host pointer */
-    at::Half* C,
-    int ldc,
-    void *workspace,
-    size_t workspaceSize,
-    cudaStream_t stream,
-    bool use_relu,
-    const void* bias) {
-  cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
-
-  cublasLtMatmulDescOpaque_t operationDesc = {};
-  cublasLtMatrixLayoutOpaque_t Adesc = {}, Bdesc = {}, Cdesc = {};
-  cublasLtMatmulPreferenceOpaque_t preference = {};
-
-  int returnedResults                             = 0;
-  cublasLtMatmulHeuristicResult_t heuristicResult = {};
-  cublasLtEpilogue_t epilogue = CUBLASLT_EPILOGUE_DEFAULT;
-
-  // Create operation descriptor; see cublasLtMatmulDescAttributes_t
-  // for details about defaults; here we just set the transforms for
-  // A and B.
-  status = cublasLtMatmulDescInit(&operationDesc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_TRANSA, &transa, sizeof(transa));
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(transa));
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-
-  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &bias, sizeof(bias));
-  if (status != CUBLAS_STATUS_SUCCESS) {
-      goto CLEANUP;
-  }
-  if (use_relu) {
-      epilogue = CUBLASLT_EPILOGUE_RELU_BIAS;
-  } else {
-      epilogue = CUBLASLT_EPILOGUE_BIAS;
-  }
-
-  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_EPILOGUE, &epilogue, sizeof(epilogue));
-  if (status != CUBLAS_STATUS_SUCCESS) {
-    goto CLEANUP;
-  }
-
-  // Create matrix descriptors. Not setting any extra attributes.
-  status = cublasLtMatrixLayoutInit(
-    &Adesc, CUDA_R_16F, transa == CUBLAS_OP_N ? m : k, transa == CUBLAS_OP_N ? k : m, lda);
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-  status = cublasLtMatrixLayoutInit(
-    &Bdesc, CUDA_R_16F, transb == CUBLAS_OP_N ? k : n, transb == CUBLAS_OP_N ? n : k, ldb);
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-  status = cublasLtMatrixLayoutInit(&Cdesc, CUDA_R_16F, m, n, ldc);
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-
-  // Create preference handle; In general, extra attributes can be
-  // used here to disable tensor ops or to make sure algo selected
-  // will work with badly aligned A, B, C. However, for simplicity
-  // here we assume A,B,C are always well aligned (e.g., directly
-  // come from cudaMalloc)
-  status = cublasLtMatmulPreferenceInit(&preference);
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-  status = cublasLtMatmulPreferenceSetAttribute(
-    &preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspaceSize, sizeof(workspaceSize));
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-
-  // We just need the best available heuristic to try and run matmul.
-  // There is no guarantee that this will work. For example, if A is
-  // badly aligned, you can request more (e.g. 32) algos and try to
-  // run them one by one until something works.
-  status = cublasLtMatmulAlgoGetHeuristic(
-    ltHandle, &operationDesc, &Adesc, &Bdesc, &Cdesc, &Cdesc, &preference, 1, &heuristicResult, &returnedResults);
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-
-  if (returnedResults == 0) {
-    status = CUBLAS_STATUS_NOT_SUPPORTED;
-    goto CLEANUP;
-  }
-  status = cublasLtMatmul(ltHandle,
-                          &operationDesc,
-                          alpha,
-                          A,
-                          &Adesc,
-                          B,
-                          &Bdesc,
-                          beta,
-                          C,
-                          &Cdesc,
-                          C,
-                          &Cdesc,
-                          &heuristicResult.algo,
-                          workspace,
-                          workspaceSize,
-                          stream);
-
-CLEANUP:
-  // Descriptors are no longer needed as all GPU work was already
-  // enqueued.
-  return status == CUBLAS_STATUS_SUCCESS ? 0 : 1;
-}
-
-int mlp_gemm_lt(
-    cublasLtHandle_t ltHandle,
-    cublasOperation_t transa,
-    cublasOperation_t transb,
-    int m,
-    int n,
-    int k,
-    float *alpha, /* host pointer */
-    const double* A,
-    int lda,
-    const double* B,
-    int ldb,
-    float *beta, /* host pointer */
-    double* C,
-    int ldc,
-    void *workspace,
-    size_t workspaceSize,
-    cudaStream_t stream,
-    bool use_relu,
-    const void* bias) {
-  return 1;
-}
-
-int mlp_gemm_lt(
-    cublasLtHandle_t ltHandle,
-    cublasOperation_t transa,
-    cublasOperation_t transb,
-    int m,
-    int n,
-    int k,
-    float *alpha, /* host pointer */
-    const float *A,
-    int lda,
-    const float *B,
-    int ldb,
-    float *beta, /* host pointer */
-    float *C,
-    int ldc,
-    void *workspace,
-    size_t workspaceSize,
-    cudaStream_t stream,
-    bool use_relu,
-    const void* bias) {
-  cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
-
-  cublasLtMatmulDescOpaque_t operationDesc = {};
-  cublasLtMatrixLayoutOpaque_t Adesc = {}, Bdesc = {}, Cdesc = {};
-  cublasLtMatmulPreferenceOpaque_t preference = {};
-
-  int returnedResults                             = 0;
-  cublasLtMatmulHeuristicResult_t heuristicResult = {};
-  cublasLtEpilogue_t epilogue = CUBLASLT_EPILOGUE_DEFAULT;
-
-  // Create operation descriptor; see cublasLtMatmulDescAttributes_t
-  // for details about defaults; here we just set the transforms for
-  // A and B.
-  status = cublasLtMatmulDescInit(&operationDesc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_TRANSA, &transa, sizeof(transa));
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(transa));
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-
-  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &bias, sizeof(bias));
-  if (status != CUBLAS_STATUS_SUCCESS) {
-      goto CLEANUP;
-  }
-  if (use_relu) {
-      epilogue = CUBLASLT_EPILOGUE_RELU_BIAS;
-  } else {
-      epilogue = CUBLASLT_EPILOGUE_BIAS;
-  }
-
-  status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_EPILOGUE, &epilogue, sizeof(epilogue));
-  if (status != CUBLAS_STATUS_SUCCESS) {
-    goto CLEANUP;
-  }
-
-  // Create matrix descriptors. Not setting any extra attributes.
-  status = cublasLtMatrixLayoutInit(
-    &Adesc, CUDA_R_32F, transa == CUBLAS_OP_N ? m : k, transa == CUBLAS_OP_N ? k : m, lda);
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-  status = cublasLtMatrixLayoutInit(
-    &Bdesc, CUDA_R_32F, transb == CUBLAS_OP_N ? k : n, transb == CUBLAS_OP_N ? n : k, ldb);
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-  status = cublasLtMatrixLayoutInit(&Cdesc, CUDA_R_32F, m, n, ldc);
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-
-  // Create preference handle; In general, extra attributes can be
-  // used here to disable tensor ops or to make sure algo selected
-  // will work with badly aligned A, B, C. However, for simplicity
-  // here we assume A,B,C are always well aligned (e.g., directly
-  // come from cudaMalloc)
-  status = cublasLtMatmulPreferenceInit(&preference);
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-  status = cublasLtMatmulPreferenceSetAttribute(
-    &preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspaceSize, sizeof(workspaceSize));
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-
-  // We just need the best available heuristic to try and run matmul.
-  // There is no guarantee that this will work. For example, if A is
-  // badly aligned, you can request more (e.g. 32) algos and try to
-  // run them one by one until something works.
-  status = cublasLtMatmulAlgoGetHeuristic(
-    ltHandle, &operationDesc, &Adesc, &Bdesc, &Cdesc, &Cdesc, &preference, 1, &heuristicResult, &returnedResults);
-  if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
-
-  if (returnedResults == 0) {
-    status = CUBLAS_STATUS_NOT_SUPPORTED;
-    goto CLEANUP;
-  }
-
-  status = cublasLtMatmul(ltHandle,
-                          &operationDesc,
-                          alpha,
-                          A,
-                          &Adesc,
-                          B,
-                          &Bdesc,
-                          beta,
-                          C,
-                          &Cdesc,
-                          C,
-                          &Cdesc,
-                          &heuristicResult.algo,
-                          workspace,
-                          workspaceSize,
-                          stream);
-
-CLEANUP:
-  // Descriptors are no longer needed as all GPU work was already
-  // enqueued.
-  return status == CUBLAS_STATUS_SUCCESS ? 0 : 1;
-}
-
 
 // Bias ADD. Assume input X is [features x batch size], column major.
 // Bias is one 'features' long vector, with implicit broadcast.
@@ -453,7 +209,7 @@ __global__ void biasAdd_fprop(T *X, T *b, uint batch_size, uint features) {
       int row = tid % (features / ILP);
       load_store(r_x, X, 0 , tid);
       load_store(r_b, b, 0 , row);
-#pragma unroll
+      #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
         float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
         r_x[ii] = bias_sum;
@@ -843,7 +599,7 @@ __global__ void GeluDropout_bprop(T *dY, T* H, T *Y, uint8_t* mask, uint feature
       load_store(r_m, mask, 0 , tid);
 #pragma unroll
       for(int ii=0;ii<ILP;ii++){
-          r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii] * (float)r_m[ii] * pinv);
+            r_dy[ii] = gelu_back((float)r_dy[ii] * (float)r_m[ii] * pinv, (float)r_h[ii]);
       }
       load_store(dX, r_dy, tid, 0);
     }
@@ -862,7 +618,7 @@ __global__ void GeluDropout_bprop(T *dY, T* H, T *Y, uint8_t* mask, uint feature
       }
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
-        r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii] * (float)r_m[ii] * pinv);
+        r_dy[ii] = gelu_back( (float)r_dy[ii] * (float)r_m[ii] * pinv, (float)r_h[ii] );
       }
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
@@ -1211,7 +967,7 @@ __global__ void biasAddGeLUDropout_bprop(
       T dy_val = dY[flat_idx];
       uint8_t m_val = mask[flat_idx];
       T dx_val;
-      dx_val = gelu_back((float)dy_val, (float)h_val) * float(m_val) * pinv ;  // gelu backprop
+      dx_val = gelu_back((float)dy_val * float(m_val) * pinv, (float)h_val)  ;  // gelu backprop
 
       dX[flat_idx] = dx_val;
       db_local += (float)dx_val;
@@ -1230,7 +986,7 @@ __global__ void biasAddGeLUDropout_bprop(
         T h_val = H[flat_idx];
         uint8_t m_val = mask[flat_idx];
         T dx_val;
-        dx_val = gelu_back((float)dy_val, (float)h_val) * float(m_val) * pinv;
+        dx_val = gelu_back((float)dy_val * float(m_val) * pinv, (float)h_val) ;
 //        if ((float)y_val > 0.f)
 //          dx_val = dy_val * pinv;
 //        else
@@ -1351,7 +1107,7 @@ __global__ void biasAddGeLUDropout_bprop_aligned(
 //      else {
 //        r_dy[ii] = r_dy[ii] * pinv;
 //      }
-      r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]) * float(r_m[ii]) * pinv;
+      r_dy[ii] = gelu_back((float)r_dy[ii] * float(r_m[ii]) * pinv, (float)r_h[ii]) ;
       db_local[ii] += (float)r_dy[ii];
     }
     load_store(dX, r_dy, flat_idx, 0);
@@ -1375,7 +1131,7 @@ __global__ void biasAddGeLUDropout_bprop_aligned(
 //          r_dy[ii] = 0;
 //        else
 //          r_dy[ii] = r_dy[ii] * pinv;
-        r_dy[ii] = gelu_back((float)r_dy[ii], (float)r_h[ii]) * (float)r_m[ii] * pinv;
+        r_dy[ii] = gelu_back((float)r_dy[ii] * (float)r_m[ii] * pinv, (float)r_h[ii]) ;
         db_local[ii] += (float)r_dy[ii];
       }
       load_store(dX, r_dy, flat_idx, 0);
@@ -1612,7 +1368,6 @@ int mlp_fp(
     T* reserved_space,
     T* reserved_activations,
     uint8_t* reserved_mask,
-    void* lt_workspace,
     float p) {
   auto gen = at::cuda::detail::getDefaultCUDAGenerator();
   T *weight, *input, *output, *hidden, *bias;
@@ -1635,7 +1390,7 @@ int mlp_fp(
     weight = WPtr[layer];
     input = (layer == 0) ? X : reserved_space_x;
     output = (layer == num_layers - 1) ? Y : reserved_space_y;  // after activation/dropout
-    mask = (layer == num_layers - 1) ? NULL : reserved_space_m;
+    mask = (layer == num_layers - 1 || p == 0) ? NULL : reserved_space_m;
     hidden = (layer == num_layers - 1) ? NULL : reserved_space_a; // before activation/dropout
     bias = BPtr[layer];
     int ifeat = (layer == 0) ? input_features : output_features[layer - 1];
@@ -1701,7 +1456,8 @@ int mlp_fp(
     if (layer < (num_layers -1)) {
         reserved_space_y += ofeat * batch_size;
         reserved_space_a += ofeat * batch_size;
-        reserved_space_m += ofeat * batch_size;
+        if (p > 0.0)
+            reserved_space_m += ofeat * batch_size;
     }
   }
 
@@ -1782,7 +1538,7 @@ int mlp_bp(
 
     // note: last layer doesn't have h and mask
     h = (layer == num_layers - 1) ? NULL : reserved_activations + y_offsets[layer];  // activation + dropout output
-    mask = (layer == num_layers - 1) ? NULL : reserved_mask + y_offsets[layer];  // mask
+    mask = ((layer == num_layers - 1) || (p == 0.0)) ? NULL : reserved_mask + y_offsets[layer];  // mask
 
     // dx from layer+1
     dy = (layer == num_layers - 1) ? dY : dx_gemm_base + y_offsets[layer];
@@ -2113,7 +1869,6 @@ template int mlp_fp<float>(
     float* reserved_space,
     float* reserved_activations,
     uint8_t* reserved_mask,
-    void* lt_workspace,
     float p);
 
 template int mlp_bp<float>(
@@ -2164,7 +1919,6 @@ template int mlp_fp<at::Half>(
     at::Half* reserved_space,
     at::Half* reserved_activations,
     uint8_t* reserved_mask,
-    void* lt_workspace,
     float p);
 
 template int mlp_bp<at::Half>(
@@ -2215,7 +1969,6 @@ template int mlp_fp<double>(
     double* reserved_space,
     double* reserved_activations,
     uint8_t* reserved_mask,
-    void* lt_workspace,
     float p);
 
 template int mlp_bp<double>(

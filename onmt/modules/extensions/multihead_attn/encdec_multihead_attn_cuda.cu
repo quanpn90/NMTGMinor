@@ -12,10 +12,7 @@
 #include <torch/extension.h>
 #include <math.h>
 
-#include "strided_batched_gemm.h"
 #include "softmax_dropout.h"
-#include "dropout.h"
-#include "layer_norm.h"
 
 // symbol to be automatically resolved by PyTorch libs
 extern THCState *state;

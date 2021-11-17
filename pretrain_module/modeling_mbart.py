@@ -612,7 +612,7 @@ class MBartDecoderLayer(nn.Module):
             cross_attn_layer_head_mask: Optional[torch.Tensor] = None,
             # past_key_value: Optional[Tuple[torch.Tensor]] = None,
             output_attentions: Optional[bool] = False,
-            incremental: Optional[bool] = True,
+            incremental: Optional[bool] = False,
             incremental_cache=None
     ):
         """
@@ -631,6 +631,8 @@ class MBartDecoderLayer(nn.Module):
             output_attentions (:obj:`bool`, `optional`):
                 Whether or not to return the attentions tensors of all attention layers. See ``attentions`` under
                 returned tensors for more detail.
+            incremental_cache:
+            incremental:
         """
         if incremental and incremental_cache is None:
             incremental_cache = dict()
@@ -641,7 +643,7 @@ class MBartDecoderLayer(nn.Module):
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
         # self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
         # add present self-attn cache to positions 1,2 of present_key_value tuple
-        hidden_states, self_attn_weights, incremental_cache = self.self_attn(
+        hidden_states, self_attn_weights, _ = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             layer_head_mask=layer_head_mask,
@@ -684,11 +686,11 @@ class MBartDecoderLayer(nn.Module):
             weights = [self.fc1.weight, self.fc2.weight]
             biases = [self.fc1.bias, self.fc2.bias]
 
-            seq_len, bsz, hidden_size = hidden_states.size(0), hidden_states.size(1), hidden_states.size(2)
+            # seq_len, bsz, hidden_size = hidden_states.size(0), hidden_states.size(1), hidden_states.size(2)
             dropout = self.activation_dropout if self.training else 0.0
-            hidden_states = self.fused_function(dropout, False, hidden_states.view(seq_len * bsz, -1),
-                                                *weights, *biases).type_as(hidden_states)
-            hidden_states = hidden_states.view(seq_len, bsz, hidden_size)
+            hidden_states = self.fused_function(dropout, False, hidden_states, *weights, *biases).type_as(hidden_states)
+
+            # hidden_states = hidden_states.view(seq_len, bsz, hidden_size)
         else:
             hidden_states = self.activation_fn(self.fc1(hidden_states))
             hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)

@@ -82,8 +82,7 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
 
             sinq, cosq, = null_tensor, null_tensor
             sink, cosk, = null_tensor, null_tensor
-        #
-        #     if not ctx.recompute:
+
             ctx.save_for_backward(heads_t,
                                   scale_t,
                                   matmul2_results,

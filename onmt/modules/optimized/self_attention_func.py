@@ -13,11 +13,6 @@ except (ModuleNotFoundError, ImportError) as e:
     from .compat import custom_fwd, custom_bwd
 
 try:
-    import mask_softmax_dropout_cuda
-except (ModuleNotFoundError, ImportError) as e:
-    mask_softmax_dropout_cuda = None
-
-try:
     import self_multihead_attn_cuda
 except (ModuleNotFoundError, ImportError) as e:
     self_multihead_attn_cuda = None
@@ -60,12 +55,12 @@ class SelfAttnFunc(torch.autograd.Function):
 
         bsz, len_q = inputs.size(1), inputs.size(0)
 
+        # print(low_precision, incremental, inputs.type())
         if low_precision and self_multihead_attn_cuda is not None and not incremental and len_q <= 2048 \
                 and inputs.type() == 'torch.cuda.HalfTensor' \
                 and not rotary_pos_enc:
             ctx.fused = True
 
-            # use_mask = True
             if mask is not None:
                 mask = mask.half() * -16384
             else:
@@ -191,7 +186,6 @@ class SelfAttnFunc(torch.autograd.Function):
         else:
             dropout_results = softmax_results
             dropout_mask = null_tensor
-
 
         nan_mask = torch.isnan(dropout_results)
         if nan_mask.any():
@@ -353,17 +347,11 @@ class SelfAttnFunc(torch.autograd.Function):
         # GEMM: Per batch: ( seql_q x head_dim ) x ( head_dim x seql_k ) = ( seql_q x seql_k )
         values_grads = torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
 
-        if mask_softmax_dropout_cuda is not None and matmul2_dgrad1.type() == 'torch.cuda.HalfTensor' \
-                and len_key <= 2048:
-            softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t[0], matmul2_dgrad1, softmax_results,
-                                                                         dropout_mask, dropout_prob_t[0])
-        else:
+        # Mask and Scaling for Dropout (not a publically documented op)
+        dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
 
-            # Mask and Scaling for Dropout (not a publically documented op)
-            dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
-
-            # Softmax Grad (not a publically documented op)
-            softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
+        # Softmax Grad (not a publically documented op)
+        softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
 
         # Matmul1 - DGRAD1
         # Input1: (data grads)  [seqs*heads, seql_q, seql_k]

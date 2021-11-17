@@ -1216,14 +1216,11 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
             if fused and x.is_cuda:
                 dropout_p_ = dropout_p if training_ else 0.0
-                seq_len, bsz, hidden_size = x.size(0), x.size(1), x.size(2)
 
                 weights = [in_weight, out_weight]
                 biases = [in_bias, out_bias]
 
-                x = fused_function(dropout_p_, False, x.view(seq_len * bsz, -1),
-                                        *weights, *biases)
-                x = x.view(seq_len, bsz, -1)
+                x = fused_function(dropout_p_, False, x, *weights, *biases)
 
             else:
                 x = F.linear(x, in_weight, in_bias)

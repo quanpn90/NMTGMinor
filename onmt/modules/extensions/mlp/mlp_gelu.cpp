@@ -1,6 +1,8 @@
 #include <torch/extension.h>
 #include <torch/torch.h>
 #include <vector>
+#include <ATen/ATen.h>
+#include <ATen/cuda/CUDAContext.h>
 
 #include <stdio.h>
 
@@ -24,7 +26,6 @@ int mlp_fp(
     T* reserved_space,
     T* reserved_activations,
     uint8_t* reserved_mask,
-    void* lt_workspace,
     float p);
 
 template <typename T>
@@ -65,32 +66,37 @@ int mlp_bp_input_only(
     bool requires_grad,
     float p);
 
-std::vector<torch::Tensor> mlp_forward(float p, std::vector<torch::Tensor> inputs) {
+std::vector<at::Tensor> mlp_forward(float p, std::vector<at::Tensor> inputs) {
 
   auto num_layers = inputs.size() - 1;
   num_layers /= 2;
-  auto batch_size = inputs[0].size(0);
-  auto input_features = inputs[0].size(1);
-
+  unsigned batch_size = 1;
   std::vector<int> output_features;
   for (int i = 0; i < num_layers; i++) {
     output_features.push_back(inputs[i + 1].size(0));
   }
 
+  auto input_sizes = inputs[0].sizes();
+  auto input_features = input_sizes.back();
+  std::vector<int64_t> output_sizes;
+  for (unsigned i=0; i < input_sizes.size() - 1 ; i++) {
+    batch_size = batch_size * input_sizes[i];
+    output_sizes.push_back(input_sizes[i]);
+  }
+  output_sizes.push_back(output_features.back());
+
   auto reserved_size = get_mlp_reserved_space(batch_size, num_layers, output_features.data());
   auto dmask_size    = get_mlp_activation_space(batch_size, num_layers, output_features.data());
 
   // create output/workspace tensor
-  auto out = torch::empty({batch_size, output_features.back()}, inputs[0].type());
+  auto out = at::empty(output_sizes, inputs[0].type());
 
-  auto reserved_space = torch::empty({reserved_size}, inputs[0].type());
-  auto reserved_activations = torch::empty({reserved_size}, inputs[0].type());
+  auto reserved_space = at::empty({reserved_size}, inputs[0].type());
+  auto reserved_activations = at::empty({reserved_size}, inputs[0].type());
 
   auto act_options  = inputs[0].options().requires_grad(false);
   auto mask_options = act_options.dtype(torch::kUInt8);
-  auto reserved_mask  = torch::empty({dmask_size}, mask_options);  // for relu we don't need the mask for bwd
-  // allocate fixed 4MB workspace for cublaslt for now, and this gets at least 4 MB
-  auto lt_workspace = torch::empty({1 << 22}, inputs[0].type());
+  auto reserved_mask  = at::empty({dmask_size}, mask_options);  // for relu we don't need the mask for bwd
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(inputs[0].type(), "mlp_forward", [&] {
     std::vector<scalar_t*> w_ptr;
@@ -111,24 +117,27 @@ std::vector<torch::Tensor> mlp_forward(float p, std::vector<torch::Tensor> input
         reserved_space.data_ptr<scalar_t>(),
         reserved_activations.data_ptr<scalar_t>(),
         reserved_mask.data_ptr<uint8_t>(),
-        (void*) (lt_workspace.data_ptr<scalar_t>()),
         p);
   });
 
   return {out, reserved_space, reserved_activations, reserved_mask};
 }
 
-std::vector<torch::Tensor> mlp_backward(
+std::vector<at::Tensor> mlp_backward(
   float p,
-  torch::Tensor grad_o,
-  std::vector<torch::Tensor> fprop_outputs,
-  std::vector<torch::Tensor> inputs) {
+  at::Tensor grad_o,
+  std::vector<at::Tensor> fprop_outputs,
+  std::vector<at::Tensor> inputs) {
 
   auto num_layers = inputs.size() - 1;
   num_layers /= 2;
 
-  auto batch_size = inputs[0].size(0);
-  auto input_features = inputs[0].size(1);
+  unsigned batch_size = 1;
+  auto input_sizes = inputs[0].sizes();
+
+  auto input_features = input_sizes.back();
+  for (unsigned i=0; i < input_sizes.size() - 1 ; i++)
+    batch_size = batch_size * input_sizes[i];
 
   bool requires_grad = inputs[0].requires_grad();
 
@@ -137,9 +146,9 @@ std::vector<torch::Tensor> mlp_backward(
     output_features.push_back(inputs[i + 1].size(0));
   }
   // create outputs, length of inputs
-  std::vector<torch::Tensor> outputs;
+  std::vector<at::Tensor> outputs;
   for (int i = 0; i < inputs.size(); i++) {
-    outputs.push_back(torch::empty(inputs[i].sizes(), inputs[i].type()));  // clone for testing now
+    outputs.push_back(at::empty(inputs[i].sizes(), inputs[i].type()));  // clone for testing now
   }
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(inputs[0].type(), "mlp_backward", [&] {
@@ -155,8 +164,8 @@ std::vector<torch::Tensor> mlp_backward(
     auto work_size =
         get_mlp_bp_workspace_in_bytes<scalar_t>(batch_size, num_layers, output_features.data());
 
-    // auto work_space = torch::empty({work_size*4}, torch::kByte);
-    auto work_space = torch::empty({work_size / sizeof(scalar_t)}, inputs[0].type());
+    // auto work_space = at::empty({work_size*4}, at::kByte);
+    auto work_space = at::empty({work_size / sizeof(scalar_t)}, inputs[0].type());
 
     auto result = mlp_bp<scalar_t>(
         inputs[0].data_ptr<scalar_t>(),
@@ -182,17 +191,21 @@ std::vector<torch::Tensor> mlp_backward(
 }
 
 
-std::vector<torch::Tensor> mlp_backward_input_only(
+std::vector<at::Tensor> mlp_backward_input_only(
   float p,
-  torch::Tensor grad_o,
-  std::vector<torch::Tensor> fprop_outputs,
-  std::vector<torch::Tensor> inputs) {
+  at::Tensor grad_o,
+  std::vector<at::Tensor> fprop_outputs,
+  std::vector<at::Tensor> inputs) {
 
   auto num_layers = inputs.size() - 1;
   num_layers /= 2;
 
-  auto batch_size = inputs[0].size(0);
-  auto input_features = inputs[0].size(1);
+  unsigned batch_size = 1;
+  auto input_sizes = inputs[0].sizes();
+
+  auto input_features = input_sizes.back();
+  for (unsigned i=0; i < input_sizes.size() - 1 ; i++)
+    batch_size = batch_size * input_sizes[i];
 
   bool requires_grad = inputs[0].requires_grad();
 
@@ -201,10 +214,10 @@ std::vector<torch::Tensor> mlp_backward_input_only(
     output_features.push_back(inputs[i + 1].size(0));
   }
   // create outputs, length of inputs
-  std::vector<torch::Tensor> outputs;
+  std::vector<at::Tensor> outputs;
   for (int i = 0; i < 1; i++) {
 //  for (int i = 0; i < inputs.size(); i++) {
-    outputs.push_back(torch::empty(inputs[i].sizes(), inputs[i].type()));  // clone for testing now
+    outputs.push_back(at::empty(inputs[i].sizes(), inputs[i].type()));  // clone for testing now
   }
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(inputs[0].type(), "mlp_backward", [&] {
@@ -221,8 +234,8 @@ std::vector<torch::Tensor> mlp_backward_input_only(
     auto work_size =
         get_mlp_bp_workspace_in_bytes<scalar_t>(batch_size, num_layers, output_features.data());
 
-    // auto work_space = torch::empty({work_size*4}, torch::kByte);
-    auto work_space = torch::empty({work_size / sizeof(scalar_t)}, inputs[0].type());
+    // auto work_space = at::empty({work_size*4}, at::kByte);
+    auto work_space = at::empty({work_size / sizeof(scalar_t)}, inputs[0].type());
 
     auto result = mlp_bp_input_only<scalar_t>(
         inputs[0].data_ptr<scalar_t>(),
@@ -233,9 +246,9 @@ std::vector<torch::Tensor> mlp_backward_input_only(
         num_layers,
         output_features.data(),
         grad_o.contiguous().data_ptr<scalar_t>(),
-        fprop_outputs[1].data_ptr<scalar_t>(),
-        fprop_outputs[2].data_ptr<scalar_t>(),
-        fprop_outputs[3].data_ptr<uint8_t>(),
+        fprop_outputs[1].data_ptr<scalar_t>(), // linear - activation
+        fprop_outputs[2].data_ptr<scalar_t>(), // linear
+        fprop_outputs[3].data_ptr<uint8_t>(), // mask
         work_space.data_ptr<scalar_t>(),
         outputs_ptr[0],
 //        outputs_ptr.data() + 1,
@@ -246,6 +259,9 @@ std::vector<torch::Tensor> mlp_backward_input_only(
 
   return outputs;
 }
+
+
+
 
 
 

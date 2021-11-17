@@ -41,13 +41,11 @@ class Adapter(torch.nn.Module):
             weights = [self.linear_in.weight, self.linear_out.weight]
             biases = [self.linear_in.bias, self.linear_out.bias]
 
-            seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
-            input_norm = self.norm(input.view(seq_len * bsz, -1))
+            # seq_len, bsz, hidden_size = input.size(0), input.size(1), input.size(2)
+            input_norm = self.norm(input)
 
             input = self.fused_function(0.0, False, input_norm,
                                         *weights, *biases)
-
-            input = input.view(seq_len, bsz, hidden_size)
 
             return input
         else:
