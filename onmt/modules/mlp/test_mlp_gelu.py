@@ -269,7 +269,7 @@ if __name__ == '__main__':
                     mlp_out, dropout_mask = mlp(test_input)
                     ref_out = ref_mlp.forward(ref_input, dropout_mask, ref=True)
 
-                    print(dropout_mask.sum() / dropout_mask.numel())
+                    print(dropout_mask.sum() / dropout_mask.numel(), dropout_mask.numel())
                     np.testing.assert_allclose(
                         mlp_out.detach().cpu().numpy(),
                         ref_out.detach().cpu().numpy(),
