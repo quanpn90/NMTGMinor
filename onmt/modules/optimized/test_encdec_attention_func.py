@@ -154,97 +154,97 @@ class SelfMultiheadAttnTest(unittest.TestCase):
 
     def test_performance(self):
         training = True
-        dropout = 0.5
+        for dropout in [0.0, 0.5]:
 
-        mask = ((torch.randn(self.sequences, self.seq_length_kv) > 0)).bool().cuda()
+            mask = ((torch.randn(self.sequences, self.seq_length_kv) > 0)).bool().cuda()
 
-        num_iters = 32
+            num_iters = 32
 
-        torch.cuda.profiler.start()
-        torch.cuda.synchronize()
-        for _ in range(16):
-            tst_output, tst_coverage = encdec_attn_bias_func(False, training, self.heads,
-                                                             self.tst_inputs_q, self.tst_inputs_kv,
-                                                             self.tst_parameters.in_proj_weight_q,
-                                                             self.tst_parameters.in_proj_weight_kv,
-                                                             self.tst_parameters.out_proj_weight,
-                                                             self.tst_parameters.in_proj_bias_q,
-                                                             self.tst_parameters.in_proj_bias_kv,
-                                                             self.tst_parameters.out_proj_bias,
-                                                             mask, self.dropout_prob,
-                                                             False, None,
-                                                             False, None, None,
-                                                             True, True)
+            torch.cuda.profiler.start()
+            torch.cuda.synchronize()
+            for _ in range(16):
+                tst_output, tst_coverage = encdec_attn_bias_func(False, training, self.heads,
+                                                                 self.tst_inputs_q, self.tst_inputs_kv,
+                                                                 self.tst_parameters.in_proj_weight_q,
+                                                                 self.tst_parameters.in_proj_weight_kv,
+                                                                 self.tst_parameters.out_proj_weight,
+                                                                 self.tst_parameters.in_proj_bias_q,
+                                                                 self.tst_parameters.in_proj_bias_kv,
+                                                                 self.tst_parameters.out_proj_bias,
+                                                                 mask, dropout,
+                                                                 False, None,
+                                                                 False, None, None,
+                                                                 True, True)
 
-            ref_output, ref_coverage = encdec_attn_bias_func(False, training, self.heads,
-                                                             self.ref_inputs_q, self.ref_inputs_kv,
-                                                             self.ref_parameters.in_proj_weight_q,
-                                                             self.ref_parameters.in_proj_weight_kv,
-                                                             self.ref_parameters.out_proj_weight,
-                                                             self.ref_parameters.in_proj_bias_q,
-                                                             self.ref_parameters.in_proj_bias_kv,
-                                                             self.ref_parameters.out_proj_bias,
-                                                             mask, self.dropout_prob,
-                                                             False, None,
-                                                             False, None, None,
-                                                             False, True)
+                ref_output, ref_coverage = encdec_attn_bias_func(False, training, self.heads,
+                                                                 self.ref_inputs_q, self.ref_inputs_kv,
+                                                                 self.ref_parameters.in_proj_weight_q,
+                                                                 self.ref_parameters.in_proj_weight_kv,
+                                                                 self.ref_parameters.out_proj_weight,
+                                                                 self.ref_parameters.in_proj_bias_q,
+                                                                 self.ref_parameters.in_proj_bias_kv,
+                                                                 self.ref_parameters.out_proj_bias,
+                                                                 mask, dropout,
+                                                                 False, None,
+                                                                 False, None, None,
+                                                                 False, True)
 
-            grad_outputs_tst = torch.randn_like(tst_output)
-            grad_outputs_ref = torch.randn_like(ref_output)
-            tst_output.backward(grad_outputs_tst)
-            ref_output.backward(grad_outputs_ref)
-            self.tst_parameters.zero_grad()
-            self.ref_parameters.zero_grad()
+                grad_outputs_tst = torch.randn_like(tst_output)
+                grad_outputs_ref = torch.randn_like(ref_output)
+                tst_output.backward(grad_outputs_tst)
+                ref_output.backward(grad_outputs_ref)
+                self.tst_parameters.zero_grad()
+                self.ref_parameters.zero_grad()
 
-        torch.cuda.profiler.start()
-        torch.cuda.synchronize()
-        start_time = time()
-        for _ in range(num_iters):
-            ref_output, ref_coverage = encdec_attn_bias_func(False, training, self.heads,
-                                                             self.ref_inputs_q, self.ref_inputs_kv,
-                                                             self.ref_parameters.in_proj_weight_q,
-                                                             self.ref_parameters.in_proj_weight_kv,
-                                                             self.ref_parameters.out_proj_weight,
-                                                             self.ref_parameters.in_proj_bias_q,
-                                                             self.ref_parameters.in_proj_bias_kv,
-                                                             self.ref_parameters.out_proj_bias,
-                                                             mask, self.dropout_prob,
-                                                             False, None,
-                                                             False, None, None,
-                                                             False, True)
+            torch.cuda.profiler.start()
+            torch.cuda.synchronize()
+            start_time = time()
+            for _ in range(num_iters):
+                ref_output, ref_coverage = encdec_attn_bias_func(False, training, self.heads,
+                                                                 self.ref_inputs_q, self.ref_inputs_kv,
+                                                                 self.ref_parameters.in_proj_weight_q,
+                                                                 self.ref_parameters.in_proj_weight_kv,
+                                                                 self.ref_parameters.out_proj_weight,
+                                                                 self.ref_parameters.in_proj_bias_q,
+                                                                 self.ref_parameters.in_proj_bias_kv,
+                                                                 self.ref_parameters.out_proj_bias,
+                                                                 mask, dropout,
+                                                                 False, None,
+                                                                 False, None, None,
+                                                                 False, True)
 
-            grad_outputs_ref = torch.randn_like(ref_output)
-            ref_output.backward(grad_outputs_ref)
-            self.ref_parameters.zero_grad()
+                grad_outputs_ref = torch.randn_like(ref_output)
+                ref_output.backward(grad_outputs_ref)
+                self.ref_parameters.zero_grad()
 
-        torch.cuda.synchronize()
-        stop_time = time()
-        print(F"\nPytorch Self-Attn time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+            torch.cuda.synchronize()
+            stop_time = time()
+            print(F"\nPytorch Self-Attn time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
 
-        torch.cuda.profiler.start()
-        torch.cuda.synchronize()
-        start_time = time()
-        for _ in range(num_iters):
-            tst_output, tst_coverage = encdec_attn_bias_func(False, training, self.heads,
-                                                             self.tst_inputs_q, self.tst_inputs_kv,
-                                                             self.tst_parameters.in_proj_weight_q,
-                                                             self.tst_parameters.in_proj_weight_kv,
-                                                             self.tst_parameters.out_proj_weight,
-                                                             self.tst_parameters.in_proj_bias_q,
-                                                             self.tst_parameters.in_proj_bias_kv,
-                                                             self.tst_parameters.out_proj_bias,
-                                                             mask, self.dropout_prob,
-                                                             False, None,
-                                                             False, None, None,
-                                                             True, True)
+            torch.cuda.profiler.start()
+            torch.cuda.synchronize()
+            start_time = time()
+            for _ in range(num_iters):
+                tst_output, tst_coverage = encdec_attn_bias_func(False, training, self.heads,
+                                                                 self.tst_inputs_q, self.tst_inputs_kv,
+                                                                 self.tst_parameters.in_proj_weight_q,
+                                                                 self.tst_parameters.in_proj_weight_kv,
+                                                                 self.tst_parameters.out_proj_weight,
+                                                                 self.tst_parameters.in_proj_bias_q,
+                                                                 self.tst_parameters.in_proj_bias_kv,
+                                                                 self.tst_parameters.out_proj_bias,
+                                                                 mask, dropout,
+                                                                 False, None,
+                                                                 False, None, None,
+                                                                 True, True)
 
-            grad_outputs_tst = torch.randn_like(tst_output)
-            tst_output.backward(grad_outputs_tst)
-            self.tst_parameters.zero_grad()
+                grad_outputs_tst = torch.randn_like(tst_output)
+                tst_output.backward(grad_outputs_tst)
+                self.tst_parameters.zero_grad()
 
-        torch.cuda.synchronize()
-        stop_time = time()
-        print(F"\nCUDA Self-Attn time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+            torch.cuda.synchronize()
+            stop_time = time()
+            print(F"\nCUDA Self-Attn time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
 
 
 

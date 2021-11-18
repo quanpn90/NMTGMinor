@@ -42,9 +42,9 @@ class SelfMultiheadAttnTest(unittest.TestCase):
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
-        self.seq_length = 32
-        self.sequences = 8
-        self.hidden_dim = 512
+        self.seq_length = 1024
+        self.sequences = 16
+        self.hidden_dim = 1024
         self.heads = 16
         self.dropout_prob = 0.0
 
@@ -188,69 +188,82 @@ class SelfMultiheadAttnTest(unittest.TestCase):
 
     def test_performance(self):
         training = True
-        dropout = 0.5
+        for dropout in [0.0, 0.5]:
 
-        mask = ((torch.randn(self.sequences, self.seq_length) > 0)).bool().cuda()
+            mask = ((torch.randn(self.sequences, self.seq_length) > 0)).bool().cuda()
 
-        num_iters = 32
-        torch.cuda.profiler.start()
-        torch.cuda.synchronize()
-        start_time = time()
-        for _ in range(num_iters):
-            ref_output, ref_coverage = self_attn_func(False, training, self.heads, self.ref_inputs,
-                                                      self.ref_parameters.in_proj_weight,
-                                                      self.ref_parameters.out_proj_weight,
-                                                      self.ref_parameters.in_proj_bias,
-                                                      self.ref_parameters.out_proj_bias,
-                                                      mask, dropout,
-                                                      False, None, False, None,
-                                                      False, True)
+            num_iters = 32
+            torch.cuda.profiler.start()
+            torch.cuda.synchronize()
+            start_time = time()
+            for _ in range(num_iters):
+                ref_output, ref_coverage = self_attn_func(False, training, self.heads, self.ref_inputs,
+                                                          self.ref_parameters.in_proj_weight,
+                                                          self.ref_parameters.out_proj_weight,
+                                                          self.ref_parameters.in_proj_bias,
+                                                          self.ref_parameters.out_proj_bias,
+                                                          mask, dropout,
+                                                          False, None, False, None,
+                                                          False, True)
 
-            grad_outputs_ref = torch.randn_like(ref_output)
-            ref_output.backward(grad_outputs_ref)
-            self.ref_parameters.zero_grad()
+                grad_outputs_ref = torch.randn_like(ref_output)
+                ref_output.backward(grad_outputs_ref)
+                self.ref_parameters.zero_grad()
 
-        torch.cuda.profiler.start()
-        torch.cuda.synchronize()
-        start_time = time()
-        for _ in range(num_iters):
-            ref_output, ref_coverage = self_attn_func(False, training, self.heads, self.ref_inputs,
-                                                      self.ref_parameters.in_proj_weight,
-                                                      self.ref_parameters.out_proj_weight,
-                                                      self.ref_parameters.in_proj_bias,
-                                                      self.ref_parameters.out_proj_bias,
-                                                      mask, dropout,
-                                                      False, None, False, None,
-                                                      False, True)
+                tst_output, tst_coverage = self_attn_func(False, training, self.heads, self.tst_inputs,
+                                                          self.tst_parameters.in_proj_weight,
+                                                          self.tst_parameters.out_proj_weight,
+                                                          self.tst_parameters.in_proj_bias,
+                                                          self.tst_parameters.out_proj_bias,
+                                                          mask, dropout,
+                                                          False, None, False, None,
+                                                          True, True)
 
-            grad_outputs_ref = torch.randn_like(ref_output)
-            ref_output.backward(grad_outputs_ref)
-            self.ref_parameters.zero_grad()
+                grad_outputs_tst = torch.randn_like(tst_output)
+                tst_output.backward(grad_outputs_tst)
+                self.tst_parameters.zero_grad()
 
-        torch.cuda.synchronize()
-        stop_time = time()
-        print(F"\nPytorch Self-Attn time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+            torch.cuda.profiler.start()
+            torch.cuda.synchronize()
+            start_time = time()
+            for _ in range(num_iters):
+                ref_output, ref_coverage = self_attn_func(False, training, self.heads, self.ref_inputs,
+                                                          self.ref_parameters.in_proj_weight,
+                                                          self.ref_parameters.out_proj_weight,
+                                                          self.ref_parameters.in_proj_bias,
+                                                          self.ref_parameters.out_proj_bias,
+                                                          mask, dropout,
+                                                          False, None, False, None,
+                                                          False, True)
 
-        torch.cuda.profiler.start()
-        torch.cuda.synchronize()
-        start_time = time()
-        for _ in range(num_iters):
-            tst_output, tst_coverage = self_attn_func(False, training, self.heads, self.tst_inputs,
-                                                      self.tst_parameters.in_proj_weight,
-                                                      self.tst_parameters.out_proj_weight,
-                                                      self.tst_parameters.in_proj_bias,
-                                                      self.tst_parameters.out_proj_bias,
-                                                      mask, dropout,
-                                                      False, None, False, None,
-                                                      True, True)
+                grad_outputs_ref = torch.randn_like(ref_output)
+                ref_output.backward(grad_outputs_ref)
+                self.ref_parameters.zero_grad()
 
-            grad_outputs_tst = torch.randn_like(tst_output)
-            tst_output.backward(grad_outputs_tst)
-            self.tst_parameters.zero_grad()
+            torch.cuda.synchronize()
+            stop_time = time()
+            print(F"\nPytorch Self-Attn time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
 
-        torch.cuda.synchronize()
-        stop_time = time()
-        print(F"\nCUDA Self-Attn time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+            torch.cuda.profiler.start()
+            torch.cuda.synchronize()
+            start_time = time()
+            for _ in range(num_iters):
+                tst_output, tst_coverage = self_attn_func(False, training, self.heads, self.tst_inputs,
+                                                          self.tst_parameters.in_proj_weight,
+                                                          self.tst_parameters.out_proj_weight,
+                                                          self.tst_parameters.in_proj_bias,
+                                                          self.tst_parameters.out_proj_bias,
+                                                          mask, dropout,
+                                                          False, None, False, None,
+                                                          True, True)
+
+                grad_outputs_tst = torch.randn_like(tst_output)
+                tst_output.backward(grad_outputs_tst)
+                self.tst_parameters.zero_grad()
+
+            torch.cuda.synchronize()
+            stop_time = time()
+            print(F"\nCUDA Self-Attn time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
 
 
 if __name__ == '__main__':

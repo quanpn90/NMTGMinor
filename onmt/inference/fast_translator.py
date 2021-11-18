@@ -6,7 +6,7 @@ import torch
 import math
 from onmt.model_factory import build_model, optimize_model
 import torch.nn.functional as F
-from onmt.inference.search import BeamSearch, DiverseBeamSearch
+from onmt.inference.search import BeamSearch, DiverseBeamSearch, Sampling
 from onmt.inference.translator import Translator
 from onmt.constants import add_tokenidx
 from options import backward_compatible
@@ -35,7 +35,10 @@ class FastTranslator(Translator):
         self.tgt_eos = onmt.constants.TGT_EOS
         self.tgt_unk = onmt.constants.TGT_UNK
 
-        self.search = BeamSearch(self.tgt_dict)
+        if opt.sampling:
+            self.search = Sampling(self.tgt_dict)
+        else:
+            self.search = BeamSearch(self.tgt_dict)
 
         self.vocab_size = self.tgt_dict.size()
         self.min_len = 1
@@ -714,7 +717,18 @@ class FastTranslator(Translator):
                                                        onmt.constants.UNK_WORD)
                             for b in src_sents]
             data_type = 'text'
-            past_src_data = None
+            if past_sents is not None:
+                if self.start_with_bos:
+                    past_src_data = [self.src_dict.convertToIdx(b,
+                                                                onmt.constants.UNK_WORD,
+                                                                onmt.constants.BOS_WORD)
+                                     for b in past_sents]
+                else:
+                    past_src_data = [self.src_dict.convertToIdx(b,
+                                                                onmt.constants.UNK_WORD)
+                                     for b in past_sents]
+            else:
+                past_src_data = None
         elif type == 'asr':
             # no need to deal with this
             src_data = src_sents
@@ -766,7 +780,7 @@ class FastTranslator(Translator):
                 batch = dataset.get_batch(0)
                 batches.append(batch)
         else:
-            dataset = self.build_data(src_data, tgt_data, type=type)
+            dataset = self.build_data(src_data, tgt_data, type=type, past_sents=past_src_data)
             batch = dataset.get_batch(0)  # this dataset has only one mini-batch
             batches = [batch] * self.n_models
             src_data = [src_data] * self.n_models

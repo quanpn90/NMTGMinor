@@ -86,7 +86,10 @@ std::vector<at::Tensor> mlp_forward(float p, std::vector<at::Tensor> inputs) {
   output_sizes.push_back(output_features.back());
 
   auto reserved_size = get_mlp_reserved_space(batch_size, num_layers, output_features.data());
-  auto dmask_size    = get_mlp_activation_space(batch_size, num_layers, output_features.data());
+  size_t dmask_size = 0;
+
+  if (p > 0.0)
+    dmask_size    = get_mlp_activation_space(batch_size, num_layers, output_features.data());
 
   // create output/workspace tensor
   auto out = at::empty(output_sizes, inputs[0].type());

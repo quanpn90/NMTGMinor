@@ -4,8 +4,6 @@ import onmt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from ..speech_recognizer.relative_transformer_layers import \
-    RelativeTransformerEncoderLayer, RelativeTransformerDecoderLayer
 from onmt.models.transformers import Transformer, TransformerDecodingState
 from onmt.modules.pre_post_processing import PrePostProcessing
 
@@ -19,6 +17,13 @@ class DiscourseTransformerEncoder(nn.Module):
         super(DiscourseTransformerEncoder, self).__init__()
         # a shared encoder for all present, past and future
         self.encoder = encoder
+        if hasattr(encoder, 'word_lut'):
+            self.word_lut = encoder.word_lut
+            from ..multilingual_translator.relative_transformer_layers \
+                import RelativeTransformerEncoderLayer
+        else:
+            from ..speech_recognizer.relative_transformer_layers \
+                import RelativeTransformerEncoderLayer
 
         self.past_layer = RelativeTransformerEncoderLayer(self.opt)
         self.input_type = encoder.input_type
@@ -47,9 +52,14 @@ class DiscourseTransformerEncoder(nn.Module):
         current_context = encoder_output['context']
         current_pos_emb = encoder_output['pos_emb']
 
-        mask_src = input.narrow(2, 0, 1).squeeze(2).transpose(0, 1).eq(onmt.constants.PAD).unsqueeze(0)
-        past_mask = past_input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
-        dec_attn_mask = input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
+        if len(input.size()) > 2:
+            mask_src = input.narrow(2, 0, 1).squeeze(2).transpose(0, 1).eq(onmt.constants.PAD).unsqueeze(0)
+            past_mask = past_input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
+            dec_attn_mask = input.narrow(2, 0, 1).squeeze(2).eq(onmt.constants.PAD).unsqueeze(1)
+        else:
+            mask_src = input.transpose(0, 1).eq(onmt.constants.PAD).unsqueeze(0)
+            past_mask = past_input.eq(onmt.constants.PAD).unsqueeze(1)
+            dec_attn_mask = input.eq(onmt.constants.PAD).unsqueeze(1)
         context = self.gate_layer(current_context, past_context, current_pos_emb, mask_src, past_mask,
                                    src_lang=input_lang, factorize=factorize)
         # context = current_context
