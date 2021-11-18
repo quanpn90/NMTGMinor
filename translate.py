@@ -206,7 +206,7 @@ def main():
     pred_score_total, pred_words_total, gold_score_total, gold_words_total = 0, 0, 0, 0
 
     src_batches = []
-    src_batch, tgt_batch = [], []
+    src_batch, tgt_batch, past_src_batch = [], [], []
 
     count = 0
 
@@ -577,6 +577,8 @@ def main():
                 if past_audio_data: past_src_batches[j] = []
 
     else:
+        past_text_data = open(opt.past_src) if opt.past_src else None
+
         for line in addone(in_file):
             if line is not None:
                 if opt.input_type == 'word':
@@ -602,6 +604,15 @@ def main():
                         raise NotImplementedError("Input type unknown")
                     tgt_batch += [tgt_tokens]
 
+                if past_text_data:
+                    if opt.input_type == 'word':
+                        past_src_tokens = past_text_data.readline().split()
+                    elif opt.input_type == 'char':
+                        past_src_tokens = list(past_text_data.readline().strip())
+                    else:
+                        raise NotImplementedError("Input type unknown")
+                    past_src_batch += [past_src_tokens]
+
                 if len(src_batch) < opt.batch_size:
                     continue
             else:
@@ -611,9 +622,10 @@ def main():
 
             # actually done beam search from the model
             pred_batch, pred_ids, pred_score, pred_length, \
-            gold_score, num_gold_words, all_gold_scores = translator.translate(
-                src_batch,
-                tgt_batch)
+                gold_score, num_gold_words, all_gold_scores = translator.translate(
+                    src_batch,
+                    tgt_batch,
+                    past_src_batch)
 
             # convert output tensor to words
             count, pred_score, pred_words, gold_score, goldWords = translate_batch(opt, tgtF, count, outF, translator,
@@ -627,7 +639,7 @@ def main():
             pred_words_total += pred_words
             gold_score_total += gold_score
             gold_words_total += goldWords
-            src_batch, tgt_batch = [], []
+            src_batch, tgt_batch, past_src_batch = [], [], []
 
     if opt.verbose:
         report_score('PRED', pred_score_total, pred_words_total)

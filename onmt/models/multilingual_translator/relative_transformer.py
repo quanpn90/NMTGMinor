@@ -170,7 +170,7 @@ class RelativeTransformerEncoder(TransformerEncoder):
         # final layer norm. we can consider this layer norm as a part of the output layer/function
         context = self.postprocess_layer(context)
 
-        output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask, 'src': input})
+        output_dict = defaultdict(lambda: None, {'context': context, 'src_mask': dec_attn_mask, 'src': input, 'pos_emb': pos_emb})
 
         return output_dict
 

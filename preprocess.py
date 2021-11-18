@@ -744,6 +744,8 @@ def main():
         assert len(src_input_files) == len(tgt_input_files)
         assert len(tgt_input_files) == len(tgt_langs)
 
+        past_src_files = opt.past_train_src.split("|")
+
         n_input_files = len(src_input_files)
 
         train = dict()
@@ -751,10 +753,15 @@ def main():
         train['src_sizes'], train['tgt_sizes'] = list(), list()
         train['src_lang'], train['tgt_lang'] = list(), list()
 
+        if opt.past_train_src and len(past_src_files) == len(src_input_files):
+            train['past_src'] = list()
+            train['past_src_sizes'] = list()
+
         start = time.time()
         print('Binarizing data to train translation models...')
 
-        for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
+        for i, (src_file, tgt_file, src_lang, tgt_lang) in \
+                enumerate(zip(src_input_files, tgt_input_files, src_langs, tgt_langs)):
 
             src_data, tgt_data, src_sizes, tgt_sizes = make_translation_data(src_file, tgt_file,
                                                                              dicts['src'], dicts['tgt'], tokenizer,
@@ -776,6 +783,22 @@ def main():
                 src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
                 tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
 
+            # processing the previous segment
+            if opt.past_train_src and len(past_src_files) == len(src_input_files):
+                past_src_file = past_src_files[i]
+
+                past_src_data, _, past_src_sizes, _ = make_translation_data(past_src_file, '/dev/null',
+                                                                            dicts['src'], dicts['src'], tokenizer,
+                                                                            max_src_length=opt.src_seq_length,
+                                                                            max_tgt_length=opt.tgt_seq_length,
+                                                                            add_bos=(not opt.no_bos),
+                                                                            data_type=opt.data_type,
+                                                                            num_workers=opt.num_threads,
+                                                                            verbose=opt.verbose)
+
+                train['past_src'] += past_src_data
+                train['past_src_sizes'] += past_src_sizes
+
             train['src'] += src_data
             train['tgt'] += tgt_data
             train['src_sizes'] += src_sizes
@@ -787,6 +810,7 @@ def main():
 
         src_input_files = opt.valid_src.split("|")
         tgt_input_files = opt.valid_tgt.split("|")
+        past_src_files = opt.past_valid_src.split("|")
 
         src_langs = opt.valid_src_lang.split("|")
         tgt_langs = opt.valid_tgt_lang.split("|")
@@ -801,6 +825,10 @@ def main():
         valid['src'], valid['tgt'] = list(), list()
         valid['src_sizes'], valid['tgt_sizes'] = list(), list()
         valid['src_lang'], valid['tgt_lang'] = list(), list()
+
+        if opt.past_train_src and len(past_src_files) == len(src_input_files):
+            valid['past_src'] = list()
+            valid['past_src_sizes'] = list()
 
         for (src_file, tgt_file, src_lang, tgt_lang) in zip(src_input_files, tgt_input_files, src_langs, tgt_langs):
 
@@ -825,6 +853,24 @@ def main():
                 # each sample will have a different language id
                 src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
                 tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
+
+            # validation past file
+            if opt.past_train_src and len(past_src_files) == len(src_input_files):
+                past_src_file = past_src_files[i]
+
+                past_src_data, _, past_src_sizes, _ = make_translation_data(past_src_file, '/dev/null',
+                                                                            dicts['src'], dicts['src'], tokenizer,
+                                                                            max_src_length=max(1024,
+                                                                                               opt.src_seq_length),
+                                                                            max_tgt_length=max(1024,
+                                                                                               opt.tgt_seq_length),
+                                                                            add_bos=(not opt.no_bos),
+                                                                            data_type=opt.data_type,
+                                                                            num_workers=opt.num_threads,
+                                                                            verbose=opt.verbose)
+
+                valid['past_src'] += past_src_data
+                valid['past_src_sizes'] += past_src_sizes
 
             valid['src'] += src_data
             valid['tgt'] += tgt_data
@@ -958,15 +1004,12 @@ def main():
             print('Saving data to memory indexed data files')
             from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
 
-            if opt.asr:
-                print("ASR data format isn't compatible with memory indexed format")
-                raise AssertionError
 
             # save dicts in this format
             torch.save(dicts, opt.save_data + '.dict.pt')
 
             # binarize the training set first
-            for set_ in ['src', 'tgt', 'src_lang', 'tgt_lang']:
+            for set_ in ['src', 'tgt', 'src_lang', 'tgt_lang', 'past_src']:
                 if train[set_] is None:
                     continue
 
@@ -1007,6 +1050,27 @@ def main():
                 else:
                     print("Training %s not found " % set_)
 
+# <<<<<<< HEAD
+#                 if valid[set_] is not None:
+#
+#                     np_array = np.asarray(valid[set_])
+#                     np.save(opt.save_data + ".valid.%s.npy" % set_, np_array)
+#                 else:
+#                     print("Validation %s not found " % set_)
+#
+#         else:
+#             raise NotImplementedError
+# =======
+            if 'past_src' in train and len(train['past_src']) > 0:
+                set_ = 'past_src_sizes'
+
+                if train[set_] is not None:
+
+                    np_array = np.asarray(train[set_])
+                    np.save(opt.save_data + ".train.%s.npy" % set_, np_array)
+                else:
+                    print("Training %s not found " % set_)
+
                 if valid[set_] is not None:
 
                     np_array = np.asarray(valid[set_])
@@ -1016,6 +1080,7 @@ def main():
 
         else:
             raise NotImplementedError
+# >>>>>>> 897ccf588df71ac7202bbd16abc99ae76829f590
 
 
 if __name__ == "__main__":
