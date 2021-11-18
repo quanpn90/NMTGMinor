@@ -89,7 +89,7 @@ class BeamSearch(Search):
                 beam_size * 2,
                 lprobs.view(bsz, -1).size(1) - beam_size,  # -beam_size so we never select pad (beam_size times)
             ),
-            out=(self.scores_buf, self.indices_buf),
+            out=(self.scores_buf.resize_(0), self.indices_buf.resize_(0)),
         )
 
         # torch.div(self.indices_buf, vocab_size, out=self.beams_buf)
