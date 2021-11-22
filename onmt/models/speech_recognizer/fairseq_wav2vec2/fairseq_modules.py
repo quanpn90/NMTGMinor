@@ -310,6 +310,7 @@ class MultiheadAttention(nn.Module):
             kdim=None,
             vdim=None,
             dropout=0.0,
+            weight_drop=0.0,
             bias=True,
             add_bias_kv=False,
             add_zero_attn=False,
@@ -329,6 +330,7 @@ class MultiheadAttention(nn.Module):
 
         self.num_heads = num_heads
         self.dropout_p = dropout
+        self.weight_drop = weight_drop
 
         self.head_dim = embed_dim // num_heads
         assert (
@@ -539,8 +541,8 @@ class MultiheadAttention(nn.Module):
                 bsz = query.size(1)
                 len_q = query.size(0)
 
-                in_proj_weight = self.proj_weight
-                out_proj_weight = self.out_proj.weight
+                in_proj_weight = F.dropout(self.proj_weight, self.weight_drop, training=self.training)
+                out_proj_weight = F.dropout(self.out_proj.weight, self.weight_drop, training=self.training)
 
                 if self.factorized:
                     if self.multiplicative_factorize:

@@ -400,11 +400,11 @@ def make_parser(parser):
 
     parser.add_argument('-enc_pretrain_word_dropout', type=float, default=0.0,
                         help="""word dropout appled on bert""")
-    parser.add_argument('-enc_pretrain_emb_dropout', type=float, default=0.1,
+    parser.add_argument('-enc_pretrain_emb_dropout', type=float, default=0.0,
                         help="""dropout applied on bert embedding""")
     parser.add_argument('-enc_pretrain_attn_dropout', type=float, default=0.1,
                         help="""dropout on bert attention, corresponds to attention_probs_dropout_prob""")
-    parser.add_argument('-enc_pretrain_hidden_dropout', type=float, default=0.1,
+    parser.add_argument('-enc_pretrain_hidden_dropout', type=float, default=0.0,
                         help="""dropout applied on bert hidden, corresponds to hidden_dropout_prob""")
 
     parser.add_argument('-enc_gradient_checkpointing', action='store_true',

@@ -41,7 +41,7 @@ std::vector<torch::Tensor> fwd_cuda(
 //    torch::Tensor outputs              = torch::empty_like(inputs, act_options);
     torch::Tensor outputs = inputs;   // inplace everything?
 
-    if (is_training) {
+    if (is_training && dropout_prob > 0.0) {
         apex_dropout_add_cuda<half,float,uint32_t>(
                              static_cast<const half*>(inputs.data_ptr()),
                              static_cast<const half*>(residuals.data_ptr()),
@@ -76,15 +76,20 @@ torch::Tensor bwd_cuda(
     cudaStream_t   stream = at::cuda::getCurrentCUDAStream().stream();
     cublasSetStream(handle, stream);
 
-    at::Tensor dropout_add_grads         = torch::empty_like(output_grads);
+    at::Tensor dropout_add_grads = torch::empty_like(output_grads);
+
+    if (dropout_prob > 0.0) {
+        apex_masked_scale_cuda<half,float,uint32_t>(
+                                         static_cast<const half*>(output_grads.data_ptr()),
+                                         static_cast<half*>(dropout_add_grads.data_ptr()),
+                                         static_cast<const uint8_t*>(dropout_add_mask.data_ptr()),
+                                         total_tokens_q,
+                                         (1.0 / (1.0 - dropout_prob)));
+    } else {
+        dropout_add_grads.copy_(output_grads);
+    }
 
     // Dropout Add Backward
-    apex_masked_scale_cuda<half,float,uint32_t>(
-                                 static_cast<const half*>(output_grads.data_ptr()),
-                                 static_cast<half*>(dropout_add_grads.data_ptr()),
-                                 static_cast<const uint8_t*>(dropout_add_mask.data_ptr()),
-                                 total_tokens_q,
-                                 (1.0 / (1.0 - dropout_prob)));
 
     return dropout_add_grads;
 }

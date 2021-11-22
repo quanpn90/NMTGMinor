@@ -74,7 +74,7 @@ class Translator(object):
                 self.bos_id = self.tgt_dict.labelToIdx[self.bos_token]
                 print("[INFO] Bos Token: %s Bos_ID: %d" % (self.bos_token, self.bos_id))
 
-            model = build_model(model_opt, checkpoint['dicts'])
+            model = build_model(model_opt, checkpoint['dicts'], remove_pretrain=True)
 
             if opt.verbose:
                 print('Loading model from %s' % model_path)

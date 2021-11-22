@@ -28,12 +28,9 @@ Faster version of Layer Norm from apex (new)
 
 try:
     import fast_layer_norm_cuda
-
-    fast_fused = True
     # print("[INFO] Fast layer norm implementation detected.")
 except (ModuleNotFoundError, ImportError) as e:
     fast_layer_norm = None
-    fast_fused = False
     # print("[INFO] Fast layer norm implementation not found.")
 
 
@@ -133,11 +130,11 @@ class LayerNorm(torch.nn.Module):
             init.ones_(self.weight)
             init.zeros_(self.bias)
 
-    def forward(self, input):
+    def forward(self, input, fast=True):
 
         eps = self.eps
 
-        if fast_fused and input.size(-1) in [768, 1024, 2048, 3072, 4096]:
+        if fast and fast_layer_norm_cuda is not None and input.size(-1) in [768, 1024, 2048, 3072, 4096]:
             return fast_layer_norm_affine(input, self.weight, self.bias, self.normalized_shape, eps)
 
         return F.layer_norm(

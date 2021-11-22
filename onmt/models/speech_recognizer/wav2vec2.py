@@ -78,9 +78,9 @@ class FairseqWav2Vec(nn.Module):
         self.cfg = state['cfg']['model']
 
         # don't override the options for wav2vec yet (some of them can create NaN)
-        # self.cfg.dropout = self.opt.residual_dropout
+        self.cfg.dropout = self.opt.enc_pretrain_emb_dropout
         # self.cfg.activation_dropout = self.opt.ffn_dropout
-        # self.cfg.attention_dropout = self.opt.attn_dropout
+        self.cfg.attention_dropout = self.opt.enc_pretrain_hidden_dropout
         self.cfg.encoder_layerdrop = self.opt.death_rate
         # self.cfg.dropout_features = self.opt.emb_dropout
         # self.cfg.mask_channel_before = True
@@ -88,7 +88,7 @@ class FairseqWav2Vec(nn.Module):
         self.cfg.mask_channel_length = 64
         self.cfg.mask_prob = 0.0
 
-        self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg, favor=opt.favor_attention)
+        self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg, favor=opt.favor_attention, weight_drop=opt.weight_drop)
         self.favor = opt.favor_attention
         if self.favor:
             from onmt.modules.performer import ProjectionUpdater
@@ -139,6 +139,26 @@ class FairseqWav2Vec(nn.Module):
     def convert_fast_attention(self):
         self.wav2vec_encoder.convert_fast_attention()
 
+    def test_run(self, input, mask):
+
+        # input should have size [B x T x H]
+        # H == 1: audio samples
+        # H > 1: precomputed samples
+
+        if input.size(-1) == 1:
+            precomputed_tdnn = False
+            input = input.squeeze(-1)
+        else:
+            precomputed_tdnn = True
+
+        wav2vec_output = self.wav2vec_encoder.extract_features(input, mask,
+                                                               mask=False,
+                                                               precomputed_tdnn=precomputed_tdnn,
+                                                               lang=None, mixture=None)
+
+        context = wav2vec_output['x']
+        return context
+
     def forward(self, input, batch_first_output=False, adv_ptb_grad=False, input_ptb=None,
                 lang=None, mixture=None, **kwargs):
         """
@@ -184,10 +204,14 @@ class FairseqWav2Vec(nn.Module):
                 self.proj_updater.redraw_projections()
 
         # don't mask when precomputed tdnn is used, because spec augmentation is used in the dataset
-        wav2vec_output = self.wav2vec_encoder.extract_features(input, attn_mask,
-                                                               mask=self.training,
-                                                               precomputed_tdnn=precomputed_tdnn,
-                                                               lang=lang, mixture=mixture)
+        # wav2vec_output = self.wav2vec_encoder.extract_features(input, attn_mask,
+        #                                                        mask=self.training,
+        #                                                        precomputed_tdnn=precomputed_tdnn,
+        #                                                        lang=lang, mixture=mixture)
+        wav2vec_output = self.wav2vec_encoder(input, attn_mask,
+                                              mask=self.training, features_only=True, layer=None,
+                                              precomputed_tdnn=precomputed_tdnn,
+                                              lang=lang, mixture=mixture)
 
         if not batch_first_output:
             context = wav2vec_output['x'].transpose(0, 1).contiguous()

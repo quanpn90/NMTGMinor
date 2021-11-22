@@ -276,7 +276,8 @@ def init_bert_params(module):
 # @register_model("wav2vec2", dataclass=Wav2Vec2Config)
 class Wav2Vec2Model(torch.nn.Module):
     def __init__(self, cfg: Wav2Vec2Config,
-                 favor=False, feature_redraw_interval=1000, auto_check_redraw=True):
+                 favor=False, feature_redraw_interval=1000, auto_check_redraw=True,
+                 weight_drop=0.0):
         super().__init__()
         self.cfg = cfg
 
@@ -368,7 +369,7 @@ class Wav2Vec2Model(torch.nn.Module):
             torch.FloatTensor(cfg.encoder_embed_dim).uniform_()
         )
 
-        self.encoder = TransformerEncoder(cfg, favor=favor)
+        self.encoder = TransformerEncoder(cfg, favor=favor, weight_drop=weight_drop)
         self.layer_norm = LayerNorm(self.embed)
 
         self.target_glu = None
@@ -926,7 +927,7 @@ class ConvFeatureExtractionModel(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, args, favor=False):
+    def __init__(self, args, favor=False, weight_drop=0.0):
         """
         :param args:
         :param favor: Performer Attention
@@ -936,6 +937,7 @@ class TransformerEncoder(nn.Module):
         self.dropout = args.dropout
         self.embedding_dim = args.encoder_embed_dim
         self.favor = favor
+        self.weight_drop = weight_drop
 
         self.pos_conv = nn.Conv1d(
             self.embedding_dim,
@@ -959,6 +961,7 @@ class TransformerEncoder(nn.Module):
                     ffn_embedding_dim=args.encoder_ffn_embed_dim,
                     num_attention_heads=args.encoder_attention_heads,
                     dropout=self.dropout,
+                    weight_drop=self.weight_drop,
                     attention_dropout=args.attention_dropout,
                     activation_dropout=args.activation_dropout,
                     activation_fn=args.activation_fn,
@@ -1062,6 +1065,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             ffn_embedding_dim: float = 3072,
             num_attention_heads: float = 8,
             dropout: float = 0.1,
+            weight_drop: float = 0.0,
             attention_dropout: float = 0.1,
             activation_dropout: float = 0.1,
             activation_fn: str = "relu",
@@ -1086,6 +1090,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             self.embedding_dim,
             num_attention_heads,
             dropout=attention_dropout,
+            weight_drop=weight_drop,
             self_attention=True,
             favor=favor
         )
@@ -1210,11 +1215,13 @@ class TransformerSentenceEncoderLayer(nn.Module):
         modules similar to the original Transformer imlementation.
         """
         residual = x
+        is_fast = self.self_attn.fast_attention
 
         def call_mlp(x, in_weight, out_weight, in_bias, out_bias, activation_fn, dropout_p, training_,
                      fused, fused_function):
 
-            if fused and x.is_cuda:
+            # TODO: check type x torch.half or torch.float32
+            if fused and x.is_cuda and is_fast:
                 dropout_p_ = dropout_p if training_ else 0.0
 
                 weights = [in_weight, out_weight]
@@ -1239,7 +1246,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             residual = x
 
         if self.layer_norm_first:
-            x = self.self_attn_layer_norm(x)
+            x = self.self_attn_layer_norm(x, fast=is_fast)
 
             # print("[attn input]", torch.any(torch.isnan(x)))
             x, attn = self.self_attn(
@@ -1251,10 +1258,11 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 lang=lang, mixture=mixture
             )
 
-            # x = self.dropout1(x)
-            #
-            # x.add_(residual)
-            x = fused_dropout_add(x, residual, self.residual_dropout, self.training)
+            if is_fast:
+                x = fused_dropout_add(x, residual, self.residual_dropout, self.training)
+            else:
+                x = self.dropout1(x) + residual
+
             residual = x
 
             if self.has_adapter:
@@ -1264,30 +1272,18 @@ class TransformerSentenceEncoderLayer(nn.Module):
                     x.add_(residual)
                     residual = x
 
-            x = self.final_layer_norm(x)
+            x = self.final_layer_norm(x, fast=is_fast)
 
             in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, mixture=mixture)
             x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
                          self.dropout2.p, self.training,
                          self.fused, self.fused_function)
-            # if self.fused and x.is_cuda:
-            #     dropout = self.dropout2.p if self.training else 0.0
-            #     seq_len, bsz, hidden_size = x.size(0), x.size(1), x.size(2)
-            #
-            #     weights = [self.fc1.weight, self.fc2.weight]
-            #     biases = [self.fc1.bias, self.fc2.bias]
-            #
-            #     x = self.fused_function(dropout, False, x.view(seq_len * bsz, -1),
-            #                             *weights, *biases)
-            #     x = x.view(seq_len, bsz, -1)
-            # else:
-            #     x = self.activation_fn(self.fc1(x))
-            #     x = self.dropout2(x)
-            #     x = self.fc2(x)
 
-            # x = self.dropout3(x)
-            # x = residual + x
-            x = fused_dropout_add(x, residual, self.residual_dropout, self.training)
+            if is_fast:
+                x = fused_dropout_add(x, residual, self.residual_dropout, self.training)
+            else:
+                x = self.dropout3(x)
+                x = residual + x
 
         else:
             x, attn = self.self_attn(

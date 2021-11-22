@@ -9,7 +9,6 @@ from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, Rela
 from onmt.modules.copy_generator import CopyGenerator
 from options import backward_compatible
 from onmt.constants import add_tokenidx
-
 import math
 
 init = torch.nn.init
@@ -17,9 +16,17 @@ init = torch.nn.init
 MAX_LEN = onmt.constants.max_position_length  # This should be the longest sentence from the dataset
 
 
-def build_model(opt, dicts):
+def remove_pretrain_weights(opt):
+    opt.dec_state_dict = ""
+    opt.enc_state_dict = ""
+    return opt
+
+
+def build_model(opt, dicts, remove_pretrain=False):
     # adding missing options if the opt was built before. (for loading old models)
     opt = backward_compatible(opt)
+    if remove_pretrain:
+        opt = remove_pretrain_weights(opt)
 
     onmt.constants.layer_norm = opt.layer_norm
     onmt.constants.weight_norm = opt.weight_norm

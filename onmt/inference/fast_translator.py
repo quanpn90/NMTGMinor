@@ -129,7 +129,7 @@ class FastTranslator(Translator):
                 if opt.verbose:
                     print('Loading sub-model from %s' % model_path)
 
-                model = build_model(model_opt, checkpoint['dicts'])
+                model = build_model (model_opt, checkpoint['dicts'], remove_pretrain=True)
                 optimize_model(model)
                 model.load_state_dict(checkpoint['model'])
 
