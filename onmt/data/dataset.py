@@ -58,7 +58,7 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
 
         return tensor, pos, lengths
 
-    elif type == "audio":
+    elif type in ["audio", "scp"]:
 
         # First step: on-the-fly processing for the samples
         # Reshaping: either downsampling or upsampling
@@ -136,12 +136,12 @@ def collect_fn(src_data, tgt_data,
                src_type='text',
                augmenter=None, upsampling=False,
                bilingual=False, vocab_mask=None,
-               past_src_data=None, src_pad="<blank>", tgt_pad="<blank>"):
+               past_src_data=None, src_pad="<blank>", tgt_pad="<blank>", feature_size=40):
     tensors = dict()
     if src_data is not None:
         tensors['source'], tensors['source_pos'], src_lengths = merge_data(src_data, align_right=src_align_right,
                                                                            type=src_type, augmenter=augmenter,
-                                                                           upsampling=upsampling, feature_size=40,
+                                                                           upsampling=upsampling, feature_size=feature_size,
                                                                            dataname="source", src_pad=src_pad)
         tensors['src_type'] = src_type
         tensors['src_selfattn_mask'] = tensors['source'].ne(src_pad)
@@ -173,7 +173,7 @@ def collect_fn(src_data, tgt_data,
                                                                                           type=src_type,
                                                                                           augmenter=augmenter,
                                                                                           upsampling=upsampling,
-                                                                                          feature_size=40,
+                                                                                          feature_size=feature_size,
                                                                                           dataname="source",
                                                                                           src_pad=src_pad)
 
@@ -481,6 +481,7 @@ class Dataset(torch.utils.data.Dataset):
 
         self.cur_index = 0
         self.batchOrder = None
+        self.input_size = input_size
 
         if augment:
             self.augmenter = Augmenter(F=sa_f, T=sa_t, input_size=input_size)
@@ -586,7 +587,8 @@ class Dataset(torch.utils.data.Dataset):
                                   augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask,
                                   past_src_data=past_src,
                                   src_pad=self.src_pad,
-                                  tgt_pad=self.tgt_pad)
+                                  tgt_pad=self.tgt_pad,
+                                  feature_size=self.input_size),
                        )
         return batch
 
@@ -634,7 +636,8 @@ class Dataset(torch.utils.data.Dataset):
                                src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
                                src_type=self._type,
                                augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask,
-                               past_src_data=past_src_data, src_pad=self.src_pad, tgt_pad=self.tgt_pad)
+                               past_src_data=past_src_data, src_pad=self.src_pad, tgt_pad=self.tgt_pad,
+                               feature_size=self.input_size)
 
             batches.append(batch)
 

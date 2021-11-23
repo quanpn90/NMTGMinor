@@ -81,10 +81,10 @@ class TestWav2vec(unittest.TestCase):
         bsz = 16
 
         self.ref_input = torch.randn(bsz, seq_len, 1, dtype=torch.float32, device=torch.device("cuda"))
-        self.input = torch.randn(bsz, seq_len // 256, 512, dtype=torch.float32, device=torch.device("cuda"))
+        self.input = torch.randn(bsz//2, seq_len // 256, 512, dtype=torch.float32, device=torch.device("cuda"))
         self.tst_input = self.ref_input.new(*self.ref_input.size()).copy_(self.ref_input)
         self.mask = ((torch.randn(bsz, seq_len) > 0)).bool().cuda().zero_()  # no mask
-        self.short_mask = ((torch.randn(bsz, seq_len // 256) > 0)).bool().cuda().zero_()  # no mask
+        self.short_mask = ((torch.randn(bsz//2, seq_len // 256) > 0)).bool().cuda().zero_()  # no mask
 
     def setUp(self):
 

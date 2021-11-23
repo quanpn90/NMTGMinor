@@ -54,10 +54,10 @@ parser.add_argument('-max_memory_size', type=int, default=512,
 
 parser.add_argument('-tgt',
                     help='True target sequence (optional)')
-parser.add_argument('-scp_output', default='output.scp',
+parser.add_argument('-scp', default='output.scp',
                     help="""Path to output the feature paths""")
-parser.add_argument('-ark_output', default='output.ark',
-                    help="""Path to output the features""")
+# parser.add_argument('-ark_output', default='output.ark',
+#                     help="""Path to output the features""")
 
 parser.add_argument('-batch_size', type=int, default=30,
                     help='Batch size (in audio samples)')
@@ -90,26 +90,35 @@ def _is_oversized(batch, new_sent_size, batch_size):
     return False
 
 
-def write_ark(utts, features, padding_mask, out_ark, out_scp, opt):
+def verify_ark(utts, features, padding_mask, scp_data):
     # cache_wav = ''
 
     features = features.cpu()
     bsz, seq_len, feat_size = features.size()
     lengths = (1 - padding_mask).sum(dim=1)
+    # print(features.size(), lengths)
+    assert(torch.max(lengths).item() == seq_len)
 
     assert len(utts) == bsz
 
     for i in range(bsz):
         feature_ = features[i, 0:lengths[i]]
         feature_ = feature_.numpy()
+
+        precomputed_feature_ = scp_data[i]
+
+        np.testing.assert_allclose(
+                feature_,
+                precomputed_feature_,
+                atol=1e-5, rtol=1e-5)
         # if opt.fp16:
         #     feature_ = feature_.astype(np.float16)
 
-        seg_name = utts[i]
-        dic = {seg_name: feature_}
-
-        from onmt.data.kaldiio.io import write_ark_file
-        write_ark_file(out_ark, out_scp, dic)
+        # seg_name = utts[i]
+        # dic = {seg_name: feature_}
+        #
+        # from onmt.data.kaldiio.io import write_ark_file
+        # write_ark_file(out_ark, out_scp, dic)
 
 
 def build_data(src_sents):
@@ -148,10 +157,13 @@ if __name__ == '__main__':
         model = model.cuda()
     model.eval()
 
-    ark_out = open(opt.ark_output, 'wb')
-    scp_out = open(opt.scp_output, 'w')
+    print(model.wav2vec_encoder.feature_extractor)
 
     audio_data = open(opt.src)
+    scp_data = open(opt.scp)
+    from onmt.data.audio_utils import ArkLoader
+    scp_reader = ArkLoader()
+
     from onmt.utils import safe_readaudio
 
     i = 0
@@ -159,6 +171,7 @@ if __name__ == '__main__':
     n_models = len(opt.model.split("|"))
     src_batch = list()
     src_utts = list()
+    src_scp = list()
 
     while True:
         try:
@@ -171,7 +184,13 @@ if __name__ == '__main__':
                 end = 0
             else:
                 wav_path, start, end = line[1], float(line[2]), float(line[3])
+
+            # read the wav samples
             line = safe_readaudio(wav_path, start=start, end=end, sample_rate=16000)
+
+            # read the scp data
+            scp_path = next(scp_data).strip().split()[1]
+            scp_line = scp_reader.load_mat(scp_path)
 
         except StopIteration:
             break
@@ -192,12 +211,15 @@ if __name__ == '__main__':
 
             with autocast(enabled=opt.fp16):
                 features, padding_mask = model(batch)
-            write_ark(src_utts, features, padding_mask, ark_out, scp_out, opt)
+            # write_ark(src_utts, features, padding_mask, ark_out, scp_out, opt)
+            verify_ark(src_utts, features, padding_mask, src_scp)
 
             src_batch = []
             src_utts = []
+            src_scp = []
         src_batch.append(line)
         src_utts.append(utt)
+        src_scp.append(scp_line)
 
     # catch the last batch
     if len(src_batch) != 0:
@@ -207,10 +229,11 @@ if __name__ == '__main__':
         batch.cuda()
         with autocast(enabled=opt.fp16):
             features, padding_mask = model(batch)
-        write_ark(src_utts, features, padding_mask, ark_out, scp_out, opt)
+        verify_ark(src_utts, features, padding_mask, src_scp)
 
         src_batch = []
         src_utts = []
+        src_scp = []
 
     ark_out.close()
     scp_out.close()

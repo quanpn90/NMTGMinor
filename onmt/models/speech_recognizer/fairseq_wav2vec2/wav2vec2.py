@@ -1302,7 +1302,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
             if self.fused and x.is_cuda:
                 dropout = self.dropout2.p if self.training else 0.0
-                print(dropout)
                 if self.fused_blaslt and dropout == 0.0:
                     x = self.fused_function(x.view(seq_len * bsz, -1), self.fc1.weight, self.fc1.bias,
                                             self.fc2.weight, self.fc2.bias)

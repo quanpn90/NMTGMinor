@@ -145,6 +145,7 @@ def main():
                                           max_src_len=opt.max_src_length,
                                           multiplier=opt.batch_size_multiplier,
                                           upsampling=opt.upsampling,
+                                          input_size=opt.input_size,
                                           constants=onmt.constants)
             else:
                 valid_data = onmt.StreamDataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
@@ -308,6 +309,7 @@ def main():
                                           batch_size_words=opt.batch_size_words,
                                           multiplier=opt.batch_size_multiplier,
                                           data_type=data_type, sorting=True,
+                                          input_size=opt.input_size,
                                           batch_size_sents=opt.batch_size_sents,
                                           src_align_right=opt.src_align_right,
                                           cleaning=True, verbose=True, debug=True,
@@ -466,6 +468,7 @@ def main():
                                               batch_size_sents=opt.batch_size_sents,
                                               src_align_right=opt.src_align_right,
                                               min_src_len=1, min_tgt_len=3,
+                                              input_size=opt.input_size,
                                               cleaning=True, verbose=True, constants=onmt.constants)
 
                     valid_sets.append(valid_data)
