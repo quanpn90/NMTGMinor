@@ -601,7 +601,9 @@ class Wav2Vec2Model(torch.nn.Module):
             features = source
 
         features = self.layer_norm(features)
-        unmasked_features = None
+
+        if not features_only:
+            unmasked_features = None
         # unmasked_features = features.clone()
 
         if not precomputed_tdnn:  # then compute the padding mask after the TDNN step
@@ -653,7 +655,7 @@ class Wav2Vec2Model(torch.nn.Module):
                 mask_indices=mask_indices,
                 mask_channel_indices=mask_channel_indices,
             )
-            if not is_xla_tensor(x) and mask_indices is not None:
+            if not is_xla_tensor(x) and mask_indices is not None and not features_only:
                 # tpu-comment: reducing the size in a dynamic way causes
                 # too many recompilations on xla.
                 y = unmasked_features[mask_indices].view(
