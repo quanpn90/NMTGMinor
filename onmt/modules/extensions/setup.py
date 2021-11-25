@@ -302,7 +302,7 @@ ext_modules.append(
                                               ] + version_dependent_macros + generator_flag,
                                       'nvcc': ['-O3',
                                                '-gencode', 'arch=compute_80,code=sm_80',
-                                               'arch=compute_86,code=sm_86'
+                                               '-gencode', 'arch=compute_86,code=sm_86',
                                                '-U__CUDA_NO_HALF_OPERATORS__',
                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
                                                '--expt-relaxed-constexpr',
