@@ -591,7 +591,7 @@ class MultiheadAttention(nn.Module):
                     assert cu_seqlens is not None
                     assert max_len is not None and max_len <= 512
                     sm = torch.cuda.get_device_capability()
-                    assert sm[0] == 8 and sm[1] == 0  # Only NVIDIA A100 supported at the moment
+                    assert sm[0] == 8 and sm[1] >= 0  # Only Ampere supported at the moment
 
                     total_bsz = query.size(0)
                     qkv = F.linear(query, in_proj_weight, self.proj_bias)  # B x H

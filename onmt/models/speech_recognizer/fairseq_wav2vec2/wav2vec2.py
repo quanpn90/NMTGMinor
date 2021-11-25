@@ -1025,8 +1025,8 @@ class TransformerEncoder(nn.Module):
             fast_attention = False
         else:
             fast_attention = self.layers[0].self_attn.fast_attention
-        # only run this when seq_len <= 512 and sm = 80
-        if seq_len <= 512 and sm[0] == 8 and sm[1] == 0 and not self.deepspeed and fast_attention:
+        # only run this when seq_len <= 512 and sm = 80/86
+        if seq_len <= 512 and sm[0] == 8 and sm[1] >= 0 and not self.deepspeed and fast_attention:
             # print("[INFO] Can run FAST MHA with seq_len", seq_len)
             can_run_fast_bert_mha = True
             # masked positions = 1 so to compute length we need the (1 -)
@@ -1084,7 +1084,6 @@ class TransformerEncoder(nn.Module):
             with autocast(enabled=False):
                 dtype = x.dtype
                 x = x.half()
-                x.data.fill_(1)
 
                 layer_results = []
                 if padding_mask is None:
