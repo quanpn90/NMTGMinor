@@ -1026,7 +1026,8 @@ class TransformerEncoder(nn.Module):
         else:
             fast_attention = self.layers[0].self_attn.fast_attention
         # only run this when seq_len <= 512 and sm = 80/86
-        if seq_len <= 512 and sm[0] == 8 and sm[1] == 0 and not self.deepspeed and fast_attention:
+        if ((seq_len <= 512 and sm[0] == 8 and sm[1] == 0) or (seq_len <= 384 and sm[0] == 8 and sm[1] == 6)) \
+                 and not self.deepspeed and fast_attention:
             # print("[INFO] Can run FAST MHA with seq_len", seq_len)
             can_run_fast_bert_mha = True
             # masked positions = 1 so to compute length we need the (1 -)

@@ -337,8 +337,8 @@ class TestFMHA(unittest.TestCase):
         self.run_uneven_test(384, 8)
         # self.run_test(384, 3)
 
-    # def test_512(self):
-        # self.run_test(512, 32)
+    def test_512(self):
+        self.run_test(512, 32)
         # self.run_test(512, 2)
         # self.run_test(512, 3)
         #

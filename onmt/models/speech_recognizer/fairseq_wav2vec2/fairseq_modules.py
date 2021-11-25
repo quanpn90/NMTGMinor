@@ -589,9 +589,12 @@ class MultiheadAttention(nn.Module):
                     assert self.fast_bert_mha is not None
                     assert query.dtype == torch.half
                     assert cu_seqlens is not None
-                    assert max_len is not None and max_len <= 512
+                    assert max_len is not None # and max_len <= 512
                     sm = torch.cuda.get_device_capability()
-                    assert sm[0] == 8 and sm[1] == 0  # Only Ampere supported at the moment
+
+                    # Only Ampere supported at the moment
+                    assert (sm[0] == 8 and sm[1] == 0 and max_len <= 512) or \
+                        (sm[0] == 8 and sm[1] == 6 and max_len <= 3)
 
                     total_bsz = query.size(0)
                     qkv = F.linear(query, in_proj_weight, self.proj_bias)  # B x H
