@@ -213,6 +213,7 @@ class FairseqWav2Vec(nn.Module):
                                               precomputed_tdnn=precomputed_tdnn,
                                               lang=lang, mixture=mixture)
 
+        # TODO: move batch_first_output up to avoid confusion
         if not batch_first_output:
             context = wav2vec_output['x'].transpose(0, 1).contiguous()
             batch_size, time = context.size(1), context.size(0)

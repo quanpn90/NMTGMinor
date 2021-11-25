@@ -6,6 +6,7 @@
 import math
 from dataclasses import dataclass, field
 from typing import List, Tuple
+import copy
 
 import numpy as np
 import torch
@@ -602,9 +603,10 @@ class Wav2Vec2Model(torch.nn.Module):
 
         features = self.layer_norm(features)
 
-        if not features_only:
+        if features_only:
             unmasked_features = None
-        # unmasked_features = features.clone()
+        else:
+            unmasked_features = features.clone()
 
         if not precomputed_tdnn:  # then compute the padding mask after the TDNN step
             if padding_mask is not None and padding_mask.any():
@@ -846,6 +848,9 @@ class Wav2Vec2Model(torch.nn.Module):
         for fast_attention in fast_attentions:
             fast_attention.convert_fast_attention()
 
+    # Convert the self-attn module to deep speed transformer
+    def convert_deepspeed(self, training=True, bsz=32):
+        self.encoder.convert_deepspeed(training=training, bsz=bsz)
 
 class ConvFeatureExtractionModel(nn.Module):
     def __init__(
@@ -940,6 +945,11 @@ class TransformerEncoder(nn.Module):
         self.embedding_dim = args.encoder_embed_dim
         self.favor = favor
         self.weight_drop = weight_drop
+        self.num_heads = args.encoder_attention_heads
+        self.num_layers = args.encoder_layers
+        self.attention_dropout = args.attention_dropout
+        self.activation_dropout = args.activation_dropout
+        self.deepspeed = False
 
         self.pos_conv = nn.Conv1d(
             self.embedding_dim,
@@ -1001,30 +1011,52 @@ class TransformerEncoder(nn.Module):
 
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        if not self.favor:
+        if not self.favor and not self.deepspeed:
             # B x T x C -> T x B x C  (only for vanilla self-attention)
             x = x.transpose(0, 1)
         x = x.contiguous()
 
-        layer_results = []
-        r = None
-        for i, layer in enumerate(self.layers):
-            dropout_probability = np.random.random()
-            if not self.training or (dropout_probability > self.layerdrop):
-                x, z = layer(x, self_attn_padding_mask=padding_mask, need_weights=False,
-                             lang=lang, mixture=mixture)
-                if tgt_layer is not None:
-                    layer_results.append((x, z))
-            if i == tgt_layer:
-                r = x
-                break
+        # If not using deepspeed: proceed like normal
+        if not self.deepspeed:
+            layer_results = []
+            r = None
+            for i, layer in enumerate(self.layers):
+                dropout_probability = np.random.random()
+                if not self.training or (dropout_probability > self.layerdrop):
+                    x, z = layer(x, self_attn_padding_mask=padding_mask, need_weights=False,
+                                 lang=lang, mixture=mixture)
+                    if tgt_layer is not None:
+                        layer_results.append((x, z))
+                if i == tgt_layer:
+                    r = x
+                    break
 
-        if r is not None:
-            x = r
+            if r is not None:
+                x = r
 
-        # T x B x C -> B x T x C
-        if not self.favor:
-            x = x.transpose(0, 1)
+            # T x B x C -> B x T x C
+            if not self.favor:
+                x = x.transpose(0, 1)
+
+        else:
+            with autocast(enabled=False):
+                dtype = x.dtype
+                x = x.half()
+                x.data.fill_(1)
+
+                layer_results = []
+                if padding_mask is None:
+                    padding_mask = x.new(x.size(0), x.size(1)).fill_(0)
+                # print(x, padding_mask)
+                # padding_mask = padding_mask.transpose(0, 1).contiguous()
+                padding_mask = padding_mask.unsqueeze(1).unsqueeze(1)
+                padding_mask = padding_mask.type_as(x).fill_(-10000)
+                for i, layer in enumerate(self.layers):
+                    dropout_probability = np.random.random()
+                    if not self.training or (dropout_probability > self.layerdrop):
+                        x = layer(x, padding_mask)
+
+            x = x.to(dtype)
 
         return x, layer_results
 
@@ -1053,6 +1085,59 @@ class TransformerEncoder(nn.Module):
                 p.requires_grad = not p.requires_grad
             for p in layer.fc2.parameters():
                 p.requires_grad = not p.requires_grad
+
+    def convert_deepspeed(self, training=True, bsz=32):
+
+        from deepspeed import DeepSpeedTransformerConfig, DeepSpeedTransformerLayer
+        self.deepspeed = True
+
+        config = DeepSpeedTransformerConfig(batch_size=bsz,
+                                            hidden_size=self.embedding_dim,
+                                            heads=self.num_heads,
+                                            attn_dropout_ratio=self.attention_dropout,
+                                            hidden_dropout_ratio=self.activation_dropout,
+                                            num_hidden_layers=-1,
+                                            initializer_range=0.02,
+                                            local_rank=-1,
+                                            seed=1234,
+                                            fp16=True,
+                                            pre_layer_norm=True,
+                                            adjust_init_range=False,
+                                            attn_dropout_checkpoint=False,
+                                            normalize_invertible=False,
+                                            gelu_checkpoint=False,
+                                            return_tuple=False,
+                                            training=training)
+
+        old_layers = self.layers
+
+        self.layers = nn.ModuleList([
+            copy.deepcopy(DeepSpeedTransformerLayer(config))
+            for _ in range(self.num_layers)
+        ])
+
+        # self.layers = nn.ModuleList()
+        # for i in range(self.num_layers):
+        #
+        #     old_layer = old_layers[i]
+        #
+            # new_layer = DeepSpeedTransformerLayer(config)
+        #
+        #     with torch.no_grad():
+        #         new_layer.attn_qkvw.copy_(old_layer.self_attn.proj_weight)
+        #         new_layer.attn_qkvb.copy_(old_layer.self_attn.proj_bias)
+        #         new_layer.attn_ow.copy_(old_layer.self_attn.out_proj.weight)
+        #         new_layer.attn_ob.copy_(old_layer.self_attn.out_proj.bias)
+        #         new_layer.attn_nw.copy_(old_layer.self_attn_layer_norm.weight)
+        #         new_layer.attn_nb.copy_(old_layer.self_attn_layer_norm.bias)
+        #         new_layer.inter_w.copy_(old_layer.fc1.weight)
+        #         new_layer.inter_b.copy_(old_layer.fc1.bias)
+        #         new_layer.output_w.copy_(old_layer.fc2.weight)
+        #         new_layer.output_b.copy_(old_layer.fc2.bias)
+        #         new_layer.norm_w.copy_(old_layer.final_layer_norm.weight)
+        #         new_layer.norm_b.copy_(old_layer.final_layer_norm.bias)
+        #
+            # self.layers.append(new_layer)
 
 
 class TransformerSentenceEncoderLayer(nn.Module):

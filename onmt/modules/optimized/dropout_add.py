@@ -39,6 +39,7 @@ class FusedDropoutAdd(torch.autograd.Function):
         null_tensor = torch.tensor([])
         dropout_prob_t = torch.tensor([dropout_prob])
         ctx.fused = False
+        ctx.training = is_training
 
         if not is_training or dropout_prob <= 0.0:
             dropout_mask = null_tensor
@@ -70,7 +71,7 @@ class FusedDropoutAdd(torch.autograd.Function):
 
         dropout_mask, dropout_prob_t = ctx.saved_tensors
 
-        if dropout_prob_t[0] <= 0:
+        if dropout_prob_t[0] <= 0 or not ctx.training:
             return output_grads, output_grads, None, None
 
         # if fused_dropout_add_cuda is not None and output_grads.is_cuda and output_grads.dtype == torch.float16:

@@ -113,9 +113,9 @@ std::vector<torch::Tensor> fwd_cuda(
   THCublasCheck(cublasGemmStridedBatchedEx(handle,
                              CUBLAS_OP_T,
                              CUBLAS_OP_N,
-                             k_seq_len,
-                             q_seq_len,
-                             head_dim,
+                             k_seq_len,  // m
+                             q_seq_len,  // n
+                             head_dim,   // k
                              static_cast<const void*>(&scale),
                              static_cast<const void*>(k_lin_results_ptr),  // A:
                              CUDA_R_16F,
@@ -123,14 +123,14 @@ std::vector<torch::Tensor> fwd_cuda(
                              batch_stride, // stride A
                              static_cast<const void*>(q_lin_results_ptr),
                              CUDA_R_16F,
-                             lead_dim,
-                             batch_stride,
+                             lead_dim,  // attn_batches * 3 * head_dim
+                             batch_stride,  // 3 * head_dim
                              static_cast<const void*>(&beta_zero),
                              static_cast<void*>(attn_scores_ptr), // C
                              CUDA_R_16F,
                              k_seq_len,
                              k_seq_len*q_seq_len,
-                             attn_batches,
+                             attn_batches,  // batch = heads * bsz
                              CUDA_R_32F,
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
   // Padded Softmax

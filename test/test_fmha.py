@@ -24,8 +24,6 @@
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 ###############################################################################
-
-
 import sys
 import torch
 import numpy as np
@@ -34,6 +32,37 @@ import math
 
 import fmhalib as mha
 from time import time
+from random import randint
+from torch.cuda.amp import custom_fwd, custom_bwd
+
+
+# CONDITION to use fast mha:
+# length <= 512 and sm=80
+
+
+class IndexCopy(torch.autograd.Function):
+    @staticmethod
+    @custom_fwd
+    def forward(ctx, input, non_pad_indices, total_batch_size):
+
+        sizes = list(input.size())
+        sizes[0] = total_batch_size
+
+        output = input.new_zeros(*sizes)
+        output.index_copy_(0, non_pad_indices, input)
+        ctx.save_for_backward(non_pad_indices)
+
+        return output
+
+    @staticmethod
+    @custom_bwd
+    def backward(ctx, output_grads):
+
+        non_pad_indices,  = ctx.saved_tensors
+
+        grad_input = output_grads.index_select(0, non_pad_indices)
+
+        return grad_input, None, None
 
 
 def py_mha(qkv, amask, b, s, h, d):
@@ -42,7 +71,7 @@ def py_mha(qkv, amask, b, s, h, d):
     k = qkv[:, :, :, 1, :].permute(0, 2, 1, 3)
     v = qkv[:, :, :, 2, :].permute(0, 2, 1, 3)
     p = torch.matmul(q.float(), k.permute(0, 1, 3, 2).float())
-    p_masked = p / math.sqrt(d) + (1.0 - amask) * -10000.0
+    p_masked = p / math.sqrt(d) + (amask) * -10000.0
     s = torch.softmax(p_masked, -1).to(qkv.dtype)
     ctx = torch.matmul(s, v)
     ctx = ctx.permute(0, 2, 1, 3).contiguous()
@@ -54,7 +83,136 @@ def py_mha(qkv, amask, b, s, h, d):
 
 class TestFMHA(unittest.TestCase):
 
+    def run_uneven_test(self, s, b):
+
+        s = randint(s-127, s)
+
+        print(f'Test uneven s={s} b={b}')
+
+        torch.manual_seed(12341234)
+        torch.cuda.manual_seed(12341234)
+
+        dtype = torch.float16
+        device = torch.device('cuda')
+
+        h = 16
+        d = 64
+
+        amask = torch.ones(b, s, dtype=dtype, device=device)
+
+        slens = []
+        prev_size = -1
+        for b_ in range(b):
+            if prev_size == -1:
+                curr_size = randint(1, s)
+                slens.append(curr_size)
+                prev_size = curr_size
+            else:
+                # no sort?
+                curr_size = randint(1, s)
+                slens.append(curr_size)
+                prev_size = curr_size
+
+            amask[b_, :prev_size].fill_(0)  # the first prev_size elements have no mask
+
+        max_s = max(slens)
+
+        non_pad_indices = torch.nonzero(amask.view(-1).ne(1)).squeeze(1)
+
+        a = torch.tensor(np.array([0] + slens), dtype=torch.int32)
+        amask = amask.unsqueeze(1).unsqueeze(1)
+        seqlens = torch.tensor(slens, dtype=torch.int32, device=device)
+        cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=device)
+        total = cu_seqlens[-1].item()
+
+        # input for python mha?
+        # should be identical layout with the current code
+        qkv = torch.randn((b, s, h, 3, d), device=device, dtype=dtype)
+
+        def run_fmha_forward(qkv_, non_pad_indices_, cu_seqlens_, max_s_):
+            qkv_vs = qkv_.permute(0, 1, 3, 2, 4).contiguous().view(b * s, 3, h, d)
+            qkv_vs = qkv_vs.index_select(0, non_pad_indices_)
+            if b < 4:
+                ctx, S_ = mha.fwd_nl(qkv_vs, cu_seqlens_, 0.0, max_s_, True, None)
+            else:
+                ctx, S_ = mha.fwd(qkv_vs, cu_seqlens_, 0.0, max_s_, True, None)
+
+            ctx.requires_grad = True
+            ctx_out = IndexCopy.apply(ctx, non_pad_indices, b * s)
+            ctx_out = ctx_out.view(b, s, h, d)
+
+            return qkv_vs, ctx, ctx_out, S_
+
+        def run_mha_backward(grad, ctx_out_, ctx_, qkv_vs_, non_pad_indices_, cu_seqlens_, max_s_, S__):
+            ctx_out.backward(grad, inputs=[ctx_])
+
+            if b < 4:
+                dqkv2, _, _ = mha.bwd_nl(ctx.grad, qkv_vs_, S__, cu_seqlens_, 0.0, max_s_)
+            else:
+                dqkv2, _ = mha.bwd(ctx.grad, qkv_vs_, S__, cu_seqlens_, 0.0, max_s_)
+
+            dqkv2 = dqkv2.permute(0, 2, 1, 3)  # [b*s, 3, h, d]
+
+            return dqkv2
+
+        qkv_vs, ctx, ctx_out, S_ = run_fmha_forward(qkv, non_pad_indices, cu_seqlens, max_s)
+        qkv.requires_grad = True
+
+        ctx_ref = py_mha(qkv, amask, b, s, h, d)
+        mask = amask.squeeze(1).squeeze(1).bool().unsqueeze(-1).unsqueeze(-1)
+        ctx_ref.masked_fill_(mask, 0)
+
+        self.assertTrue(torch.allclose(ctx_ref.float(), ctx_out.float(), atol=1e-2))
+        print("output ok.")
+
+        labels = torch.randn_like(ctx_ref)
+        diff = ctx_ref - labels
+        l = (diff * diff).sum() / b
+        l.backward(inputs=[ctx_ref, qkv])
+
+        dw = ctx_ref.grad  # .permute(0, 2, 1, 3)
+        dw2 = dw.clone().detach().contiguous()
+
+        dqkv2 = run_mha_backward(dw2, ctx_out, ctx, qkv_vs, non_pad_indices, cu_seqlens, max_s, S_)
+
+        qkv_grad = qkv.grad.view(b * s, h, 3, d)
+        qkv_grad = qkv_grad.index_select(0, non_pad_indices)
+
+        if not torch.allclose(qkv_grad.float(), dqkv2.float(), atol=1e-3):
+            print(qkv_grad.float() - dqkv2.float())
+        self.assertTrue(torch.allclose(qkv_grad.float(), dqkv2.float(), atol=1e-2))
+
+        num_iters = 20
+
+        torch.cuda.synchronize()
+        start_time = time()
+        for _ in range(num_iters):
+            qkv_vs, ctx, ctx_out, S_ = run_fmha_forward(qkv, non_pad_indices, cu_seqlens, max_s)
+
+            dw2 = torch.randn_like(ctx_out)
+            dqkv2 = run_mha_backward(dw2, ctx_out, ctx, qkv_vs, non_pad_indices, cu_seqlens, max_s, S_)
+
+        torch.cuda.synchronize()
+        stop_time = time()
+        print(F"Fused MHA MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+        torch.cuda.profiler.stop()
+
+        torch.cuda.synchronize()
+        start_time = time()
+        for _ in range(num_iters):
+            ctx_ref = py_mha(qkv, amask, b, s, h, d)
+
+            labels = torch.randn_like(ctx_ref)
+            ctx_ref.backward(labels)
+
+        torch.cuda.synchronize()
+        stop_time = time()
+        print(F"Python MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+        torch.cuda.profiler.stop()
+
     def run_test(self, s, b):
+        s = randint(s - 127, s)
+
         print(f'Test s={s} b={b}')
 
         torch.manual_seed(1234)
@@ -68,7 +226,7 @@ class TestFMHA(unittest.TestCase):
 
         slens = [s] * b
         a = torch.tensor(np.array([0] + slens), dtype=torch.int32)
-        amask = torch.ones(b, h, s, s, dtype=dtype, device=device)
+        amask = torch.zeros(b, h, s, s, dtype=dtype, device=device)
         seqlens = torch.tensor(slens, dtype=torch.int32, device=device)
         cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=device)
         total = cu_seqlens[-1].item()
@@ -143,18 +301,43 @@ class TestFMHA(unittest.TestCase):
         torch.cuda.profiler.stop()
 
     def test_128(self):
-        self.run_test(128, 64)
+        # self.run_test(128, 55)
+        # self.run_test(128, 47)
+        # self.run_test(128, 90)
 
-    def test_256(self):
-        self.run_test(256, 32)
+        self.run_uneven_test(128, 55)
+        self.run_uneven_test(128, 47)
+        self.run_uneven_test(128, 90)
+        # self.run_test(128, 3)
+
+    def test_256(self):  # 129 - 256?
+        #
+        # self.run_test(256, 32)
+        # self.run_test(256, 16)
+        # self.run_test(224, 16)
+
+        self.run_uneven_test(256, 32)
+        self.run_uneven_test(256, 16)
+        self.run_uneven_test(224, 16)
 
     def test_384(self):
-        self.run_test(384, 32)
+        # self.run_test(384, 32)
+        # self.run_test(384, 16)
+        # self.run_test(384, 8)
+
+        self.run_uneven_test(384, 32)
+        self.run_uneven_test(384, 16)
+        self.run_uneven_test(384, 8)
+        # self.run_test(384, 3)
 
     def test_512(self):
-        self.run_test(512, 32)
-        self.run_test(512, 2)
-        self.run_test(512, 3)
+        # self.run_test(512, 32)
+        # self.run_test(512, 2)
+        # self.run_test(512, 3)
+
+        self.run_uneven_test(512, 32)
+        self.run_uneven_test(512, 2)
+        self.run_uneven_test(512, 3)
 
 
 if __name__ == '__main__':

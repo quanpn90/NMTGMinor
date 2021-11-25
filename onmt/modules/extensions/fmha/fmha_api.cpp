@@ -267,7 +267,7 @@ std::vector<at::Tensor> mha_fwd_nl(const at::Tensor &qkv,         // total x num
                                 c10::optional<at::Generator> gen_) {
     int seq_len = 512;
     auto launch = &run_fmha_fp16_512_64_sm80_nl;
-    TORCH_CHECK(max_seq_len == seq_len);
+//    TORCH_CHECK(max_seq_len == seq_len);
 
     constexpr int warps_m = 1;
     constexpr int warps_n = 4;  // this leads to an upper bound
