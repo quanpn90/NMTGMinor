@@ -23,11 +23,15 @@ std::vector<torch::Tensor> fwd_cuda(
                                    float                dropout_prob
                                   )
 {
-    const int   embed_dim         = inputs.size(2);
-    const int   sequences         = inputs.size(1);
-    const int   q_seq_len         = inputs.size(0);
+//    auto input_sizes = inputs[0].sizes();
 
-    const int   total_tokens_q    = sequences * q_seq_len * embed_dim;
+//    int q_seq_len = 1;
+//
+//    const int   embed_dim         = inputs.size(2);
+//    const int   sequences         = inputs.size(1);
+//    const int   q_seq_len         = inputs.size(0);
+
+    const int   total_tokens_q    = at::numel(inputs);
 
     // There is no reason to use more than one stream as every kernel is
     // sequentially dependent
@@ -67,11 +71,7 @@ torch::Tensor bwd_cuda(
                                    float                dropout_prob
                                   )
 {
-    const int   embed_dim         = output_grads.size(2);
-    const int   sequences         = output_grads.size(1);
-    const int   q_seq_len         = output_grads.size(0);
-
-    const int   total_tokens_q    = sequences * q_seq_len * embed_dim;
+    const int   total_tokens_q    = at::numel(output_grads);
     cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
     cudaStream_t   stream = at::cuda::getCurrentCUDAStream().stream();
     cublasSetStream(handle, stream);

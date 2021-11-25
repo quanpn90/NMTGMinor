@@ -24,6 +24,7 @@ from .fairseq_modules import (
     MultiheadAttention,
     SamePad,
     TransposeLast,
+    index_copy
 )
 
 from onmt.modules.layer_norm import LayerNorm
@@ -990,6 +991,9 @@ class TransformerEncoder(nn.Module):
 
         self.apply(init_bert_params)
 
+        from onmt.modules.optimized.fast_mha import fast_bert_mha
+        self.fast_bert_mha = fast_bert_mha
+
     def forward(self, x, padding_mask=None, layer=None, lang=None, mixture=None):
         x, layer_results = self.extract_features(x, padding_mask, layer, lang=lang, mixture=mixture)
 
@@ -1011,7 +1015,44 @@ class TransformerEncoder(nn.Module):
 
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        if not self.favor and not self.deepspeed:
+        can_run_fast_bert_mha = False
+        # check if fast bert mha can be run
+        seq_len = x.size(1)
+        bsz = x.size(0)
+        sm = torch.cuda.get_device_capability()
+
+        if self.deepspeed:
+            fast_attention = False
+        else:
+            fast_attention = self.layers[0].self_attn.fast_attention
+        # only run this when seq_len <= 512 and sm = 80
+        if seq_len <= 512 and sm[0] == 8 and sm[1] == 0 and not self.deepspeed and fast_attention:
+            # print("[INFO] Can run FAST MHA with seq_len", seq_len)
+            can_run_fast_bert_mha = True
+            # masked positions = 1 so to compute length we need the (1 -)
+            if padding_mask is None:
+                padding_mask = x.new_zeros(bsz, seq_len)
+            padding_mask = padding_mask.long()
+            lengths = (1 - padding_mask).sum(dim=1)
+            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+
+            # remove paddings from x
+            x = x.view(-1, x.size(-1))
+            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+            x = x.index_select(0, non_pad_indices)
+            max_len = max(lengths)
+
+            # maybe pad it so the first dim % 8 = 0?
+            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
+
+        else:
+            # print("[INFO] Cannot run FAST MHA with seq_len", seq_len)
+            max_len = -1
+            cu_seqlens = None
+            non_pad_indices = None
+
+        if not self.favor and not self.deepspeed and not can_run_fast_bert_mha:
             # B x T x C -> T x B x C  (only for vanilla self-attention)
             x = x.transpose(0, 1)
         x = x.contiguous()
@@ -1024,6 +1065,7 @@ class TransformerEncoder(nn.Module):
                 dropout_probability = np.random.random()
                 if not self.training or (dropout_probability > self.layerdrop):
                     x, z = layer(x, self_attn_padding_mask=padding_mask, need_weights=False,
+                                 max_len=max_len, cu_seqlens=cu_seqlens,
                                  lang=lang, mixture=mixture)
                     if tgt_layer is not None:
                         layer_results.append((x, z))
@@ -1035,7 +1077,7 @@ class TransformerEncoder(nn.Module):
                 x = r
 
             # T x B x C -> B x T x C
-            if not self.favor:
+            if not self.favor and not can_run_fast_bert_mha:
                 x = x.transpose(0, 1)
 
         else:
@@ -1057,6 +1099,13 @@ class TransformerEncoder(nn.Module):
                         x = layer(x, padding_mask)
 
             x = x.to(dtype)
+
+        # if we remove padding before (for fast bert MHA) then remember to put padding back
+        # to restore the form B x T X H
+        if can_run_fast_bert_mha:
+            # print(x.size(), bsz, seq_len, non_pad_indices.size())
+            x = index_copy(x, non_pad_indices, bsz * seq_len)
+            x = x.view(bsz, seq_len, -1)
 
         return x, layer_results
 
@@ -1294,6 +1343,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             x: torch.Tensor,
             self_attn_mask: torch.Tensor = None,
             self_attn_padding_mask: torch.Tensor = None,
+            max_len=-1, cu_seqlens=None,
             lang=None, mixture=None,
             **kwargs
     ):
@@ -1335,13 +1385,13 @@ class TransformerSentenceEncoderLayer(nn.Module):
         if self.layer_norm_first:
             x = self.self_attn_layer_norm(x, fast=is_fast)
 
-            # print("[attn input]", torch.any(torch.isnan(x)))
             x, attn = self.self_attn(
                 query=x,
                 key=x,
                 value=x,
                 key_padding_mask=self_attn_padding_mask,
                 attn_mask=self_attn_mask,
+                max_len=max_len, cu_seqlens=cu_seqlens,
                 lang=lang, mixture=mixture
             )
 

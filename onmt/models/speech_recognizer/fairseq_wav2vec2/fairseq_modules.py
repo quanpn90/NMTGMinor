@@ -5,6 +5,7 @@ from torch.nn import Parameter
 import math
 from typing import Dict, Optional, Tuple
 import torch
+from torch.cuda.amp import custom_fwd, custom_bwd
 
 from onmt.modules.performer import Performer, ProjectionUpdater
 from onmt.modules.optimized.self_attention_func import self_attn_func
@@ -370,6 +371,9 @@ class MultiheadAttention(nn.Module):
         self.fast_attention = False
         self.factorized = False
 
+        from onmt.modules.optimized.fast_mha import fast_bert_mha
+        self.fast_bert_mha = fast_bert_mha
+
     def fix_projection_matrices_(self):
         if self.proj_updater:
             self.proj_updater.feature_redraw_interval = None
@@ -469,7 +473,7 @@ class MultiheadAttention(nn.Module):
             need_weights: bool = True,
             static_kv: bool = False,
             attn_mask: Optional[Tensor] = None,
-            before_softmax: bool = False,
+            cu_seqlens=None, max_len=None,
             need_head_weights: bool = False,
             lang=None, mixture=None
     ) -> Tuple[Tensor, Optional[Tensor]]:
@@ -502,14 +506,13 @@ class MultiheadAttention(nn.Module):
 
         if not self.favor:
 
-            tgt_len, bsz, embed_dim = query.size()
-            src_len = tgt_len
-            assert embed_dim == self.embed_dim, f"query dim {embed_dim} != {self.embed_dim}"
-            assert list(query.size()) == [tgt_len, bsz, embed_dim]
-
-            assert key is not None and value is not None
-
             if not self.fast_attention:
+                tgt_len, bsz, embed_dim = query.size()
+                src_len = tgt_len
+                assert embed_dim == self.embed_dim, f"query dim {embed_dim} != {self.embed_dim}"
+                assert list(query.size()) == [tgt_len, bsz, embed_dim]
+
+                assert key is not None and value is not None
 
                 return F.multi_head_attention_forward(
                     query,
@@ -535,11 +538,6 @@ class MultiheadAttention(nn.Module):
                     v_proj_weight=self.v_proj.weight,
                 )
             else:
-                inputs = query
-                heads = self.num_heads
-                head_dim = self.head_dim
-                bsz = query.size(1)
-                len_q = query.size(0)
 
                 in_proj_weight = F.dropout(self.proj_weight, self.weight_drop, training=self.training)
                 out_proj_weight = F.dropout(self.out_proj.weight, self.weight_drop, training=self.training)
@@ -561,17 +559,53 @@ class MultiheadAttention(nn.Module):
                     in_proj_weight = in_proj_weight + torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
                     out_proj_weight = out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
 
-                is_training = self.training
-                low_precision = True
-                outputs, coverage = self_attn_func(False, is_training, self.num_heads, inputs,
-                                                   in_proj_weight, out_proj_weight,
-                                                   self.proj_bias, self.out_proj.bias,
-                                                   key_padding_mask, self.dropout_p,
-                                                   False, None,
-                                                   False, None,  # incremental and state
-                                                   low_precision, True)  # low-precision and return coverage
+                if query.ndim == 3:
+                    tgt_len, bsz, embed_dim = query.size()
+                    src_len = tgt_len
+                    assert embed_dim == self.embed_dim, f"query dim {embed_dim} != {self.embed_dim}"
+                    assert list(query.size()) == [tgt_len, bsz, embed_dim]
 
-                return outputs, coverage
+                    inputs = query
+                    heads = self.num_heads
+                    head_dim = self.head_dim
+                    bsz = query.size(1)
+                    len_q = query.size(0)
+
+                    is_training = self.training
+                    low_precision = True
+                    outputs, coverage = self_attn_func(False, is_training, self.num_heads, inputs,
+                                                       in_proj_weight, out_proj_weight,
+                                                       self.proj_bias, self.out_proj.bias,
+                                                       key_padding_mask, self.dropout_p,
+                                                       False, None,
+                                                       False, None,  # incremental and state
+                                                       low_precision, True)  # low-precision and return coverage
+
+                    return outputs, coverage
+
+                # Fused attention using packed data (B T H) -> (BxT H) and removing padded positions
+                elif query.ndim == 2:
+
+                    assert self.fast_bert_mha is not None
+                    assert query.dtype == torch.half
+                    assert cu_seqlens is not None
+                    assert max_len is not None and max_len <= 512
+                    sm = torch.cuda.get_device_capability()
+                    assert sm[0] == 8 and sm[1] == 0  # Only NVIDIA A100 supported at the moment
+
+                    total_bsz = query.size(0)
+                    qkv = F.linear(query, in_proj_weight, self.proj_bias)  # B x H
+                    # B x 3 x H x d
+
+                    # TODO: moving to CUDA to remove overhead?
+                    qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
+
+                    context, coverage = self.fast_bert_mha(qkv, cu_seqlens, self.dropout_p, max_len, self.training)
+
+                    context = context.view(-1, self.num_heads * self.head_dim)
+                    outputs = F.linear(context, out_proj_weight, self.out_proj.bias)
+
+                    return outputs, coverage
 
         else:
             # using performer attention
@@ -613,3 +647,30 @@ def gelu_accurate(x):
 
 def gelu(x: torch.Tensor) -> torch.Tensor:
     return torch.nn.functional.gelu(x.float()).type_as(x)
+
+
+class IndexCopy(torch.autograd.Function):
+    @staticmethod
+    @custom_fwd
+    def forward(ctx, input, non_pad_indices, total_batch_size):
+
+        sizes = list(input.size())
+        sizes[0] = total_batch_size
+
+        output = input.new_zeros(*sizes)
+        output.index_copy_(0, non_pad_indices, input)
+        ctx.save_for_backward(non_pad_indices)
+
+        return output
+
+    @staticmethod
+    @custom_bwd
+    def backward(ctx, output_grads):
+
+        non_pad_indices,  = ctx.saved_tensors
+
+        grad_input = output_grads.index_select(0, non_pad_indices)
+
+        return grad_input, None, None
+
+index_copy = IndexCopy.apply

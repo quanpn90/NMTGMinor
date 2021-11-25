@@ -65,15 +65,22 @@ class IndexCopy(torch.autograd.Function):
         return grad_input, None, None
 
 
-def py_mha(qkv, amask, b, s, h, d):
+def py_mha(qkv, amask, b, s, h, d, high_precision=True):
     qkv = qkv.view(b, s, h, 3, d)
     q = qkv[:, :, :, 0, :].permute(0, 2, 1, 3)
     k = qkv[:, :, :, 1, :].permute(0, 2, 1, 3)
     v = qkv[:, :, :, 2, :].permute(0, 2, 1, 3)
-    p = torch.matmul(q.float(), k.permute(0, 1, 3, 2).float())
-    p_masked = p / math.sqrt(d) + (amask) * -10000.0
-    s = torch.softmax(p_masked, -1).to(qkv.dtype)
-    ctx = torch.matmul(s, v)
+    if high_precision:
+        p = torch.matmul(q.float(), k.permute(0, 1, 3, 2).float())
+        p_masked = p / math.sqrt(d) + (amask) * -10000.0
+        s = torch.softmax(p_masked, -1).to(qkv.dtype)
+        ctx = torch.matmul(s, v)
+    else:
+        p = torch.matmul(q, k.permute(0, 1, 3, 2))
+        p_masked = p / math.sqrt(d) + (amask) * -10000.0
+        s = torch.softmax(p_masked, -1).to(qkv.dtype)
+        ctx = torch.matmul(s, v)
+
     ctx = ctx.permute(0, 2, 1, 3).contiguous()
 
     ctx.retain_grad()
@@ -200,7 +207,7 @@ class TestFMHA(unittest.TestCase):
         torch.cuda.synchronize()
         start_time = time()
         for _ in range(num_iters):
-            ctx_ref = py_mha(qkv, amask, b, s, h, d)
+            ctx_ref = py_mha(qkv, amask, b, s, h, d, high_precision=False)
 
             labels = torch.randn_like(ctx_ref)
             ctx_ref.backward(labels)
@@ -290,7 +297,7 @@ class TestFMHA(unittest.TestCase):
         torch.cuda.synchronize()
         start_time = time()
         for _ in range(num_iters):
-            ctx_ref = py_mha(qkv, amask, b, s, h, d)
+            ctx_ref = py_mha(qkv, amask, b, s, h, d, high_precision=False)
 
             labels = torch.randn_like(ctx_ref)
             ctx_ref.backward(labels)

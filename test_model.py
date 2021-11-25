@@ -69,6 +69,10 @@ class TestWav2vec(unittest.TestCase):
         cls.main_model = main_model.encoder
         cls.fast_model = fast_model.encoder
         cls.ds_model = ds_model.encoder
+
+        cls.main_model.layerdrop = 0
+        cls.fast_model.layerdrop = 0
+        cls.ds_model.layerdrop = 0
         # cls.ds_test_model = ds_test_model.encoder
 
         cls.fast_model.load_state_dict(cls.main_model.state_dict())
@@ -81,17 +85,17 @@ class TestWav2vec(unittest.TestCase):
         optimize_model(cls.fast_model)
         cls.fast_model = cls.fast_model.cuda()
 
-        bsz = 8 * 8
+        bsz = 64
         optimize_model(cls.ds_model)
-        cls.ds_model.wav2vec_encoder.convert_deepspeed(training=False, bsz=bsz)
+        cls.ds_model.wav2vec_encoder.convert_deepspeed(training=True, bsz=bsz)
         cls.ds_model = cls.ds_model.cuda()
         #
         # optimize_model(cls.ds_test_model)
         # cls.ds_test_model.wav2vec_encoder.convert_deepspeed(training=False)
         # cls.ds_test_model = cls.ds_model.cuda()
 
-        seq_len = int(128 * 1000 / 8)
-        short_len = math.ceil(128)
+        seq_len = int(256 * 1000 / 8)
+        short_len = math.ceil(seq_len / 320)
 
         cls.ref_input = torch.randn(bsz, seq_len, 1, dtype=torch.float32, device=torch.device("cuda"))
         cls.input = torch.randn(bsz, short_len, 512, dtype=torch.float32, device=torch.device("cuda"))
@@ -155,122 +159,121 @@ class TestWav2vec(unittest.TestCase):
     #     self.assertTrue(torch.allclose(ref_output, tst_output, atol=1e-2, rtol=1e-2))
 
     def test_forward_performance(self):
-        self.main_model.eval()
-        self.fast_model.eval()
-        self.ds_model.eval()
+        # self.main_model.eval()
+        # self.fast_model.eval()
+        # self.ds_model.eval()
         training = True
 
         num_iters = 10
 
-        with torch.no_grad():
 
-            torch.cuda.profiler.start()
-            torch.cuda.synchronize()
-            start_time = time()
-            for _ in range(num_iters):
-                with autocast():
-                    ref_output = self.main_model.test_run(self.ref_input, self.mask)
+        torch.cuda.profiler.start()
+        torch.cuda.synchronize()
+        start_time = time()
+        for _ in range(num_iters):
+            with autocast():
+                ref_output = self.main_model.test_run(self.ref_input, self.mask)
 
-                grad_outputs_ref = torch.randn_like(ref_output)
-                # ref_output.backward(grad_outputs_ref)
-                # self.main_model.zero_grad()
+            grad_outputs_ref = torch.randn_like(ref_output)
+            ref_output.backward(grad_outputs_ref)
+            self.main_model.zero_grad()
 
-                with autocast():
-                    tst_output = self.fast_model.test_run(self.tst_input, self.mask)
+            with autocast():
+                tst_output = self.fast_model.test_run(self.tst_input, self.mask)
 
-                # grad_outputs_tst = torch.randn_like(tst_output)
-                # tst_output.backward(grad_outputs_tst)
-                self.fast_model.zero_grad()
+            grad_outputs_tst = torch.randn_like(tst_output)
+            tst_output.backward(grad_outputs_tst)
+            self.fast_model.zero_grad()
 
-            torch.cuda.profiler.start()
-            torch.cuda.synchronize()
-            start_time = time()
-            for _ in range(num_iters):
-                with autocast():
-                    ref_output = self.main_model.test_run(self.ref_input, self.mask)
+        torch.cuda.profiler.start()
+        torch.cuda.synchronize()
+        start_time = time()
+        for _ in range(num_iters):
+            with autocast():
+                ref_output = self.main_model.test_run(self.ref_input, self.mask)
 
-                # grad_outputs_ref = torch.randn_like(ref_output)
-                # ref_output.backward(grad_outputs_ref)
-                self.main_model.zero_grad()
+            grad_outputs_ref = torch.randn_like(ref_output)
+            ref_output.backward(grad_outputs_ref)
+            self.main_model.zero_grad()
 
-            torch.cuda.synchronize()
-            stop_time = time()
-            print(F"\nPytorch Wav2vec time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+        torch.cuda.synchronize()
+        stop_time = time()
+        print(F"\nPytorch Wav2vec time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
 
-            torch.cuda.profiler.start()
-            torch.cuda.synchronize()
-            start_time = time()
-            for _ in range(num_iters):
-                with autocast():
-                    tst_output = self.fast_model.test_run(self.tst_input, self.mask)
+        torch.cuda.profiler.start()
+        torch.cuda.synchronize()
+        start_time = time()
+        for _ in range(num_iters):
+            with autocast():
+                tst_output = self.fast_model.test_run(self.tst_input, self.mask)
 
-                # grad_outputs_tst = torch.randn_like(tst_output)
-                # tst_output.backward(grad_outputs_tst)
-                self.fast_model.zero_grad()
+            grad_outputs_tst = torch.randn_like(tst_output)
+            tst_output.backward(grad_outputs_tst)
+            self.fast_model.zero_grad()
 
-            torch.cuda.synchronize()
-            stop_time = time()
-            print(F"\nCUDA Wav2vec time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+        torch.cuda.synchronize()
+        stop_time = time()
+        print(F"\nCUDA Wav2vec time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
 
-            torch.cuda.profiler.start()
-            torch.cuda.synchronize()
-            start_time = time()
-            for _ in range(num_iters):
-                with autocast():
-                    tst_output = self.ds_model.test_run(self.tst_input, self.mask)
+        torch.cuda.profiler.start()
+        torch.cuda.synchronize()
+        start_time = time()
+        for _ in range(num_iters):
+            with autocast():
+                tst_output = self.ds_model.test_run(self.tst_input, self.mask)
 
-                # grad_outputs_tst = torch.randn_like(tst_output)
-                # tst_output.backward(grad_outputs_tst)
-                self.ds_model.zero_grad()
+            grad_outputs_tst = torch.randn_like(tst_output)
+            tst_output.backward(grad_outputs_tst)
+            self.ds_model.zero_grad()
 
-            torch.cuda.synchronize()
-            stop_time = time()
-            print(F"\nDeepSpeed Wav2vec time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+        torch.cuda.synchronize()
+        stop_time = time()
+        print(F"\nDeepSpeed Wav2vec time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
 
-            torch.cuda.profiler.start()
-            torch.cuda.synchronize()
-            start_time = time()
-            for _ in range(num_iters):
-                with autocast():
-                    ref_output = self.main_model.test_run(self.input, self.short_mask)
+        torch.cuda.profiler.start()
+        torch.cuda.synchronize()
+        start_time = time()
+        for _ in range(num_iters):
+            with autocast():
+                ref_output = self.main_model.test_run(self.input, self.short_mask)
 
-                # grad_outputs_ref = torch.randn_like(ref_output)
-                # ref_output.backward(grad_outputs_ref)
-                self.main_model.zero_grad()
+            grad_outputs_ref = torch.randn_like(ref_output)
+            ref_output.backward(grad_outputs_ref)
+            self.main_model.zero_grad()
 
-            torch.cuda.synchronize()
-            stop_time = time()
-            print(F"\nPytorch Wav2vec-No-CNN time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+        torch.cuda.synchronize()
+        stop_time = time()
+        print(F"\nPytorch Wav2vec-No-CNN time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
 
-            torch.cuda.profiler.start()
-            torch.cuda.synchronize()
-            start_time = time()
-            for _ in range(num_iters):
-                with autocast():
-                    tst_output = self.fast_model.test_run(self.input, self.short_mask)
+        torch.cuda.profiler.start()
+        torch.cuda.synchronize()
+        start_time = time()
+        for _ in range(num_iters):
+            with autocast():
+                tst_output = self.fast_model.test_run(self.input, self.short_mask)
 
-                # grad_outputs_tst = torch.randn_like(tst_output)
-                # tst_output.backward(grad_outputs_tst)
-                self.fast_model.zero_grad()
+            grad_outputs_tst = torch.randn_like(tst_output)
+            tst_output.backward(grad_outputs_tst)
+            self.fast_model.zero_grad()
 
-            torch.cuda.synchronize()
-            stop_time = time()
-            print(F"\nCUDA Wav2vec-No-CNN time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+        torch.cuda.synchronize()
+        stop_time = time()
+        print(F"\nCUDA Wav2vec-No-CNN time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
 
-            torch.cuda.profiler.start()
-            torch.cuda.synchronize()
-            start_time = time()
-            for _ in range(num_iters):
-                with autocast():
-                    tst_output = self.ds_model.test_run(self.input, self.short_mask)
+        torch.cuda.profiler.start()
+        torch.cuda.synchronize()
+        start_time = time()
+        for _ in range(num_iters):
+            with autocast():
+                tst_output = self.ds_model.test_run(self.input, self.short_mask)
 
-                # grad_outputs_tst = torch.randn_like(tst_output)
-                # tst_output.backward(grad_outputs_tst)
-                self.ds_model.zero_grad()
+            grad_outputs_tst = torch.randn_like(tst_output)
+            tst_output.backward(grad_outputs_tst)
+            self.ds_model.zero_grad()
 
-            torch.cuda.synchronize()
-            stop_time = time()
-            print(F"\nDeepSpeed Wav2vec-No-CNN time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+        torch.cuda.synchronize()
+        stop_time = time()
+        print(F"\nDeepSpeed Wav2vec-No-CNN time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
 
 
 if __name__ == '__main__':
