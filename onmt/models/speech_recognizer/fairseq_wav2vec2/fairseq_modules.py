@@ -369,7 +369,9 @@ class MultiheadAttention(nn.Module):
 
         self.onnx_trace = False
         self.fast_attention = False
-        self.factorized = False
+        self.is_factorized = False
+        self.multiplicative_factorize = False
+        self.fast_factorize = False
 
         from onmt.modules.optimized.fast_mha import fast_bert_mha
         self.fast_bert_mha = fast_bert_mha
@@ -378,32 +380,35 @@ class MultiheadAttention(nn.Module):
         if self.proj_updater:
             self.proj_updater.feature_redraw_interval = None
 
-    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False):
+    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False):
         embed_dim = self.embed_dim
-        self.factorized = True
+        self.is_factorized = True
         self.multiplicative_factorize = multiplicative
+        self.fast_factorize = fast
 
         self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
         self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
         self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
         self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
-        nn.init.normal_(self.r_i, 0.0, 0.02)
-        nn.init.normal_(self.s_i, 0.0, 0.02)
-        nn.init.normal_(self.r_o, 0.0, 0.02)
-        nn.init.normal_(self.s_o, 0.0, 0.02)
+        std = 0.01 if fast else 0.02
+        nn.init.normal_(self.r_i, 0.0, std)
+        nn.init.normal_(self.s_i, 0.0, std)
+        nn.init.normal_(self.r_o, 0.0, std)
+        nn.init.normal_(self.s_o, 0.0, std)
 
         if multiplicative:
-            rank = 1
+            rank = rank if fast else 1
             self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
             self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
             self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
             self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
-            nn.init.constant_(self.rm_i, 1.0)
-            nn.init.constant_(self.sm_i, 1.0)
-            nn.init.constant_(self.rm_o, 1.0)
-            nn.init.constant_(self.sm_o, 1.0)
+            constant = math.sqrt(1.0 / rank) if fast else 1
+            nn.init.constant_(self.rm_i, constant)
+            nn.init.constant_(self.sm_i, constant)
+            nn.init.constant_(self.rm_o, constant)
+            nn.init.constant_(self.sm_o, constant)
 
     def convert_fast_attention(self):
 
@@ -430,7 +435,7 @@ class MultiheadAttention(nn.Module):
 
         # when we concatenate the weights, the output has the size 3 * D (3 -> heads -> head_dim)
         # the fast attention module requires (heads -> 3 -> head_dim)
-        weight_ = weight_.reshape(3 * head_dim * heads, input_dim).view(3, heads, head_dim, input_dim).transpose(0, 1).\
+        weight_ = weight_.reshape(3 * head_dim * heads, input_dim).view(3, heads, head_dim, input_dim).transpose(0, 1). \
             reshape(-1, input_dim)
 
         bias_ = bias_.reshape(3 * head_dim * heads).view(3, heads, head_dim).transpose(0, 1).reshape(-1)
@@ -542,24 +547,40 @@ class MultiheadAttention(nn.Module):
                 in_proj_weight = F.dropout(self.proj_weight, self.weight_drop, training=self.training)
                 out_proj_weight = F.dropout(self.out_proj.weight, self.weight_drop, training=self.training)
 
-                if self.factorized:
+                if self.is_factorized:
                     if self.multiplicative_factorize:
                         rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
                         sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
                         rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
                         sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
-                        in_proj_weight = in_proj_weight * torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
-                        out_proj_weight = out_proj_weight * torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+
+                        if self.fast_factorize:
+                            mul_factor_in = torch.mm(rm_i.t(), sm_i)
+                            mul_factor_out = torch.mm(rm_o.t(), sm_o)
+                        else:
+                            mul_factor_in = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
+                            mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+
+                        in_proj_weight = in_proj_weight * mul_factor_in
+                        out_proj_weight = out_proj_weight * mul_factor_out
 
                     r_i = torch.index_select(self.r_i, 0, lang).squeeze(0)
                     s_i = torch.index_select(self.s_i, 0, lang).squeeze(0)
                     r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
                     s_o = torch.index_select(self.s_o, 0, lang).squeeze(0)
 
-                    in_proj_weight = in_proj_weight + torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
-                    out_proj_weight = out_proj_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+                    if self.fast_factorize:
+                        add_factor_in = torch.mm(r_i.t(), s_i)
+                        add_factor_out = torch.mm(r_o.t(), s_o)
+                    else:
+                        add_factor_in = torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
+                        add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+
+                    in_proj_weight = in_proj_weight + add_factor_in
+                    out_proj_weight = out_proj_weight + add_factor_out
 
                 if query.ndim == 3:
+                    # Call semi-fast attention from CUDA/
                     tgt_len, bsz, embed_dim = query.size()
                     src_len = tgt_len
                     assert embed_dim == self.embed_dim, f"query dim {embed_dim} != {self.embed_dim}"
@@ -589,9 +610,12 @@ class MultiheadAttention(nn.Module):
                     assert self.fast_bert_mha is not None
                     assert query.dtype == torch.half
                     assert cu_seqlens is not None
-                    assert max_len is not None and max_len <= 512
+                    assert max_len is not None  # and max_len <= 512
                     sm = torch.cuda.get_device_capability()
-                    assert sm[0] == 8 and sm[1] == 0  # Only NVIDIA A100 supported at the moment
+
+                    # Only Ampere supported at the moment
+                    assert (sm[0] == 8 and sm[1] == 0 and max_len <= 512) or \
+                           (sm[0] == 8 and sm[1] == 6 and max_len <= 3)
 
                     total_bsz = query.size(0)
                     qkv = F.linear(query, in_proj_weight, self.proj_bias)  # B x H
@@ -653,7 +677,6 @@ class IndexCopy(torch.autograd.Function):
     @staticmethod
     @custom_fwd
     def forward(ctx, input, non_pad_indices, total_batch_size):
-
         sizes = list(input.size())
         sizes[0] = total_batch_size
 
@@ -666,11 +689,11 @@ class IndexCopy(torch.autograd.Function):
     @staticmethod
     @custom_bwd
     def backward(ctx, output_grads):
-
-        non_pad_indices,  = ctx.saved_tensors
+        non_pad_indices, = ctx.saved_tensors
 
         grad_input = output_grads.index_select(0, non_pad_indices)
 
         return grad_input, None, None
+
 
 index_copy = IndexCopy.apply
