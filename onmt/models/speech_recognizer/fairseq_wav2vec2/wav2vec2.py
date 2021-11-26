@@ -853,6 +853,7 @@ class Wav2Vec2Model(torch.nn.Module):
     def convert_deepspeed(self, training=True, bsz=32):
         self.encoder.convert_deepspeed(training=training, bsz=bsz)
 
+
 class ConvFeatureExtractionModel(nn.Module):
     def __init__(
             self,
@@ -1027,7 +1028,7 @@ class TransformerEncoder(nn.Module):
             fast_attention = self.layers[0].self_attn.fast_attention
         # only run this when seq_len <= 512 and sm = 80/86
         if ((seq_len <= 512 and sm[0] == 8 and sm[1] == 0) or (seq_len <= 384 and sm[0] == 8 and sm[1] == 6)) \
-                 and not self.deepspeed and fast_attention:
+                and not self.deepspeed and fast_attention:
             # print("[INFO] Can run FAST MHA with seq_len", seq_len)
             can_run_fast_bert_mha = True
             # masked positions = 1 so to compute length we need the (1 -)
@@ -1122,10 +1123,10 @@ class TransformerEncoder(nn.Module):
         for layer in self.layers:
             layer.add_adapters(n_languages, adapter_location=adapter_location)
 
-    def add_factorize(self, n_languages, rank=4, multiplicative=False):
+    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False):
 
         for layer in self.layers:
-            layer.add_factorized(n_languages, rank=rank, multiplicative=multiplicative)
+            layer.add_factorized(n_languages, rank=rank, multiplicative=multiplicative, fast=fast)
 
     def freeze_or_unfreeze_ffn_params(self):
 
@@ -1170,7 +1171,7 @@ class TransformerEncoder(nn.Module):
         #
         #     old_layer = old_layers[i]
         #
-            # new_layer = DeepSpeedTransformerLayer(config)
+        # new_layer = DeepSpeedTransformerLayer(config)
         #
         #     with torch.no_grad():
         #         new_layer.attn_qkvw.copy_(old_layer.self_attn.proj_weight)
@@ -1186,9 +1187,10 @@ class TransformerEncoder(nn.Module):
         #         new_layer.norm_w.copy_(old_layer.final_layer_norm.weight)
         #         new_layer.norm_b.copy_(old_layer.final_layer_norm.bias)
         #
-            # self.layers.append(new_layer)
+        # self.layers.append(new_layer)
 
 
+# noinspection PyAttributeOutsideInit
 class TransformerSentenceEncoderLayer(nn.Module):
     """
     Implements a Transformer Encoder Layer used in BERT/XLM style pre-trained
@@ -1218,6 +1220,8 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.favor = favor
         self.has_adapter = False
         self.is_factorized = False
+        self.fast_factorize = False
+        self.multiplicative_factorize = False
 
         # Initialize blocks
         self.activation_fn = get_activation_fn(activation_fn)
@@ -1274,13 +1278,15 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.adapter = MultilingualAdapter(n_languages, self.embedding_dim, downsample_factor=downsampling_factor)
 
         if adapter_location == 2:
-            self.mid_adapter = MultilingualAdapter(n_languages, self.embedding_dim, downsample_factor=downsampling_factor)
+            self.mid_adapter = MultilingualAdapter(n_languages, self.embedding_dim,
+                                                   downsample_factor=downsampling_factor)
 
-    def add_factorized(self, n_languages, rank=4, multiplicative=True):
+    def add_factorized(self, n_languages, rank=4, multiplicative=True, fast=False):
 
         self.self_attn.add_factorized_weights(n_languages, rank=rank, multiplicative=multiplicative)
         self.multiplicative_factorize = multiplicative
         self.is_factorized = True
+        self.fast_factorize = fast
 
         embed_dim = self.embedding_dim
         ffn_dim = self.ffn_embedding_dim
@@ -1295,16 +1301,17 @@ class TransformerSentenceEncoderLayer(nn.Module):
         nn.init.normal_(self.s_o, 0.0, 0.02)
 
         if multiplicative:
-            rank = 1
+            rank = rank if fast else 1
             self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
-            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
+            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
             self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
 
-            nn.init.constant_(self.rm_i, 1.0)
-            nn.init.constant_(self.sm_i, 1.0)
-            nn.init.constant_(self.rm_o, 1.0)
-            nn.init.constant_(self.sm_o, 1.0)
+            constant = math.sqrt(1.0 / rank) if fast else 1
+            nn.init.constant_(self.rm_i, constant)
+            nn.init.constant_(self.sm_i, constant)
+            nn.init.constant_(self.rm_o, constant)
+            nn.init.constant_(self.sm_o, constant)
 
     def get_mlp_weights(self, lang=None, mixture=None):
 
@@ -1322,16 +1329,31 @@ class TransformerSentenceEncoderLayer(nn.Module):
                     sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
                     rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
                     sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
-                    in_weight = in_weight * torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
-                    out_weight = out_weight * torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+
+                    if self.fast_factorize:
+                        mul_factor_in = torch.mm(rm_i.t(), sm_i)
+                        mul_factor_out = torch.mm(rm_o.t(), sm_o)
+                    else:
+                        mul_factor_in = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
+                        mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+
+                    in_weight = in_weight * mul_factor_in
+                    out_weight = out_weight * mul_factor_out
 
                 r_i = torch.index_select(self.r_i, 0, lang).squeeze(0)
                 s_i = torch.index_select(self.s_i, 0, lang).squeeze(0)
                 r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
                 s_o = torch.index_select(self.s_o, 0, lang).squeeze(0)
 
-                in_weight = in_weight + torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
-                out_weight = out_weight + torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+                if self.fast_factorize:
+                    add_factor_in = torch.mm(r_i.t(), s_i)
+                    add_factor_out = torch.mm(r_o.t(), s_o)
+                else:
+                    add_factor_in = torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
+                    add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+
+                in_weight = in_weight + add_factor_in
+                out_weight = out_weight + add_factor_out
 
         if mixture is not None:
             raise NotImplementedError

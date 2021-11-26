@@ -227,18 +227,39 @@ def build_tm_model(opt, dicts):
             print("[INFO] Loading weights for decoder from: %s ..." % opt.dec_state_dict)
             dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
 
-            # load parameters from state dict to model (using huggingface's approach)
-            # decoder.from_pretrained(state_dict=dec_model_state_dict,
-            #                         model=decoder,
-            #                         output_loading_info=opt.verbose,
-            #                         model_prefix=opt.dec_pretrained_model
-            #                         )
             decoder.load_state_dict(dec_model_state_dict)
             print("[INFO] ... Done")
 
         decoder.dec_pretrained_model = opt.dec_pretrained_model
 
-        model = Wav2vecBERT(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
+        # Mutual modality between output decoder and text encoder:
+        if opt.mutual_modality_training > 0:
+            if "mbart" in opt.dec_pretrained_model:
+                from pretrain_module.configuration_mbart import MBartConfig
+                from pretrain_module.modeling_mbart import MBartEncoder
+
+                enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
+                sub_encoder = MBartEncoder(enc_mbart_config, opt)
+
+                if opt.enc_state_dict:
+                    print("[INFO] Loading weights for sub encoder from: %s ..." % opt.enc_state_dict)
+                    enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+                    sub_encoder.load_state_dict(enc_model_state_dict)
+                    print("[INFO] ... Done")
+
+                    # freeze the weights
+                    for p in sub_encoder.parameters():
+                        p.requires_grad = False
+                    sub_encoder.embed_tokens.weight = decoder.embed_tokens.weight
+
+        else:
+            sub_encoder = None
+
+        model = Wav2vecBERT(encoder, decoder,
+                            nn.ModuleList(generators), mirror=opt.mirror_loss,
+                            ctc=opt.ctc_loss > 0.0,
+                            sub_encoder=sub_encoder,
+                            mutual_modality_training=opt.mutual_modality_training > 0)
 
     elif opt.model in ['wav2vec2_transformer']:
         from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecTransformer

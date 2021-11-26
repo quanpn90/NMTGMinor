@@ -127,7 +127,8 @@ class FairseqWav2Vec(nn.Module):
         if opt.multilingual_factorized_weights:
             print("[INFO] Factorizing Wav2vec model into %d languages" % opt.n_languages)
             self.wav2vec_encoder.encoder.add_factorize(opt.n_languages, rank=opt.mfw_rank,
-                                                       multiplicative=opt.mfw_multiplicative)
+                                                       multiplicative=opt.mfw_multiplicative,
+                                                       fast=opt.fast_factorize)
 
         if opt.freeze_encoder_ffn:
             self.wav2vec_encoder.encoder.freeze_or_unfreeze_ffn_params()
@@ -411,7 +412,8 @@ class Wav2vecBERT(Wav2vecTransformer):
 
     def __init__(self, encoder, decoder, generator=None,
                  mirror=False, ctc=False, encoder_type='wav2vec2',
-                         decoder_type='bart', **kwargs):
+                 decoder_type='bart',
+                 sub_encoder=None, mutual_modality_training=False, **kwargs):
         super().__init__(encoder, decoder, generator, mirror=mirror, ctc=ctc)
 
         self.src_vocab_size = 0

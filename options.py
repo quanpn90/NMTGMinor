@@ -328,6 +328,8 @@ def make_parser(parser):
 
     parser.add_argument('-multilingual_factorized_weights', action='store_true',
                         help='Factorize the weights in the model for multilingual')
+    parser.add_argument('-fast_factorize', action='store_true',
+                        help='Fast Factorize the weights in the model for multilingual')
     parser.add_argument('-mfw_rank', type=int, default=1,
                         help="Rank of the mfw vectors.")
     parser.add_argument('-mfw_multiplicative', action='store_true',
@@ -498,6 +500,8 @@ def make_parser(parser):
                         help='Virtual Adversarial Training. 0=disabled. 1=kl_loss. 2=ce. 3=kl_loss + ce.')
     parser.add_argument('-wav2vec_adapter', type=int, default=0,
                         help='Adapter for wav2vec model')
+    parser.add_argument('-mutual_modality_training', type=float, default=0,
+                        help='Coefficient for the Mutual Modality Training term')
 
     return parser
 
@@ -653,6 +657,9 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'mfw_multiplicative'):
         opt.mfw_multiplicative = False
+
+    if not hasattr(opt, 'fast_factorize'):
+        opt.fast_factorize = False
 
     if not hasattr(opt, 'macaron'):
         opt.macaron = False

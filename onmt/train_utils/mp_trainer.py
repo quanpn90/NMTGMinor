@@ -1019,4 +1019,3 @@ class Trainer(object):
 
             itr_progress = None
             resume = False
-
