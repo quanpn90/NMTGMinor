@@ -1021,33 +1021,43 @@ class TransformerEncoder(nn.Module):
         seq_len = x.size(1)
         bsz = x.size(0)
         sm = torch.cuda.get_device_capability()
+        total_bsz = 0
 
         if self.deepspeed:
             fast_attention = False
         else:
             fast_attention = self.layers[0].self_attn.fast_attention
         # only run this when seq_len <= 512 and sm = 80/86
-        if ((seq_len <= 512 and sm[0] == 8 and sm[1] == 0) or (seq_len <= 384 and sm[0] == 8 and sm[1] == 6)) \
+        if self.fast_bert_mha and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] == 0) \
                 and not self.deepspeed and fast_attention:
             # print("[INFO] Can run FAST MHA with seq_len", seq_len)
             can_run_fast_bert_mha = True
+
             # masked positions = 1 so to compute length we need the (1 -)
             if padding_mask is None:
                 padding_mask = x.new_zeros(bsz, seq_len)
             padding_mask = padding_mask.long()
             lengths = (1 - padding_mask).sum(dim=1)
             lengths = lengths.cpu().tolist()  # list of lengths for B seqs
-            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
 
             # remove paddings from x
             x = x.view(-1, x.size(-1))
             non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
             x = x.index_select(0, non_pad_indices)
-            max_len = max(lengths)
 
             # maybe pad it so the first dim % 8 = 0?
-            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
+            total_bsz = x.size(0)
+            # if total_bsz % 16 != 0:
+            #     patch_size = total_bsz - (total_bsz // 16) * 16
+            #     patch = torch.randn(patch_size, x.size(-1), dtype=x.dtype, device=x.device)
+            #     x = torch.cat([x, patch], dim=0)
+            #     # treat the "tail" like a normal sequence that attends to itself
+            #     lengths.append(patch_size)
 
+            max_len = max(lengths)
+            # cumulative sequence lengths (required input for fmha)
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
         else:
             # print("[INFO] Cannot run FAST MHA with seq_len", seq_len)
             max_len = -1
@@ -1083,6 +1093,7 @@ class TransformerEncoder(nn.Module):
                 x = x.transpose(0, 1)
 
         else:
+            # deepspeed has strict requirement so better disable autocast
             with autocast(enabled=False):
                 dtype = x.dtype
                 x = x.half()
@@ -1090,8 +1101,6 @@ class TransformerEncoder(nn.Module):
                 layer_results = []
                 if padding_mask is None:
                     padding_mask = x.new(x.size(0), x.size(1)).fill_(0)
-                # print(x, padding_mask)
-                # padding_mask = padding_mask.transpose(0, 1).contiguous()
                 padding_mask = padding_mask.unsqueeze(1).unsqueeze(1)
                 padding_mask = padding_mask.type_as(x).fill_(-10000)
                 for i, layer in enumerate(self.layers):
@@ -1104,6 +1113,9 @@ class TransformerEncoder(nn.Module):
         # if we remove padding before (for fast bert MHA) then remember to put padding back
         # to restore the form B x T X H
         if can_run_fast_bert_mha:
+            # remove the patch
+            if x.size(0) > total_bsz:
+                x = x[:total_bsz, :]
             # print(x.size(), bsz, seq_len, non_pad_indices.size())
             x = index_copy(x, non_pad_indices, bsz * seq_len)
             x = x.view(bsz, seq_len, -1)

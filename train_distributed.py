@@ -20,6 +20,7 @@ import numpy as np
 import warnings
 
 warnings.filterwarnings("ignore", message="The given NumPy array is not writeable ")
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 parser = argparse.ArgumentParser(description='train_distributed.py')
 onmt.markdown.add_md_help_argument(parser)
