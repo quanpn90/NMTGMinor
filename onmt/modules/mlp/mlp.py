@@ -156,6 +156,8 @@ class MlpGELUFunction(torch.autograd.Function):
                 grads = fused_mlp_gelu.backward_input_only(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
             for _ in range(len(ctx.saved_tensors) - 1):
                 grads.append(None)
+
+        del ctx.requires_grad_weight
         del ctx.outputs
         return (None, None, *grads)
 

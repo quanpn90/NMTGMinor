@@ -43,6 +43,7 @@ class FastLayerNormFN(torch.autograd.Function):
         hidden_size = gamma.numel()
         y, mu, rsigma = fast_layer_norm_cuda.ln_fwd(x, gamma, beta, epsilon)
         ctx.save_for_backward(x, gamma, mu, rsigma)
+        ctx.need_weight_grad = gamma.requires_grad
         return y
 
     @staticmethod
@@ -52,6 +53,11 @@ class FastLayerNormFN(torch.autograd.Function):
         x, gamma, mu, rsigma = ctx.saved_tensors
 
         dx, dgamma, dbeta, _, _ = fast_layer_norm_cuda.ln_bwd(dy, x, mu, rsigma, gamma)
+
+        # TODO: write bwd function that doesn't need backward
+        if not ctx.need_weight_grad:
+            dgamma = None
+            dbeta = None
 
         return dx, dgamma, dbeta, None
 

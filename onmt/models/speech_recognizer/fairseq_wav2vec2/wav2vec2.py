@@ -1027,9 +1027,10 @@ class TransformerEncoder(nn.Module):
             fast_attention = False
         else:
             fast_attention = self.layers[0].self_attn.fast_attention
-        # only run this when seq_len <= 512 and sm = 80/86
+
+        # only run this when seq_len <= 512 and sm = 80/86 and type = half
         if self.fast_bert_mha and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] == 0) \
-                and not self.deepspeed and fast_attention:
+                and not self.deepspeed and fast_attention and x.dtype == torch.half:
             # print("[INFO] Can run FAST MHA with seq_len", seq_len)
             can_run_fast_bert_mha = True
 
@@ -1059,7 +1060,7 @@ class TransformerEncoder(nn.Module):
             a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
             cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
         else:
-            # print("[INFO] Cannot run FAST MHA with seq_len", seq_len)
+            # print("[INFO] CanNOT run FAST MHA with seq_len", seq_len)
             max_len = -1
             cu_seqlens = None
             non_pad_indices = None
@@ -1116,7 +1117,6 @@ class TransformerEncoder(nn.Module):
             # remove the patch
             if x.size(0) > total_bsz:
                 x = x[:total_bsz, :]
-            # print(x.size(), bsz, seq_len, non_pad_indices.size())
             x = index_copy(x, non_pad_indices, bsz * seq_len)
             x = x.view(bsz, seq_len, -1)
 

@@ -70,7 +70,12 @@ def build_classifier(opt, dicts):
 
     from onmt.models.speech_recognizer.classifier import TransformerClassifier
 
-    if opt.model in ["LSTM", 'lstm']:
+    if opt.model in ["wav2vec2", "wav2vec"]:
+        from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecBERT
+
+        encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model)
+
+    elif opt.model in ["LSTM", 'lstm']:
         # print("LSTM")
         onmt.constants.init_value = opt.param_init
         from onmt.models.speech_recognizer.lstm import SpeechLSTMDecoder, SpeechLSTMEncoder, SpeechLSTMSeq2Seq
@@ -233,6 +238,12 @@ def build_tm_model(opt, dicts):
             #                         output_loading_info=opt.verbose,
             #                         model_prefix=opt.dec_pretrained_model
             #                         )
+            current_dict = decoder.state_dict()
+
+            for key in current_dict:
+                if key not in dec_model_state_dict:
+                    dec_model_state_dict[key] = current_dict[key]
+
             decoder.load_state_dict(dec_model_state_dict)
             print("[INFO] ... Done")
 
@@ -657,7 +668,7 @@ def init_model_parameters(model, opt):
         elif classname.find('PositionWiseFeedForward') != -1:
             m.reset_parameters(init=opt.init)
 
-    if opt.model not in ["pretrain_transformer", "wav2vec2_transformer", "wav2vec2_bert"]:
+    if opt.model not in ["pretrain_transformer", "wav2vec2_transformer", "wav2vec2_bert", "wav2vec2"]:
         print('[INFO] Initializing entire model parameters')
         model.apply(weights_init)
     elif opt.model in ['wav2vec2_transformer']:
@@ -776,16 +787,6 @@ def optimize_model(model, fp16=True, distributed=False):
             for n, ch in m.named_children():
                 replace_layer_norm(ch, n)
 
-    def safe_batch_norm(m, name):
-        for attr_str in dir(m):
-            target_attr = getattr(m, attr_str)
-            if type(target_attr) == torch.nn.BatchNorm2d or type(target_attr) == torch.nn.BatchNorm1d:
-
-                if fp16:
-                    target_attr.eps = 1e-5  # tiny value for fp16 according to AllenNLP
-
-                setattr(m, attr_str, target_attr)
-
     def convert_fast_attention(m, name):
 
         def convert(m_):
@@ -799,7 +800,6 @@ def optimize_model(model, fp16=True, distributed=False):
 
         m.apply(convert)
 
-    # replace_layer_norm(model, "Transformer")
     convert_fast_attention(model, "Transformer")
 
 

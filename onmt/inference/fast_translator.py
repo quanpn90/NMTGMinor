@@ -89,6 +89,19 @@ class FastTranslator(Translator):
                 self.filter = self.filter.cuda()
 
             self.use_filter = True
+        elif opt.vocab_id_list:
+            ids = torch.load(opt.vocab_id_list)
+
+            print('[INFO] Loaded word list with %d ids' % len(ids))
+            self.filter = torch.Tensor(self.tgt_dict.size()).zero_()
+            for id in ids:
+                self.filter[id] = 1
+
+            self.filter = self.filter.bool()
+            if opt.cuda:
+                self.filter = self.filter.cuda()
+
+            self.use_filter = True
         else:
             self.use_filter = False
 
@@ -402,13 +415,14 @@ class FastTranslator(Translator):
         decoder_states = dict()
         sub_decoder_states = dict()  # for sub-model
         for i in range(self.n_models):
-            if self.opt.pretrained_classifier:
-                pretrained_layer_states = self.pretrained_clfs[i].encode(batches[i])
-            else:
-                pretrained_layer_states = None
+            # if self.opt.pretrained_classifier:
+            #     pretrained_layer_states = self.pretrained_clfs[i].encode(batches[i])
+            # else:
+            #     pretrained_layer_states = None
+            pretrained_clf = self.pretrained_clfs[i] if self.opt.pretrained_classifier else None
             decoder_states[i] = self.models[i].create_decoder_state(batches[i], beam_size, type=2,
                                                                     buffering=self.buffering,
-                                                                    pretrained_layer_states=pretrained_layer_states)
+                                                                    pretrained_classifier=pretrained_clf)
         if self.opt.sub_model:
             for i in range(self.n_sub_models):
                 sub_decoder_states[i] = self.sub_models[i].create_decoder_state(sub_batches[i], beam_size, type=2,
@@ -752,8 +766,15 @@ class FastTranslator(Translator):
                                                    tgt_bos_word,
                                                    onmt.constants.EOS_WORD) for b in tgt_sents]
 
-        src_lang_data = [torch.Tensor([self.lang_dict[self.src_lang]])]
-        tgt_lang_data = [torch.Tensor([self.lang_dict[self.tgt_lang]])]
+        if self.src_lang in self.lang_dict:
+            src_lang_data = [torch.Tensor([self.lang_dict[self.src_lang]])]
+        else:
+            src_lang_data = [torch.Tensor([0])]
+
+        if self.tgt_lang in self.lang_dict:
+            tgt_lang_data = [torch.Tensor([self.lang_dict[self.tgt_lang]])]
+        else:
+            tgt_lang_data = [torch.Tensor([0])]
 
         return onmt.Dataset(src_data, tgt_data,
                             src_langs=src_lang_data, tgt_langs=tgt_lang_data,

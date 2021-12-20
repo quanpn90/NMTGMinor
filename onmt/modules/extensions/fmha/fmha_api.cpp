@@ -350,9 +350,11 @@ std::vector<at::Tensor> mha_bwd_nl(const at::Tensor &dout,        // total x num
     auto stream = at::cuda::getCurrentCUDAStream().stream();
 
     TORCH_CHECK(qkv.is_cuda())
+    TORCH_CHECK(dout.is_cuda())
     TORCH_CHECK(cu_seqlens.is_cuda())
 
     TORCH_CHECK(qkv.is_contiguous())
+    TORCH_CHECK(dout.is_contiguous())
     TORCH_CHECK(cu_seqlens.is_contiguous())
 
     TORCH_CHECK(cu_seqlens.dim() == 1);

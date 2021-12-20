@@ -563,6 +563,267 @@ std::vector<torch::Tensor> bwd_cuda(
          };
 }
 
+
+torch::Tensor bwd_cuda_input_only(
+                               bool use_time_mask,
+                               int                  heads,
+                               torch::Tensor const& output_grads,
+                               torch::Tensor const& matmul2_results,
+                               torch::Tensor const& dropout_results,
+                               torch::Tensor const& attn_scores,
+                               const half* pad_mask,
+                               torch::Tensor const& input_lin_results,
+                               torch::Tensor const& inputs,
+                               torch::Tensor const& input_weights,
+                               torch::Tensor const& output_weights,
+                               torch::Tensor const& dropout_mask,
+                               float                dropout_prob
+                                   )
+{
+  const int   embed_dim      = inputs.size(2);
+  const int   sequences      = inputs.size(1);
+  const int   q_seq_len      = inputs.size(0);
+  const int   k_seq_len      = q_seq_len;
+  const int   batches        = sequences * q_seq_len;
+  const int   head_dim       = embed_dim / heads;
+  const int   output_lin_dim = 3 * embed_dim;
+  const int   attn_batches   = heads * sequences;
+  const int   lead_dim       = attn_batches * 3 * head_dim;
+  const int   batch_stride   = 3 * head_dim;
+  const int   dropout_elems  = attn_batches * q_seq_len * k_seq_len;
+  const float alpha          = 1.0;
+  const float beta           = 0.0;
+  const float scale          = 1.0 / sqrt(static_cast<float>(head_dim));
+  const half halpha = __float2half_rn(alpha);
+  const half hbeta = __float2half_rn(beta);
+  const half hscale = __float2half_rn(scale);
+
+  // TODO: Streams can be used in Backprop but I haven't added more than one
+  // in my first attempt to create the code
+  cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
+  cudaStream_t   stream = at::cuda::getCurrentCUDAStream().stream();
+  cublasSetStream(handle, stream);
+
+  // Output Tensor Allocations
+  torch::Tensor input_grads         = torch::empty_like(inputs);
+//  torch::Tensor input_weight_grads  = torch::empty_like(input_weights);
+//  torch::Tensor output_weight_grads = torch::empty_like(output_weights);
+  // Intermediate Tensor Allocations
+  at::Tensor output_lin_grads       = torch::empty_like(matmul2_results);
+  at::Tensor matmul2_grads          = torch::empty_like(dropout_results);
+  at::Tensor input_lin_output_grads = torch::empty_like(input_lin_results);
+
+  auto q_lin_results_ptr = static_cast<half*>(input_lin_results.data_ptr());
+  auto k_lin_results_ptr = static_cast<half*>(input_lin_results.data_ptr()) + head_dim;
+  auto v_lin_results_ptr = static_cast<half*>(input_lin_results.data_ptr()) + 2*head_dim;
+
+  auto q_lin_grads_ptr = static_cast<half*>(input_lin_output_grads.data_ptr());
+  auto k_lin_grads_ptr = static_cast<half*>(input_lin_output_grads.data_ptr()) + head_dim;
+  auto v_lin_grads_ptr = static_cast<half*>(input_lin_output_grads.data_ptr()) + 2*head_dim;
+
+//  char a_layout_n{'n'};
+//  char a_layout_t{'t'};
+//  char b_layout_n{'n'};
+//  char b_layout_t{'t'};
+
+  THCublasCheck(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
+
+  // Output Linear Dgrad
+  THCublasCheck(cublasGemmEx(handle,
+                             CUBLAS_OP_N,
+                             CUBLAS_OP_N,
+                             embed_dim,
+                             batches,
+                             embed_dim,
+                             static_cast<const void*>(&alpha),
+                             static_cast<const void*>(output_weights.data_ptr()),
+                             CUDA_R_16F,
+                             embed_dim,
+                             static_cast<const void*>(output_grads.data_ptr()),
+                             CUDA_R_16F,
+                             embed_dim,
+                             static_cast<const void*>(&beta),
+                             static_cast<void*>(output_lin_grads.data_ptr()),
+                             CUDA_R_16F,
+                             embed_dim,
+                             CUDA_R_32F,
+                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+
+  // MatMul2 Dgrad1
+  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+                             CUBLAS_OP_T,
+                             CUBLAS_OP_N,
+                             k_seq_len,    // m
+                             q_seq_len,   // n
+                             head_dim,   // k
+                             static_cast<const void*>(&alpha),
+                             static_cast<const void*>(v_lin_results_ptr),  // A:
+                             CUDA_R_16F,
+                             lead_dim,  // lda
+                             batch_stride, // stride A
+                             static_cast<const void*>(output_lin_grads.data_ptr()),
+                             CUDA_R_16F,
+                             head_dim*attn_batches,
+                             head_dim,
+                             static_cast<const void*>(&beta),
+                             static_cast<void*>(matmul2_grads.data_ptr()), // C
+                             CUDA_R_16F,
+                             k_seq_len,
+                             k_seq_len*q_seq_len,
+                             attn_batches,
+                             CUDA_R_32F,
+                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+
+  // Matmul2 Dgrad2
+  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+                             CUBLAS_OP_N,
+                             CUBLAS_OP_T,
+                             head_dim,    // m
+                             k_seq_len,   // n
+                             q_seq_len,   // k
+                             static_cast<const void*>(&alpha),
+                             static_cast<const void*>(output_lin_grads.data_ptr()),  // A:
+                             CUDA_R_16F,
+                             head_dim*attn_batches,  // lda
+                             head_dim, // stride A
+                             static_cast<const void*>(dropout_results.data_ptr()),
+                             CUDA_R_16F,
+                             k_seq_len,
+                             k_seq_len*q_seq_len,
+                             static_cast<const void*>(&beta),
+                             static_cast<void*>(v_lin_grads_ptr), // C
+                             CUDA_R_16F,
+                             lead_dim,
+                             batch_stride,
+                             attn_batches,
+                             CUDA_R_32F,
+                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+
+  // Apply Dropout Mask and Scale by Dropout Probability
+  // Softmax Grad
+
+  if ( dropout_prob > 0.0f) {
+      if (use_time_mask)
+          dispatch_masked_scale_softmax_backward_recompute<half, half, float, false, true>(
+                                     static_cast<half*>(matmul2_grads.data_ptr()),
+                                     static_cast<const half*>(matmul2_grads.data_ptr()),
+                                     reinterpret_cast<const half*>(attn_scores.data_ptr()), // need this to recompute softmax
+                                     pad_mask,
+                                     //reinterpret_cast<half const*>(pad_mask.data_ptr()),
+                                     static_cast<uint8_t const*>(dropout_mask.data_ptr()),
+                                     1.0/(1.0-dropout_prob),
+                                     k_seq_len,
+                                     k_seq_len,
+                                     attn_batches*q_seq_len/sequences,
+                                     (use_time_mask) ? attn_batches*q_seq_len: q_seq_len,
+                                     stream);
+      else
+          dispatch_masked_scale_softmax_backward_recompute<half, half, float, false, false>(
+                                     static_cast<half*>(matmul2_grads.data_ptr()),
+                                     static_cast<const half*>(matmul2_grads.data_ptr()),
+                                     reinterpret_cast<const half*>(attn_scores.data_ptr()), // need this to recompute softmax
+                                     pad_mask,
+                                     //reinterpret_cast<half const*>(pad_mask.data_ptr()),
+                                     static_cast<uint8_t const*>(dropout_mask.data_ptr()),
+                                     1.0/(1.0-dropout_prob),
+                                     k_seq_len,
+                                     k_seq_len,
+                                     attn_batches*q_seq_len/sequences,
+                                     (use_time_mask) ? attn_batches*q_seq_len: q_seq_len,
+                                     stream);
+  } else {
+//       if dropout == 0 then we don't need to recompute (because dropout_results == softmax_results)
+      dispatch_softmax_backward_norecompute<half, half, float, false>(
+                                 static_cast<half*>(matmul2_grads.data_ptr()),
+                                 static_cast<const half*>(matmul2_grads.data_ptr()),
+                                 reinterpret_cast<const half*>(dropout_results.data_ptr()),
+                                 k_seq_len,
+                                 k_seq_len,
+                                 attn_batches*q_seq_len/sequences,
+                                 attn_batches*q_seq_len,
+                                 stream);
+  }
+
+
+  // Matmul1 Dgrad1
+  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+                             CUBLAS_OP_N,
+                             CUBLAS_OP_N,
+                             head_dim,    // m
+                             q_seq_len,   // n
+                             k_seq_len,   // k
+                             static_cast<const void*>(&scale),
+                             static_cast<const void*>(k_lin_results_ptr),  // A:
+                             CUDA_R_16F,
+                             lead_dim,  // lda
+                             batch_stride, // stride A
+                             static_cast<const void*>(matmul2_grads.data_ptr()),
+                             CUDA_R_16F,
+                             k_seq_len,
+                             k_seq_len*q_seq_len,
+                             static_cast<const void*>(&beta),
+                             static_cast<void*>(q_lin_grads_ptr), // C
+                             CUDA_R_16F,
+                             lead_dim,
+                             batch_stride,
+                             attn_batches,
+                             CUDA_R_32F,
+                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+
+  // Matmul1 Dgrad2
+
+  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+                             CUBLAS_OP_N,
+                             CUBLAS_OP_T,
+                             head_dim,    // m
+                             k_seq_len,   // n
+                             q_seq_len,   // k
+                             static_cast<const void*>(&scale),
+                             static_cast<const void*>(q_lin_results_ptr),  // A:
+                             CUDA_R_16F,
+                             lead_dim,  // lda
+                             batch_stride, // stride A
+                             static_cast<const void*>(matmul2_grads.data_ptr()),
+                             CUDA_R_16F,
+                             k_seq_len,
+                             k_seq_len*q_seq_len,
+                             static_cast<const void*>(&beta),
+                             static_cast<void*>(k_lin_grads_ptr), // C
+                             CUDA_R_16F,
+                             lead_dim,
+                             batch_stride,
+                             attn_batches,
+                             CUDA_R_32F,
+                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+
+  // Input Linear Dgrad
+  THCublasCheck(cublasGemmEx(handle,
+                             CUBLAS_OP_N,
+                             CUBLAS_OP_N,
+                             embed_dim,
+                             batches,
+                             output_lin_dim,
+                             static_cast<const void*>(&alpha),
+                             static_cast<const void*>(input_weights.data_ptr()),
+                             CUDA_R_16F,
+                             embed_dim,
+			                 static_cast<const void*>(input_lin_output_grads.data_ptr()),
+                             //static_cast<const void*>(q_lin_grads_ptr),
+                             CUDA_R_16F,
+                             output_lin_dim,
+                             static_cast<const void*>(&beta),
+                             static_cast<void*>(input_grads.data_ptr()),
+                             CUDA_R_16F,
+                             embed_dim,
+                             CUDA_R_32F,
+                             //CUBLAS_GEMM_ALGO10_TENSOR_OP));
+                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+
+  THCublasCheck(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
+
+  return input_grads;
+}
+
 } // end namespace cublas_gemmex
 } // end namespace self
 } // end namespace multihead_attn

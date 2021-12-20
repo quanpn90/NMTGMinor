@@ -612,7 +612,7 @@ def main():
         torch.save(save_data, opt.save_data + '.train.pt')
         print("Done")
 
-    elif opt.format in ['scp', 'scpmem']:
+    elif opt.format in ['scp', 'scpmem', 'wav']:
         print('Saving target data to memory indexed data files. Source data is stored only as scp path.')
         from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
 
@@ -695,11 +695,14 @@ def main():
             save_data['train_past'] = train['past_src']
             save_data['valid_past'] = valid['past_src']
 
-        torch.save(save_data, opt.save_data + '.scp_path.pt')
+        if opt.format in ['wav']:
+            torch.save(save_data, opt.save_data + '.wav_path.pt')
+        else:
+            torch.save(save_data, opt.save_data + '.scp_path.pt')
 
         print("Done")
 
-    elif opt.format in ['mmap', 'mmem']:
+    elif opt.format in ['mmap', 'mmem', 'scp']:
         print('Saving data to memory indexed data files')
         from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
 

@@ -110,7 +110,9 @@ class FairseqWav2Vec(nn.Module):
         self.wav2vec_encoder.remove_pretraining_modules()  # remove the quantization modules
 
         cfg = self.wav2vec_encoder.cfg
-        assert self.opt.model_size == cfg.encoder_embed_dim
+        assert self.opt.model_size == cfg.encoder_embed_dim, \
+            "Expect self.opt.model_size (%d) and cfg.encoder_embed_dim (%d) to equal " \
+            % (self.opt.model_size, cfg.encoder_embed_dim)
         self.input_type = self.opt.encoder_type
         self.model_size = cfg.encoder_embed_dim
         self.wav2vec_encoder.feature_grad_mult = 0.0
@@ -124,14 +126,20 @@ class FairseqWav2Vec(nn.Module):
             print("[INFO] Adding adapters for Wav2vec model with %d languages" % opt.n_languages)
             self.wav2vec_encoder.encoder.add_adapters(opt.n_languages, adapter_location=opt.wav2vec_adapter)
 
+        # freeze the whole encoder
+        if opt.freeze_encoder:
+            for p in self.wav2vec_encoder.parameters():
+                p.requires_grad = False
+
+        # then add factorize
         if opt.multilingual_factorized_weights:
             print("[INFO] Factorizing Wav2vec model into %d languages" % opt.n_languages)
             self.wav2vec_encoder.encoder.add_factorize(opt.n_languages, rank=opt.mfw_rank,
                                                        multiplicative=opt.mfw_multiplicative,
                                                        fast=opt.fast_factorize)
 
-        if opt.freeze_encoder_ffn:
-            self.wav2vec_encoder.encoder.freeze_or_unfreeze_ffn_params()
+        # if opt.freeze_encoder_ffn:
+        #     self.wav2vec_encoder.encoder.freeze_or_unfreeze_ffn_params()
 
     def fix_projection_matrices_(self):
         if self.favor:
@@ -508,7 +516,8 @@ class Wav2vecBERT(Wav2vecTransformer):
             decoder_output = self.decoder(input_ids=tgt,
                                           attention_mask=tgt_attention_mask,
                                           encoder_hidden_states=context,
-                                          encoder_attention_mask=src_attention_mask)
+                                          encoder_attention_mask=src_attention_mask,
+                                          lang=tgt_lang, mixture=None)
             decoder_output = decoder_output[0]
             output = decoder_output
             output_dict = defaultdict(lambda: None)

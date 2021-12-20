@@ -6,12 +6,10 @@ import onmt.modules
 import argparse
 import torch
 import time, datetime
-from onmt.train_utils.trainer import XETrainer
 from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
 from onmt.data.scp_dataset import SCPIndexDataset
+from onmt.data.wav_dataset import WavDataset
 from onmt.modules.loss import NMTLossFunc, NMTAndCTCLossFunc
-from onmt.model_factory import build_model, optimize_model, init_model_parameters
-from onmt.bayesian_factory import build_model as build_bayesian_model
 from options import make_parser
 from collections import defaultdict
 from onmt.constants import add_tokenidx
@@ -98,26 +96,16 @@ def main():
                 train_src_langs.append(torch.Tensor([dicts['langs']['src']]))
                 train_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
-            if not opt.streaming:
-                train_data = onmt.Dataset(numpy_to_torch(train_dict['src']), numpy_to_torch(train_dict['tgt']),
-                                          train_dict['src_sizes'], train_dict['tgt_sizes'],
-                                          train_src_langs, train_tgt_langs,
-                                          batch_size_words=opt.batch_size_words,
-                                          data_type=dataset.get("type", "text"), sorting=True,
-                                          batch_size_sents=opt.batch_size_sents,
-                                          multiplier=opt.batch_size_multiplier,
-                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
-                                          upsampling=opt.upsampling,
-                                          num_split=1)
-            else:
-                train_data = onmt.StreamDataset(train_dict['src'], train_dict['tgt'],
-                                                train_src_langs, train_tgt_langs,
-                                                batch_size_words=opt.batch_size_words,
-                                                data_type=dataset.get("type", "text"), sorting=True,
-                                                batch_size_sents=opt.batch_size_sents,
-                                                multiplier=opt.batch_size_multiplier,
-                                                augment=opt.augment_speech,
-                                                upsampling=opt.upsampling)
+            train_data = onmt.Dataset(numpy_to_torch(train_dict['src']), numpy_to_torch(train_dict['tgt']),
+                                      train_dict['src_sizes'], train_dict['tgt_sizes'],
+                                      train_src_langs, train_tgt_langs,
+                                      batch_size_words=opt.batch_size_words,
+                                      data_type=dataset.get("type", "text"), sorting=True,
+                                      batch_size_sents=opt.batch_size_sents,
+                                      multiplier=opt.batch_size_multiplier,
+                                      augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
+                                      upsampling=opt.upsampling,
+                                      num_split=1)
 
             if valid_dict['src_lang'] is not None:
                 assert 'langs' in dicts
@@ -132,29 +120,21 @@ def main():
                 valid_src_langs.append(torch.Tensor([dicts['langs']['src']]))
                 valid_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
-            if not opt.streaming:
-                valid_data = onmt.Dataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
-                                          valid_dict['src_sizes'], valid_dict['tgt_sizes'],
-                                          valid_src_langs, valid_tgt_langs,
-                                          batch_size_words=opt.batch_size_words,
-                                          data_type=dataset.get("type", "text"), sorting=True,
-                                          batch_size_sents=opt.batch_size_sents,
-                                          multiplier=opt.batch_size_multiplier,
-                                          cleaning=True,
-                                          upsampling=opt.upsampling)
-            else:
-                valid_data = onmt.StreamDataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
-                                                valid_src_langs, valid_tgt_langs,
-                                                batch_size_words=opt.batch_size_words,
-                                                data_type=dataset.get("type", "text"), sorting=True,
-                                                batch_size_sents=opt.batch_size_sents,
-                                                upsampling=opt.upsampling)
+            valid_data = onmt.Dataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
+                                      valid_dict['src_sizes'], valid_dict['tgt_sizes'],
+                                      valid_src_langs, valid_tgt_langs,
+                                      batch_size_words=opt.batch_size_words,
+                                      data_type=dataset.get("type", "text"), sorting=True,
+                                      batch_size_sents=opt.batch_size_sents,
+                                      multiplier=opt.batch_size_multiplier,
+                                      cleaning=True,
+                                      upsampling=opt.upsampling)
 
             print(' * number of training sentences. %d' % len(dataset['train']['src']))
             print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
 
         # Loading asr data structures
-        elif opt.data_format in ['scp', 'scpmem', 'mmem']:
+        elif opt.data_format in ['scp', 'scpmem', 'mmem', 'wav']:
             print("Loading memory mapped data files ....")
             start = time.time()
             from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
@@ -165,11 +145,8 @@ def main():
 
             if opt.data_format in ['scp', 'scpmem']:
                 audio_data = torch.load(opt.data + ".scp_path.pt")
-                # # TODO: maybe having another option like -past_context
-                # if os.path.exists(opt.data + '.prev_src_path.pt'):
-                #     prev_audio_data = torch.load(opt.data + '.prev_src_path.pt')
-                # else:
-                #     prev_audio_data = None
+            elif opt.data_format in ['wav']:
+                audio_data = torch.load(opt.data + ".wav_path.pt")
 
             # allocate languages if not
             if 'langs' not in dicts:
@@ -185,6 +162,9 @@ def main():
                                                      concat=opt.concat, shared_object=train_src)
                 else:
                     past_train_src = None
+            elif opt.data_format in ['wav']:
+                train_src = WavDataset(audio_data['train'])
+                past_train_src = None
             else:
                 train_src = MMapIndexedDataset(train_path + '.src')
                 past_train_src = None
@@ -216,36 +196,28 @@ def main():
             else:
                 past_train_src_sizes = None
 
-            if opt.encoder_type == 'audio':
+            if opt.data_format in ['scp', 'scpmem']:
                 data_type = 'audio'
+            elif opt.data_format in ['wav']:
+                data_type = 'wav'
             else:
                 data_type = 'text'
 
-            if not opt.streaming:
-                train_data = onmt.Dataset(train_src,
-                                          train_tgt,
-                                          train_src_sizes, train_tgt_sizes,
-                                          train_src_langs, train_tgt_langs,
-                                          batch_size_words=opt.batch_size_words,
-                                          data_type=data_type, sorting=True,
-                                          batch_size_sents=opt.batch_size_sents,
-                                          multiplier=opt.batch_size_multiplier,
-                                          src_align_right=opt.src_align_right,
-                                          upsampling=opt.upsampling,
-                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t = opt.sa_t,
-                                          cleaning=True, verbose=True,
-                                          num_split=1,
-                                          past_src_data=past_train_src,
-                                          past_src_data_sizes=past_train_src_sizes)
-            else:
-                train_data = onmt.StreamDataset(train_src,
-                                                train_tgt,
-                                                train_src_langs, train_tgt_langs,
-                                                batch_size_words=opt.batch_size_words,
-                                                data_type=data_type, sorting=False,
-                                                batch_size_sents=opt.batch_size_sents,
-                                                multiplier=opt.batch_size_multiplier,
-                                                upsampling=opt.upsampling)
+            train_data = onmt.Dataset(train_src,
+                                      train_tgt,
+                                      train_src_sizes, train_tgt_sizes,
+                                      train_src_langs, train_tgt_langs,
+                                      batch_size_words=opt.batch_size_words,
+                                      data_type=data_type, sorting=True,
+                                      batch_size_sents=opt.batch_size_sents,
+                                      multiplier=opt.batch_size_multiplier,
+                                      augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
+                                      cleaning=True, verbose=True,
+                                      input_size=opt.input_size,
+                                      past_src_data=past_train_src,
+                                      min_src_len=0, min_tgt_len=0,
+                                      past_src_data_sizes=past_train_src_sizes,
+                                      constants=onmt.constants)
 
             valid_path = opt.data + '.valid'
             if opt.data_format in ['scp', 'scpmem']:
@@ -255,6 +227,9 @@ def main():
                                                      concat=opt.concat, shared_object=valid_src)
                 else:
                     past_valid_src = None
+            elif opt.data_format in ['wav']:
+                valid_src = WavDataset(audio_data['valid'])
+                past_valid_src = None
             else:
                 valid_src = MMapIndexedDataset(valid_path + '.src')
                 past_valid_src = None
@@ -286,25 +261,20 @@ def main():
             else:
                 past_valid_src_sizes = None
 
-            if not opt.streaming:
-                valid_data = onmt.Dataset(valid_src, valid_tgt,
-                                          valid_src_sizes, valid_tgt_sizes,
-                                          valid_src_langs, valid_tgt_langs,
-                                          batch_size_words=opt.batch_size_words,
-                                          multiplier=opt.batch_size_multiplier,
-                                          data_type=data_type, sorting=True,
-                                          batch_size_sents=opt.batch_size_sents,
-                                          src_align_right=opt.src_align_right,
-                                          cleaning=True, verbose=True, debug=True,
-                                          past_src_data=past_valid_src,
-                                          past_src_data_sizes=past_valid_src_sizes)
-            else:
-                # for validation data, we have to go through sentences (very slow but to ensure correctness)
-                valid_data = onmt.StreamDataset(valid_src, valid_tgt,
-                                                valid_src_langs, valid_tgt_langs,
-                                                batch_size_words=opt.batch_size_words,
-                                                data_type=data_type, sorting=True,
-                                                batch_size_sents=opt.batch_size_sents)
+            # we can use x2 batch eize for validation 
+            valid_data = onmt.Dataset(valid_src, valid_tgt,
+                                      valid_src_sizes, valid_tgt_sizes,
+                                      valid_src_langs, valid_tgt_langs,
+                                      batch_size_words=opt.batch_size_words * 2,
+                                      multiplier=opt.batch_size_multiplier,
+                                      data_type=data_type, sorting=True,
+                                      input_size=opt.input_size,
+                                      batch_size_sents=opt.batch_size_sents,
+                                      cleaning=True, verbose=True, debug=True,
+                                      past_src_data=past_valid_src,
+                                      past_src_data_sizes=past_valid_src_sizes,
+                                      min_src_len=0, min_tgt_len=0,
+                                      constants=onmt.constants)
 
             elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
             print("Done after %s" % elapse)
@@ -348,13 +318,16 @@ def main():
             if opt.data_format in ['bin', 'raw']:
                 raise NotImplementedError
 
-            elif opt.data_format in ['scp', 'scpmem', 'mmem']:
+            elif opt.data_format in ['scp', 'scpmem', 'mmem', 'wav']:
                 from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
                 from onmt.data.scp_dataset import SCPIndexDataset
 
                 if opt.data_format in ['scp', 'scpmem']:
                     audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
                     src_data = SCPIndexDataset(audio_data, concat=opt.concat)
+                elif opt.data_format in ['wav']:
+                    audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
+                    src_data = WavDataset(audio_data)
                 else:
                     src_data = MMapIndexedDataset(os.path.join(data_dir, "data.src"))
 
@@ -369,30 +342,29 @@ def main():
                 else:
                     src_sizes, sizes = None, None
 
-                if opt.encoder_type == 'audio':
+                if opt.data_format in ['scp', 'scpmem']:
                     data_type = 'audio'
+                elif opt.data_format in ['wav']:
+                    data_type = 'wav'
                 else:
                     data_type = 'text'
 
-                if not opt.streaming:
-                    train_data = onmt.Dataset(src_data,
-                                              tgt_data,
-                                              src_sizes, tgt_sizes,
-                                              src_lang_data, tgt_lang_data,
-                                              batch_size_words=opt.batch_size_words,
-                                              data_type=data_type, sorting=True,
-                                              batch_size_sents=opt.batch_size_sents,
-                                              multiplier=opt.batch_size_multiplier,
-                                              src_align_right=opt.src_align_right,
-                                              upsampling=opt.upsampling,
-                                              cleaning=True, verbose=True,
-                                              num_split=1)
+                train_data = onmt.Dataset(src_data,
+                                          tgt_data,
+                                          src_sizes, tgt_sizes,
+                                          src_lang_data, tgt_lang_data,
+                                          batch_size_words=opt.batch_size_words,
+                                          data_type=data_type, sorting=True,
+                                          batch_size_sents=opt.batch_size_sents,
+                                          multiplier=opt.batch_size_multiplier,
+                                          src_align_right=opt.src_align_right,
+                                          upsampling=opt.upsampling,
+                                          augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
+                                          cleaning=True, verbose=True,
+                                          input_size=opt.input_size,
+                                          constants=onmt.constants)
 
-                    train_sets.append(train_data)
-
-                else:
-                    print("Multi-dataset not implemented for Streaming tasks.")
-                    raise NotImplementedError
+                train_sets.append(train_data)
 
         for (idx_, dir_) in sorted(valid_dirs.items()):
 
@@ -403,11 +375,14 @@ def main():
             if opt.data_format in ['bin', 'raw']:
                 raise NotImplementedError
 
-            elif opt.data_format in ['scp', 'scpmem', 'mmem']:
+            elif opt.data_format in ['scp', 'scpmem', 'mmem', 'wav']:
 
                 if opt.data_format in ['scp', 'scpmem']:
                     audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
                     src_data = SCPIndexDataset(audio_data, concat=opt.concat)
+                elif opt.data_format in ['wav']:
+                    audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
+                    src_data = WavDataset(audio_data)
                 else:
                     src_data = MMapIndexedDataset(os.path.join(data_dir, "data.src"))
 
@@ -427,21 +402,19 @@ def main():
                 else:
                     data_type = 'text'
 
-                if not opt.streaming:
-                    valid_data = onmt.Dataset(src_data, tgt_data,
-                                              src_sizes, tgt_sizes,
-                                              src_lang_data, tgt_lang_data,
-                                              batch_size_words=opt.batch_size_words,
-                                              multiplier=opt.batch_size_multiplier,
-                                              data_type=data_type, sorting=True,
-                                              batch_size_sents=opt.batch_size_sents,
-                                              src_align_right=opt.src_align_right,
-                                              cleaning=True, verbose=True, debug=True)
+                valid_data = onmt.Dataset(src_data, tgt_data,
+                                          src_sizes, tgt_sizes,
+                                          src_lang_data, tgt_lang_data,
+                                          batch_size_words=opt.batch_size_words,
+                                          multiplier=opt.batch_size_multiplier,
+                                          data_type=data_type, sorting=True,
+                                          batch_size_sents=opt.batch_size_sents,
+                                          src_align_right=opt.src_align_right,
+                                          min_src_len=1, min_tgt_len=3,
+                                          input_size=opt.input_size,
+                                          cleaning=True, verbose=True, constants=onmt.constants)
 
-                    valid_sets.append(valid_data)
-
-                else:
-                    raise NotImplementedError
+                valid_sets.append(valid_data)
 
         train_data = train_sets
         valid_data = valid_sets

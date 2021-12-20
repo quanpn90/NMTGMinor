@@ -614,8 +614,7 @@ class MultiheadAttention(nn.Module):
                     sm = torch.cuda.get_device_capability()
 
                     # Only Ampere supported at the moment
-                    assert (sm[0] == 8 and sm[1] == 0 and max_len <= 512) or \
-                           (sm[0] == 8 and sm[1] == 6 and max_len <= 3)
+                    assert (sm[0] == 8 and sm[1] == 0 and max_len <= 512)
 
                     total_bsz = query.size(0)
                     qkv = F.linear(query, in_proj_weight, self.proj_bias)  # B x H
@@ -626,7 +625,7 @@ class MultiheadAttention(nn.Module):
 
                     context, coverage = self.fast_bert_mha(qkv, cu_seqlens, self.dropout_p, max_len, self.training)
 
-                    context = context.view(-1, self.num_heads * self.head_dim)
+                    context = context.view(-1, self.num_heads * self.head_dim).contiguous()
                     outputs = F.linear(context, out_proj_weight, self.out_proj.bias)
 
                     return outputs, coverage
@@ -674,9 +673,21 @@ def gelu(x: torch.Tensor) -> torch.Tensor:
 
 
 class IndexCopy(torch.autograd.Function):
+    """
+    This function is kinda similar to rnn pad_packed_sequence
+    It remaps nonpadded values for a (N-1)-d tensor into a (N)-d tensor
+    """
     @staticmethod
     @custom_fwd
     def forward(ctx, input, non_pad_indices, total_batch_size):
+        """
+        :param ctx:
+        :param input: 2D [bsz x ... ] bsz is the total number of elements after unpadding
+        :param non_pad_indices: bsz * seq_len
+        :param total_batch_size: (int) bsz * seq_len (before unpadding) > bsz
+        :return:
+        In the forward pass we create a new zero tensor and copy the inputs into it based on non_pad_indices
+        """
         sizes = list(input.size())
         sizes[0] = total_batch_size
 
@@ -689,6 +700,12 @@ class IndexCopy(torch.autograd.Function):
     @staticmethod
     @custom_bwd
     def backward(ctx, output_grads):
+        """
+        :param ctx:
+        :param output_grads:
+        :return:
+        In the backward pass we simply
+        """
         non_pad_indices, = ctx.saved_tensors
 
         grad_input = output_grads.index_select(0, non_pad_indices)

@@ -122,15 +122,16 @@ class ClassifierTrainer(object):
         if self.is_main():
             print("[INFO] Building models .... ", flush=True)
         model = build_classifier(opt, dicts)
-        loss_function = ClassifierLoss(opt.model_size, dicts['tgt'].size(), fast_xentropy=opt.fast_xentropy)
+        loss_function = ClassifierLoss(opt.model_size, dicts['tgt'].size(), label_smoothing=opt.label_smoothing)
 
         # This function replaces modules with the more optimized counterparts so that it can run faster
         # Currently exp with LayerNorm
-        if not opt.memory_profiling:
-            # distributed is required to convert BatchNorm to SyncBatchNorm for DDP
-            optimize_model(model, distributed=(self.world_size > 1))
+        # if not opt.memory_profiling:
+        #     # distributed is required to convert BatchNorm to SyncBatchNorm for DDP
+        optimize_model(model, distributed=(self.world_size > 1))
 
-        init_model_parameters(model, opt)
+        if 'wav2vec2' not in opt.model:
+            init_model_parameters(model, opt)
         self.model = model
         self.loss_function = loss_function
         self.grad_scaler = torch.cuda.amp.GradScaler()
@@ -395,7 +396,6 @@ class ClassifierTrainer(object):
     #             print(torch.cuda.memory_summary())
     #         exit()
 
-
     # maybe save by accuracy?
     def save(self, epoch, valid_ppl, itr=None):
 
@@ -440,8 +440,8 @@ class ClassifierTrainer(object):
 
         self.print("[INFO] Running evaluation...", flush=True)
         opt = self.opt
-        rank = 0
-        world_size = 1
+        rank = self.rank
+        world_size = self.world_size
 
         # the data iterator creates an epoch iterator
         data_iterator = generate_data_iterator(data, rank, world_size, seed=self.opt.seed,
@@ -481,6 +481,9 @@ class ClassifierTrainer(object):
                     i = i + 1
 
         # allreduce the total loss and total words from other processes
+        self.all_reduce(total_loss, op=dist.ReduceOp.SUM, group=self.group)
+        self.all_reduce(total_words, op=dist.ReduceOp.SUM, group=self.group)
+        self.all_reduce(total_correct, op=dist.ReduceOp.SUM, group=self.group)
 
         self.model.train()
         self.loss_function.train()
@@ -534,8 +537,6 @@ class ClassifierTrainer(object):
 
         while not data_iterator.end_of_epoch():
 
-            curriculum = (epoch < opt.curriculum)
-
             # this batch generator is not very clean atm
             # TODO: move everything to the multiGPU trainer
             samples = next(epoch_iterator)
@@ -545,87 +546,56 @@ class ClassifierTrainer(object):
             # TODO: dealing with oom during distributed training
             oom = zero_tensor()
 
-            try:
-                # outputs is a dictionary containing keys/values necessary for loss function
-                # can be flexibly controlled within models for easier extensibility
-                counter = counter + 1
-                # reduction_disabled = False if counter >= opt.update_frequency or i == (n_samples - 1) else True
-                reduce = True if counter >= opt.update_frequency or i == (n_samples - 1) else False
+            # outputs is a dictionary containing keys/values necessary for loss function
+            # can be flexibly controlled within models for easier extensibility
+            counter = counter + 1
+            # reduction_disabled = False if counter >= opt.update_frequency or i == (n_samples - 1) else True
+            reduce = True if counter >= opt.update_frequency or i == (n_samples - 1) else False
 
-                def maybe_no_sync():
-                    if not reduce and isinstance(self.model, DDP_model):
-                        return self.model.no_sync()
+            def maybe_no_sync():
+                if not reduce and isinstance(self.model, DDP_model):
+                    return self.model.no_sync()
+                else:
+                    # when we dont reach the updating step, we do not need to synchronize the gradients
+                    # thus disabling the backward grad sync to improve speed
+                    return contextlib.ExitStack()  # dummy contextmanager
+
+            with maybe_no_sync():
+                with autocast():
+                    targets = batch.get('target')
+                    # tgt_mask = targets.ne(onmt.constants.PAD)
+                    outputs = self.model(batch)
+
+                    batch_size = batch.size
+                    # outputs['tgt_mask'] = tgt_mask
+
+                    loss_dict = self.loss_function(outputs, targets, model=self.model)
+                    loss_data = loss_dict['data']
+                    loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
+                    numel = loss_dict['numel']
+                    n_correct = loss_dict['n_correct']
+                    full_loss = loss
+
+                    # # Todo: MPC loss
+                    if self.opt.mpc:
+
+                        mpc_loss_dict = self.mpc_loss(outputs)
+                        mpc_loss_data = mpc_loss_dict['data']
+                        mpc_loss = mpc_loss_dict['loss']
+                        mpc_numel = mpc_loss_dict['numel']
+                        # mpc_loss_data = 0
+                        # mpc_numel = 0
+                        full_loss = full_loss + 0.0001  * mpc_loss
                     else:
-                        # when we dont reach the updating step, we do not need to synchronize the gradients
-                        # thus disabling the backward grad sync to improve speed
-                        return contextlib.ExitStack()  # dummy contextmanager
+                        mpc_loss_data = 0
+                        mpc_numel = 0
 
-                with maybe_no_sync():
-                    with autocast():
-                        targets = batch.get('target')
-                        # tgt_mask = targets.ne(onmt.constants.PAD)
-                        outputs = self.model(batch)
-
-                        batch_size = batch.size
-                        # outputs['tgt_mask'] = tgt_mask
-
-                        loss_dict = self.loss_function(outputs, targets, model=self.model)
-                        loss_data = loss_dict['data']
-                        loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-                        numel = loss_dict['numel']
-                        n_correct = loss_dict['n_correct']
-                        full_loss = loss
-
-                        # # Todo: MPC loss
-                        if self.opt.mpc:
-
-                            mpc_loss_dict = self.mpc_loss(outputs)
-                            mpc_loss_data = mpc_loss_dict['data']
-                            mpc_loss = mpc_loss_dict['loss']
-                            mpc_numel = mpc_loss_dict['numel']
-                            # mpc_loss_data = 0
-                            # mpc_numel = 0
-                            full_loss = full_loss + 0.0001  * mpc_loss
-                        else:
-                            mpc_loss_data = 0
-                            mpc_numel = 0
-
-                    # grad scaler has to be done outside of the autocast
-                    # this line basically equals full_loss.mul_(some_scale).backward()
-                    # which means the grad scaler doesn't internally change
-                    self.grad_scaler.scale(full_loss).backward()
+                # grad scaler has to be done outside of the autocast
+                # this line basically equals full_loss.mul_(some_scale).backward()
+                # which means the grad scaler doesn't internally change
+                self.grad_scaler.scale(full_loss).backward()
 
                 del outputs
-
-            except RuntimeError as e:
-                if 'out of memory' in str(e):
-                    print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
-                    loss = 0
-                    numel = 0
-                    for p in self.model.parameters():
-                        if p.grad is not None:
-                            del p.grad  # free some memory
-                        loss = loss + p.sum() * 0
-
-                    torch.cuda.empty_cache()
-
-                    if opt.streaming:  # reset stream in this case ...
-                        streaming_state = self.model.init_stream()
-
-                    # backward to actually free the graph
-                    self.grad_scaler.scale(loss).backward()
-                    oom.add_(1)
-
-            # connecting the oom signal from different gpus
-            self.all_reduce(oom, op=dist.ReduceOp.SUM, group=self.group)
-            # if OOM: all gpus reset grad and reset counter
-            # or maybe all-reduce grad?
-            if oom.item() > 0:
-                # reset counter
-                self.model.zero_grad()
-                self.optim.zero_grad()
-                counter = 0
-                oom.zero_()
 
             batch_size = batch.size
 
@@ -716,7 +686,7 @@ class ClassifierTrainer(object):
                                        (report_mpc_loss.item() / report_mpc_numel.item() ))
 
                     log_string += ("lr: %.7f ; updates: %7d; " %
-                                   (self.optim.getLearningRate(),
+                                   (self.optim.get_learning_rate(),
                                     self.optim._step))
 
                     log_string += ("%5.0f src tok/s; %5.0f tgt tok/s; " %
@@ -738,7 +708,6 @@ class ClassifierTrainer(object):
                 report_mpc_loss.zero_()
                 report_mpc_numel.zero_()
                 start = time.time()
-                report_correct.zero_()
 
             # increase i by world size
             i = i + self.world_size
@@ -787,16 +756,12 @@ class ClassifierTrainer(object):
         if opt.load_decoder_from:
             self.load_decoder_weight(opt.load_decoder_from)
 
-        # if we are on a GPU: warm up the memory allocator
-        if self.cuda:
-            self.warm_up()
+        valid_output = self.eval(self.valid_data)
+        valid_ppl = math.exp(min(valid_output['loss'], 100))
 
-        # if self.is_main():
-        #     valid_output = self.eval(self.valid_data)
-        #     valid_ppl = math.exp(min(valid_output['loss'], 100))
-        #
-        #     print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
-        #     print('[INFO] Validation accuracy: %g' % valid_output['accuracy'], flush=True)
+        if self.is_main():
+            print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
+            print('[INFO] Validation accuracy: %g' % valid_output['accuracy'], flush=True)
 
         self.start_time = time.time()
 

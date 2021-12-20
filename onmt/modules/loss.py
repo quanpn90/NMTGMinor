@@ -311,7 +311,7 @@ class ClassifierLoss(CrossEntropyLossBase):
     Standard NMT Loss Computation.
     """
 
-    def __init__(self, hidden_size, output_size, fast_xentropy=False):
+    def __init__(self, hidden_size, output_size, label_smoothing=0.0):
         """
         :param hidden_size:
         :param output_size:
@@ -319,13 +319,10 @@ class ClassifierLoss(CrossEntropyLossBase):
         :param mirror:
         :param fast_xentropy:
         """
-        super(ClassifierLoss, self).__init__(output_size, 0.0, fast_xentropy=fast_xentropy)
+        self.label_smoothing = label_smoothing
+        super(ClassifierLoss, self).__init__(output_size, label_smoothing)
         self.hidden_size = hidden_size
         self.output_size = output_size
-        # no label smoothing?
-        self.smoothing_value = 0.0
-        self.confidence = 1.0
-        self.label_smoothing = 0.0
         self.padding_idx = -9999999999  # don't pad
 
     def forward(self, model_outputs, targets, model=None,
@@ -352,9 +349,9 @@ class ClassifierLoss(CrossEntropyLossBase):
 
         # print(logits.size())
 
-        mask = model_outputs['src_mask']
+        mask = model_outputs['src_mask']   # B x T
 
-        mask = mask.squeeze(1).transpose(0, 1)
+        mask = mask.squeeze(1).transpose(0, 1).contiguous()  # T x B
         # because mask is input.eq(pad) which means the pad positions are 1
         # reverse the mask so that the correct positions are 1
         # flattened_mask = ~mask.view(-1)
@@ -363,9 +360,9 @@ class ClassifierLoss(CrossEntropyLossBase):
         # non_pad_indices = torch.nonzero(flattened_mask).squeeze(1)
 
         if granularity == 'average':
-            mask = mask.unsqueeze(-1)
-            logits.masked_fill_(mask, 0)
-            lengths = (1 - mask.long()).squeeze(-1).sum(dim=0, keepdim=False)
+            mask = mask
+            logits.masked_fill_(mask.bool().unsqueeze(-1), 0)
+            lengths = (1 - mask.long()).sum(dim=0, keepdim=False)
             clean_logits = logits.sum(dim=0, keepdim=False).div(lengths.unsqueeze(-1))
             clean_targets = targets.squeeze(0)  # --> batch
         else:
@@ -375,7 +372,7 @@ class ClassifierLoss(CrossEntropyLossBase):
         #
         # # loss, loss_data = self._compute_loss(clean_logits, clean_targets, softmaxed=softmaxed)
         loss = F.cross_entropy(clean_logits.float(), clean_targets, weight=None,
-                                ignore_index=-100, reduction='sum')
+                                ignore_index=-100, reduction='sum', label_smoothing=self.label_smoothing)
         loss_data = loss.item()
         #
         predictions = F.log_softmax(clean_logits.float()).topk(1, dim=1)[1].squeeze(1)

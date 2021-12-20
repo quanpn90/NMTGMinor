@@ -9,9 +9,6 @@ import time, datetime
 from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
 from onmt.data.scp_dataset import SCPIndexDataset
 from onmt.data.wav_dataset import WavDataset
-from onmt.modules.loss import NMTLossFunc, NMTAndCTCLossFunc
-from onmt.model_factory import build_model, optimize_model, init_model_parameters
-from onmt.bayesian_factory import build_model as build_bayesian_model
 from options import make_parser
 from collections import defaultdict
 from onmt.constants import add_tokenidx
@@ -41,8 +38,6 @@ if opt.checkpointing > 0:
 
 if torch.cuda.is_available() and not opt.gpus:
     print("WARNING: You have a CUDA device, should run with -gpus 0")
-
-torch.manual_seed(opt.seed)
 
 
 def numpy_to_torch(tensor_list):
@@ -227,9 +222,9 @@ def main():
             else:
                 past_train_src_sizes = None
 
-            if opt.encoder_type in ['audio', 'wav2vec2_scp']:
+            if opt.data_format in ['scp', 'scpmem']:
                 data_type = 'audio'
-            elif opt.encoder_type == 'wav2vec2':
+            elif opt.data_format in ['wav']:
                 data_type = 'wav'
             else:
                 data_type = 'text'
@@ -243,8 +238,6 @@ def main():
                                           data_type=data_type, sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
                                           multiplier=opt.batch_size_multiplier,
-                                          src_align_right=opt.src_align_right,
-                                          upsampling=opt.upsampling,
                                           augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
                                           cleaning=True, verbose=True,
                                           input_size=opt.input_size,
@@ -312,7 +305,6 @@ def main():
                                           data_type=data_type, sorting=True,
                                           input_size=opt.input_size,
                                           batch_size_sents=opt.batch_size_sents,
-                                          src_align_right=opt.src_align_right,
                                           cleaning=True, verbose=True, debug=True,
                                           past_src_data=past_valid_src,
                                           past_src_data_sizes=past_valid_src_sizes,

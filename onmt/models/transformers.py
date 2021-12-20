@@ -786,10 +786,10 @@ class Transformer(NMTModel):
         return output_dict
 
     def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True,
-                             pretrained_layer_states=None, **kwargs):
+                             pretrained_classifier=None, **kwargs):
         """
         Generate a new decoder state based on the batch input
-        :param pretrained_layer_states:
+        :param pretrained_classifier: model to create mixtures
         :param buffering:
         :param type:
         :param batch: Batch object (may not contain target during decoding)
@@ -803,6 +803,10 @@ class Transformer(NMTModel):
         tgt_lang = batch.get('target_lang')
 
         src_transposed = src.transpose(0, 1)
+
+        if pretrained_classifier is not None:
+            mixture = pretrained_classifier(src_transposed)
+
         encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang,
                                       pretrained_layer_states=pretrained_layer_states)
 

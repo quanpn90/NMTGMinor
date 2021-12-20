@@ -58,8 +58,10 @@ class FMHAFun(torch.autograd.Function):
     def backward(ctx, dout, dsoftmax):
         qkv, S_dmask = ctx.saved_tensors
         batch_size = ctx.cu_seqlens.numel() - 1
+
+        dout = dout.contiguous()  # this happens!!! and can mess up with gradients if dout is a view!!!
         if batch_size < 4:
-            dqkv, dp, _ = fmhalib.bwd_nl(dout, qkv, S_dmask, ctx.cu_seqlens, ctx.p_dropout, ctx.max_s)
+            dqkv, dp, _ = fmhalib.bwd_nl(dout.contiguous(), qkv, S_dmask, ctx.cu_seqlens, ctx.p_dropout, ctx.max_s)
         else:
             dqkv, dp = fmhalib.bwd(dout, qkv, S_dmask, ctx.cu_seqlens, ctx.p_dropout, ctx.max_s)
 

@@ -70,14 +70,14 @@ class SelfAttnFunc(torch.autograd.Function):
                     mask = inputs.new(bsz, len_q).zero_()  # works
 
             input_lin_results, \
-                attn_scores, \
-                dropout_results, \
-                dropout_mask, \
-                matmul2_results, \
-                outputs = self_multihead_attn_cuda.forward(use_time_mask, is_training, heads,
-                                                           inputs.contiguous(), input_weights, output_weights,
-                                                           input_biases, output_biases,
-                                                           mask, dropout_prob)
+            attn_scores, \
+            dropout_results, \
+            dropout_mask, \
+            matmul2_results, \
+            outputs = self_multihead_attn_cuda.forward(use_time_mask, is_training, heads,
+                                                       inputs.contiguous(), input_weights, output_weights,
+                                                       input_biases, output_biases,
+                                                       mask, dropout_prob)
 
             ctx.save_for_backward(heads_t,
                                   scale_t,
@@ -249,26 +249,40 @@ class SelfAttnFunc(torch.autograd.Function):
 
         if ctx.fused:
             heads_t, \
-                scale_t, \
-                matmul2_results, \
-                dropout_results, \
-                attn_scores, \
-                input_lin_results, \
-                inputs, \
-                input_weights, \
-                output_weights, \
-                dropout_mask, \
-                dropout_prob_t, pad_mask = ctx.saved_tensors
+            scale_t, \
+            matmul2_results, \
+            dropout_results, \
+            attn_scores, \
+            input_lin_results, \
+            inputs, \
+            input_weights, \
+            output_weights, \
+            dropout_mask, \
+            dropout_prob_t, pad_mask = ctx.saved_tensors
 
-            input_grads, \
-                input_weight_grads, \
-                output_weight_grads, \
-                input_bias_grads, \
-                output_bias_grads = self_multihead_attn_cuda.backward(ctx.use_time_mask, heads_t[0],
-                                                                      output_grads.contiguous(), matmul2_results,
-                                                                      dropout_results, attn_scores, pad_mask,
-                                                                      input_lin_results, inputs, input_weights,
-                                                                      output_weights, dropout_mask, dropout_prob_t[0])
+            if input_weights.requires_grad:
+                input_grads, \
+                    input_weight_grads, \
+                    output_weight_grads, \
+                    input_bias_grads, \
+                    output_bias_grads = \
+                    self_multihead_attn_cuda.backward(ctx.use_time_mask, heads_t[0],
+                                                      output_grads.contiguous(), matmul2_results,
+                                                      dropout_results, attn_scores, pad_mask,
+                                                      input_lin_results, inputs, input_weights,
+                                                      output_weights, dropout_mask, dropout_prob_t[0])
+
+            else:
+                input_grads = self_multihead_attn_cuda.backward_input_only(ctx.use_time_mask, heads_t[0],
+                                                                           output_grads.contiguous(), matmul2_results,
+                                                                           dropout_results, attn_scores, pad_mask,
+                                                                           input_lin_results, inputs, input_weights,
+                                                                           output_weights, dropout_mask,
+                                                                           dropout_prob_t[0])
+                input_weight_grads = None
+                input_bias_grads = None
+                output_weight_grads = None
+                output_bias_grads = None
 
             return None, None, None, \
                    input_grads, \
@@ -277,17 +291,17 @@ class SelfAttnFunc(torch.autograd.Function):
                    None, None, None, None, None, None, None, None
 
         heads_t, \
-            scale_t, \
-            matmul2_results, \
-            dropout_results, \
-            softmax_results, \
-            input_lin_results, \
-            inputs, \
-            input_weights, \
-            output_weights, \
-            dropout_mask, \
-            dropout_prob_t, \
-            sin, cos = ctx.saved_tensors
+        scale_t, \
+        matmul2_results, \
+        dropout_results, \
+        softmax_results, \
+        input_lin_results, \
+        inputs, \
+        input_weights, \
+        output_weights, \
+        dropout_mask, \
+        dropout_prob_t, \
+        sin, cos = ctx.saved_tensors
 
         head_dim = inputs.size(2) // heads_t.item()
 
@@ -388,10 +402,15 @@ class SelfAttnFunc(torch.autograd.Function):
         # input2: (activations) [seql_q*seqs, embed_dim(1024)]
         # output:               [3*embed_dim, embed_dim]
         # GEMM: ( 3*embed_dim x seql_q*seqs ) x ( seql_q*seqs x embed_dim ) = (3*embed_dim x embed_dim)
-        input_weight_grads = torch.mm(input_lin_results_grads.transpose(0, 1),
-                                      inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)))
 
-        input_bias_grads = torch.sum(input_lin_results_grads, 0)
+        if input_weights.requires_grad:
+            input_weight_grads = torch.mm(input_lin_results_grads.transpose(0, 1),
+                                          inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)))
+
+            input_bias_grads = torch.sum(input_lin_results_grads, 0)
+        else:
+            input_weight_grads = None
+            input_bias_grads = None
 
         return None, None, None, \
                input_grads, \

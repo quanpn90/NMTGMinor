@@ -328,6 +328,8 @@ def make_parser(parser):
 
     parser.add_argument('-multilingual_factorized_weights', action='store_true',
                         help='Factorize the weights in the model for multilingual')
+    parser.add_argument('-multilingual_factorized_weights_decoder', action='store_true',
+                        help='Factorize the weights in the model decoder for multilingual')
     parser.add_argument('-fast_factorize', action='store_true',
                         help='Fast Factorize the weights in the model for multilingual')
     parser.add_argument('-mfw_rank', type=int, default=1,
@@ -487,10 +489,15 @@ def make_parser(parser):
     parser.add_argument('-wav2vec2_pretrained_model', default='wav2vec2-large-lv60', type=str,
                         help="""Wav2vec2 model from HuggingFace. """)
 
+    parser.add_argument('-freeze_encoder', action='store_true',
+                        help='Freeze the whole wav2vec weights.')
     parser.add_argument('-freeze_encoder_self_attn', action='store_true',
                         help='Freeze the wav2vec self-attention weight.')
     parser.add_argument('-freeze_encoder_ffn', action='store_true',
                         help='Freeze the wav2vec self-attention weight.')
+
+    parser.add_argument('-freeze_decoder', action='store_true',
+                        help='Freeze the whole mbart decoder weights.')
     parser.add_argument('-freeze_decoder_self_attn', action='store_true',
                         help='Freeze the wav2vec self-attention weight.')
     parser.add_argument('-freeze_decoder_ffn', action='store_true',
@@ -643,6 +650,9 @@ def backward_compatible(opt):
     if not hasattr(opt, 'multilingual_factorized_weights'):
         opt.multilingual_factorized_weights = False
 
+    if not hasattr(opt, 'multilingual_factorized_weights_decoder'):
+        opt.multilingual_factorized_weights_decoder  = False
+
     if not hasattr(opt, 'mfw_rank'):
         opt.mfw_rank = 1
 
@@ -770,4 +780,9 @@ def backward_compatible(opt):
     if not hasattr(opt, 'wav2vec_adapter'):
         opt.wav2vec_adapter = 0
 
+    if not hasattr(opt, 'freeze_encoder'):
+        opt.freeze_encoder = False
+
+    if not hasattr(opt, 'freeze_decoder'):
+        opt.freeze_decoder = False
     return opt
