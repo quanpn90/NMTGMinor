@@ -507,6 +507,8 @@ def make_parser(parser):
                         help='Virtual Adversarial Training. 0=disabled. 1=kl_loss. 2=ce. 3=kl_loss + ce.')
     parser.add_argument('-wav2vec_adapter', type=int, default=0,
                         help='Adapter for wav2vec model')
+    parser.add_argument('-decoder_adapter', type=int, default=0,
+                        help='Adapter for wav2vec model')
     parser.add_argument('-mutual_modality_training', type=float, default=0,
                         help='Coefficient for the Mutual Modality Training term')
 
@@ -779,6 +781,9 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'wav2vec_adapter'):
         opt.wav2vec_adapter = 0
+
+    if not hasattr(opt, 'decoder_adapter'):
+        opt.decoder_adapter = 0
 
     if not hasattr(opt, 'freeze_encoder'):
         opt.freeze_encoder = False

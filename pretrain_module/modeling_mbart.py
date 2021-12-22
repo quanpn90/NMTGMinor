@@ -670,6 +670,10 @@ class MBartDecoderLayer(nn.Module):
         self.fast_factorize = False
         self.ffn_dim = config.decoder_ffn_dim
 
+        self.n_languages = -1
+        self.has_adapter = False
+        self.adapter_location = -1
+
     @property
     def word_lut(self):
         return self.embed_tokens
@@ -722,6 +726,20 @@ class MBartDecoderLayer(nn.Module):
             nn.init.constant_(self.sm_i, constant)
             nn.init.constant_(self.rm_o, constant)
             nn.init.constant_(self.sm_o, constant)
+
+    def add_adapters(self, n_languages, downsampling_factor=4, adapter_location=1):
+        """
+        :param n_languages: one adapter per language
+        :param downsampling_factor: downsampling rate size for the hidden layer
+        :param adapter_location:
+        :return:
+        """
+
+        self.n_languages = n_languages
+        self.has_adapter = True
+        self.adapter_location = adapter_location
+        from .adapter import MultilingualAdapter
+        self.adapter = MultilingualAdapter(n_languages, self.embed_dim, downsample_factor=downsampling_factor)
 
     def get_mlp_weights(self, lang=None, mixture=None):
 
@@ -901,6 +919,14 @@ class MBartDecoderLayer(nn.Module):
         hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         # hidden_states = residual + hidden_states
+
+        if self.has_adapter:
+            residual = hidden_states
+            if self.adapter_location == 1:
+                assert lang is not None or mixture is not None
+                hidden_states = self.adapter(hidden_states, lang=lang, mixture=mixture)
+
+            hidden_states.add_(residual)
 
         if hidden_states.dtype == torch.float16 and (
                 torch.isinf(hidden_states).any() or torch.isnan(hidden_states).any()
@@ -1283,11 +1309,24 @@ class MBartDecoder(MBartPreTrainedModel):
             for p in self.parameters():
                 p.requires_grad = False
 
+            # but we need to enable the cross attention
+            for layer in self.layers:
+                for p in layer.encoder_attn.parameters():
+                    p.requires_grad = True
+                for p in layer.encoder_attn_layer_norm.parameters():
+                    p.requires_grad = True
+
         if opt.multilingual_factorized_weights_decoder:
             print("[INFO] Factorizing MBART model into %d languages" % opt.n_languages)
             self.add_factorize(opt.n_languages, rank=opt.mfw_rank,
                                multiplicative=opt.mfw_multiplicative,
                                fast=opt.fast_factorize)
+
+        # adapter
+        if opt.decoder_adapter > 0:
+            print("[INFO] Adding MBART Adapters for %d languages" % opt.n_languages)
+            for layer in self.layers:
+                layer.add_adapters(opt.n_languages, adapter_location=opt.decoder_adapter)
 
     def freeze_self_attn_params(self):
 
