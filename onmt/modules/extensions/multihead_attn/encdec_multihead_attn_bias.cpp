@@ -39,6 +39,23 @@ std::vector<torch::Tensor> bwd_cuda(
                                float                dropout_prob
                                                   );
 
+std::vector<torch::Tensor> bwd_cuda_input_only(
+                               int                  heads,
+                               torch::Tensor const& output_grads,
+                               torch::Tensor const& matmul2_results,
+                               torch::Tensor const& dropout_results,
+                               torch::Tensor const& attn_scores,
+                               const half* pad_mask,
+                               torch::Tensor const& input_lin_q_results,
+                               torch::Tensor const& input_lin_kv_results,
+                               torch::Tensor const& inputs_q,
+                               torch::Tensor const& inputs_kv,
+                               torch::Tensor const& input_weights_q,
+                               torch::Tensor const& input_weights_kv,
+                               torch::Tensor const& output_weights,
+                               torch::Tensor const& dropout_mask,
+                               float                dropout_prob
+                                                  );
 //std::vector<torch::Tensor> bwd_recompute_cuda(
 //                               int                  heads,
 //                               torch::Tensor const& output_grads,
@@ -179,6 +196,70 @@ std::vector<torch::Tensor> bwd(
 }
 
 
+std::vector<torch::Tensor> bwd_input_only(
+                               int                  heads,
+                               torch::Tensor const& output_grads,
+                               torch::Tensor const& matmul2_results,
+                               torch::Tensor const& dropout_results,
+                               torch::Tensor const& attn_scores,
+                               torch::Tensor const& pad_mask,
+                               torch::Tensor const& input_lin_q_results,
+                               torch::Tensor const& input_lin_kv_results,
+                               torch::Tensor const& inputs_q,
+                               torch::Tensor const& inputs_kv,
+                               torch::Tensor const& input_weights_q,
+                               torch::Tensor const& input_weights_kv,
+                               torch::Tensor const& output_weights,
+                               torch::Tensor const& dropout_mask,
+                               float                dropout_prob
+                                                  )
+{
+  AT_ASSERTM(output_grads.dim()         == 3, "expected 3D tensor");
+  AT_ASSERTM(matmul2_results.dim()      == 3, "expected 3D tensor");
+  AT_ASSERTM(dropout_results.dim()      == 3, "expected 3D tensor");
+  AT_ASSERTM(attn_scores.dim()      == 3, "expected 3D tensor");
+  AT_ASSERTM(input_lin_q_results.dim()  == 3, "expected 3D tensor");
+  AT_ASSERTM(input_lin_kv_results.dim() == 3, "expected 3D tensor");
+  AT_ASSERTM(inputs_q.dim()             == 3, "expected 3D tensor");
+  AT_ASSERTM(inputs_kv.dim()            == 3, "expected 3D tensor");
+  AT_ASSERTM(input_weights_q.dim()      == 2, "expected 2D tensor");
+  AT_ASSERTM(input_weights_kv.dim()     == 2, "expected 2D tensor");
+  AT_ASSERTM(output_weights.dim()       == 2, "expected 2D tensor");
+  AT_ASSERTM(dropout_mask.dim()         == 3, "expected 3D tensor");
+
+  AT_ASSERTM(output_grads.type().scalarType()         == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(matmul2_results.type().scalarType()      == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(dropout_results.type().scalarType()      == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(attn_scores.type().scalarType()      == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(input_lin_q_results.type().scalarType()  == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(input_lin_kv_results.type().scalarType() == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(inputs_q.type().scalarType()             == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(inputs_kv.type().scalarType()            == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(input_weights_q.type().scalarType()      == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(input_weights_kv.type().scalarType()     == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(output_weights.type().scalarType()       == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(dropout_mask.type().scalarType()         == at::ScalarType::Byte, "Only BYTE is supported");
+
+  return bwd_cuda_input_only(
+                                 heads,
+                                 output_grads,
+                                 matmul2_results,
+                                 dropout_results,
+                                 attn_scores,
+                                 static_cast<const half*>(pad_mask.data_ptr()),
+                                 input_lin_q_results,
+                                 input_lin_kv_results,
+                                 inputs_q,
+                                 inputs_kv,
+                                 input_weights_q,
+                                 input_weights_kv,
+                                 output_weights,
+                                 dropout_mask,
+                                 dropout_prob
+                                );
+}
+
+
 //std::vector<torch::Tensor> bwd_recompute(
 //                               int                  heads,
 //                               torch::Tensor const& output_grads,
@@ -229,5 +310,6 @@ std::vector<torch::Tensor> bwd(
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("forward", &multihead_attn::encdec_bias::cublas_gemmex::fwd, "Encdec Multihead Attention Bias Forward.");
   m.def("backward", &multihead_attn::encdec_bias::cublas_gemmex::bwd, "Encdec Multihead Attention Bias Backward.");
+  m.def("backward_input_only", &multihead_attn::encdec_bias::cublas_gemmex::bwd_input_only, "Encdec Multihead Attention Bias Backward.");
 //  m.def("backward_recompute", &multihead_attn::encdec::cublas_gemmex::bwd_recompute, "Encdec Multihead Attention Backward Recompute.");
 }

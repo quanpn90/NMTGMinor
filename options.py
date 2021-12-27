@@ -502,6 +502,8 @@ def make_parser(parser):
                         help='Freeze the wav2vec self-attention weight.')
     parser.add_argument('-freeze_decoder_ffn', action='store_true',
                         help='Freeze the wav2vec self-attention weight.')
+    parser.add_argument('-freeze_cross_attention', action='store_true',
+                        help='Freeze the cross attention.')
 
     parser.add_argument('-virtual_adversarial_training_mode', type=int, default=0,
                         help='Virtual Adversarial Training. 0=disabled. 1=kl_loss. 2=ce. 3=kl_loss + ce.')
@@ -790,4 +792,7 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'freeze_decoder'):
         opt.freeze_decoder = False
+
+    if not hasattr(opt, 'freeze_cross_attention'):
+        opt.freeze_cross_attention = False
     return opt

@@ -340,13 +340,17 @@ class SelfAttnFunc(torch.autograd.Function):
         # Input2: (activations) [seql_q*seqs, embed_dim ]
         # Output:               [ seql_q, seqs, embed_dim ]
         # GEMM: ( embed_dim x seql_q*seqs ) x ( seql_q*seqs x embed_dim ) = ( embed_dim x embed_dim )
-        output_weight_grads = torch.mm(
-            output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)).transpose(0, 1),
-            matmul2_results.view(matmul2_results.size(0) * matmul2_results.size(1), matmul2_results.size(2)))
-        output_lin_grads = output_lin_grads.view(inputs.size(0), inputs.size(1) * heads_t[0], head_dim).transpose(0, 1)
 
-        output_bias_grads = torch.sum(
-            output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), 0)
+        if output_weights.requires_grad:
+            output_weight_grads = torch.mm(
+                output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)).transpose(0, 1),
+                matmul2_results.view(matmul2_results.size(0) * matmul2_results.size(1), matmul2_results.size(2)))
+            output_bias_grads = torch.sum(
+                output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), 0)
+        else:
+            output_weight_grads = None
+            output_bias_grads = None
+        output_lin_grads = output_lin_grads.view(inputs.size(0), inputs.size(1) * heads_t[0], head_dim).transpose(0, 1)
 
         # Matmul2 - DGRAD1
         # Input1: (data grads)  [seql_q, seqs*heads, head_dim] transpose(0,1)

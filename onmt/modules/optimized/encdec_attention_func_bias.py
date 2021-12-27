@@ -98,18 +98,7 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
                                   dropout_mask, mask,
                                   dropout_prob_t,
                                   sinq, cosq, sink, cosk)
-        #     else:
-        #         ctx.save_for_backward(heads_t,
-        #                               scale_t,
-        #                               inputs_q,
-        #                               inputs_kv,
-        #                               input_weights_q,
-        #                               input_weights_kv,
-        #                               output_weights,
-        #                               dropout_mask,
-        #                               dropout_prob_t,
-        #                               mask,
-        #                               sinq, cosq, sink, cosk)
+
             ctx.fused_all = True
 
             if return_coverage:
@@ -358,23 +347,44 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
                 dropout_prob_t, \
                 sinq, cosq, sink, cosk = ctx.saved_tensors
 
-            input_q_grads, \
-                input_kv_grads, \
-                input_weight_q_grads, \
-                input_weight_kv_grads, \
-                output_weight_grads, \
-                input_bias_q_grads, input_bias_kv_grads, output_bias_grads \
-                = encdec_multihead_attn_bias_cuda.backward(heads_t[0], output_grads, matmul2_results,
-                                                           dropout_results,
-                                                           attn_scores, mask,
-                                                           input_lin_q_results,
-                                                           input_lin_kv_results,
-                                                           inputs_q, inputs_kv, input_weights_q,
-                                                           input_weights_kv,
-                                                           output_weights, dropout_mask,
-                                                           dropout_prob_t[0])
+            if input_weights_q.requires_grad:
 
-            # else:
+                input_q_grads, \
+                    input_kv_grads, \
+                    input_weight_q_grads, \
+                    input_weight_kv_grads, \
+                    output_weight_grads, \
+                    input_bias_q_grads, input_bias_kv_grads, output_bias_grads \
+                    = encdec_multihead_attn_bias_cuda.backward(heads_t[0], output_grads, matmul2_results,
+                                                               dropout_results,
+                                                               attn_scores, mask,
+                                                               input_lin_q_results,
+                                                               input_lin_kv_results,
+                                                               inputs_q, inputs_kv, input_weights_q,
+                                                               input_weights_kv,
+                                                               output_weights, dropout_mask,
+                                                               dropout_prob_t[0])
+
+            else:
+                input_q_grads, \
+                input_kv_grads, \
+                    = encdec_multihead_attn_bias_cuda.backward_input_only(heads_t[0], output_grads, matmul2_results,
+                                                                          dropout_results,
+                                                                          attn_scores, mask,
+                                                                          input_lin_q_results,
+                                                                          input_lin_kv_results,
+                                                                          inputs_q, inputs_kv, input_weights_q,
+                                                                          input_weights_kv,
+                                                                          output_weights, dropout_mask,
+                                                                          dropout_prob_t[0])
+
+                input_weight_q_grads, \
+                    input_weight_kv_grads, \
+                    output_weight_grads, \
+                    input_bias_q_grads, input_bias_kv_grads, output_bias_grads \
+                    = None, None, None, None, None, None
+
+                    # else:
             #
             #     input_q_grads, \
             #     input_kv_grads, \
@@ -508,12 +518,16 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         # Input2: (activations) [seql_q*seqs, embed_dim ]
         # Output:               [ seql_q, seqs, embed_dim ]
         # GEMM: ( embed_dim x seql_q*seqs ) x ( seql_q*seqs x embed_dim ) = ( embed_dim x embed_dim )
-        output_weight_grads = torch.mm(
-            output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)).transpose(0, 1),
-            matmul2_results.view(matmul2_results.size(0) * matmul2_results.size(1), matmul2_results.size(2)))
 
-        output_bias_grads = torch.sum(
-            output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), 0)
+        if input_weights_q.requires_grad:
+            output_weight_grads = torch.mm(
+                output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)).transpose(0, 1),
+                matmul2_results.view(matmul2_results.size(0) * matmul2_results.size(1), matmul2_results.size(2)))
+
+            output_bias_grads = torch.sum(
+                output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), 0)
+        else:
+            output_weight_grads, output_bias_grads = None, None
 
         output_lin_grads = output_lin_grads.view(output_grads.size(0), output_grads.size(1) * heads_t[0],
                                                  head_dim).transpose(0, 1)
@@ -604,19 +618,26 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         # input2: (activations) [seql_q*seqs, embed_dim(1024)]
         # output:               [embed_dim, embed_dim]
         # GEMM: ( embed_dim x seql_q*seqs ) x ( seql_q*seqs x embed_dim ) = (embed_dim x embed_dim)
-        input_weight_q_grads = torch.mm(queries_grads.transpose(0, 1),
-                                        inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)))
+        if input_weights_q.requires_grad:
+            input_weight_q_grads = torch.mm(queries_grads.transpose(0, 1),
+                                            inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)))
 
-        input_bias_q_grads = torch.sum(queries_grads, 0)
+            input_bias_q_grads = torch.sum(queries_grads, 0)
+        else:
+            input_weight_q_grads, input_bias_q_grads = None, None
         # Input KV Linear GEMM - WGRAD
         # input1: (data grads)  [seql_k*seqs, 2*embed_dim(2048)]
         # input2: (activations) [seql_k*seqs, embed_dim(1024)]
         # output:               [2*embed_dim, embed_dim]
         # GEMM: ( 2*embed_dim x seql_k*seqs ) x ( seql_k*seqs x embed_dim ) = (2*embed_dim x embed_dim)
-        input_weight_kv_grads = torch.mm(input_lin_kv_results_grads.transpose(0, 1),
-                                         inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)))
 
-        input_bias_kv_grads = torch.sum(input_lin_kv_results_grads, 0)
+        if input_weights_q.requires_grad:
+            input_weight_kv_grads = torch.mm(input_lin_kv_results_grads.transpose(0, 1),
+                                             inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)))
+
+            input_bias_kv_grads = torch.sum(input_lin_kv_results_grads, 0)
+        else:
+            input_weight_kv_grads, input_bias_kv_grads = None, None
 
         return None, None, None \
             , input_q_grads, input_kv_grads \

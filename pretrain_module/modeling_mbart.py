@@ -1309,12 +1309,13 @@ class MBartDecoder(MBartPreTrainedModel):
             for p in self.parameters():
                 p.requires_grad = False
 
-            # but we need to enable the cross attention
-            for layer in self.layers:
-                for p in layer.encoder_attn.parameters():
-                    p.requires_grad = True
-                for p in layer.encoder_attn_layer_norm.parameters():
-                    p.requires_grad = True
+            if not opt.freeze_cross_attention:
+                # but we need to enable the cross attention
+                for layer in self.layers:
+                    for p in layer.encoder_attn.parameters():
+                        p.requires_grad = True
+                    for p in layer.encoder_attn_layer_norm.parameters():
+                        p.requires_grad = True
 
         if opt.multilingual_factorized_weights_decoder:
             print("[INFO] Factorizing MBART model into %d languages" % opt.n_languages)
