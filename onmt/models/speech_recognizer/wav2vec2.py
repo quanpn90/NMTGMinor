@@ -427,6 +427,7 @@ class Wav2vecBERT(Wav2vecTransformer):
         self.src_vocab_size = 0
         self.encoder_type = encoder_type
         self.decoder_type = decoder_type
+        self.sub_encoder = sub_encoder
 
         if hasattr(decoder, 'dec_pretrained_model') and decoder.dec_pretrained_model:
             self.model_size = self.decoder.config.bert_hidden_size
@@ -478,6 +479,8 @@ class Wav2vecBERT(Wav2vecTransformer):
 
         context = encoder_output['context']
         src_attention_mask = encoder_output['src']
+        contrastive_loss = 0
+
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bert", "roberta"]:
             # src: [b, src_l]  context: [b, src_l, de_model]
             tgt_token_type = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
@@ -509,16 +512,33 @@ class Wav2vecBERT(Wav2vecTransformer):
             context = context.transpose(0, 1)
             output_dict = defaultdict(lambda: None)
         elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["mbart", "mbart50"]:
+            if self.sub_encoder is not None:
+                src_text_input = batch.get('target')
+                sub_context_mask = batch.get('tgt_selfattn_mask')
+
+                with torch.no_grad():
+                    sub_encoder_output = self.sub_encoder(input_ids=src_text_input,
+                                                          attention_mask=sub_context_mask)
+                    sub_context = sub_encoder_output[0]
+                    # print(torch.isnan(sub_context).float().sum())
+
+            else:
+                sub_context = None
+                sub_context_mask = None
+
             src_attention_mask = src_attention_mask   # new version
             # tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
             tgt_attention_mask = tgt.new(*tgt.size()).fill_(1)
 
-            decoder_output = self.decoder(input_ids=tgt,
+            decoder_outputs = self.decoder(input_ids=tgt,
                                           attention_mask=tgt_attention_mask,
                                           encoder_hidden_states=context,
                                           encoder_attention_mask=src_attention_mask,
+                                          sub_encoder_hidden_states=sub_context,
+                                          sub_encoder_attention_mask=sub_context_mask,
                                           lang=tgt_lang, mixture=None)
-            decoder_output = decoder_output[0]
+            decoder_output = decoder_outputs[0]
+            contrastive_loss = decoder_outputs[-1]
             output = decoder_output
             output_dict = defaultdict(lambda: None)
 
@@ -577,6 +597,18 @@ class Wav2vecBERT(Wav2vecTransformer):
         if self.ctc:
             # raise NotImplementedError
             output_dict['encoder_logits'] = self.ctc_linear(output_dict['context'])
+
+        if self.sub_encoder is not None:
+            # contrastive loss has size: t x b x h
+            # stacked sum from multiple layers
+            contrastive_loss = contrastive_loss.transpose(0, 1).contiguous()
+
+            # the input is the target full without the final token so
+            # remove the last time step from the mask
+            mask = sub_context_mask[:, :-1].unsqueeze(-1)  # b x t x 1
+            contrastive_loss.masked_fill_(mask, 0)  # masked values = zero
+
+            output_dict['contrastive_loss'] = contrastive_loss.sum()
 
         return output_dict
 

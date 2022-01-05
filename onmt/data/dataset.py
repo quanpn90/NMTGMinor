@@ -144,7 +144,7 @@ def collect_fn(src_data, tgt_data,
                                                                            upsampling=upsampling, feature_size=feature_size,
                                                                            dataname="source", src_pad=src_pad)
         tensors['src_type'] = src_type
-        tensors['src_selfattn_mask'] = tensors['source'].ne(src_pad)
+        tensors['src_selfattn_mask'] = tensors['source'].eq(src_pad)
         tensors['source'] = tensors['source'].transpose(0, 1).contiguous()
         if tensors['source_pos'] is not None:
             tensors['source_pos'] = tensors['source_pos'].transpose(0, 1)
@@ -154,6 +154,7 @@ def collect_fn(src_data, tgt_data,
     if tgt_data is not None:
         target_full, target_pos, tgt_lengths = merge_data(tgt_data, align_right=tgt_align_right,
                                                           dataname="target", tgt_pad=tgt_pad)
+        tensors['tgt_selfattn_mask'] = target_full.eq(tgt_pad)
         target_full = target_full.t().contiguous()  # transpose BxT to TxB
         tensors['target'] = target_full
         tensors['target_input'] = target_full[:-1]
@@ -162,6 +163,7 @@ def collect_fn(src_data, tgt_data,
             tensors['target_pos'] = target_pos.t().contiguous()[:-1]
         tgt_size = sum([len(x) - 1 for x in tgt_data])
         tensors['tgt_lengths'] = tgt_lengths
+
     else:
         tgt_size = 0
         tensors['tgt_lengths'] = None

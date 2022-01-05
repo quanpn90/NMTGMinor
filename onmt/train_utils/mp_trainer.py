@@ -402,7 +402,7 @@ class Trainer(object):
             streaming_state = None
 
         # try:
-        with autocast():
+        with autocast(enabled=opt.fp16):
             targets = batch.get('target_output')
             tgt_mask = None
             outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
@@ -545,7 +545,7 @@ class Trainer(object):
 
                 if samples:
                     with maybe_no_sync():
-                        with autocast():
+                        with autocast(enabled=opt.fp16):
                             batch = prepare_sample(samples, device=self.device)
                             targets = batch.get('target_output')
                             tgt_mask = targets.ne(onmt.constants.PAD)
@@ -630,6 +630,7 @@ class Trainer(object):
         counter = 0
         num_accumulated_words = zero_tensor()
         num_accumulated_sents = zero_tensor()
+        report_contrastive_loss = zero_tensor()
 
         if opt.streaming:
             streaming_state = self.model.init_stream()
@@ -672,7 +673,7 @@ class Trainer(object):
                         return contextlib.ExitStack()  # dummy contextmanager
 
                 # with maybe_no_sync():
-                with autocast():
+                with autocast(enabled=opt.fp16):
 
                     tgt_mask = targets.ne(onmt.constants.PAD)
                     if opt.load_pretrained_classifier:
@@ -721,6 +722,11 @@ class Trainer(object):
                     else:
                         rec_loss_data = None
 
+                    if opt.contrastive_loss_coeff > 0 and 'contrastive_loss' in outputs:
+                        contrastive_loss = outputs['contrastive_loss']
+                        full_loss = full_loss + opt.contrastive_loss_coeff * contrastive_loss
+                        report_contrastive_loss.add_(contrastive_loss.item())
+
                     correct, total = loss_dict['correct'], loss_dict['total']
                     optimizer = self.optim.optimizer
 
@@ -746,7 +752,7 @@ class Trainer(object):
                     # the perturbation is the gradient of the model w.r.t the input
                     perturb = model_input.grad.data.new(*model_input.size()).copy_(model_input.grad.data)
 
-                    with autocast():
+                    with autocast(enabled=opt.fp16):
                         assert model_input.grad is not None
                         outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                              pretrained_layer_states=layer_states,
@@ -897,6 +903,7 @@ class Trainer(object):
                 self.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
                 self.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
                 self.all_reduce(report_src_words, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(report_contrastive_loss, op=dist.ReduceOp.SUM, group=self.group)
 
                 if self.is_main():
                     log_string = ("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; " %
@@ -921,6 +928,11 @@ class Trainer(object):
                         ctc_loss = report_ctc_loss.item() / report_tgt_words.item()
                         log_string += (" ctcloss: %8.2f ; " % ctc_loss)
 
+                    if opt.contrastive_loss_coeff > 0.0:
+                        #
+                        ctv_loss = report_contrastive_loss.item() / report_tgt_words.item()
+                        log_string += (" ctv_loss: %8.2f ; " % ctv_loss)
+
                     log_string += ("lr: %.7f ; updates: %7d; " %
                                    (self.optim.get_learning_rate(),
                                     self.optim._step))
@@ -941,6 +953,8 @@ class Trainer(object):
                 report_rev_loss.zero_()
                 report_mirror_loss.zero_()
                 report_ctc_loss.zero_()
+                if report_contrastive_loss is not None:
+                    report_contrastive_loss.zero_()
                 start = time.time()
 
             # increase i by world size

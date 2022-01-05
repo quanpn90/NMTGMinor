@@ -513,6 +513,8 @@ def make_parser(parser):
                         help='Adapter for wav2vec model')
     parser.add_argument('-mutual_modality_training', type=float, default=0,
                         help='Coefficient for the Mutual Modality Training term')
+    parser.add_argument('-contrastive_loss_coeff', type=float, default=0.0,
+                        help='Coefficient for the Mutual Modality Training term')
 
     return parser
 

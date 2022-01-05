@@ -171,7 +171,7 @@ def init_bert_params(module):
 #     quantizer_factor: int = field(
 #         default=3,
 #         metadata={
-#             "help": "dimensionality increase for inner quantizer layers (if depth > 1)"
+#             "help": "dimensionality increase for inner quantizer layers (if depth > 1)"   
 #         },
 #     )
 #     latent_vars: int = field(

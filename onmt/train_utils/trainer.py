@@ -649,6 +649,11 @@ class Trainer(object):
         counter = 0
         num_accumulated_words = zero_tensor()
         num_accumulated_sents = zero_tensor()
+
+        if opt.contrastive_loss_coeff > 0:
+            report_contrastive_loss = zero_tensor()
+        else:
+            report_contrastive_loss = None
         grad_div = 1
 
         nan = False
@@ -682,7 +687,6 @@ class Trainer(object):
             oom = zero_tensor()
 
             try:
-
                 counter = counter + 1
                 reduce = True if counter >= opt.update_frequency or i == (n_samples - 1) else False
 
@@ -743,12 +747,12 @@ class Trainer(object):
                         else:
                             rec_loss_data = None
 
-                        if opt.lfv_multilingual:
-                            lid_logits = outputs['lid_logits']
-                            lid_labels = batch.get('target_lang')
-                            lid_loss_function = self.loss_function.get_loss_function('lid_loss')
-                            lid_loss = lid_loss_function(lid_logits, lid_labels)
-                            full_loss = full_loss + lid_loss
+                        # if opt.lfv_multilingual:
+                        #     lid_logits = outputs['lid_logits']
+                        #     lid_labels = batch.get('target_lang')
+                        #     lid_loss_function = self.loss_function.get_loss_function('lid_loss')
+                        #     lid_loss = lid_loss_function(lid_logits, lid_labels)
+                        #     full_loss = full_loss + lid_loss
 
                         optimizer = self.optim.optimizer
 
@@ -899,6 +903,8 @@ class Trainer(object):
                         ctc_loss = report_ctc_loss.item() / report_tgt_words.item()
                         log_string += (" ctcloss: %8.2f ; " % ctc_loss)
 
+
+
                     log_string += ("lr: %.7f ; updates: %7d; " %
                                    (self.optim.getLearningRate(),
                                     self.optim._step))
@@ -919,6 +925,7 @@ class Trainer(object):
                 report_rev_loss.zero_()
                 report_mirror_loss.zero_()
                 report_ctc_loss.zero_()
+
                 start = time.time()
 
             # increase i by world size

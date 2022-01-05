@@ -155,24 +155,7 @@ def build_tm_model(opt, dicts):
         from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecBERT
 
         encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model)
-
-        # from pretrain_module.configuration_roberta import RobertaConfig
-        # from pretrain_module.modeling_roberta import RobertaModel
-        #
-        # dec_roberta_config = RobertaConfig.from_json_file(opt.dec_config_file)
-        #
-        # decoder = RobertaModel(dec_roberta_config,
-        #                        bert_word_dropout=opt.dec_pretrain_word_dropout,
-        #                        bert_emb_dropout=opt.dec_pretrain_emb_dropout,
-        #                        bert_atten_dropout=opt.dec_pretrain_attn_dropout,
-        #                        bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
-        #                        bert_hidden_size=opt.dec_pretrain_hidden_size,
-        #                        is_decoder=True,
-        #                        gradient_checkpointing=opt.dec_gradient_checkpointing,
-        #                        max_pos_len=opt.max_pos_length,
-        #                        diff_head_pos=opt.diff_head_pos,
-        #                        pos_emb_type=opt.pos_emb_type,
-        #                        )
+        sub_encoder = None
 
         if opt.dec_pretrained_model == "bert":
             from pretrain_module.configuration_bert import BertConfig
@@ -211,11 +194,15 @@ def build_tm_model(opt, dicts):
                                    )
         elif "mbart" in opt.dec_pretrained_model:
             from pretrain_module.configuration_mbart import MBartConfig
-            from pretrain_module.modeling_mbart import MBartDecoder
+            from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder
 
             dec_mbart_config = MBartConfig.from_json_file(opt.dec_config_file)
 
             decoder = MBartDecoder(dec_mbart_config, opt)
+
+            if opt.enc_config_file:
+                enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
+                sub_encoder = MBartEncoder(enc_mbart_config, opt)
 
         elif opt.dec_pretrained_model == "bart":
             from pretrain_module.configuration_bart import BartConfig
@@ -247,9 +234,18 @@ def build_tm_model(opt, dicts):
             decoder.load_state_dict(dec_model_state_dict)
             print("[INFO] ... Done")
 
+            if opt.enc_state_dict is not None:
+                print("[INFO] Loading weights for mBART encoder from: %s ..." % opt.enc_state_dict)
+                enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+                sub_encoder.load_state_dict(enc_model_state_dict)
+                for parameter in sub_encoder.parameters():
+                    parameter.requires_grad = False # don't update these guys
+                    sub_encoder.embed_tokens = decoder.embed_tokens # and reduce memory usage
+
         decoder.dec_pretrained_model = opt.dec_pretrained_model
 
-        model = Wav2vecBERT(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
+        model = Wav2vecBERT(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0,
+                            sub_encoder=sub_encoder)
 
     elif opt.model in ['wav2vec2_transformer']:
         from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecTransformer

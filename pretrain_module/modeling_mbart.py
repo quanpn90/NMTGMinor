@@ -550,6 +550,8 @@ class MBartEncoderLayer(nn.Module):
     def __init__(self, config: MBartConfig):
         super().__init__()
         self.embed_dim = config.d_model
+        config.attention_dropout = 0.0
+        config.dropout = 0.0
         self.self_attn = MBartAttention(
             embed_dim=self.embed_dim,
             num_heads=config.encoder_attention_heads,
@@ -577,6 +579,7 @@ class MBartEncoderLayer(nn.Module):
                 self.fused_function = mlp_gelu_function
                 self.fused = True
 
+
     def forward(
             self,
             hidden_states: torch.Tensor,
@@ -593,12 +596,17 @@ class MBartEncoderLayer(nn.Module):
                 returned tensors for more detail.
         """
         residual = hidden_states
+
+        # print("check before self attn norm,", torch.isnan(hidden_states).float().sum())
         hidden_states = self.self_attn_layer_norm(hidden_states)
+        # print("check after attn norm,", torch.isnan(hidden_states).float().sum())
+
         hidden_states, attn_weights, _ = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             output_attentions=output_attentions,
         )
+
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
 
@@ -607,6 +615,20 @@ class MBartEncoderLayer(nn.Module):
         hidden_states = self.activation_fn(self.fc1(hidden_states))
         hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
         hidden_states = self.fc2(hidden_states)
+
+        if self.fused and hidden_states.is_cuda:
+            weights = [self.fc1.weight, self.fc2.weight]
+            biases = [self.fc1.bias, self.fc2.bias]
+
+            dropout = self.activation_dropout if self.training else 0.0
+            hidden_states = self.fused_function(dropout, False, hidden_states, *weights, *biases).type_as(hidden_states)
+
+        else:
+
+            hidden_states = self.activation_fn(self.fc1(hidden_states))
+            hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
+            hidden_states = self.fc2(hidden_states)
+
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
 
@@ -828,7 +850,8 @@ class MBartDecoderLayer(nn.Module):
             attention_mask: Optional[torch.Tensor] = None,
             encoder_hidden_states: Optional[torch.Tensor] = None,
             encoder_attention_mask: Optional[torch.Tensor] = None,
-            # past_key_value: Optional[Tuple[torch.Tensor]] = None,
+            sub_encoder_hidden_states: Optional[torch.Tensor] = None,
+            sub_encoder_attention_mask: Optional[torch.Tensor] = None,
             output_attentions: Optional[bool] = False,
             incremental: Optional[bool] = False,
             incremental_cache=None,
@@ -875,23 +898,39 @@ class MBartDecoderLayer(nn.Module):
         if encoder_hidden_states is not None:
             residual = hidden_states
             hidden_states = self.encoder_attn_layer_norm(hidden_states)
+            attention_input = hidden_states
 
             # cross_attn cached key/values tuple is at positions 3,4 of present_key_value tuple
             # cross_attn_past_key_value = past_key_value[-2:] if past_key_value is not None else None
             hidden_states, cross_attn_weights, incremental_cache = self.encoder_attn(
-                hidden_states=hidden_states,
+                hidden_states=attention_input,
                 key_value_states=encoder_hidden_states,
                 attention_mask=encoder_attention_mask,
                 output_attentions=output_attentions,
                 incremental=incremental, incremental_cache=incremental_cache,
                 lang=lang, mixture=mixture
             )
+
+            # perform cross-attention on the sub-hidden states
+            if sub_encoder_hidden_states is not None:
+                sub_hidden_states, sub_cross_attn_weights, _ = self.encoder_attn(
+                    hidden_states=attention_input,
+                    key_value_states=sub_encoder_hidden_states,
+                    attention_mask=sub_encoder_attention_mask,
+                    output_attentions=output_attentions,
+                    incremental=False, incremental_cache=None,
+                    lang=lang, mixture=mixture
+                )
+
+                # t x b x h -> sum to 1
+                contrastive_loss = F.mse_loss(hidden_states.float(), sub_hidden_states.float(), reduction='none')
+
+            else:
+                contrastive_loss = None
+
             # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
             # hidden_states = residual + hidden_states
             hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
-
-            # add cross-attn to positions 3,4 of present_key_value tuple
-            # present_key_value = present_key_value + cross_attn_present_key_value
 
         # Fully Connected
         residual = hidden_states
@@ -938,6 +977,10 @@ class MBartDecoderLayer(nn.Module):
 
         if output_attentions:
             outputs += (self_attn_weights, cross_attn_weights)
+
+        if contrastive_loss is not None:
+            # print("Return contrastive loss here,", contrastive_loss.size())
+            outputs += (contrastive_loss, )
 
         return outputs, incremental_cache
 
@@ -1113,11 +1156,12 @@ class MBartEncoder(MBartPreTrainedModel):
         embed_tokens (nn.Embedding): output embedding
     """
 
-    def __init__(self, config: MBartConfig, embed_tokens: Optional[nn.Embedding] = None):
+    def __init__(self, config: MBartConfig, opt, embed_tokens: Optional[nn.Embedding] = None):
         super().__init__(config)
 
         self.dropout = config.dropout
         self.layerdrop = config.encoder_layerdrop
+        self.opt = opt
 
         embed_dim = config.d_model
         self.padding_idx = config.pad_token_id
@@ -1199,12 +1243,6 @@ class MBartEncoder(MBartPreTrainedModel):
         hidden_states = inputs_embeds + embed_pos
         hidden_states = self.layernorm_embedding(hidden_states)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-
-        # expand attention_mask
-        if attention_mask is not None:
-            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            attention_mask = _expand_mask(attention_mask, inputs_embeds.dtype)
-
         encoder_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
 
@@ -1216,25 +1254,11 @@ class MBartEncoder(MBartPreTrainedModel):
             if self.training and (dropout_probability < self.layerdrop):  # skip the layer
                 layer_outputs = (None, None)
             else:
-                if self.gradient_checkpointing and self.training:
-
-                    def create_custom_forward(module):
-                        def custom_forward(*inputs):
-                            return module(*inputs, output_attentions)
-
-                        return custom_forward
-
-                    layer_outputs = torch.utils.checkpoint.checkpoint(
-                        create_custom_forward(encoder_layer),
-                        hidden_states,
-                        attention_mask,
-                    )
-                else:
-                    layer_outputs = encoder_layer(
-                        hidden_states,
-                        attention_mask,
-                        output_attentions=output_attentions,
-                    )
+                layer_outputs = encoder_layer(
+                    hidden_states,
+                    attention_mask,
+                    output_attentions=output_attentions,
+                )
 
                 hidden_states = layer_outputs[0]
 
@@ -1378,6 +1402,8 @@ class MBartDecoder(MBartPreTrainedModel):
             attention_mask=None,
             encoder_hidden_states=None,
             encoder_attention_mask=None,
+            sub_encoder_hidden_states=None,
+            sub_encoder_attention_mask=None,
             # past_key_values=None,
             inputs_embeds=None,
             incremental=False, incremental_cache=None,
@@ -1490,6 +1516,7 @@ class MBartDecoder(MBartPreTrainedModel):
         all_self_attns = () if output_attentions else None
         all_cross_attentions = () if (output_attentions and encoder_hidden_states is not None) else None
         # next_decoder_cache = () if use_cache else None
+        contrastive_loss = 0
 
         for idx, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
@@ -1505,6 +1532,8 @@ class MBartDecoder(MBartPreTrainedModel):
                 attention_mask=attention_mask,
                 encoder_hidden_states=encoder_hidden_states,
                 encoder_attention_mask=encoder_attention_mask,
+                sub_encoder_hidden_states=sub_encoder_hidden_states,
+                sub_encoder_attention_mask=sub_encoder_attention_mask,
                 output_attentions=output_attentions,
                 lang=lang,
                 mixture=mixture
@@ -1517,6 +1546,12 @@ class MBartDecoder(MBartPreTrainedModel):
                 if encoder_hidden_states is not None:
                     all_cross_attentions += (layer_outputs[2],)
 
+            # add up the contrastive_loss per layer
+            if sub_encoder_hidden_states is not None:
+                contrastive_loss_ = layer_outputs[-1]
+                # print("Receive contrastive loss after layer", contrastive_loss_.size())
+                contrastive_loss = contrastive_loss + contrastive_loss_
+
         hidden_states = self.layer_norm(hidden_states)
 
         # add hidden states from the last decoder layer
@@ -1526,7 +1561,7 @@ class MBartDecoder(MBartPreTrainedModel):
         if not return_dict:
             return tuple(
                 v
-                for v in [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions]
+                for v in [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions, contrastive_loss]
                 if v is not None
             )
         return BaseModelOutputWithPastAndCrossAttentions(
