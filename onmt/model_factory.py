@@ -141,7 +141,8 @@ def build_tm_model(opt, dicts):
                                      padding_idx=onmt.constants.TGT_PAD)
     else:
         assert opt.model in ["pretrain_transformer", "wav2vec2_bert",
-                             "wav2vec_mbart50"], "Expecting a pretrained model that has a " \
+                             "wav2vec_mbart50", "quantize_wav2vec2_bert", "quantize_wav2vec2_mbart50"], \
+            "Expecting a pretrained model that has a " \
                                                  "separate Embedding initialization"
         embedding_tgt = None
 
@@ -151,10 +152,22 @@ def build_tm_model(opt, dicts):
     else:
         language_embeddings = None
 
-    if opt.model in ['wav2vec2_bert']:
+    if opt.model in ['wav2vec2_bert', 'quantize_wav2vec2_bert', 'quantize_wav2vec2_mbart50']:
         from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecBERT
 
-        encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model)
+        if opt.model.startswith("quantize"):
+            from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder
+            from pretrain_module.configuration_mbart import MBartConfig
+            enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
+            discrete_encoder = MBartEncoder(enc_mbart_config, opt)
+            print("[INFO] Loading weights for mBART encoder from: %s ..." % opt.enc_state_dict)
+            enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+            discrete_encoder.load_state_dict(enc_model_state_dict)
+        else:
+            discrete_encoder = None
+
+        encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model, discrete_encoder=discrete_encoder)
+
         sub_encoder = None
 
         if opt.dec_pretrained_model == "bert":
@@ -200,9 +213,9 @@ def build_tm_model(opt, dicts):
 
             decoder = MBartDecoder(dec_mbart_config, opt)
 
-            if opt.enc_config_file:
-                enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
-                sub_encoder = MBartEncoder(enc_mbart_config, opt)
+            # if opt.enc_config_file:
+            #     enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
+            #     sub_encoder = MBartEncoder(enc_mbart_config, opt)
 
         elif opt.dec_pretrained_model == "bart":
             from pretrain_module.configuration_bart import BartConfig
@@ -212,10 +225,11 @@ def build_tm_model(opt, dicts):
 
             decoder = BartDecoder(dec_bart_config, opt)
 
-        if opt.load_from or not opt.dec_state_dict:
-            if opt.verbose:
-                print("[INFO] No weights loading from {} for decoder".format(opt.dec_pretrained_model))
-        else:
+        # if opt.load_from or not opt.dec_state_dict:
+        #     if opt.verbose:
+        #         print("[INFO] No weights loading from {} for decoder".format(opt.dec_pretrained_model))
+        # else:
+        if len(opt.dec_state_dict) > 1:
             print("[INFO] Loading weights for decoder from: %s ..." % opt.dec_state_dict)
             dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
 
@@ -234,13 +248,13 @@ def build_tm_model(opt, dicts):
             decoder.load_state_dict(dec_model_state_dict)
             print("[INFO] ... Done")
 
-            if opt.enc_state_dict is not None:
-                print("[INFO] Loading weights for mBART encoder from: %s ..." % opt.enc_state_dict)
-                enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
-                sub_encoder.load_state_dict(enc_model_state_dict)
-                for parameter in sub_encoder.parameters():
-                    parameter.requires_grad = False # don't update these guys
-                    sub_encoder.embed_tokens = decoder.embed_tokens # and reduce memory usage
+        # if len(opt.enc_state_dict) > 1:
+        #     print("[INFO] Loading weights for mBART encoder from: %s ..." % opt.enc_state_dict)
+        #     enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+        #     sub_encoder.load_state_dict(enc_model_state_dict)
+        #     for parameter in sub_encoder.parameters():
+        #         parameter.requires_grad = False # don't update these guys
+        #         sub_encoder.embed_tokens = decoder.embed_tokens # and reduce memory usage
 
         decoder.dec_pretrained_model = opt.dec_pretrained_model
 

@@ -290,6 +290,7 @@ class Binarizer:
 
             # next(f) breaks f.tell(), hence readline() must be used
             line = safe_readline(f)
+            n_bad_sentences = 0
 
             while line:
                 if 0 < end < f.tell():
@@ -314,7 +315,8 @@ class Binarizer:
                         pad_id = vocab.convertToIdx(["<pad>"], None)[0]
                         assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
                     if len(tensor) <= 2:
-                        print("[Warning] empty sentence with %d tokens including <bos> <eos>" % len(tensor))
+                        n_bad_sentences += 1
+                        # print("[Warning] empty sentence with %d tokens including <bos> <eos>" % len(tensor))
                     sizes += [len(tensor)]
                     data += [np.asarray(tensor)]
 
@@ -326,6 +328,8 @@ class Binarizer:
                         print("[INFO] Thread %d processed %d lines." % (worker_id, count))
 
         if verbose:
+            if n_bad_sentences > 0:
+                print("[Warning] %d empty sentence including <bos> <eos>" % n_bad_sentences)
             print("[INFO] Thread %d Done." % worker_id)
         result['data'] = data
         result['sizes'] = sizes

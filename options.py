@@ -394,7 +394,7 @@ def make_parser(parser):
     parser.add_argument('-enc_pretrain_hidden_size', type=int, default=768,
                         help='Size of bert hidden')
 
-    parser.add_argument('-enc_config_file', default="path/bert_config.json", type=str,
+    parser.add_argument('-enc_config_file', default="", type=str,
                         help=""" the name of src pretrained model configuration.""")
 
     parser.add_argument('-enc_state_dict', default="", type=str,
@@ -423,7 +423,7 @@ def make_parser(parser):
     parser.add_argument('-dec_pretrain_hidden_size', type=int, default=768,
                         help='Size of bert hidden')
 
-    parser.add_argument('-dec_config_file', default="bert_config.json", type=str,
+    parser.add_argument('-dec_config_file', default="", type=str,
                         help=""" the name of tgt pretrained model configuration.""")
     parser.add_argument('-dec_state_dict', default="", type=str,
                         help=""" the state_dict of the  pretrained model""")
@@ -488,6 +488,10 @@ def make_parser(parser):
 
     parser.add_argument('-wav2vec2_pretrained_model', default='wav2vec2-large-lv60', type=str,
                         help="""Wav2vec2 model from HuggingFace. """)
+    parser.add_argument('-wav2vec2_quantize', action='store_true',
+                        help='Keep the quantization part of Wav2vec 2.0')
+    parser.add_argument('-wav2vec2_dual_output', action='store_true',
+                        help='Use both wav2vec quantized and continuous outputs for decoder')
 
     parser.add_argument('-freeze_encoder', action='store_true',
                         help='Freeze the whole wav2vec weights.')
@@ -785,6 +789,12 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'wav2vec_adapter'):
         opt.wav2vec_adapter = 0
+
+    if not hasattr(opt, 'wav2vec2_quantize'):
+        opt.wav2vec2_quantize = False
+
+    if not hasattr(opt, 'wav2vec2_dual_output'):
+        opt.wav2vec2_dual_output = False
 
     if not hasattr(opt, 'decoder_adapter'):
         opt.decoder_adapter = 0

@@ -214,25 +214,35 @@ class GumbelVectorQuantizer(nn.Module):
 
         result = {"num_vars": self.num_vars * self.groups}
 
+        # B x H x T -> B x T x H if not time first
         if not self.time_first:
             x = x.transpose(1, 2)
 
         bsz, tsz, fsz = x.shape
         x = x.reshape(-1, fsz)
+
+        # from fsz -> group * num_vars
         x = self.weight_proj(x)
         x = x.view(bsz * tsz * self.groups, -1)
 
+        # choose the (indices of) max var in num_vars
         _, k = x.max(-1)
+
+        # hard_x has the original size of x
+        # 1 for chosen value, 0 for non-chosen value
         hard_x = (
             x.new_zeros(*x.shape)
                 .scatter_(-1, k.view(-1, 1), 1.0)
                 .view(bsz * tsz, self.groups, -1)
         )
+
+        # mean over the bsz * tsz dimension?
         hard_probs = torch.mean(hard_x.float(), dim=0)
         result["code_perplexity"] = torch.exp(
             -torch.sum(hard_probs * torch.log(hard_probs + 1e-7), dim=-1)
         ).sum()
 
+        # code probabilities for each group
         avg_probs = torch.softmax(
             x.view(bsz * tsz, self.groups, -1).float(), dim=-1
         ).mean(dim=0)
@@ -261,7 +271,11 @@ class GumbelVectorQuantizer(nn.Module):
                     .detach()
             )
 
+        # x size: [bsz * tsz * self.groups, self.num_vars]
+        # the last dimension is basically distribution over different vars (for each group)
         x = x.unsqueeze(-1) * vars
+
+        # vars is "probably" latent variable embeddings
         x = x.view(bsz * tsz, self.groups, self.num_vars, -1)
         x = x.sum(-2)
         x = x.view(bsz, tsz, -1)

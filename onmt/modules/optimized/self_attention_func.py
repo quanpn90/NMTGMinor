@@ -34,7 +34,7 @@ def rotate_backward(dx):
 
 class SelfAttnFunc(torch.autograd.Function):
     @staticmethod
-    # @custom_fwd(cast_inputs=torch.float16)
+    @custom_fwd()
     def forward(ctx, use_time_mask, is_training, heads, inputs,
                 input_weights, output_weights,
                 input_biases, output_biases,
@@ -165,7 +165,6 @@ class SelfAttnFunc(torch.autograd.Function):
             # Self Attention Time Mask
             if use_time_mask:
                 assert (len(mask.size()) == 2), "Timing mask is not 2D!"
-                # assert (mask.size(0) == mask.size(1)), "Sequence length should match!"
                 mask = mask.to(torch.bool)
                 matmul1_results = matmul1_results.masked_fill_(mask, float('-inf'))
             # Key Padding Mask
@@ -239,7 +238,7 @@ class SelfAttnFunc(torch.autograd.Function):
             return (outputs,)
 
     @staticmethod
-    # @custom_bwd
+    @custom_bwd
     def backward(ctx, *output_grads):
 
         if ctx.return_coverage:

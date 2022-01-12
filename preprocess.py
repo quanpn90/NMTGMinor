@@ -371,7 +371,8 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
 
 
 def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, max_src_length=64, max_tgt_length=64,
-                          add_bos=True, data_type='int64', num_workers=1, verbose=False):
+                          add_bos=True, data_type='int64', num_workers=1, verbose=False,
+                          external_tokenizer=None, src_lang=None, tgt_lang=None):
     src, tgt = [], []
     src_sizes = []
     tgt_sizes = []
@@ -380,7 +381,10 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
     binarized_src = Binarizer.binarize_file(src_file, src_dicts, tokenizer,
                                             bos_word=None, eos_word=None,
                                             data_type=data_type,
-                                            num_workers=num_workers, verbose=verbose)
+                                            num_workers=num_workers, verbose=verbose,
+                                            external_tokenizer=external_tokenizer,
+                                            lang=src_lang
+                                            )
 
     if add_bos:
         tgt_bos_word = opt.tgt_bos_token
@@ -391,7 +395,10 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
     binarized_tgt = Binarizer.binarize_file(tgt_file, tgt_dicts, tokenizer,
                                             bos_word=tgt_bos_word, eos_word=opt.tgt_eos_token,
                                             data_type=data_type,
-                                            num_workers=num_workers, verbose=verbose)
+                                            num_workers=num_workers, verbose=verbose,
+                                            external_tokenizer=external_tokenizer,
+                                            lang=tgt_lang
+                                            )
 
     src = binarized_src['data']
     src_sizes = binarized_src['sizes']
@@ -770,7 +777,10 @@ def main():
                                                                              add_bos=(not opt.no_bos),
                                                                              data_type=opt.data_type,
                                                                              num_workers=opt.num_threads,
-                                                                             verbose=opt.verbose)
+                                                                             verbose=opt.verbose,
+                                                                             external_tokenizer=opt.external_tokenizer,
+                                                                             src_lang=src_lang,
+                                                                             tgt_lang=tgt_lang)
 
             n_samples = len(src_data)
             if n_input_files == 1:
@@ -794,7 +804,10 @@ def main():
                                                                             add_bos=(not opt.no_bos),
                                                                             data_type=opt.data_type,
                                                                             num_workers=opt.num_threads,
-                                                                            verbose=opt.verbose)
+                                                                            verbose=opt.verbose,
+                                                                            external_tokenizer=opt.external_tokenizer,
+                                                                            src_lang=src_lang,
+                                                                            tgt_lang=tgt_lang)
 
                 train['past_src'] += past_src_data
                 train['past_src_sizes'] += past_src_sizes
@@ -841,7 +854,10 @@ def main():
                                                                              add_bos=(not opt.no_bos),
                                                                              data_type=opt.data_type,
                                                                              num_workers=opt.num_threads,
-                                                                             verbose=opt.verbose)
+                                                                             verbose=opt.verbose,
+                                                                             external_tokenizer=opt.external_tokenizer,
+                                                                             src_lang=src_lang,
+                                                                             tgt_lang=tgt_lang)
 
             n_samples = len(src_data)
             if n_input_files == 1:
@@ -867,7 +883,10 @@ def main():
                                                                             add_bos=(not opt.no_bos),
                                                                             data_type=opt.data_type,
                                                                             num_workers=opt.num_threads,
-                                                                            verbose=opt.verbose)
+                                                                            verbose=opt.verbose,
+                                                                            external_tokenizer=opt.external_tokenizer,
+                                                                            src_lang=src_lang,
+                                                                            tgt_lang=tgt_lang)
 
                 valid['past_src'] += past_src_data
                 valid['past_src_sizes'] += past_src_sizes

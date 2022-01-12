@@ -581,6 +581,7 @@ class Wav2Vec2Model(torch.nn.Module):
             mask_channel_indices=None,
             padding_count=None,
             precomputed_tdnn=False,
+            quantize=False, quantize_only=False,
             lang=None,
             mixture=None
     ):
@@ -603,6 +604,12 @@ class Wav2Vec2Model(torch.nn.Module):
             features = source
 
         features = self.layer_norm(features)
+
+        if quantize:
+            assert self.quantizer is not None
+            quantizer_output = self.quantizer.forward_idx(features)
+        else:
+            quantizer_output = None
 
         if features_only:
             unmasked_features = None
@@ -630,6 +637,14 @@ class Wav2Vec2Model(torch.nn.Module):
                 padding_mask = (1 - padding_mask.flip([-1]).cumsum(-1).flip([-1])).bool()
             else:
                 padding_mask = None
+
+        if quantize_only:
+            quantized_x, quantized_target = quantizer_output
+            output_dict = dict()
+            output_dict['quantized_x'] = quantized_x  # b x t x ?
+            output_dict['quantized_target'] = quantized_target  # b x t x num_groups
+            output_dict['padding_mask'] = padding_mask
+            return output_dict
 
         if self.post_extract_proj is not None:
             features = self.post_extract_proj(features)
@@ -674,12 +689,21 @@ class Wav2Vec2Model(torch.nn.Module):
         x, layer_results = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, mixture=mixture)
 
         if features_only:
-            return {
+            output_dict =  {
                 "x": x,
                 "padding_mask": padding_mask,
                 "features": unmasked_features,
                 "layer_results": layer_results,
             }
+
+            if quantize:
+                quantized_x, quantized_target = quantizer_output
+                output_dict['quantized_x'] = quantized_x  # b x t x ?
+                output_dict['quantized_target'] = quantized_target # b x t x num_groups
+                # print(quantized_x.size(), quantized_target.size())
+                # print(quantized_target)
+
+            return output_dict
 
         if self.quantizer:
             q = self.quantizer(y, produce_targets=False)
@@ -832,8 +856,21 @@ class Wav2Vec2Model(torch.nn.Module):
 
         return pen
 
-    def remove_pretraining_modules(self):
-        self.quantizer = None
+    def remove_pretraining_modules(self, removing_quantizer=True):
+        if removing_quantizer:
+            self.quantizer = None
+        else:
+            print("[INFO] Keeping the quantizer")
+            print(self.quantizer)
+            # self.groups = groups
+            # self.combine_groups = combine_groups
+            # self.input_dim = dim
+            # self.num_vars = num_vars
+            # self.time_first = time_first
+            print("Groups: ", self.quantizer.groups)
+            print("Combine groups: ", self.quantizer.combine_groups)
+            print("num vars: ", self.quantizer.num_vars)
+            print(self.quantizer.vars.size())
         self.project_q = None
         self.target_glu = None
         self.final_proj = None

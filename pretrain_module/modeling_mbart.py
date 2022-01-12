@@ -372,7 +372,7 @@ class MBartAttention(nn.Module):
             use_time_mask = self.is_decoder
             qlen, klen = hidden_states.size(0), hidden_states.size(0)
             mask = attention_mask
-            low_precision = True  # Use CUDA impl
+            low_precision = False  # Use CUDA impl
 
             #TODO: add factorize
 
@@ -622,9 +622,7 @@ class MBartEncoderLayer(nn.Module):
 
             dropout = self.activation_dropout if self.training else 0.0
             hidden_states = self.fused_function(dropout, False, hidden_states, *weights, *biases).type_as(hidden_states)
-
         else:
-
             hidden_states = self.activation_fn(self.fc1(hidden_states))
             hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
             hidden_states = self.fc2(hidden_states)
@@ -1164,6 +1162,7 @@ class MBartEncoder(MBartPreTrainedModel):
         self.opt = opt
 
         embed_dim = config.d_model
+        self.embed_dim = embed_dim
         self.padding_idx = config.pad_token_id
         self.max_source_positions = config.max_position_embeddings
         self.embed_scale = math.sqrt(embed_dim) if config.scale_embedding else 1.0
@@ -1193,30 +1192,14 @@ class MBartEncoder(MBartPreTrainedModel):
             output_hidden_states=None,
             return_dict=None,
     ):
-        r"""
-        Args:
-            input_ids (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`):
-                Indices of input sequence tokens in the vocabulary. Padding will be ignored by default should you
-                provide it.
-
-                Indices can be obtained using :class:`~transformers.MBartTokenizer`. See
-                :meth:`transformers.PreTrainedTokenizer.encode` and :meth:`transformers.PreTrainedTokenizer.__call__`
-                for details.
-
-                `What are input IDs? <../glossary.html#input-ids>`__
-
-            inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`):
-                Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded
-                representation. This is useful if you want more control over how to convert :obj:`input_ids` indices
-                into associated vectors than the model's internal embedding lookup matrix.
-            output_attentions (:obj:`bool`, `optional`):
-                Whether or not to return the attentions tensors of all attention layers. See ``attentions`` under
-                returned tensors for more detail.
-            output_hidden_states (:obj:`bool`, `optional`):
-                Whether or not to return the hidden states of all layers. See ``hidden_states`` under returned tensors
-                for more detail.
-            return_dict (:obj:`bool`, `optional`):
-                Whether or not to return a :class:`~transformers.file_utils.ModelOutput` instead of a plain tuple.
+        """
+        :param input_ids: [T x B] discrete input tokens
+        :param attention_mask: [B x T] attention mask (padded = 1, non-pad = 0]
+        :param inputs_embeds: [T x B x H] optional
+        :param output_attentions:
+        :param output_hidden_states:
+        :param return_dict:
+        :return:
         """
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -1228,20 +1211,23 @@ class MBartEncoder(MBartPreTrainedModel):
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
-            input_shape = input_ids.size()
-            input_ids = input_ids.view(-1, input_shape[-1])
+            pass
         elif inputs_embeds is not None:
-            input_shape = inputs_embeds.size()[:-1]
+            pass
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
 
+        seq_len, batch_size = input_ids.size(0), input_ids.size(1)
+        input_shape = torch.Size([batch_size, seq_len])
+        inputs_embeds = inputs_embeds.view(seq_len, batch_size, -1)
+
         embed_pos = self.embed_positions(input_shape)
 
-        hidden_states = inputs_embeds + embed_pos
-        hidden_states = self.layernorm_embedding(hidden_states)
+        hidden_states = inputs_embeds.transpose(0, 1) + embed_pos
+        hidden_states = self.layernorm_embedding(hidden_states).transpose(0, 1)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         encoder_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
@@ -1280,7 +1266,7 @@ class MBartEncoder(MBartPreTrainedModel):
 class MBartDecoder(MBartPreTrainedModel):
     """
     Transformer decoder consisting of *config.decoder_layers* layers. Each layer is a :class:`MBartDecoderLayer`
-
+\
     Args:
         config: MBartConfig
         embed_tokens (nn.Embedding): output embedding

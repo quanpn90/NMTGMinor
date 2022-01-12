@@ -270,14 +270,13 @@ class DataIterator(EpochBatchIterating):
         batches = list(ShardedIterator(batches, num_shards, self.shard_id, fill_value=batches[0]))
 
         # catch the exception when the data is so small that one iterator is completely empty
-        if batches[0] is None:
+        if len(batches) == 0:
             empty = True
-            print("This iterator is empty")
         else:
             empty = False
-
-        if offset > 0 and offset >= len(batches):
-            return None
+        #
+        # if offset > 0 and offset >= len(batches):
+        #     return None
 
         if self.num_workers > 0:
             os.environ['PYTHONWARNINGS'] = 'ignore:semaphore_tracker:UserWarning'
@@ -318,9 +317,20 @@ class ShardedIterator(CountingIterator):
             raise ValueError('shard_id must be between 0 and num_shards')
 
         sharded_len = int(math.ceil(len(iterable) / float(num_shards)))
+        # 4 shard for 6 gpu:
+        # shard_len = 1
+        # 5 gpus get 0 zeros
+        n_full_gpus = math.floor(len(iterable) / float(sharded_len))
+        #
 
-        if shard_id == (num_shards - 1):  # last shard takes the remaining
-            sharded_len = len(iterable) - sharded_len * (num_shards - 1)
+        # if shard_id == (num_shards - 1):  # last shard takes the remaining
+        #     sharded_len = len(iterable) - sharded_len * (num_shards - 1)
+        if shard_id < n_full_gpus:
+            sharded_len = sharded_len
+        elif shard_id == n_full_gpus:  # the very next one after full
+            sharded_len = len(iterable) - sharded_len * n_full_gpus
+        else:
+            sharded_len = 0
 
         # # first islice takes a list of minibatch-ids from shard_id to max, every "num_shards"
         # # next, zip_longest takes the zip between (0, 1, ... n) and
