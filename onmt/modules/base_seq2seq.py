@@ -67,6 +67,8 @@ class NMTModel(nn.Module):
         assert self.generator is not None, "The generator needs to be created before sharing weights"
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bert", "roberta"]:
             self.generator[0].linear.weight = self.decoder.embeddings.word_embeddings.weight
+        if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["mbart", "mbart50"]:
+            self.generator[0].linear.weight = self.decoder.embed_tokens.weight
         else:
             self.generator[0].linear.weight = self.decoder.word_lut.weight
 

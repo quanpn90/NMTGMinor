@@ -279,7 +279,7 @@ def save_dataset(path, data, format, dicts, src_type):
         print("Done")
 
     elif opt.format in ['mmap', 'mmem']:
-        # print('Saving data to memory indexed data files')
+        print('Saving data to memory indexed data files')
         from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
 
         if opt.asr:
@@ -738,7 +738,6 @@ def main():
                 valid['src_lang'] += src_lang_data
                 valid['tgt_lang'] += tgt_lang_data
 
-
     else:
 
         src_input_files = opt.train_src.split("|")
@@ -755,6 +754,8 @@ def main():
 
         n_input_files = len(src_input_files)
 
+        idx = 0
+        data = dict()
         train = dict()
         train['src'], train['tgt'] = list(), list()
         train['src_sizes'], train['tgt_sizes'] = list(), list()
@@ -809,15 +810,39 @@ def main():
                                                                             src_lang=src_lang,
                                                                             tgt_lang=tgt_lang)
 
-                train['past_src'] += past_src_data
-                train['past_src_sizes'] += past_src_sizes
+                if opt.multi_dataset:
+                    data['prev_src'] = prev_src_data
+                else:
+                    train['past_src'] += past_src_data
+                    train['past_src_sizes'] += past_src_sizes
 
-            train['src'] += src_data
-            train['tgt'] += tgt_data
-            train['src_sizes'] += src_sizes
-            train['tgt_sizes'] += tgt_sizes
-            train['src_lang'] += src_lang_data
-            train['tgt_lang'] += tgt_lang_data
+            if opt.multi_dataset:
+
+                data['src'] = src_data
+                data['tgt'] = tgt_data
+
+                data['src_sizes'] = src_sizes
+                data['tgt_sizes'] = tgt_sizes
+                data['src_lang'] = src_lang_data
+                data['tgt_lang'] = tgt_lang_data
+                print("Saving training set %i %s-%s to disk ..." % (idx, src_lang, tgt_lang))
+
+                # take basedir from opt.save_data
+                path = os.path.join(dirname(opt.save_data), "train.%i.%s-%s" % (idx, src_lang, tgt_lang))
+                os.makedirs(path, exist_ok=True)
+
+                # save data immediately
+                # TODO: save the prev src as well
+                save_dataset(path, data, opt.format, dicts, opt.src_type)
+                idx = idx + 1
+
+            else:
+                train['src'] += src_data
+                train['tgt'] += tgt_data
+                train['src_sizes'] += src_sizes
+                train['tgt_sizes'] += tgt_sizes
+                train['src_lang'] += src_lang_data
+                train['tgt_lang'] += tgt_lang_data
 
         print('Preparing validation ...')
 
@@ -834,6 +859,8 @@ def main():
 
         n_input_files = len(src_input_files)
 
+        idx = 0
+        data = dict()
         valid = dict()
         valid['src'], valid['tgt'] = list(), list()
         valid['src_sizes'], valid['tgt_sizes'] = list(), list()
@@ -891,12 +918,31 @@ def main():
                 valid['past_src'] += past_src_data
                 valid['past_src_sizes'] += past_src_sizes
 
-            valid['src'] += src_data
-            valid['tgt'] += tgt_data
-            valid['src_sizes'] += src_sizes
-            valid['tgt_sizes'] += tgt_sizes
-            valid['src_lang'] += src_lang_data
-            valid['tgt_lang'] += tgt_lang_data
+            if opt.multi_dataset:
+                data['src'] = src_data
+                data['tgt'] = tgt_data
+
+                data['src_sizes'] = src_sizes
+                data['tgt_sizes'] = tgt_sizes
+                data['src_lang'] = src_lang_data
+                data['tgt_lang'] = tgt_lang_data
+
+                print("Saving validation set %i %s-%s to disk ..." % (idx, src_lang, tgt_lang))
+
+                # take basedir from opt.save_data
+                path = os.path.join(dirname(opt.save_data), "valid.%i.%s-%s" % (idx, src_lang, tgt_lang))
+                os.makedirs(path, exist_ok=True)
+
+                # save data immediately
+                save_dataset(path, data, opt.format, dicts, opt.src_type)
+                idx = idx + 1
+            else:
+                valid['src'] += src_data
+                valid['tgt'] += tgt_data
+                valid['src_sizes'] += src_sizes
+                valid['tgt_sizes'] += tgt_sizes
+                valid['src_lang'] += src_lang_data
+                valid['tgt_lang'] += tgt_lang_data
 
         elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
         print("Binarization finished after %s" % elapse)

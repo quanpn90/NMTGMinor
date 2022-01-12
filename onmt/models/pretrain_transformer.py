@@ -53,7 +53,7 @@ class PretrainTransformer(NMTModel):
         return
 
     def forward(self, batch, target_mask=None, streaming=False, zero_encoder=False,
-                mirror=False, streaming_state=None, nce=False):
+                mirror=False, streaming_state=None, nce=False, **kwargs):
         """
         :param nce: use noise contrastive estimation
         :param streaming_state:
@@ -81,10 +81,22 @@ class PretrainTransformer(NMTModel):
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
+        # print("HELLO MBART")
+
         src_attention_mask = src.ne(onmt.constants.SRC_PAD).long()  # [b, src_len]
         if hasattr(self.encoder, 'enc_pretrained_model') and self.encoder.enc_pretrained_model in ["bert", "roberta"]:
             segments_tensor = src.ne(onmt.constants.SRC_PAD).long()
             enc_outputs = self.encoder(src, src_attention_mask, segments_tensor)  # the encoder is a pretrained model
+            context = enc_outputs[0]
+            encoder_output = defaultdict(lambda: None)
+            encoder_output['context'] = context
+            encoder_output['src_attention_mask'] = src_attention_mask
+            encoder_output['streaming_state'] = None
+        if hasattr(self.encoder, 'enc_pretrained_model') and self.encoder.enc_pretrained_model in ["mbart", "mbart50"]:
+            # print("HELLO ENCODER")
+            # segments_tensor = src.ne(onmt.constants.SRC_PAD).long()
+            src_attention_mask = batch.get('src_selfattn_mask')
+            enc_outputs = self.encoder(org_src, src_attention_mask)  # the encoder is a pretrained model
             context = enc_outputs[0]
             encoder_output = defaultdict(lambda: None)
             encoder_output['context'] = context
@@ -120,6 +132,21 @@ class PretrainTransformer(NMTModel):
             output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
             output_dict = defaultdict(lambda: None)
             context = context.transpose(0, 1)  # to [src_l, b, de_model]
+        if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["mbart", "mbart50"]:
+            # print("HELLO DECODER")
+            # src: [b, src_l]  context: [b, src_l, de_model]
+            tgt_attention_mask = None
+            decoder_output = self.decoder(input_ids=tgt,
+                                          attention_mask=tgt_attention_mask,
+                                          encoder_hidden_states=context,
+                                          encoder_attention_mask=src_attention_mask,
+                                          )
+
+            decoder_output = decoder_output[0]
+            output = decoder_output
+            # output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
+            output_dict = defaultdict(lambda: None)
+            # context = context.transpose(0, 1)  # to [src_l, b, de_model]
         else:
             context = context.transpose(0, 1)  # to  [src_l, b, de_model] src: [b, l]
             decoder_output = self.decoder(tgt, context, src,
@@ -325,6 +352,11 @@ class PretrainTransformer(NMTModel):
             context = context.transpose(0, 1)  # [len, batch_size, hidden]
             encoder_output = defaultdict(lambda: None)
             encoder_output["context"] = context
+        elif self.encoder.enc_pretrained_model in ['mbart', 'mbart50']:
+            src_attention_mask = batch.get("src_selfattn_mask")
+            enc_outputs = self.encoder(src_transposed, src_attention_mask)
+            context = enc_outputs[0]
+            encoder_output["context"] = context
         else:
             print("Warning: unknown enc_pretrained_model")
             raise NotImplementedError
@@ -334,6 +366,8 @@ class PretrainTransformer(NMTModel):
             mask_src = None
         elif dec_pretrained_model in["bert", "roberta"]:
             mask_src = src_transposed.ne(onmt.constants.SRC_PAD).unsqueeze(1)  # batch_size  x 1 x len_src for broadcasting
+        elif dec_pretrained_model in["mbart", "mbart50"]:
+            mask_src = src_attention_mask  # batch_size  x 1 x len_src for broadcasting
         else:
             print("Warning: unknown dec_pretrained_model")
             raise NotImplementedError

@@ -478,6 +478,14 @@ def build_tm_model(opt, dicts):
                                    diff_head_pos=opt.diff_head_pos,
                                    pos_emb_type=opt.pos_emb_type,
                                    )
+
+        elif opt.enc_pretrained_model in ["mbart", "mbart50"]:
+            from pretrain_module.configuration_mbart import MBartConfig
+            from pretrain_module.modeling_mbart import MBartEncoder
+            enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
+
+            encoder = MBartEncoder(enc_mbart_config, opt)
+
         elif not opt.enc_pretrained_model:
             print(" Encoder is not from pretrained model")
             encoder = TransformerEncoder(opt, embedding_src, positional_encoder,
@@ -490,9 +498,10 @@ def build_tm_model(opt, dicts):
             if opt.verbose:
                 print("  No weights loading from {} for encoder".format(opt.enc_pretrained_model))
         elif opt.enc_pretrained_model:
-            print("  Loading weights for encoder from: \n", opt.enc_state_dict)
+            print("[INFO] Loading weights for encoder from: \n", opt.enc_state_dict)
 
             enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+            # encoder.load_state_dict(enc_model_state_dict)
 
             encoder.from_pretrained(state_dict=enc_model_state_dict,
                                     model=encoder,
@@ -541,6 +550,16 @@ def build_tm_model(opt, dicts):
                                    pos_emb_type=opt.pos_emb_type,
                                    )
 
+        elif opt.dec_pretrained_model in ["mbart", "mbart50"]:
+            if opt.enc_pretrained_model not in ["mbart", "mbart50"]:
+                from pretrain_module.configuration_mbart import MBartConfig
+            from pretrain_module.modeling_mbart import MBartDecoder
+
+            dec_config = MBartConfig.from_json_file(opt.dec_config_file)
+
+            decoder = MBartDecoder(dec_config, opt)
+            decoder.embed_tokens = encoder.embed_tokens
+
         elif not opt.dec_pretrained_model:
             print(" Decoder is not from pretrained model")
             decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder,
@@ -564,6 +583,7 @@ def build_tm_model(opt, dicts):
 
         encoder.enc_pretrained_model = opt.enc_pretrained_model
         decoder.dec_pretrained_model = opt.dec_pretrained_model
+        print(encoder.enc_pretrained_model, decoder.dec_pretrained_model)
 
         encoder.input_type = opt.encoder_type
 
