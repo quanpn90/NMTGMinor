@@ -558,7 +558,10 @@ def build_tm_model(opt, dicts):
             dec_config = MBartConfig.from_json_file(opt.dec_config_file)
 
             decoder = MBartDecoder(dec_config, opt)
-            decoder.embed_tokens = encoder.embed_tokens
+            decoder.embed_tokens.weight = encoder.embed_tokens.weight
+            generators[0].linear.weight = encoder.embed_tokens.weight
+            encoder.embed_tokens.weight.requires_grad = False
+            decoder.embed_tokens.weight.requires_grad = False
 
         elif not opt.dec_pretrained_model:
             print(" Decoder is not from pretrained model")

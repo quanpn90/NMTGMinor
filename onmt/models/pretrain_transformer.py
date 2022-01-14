@@ -81,8 +81,6 @@ class PretrainTransformer(NMTModel):
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
-        # print("HELLO MBART")
-
         src_attention_mask = src.ne(onmt.constants.SRC_PAD).long()  # [b, src_len]
         if hasattr(self.encoder, 'enc_pretrained_model') and self.encoder.enc_pretrained_model in ["bert", "roberta"]:
             segments_tensor = src.ne(onmt.constants.SRC_PAD).long()
@@ -93,11 +91,11 @@ class PretrainTransformer(NMTModel):
             encoder_output['src_attention_mask'] = src_attention_mask
             encoder_output['streaming_state'] = None
         if hasattr(self.encoder, 'enc_pretrained_model') and self.encoder.enc_pretrained_model in ["mbart", "mbart50"]:
-            # print("HELLO ENCODER")
-            # segments_tensor = src.ne(onmt.constants.SRC_PAD).long()
-            src_attention_mask = batch.get('src_selfattn_mask')
-            enc_outputs = self.encoder(org_src, src_attention_mask)  # the encoder is a pretrained model
+            # src_attention_mask = src.ne(onmt.constants.SRC_PAD).long()
+            src_attention_mask = batch.get("src_selfattn_mask")
+            enc_outputs = self.encoder(src, src_attention_mask)  # the encoder is a pretrained model
             context = enc_outputs[0]
+            context = context  # .transpose(0, 1).contiguous()
             encoder_output = defaultdict(lambda: None)
             encoder_output['context'] = context
             encoder_output['src_attention_mask'] = src_attention_mask
@@ -113,9 +111,7 @@ class PretrainTransformer(NMTModel):
             # the state is changed
             streaming_state = encoder_output['streaming_state']
 
-        # zero out the encoder part for pre-training
-        if zero_encoder:
-            context.zero_()
+        # DECODER PART
 
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bert", "roberta"]:
             # src: [b, src_l]  context: [b, src_l, de_model]
@@ -132,10 +128,12 @@ class PretrainTransformer(NMTModel):
             output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
             output_dict = defaultdict(lambda: None)
             context = context.transpose(0, 1)  # to [src_l, b, de_model]
-        if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["mbart", "mbart50"]:
+        elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["mbart", "mbart50"]:
             # print("HELLO DECODER")
             # src: [b, src_l]  context: [b, src_l, de_model]
-            tgt_attention_mask = None
+            # src_attention_mask = src.eq(onmt.constants.SRC_PAD).long()
+            # src_attention_mask = (1 - src_attention_mask.long())
+            tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
             decoder_output = self.decoder(input_ids=tgt,
                                           attention_mask=tgt_attention_mask,
                                           encoder_hidden_states=context,
@@ -143,8 +141,8 @@ class PretrainTransformer(NMTModel):
                                           )
 
             decoder_output = decoder_output[0]
-            output = decoder_output
-            # output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
+            # output = decoder_output
+            output = decoder_output  # .transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
             output_dict = defaultdict(lambda: None)
             # context = context.transpose(0, 1)  # to [src_l, b, de_model]
         else:

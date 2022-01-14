@@ -62,12 +62,15 @@ class SelfAttnFunc(torch.autograd.Function):
             ctx.fused = True
 
             if mask is not None:
-                mask = mask.half() * -16384
+                if use_time_mask:
+                    mask = mask.bool()
+                else:  # [b x len_k] -> [b x 1 x 1 x len_k]
+                    mask = mask.unsqueeze(1).unsqueeze(2).bool()
             else:
                 if use_time_mask:
-                    mask = inputs.new(len_q, len_q).zero_()
+                    mask = inputs.new(len_q, len_q).zero_().bool()
                 else:
-                    mask = inputs.new(bsz, len_q).zero_()  # works
+                    mask = inputs.new(bsz, 1, 1, len_q).zero_().bool()  # works
 
             input_lin_results, \
             attn_scores, \
@@ -267,14 +270,14 @@ class SelfAttnFunc(torch.autograd.Function):
                     output_bias_grads = \
                     self_multihead_attn_cuda.backward(ctx.use_time_mask, heads_t[0],
                                                       output_grads.contiguous(), matmul2_results,
-                                                      dropout_results, attn_scores, pad_mask,
+                                                      dropout_results, attn_scores,
                                                       input_lin_results, inputs, input_weights,
                                                       output_weights, dropout_mask, dropout_prob_t[0])
 
             else:
                 input_grads = self_multihead_attn_cuda.backward_input_only(ctx.use_time_mask, heads_t[0],
                                                                            output_grads.contiguous(), matmul2_results,
-                                                                           dropout_results, attn_scores, pad_mask,
+                                                                           dropout_results, attn_scores,
                                                                            input_lin_results, inputs, input_weights,
                                                                            output_weights, dropout_mask,
                                                                            dropout_prob_t[0])

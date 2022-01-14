@@ -69,8 +69,10 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         if encdec_multihead_attn_bias_cuda is not None and not incremental and len_k <= 2048 \
                 and inputs_q.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc and low_precision:
 
+            mask_ = mask
             # print("[DEBUGGING] FAST CUDA ENCDEC ATTENTION BIAS")
-            mask = mask.half() * -10000
+            # mask = mask.half() * -10000
+            mask = mask.unsqueeze(1).unsqueeze(2).bool()
 
             input_lin_q_results, input_lin_kv_results, \
                 attn_scores, dropout_results, dropout_mask, \
@@ -79,6 +81,54 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
                                                             input_weights_q, input_weights_kv,
                                                             output_weights, input_bias_q, input_bias_kv, output_bias,
                                                             mask, dropout_prob)
+
+            # input_lin_q_results_ = torch.addmm(input_bias_q,
+            #                                   inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
+            #                                   input_weights_q.transpose(0, 1),
+            #                                   beta=1., alpha=1.)
+            # input_lin_q_results_ = input_lin_q_results_.view(inputs_q.size(0), inputs_q.size(1), input_weights_q.size(0))
+            #
+            # print(input_lin_q_results - input_lin_q_results_)
+            #
+            # input_lin_kv_results_ = torch.addmm(input_bias_kv,
+            #                                    inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)),
+            #                                    input_weights_kv.transpose(0, 1),
+            #                                    beta=1., alpha=1.)
+            # input_lin_kv_results_ = input_lin_kv_results_.view(inputs_kv.size(0), inputs_kv.size(1),
+            #                                                  input_weights_kv.size(0))
+            #
+            # # print(input_lin_kv_results - input_lin_kv_results_)
+            #
+            # queries = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1) * heads, head_dim)
+            #
+            # input_lin_kv_results_ = input_lin_kv_results_.view(inputs_kv.size(0), inputs_kv.size(1) * heads, 2, head_dim)
+            # keys = input_lin_kv_results_[:, :, 0, :]
+            # # values = input_lin_kv_results_[:, :, 1, :]
+            #
+            # matmul1_results = torch.empty((queries.size(1), queries.size(0), keys.size(0)), dtype=queries.dtype,
+            #                               device=queries.device)
+            # matmul1_results = torch.baddbmm(matmul1_results, queries.transpose(0, 1),
+            #                                 keys.transpose(0, 1).transpose(1, 2),
+            #                                 out=matmul1_results, beta=0.0, alpha=scale_t[0])
+            #
+            # # print(attn_scores - matmul1_results)
+            #
+            # if mask_ is not None:
+            #     mask_ = mask_.to(torch.bool)
+            #
+            #     mask_ = mask_.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
+            #
+            #     batches, seql_q, seql_k = matmul1_results.size()
+            #     bsz = int(batches / heads)
+            #     matmul1_results = matmul1_results.view(bsz, heads, seql_q, seql_k)
+            #     # after unsqueezing the mask should have size [bsz x 1 x 1 x seql_k]
+            #     matmul1_results = matmul1_results.masked_fill_(mask_, float('-inf'))
+            #     matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
+
+            # softmax_results_ = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
+            # print(dropout_results - softmax_results_)
+
+            # attn_scores_ =
 
             sinq, cosq, = null_tensor, null_tensor
             sink, cosk, = null_tensor, null_tensor
@@ -328,6 +378,8 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         else:
             output_grads = output_grads[0]
 
+        output_grads = output_grads.contiguous()
+
         if ctx.fused_all:
             assert encdec_multihead_attn_bias_cuda is not None and len_key <= 2048
 
@@ -357,7 +409,7 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
                     input_bias_q_grads, input_bias_kv_grads, output_bias_grads \
                     = encdec_multihead_attn_bias_cuda.backward(heads_t[0], output_grads, matmul2_results,
                                                                dropout_results,
-                                                               attn_scores, mask,
+                                                               attn_scores,
                                                                input_lin_q_results,
                                                                input_lin_kv_results,
                                                                inputs_q, inputs_kv, input_weights_q,
@@ -370,7 +422,7 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
                 input_kv_grads, \
                     = encdec_multihead_attn_bias_cuda.backward_input_only(heads_t[0], output_grads, matmul2_results,
                                                                           dropout_results,
-                                                                          attn_scores, mask,
+                                                                          attn_scores,
                                                                           input_lin_q_results,
                                                                           input_lin_kv_results,
                                                                           inputs_q, inputs_kv, input_weights_q,
@@ -730,9 +782,8 @@ if __name__ == "__main__":
                     recompute=False, use_rotary_enc=False, pos_emb_q=None, pos_emb_k=None):
             is_training = True
             dropout = 0.0
-            low_precision = True
+            low_precision = False
             return_coverage = False
-
             # .apply(time_masking, is_training,
             #        num_heads, query, key,
             #        in_proj_weight_q, in_proj_weight_kv,

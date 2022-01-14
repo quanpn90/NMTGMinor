@@ -1075,7 +1075,7 @@ def main():
 
             # binarize the training set first
             for set_ in ['src', 'tgt', 'src_lang', 'tgt_lang', 'past_src']:
-                if train[set_] is None:
+                if set_ not in train or train[set_] is None:
                     continue
 
                 if opt.data_type == 'int64':
@@ -1108,24 +1108,13 @@ def main():
 
             for set_ in ['src_sizes', 'tgt_sizes']:
 
-                if train[set_] is not None:
+                if set_ not in train or train[set_] is not None:
 
                     np_array = np.asarray(train[set_])
                     np.save(opt.save_data + ".train.%s.npy" % set_, np_array)
                 else:
                     print("Training %s not found " % set_)
 
-# <<<<<<< HEAD
-#                 if valid[set_] is not None:
-#
-#                     np_array = np.asarray(valid[set_])
-#                     np.save(opt.save_data + ".valid.%s.npy" % set_, np_array)
-#                 else:
-#                     print("Validation %s not found " % set_)
-#
-#         else:
-#             raise NotImplementedError
-# =======
             if 'past_src' in train and len(train['past_src']) > 0:
                 set_ = 'past_src_sizes'
 

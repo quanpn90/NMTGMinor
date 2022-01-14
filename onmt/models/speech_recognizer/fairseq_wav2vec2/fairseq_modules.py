@@ -608,6 +608,7 @@ class MultiheadAttention(nn.Module):
 
                     is_training = self.training
                     low_precision = True
+
                     outputs, coverage = self_attn_func(False, is_training, self.num_heads, inputs,
                                                        in_proj_weight, out_proj_weight,
                                                        self.proj_bias, self.out_proj.bias,

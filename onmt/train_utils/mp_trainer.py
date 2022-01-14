@@ -1003,14 +1003,14 @@ class Trainer(object):
         if self.cuda:
             self.warm_up()
 
-        if opt.load_from:
-            valid_loss, valid_accuracy = self.eval(self.valid_data)
-            valid_ppl = math.exp(min(valid_loss, 100))
+        # if opt.load_from:
+        valid_loss, valid_accuracy = self.eval(self.valid_data)
+        valid_ppl = math.exp(min(valid_loss, 100))
 
-            if self.is_main():
-                print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
-                # percent is never used in plural :)
-                print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
+        if self.is_main():
+            print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
+            # percent is never used in plural :)
+            print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
 
         self.start_time = time.time()
 

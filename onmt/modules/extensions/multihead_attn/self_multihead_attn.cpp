@@ -15,7 +15,7 @@ std::vector<torch::Tensor> fwd_cuda(
                                torch::Tensor const& output_weights,
                                torch::Tensor const& input_biases,
                                torch::Tensor const& output_biases,
-                               const half* pad_mask,
+                               torch::Tensor const& pad_mask,
                                float                dropout_prob
                                                   );
 
@@ -26,7 +26,6 @@ std::vector<torch::Tensor> bwd_cuda(
                                torch::Tensor const& matmul2_results,
                                torch::Tensor const& dropout_results,
                                torch::Tensor const& attn_scores,
-                               const half* pad_mask,
                                torch::Tensor const& input_lin_results,
                                torch::Tensor const& inputs,
                                torch::Tensor const& input_weights,
@@ -42,7 +41,6 @@ torch::Tensor bwd_cuda_input_only(
                                torch::Tensor const& matmul2_results,
                                torch::Tensor const& dropout_results,
                                torch::Tensor const& attn_scores,
-                               const half* pad_mask,
                                torch::Tensor const& input_lin_results,
                                torch::Tensor const& inputs,
                                torch::Tensor const& input_weights,
@@ -75,7 +73,7 @@ std::vector<torch::Tensor> fwd(
   AT_ASSERTM(inputs.type().scalarType()         == at::ScalarType::Half, "Only HALF is supported");
   AT_ASSERTM(input_weights.type().scalarType()  == at::ScalarType::Half, "Only HALF is supported");
   AT_ASSERTM(output_weights.type().scalarType() == at::ScalarType::Half, "Only HALF is supported");
-  AT_ASSERTM(pad_mask.dim()                     == 2,                    "expected 2D tensor");
+//  AT_ASSERTM(pad_mask.dim()                     == 2,                    "expected 2D tensor");
 
   return fwd_cuda(
                                  use_time_mask,
@@ -86,7 +84,7 @@ std::vector<torch::Tensor> fwd(
                                  output_weights,
                                  input_biases,
                                  output_biases,
-                                 static_cast<const half*>(pad_mask.data_ptr()),
+                                 pad_mask,
                                  dropout_prob
                                 );
 }
@@ -98,7 +96,6 @@ std::vector<torch::Tensor> bwd(
                                torch::Tensor const& matmul2_results,
                                torch::Tensor const& dropout_results,
                                torch::Tensor const& attn_scores,
-                               torch::Tensor const& pad_mask,
                                torch::Tensor const& input_lin_results,
                                torch::Tensor const& inputs,
                                torch::Tensor const& input_weights,
@@ -132,7 +129,6 @@ std::vector<torch::Tensor> bwd(
                                  matmul2_results,
                                  dropout_results,
                                  attn_scores,
-                                 static_cast<const half*>(pad_mask.data_ptr()),
                                  input_lin_results,
                                  inputs,
                                  input_weights,
@@ -149,7 +145,6 @@ torch::Tensor bwd_input_only(
                                torch::Tensor const& matmul2_results,
                                torch::Tensor const& dropout_results,
                                torch::Tensor const& attn_scores,
-                               torch::Tensor const& pad_mask,
                                torch::Tensor const& input_lin_results,
                                torch::Tensor const& inputs,
                                torch::Tensor const& input_weights,
@@ -183,7 +178,6 @@ torch::Tensor bwd_input_only(
                                  matmul2_results,
                                  dropout_results,
                                  attn_scores,
-                                 static_cast<const half*>(pad_mask.data_ptr()),
                                  input_lin_results,
                                  inputs,
                                  input_weights,

@@ -19,7 +19,7 @@ Two basic classes:
 
 
 def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=False,
-               feature_size=40, dataname="source", src_pad="<blank>", tgt_pad="<blank>" ):
+               feature_size=40, dataname="source", src_pad=1, tgt_pad=1 ):
     """
             Assembling the individual sequences into one single tensor, included padding
             :param tgt_pad:
@@ -352,6 +352,8 @@ class Dataset(torch.utils.data.Dataset):
         else:
             self.tgt_pad = onmt.constants.TGT_PAD
             self.src_pad = onmt.constants.SRC_PAD
+
+        # print(self.src_pad, self.tgt_pad)
 
         self.src = src_data
         self.past_src = past_src_data
