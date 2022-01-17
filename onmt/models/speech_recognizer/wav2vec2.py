@@ -62,6 +62,46 @@ class FairseqWav2VecExtractor(nn.Module):
         return features, padding_mask
 
 
+class FairseqWav2VecQuantizer(nn.Module):
+
+    def __init__(self, model_path="wav2vec_vox_new.pt"):
+        self.model_path = model_path
+        import fairseq
+        from fairseq.checkpoint_utils import load_model_ensemble_and_task, load_checkpoint_to_cpu
+        from .fairseq_wav2vec2.wav2vec2 import Wav2Vec2Model
+
+        super().__init__()
+        state = load_checkpoint_to_cpu(model_path)
+
+        self.cfg = state['cfg']['model']
+        self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg)
+        self.wav2vec_encoder.load_state_dict(state['model'])
+        # self.wav2vec_encoder.remove_pretraining_modules()
+
+    def forward(self, batch, **kwargs):
+        """
+        :param batch_first_output: [bsz, seq_len, hidden_size] as output size, else transpose(0, 1)
+        :param input: torch.Tensor [batch_size, sequence_length, 2]
+        :param kwargs:
+        :return:
+        """
+        input = batch.get('source').transpose(0, 1)  # T x B x H -> B x T x H
+
+        # 0 for tokens that are not masked, 1 for tokens that are masked
+        long_mask = input.narrow(2, 0, 1).squeeze(2).eq(0).long()
+        input = input.narrow(2, 1, input.size(2) - 1).squeeze(-1)
+
+        attn_mask = long_mask
+        wav2vec_output = self.wav2vec_encoder(input, attn_mask, mask=False,
+                                              quantize=True, quantize_only=True,
+                                              )
+
+        codes = wav2vec_output['quantized_target']
+        padding_mask = wav2vec_output['padding_mask']
+
+        return codes, padding_mask
+
+
 class FairseqWav2Vec(nn.Module):
 
     def __init__(self, opt, model_path="wav2vec_vox_new.pt", discrete_encoder=None):
@@ -144,20 +184,29 @@ class FairseqWav2Vec(nn.Module):
             self.wav2vec_encoder.encoder.add_adapters(opt.n_languages, adapter_location=opt.wav2vec_adapter)
 
         # discrete encoder that works on top of the wav quantized output
-        self.discrete_encoder = discrete_encoder
-        if discrete_encoder is not None:
-            assert self.quantize is True
+        self.discrete_encoder = None # discrete_encoder
 
-            codebook_size = self.wav2vec_encoder.quantizer.num_vars
-            embed_dim = self.discrete_encoder.embed_dim # // self.wav2vec_encoder.quantizer.groups
+        if self.quantize:
             var_dim = self.wav2vec_encoder.quantizer.vars.size(-1) * self.wav2vec_encoder.quantizer.groups
-            # new embedding layer
-            self.discrete_encoder.embed_tokens =  nn.Linear(var_dim, embed_dim) #nn.Embedding(codebook_size, embed_dim)
-            nn.init.normal_(self.discrete_encoder.embed_tokens.weight, 0.0, 0.02)
-
-            # freeze the quantizer
-            # for param in self.wav2vec_encoder.quantizer.parameters():
-            #     param.requires_grad = False
+            model_dim = self.model_size
+            self.discrete_encoder = nn.Linear(var_dim, model_dim)
+        # if discrete_encoder is not None:
+        #     assert self.quantize is True
+        #
+        #     codebook_size = self.wav2vec_encoder.quantizer.num_vars ** self.wav2vec_encoder.quantizer.groups
+        #     embed_dim = self.discrete_encoder.embed_dim
+        #     var_dim = self.wav2vec_encoder.quantizer.vars.size(-1) * self.wav2vec_encoder.quantizer.groups
+        #     # new embedding layer
+        #     # self.discrete_encoder.embed_tokens =  nn.Linear(var_dim, embed_dim) #nn.Embedding(codebook_size, embed_dim)
+        #     self.discrete_encoder.embed_tokens = nn.Embedding(codebook_size, embed_dim)
+        #     nn.init.normal_(self.discrete_encoder.embed_tokens.weight, 0.0, 0.02)
+        #
+        #     # freeze the quantizer
+        #     for param in self.wav2vec_encoder.quantizer.parameters():
+        #         param.requires_grad = False
+        #
+        #     for param in self.wav2vec_encoder.layer_norm.parameters():
+        #         param.requires_grad = False
 
     def fix_projection_matrices_(self):
         if self.favor:
@@ -236,44 +285,63 @@ class FairseqWav2Vec(nn.Module):
         #                                                        precomputed_tdnn=precomputed_tdnn,
         #                                                        lang=lang, mixture=mixture)
 
-        quantize_only = self.quantize and not self.dual_output
+        quantize_only = False # self.quantize and not self.dual_output
         wav2vec_output = self.wav2vec_encoder(input, attn_mask,
                                               mask=self.training, features_only=True, layer=None,
                                               precomputed_tdnn=precomputed_tdnn, quantize=self.quantize,
                                               quantize_only=quantize_only,
                                               lang=lang, mixture=mixture)
 
+        # if self.quantize:
+        #     quantized_codebooks = wav2vec_output['quantized_target']
+        #     encoder_input = quantized_codebooks.prod(dim=-1, keepdim=False)  # .transpose(0, 1)  # -> t x b x groups
+        #     dec_attn_mask = wav2vec_output['padding_mask'] # b x t
+        #
+        #     # 44204 = magic number
+        #     additional_mask = encoder_input.eq(44204)
+        #
+        #     if dec_attn_mask is not None:
+        #         dec_attn_mask = torch.logical_or(dec_attn_mask.bool(), additional_mask)
+        #     else:
+        #         dec_attn_mask = additional_mask
+        #
+        #     discrete_encoder_output = self.discrete_encoder(input_ids=encoder_input, attention_mask=dec_attn_mask)
+        #     discrete_output = discrete_encoder_output[0]
+        #     batch_size, time = discrete_output.size(1), discrete_output.size(0)
+        #     if batch_first_output:
+        #         discrete_output = discrete_output.transpose(0, 1).contiguous()
+        #         batch_size, time = discrete_output.size(0), discrete_output.size(1)
+        # else:
+        #     discrete_output = None
+
+        # if not self.quantize or self.dual_output:
+        # TODO: move batch_first_output up to avoid confusion
+        if not batch_first_output:
+            continuous_output = wav2vec_output['x'].transpose(0, 1).contiguous()
+            batch_size, time = continuous_output.size(1), continuous_output.size(0)
+        else:
+            continuous_output = wav2vec_output['x']
+            time, batch_size = continuous_output.size(1), continuous_output.size(0)
+
+        dec_attn_mask = wav2vec_output['padding_mask']
+
         if self.quantize:
-            quantized_codebooks = wav2vec_output['quantized_x']
-            encoder_input = quantized_codebooks.transpose(0, 1)  # -> t x b x groups
-            dec_attn_mask = wav2vec_output['padding_mask'] # b x t
-            discrete_encoder_output = self.discrete_encoder(input_ids=encoder_input, attention_mask=dec_attn_mask)
-            discrete_output = discrete_encoder_output[0]
-            batch_size, time = discrete_output.size(1), discrete_output.size(0)
-            if batch_first_output:
-                discrete_output = discrete_output.transpose(0, 1).contiguous()
-                batch_size, time = discrete_output.size(0), discrete_output.size(1)
-        else:
-            discrete_output = None
-
-        if not self.quantize or self.dual_output:
-            # TODO: move batch_first_output up to avoid confusion
+            quantized_output = wav2vec_output['quantized_x']
+            discrete_output = self.discrete_encoder(quantized_output)
             if not batch_first_output:
-                continuous_output = wav2vec_output['x'].transpose(0, 1).contiguous()
-                batch_size, time = continuous_output.size(1), continuous_output.size(0)
-            else:
-                continuous_output = wav2vec_output['x']
-                time, batch_size = continuous_output.size(1), continuous_output.size(0)
+                discrete_output = discrete_output.transpose(0, 1).contiguous()
 
-            dec_attn_mask = wav2vec_output['padding_mask']
-
-        if not self.dual_output:
-            if self.quantize:
-                context = discrete_output
-            else:
-                context = continuous_output
+            context = continuous_output + discrete_output
         else:
-            context = discrete_output + continuous_output  # summing those two guys
+            context = continuous_output
+
+        # if not self.dual_output:
+        #     if self.quantize:
+        #         context = discrete_output
+        #     else:
+        #         context = continuous_output
+        # else:
+        #     context = discrete_output + continuous_output  # summing those two guys
 
         if dec_attn_mask is None:
             dec_attn_mask = context.new_zeros(batch_size, time).byte()

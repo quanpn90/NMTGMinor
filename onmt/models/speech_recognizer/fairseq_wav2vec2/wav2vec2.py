@@ -603,11 +603,14 @@ class Wav2Vec2Model(torch.nn.Module):
         else:
             features = source
 
+        torch.set_grad_enabled(self.layer_norm.weight.requires_grad)
         features = self.layer_norm(features)
+        torch.set_grad_enabled(True)
 
         if quantize:
             assert self.quantizer is not None
-            quantizer_output = self.quantizer.forward_idx(features)
+            with torch.no_grad():
+                quantizer_output = self.quantizer.forward_idx(features)
         else:
             quantizer_output = None
 

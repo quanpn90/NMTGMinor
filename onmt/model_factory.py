@@ -155,16 +155,16 @@ def build_tm_model(opt, dicts):
     if opt.model in ['wav2vec2_bert', 'quantize_wav2vec2_bert', 'quantize_wav2vec2_mbart50']:
         from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecBERT
 
-        if opt.model.startswith("quantize"):
-            from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder
-            from pretrain_module.configuration_mbart import MBartConfig
-            enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
-            discrete_encoder = MBartEncoder(enc_mbart_config, opt)
-            print("[INFO] Loading weights for mBART encoder from: %s ..." % opt.enc_state_dict)
-            enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
-            discrete_encoder.load_state_dict(enc_model_state_dict)
-        else:
-            discrete_encoder = None
+        # if opt.model.startswith("quantize"):
+        #     from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder
+        #     from pretrain_module.configuration_mbart import MBartConfig
+        #     enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
+        #     discrete_encoder = MBartEncoder(enc_mbart_config, opt)
+        #     # print("[INFO] Loading weights for mBART encoder from: %s ..." % opt.enc_state_dict)
+        #     # enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+        #     # discrete_encoder.load_state_dict(enc_model_state_dict)
+        # else:
+        #     discrete_encoder = None
 
         encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model, discrete_encoder=discrete_encoder)
 

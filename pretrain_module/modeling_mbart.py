@@ -895,15 +895,13 @@ class MBartEncoderLayer(nn.Module):
     def __init__(self, config: MBartConfig):
         super().__init__()
         self.embed_dim = config.d_model
-        config.attention_dropout = 0.0
-        config.dropout = 0.0
         self.self_attn = MBartAttention(
             embed_dim=self.embed_dim,
             num_heads=config.encoder_attention_heads,
             dropout=config.attention_dropout,
         )
         self.self_attn_layer_norm = LayerNorm(self.embed_dim)
-        self.dropout = config.dropout
+        self.dropout = config.activation_dropout
 
         self.activation_fn = ACT2FN[config.activation_function]
         self.activation_dropout = config.activation_dropout
@@ -1509,6 +1507,9 @@ class MBartEncoder(MBartPreTrainedModel):
     def __init__(self, config: MBartConfig, opt, embed_tokens: Optional[nn.Embedding] = None):
         super().__init__(config)
 
+        config.dropout = opt.residual_dropout if opt.residual_dropout > 0 else opt.dropout
+        config.attention_dropout = opt.attn_dropout
+        config.activation_dropout = opt.ffn_dropout if opt.ffn_dropout > 0 else opt.dropout
         self.dropout = config.dropout
         self.layerdrop = config.encoder_layerdrop
         self.opt = opt
@@ -1575,10 +1576,12 @@ class MBartEncoder(MBartPreTrainedModel):
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
-            input_shape = input_ids.size()
-            input_ids = input_ids.view(-1, input_shape[-1])
-        elif inputs_embeds is not None:
-            input_shape = inputs_embeds.size()[:-1]
+            bsz, seq_len = input_ids.size(0), input_ids.size(1)
+            input_shape = torch.Size([bsz, seq_len])
+
+        #     input_ids = input_ids.view(-1, input_shape[-1])
+        # elif inputs_embeds is not None:
+        #     input_shape = inputs_embeds.size()[:-1]
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
@@ -1588,6 +1591,8 @@ class MBartEncoder(MBartPreTrainedModel):
         # seq_len, batch_size = input_ids.size(0), input_ids.size(1)
         # input_shape = torch.Size([batch_size, seq_len])
         # inputs_embeds = inputs_embeds.view(seq_len, batch_size, -1)
+
+        inputs_embeds = inputs_embeds.view(bsz, seq_len, -1)
 
         embed_pos = self.embed_positions(input_shape)
 
@@ -1604,6 +1609,7 @@ class MBartEncoder(MBartPreTrainedModel):
         encoder_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
 
+        # transpose from [B x T x H] to [T x B x H]
         hidden_states = hidden_states.transpose(0, 1).contiguous()
 
         for idx, encoder_layer in enumerate(self.layers):
@@ -1655,6 +1661,7 @@ class MBartDecoder(MBartPreTrainedModel):
 
         config.dropout = opt.residual_dropout if opt.residual_dropout > 0 else opt.dropout
         config.activation_dropout = opt.ffn_dropout if opt.ffn_dropout > 0 else opt.dropout
+        config.attention_dropout = opt.attn_dropout
         self.dropout = config.dropout
 
         if embed_tokens is not None:
