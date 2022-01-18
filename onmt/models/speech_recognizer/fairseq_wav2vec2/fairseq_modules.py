@@ -9,6 +9,7 @@ from torch.cuda.amp import custom_fwd, custom_bwd
 
 from onmt.modules.performer import Performer, ProjectionUpdater
 from onmt.modules.optimized.self_attention_func import self_attn_func
+from onmt.modules.optimized.linear import linear_function
 
 
 class Fp32GroupNorm(nn.GroupNorm):
@@ -460,6 +461,9 @@ class MultiheadAttention(nn.Module):
         bias_t.copy_(bias_)
         self.proj_weight = Parameter(weight_t)
         self.proj_bias = Parameter(bias_t)
+
+        self.proj_weight.requires_grad = self.q_proj.weight.requires_grad
+        self.proj_bias.requires_grad = self.q_proj.bias.requires_grad
         del self.q_proj, self.k_proj, self.v_proj
 
     def reset_parameters(self):
@@ -632,7 +636,7 @@ class MultiheadAttention(nn.Module):
                     assert (sm[0] == 8 and sm[1] == 0 and max_len <= 512)
 
                     total_bsz = query.size(0)
-                    qkv = F.linear(query, in_proj_weight, self.proj_bias)  # B x H
+                    qkv = linear_function(query, in_proj_weight, self.proj_bias)  # B x H
                     # B x 3 x H x d
 
                     # TODO: moving to CUDA to remove overhead?
@@ -641,7 +645,7 @@ class MultiheadAttention(nn.Module):
                     context, coverage = self.fast_bert_mha(qkv, cu_seqlens, self.dropout_p, max_len, self.training)
 
                     context = context.view(-1, self.num_heads * self.head_dim).contiguous()
-                    outputs = F.linear(context, out_proj_weight, self.out_proj.bias)
+                    outputs = linear_function(context, out_proj_weight, self.out_proj.bias)
 
                     return outputs, coverage
 

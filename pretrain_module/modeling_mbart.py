@@ -520,32 +520,11 @@ class MBartCrossAttention(MBartAttention):
         self.proj_weight_kv = Parameter(weight_t)
         self.proj_bias_kv = Parameter(bias_t)
 
-        w_k = self.k_proj.weight.clone()
-        w_v = self.v_proj.weight.clone()
-        weights = [w_k, w_v]
-        weight_ = torch.cat(weights, dim=0).contiguous()
+        self.proj_weight_kv.requires_grad = self.k_proj.weight.requires_grad
+        self.proj_bias_kv.requires_grad = self.k_proj.bias.requires_grad
 
-        # b_q = self.q_proj.bias.clone()
-        b_k = self.k_proj.bias.clone()
-        b_v = self.v_proj.bias.clone()
-        biases = [b_k, b_v]
-        bias_ = torch.cat(biases, dim=0).contiguous()
-
-        head_dim = self.head_dim
-        heads = self.num_heads
-        input_dim = self.embed_dim
-
-        weight_ = weight_.reshape(2 * head_dim * heads, input_dim).view(2, heads, head_dim, input_dim).transpose(0, 1). \
-            reshape(-1, input_dim)
-
-        bias_ = bias_.reshape(2 * head_dim * heads).view(2, heads, head_dim).transpose(0, 1).reshape(-1)
-
-        weight_t = torch.Tensor(2 * input_dim, input_dim)
-        bias_t = torch.Tensor(2 * input_dim)
-        weight_t.copy_(weight_)
-        bias_t.copy_(bias_)
-        self.proj_weight_kv = Parameter(weight_t)
-        self.proj_bias_kv = Parameter(bias_t)
+        del self.k_proj
+        del self.v_proj
 
         # # Convert Weight_Q
         # w_q = self.q_proj.weight.clone()

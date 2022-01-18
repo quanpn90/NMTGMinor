@@ -258,6 +258,7 @@ def build_tm_model(opt, dicts):
         #         sub_encoder.embed_tokens = decoder.embed_tokens # and reduce memory usage
 
         decoder.dec_pretrained_model = opt.dec_pretrained_model
+        generators[0].linear.bias.requires_grad = False
 
         model = Wav2vecBERT(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0,
                             sub_encoder=sub_encoder)
@@ -563,6 +564,7 @@ def build_tm_model(opt, dicts):
             generators[0].linear.weight = encoder.embed_tokens.weight
             encoder.embed_tokens.weight.requires_grad = False
             decoder.embed_tokens.weight.requires_grad = False
+            generators[0].linear.bias.requires_grad = False
 
         elif not opt.dec_pretrained_model:
             print(" Decoder is not from pretrained model")

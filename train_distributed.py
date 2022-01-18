@@ -472,7 +472,7 @@ def main():
         train_data = train_sets
         valid_data = valid_sets
 
-    if opt.load_from:
+    if opt.load_from and not opt.reset_optim:
         checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
         print("* Loading dictionaries from the checkpoint")
         del checkpoint['model']

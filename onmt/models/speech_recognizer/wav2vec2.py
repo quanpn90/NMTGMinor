@@ -286,6 +286,7 @@ class FairseqWav2Vec(nn.Module):
         #                                                        lang=lang, mixture=mixture)
 
         quantize_only = False # self.quantize and not self.dual_output
+
         wav2vec_output = self.wav2vec_encoder(input, attn_mask,
                                               mask=self.training, features_only=True, layer=None,
                                               precomputed_tdnn=precomputed_tdnn, quantize=self.quantize,

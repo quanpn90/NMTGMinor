@@ -81,7 +81,7 @@ class NMTModel(nn.Module):
         self.encoder.mark_pretrained()
         self.decoder.mark_pretrained()
         
-    def load_state_dict(self, state_dict, strict=False):
+    def load_state_dict(self, state_dict, strict=True):
         """
         override this method to have back-compatibility
         """
