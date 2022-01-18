@@ -17,6 +17,11 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     self_multihead_attn_cuda = None
 
+try:
+    import self_multihead_attn_blaslt
+except (ModuleNotFoundError, ImportError) as e:
+    self_multihead_attn_blaslt = None
+
 
 def rotate_half(x):
     x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
@@ -72,15 +77,27 @@ class SelfAttnFunc(torch.autograd.Function):
                 else:
                     mask = inputs.new(bsz, 1, 1, len_q).zero_().bool()  # works
 
-            input_lin_results, \
-            attn_scores, \
-            dropout_results, \
-            dropout_mask, \
-            matmul2_results, \
-            outputs = self_multihead_attn_cuda.forward(use_time_mask, is_training, heads,
-                                                       inputs.contiguous(), input_weights, output_weights,
-                                                       input_biases, output_biases,
-                                                       mask, dropout_prob)
+            if self_multihead_attn_blaslt is not None:
+                # print("Using ATTN BLASLT")
+                input_lin_results, \
+                attn_scores, \
+                dropout_results, \
+                dropout_mask, \
+                matmul2_results, \
+                outputs = self_multihead_attn_blaslt.forward(use_time_mask, is_training, heads,
+                                                           inputs.contiguous(), input_weights, output_weights,
+                                                           input_biases, output_biases,
+                                                           mask, dropout_prob)
+            else:
+                input_lin_results, \
+                attn_scores, \
+                dropout_results, \
+                dropout_mask, \
+                matmul2_results, \
+                outputs = self_multihead_attn_cuda.forward(use_time_mask, is_training, heads,
+                                                           inputs.contiguous(), input_weights, output_weights,
+                                                           input_biases, output_biases,
+                                                           mask, dropout_prob)
 
             ctx.save_for_backward(heads_t,
                                   scale_t,
@@ -263,16 +280,29 @@ class SelfAttnFunc(torch.autograd.Function):
             dropout_prob_t, pad_mask = ctx.saved_tensors
 
             if input_weights.requires_grad:
-                input_grads, \
+
+                if self_multihead_attn_blaslt is not None:
+                    input_grads, \
                     input_weight_grads, \
                     output_weight_grads, \
                     input_bias_grads, \
                     output_bias_grads = \
-                    self_multihead_attn_cuda.backward(ctx.use_time_mask, heads_t[0],
-                                                      output_grads.contiguous(), matmul2_results,
-                                                      dropout_results, attn_scores,
-                                                      input_lin_results, inputs, input_weights,
-                                                      output_weights, dropout_mask, dropout_prob_t[0])
+                        self_multihead_attn_blaslt.backward(ctx.use_time_mask, heads_t[0],
+                                                          output_grads.contiguous(), matmul2_results,
+                                                          dropout_results, attn_scores,
+                                                          input_lin_results, inputs, input_weights,
+                                                          output_weights, dropout_mask, dropout_prob_t[0])
+                else:
+                    input_grads, \
+                        input_weight_grads, \
+                        output_weight_grads, \
+                        input_bias_grads, \
+                        output_bias_grads = \
+                        self_multihead_attn_cuda.backward(ctx.use_time_mask, heads_t[0],
+                                                          output_grads.contiguous(), matmul2_results,
+                                                          dropout_results, attn_scores,
+                                                          input_lin_results, inputs, input_weights,
+                                                          output_weights, dropout_mask, dropout_prob_t[0])
 
             else:
                 input_grads = self_multihead_attn_cuda.backward_input_only(ctx.use_time_mask, heads_t[0],

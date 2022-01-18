@@ -47,6 +47,7 @@ int mlp_bp(
     T** dwPtr,
     T** dbPtr,
     bool requires_grad,
+    void* lt_workspace,
     float p);
 
 std::vector<at::Tensor> mlp_forward(float p, std::vector<at::Tensor> inputs) {
@@ -154,6 +155,7 @@ std::vector<at::Tensor> mlp_backward(
 
     // auto work_space = at::empty({work_size*4}, at::kByte);
     auto work_space = at::empty({work_size / sizeof(scalar_t)}, inputs[0].type());
+    auto lt_workspace = torch::empty({1 << 22}, inputs[0].type());
 
     auto result = mlp_bp<scalar_t>(
         inputs[0].data_ptr<scalar_t>(),
@@ -172,6 +174,7 @@ std::vector<at::Tensor> mlp_backward(
         outputs_ptr.data() + 1,
         outputs_ptr.data() + 1 + num_layers,
         requires_grad,
+        (void*) (lt_workspace.data_ptr<scalar_t>()),
         p);
   });
 
