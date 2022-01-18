@@ -1,9 +1,7 @@
 #include <vector>
 #include <math.h>
 #include <iostream>
-#include "THC/THC.h"
 #include <cuda.h>
-#include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <cuda_profiler_api.h>
@@ -15,7 +13,7 @@
 #include "softmax_apex.h"
 
 // symbol to be automatically resolved by PyTorch libs
-extern THCState *state;
+// extern THCState *state;
 
 namespace multihead_attn {
 namespace self_bias_additive_mask {
@@ -86,10 +84,10 @@ std::vector<torch::Tensor> fwd_cuda(
 //  char a_layout_n{'n'};
 //  char b_layout_n{'n'};
 
-  THCublasCheck(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
+  TORCH_CUDABLAS_CHECK(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
   // Input Linear Fwd
   input_lin_results.copy_(input_biases);
-  THCublasCheck(cublasGemmEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
                              CUBLAS_OP_T,
                              CUBLAS_OP_N,
                              output_lin_dim,
@@ -110,7 +108,7 @@ std::vector<torch::Tensor> fwd_cuda(
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
   // MatMul1 of Dot-Product Attention Plus scaling by 1/Sqrt(head size)
-  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
                              CUBLAS_OP_T,
                              CUBLAS_OP_N,
                              k_seq_len,  // m
@@ -224,7 +222,7 @@ std::vector<torch::Tensor> fwd_cuda(
   assert(softmax_success);
 
   // Matmul2
-  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
                              CUBLAS_OP_N,
                              CUBLAS_OP_N,
                              head_dim,    // m
@@ -251,7 +249,7 @@ std::vector<torch::Tensor> fwd_cuda(
   outputs.copy_(output_biases);
 
   // Output Linear
-  THCublasCheck(cublasGemmEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
                              CUBLAS_OP_T,
                              CUBLAS_OP_N,
                              embed_dim,
@@ -272,7 +270,7 @@ std::vector<torch::Tensor> fwd_cuda(
                              //CUBLAS_GEMM_ALGO1_TENSOR_OP));
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
-  THCublasCheck(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
+  TORCH_CUDABLAS_CHECK(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
 
   return {
            input_lin_results,
@@ -346,10 +344,10 @@ std::vector<torch::Tensor> bwd_cuda(
 //  char b_layout_n{'n'};
 //  char b_layout_t{'t'};
 
-  THCublasCheck(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
+  TORCH_CUDABLAS_CHECK(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
 
   // Output Linear Dgrad
-  THCublasCheck(cublasGemmEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
                              CUBLAS_OP_N,
                              CUBLAS_OP_N,
                              embed_dim,
@@ -369,7 +367,7 @@ std::vector<torch::Tensor> bwd_cuda(
                              CUDA_R_32F,
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
   // Output Linear Wgrad
-  THCublasCheck(cublasGemmEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
                              CUBLAS_OP_N,
                              CUBLAS_OP_T,
                              embed_dim,
@@ -392,7 +390,7 @@ std::vector<torch::Tensor> bwd_cuda(
   auto  output_bias_grads = output_grads.view({-1, embed_dim}).sum(0, false);
   // MatMul2 Dgrad1
 
-  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
                              CUBLAS_OP_T,
                              CUBLAS_OP_N,
                              k_seq_len,    // m
@@ -417,7 +415,7 @@ std::vector<torch::Tensor> bwd_cuda(
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
   // Matmul2 Dgrad2
-  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
                              CUBLAS_OP_N,
                              CUBLAS_OP_T,
                              head_dim,    // m
@@ -472,7 +470,7 @@ std::vector<torch::Tensor> bwd_cuda(
 
   // Matmul1 Dgrad1
 
-  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
                              CUBLAS_OP_N,
                              CUBLAS_OP_N,
                              head_dim,    // m
@@ -498,7 +496,7 @@ std::vector<torch::Tensor> bwd_cuda(
 
   // Matmul1 Dgrad2
 
-  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
                              CUBLAS_OP_N,
                              CUBLAS_OP_T,
                              head_dim,    // m
@@ -523,7 +521,7 @@ std::vector<torch::Tensor> bwd_cuda(
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
   // Input Linear Dgrad
-  THCublasCheck(cublasGemmEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
                              CUBLAS_OP_N,
                              CUBLAS_OP_N,
                              embed_dim,
@@ -546,7 +544,7 @@ std::vector<torch::Tensor> bwd_cuda(
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
   // Input Linear Wgrad
-  THCublasCheck(cublasGemmEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
                              CUBLAS_OP_N,
                              CUBLAS_OP_T,
                              embed_dim,
@@ -567,7 +565,7 @@ std::vector<torch::Tensor> bwd_cuda(
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
   auto  input_bias_grads = input_lin_output_grads.view({-1, output_lin_dim}).sum(0, false);
-  THCublasCheck(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
+  TORCH_CUDABLAS_CHECK(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
 
   return {
            input_grads,
@@ -640,10 +638,10 @@ torch::Tensor bwd_cuda_input_only(
 //  char b_layout_n{'n'};
 //  char b_layout_t{'t'};
 
-  THCublasCheck(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
+  TORCH_CUDABLAS_CHECK(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
 
   // Output Linear Dgrad
-  THCublasCheck(cublasGemmEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
                              CUBLAS_OP_N,
                              CUBLAS_OP_N,
                              embed_dim,
@@ -663,7 +661,7 @@ torch::Tensor bwd_cuda_input_only(
                              CUDA_R_32F,
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
   // Output Linear Wgrad
-//   THCublasCheck(cublasGemmEx(handle,
+//   TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
 //                              CUBLAS_OP_N,
 //                              CUBLAS_OP_T,
 //                              embed_dim,
@@ -686,7 +684,7 @@ torch::Tensor bwd_cuda_input_only(
 //   auto  output_bias_grads = output_grads.view({-1, embed_dim}).sum(0, false);
   // MatMul2 Dgrad1
 
-  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
                              CUBLAS_OP_T,
                              CUBLAS_OP_N,
                              k_seq_len,    // m
@@ -711,7 +709,7 @@ torch::Tensor bwd_cuda_input_only(
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
   // Matmul2 Dgrad2
-  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
                              CUBLAS_OP_N,
                              CUBLAS_OP_T,
                              head_dim,    // m
@@ -766,7 +764,7 @@ torch::Tensor bwd_cuda_input_only(
 
   // Matmul1 Dgrad1
 
-  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
                              CUBLAS_OP_N,
                              CUBLAS_OP_N,
                              head_dim,    // m
@@ -792,7 +790,7 @@ torch::Tensor bwd_cuda_input_only(
 
   // Matmul1 Dgrad2
 
-  THCublasCheck(cublasGemmStridedBatchedEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
                              CUBLAS_OP_N,
                              CUBLAS_OP_T,
                              head_dim,    // m
@@ -817,7 +815,7 @@ torch::Tensor bwd_cuda_input_only(
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
   // Input Linear Dgrad
-  THCublasCheck(cublasGemmEx(handle,
+  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
                              CUBLAS_OP_N,
                              CUBLAS_OP_N,
                              embed_dim,
@@ -840,7 +838,7 @@ torch::Tensor bwd_cuda_input_only(
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
   // Input Linear Wgrad
-//   THCublasCheck(cublasGemmEx(handle,
+//   TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
 //                              CUBLAS_OP_N,
 //                              CUBLAS_OP_T,
 //                              embed_dim,
@@ -861,7 +859,7 @@ torch::Tensor bwd_cuda_input_only(
 //                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 //
 //   auto  input_bias_grads = input_lin_output_grads.view({-1, output_lin_dim}).sum(0, false);
-  THCublasCheck(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
+  TORCH_CUDABLAS_CHECK(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
 
   return input_grads;
 }

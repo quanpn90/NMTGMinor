@@ -1,15 +1,15 @@
 #include <ATen/ATen.h>
 
-#ifdef OLD_GENERATOR
-#include <ATen/CUDAGenerator.h>
-#else
+#ifdef OLD_GENERATOR_PATH
 #include <ATen/CUDAGeneratorImpl.h>
+#else
+#include <ATen/cuda/CUDAGeneratorImpl.h>
 #endif
 
 #include <ATen/cuda/CUDAContext.h>
 #include <curand_kernel.h>
 
-#include <THC/THCGeneral.h>
+//#include <THC/THCGeneral.h>
 
 const int UNROLL = 4;
 
@@ -212,17 +212,14 @@ void apex_fused_dropout_cuda(scalar_t const *inputs,
   std::pair<uint64_t, uint64_t> rng_engine_inputs;
   {
     // See Note [Acquire lock when using random generators]
-#ifdef OLD_GENERATOR
-    std::lock_guard<std::mutex> lock(gen->mutex_);
-    rng_engine_inputs = gen->philox_engine_inputs(counter_offset);
-#else
     std::lock_guard<std::mutex> lock(gen.mutex());
-    rng_engine_inputs = at::check_generator<at::CUDAGeneratorImpl>(gen)->philox_engine_inputs(counter_offset);
-#endif
+    rng_engine_inputs =
+        at::check_generator<at::CUDAGeneratorImpl>(gen)->philox_engine_inputs(
+            counter_offset);
   }
 
   apex_fused_dropout_kernel<scalar_t, accscalar_t, IndexType><<<grid, dim_block, 0, at::cuda::getCurrentCUDAStream()>>>(inputs, outputs, mask, totalElements, p, rng_engine_inputs);
-  THCudaCheck(cudaGetLastError());
+  C10_CUDA_CHECK(cudaGetLastError());
 }
 
 template <
@@ -250,17 +247,14 @@ void apex_dropout_add_cuda(scalar_t const *inputs,
   std::pair<uint64_t, uint64_t> rng_engine_inputs;
   {
     // See Note [Acquire lock when using random generators]
-#ifdef OLD_GENERATOR
-    std::lock_guard<std::mutex> lock(gen->mutex_);
-    rng_engine_inputs = gen->philox_engine_inputs(counter_offset);
-#else
     std::lock_guard<std::mutex> lock(gen.mutex());
-    rng_engine_inputs = at::check_generator<at::CUDAGeneratorImpl>(gen)->philox_engine_inputs(counter_offset);
-#endif
+    rng_engine_inputs =
+        at::check_generator<at::CUDAGeneratorImpl>(gen)->philox_engine_inputs(
+            counter_offset);
   }
 
   apex_dropout_add_kernel<scalar_t, accscalar_t, IndexType><<<grid, dim_block, 0, at::cuda::getCurrentCUDAStream()>>>(inputs, add_inputs, outputs, mask, totalElements, p, rng_engine_inputs);
-  THCudaCheck(cudaGetLastError());
+  C10_CUDA_CHECK(cudaGetLastError());
 }
 
 template <
@@ -281,7 +275,7 @@ void apex_add_cuda(scalar_t const *inputs,
   grid.x = std::min((unsigned int)at::cuda::getCurrentDeviceProperties()->multiProcessorCount * blocks_per_sm, grid.x);
 
   apex_add_kernel<scalar_t, accscalar_t, IndexType><<<grid, dim_block, 0, at::cuda::getCurrentCUDAStream()>>>(inputs, add_inputs, outputs, totalElements);
-  THCudaCheck(cudaGetLastError());
+  C10_CUDA_CHECK(cudaGetLastError());
 }
 
 template<typename scalar_t, 
@@ -302,7 +296,7 @@ void apex_masked_scale_cuda(scalar_t const *inputs,
   grid.x = std::min((unsigned int)at::cuda::getCurrentDeviceProperties()->multiProcessorCount * blocks_per_sm, grid.x);
 
   apex_masked_scale_kernel<scalar_t, accscalar_t, IndexType><<<grid, dim_block, 0, at::cuda::getCurrentCUDAStream()>>>(inputs, outputs, mask, totalElements, scale);
-  THCudaCheck(cudaGetLastError());
+  C10_CUDA_CHECK(cudaGetLastError());
 }
 
 

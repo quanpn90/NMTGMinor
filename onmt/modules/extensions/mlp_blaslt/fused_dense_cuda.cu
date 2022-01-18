@@ -1350,7 +1350,7 @@ int linear_gelu_linear_backward_cuda(T *input, T *gelu_in, T *output1, T *weight
     int status = 1;
 #if defined(CUBLAS_VERSION) && CUBLAS_VERSION >= 11600
 //wgrad for first gemm
-    status = gemm_bgradb_lt(
+    status = gemm_bgradb_lt(   // this functions does output * d_output -> dweight and accumulate d_output into dbias
     (cublasLtHandle_t)handle,
     CUBLAS_OP_N,
     CUBLAS_OP_T,
@@ -1371,7 +1371,7 @@ int linear_gelu_linear_backward_cuda(T *input, T *gelu_in, T *output1, T *weight
     true,
     static_cast<void*>(d_bias2));
 //dgrad for second GEMM
-    status = gemm_dgelu_bgradb_lt(
+    status = gemm_dgelu_bgradb_lt(  // this function does weight * d_output2 for d_output1 (after gelu) and then perform dgelu
     (cublasLtHandle_t)handle,
     CUBLAS_OP_N,
     CUBLAS_OP_N,

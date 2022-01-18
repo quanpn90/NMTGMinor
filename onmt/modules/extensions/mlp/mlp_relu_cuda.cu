@@ -10,7 +10,11 @@
 /* Includes, cuda */
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
+#ifdef OLD_GENERATOR_PATH
 #include <ATen/CUDAGeneratorImpl.h>
+#else
+#include <ATen/cuda/CUDAGeneratorImpl.h>
+#endif
 #include <curand_kernel.h>
 
 // includes cublaslt

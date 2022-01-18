@@ -1,5 +1,10 @@
 #pragma once
+#ifdef OLD_GENERATOR_PATH
 #include <ATen/CUDAGeneratorImpl.h>
+#else
+#include <ATen/cuda/CUDAGeneratorImpl.h>
+#endif
+
 #include <ATen/cuda/CUDAGraphsUtils.cuh>
 #include <curand_kernel.h>
 #include "philox.h"
@@ -454,13 +459,13 @@ int softmax_elements_stride, int batch_count, float p, cudaStream_t streamid)
         int warps_per_block = (threads_per_block / warp_size);
         int batches_per_block = warps_per_block * batches_per_warp;
         int blocks = (batch_count + batches_per_block - 1) / batches_per_block;
-	c10::optional<at::Generator> gen_;
+	    c10::optional<at::Generator> gen_;
         auto gen = at::get_generator_or_default<at::CUDAGeneratorImpl>(gen_, at::cuda::detail::getDefaultCUDAGenerator());
         int64_t counter_offset = (totalElements/(blocks*threads_per_block)+1);
         at::PhiloxCudaState rng_engine_inputs;
-	{
+	    {
           std::lock_guard<std::mutex> lock(gen->mutex_);
-	  rng_engine_inputs = gen->philox_cuda_state(counter_offset);
+	      rng_engine_inputs = gen->philox_cuda_state(counter_offset);
         }
 
         // compute launch size

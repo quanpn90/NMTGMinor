@@ -50,8 +50,8 @@ def check_cuda_torch_binary_vs_bare_metal(cuda_dir):
 # ATen/CUDAGeneratorImpl.h, due to breaking change in https://github.com/pytorch/pytorch/pull/36026
 generator_flag = []
 torch_dir = torch.__path__[0]
-if os.path.exists(os.path.join(torch_dir, 'include', 'ATen', 'CUDAGenerator.h')):
-    generator_flag = ['-DOLD_GENERATOR']
+if os.path.exists(os.path.join(torch_dir, "include", "ATen", "CUDAGeneratorImpl.h")):
+    generator_flag = ["-DOLD_GENERATOR_PATH"]
 
 
 def get_cuda_bare_metal_version(cuda_dir):

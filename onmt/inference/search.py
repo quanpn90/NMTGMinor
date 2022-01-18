@@ -81,6 +81,7 @@ class BeamSearch(Search):
             lprobs.add_(scores[:, :, step - 1].unsqueeze(-1))
 
         # here lprobs should be (bsz, beam_size, V) (in streaming, bsz should be 1)
+
         torch.topk(
             lprobs.view(bsz, -1),  # after view, it should be (bsz, beam_size x V)
             k=min(

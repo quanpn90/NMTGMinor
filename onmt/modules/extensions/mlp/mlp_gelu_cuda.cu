@@ -15,7 +15,11 @@
 #include <cuda_fp16.h>
 #include <cuda_profiler_api.h>
 #include <cuda_runtime.h>
+#ifdef OLD_GENERATOR_PATH
 #include <ATen/CUDAGeneratorImpl.h>
+#else
+#include <ATen/cuda/CUDAGeneratorImpl.h>
+#endif
 #include <curand_kernel.h>
 
 // includes cublaslt
@@ -1442,6 +1446,7 @@ int mlp_fp(
         {
           std::lock_guard<std::mutex> lock(gen.mutex());
           rng_engine_inputs = at::check_generator<at::CUDAGeneratorImpl>(gen)->philox_engine_inputs(counter_offset);
+
         }
         biasAddDropoutGeLU_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0,
                              stream>>>(output, hidden, bias, mask, batch_size, input_size, p, rng_engine_inputs);

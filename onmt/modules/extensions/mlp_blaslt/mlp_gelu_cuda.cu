@@ -15,7 +15,11 @@
 #include <cuda_fp16.h>
 #include <cuda_profiler_api.h>
 #include <cuda_runtime.h>
+#ifdef OLD_GENERATOR_PATH
 #include <ATen/CUDAGeneratorImpl.h>
+#else
+#include <ATen/cuda/CUDAGeneratorImpl.h>
+#endif
 #include <curand_kernel.h>
 
 // includes cublaslt
@@ -76,6 +80,128 @@ __device__ __inline__ float gelu_back(float dy, float a) {
   return (dy * retf);
 }
 
+
+
+
+// FP64 Wrapper around cublas GEMMEx
+cublasStatus_t mlp_gemm(
+    cublasHandle_t handle,
+    cublasOperation_t transa,
+    cublasOperation_t transb,
+    int m,
+    int n,
+    int k,
+    float alpha,
+    const double* A,
+    int lda,
+    const double* B,
+    int ldb,
+    const float beta,
+    double* C,
+    int ldc) {
+  return cublasGemmEx(
+      handle,
+      transa,
+      transb,
+      m,
+      n,
+      k,
+      &alpha,
+      A,
+      CUDA_R_64F,
+      lda,
+      B,
+      CUDA_R_64F,
+      ldb,
+      &beta,
+      C,
+      CUDA_R_64F,
+      ldc,
+      CUDA_R_64F,
+      CUBLAS_GEMM_DEFAULT);
+}
+
+// FP32 Wrapper around cublas GEMMEx
+cublasStatus_t mlp_gemm(
+    cublasHandle_t handle,
+    cublasOperation_t transa,
+    cublasOperation_t transb,
+    int m,
+    int n,
+    int k,
+    float alpha,
+    const float* A,
+    int lda,
+    const float* B,
+    int ldb,
+    const float beta,
+    float* C,
+    int ldc) {
+  return cublasGemmEx(
+      handle,
+      transa,
+      transb,
+      m,
+      n,
+      k,
+      &alpha,
+      A,
+      CUDA_R_32F,
+      lda,
+      B,
+      CUDA_R_32F,
+      ldb,
+      &beta,
+      C,
+      CUDA_R_32F,
+      ldc,
+      CUDA_R_32F,
+      CUBLAS_GEMM_DEFAULT);
+}
+
+// FP16 Tensor core wrapper around cublas GEMMEx
+cublasStatus_t mlp_gemm(
+    cublasHandle_t handle,
+    cublasOperation_t transa,
+    cublasOperation_t transb,
+    int m,
+    int n,
+    int k,
+    float alpha,
+    const at::Half* A,
+    int lda,
+    const at::Half* B,
+    int ldb,
+    float beta,
+    at::Half* C,
+    int ldc) {
+
+  const half halpha = __float2half_rn(alpha);
+  const half hbeta = __float2half_rn(beta);
+  return cublasGemmEx(
+      handle,
+      transa,
+      transb,
+      m,
+      n,
+      k,
+      &halpha,
+      A,
+      CUDA_R_16F,
+      lda,
+      B,
+      CUDA_R_16F,
+      ldb,
+      &hbeta,
+      C,
+      CUDA_R_16F,
+      ldc,
+      CUBLAS_COMPUTE_16F,
+      CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+}
+
+///////// CUBLAS LT FUNCTIONS /////////////
+
 int gemm_bias_lt(
     cublasLtHandle_t ltHandle,
     cublasOperation_t transa,
@@ -95,7 +221,9 @@ int gemm_bias_lt(
     size_t workspaceSize,
     cudaStream_t stream,
     bool use_bias,
-    const void* bias) {
+    const void* bias,
+    bool use_gelu,
+    const void* gelu_in) {
   cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
 
   cublasLtMatmulDescOpaque_t operationDesc = {};
@@ -116,11 +244,21 @@ int gemm_bias_lt(
   status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(transa));
   if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
 
+  if (use_gelu) {
+    if (use_bias)
+        epilogue = CUBLASLT_EPILOGUE_GELU_AUX_BIAS;
+    else
+        epilogue = CUBLASLT_EPILOGUE_GELU_AUX;
+    status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_EPILOGUE_AUX_POINTER, &gelu_in, sizeof(gelu_in));
+    status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_EPILOGUE_AUX_LD, &ldc, sizeof(ldc));
+  }
+
   if (use_bias) {
     status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &bias, sizeof(bias));
     if (status != CUBLAS_STATUS_SUCCESS) {
       goto CLEANUP;
     }
+    if (!use_gelu)
       epilogue = CUBLASLT_EPILOGUE_BIAS;
   }
 
@@ -156,12 +294,8 @@ int gemm_bias_lt(
   // run them one by one until something works.
   status = cublasLtMatmulAlgoGetHeuristic(
     ltHandle, &operationDesc, &Adesc, &Bdesc, &Cdesc, &Cdesc, &preference, 1, &heuristicResult, &returnedResults);
-  if (status != CUBLAS_STATUS_SUCCESS) {
-//    printf("Forward pass: Not Found algorithm\n");
+  if (status != CUBLAS_STATUS_SUCCESS)
     goto CLEANUP;
-  } else {
-//    printf("Forward pass: Found algorithm\n");
-  }
 
   if (returnedResults == 0) {
     status = CUBLAS_STATUS_NOT_SUPPORTED;
@@ -216,7 +350,9 @@ int gemm_bias_lt(
     size_t workspaceSize,
     cudaStream_t stream,
     bool use_bias,
-    const void* bias) {
+    const void* bias,
+    bool use_gelu,
+    const void* gelu_in) {
   return 1;
 }
 
@@ -239,7 +375,9 @@ int gemm_bias_lt(
     size_t workspaceSize,
     cudaStream_t stream,
     bool use_bias,
-    const void* bias) {
+    const void* bias,
+    bool use_gelu,
+    const void* gelu_in) {
   cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
 
   cublasLtMatmulDescOpaque_t operationDesc = {};
@@ -260,12 +398,22 @@ int gemm_bias_lt(
   status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(transa));
   if (status != CUBLAS_STATUS_SUCCESS) goto CLEANUP;
 
+  if (use_gelu) {
+    if (use_bias)
+        epilogue = CUBLASLT_EPILOGUE_GELU_AUX_BIAS;
+    else
+        epilogue = CUBLASLT_EPILOGUE_GELU_AUX;
+    status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_EPILOGUE_AUX_POINTER, &gelu_in, sizeof(gelu_in));
+    status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_EPILOGUE_AUX_LD, &ldc, sizeof(ldc));
+  }
+
   if (use_bias) {
     status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &bias, sizeof(bias));
     if (status != CUBLAS_STATUS_SUCCESS) {
       goto CLEANUP;
     }
-      epilogue = CUBLASLT_EPILOGUE_BIAS;
+      if (!use_gelu)
+        epilogue = CUBLASLT_EPILOGUE_BIAS;
   }
 
   status = cublasLtMatmulDescSetAttribute(&operationDesc, CUBLASLT_MATMUL_DESC_EPILOGUE, &epilogue, sizeof(epilogue));
@@ -586,127 +734,7 @@ CLEANUP:
   return status == CUBLAS_STATUS_SUCCESS ? 0 : 1;
 }
 
-
-///////////////////////////////////////////////// CUBLASLT GEMMM//////////////////////////////////////////
-
-
-// FP64 Wrapper around cublas GEMMEx
-cublasStatus_t mlp_gemm(
-    cublasHandle_t handle,
-    cublasOperation_t transa,
-    cublasOperation_t transb,
-    int m,
-    int n,
-    int k,
-    float alpha,
-    const double* A,
-    int lda,
-    const double* B,
-    int ldb,
-    float beta,
-    double* C,
-    int ldc) {
-  return cublasGemmEx(
-      handle,
-      transa,
-      transb,
-      m,
-      n,
-      k,
-      &alpha,
-      A,
-      CUDA_R_64F,
-      lda,
-      B,
-      CUDA_R_64F,
-      ldb,
-      &beta,
-      C,
-      CUDA_R_64F,
-      ldc,
-      CUDA_R_64F,
-      CUBLAS_GEMM_DEFAULT);
-}
-
-// FP32 Wrapper around cublas GEMMEx
-cublasStatus_t mlp_gemm(
-    cublasHandle_t handle,
-    cublasOperation_t transa,
-    cublasOperation_t transb,
-    int m,
-    int n,
-    int k,
-    float alpha,
-    const float* A,
-    int lda,
-    const float* B,
-    int ldb,
-    float beta,
-    float* C,
-    int ldc) {
-  return cublasGemmEx(
-      handle,
-      transa,
-      transb,
-      m,
-      n,
-      k,
-      &alpha,
-      A,
-      CUDA_R_32F,
-      lda,
-      B,
-      CUDA_R_32F,
-      ldb,
-      &beta,
-      C,
-      CUDA_R_32F,
-      ldc,
-      CUDA_R_32F,
-      CUBLAS_GEMM_DEFAULT);
-}
-
-// FP16 Tensor core wrapper around cublas GEMMEx
-cublasStatus_t mlp_gemm(
-    cublasHandle_t handle,
-    cublasOperation_t transa,
-    cublasOperation_t transb,
-    int m,
-    int n,
-    int k,
-    float alpha,
-    const at::Half* A,
-    int lda,
-    const at::Half* B,
-    int ldb,
-    float beta,
-    at::Half* C,
-    int ldc) {
-
-  const half halpha = __float2half_rn(alpha);
-  const half hbeta = __float2half_rn(beta);
-  return cublasGemmEx(
-      handle,
-      transa,
-      transb,
-      m,
-      n,
-      k,
-      &halpha,
-      A,
-      CUDA_R_16F,
-      lda,
-      B,
-      CUDA_R_16F,
-      ldb,
-      &hbeta,
-      C,
-      CUDA_R_16F,
-      ldc,
-      CUBLAS_COMPUTE_16F,
-      CUBLAS_GEMM_DEFAULT_TENSOR_OP);
-}
-
+////////// DONE CUBLASLT FUNCTIONS //////////////////////////////////////////
 
 // Bias ADD. Assume input X is [features x batch size], column major.
 // Bias is one 'features' long vector, with implicit broadcast.
@@ -759,207 +787,6 @@ __global__ void biasAdd_fprop(T *X, T *b, uint batch_size, uint features) {
 // Bias ADD + ReLU. Assume input X is [features x batch size], column major.
 // Activation support fuesed ReLU. Safe to call in-place.
 template <typename T>
-__global__ void biasAddDropoutGeLU_fprop(T *X, T *Y, T *b, uint8_t *mask, uint batch_size, uint features, float p,
-                                         std::pair<uint64_t, uint64_t> seeds) {
-  T r_x[ILP];
-  T r_b[ILP];
-  T r_y[ILP];
-  uint8_t r_m[ILP];
-//  uint8_t r_m[ILP];
-  float pinv = 1.f/(1.f-p);
-
-  if(is_aligned(X) && is_aligned(b) && is_aligned(Y) && features % ILP ==0) {
-
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    curandStatePhilox4_32_10_t state;
-    curand_init(
-        seeds.first,
-        tid,
-        seeds.second,
-        &state);
-
-    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
-      int row = tid % (features / ILP);
-      load_store(r_x, X, 0 , tid);
-      load_store(r_b, b, 0 , row);
-      load_store(r_y, Y, 0 , tid);
-      load_store(r_m, mask, 0, tid);  // mask has the same size with X
-
-      float4 rand = curand_uniform4(&state);
-      rand.x = rand.x >= p;
-      rand.y = rand.y >= p;
-      rand.z = rand.z >= p;
-      rand.w = rand.w >= p;
-
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_y[ii] = bias_sum;  // store the mm + bias output
-        r_x[ii] = gelu(bias_sum) * (float)(&rand.x)[ii]*pinv;  // gelu * dropout mask
-        r_m[ii] = (uint8_t)(&rand.x)[ii];  // store the mask values in buffer
-      }
-      load_store(X, r_x, tid , 0);
-      load_store(mask, r_m, tid , 0);
-      load_store(Y, r_y, tid , 0);
-    }
-  } else {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    curandStatePhilox4_32_10_t state;
-    curand_init(
-        seeds.first,
-        tid,
-        seeds.second,
-        &state);
-
-    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
-
-      float4 rand = curand_uniform4(&state);
-      rand.x = rand.x >= p;
-      rand.y = rand.y >= p;
-      rand.z = rand.z >= p;
-      rand.w = rand.w >= p;
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        int idx = tid + ii * blockDim.x * gridDim.x;
-        if(idx < features * batch_size) {
-          int row = tid % features;
-          r_x[ii] = X[idx];
-          r_b[ii] = b[row];
-          r_m[ii] = mask[idx];
-          r_y[ii] = Y[idx];
-        }
-      }
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_y[ii] = bias_sum;
-        r_x[ii] = gelu(bias_sum)*(float)(&rand.x)[ii]*pinv;
-        r_m[ii] = (uint8_t)(&rand.x)[ii];
-      }
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        int idx = tid + ii * blockDim.x * gridDim.x;
-        if(idx < features * batch_size) {
-          X[idx] = r_x[ii];
-          mask[idx] = r_m[ii];
-          Y[idx] = r_y[ii];
-        }
-      }
-    }
-  }
-}
-
-template <typename T>
-__global__ void biasAddGeLU_fprop(T *X, T *Y, T *b, uint batch_size, uint features) {
-  T r_x[ILP];
-  T r_b[ILP];
-  T r_y[ILP];
-
-  if(is_aligned(X) && is_aligned(b) && is_aligned(Y) && features % ILP ==0) {
-
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
-      int row = tid % (features / ILP);
-      load_store(r_x, X, 0 , tid);
-      load_store(r_b, b, 0 , row);
-      load_store(r_y, Y, 0 , tid);
-
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        //r_x[ii] = relu(bias_sum)*(&rand.x)[ii]*pinv;
-        r_y[ii] = bias_sum;  // store the mm + bias output
-        r_x[ii] = gelu(bias_sum);  // gelu * dropout mask
-      }
-      load_store(X, r_x, tid , 0);
-      load_store(Y, r_y, tid , 0);
-    }
-  } else {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
-
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        int idx = tid + ii * blockDim.x * gridDim.x;
-        if(idx < features * batch_size) {
-          int row = tid % features;
-          r_x[ii] = X[idx];
-          r_b[ii] = b[row];
-          r_y[ii] = Y[idx];
-        }
-      }
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        float bias_sum = static_cast<float>(r_x[ii]) + static_cast<float>(r_b[ii]);
-        r_y[ii] = bias_sum;
-        r_x[ii] = gelu(bias_sum);
-      }
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        int idx = tid + ii * blockDim.x * gridDim.x;
-        if(idx < features * batch_size) {
-          X[idx] = r_x[ii];
-          Y[idx] = r_y[ii];
-        }
-      }
-    }
-  }
-}
-
-
-template <typename T>
-__global__ void GeLU_fprop(T *X, T *Y, uint batch_size, uint features) {
-  T r_x[ILP];
-  T r_y[ILP];
-
-  if(is_aligned(X) && is_aligned(Y) && features % ILP ==0) {
-
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
-      load_store(r_x, X, 0 , tid);
-      load_store(r_y, Y, 0 , tid);
-
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        //r_x[ii] = relu(bias_sum)*(&rand.x)[ii]*pinv;
-        r_y[ii] = gelu(static_cast<float>(r_x[ii]));  // store the mm + bias output
-      }
-      load_store(Y, r_y, tid , 0);
-    }
-  } else {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
-
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        int idx = tid + ii * blockDim.x * gridDim.x;
-        if(idx < features * batch_size) {
-          r_x[ii] = X[idx];
-          r_y[ii] = Y[idx];
-        }
-      }
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        r_y[ii] = gelu(static_cast<float>(r_x[ii]));
-      }
-#pragma unroll
-      for(int ii = 0; ii < ILP; ii++) {
-        int idx = tid + ii * blockDim.x * gridDim.x;
-        if(idx < features * batch_size) {
-          Y[idx] = r_y[ii];
-        }
-      }
-    }
-  }
-}
-
-template <typename T>
 __global__ void DropoutGeLU_fprop(T *X, T *Y, uint8_t *mask, uint batch_size, uint features, float p,
                                          std::pair<uint64_t, uint64_t> seeds) {
   T r_x[ILP];
@@ -992,9 +819,12 @@ __global__ void DropoutGeLU_fprop(T *X, T *Y, uint8_t *mask, uint batch_size, ui
 
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
-        r_y[ii] = gelu(static_cast<float>(r_x[ii])) * (float)(&rand.x)[ii]*pinv;  // gelu * dropout mask
+        float bias_sum = static_cast<float>(r_x[ii]);
+        r_y[ii] = bias_sum;  // store the mm + bias output
+        r_x[ii] = gelu(bias_sum) * (float)(&rand.x)[ii]*pinv;  // gelu * dropout mask
         r_m[ii] = (uint8_t)(&rand.x)[ii];  // store the mask values in buffer
       }
+      load_store(X, r_x, tid , 0);
       load_store(mask, r_m, tid , 0);
       load_store(Y, r_y, tid , 0);
     }
@@ -1026,14 +856,71 @@ __global__ void DropoutGeLU_fprop(T *X, T *Y, uint8_t *mask, uint batch_size, ui
       }
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
-        r_x[ii] = gelu(static_cast<float>(r_x[ii]))*(float)(&rand.x)[ii]*pinv;
+        float bias_sum = static_cast<float>(r_x[ii]);
+        r_y[ii] = bias_sum;
+        r_x[ii] = gelu(bias_sum)*(float)(&rand.x)[ii]*pinv;
         r_m[ii] = (uint8_t)(&rand.x)[ii];
       }
 #pragma unroll
       for(int ii = 0; ii < ILP; ii++) {
         int idx = tid + ii * blockDim.x * gridDim.x;
         if(idx < features * batch_size) {
+          X[idx] = r_x[ii];
           mask[idx] = r_m[ii];
+          Y[idx] = r_y[ii];
+        }
+      }
+    }
+  }
+}
+
+template <typename T>
+__global__ void GeLU_fprop(T *X, T *Y, uint batch_size, uint features) {
+  T r_x[ILP];
+  T r_y[ILP];
+
+  if(is_aligned(X) && is_aligned(Y) && features % ILP ==0) {
+
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
+      load_store(r_x, X, 0 , tid);
+      load_store(r_y, Y, 0 , tid);
+
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        float bias_sum = static_cast<float>(r_x[ii]);
+        //r_x[ii] = relu(bias_sum)*(&rand.x)[ii]*pinv;
+        r_y[ii] = bias_sum;  // store the mm + bias output
+        r_x[ii] = gelu(bias_sum);  // gelu * dropout mask
+      }
+      load_store(X, r_x, tid , 0);
+      load_store(Y, r_y, tid , 0);
+    }
+  } else {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
+
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          r_x[ii] = X[idx];
+          r_y[ii] = Y[idx];
+        }
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        float bias_sum = static_cast<float>(r_x[ii]);
+        r_y[ii] = bias_sum;
+        r_x[ii] = gelu(bias_sum);
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          X[idx] = r_x[ii];
           Y[idx] = r_y[ii];
         }
       }
@@ -2010,7 +1897,7 @@ int mlp_fp(
     T* reserved_space,
     T* reserved_activations,
     uint8_t* reserved_mask,
-    void *lt_workspace,
+    void* lt_workspace,
     float p) {
   auto gen = at::cuda::detail::getDefaultCUDAGenerator();
   T *weight, *input, *output, *hidden, *bias;
@@ -2037,96 +1924,78 @@ int mlp_fp(
     int ifeat = (layer == 0) ? input_features : output_features[layer - 1];
     int ofeat = output_features[layer];
 
-    const float alpha          = 1.0;
-    const float beta_zero       = 0.0;
-    const float beta_one       = 1.0;
+    float one = 1.f;
+    float zero = 0.f;
 
-    cublasStatus_t cublas_status;
+    int cublas_status;
     // Call GEMM: fprop is Y = W'X
-//    cublas_status = mlp_gemm(
-//                        handle,
-//                        CUBLAS_OP_T,
-//                        CUBLAS_OP_N,
-//                        ofeat,
-//                        batch_size,
-//                        ifeat,
-//                        one,
-//                        weight,
-//                        ifeat,
-//                        input,
-//                        ifeat,
-//                        zero,
-//                        output,
-//                        ofeat);
+//     cublas_status = mlp_gemm(
+//                         handle,
+//                         CUBLAS_OP_T,
+//                         CUBLAS_OP_N,
+//                         ofeat,
+//                         batch_size,
+//                         ifeat,
+//                         one,
+//                         weight,
+//                         ifeat,
+//                         input,
+//                         ifeat,
+//                         zero,
+//                         output,
+//                         ofeat);
+    bool use_gelu = (layer < (num_layers - 1) && p == 0);
 
-
-//int gemm_bias_lt(
-//    cublasLtHandle_t ltHandle,
-//    cublasOperation_t transa,
-//    cublasOperation_t transb,
-//    int m,
-//    int n,
-//    int k,
-//    float *alpha, /* host pointer */
-//    float *A,
-//    int lda,
-//    float *B,
-//    int ldb,
-//    float *beta, /* host pointer */
-//    float *C,
-//    int ldc,
-//    void *workspace,
-//    size_t workspaceSize,
-//    cudaStream_t stream,
-//    bool use_bias,
-//    const void* bias) {
-    int status = 1;
-    if (layer == (num_layers -1))
-        status = gemm_bias_lt(
+    if (use_gelu)
+        cublas_status = gemm_bias_gelu_lt(
             (cublasLtHandle_t)handle,
             CUBLAS_OP_T,
             CUBLAS_OP_N,
             ofeat,
             batch_size,
             ifeat,
-            &alpha, /* host pointer */
+            &one, /* host pointer */
             weight,
             ifeat,
             input,
             ifeat,
-            &beta_zero, /* host pointer */
+            &zero, /* host pointer */
             output,
             ofeat,
             lt_workspace,
             1 << 22,
             stream,
             true,
+            static_cast<const void*>(hidden),
             static_cast<const void*>(bias));
+
     else
-        status = gemm_bias_lt(
+        cublas_status = gemm_bias_lt(
             (cublasLtHandle_t)handle,
             CUBLAS_OP_T,
             CUBLAS_OP_N,
             ofeat,
             batch_size,
             ifeat,
-            &alpha, /* host pointer */
+            &one, /* host pointer */
             weight,
             ifeat,
             input,
             ifeat,
-            &beta_zero, /* host pointer */
-            hidden,
+            &zero, /* host pointer */
+            output,
             ofeat,
             lt_workspace,
             1 << 22,
             stream,
             true,
-            static_cast<const void*>(bias));
+            static_cast<const void*>(bias),
+            use_gelu,
+            static_cast<const void*>(hidden));
 
-    if (status != CUBLAS_STATUS_SUCCESS) {
-    printf("GEMM fprop failed with %d\n", status);
-    return 1;
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+        printf("GEMM fprop failed with %d\n", cublas_status);
+        return 1;
     }
 
     const uint &input_size = ofeat;
@@ -2134,13 +2003,13 @@ int mlp_fp(
     int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
     // Call biasReLU
     if (layer == (num_layers -1)) { // no activation
-//      cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAdd_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-//      biasAdd_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
-//      Don't do anything here
+      // do nothing here
     } else {  // GELU
       if (p == 0) {
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, GeLU_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-        GeLU_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(hidden, output, batch_size, input_size);
+           // gelu has already been applied at mlp_gemm
+//         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, GeLU_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+//         GeLU_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, hidden,
+//                                                                                     batch_size, input_size);
       } else {
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, DropoutGeLU_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
         //number of times random will be generated per thread, to offset philox counter in thc random state
@@ -2149,9 +2018,11 @@ int mlp_fp(
         {
           std::lock_guard<std::mutex> lock(gen.mutex());
           rng_engine_inputs = at::check_generator<at::CUDAGeneratorImpl>(gen)->philox_engine_inputs(counter_offset);
+
         }
+        // actually its gelu -> dropout
         DropoutGeLU_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0,
-                             stream>>>(hidden, output, mask, batch_size, input_size, p, rng_engine_inputs);
+                             stream>>>(output, hidden, mask, batch_size, input_size, p, rng_engine_inputs);
       }
 
     }
@@ -2576,7 +2447,7 @@ template int mlp_fp<float>(
     float* reserved_space,
     float* reserved_activations,
     uint8_t* reserved_mask,
-    void *lt_workspace,
+    void* lt_workspace,
     float p);
 
 template int mlp_bp<float>(
@@ -2598,23 +2469,6 @@ template int mlp_bp<float>(
     bool requires_grad,
     float p);
 
-template int mlp_bp_input_only<float>(
-    float* X,
-    float* Y,
-    int input_features,
-    int batch_size,
-    float** WPtr,
-    int num_layers,
-    int* output_features,
-    float* dY,
-    float* reserved_space,
-    float* reserved_activations,
-    uint8_t* reserved_mask,
-    float* work_space,
-    float* dX,
-    bool requires_grad,
-    float p);
-
 template int mlp_fp<at::Half>(
     at::Half* X,
     int input_features,
@@ -2627,7 +2481,7 @@ template int mlp_fp<at::Half>(
     at::Half* reserved_space,
     at::Half* reserved_activations,
     uint8_t* reserved_mask,
-    void *lt_workspace,
+    void* lt_workspace,
     float p);
 
 template int mlp_bp<at::Half>(
@@ -2649,23 +2503,6 @@ template int mlp_bp<at::Half>(
     bool requires_grad,
     float p);
 
-template int mlp_bp_input_only<at::Half>(
-    at::Half* X,
-    at::Half* Y,
-    int input_features,
-    int batch_size,
-    at::Half** WPtr,
-    int num_layers,
-    int* output_features,
-    at::Half* dY,
-    at::Half* reserved_space,
-    at::Half* reserved_activations,
-    uint8_t* reserved_mask,
-    at::Half* work_space,
-    at::Half* dX,
-    bool requires_grad,
-    float p);
-
 template int mlp_fp<double>(
     double* X,
     int input_features,
@@ -2678,7 +2515,7 @@ template int mlp_fp<double>(
     double* reserved_space,
     double* reserved_activations,
     uint8_t* reserved_mask,
-    void *lt_workspace,
+    void* lt_workspace,
     float p);
 
 template int mlp_bp<double>(
@@ -2697,23 +2534,6 @@ template int mlp_bp<double>(
     double* dX,
     double** dwPtr,
     double** dbPtr,
-    bool requires_grad,
-    float p);
-
-template int mlp_bp_input_only<double>(
-    double* X,
-    double* Y,
-    int input_features,
-    int batch_size,
-    double** WPtr,
-    int num_layers,
-    int* output_features,
-    double* dY,
-    double* reserved_space,
-    double* reserved_activations,
-    uint8_t* reserved_mask,
-    double* work_space,
-    double* dX,
     bool requires_grad,
     float p);
 

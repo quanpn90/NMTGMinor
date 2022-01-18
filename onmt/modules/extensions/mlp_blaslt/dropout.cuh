@@ -1,4 +1,4 @@
-#include <ATen/ATen.h>
+    #include <ATen/ATen.h>
 
 #ifdef OLD_GENERATOR_PATH
 #include <ATen/CUDAGeneratorImpl.h>
@@ -109,7 +109,7 @@ __global__ void apex_dropout_add_kernel(scalar_t const                *inputs,
        for (int ii = 0; ii < UNROLL; ii++) {
            IndexType li = linearIndex + blockDim.x * gridDim.x * ii;
            if (li < totalElements) {
-	           accscalar_t int1 = src[ii] * (&rand.x)[ii] * pinv;
+	           accscalar_t int1 = static_cast<accscalar_t>(src[ii]) * (&rand.x)[ii] * pinv;
 	           outputs[li] = static_cast<scalar_t>(static_cast<accscalar_t>(add_src[ii]) + int1);
                mask[li]    = (uint8_t)(&rand.x)[ii];
            }

@@ -603,9 +603,12 @@ class Wav2Vec2Model(torch.nn.Module):
         else:
             features = source
 
-        torch.set_grad_enabled(self.layer_norm.weight.requires_grad)
+        # perform layer norm ... but check grad mode
+        current_grad_mode = torch.is_grad_enabled()
+        if current_grad_mode:
+            torch.set_grad_enabled(self.layer_norm.weight.requires_grad)
         features = self.layer_norm(features)
-        torch.set_grad_enabled(True)
+        torch.set_grad_enabled(current_grad_mode)
 
         if quantize:
             assert self.quantizer is not None
