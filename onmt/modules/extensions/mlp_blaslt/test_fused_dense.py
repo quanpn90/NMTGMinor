@@ -245,8 +245,9 @@ if __name__ == '__main__':
 
 
     seq_len = 32
-    batch_size = 1024
-    mlp_sizes = [1024, 4096, 1024]
+    batch_size = 64
+    # mlp_sizes = [1024, 4096, 1024]
+    mlp_sizes = [1024, 250056]
     num_iters = 32
 
 

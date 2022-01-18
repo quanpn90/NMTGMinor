@@ -374,8 +374,6 @@ class MBartAttention(nn.Module):
             mask = attention_mask
             low_precision = True  # Use CUDA impl
 
-            #TODO: add factorize
-
             attn_output, coverage = self_attn_func(use_time_mask, self.training, self.num_heads, hidden_states,
                                                    in_proj_weight, out_proj_weight,
                                                    self.proj_bias, self.out_proj.bias,
@@ -911,6 +909,7 @@ class MBartEncoderLayer(nn.Module):
 
         self.activation_fn_name = config.activation_function
         self.fused = False
+        self.fused_function = None
         if self.activation_fn_name == 'relu':
             from onmt.modules.mlp.mlp import mlp_relu_function
             if mlp_relu_function is not None:
@@ -1013,6 +1012,7 @@ class MBartDecoderLayer(nn.Module):
 
         self.activation_fn_name = config.activation_function
         self.fused = False
+        self.fused_function = None
         if self.activation_fn_name == 'relu':
             from onmt.modules.mlp.mlp import mlp_relu_function
             if mlp_relu_function is not None:

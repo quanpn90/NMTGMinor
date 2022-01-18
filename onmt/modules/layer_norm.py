@@ -30,7 +30,7 @@ try:
     import fast_layer_norm_cuda
     # print("[INFO] Fast layer norm implementation detected.")
 except (ModuleNotFoundError, ImportError) as e:
-    fast_layer_norm = None
+    fast_layer_norm_cuda = None
     # print("[INFO] Fast layer norm implementation not found.")
 
 

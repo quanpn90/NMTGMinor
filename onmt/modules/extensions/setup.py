@@ -71,6 +71,7 @@ ext_modules = []
 cmdclass['build_ext'] = BuildExtension.with_options(use_ninja=False)
 
 cc_flag = []
+print(cpp_extension.CUDA_HOME)
 _, bare_metal_major, _ = get_cuda_bare_metal_version(cpp_extension.CUDA_HOME)
 
 cc_flag.append('-gencode')
@@ -157,7 +158,7 @@ ext_modules.append(
                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
                                                '--expt-relaxed-constexpr',
                                                '--expt-extended-lambda',
-                                               '--use_fast_math'] + cc_flag}))
+                                               '--use_fast_math'] + cc_flag + generator_flag}))
 
 
 # ext_modules.append(
@@ -207,23 +208,23 @@ ext_modules.append(
                                                '--use_fast_math'] + cc_flag + version_dependent_macros + generator_flag}))
 #
 #
-ext_modules.append(
-    CUDAExtension(name='fused_optim',
-                  sources=['fused_optim/frontend.cpp',
-                           'fused_optim/multi_tensor_scale_kernel.cu',
-                           'fused_optim/multi_tensor_axpby_kernel.cu',
-                           'fused_optim/multi_tensor_l2norm_kernel.cu',
-                           'fused_optim/multi_tensor_l2norm_scale_kernel.cu',
-                           'fused_optim/multi_tensor_adam.cu',
-                           'fused_optim/multi_tensor_lamb_stage_1.cu',
-                           'fused_optim/multi_tensor_lamb_stage_2.cu',
-                           'fused_optim/multi_tensor_lamb.cu'],
-                  include_dirs=[os.path.join(this_dir, 'include')],
-                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                      'nvcc': ['-lineinfo',
-                                               '-O3',
-                                               '--resource-usage',
-                                               '--use_fast_math'] + version_dependent_macros}))
+# ext_modules.append(
+#     CUDAExtension(name='fused_optim',
+#                   sources=['fused_optim/frontend.cpp',
+#                            'fused_optim/multi_tensor_scale_kernel.cu',
+#                            'fused_optim/multi_tensor_axpby_kernel.cu',
+#                            'fused_optim/multi_tensor_l2norm_kernel.cu',
+#                            'fused_optim/multi_tensor_l2norm_scale_kernel.cu',
+#                            'fused_optim/multi_tensor_adam.cu',
+#                            'fused_optim/multi_tensor_lamb_stage_1.cu',
+#                            'fused_optim/multi_tensor_lamb_stage_2.cu',
+#                            'fused_optim/multi_tensor_lamb.cu'],
+#                   include_dirs=[os.path.join(this_dir, 'include')],
+#                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+#                                       'nvcc': ['-lineinfo',
+#                                                '-O3',
+#                                                '--resource-usage',
+#                                                '--use_fast_math'] + version_dependent_macros}))
 #
 # MLP functions
 
@@ -233,7 +234,7 @@ ext_modules.append(
                   sources=['mlp/mlp_relu.cpp',
                            'mlp/mlp_relu_cuda.cu'],
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                      'nvcc': ['-O3'] + version_dependent_macros}))
+                                      'nvcc': ['-O3'] + version_dependent_macros + generator_flag}))
 
 # ext_modules.append(
 #     CUDAExtension(name='fused_mlp_silu',
@@ -255,7 +256,7 @@ ext_modules.append(
                   sources=['mlp/mlp_gelu.cpp',
                            'mlp/mlp_gelu_cuda.cu'],
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                      'nvcc': ['-O3'] + version_dependent_macros}))
+                                      'nvcc': ['-O3'] + version_dependent_macros + generator_flag}))
 
 ext_modules.append(
     CUDAExtension(name='xentropy_cuda',
@@ -265,14 +266,14 @@ ext_modules.append(
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                       'nvcc': ['-O3'] + version_dependent_macros}))
 
-# if bare_metal_minor >= 4 and bare_metal_major >= 11:
-# ext_modules.append(
-#     CUDAExtension(name='mlp_gelu_blaslt',
-#                   sources=['mlp_blaslt/mlp_gelu.cpp',
-#                            'mlp_blaslt/mlp_gelu_cuda.cu'],
-#                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-#                                       'nvcc': ['-O3'] + version_dependent_macros +
-#                                               generator_flag + cc_flag}))
+if bare_metal_minor >= 5 and bare_metal_major >= 11:
+    ext_modules.append(
+        CUDAExtension(name='linear_blaslt',
+                      sources=['mlp_blaslt/linear.cpp',
+                               'mlp_blaslt/linear_cuda.cu'],
+                      extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                                          'nvcc': ['-O3'] + version_dependent_macros +
+                                                  generator_flag + cc_flag}))
 # #
 # Wait until CUBLAS_VERSION >= 11600 to build. Otherwise have to build custom pytorch
 # ext_modules.append(
@@ -311,7 +312,7 @@ ext_modules.append(
 
 setup(
     name='nmtgminor_cuda',
-    version='0.1', \
+    version='0.1',
     description='CUDA/C++ Pytorch extension for multi-head attention ported from NVIDIA apex',
     ext_modules=ext_modules,
     cmdclass=cmdclass,

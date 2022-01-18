@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import onmt, math
+from onmt.modules.optimized.linear import Linear, linear_function
 
 
 class Generator(nn.Module):
@@ -11,7 +12,7 @@ class Generator(nn.Module):
         super(Generator, self).__init__()
         self.hidden_size = hidden_size
         self.output_size = output_size
-        self.linear = nn.Linear(hidden_size, output_size)
+        self.linear = Linear(hidden_size, output_size)
         self.fix_norm = fix_norm
         self.must_softmax = False
         
@@ -36,7 +37,7 @@ class Generator(nn.Module):
         else:
             normalized_weights = F.normalize(self.linear.weight, dim=-1)
             normalized_bias = self.linear.bias
-            logits = F.linear(input, normalized_weights, normalized_bias)
+            logits = linear_function(input, normalized_weights, normalized_bias)
 
         # softmax will be done at the loss function
         # output = F.log_softmax(logits, dim=-1, dtype=torch.float32)

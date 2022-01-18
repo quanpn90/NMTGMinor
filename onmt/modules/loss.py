@@ -53,7 +53,7 @@ class CrossEntropyLossBase(_Loss):
             self.softmax_xentropy = SoftmaxCrossEntropyLoss.apply
             self.fast_xentropy = True
         except (ModuleNotFoundError, AttributeError):
-            print("[INFO] Fast xentropy cannot be found. Using PyTorch/Python based cross entropy loss.")
+            # print("[INFO] Fast xentropy cannot be found. Using PyTorch/Python based cross entropy loss.")
             self.softmax_xentropy = None
             self.fast_xentropy = False
 

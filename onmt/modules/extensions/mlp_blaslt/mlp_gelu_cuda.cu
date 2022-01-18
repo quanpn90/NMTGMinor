@@ -683,7 +683,7 @@ int mlp_fp(
 //                         zero,
 //                         output,
 //                         ofeat);
-    bool use_gelu = false; // (layer < (num_layers - 1) && p == 0);
+    bool use_gelu = (layer < (num_layers - 1) && p == 0);
 
     if (use_gelu)
         cublas_status = gemm_bias_gelu_lt(
@@ -728,9 +728,7 @@ int mlp_fp(
             1 << 22,
             stream,
             true,
-            static_cast<const void*>(bias),
-            use_gelu,
-            static_cast<const void*>(hidden));
+            static_cast<const void*>(bias));
 
     if (cublas_status != CUBLAS_STATUS_SUCCESS) {
         printf("GEMM fprop failed with %d\n", cublas_status);
@@ -746,9 +744,9 @@ int mlp_fp(
     } else {  // GELU
       if (p == 0) {
            // gelu has already been applied at mlp_gemm
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, GeLU_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-        GeLU_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, hidden,
-                                                                                    batch_size, input_size);
+//         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, GeLU_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+//         GeLU_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, hidden,
+//                                                                                     batch_size, input_size);
       } else {
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, DropoutGeLU_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
         //number of times random will be generated per thread, to offset philox counter in thc random state

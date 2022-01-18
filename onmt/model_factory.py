@@ -166,6 +166,7 @@ def build_tm_model(opt, dicts):
         # else:
         #     discrete_encoder = None
 
+        discrete_encoder = None
         encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model, discrete_encoder=discrete_encoder)
 
         sub_encoder = None
@@ -229,7 +230,7 @@ def build_tm_model(opt, dicts):
         #     if opt.verbose:
         #         print("[INFO] No weights loading from {} for decoder".format(opt.dec_pretrained_model))
         # else:
-        if len(opt.dec_state_dict) > 1:
+        if opt.dec_state_dict is not None and len(opt.dec_state_dict) > 1:
             print("[INFO] Loading weights for decoder from: %s ..." % opt.dec_state_dict)
             dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
 

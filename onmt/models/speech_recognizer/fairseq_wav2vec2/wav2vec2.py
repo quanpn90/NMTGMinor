@@ -1306,6 +1306,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.final_layer_norm = LayerNorm(self.embedding_dim)
 
         self.fused = False
+        self.fused_function = None
         if self.activation_fn_name == 'relu':
             from onmt.modules.mlp.mlp import mlp_relu_function
             if mlp_relu_function is not None:
