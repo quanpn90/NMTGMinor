@@ -866,7 +866,8 @@ class Trainer(object):
                 num_accumulated_sents.zero_()
 
                 num_updates = self.optim._step
-                if opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every:
+                if (opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every) \
+                        or (num_updates >= opt.max_step):
                     valid_loss, valid_accuracy = self.eval(self.valid_data)
                     valid_ppl = math.exp(min(valid_loss, 100))
 
