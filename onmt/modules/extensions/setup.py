@@ -119,7 +119,7 @@ print("GENERATOR FLAG:", generator_flag)
 #                                                '--expt-extended-lambda',
 #                                                '--use_fast_math'] + version_dependent_macros +
 #                                                                     generator_flag + cc_flag}))
-
+#
 ext_modules.append(
     CUDAExtension(name='self_multihead_attn_cuda',
                   sources=['multihead_attn/self_multihead_attn.cpp',
@@ -133,7 +133,7 @@ ext_modules.append(
                                                '--expt-extended-lambda',
                                                '--use_fast_math'] + version_dependent_macros +
                                               generator_flag}))
-
+#
 ext_modules.append(
     CUDAExtension(name='encdec_multihead_attn_bias_cuda',
                   sources=['multihead_attn/encdec_multihead_attn_bias.cpp',
@@ -147,7 +147,7 @@ ext_modules.append(
                                                '--expt-extended-lambda',
                                                '--use_fast_math'] + version_dependent_macros +
                                                                     generator_flag}))
-
+#
 ext_modules.append(
     CUDAExtension(name='fused_dropout_add_cuda',
                   sources=['dropout_add/fused_dropout_add.cpp',

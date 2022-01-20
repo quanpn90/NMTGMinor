@@ -21,14 +21,21 @@ int linear_bias_backward_input_only_cuda(T *input, T *weight, T *d_output, int i
 at::Tensor linear_bias_forward(at::Tensor input, at::Tensor weight, at::Tensor bias) {
 
   unsigned batch_size = 1;
+  std::vector<int64_t> output_sizes;
   auto input_sizes = input.sizes();
-  for (unsigned i=0; i < input_sizes.size() - 1 ; i++)
+
+  for (unsigned i=0; i < input_sizes.size() - 1 ; i++)  {
     batch_size = batch_size * input_sizes[i];
+    output_sizes.push_back(input_sizes[i]);
+  }
+
   auto in_features = input_sizes.back();
   int out_features = weight.size(0);
+  output_sizes.push_back(out_features);
 
   // create output/workspace tensor
-  auto out = at::empty({batch_size, out_features}, input.type());
+//  auto out = at::empty({batch_size, out_features}, input.type());
+  auto out = at::empty(output_sizes, input.type());
   // allocate fixed 4MB workspace for cublaslt for now, and this gets at least 4 MB
   auto lt_workspace = at::empty({1 << 22}, input.type());
 
@@ -90,7 +97,7 @@ std::vector<at::Tensor> linear_bias_backward(at::Tensor input, at::Tensor weight
 }
 
 
-std::vector<at::Tensor> linear_bias_backward_input_only(at::Tensor input, at::Tensor weight, at::Tensor d_output) {
+at::Tensor linear_bias_backward_input_only(at::Tensor input, at::Tensor weight, at::Tensor d_output) {
 
   // compute batch size as the product of the first dimensions
   // -> more flexible input size
@@ -120,11 +127,11 @@ std::vector<at::Tensor> linear_bias_backward_input_only(at::Tensor input, at::Te
         (void*) (lt_workspace.data_ptr<scalar_t>()));
   });
 
-  return {d_input};
+  return d_input;
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("forward", &linear_bias_forward, "linear bias forward");
   m.def("backward", &linear_bias_backward, "linear bias backward");
-  m.def("backward_input_only", &linear_bias_backward_input_only, "linear bias backward");
+  m.def("backward_input_only", &linear_bias_backward_input_only, "linear bias backward input only");
 }

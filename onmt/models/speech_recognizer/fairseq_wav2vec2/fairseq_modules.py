@@ -625,8 +625,6 @@ class MultiheadAttention(nn.Module):
 
                 # Fused attention using packed data (B T H) -> (BxT H) and removing padded positions
                 elif query.ndim == 2:
-
-                    print("[INFO] USING FAST MHA")
                     assert self.fast_bert_mha is not None
                     assert query.dtype == torch.half
                     assert cu_seqlens is not None
@@ -637,7 +635,7 @@ class MultiheadAttention(nn.Module):
                     assert (sm[0] == 8 and sm[1] == 0 and max_len <= 512)
 
                     total_bsz = query.size(0)
-                    qkv = F.linear(query, in_proj_weight, self.proj_bias)  # B x H
+                    qkv = linear_function(query, in_proj_weight, self.proj_bias)  # B x H
                     # B x 3 x H x d
 
                     # TODO: moving to CUDA to remove overhead?
@@ -646,7 +644,7 @@ class MultiheadAttention(nn.Module):
                     context, coverage = self.fast_bert_mha(qkv, cu_seqlens, self.dropout_p, max_len, self.training)
 
                     context = context.view(-1, self.num_heads * self.head_dim).contiguous()
-                    outputs = F.linear(context, out_proj_weight, self.out_proj.bias)
+                    outputs = linear_function(context, out_proj_weight, self.out_proj.bias)
 
                     return outputs, coverage
 

@@ -66,7 +66,7 @@ std::vector<torch::Tensor> fwd_cuda(
   torch::Tensor input_lin_results = torch::empty({q_seq_len, sequences, output_lin_dim}, act_options);
   torch::Tensor attn_scores          = torch::empty({attn_batches, q_seq_len, k_seq_len},      act_options);
   torch::Tensor dropout_results   = torch::empty({attn_batches, q_seq_len, k_seq_len},   act_options);
-  torch::Tensor softmax_results   = torch::empty({attn_batches, q_seq_len, k_seq_len},   act_options);
+//   torch::Tensor softmax_results; //  = torch::empty({attn_batches, q_seq_len, k_seq_len},   act_options);
   torch::Tensor dropout_mask      = torch::empty({attn_batches, q_seq_len, k_seq_len},   mask_options);
   torch::Tensor matmul2_results   = torch::empty({q_seq_len, attn_batches, head_dim},    act_options);
   torch::Tensor outputs           = torch::empty_like(inputs, act_options);
@@ -79,7 +79,7 @@ std::vector<torch::Tensor> fwd_cuda(
   // Softmax Intermediate Result Ptr (used by Matmul1 -> Softmax)
   void* attn_scores_ptr = static_cast<void*>(attn_scores.data_ptr());
   void* dropout_results_ptr = static_cast<void*>(dropout_results.data_ptr());
-  void* softmax_results_ptr = static_cast<void*>(softmax_results.data_ptr());
+//   void* softmax_results_ptr = static_cast<void*>(softmax_results.data_ptr());
 
 //  char a_layout_t{'t'};
 //  char a_layout_n{'n'};
@@ -140,6 +140,24 @@ std::vector<torch::Tensor> fwd_cuda(
   }
   // Padded Softmax
   bool softmax_success = false;
+
+//   at::Tensor softmax_results = at::softmax(attn_scores, 2);
+//   at::Tensor dropout_results;
+//   at::Tensor dropout_mask;
+//
+//   if (is_training && dropout_prob > 0.0f)   {
+//       auto dropout_tuple =
+//             at::_fused_dropout(softmax_results, 1.0f - dropout_prob);
+//       dropout_results = std::get<0>(dropout_tuple);
+//       dropout_mask = std::get<1>(dropout_tuple);
+//   } else {
+//       dropout_results = softmax_results;
+//       dropout_mask = torch::empty({1},   mask_options);
+//   }
+//
+//   at::Tensor nan_mask = at::isnan(dropout_results);
+//   dropout_mask.masked_fill_(nan_mask, 0);
+
 //   if (is_training && dropout_prob > 0.0f) {
 
 //       if (use_time_mask)    {
@@ -220,7 +238,20 @@ std::vector<torch::Tensor> fwd_cuda(
                              stream);  // pad batch strides
   }
 
+//   softmax_success = dispatch_softmax<half, half, float>(
+//                              reinterpret_cast<half*>(dropout_results_ptr), // this is actually softmax results, but making it consistent for the next function
+//                              reinterpret_cast<const half*>(attn_scores_ptr),
+// //                              pad_mask,
+//                              k_seq_len,
+//                              k_seq_len,
+//                              attn_batches*q_seq_len,
+// //                              attn_batches*q_seq_len/sequences,
+//                              stream);  // pad batch strides
+
   assert(softmax_success);
+
+//   at::Tensor nan_mask = at::isnan(dropout_results);
+//   dropout_results.masked_fill_(nan_mask, 0);
 
   // Matmul2
   TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,

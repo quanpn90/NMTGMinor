@@ -229,8 +229,6 @@ std::vector<torch::Tensor> fwd_cuda(
                              stream);  // pad batch strides
   }
 
-  assert(softmax_success);
-
   // Matmul2
   TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
                              CUBLAS_OP_N,

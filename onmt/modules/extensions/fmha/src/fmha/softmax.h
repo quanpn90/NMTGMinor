@@ -400,13 +400,29 @@ struct Softmax : public Softmax_base<Cta_tile, Kernel_traits> {
 
                 // The elements.
                 float tmp_00 = this->elt_[2 * mi + 0][4 * ni + 0];
+                if (std::isnan(tmp_00)==true)
+                    tmp_00 = 0;
                 float tmp_01 = this->elt_[2 * mi + 0][4 * ni + 1];
+                if (std::isnan(tmp_01)==true)
+                    tmp_01 = 0;
                 float tmp_02 = this->elt_[2 * mi + 0][4 * ni + 2];
+                if (std::isnan(tmp_02)==true)
+                    tmp_02 = 0;
                 float tmp_03 = this->elt_[2 * mi + 0][4 * ni + 3];
+                if (std::isnan(tmp_03)==true)
+                    tmp_03 = 0;
                 float tmp_10 = this->elt_[2 * mi + 1][4 * ni + 0];
+                if (std::isnan(tmp_10)==true)
+                    tmp_10 = 0;
                 float tmp_11 = this->elt_[2 * mi + 1][4 * ni + 1];
+                if (std::isnan(tmp_11)==true)
+                    tmp_11 = 0;
                 float tmp_12 = this->elt_[2 * mi + 1][4 * ni + 2];
+                if (std::isnan(tmp_12)==true)
+                    tmp_12 = 0;
                 float tmp_13 = this->elt_[2 * mi + 1][4 * ni + 3];
+                if (std::isnan(tmp_13)==true)
+                    tmp_13 = 0;
 
                 // Transform to accumulators.
                 acc[mi][ni].reg(0) = fmha::float2_to_half2(tmp_00, tmp_01);

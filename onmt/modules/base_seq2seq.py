@@ -80,12 +80,11 @@ class NMTModel(nn.Module):
         
         self.encoder.mark_pretrained()
         self.decoder.mark_pretrained()
-        
-    def load_state_dict(self, state_dict, strict=True):
+
+    def load_state_dict(self, state_dict, strict=False):
         """
         override this method to have back-compatibility
         """
-        
         def condition(param_name):
             # don't load these buffers (more like a bug)
             if 'positional_encoder' in param_name:
@@ -100,7 +99,7 @@ class NMTModel(nn.Module):
                 if param_name in model_dict:
                     return True
                 return False
-            
+
             return True
 
         # restore old generated if necessary for loading
@@ -132,7 +131,7 @@ class NMTModel(nn.Module):
             if 'ctc_linear.bias' in filtered:
                 filtered.pop('ctc_linear.bias')
 
-        super().load_state_dict(filtered)   
+        super().load_state_dict(filtered)
 
         # in case using multiple generators
         if type(self.generator) is not nn.ModuleList:

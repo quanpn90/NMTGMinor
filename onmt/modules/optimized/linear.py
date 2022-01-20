@@ -56,7 +56,7 @@ class Linear(torch.nn.Linear):
 
     def forward(self, input: Tensor) -> Tensor:
 
-        if linear_function is not None:
+        if linear_function is not None and self.bias is not None:
             return linear_function(input, self.weight, self.bias)
         else:
             return torch.nn.functional.linear(input, self.weight, self.bias)

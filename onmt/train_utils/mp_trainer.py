@@ -218,7 +218,12 @@ class Trainer(object):
 
         if opt.load_from:
             checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
-            self.model.load_state_dict(checkpoint['model'])
+
+            try:
+                self.model.load_state_dict(checkpoint['model'])
+            except RuntimeError as e:
+                self.model.load_state_dict(checkpoint['model'], strict=True)
+
             # if 'scaler' in checkpoint and checkpoint['scaler'] is not None:
             #     self.grad_scaler.load_state_dict(checkpoint['scaler'])
 
@@ -877,6 +882,10 @@ class Trainer(object):
                         ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
                         self.save(ep, valid_ppl if opt.save_metrics in ['ppl', 'perplexity'] else 1 - valid_accuracy,
                                   itr=data_iterator)
+
+                    if num_updates >= opt.max_step:
+                        print('[INFO] Max-training-step reached.')
+                        exit(0)
 
             num_words = tgt_size
             report_loss.add_(loss_data)

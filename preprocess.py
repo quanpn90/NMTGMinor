@@ -9,7 +9,6 @@ from onmt.data.binarizer import SpeechBinarizer
 
 from onmt.data.indexed_dataset import IndexedDatasetBuilder
 
-import h5py as h5
 import numpy as np
 import warnings
 import os
