@@ -192,6 +192,7 @@ int batch_size, int stride, int element_count, at::PhiloxCudaState philox_args, 
         }
     }
 
+    acc_t temp_acc;
     // store result
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -204,7 +205,10 @@ int batch_size, int stride, int element_count, at::PhiloxCudaState philox_args, 
                 output_t out[ELEMENTS_PER_LDG_STG];
                 #pragma unroll
                 for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
-                    out[element] = rands[i][it+element] * (pinv * (elements[i][it + element] / sum[i]));
+                    temp_acc = (elements[i][it + element] / sum[i]);
+                    if (std::isnan((float)temp_acc)==true)
+                        temp_acc = 0;
+                    out[element] = rands[i][it+element] * (pinv * temp_acc);
                 }
                 copy_vector<output_t, ELEMENTS_PER_LDG_STG>(dst + i * element_count + it * WARP_SIZE, out);
             }
@@ -347,7 +351,9 @@ __global__ void softmax_dropout_warp_forward(output_t *dst, uint8_t *dropout_mas
                 float *rand_ptr = (float*)(&rand);
                 #pragma unroll
                 for (int element = 0;element < 1;++element) {
-    	        softmax_out[element] = (elements[i][it + element] / sum[i]);
+    	            softmax_out[element] = (elements[i][it + element] / sum[i]);
+    	            if (std::isnan((float)softmax_out[element])==true)
+    	                softmax_out[element] = 0;
                     rand_ptr[element] = rand_ptr[element] <= p;
                     out[element] = rand_ptr[element] * pinv * softmax_out[element];
     	            dropout_mask_temp[element] = rand_ptr[element] > 0.5; // just to distinguish 0.0f and 1.0f
@@ -589,7 +595,7 @@ int element_count)
         }
     }
 
-
+    acc_t temp_acc;
     // store result
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -602,7 +608,11 @@ int element_count)
                 output_t out[ELEMENTS_PER_LDG_STG];
                 #pragma unroll
                 for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
-                    out[element] =  (elements[i][it + element] / sum[i]);
+                    temp_acc = (elements[i][it + element] / sum[i]);
+                    if (std::isnan((float)temp_acc)==true) {
+                        temp_acc = 0;
+                    }
+                    out[element] =  temp_acc;
                 }
                 copy_vector<output_t, ELEMENTS_PER_LDG_STG>(dst + i * element_count + it * WARP_SIZE, out);
             }
@@ -741,6 +751,10 @@ int batch_size, int stride, int element_count)
                 #pragma unroll
                 for (int element = 0;element < 1;++element) {
     	            softmax_out[element] = (elements[i][it + element] / sum[i]);
+    	            // if acc_t is float we can use std::isnan to check;
+    	            bool is_nan = std::isnan((float)softmax_out[element]);
+    	            if (is_nan==true)
+    	                softmax_out[element] = 0; // set to zero if is nan;
                     out[element] = softmax_out[element];
                 }
                 copy_vector<output_t, 1>(dst + i * element_count + it * WARP_SIZE, out);

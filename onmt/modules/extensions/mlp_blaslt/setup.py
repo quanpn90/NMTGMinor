@@ -116,6 +116,7 @@ ext_modules.append(
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                       'nvcc': ['-O3'] + version_dependent_macros}))
 
+
 setup(
     name='test-mlp-blastlt',
     version='0.1',

@@ -274,15 +274,18 @@ if bare_metal_minor >= 5 and bare_metal_major >= 11:
                       extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                           'nvcc': ['-O3'] + version_dependent_macros +
                                                   generator_flag + cc_flag}))
-# #
-# Wait until CUBLAS_VERSION >= 11600 to build. Otherwise have to build custom pytorch
-# ext_modules.append(
-#     CUDAExtension(name='fused_mlp_gelu_blaslt',
-#                   sources=['mlp_blaslt/fused_dense_gelu_dense.cpp',
-#                            'mlp_blaslt/fused_dense_gelu_dense_cuda.cu'],
-#                   extra_compile_args={'cxx': ['-O3'] + versi  on_dependent_macros,
-#                                       'nvcc': ['-O3'] + version_dependent_macros}))
 
+    ext_modules.append(
+        CUDAExtension(name='mlp_gelu_blaslt',
+                      sources=['mlp_blaslt/mlp_gelu.cpp',
+                               'mlp_blaslt/mlp_gelu_cuda.cu'],
+                      extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                                          'nvcc': ['-O3'] + version_dependent_macros +
+                                                  generator_flag + cc_flag}))
+
+    # TODO: self-attn and enc-attn blaslt
+
+# check build if sm80
 ext_modules.append(
     CUDAExtension(name='fmhalib',
                   sources=[

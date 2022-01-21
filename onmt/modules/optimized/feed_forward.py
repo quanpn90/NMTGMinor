@@ -45,7 +45,7 @@ class PositionWiseFeedForward(nn.Module):
 
         if self.activation == 'relu':
             if self.glu:
-                self.act = nn.ReLU(inplace=True)
+                self.act = nn.ReLU()
             else:
                 self.act = ReLUDropout(p=self.dropout, variational=self.variational, batch_first=False)
         elif self.activation == 'gelu':

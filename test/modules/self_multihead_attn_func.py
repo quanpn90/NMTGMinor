@@ -7,10 +7,7 @@ https://github.com/NVIDIA/apex/tree/master/apex/contrib/csrc/multihead_attn
 import torch
 import torch.nn.functional as F
 
-try:
-    from torch.cuda.amp import custom_fwd, custom_bwd
-except (ModuleNotFoundError, ImportError) as e:
-    from .compat import custom_fwd, custom_bwd
+from torch.cuda.amp import custom_fwd, custom_bwd
 
 try:
     import mask_softmax_dropout_cuda
@@ -44,9 +41,7 @@ class SelfAttnFunc(torch.autograd.Function):
                 input_weights, output_weights,
                 input_biases, output_biases,
                 mask, dropout_prob,
-                rotary_pos_enc, pos_emb,
-                incremental, incremental_cache,
-                low_precision, return_coverage):
+                rotary_pos_enc, pos_emb):
         heads_t = torch.tensor([heads])
         dropout_prob_t = torch.tensor([dropout_prob])
         null_tensor = torch.tensor([])
@@ -178,27 +173,15 @@ class SelfAttnFunc(torch.autograd.Function):
                 matmul1_results = matmul1_results.view(seqs * heads, seql_q, seql_k)
 
         # Softmax and Dropout attention
-        if mask_softmax_dropout_cuda and len_k <= 2048 \
-                and matmul1_results.type() == 'torch.cuda.HalfTensor':
-            dropout_mask, softmax_results, dropout_results = mask_softmax_dropout_cuda.forward(is_training, heads,
-                                                                                               matmul1_results,
-                                                                                               dropout_prob_t[0])
-            if not is_training:
-                dropout_results = softmax_results  # because the cuda returns empty craps
+        softmax_results = F.softmax(matmul1_results, dim=-1)
 
-            ctx.fused_softmax_dropout = True
+        # Dropout - is not executed for inference
+        if is_training:
+            dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
         else:
-            if matmul1_results.type() == 'torch.cuda.HalfTensor':
-                softmax_results = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
-            else:
-                softmax_results = F.softmax(matmul1_results, dim=-1)
+            dropout_results = softmax_results
+            dropout_mask = null_tensor
 
-            # Dropout - is not executed for inference
-            if is_training:
-                dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
-            else:
-                dropout_results = softmax_results
-                dropout_mask = null_tensor
 
         nan_mask = torch.isnan(dropout_results)
         if nan_mask.any():
@@ -359,17 +342,10 @@ class SelfAttnFunc(torch.autograd.Function):
         # GEMM: Per batch: ( seql_q x head_dim ) x ( head_dim x seql_k ) = ( seql_q x seql_k )
         values_grads = torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
 
-        if mask_softmax_dropout_cuda is not None and matmul2_dgrad1.type() == 'torch.cuda.HalfTensor' \
-                and len_key <= 2048:
-            softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t[0], matmul2_dgrad1, softmax_results,
-                                                                         dropout_mask, dropout_prob_t[0])
-        else:
+        dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
 
-            # Mask and Scaling for Dropout (not a publically documented op)
-            dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
-
-            # Softmax Grad (not a publically documented op)
-            softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
+        # Softmax Grad (not a publically documented op)
+        softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
 
         # Matmul1 - DGRAD1
         # Input1: (data grads)  [seqs*heads, seql_q, seql_k]

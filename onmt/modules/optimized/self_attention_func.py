@@ -22,11 +22,6 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     self_multihead_attn_blaslt = None
 
-try:
-    import linear_blaslt
-except (ModuleNotFoundError, ImportError) as e:
-    linear_blaslt = None
-
 
 def rotate_half(x):
     x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
@@ -83,7 +78,6 @@ class SelfAttnFunc(torch.autograd.Function):
                     mask = inputs.new(bsz, 1, 1, len_q).zero_().bool()  # works
 
             if self_multihead_attn_blaslt is not None:
-                # print("Using ATTN BLASLT")
                 input_lin_results, \
                 attn_scores, \
                 dropout_results, \
@@ -126,16 +120,12 @@ class SelfAttnFunc(torch.autograd.Function):
         # input2: (weights)     [embed_dim*3 (3072), embed_dim (1024)] (transpose [0,1])
         # output:               [seql_q, seqs, embed_dim*3]
         # GEMM: ( (seql_q*seqs) x embed_dim ) x ( embed_dim x embed_dim*3 ) = (seql_q*seqs x embed_dim*3)
+        input_lin_results = torch.addmm(input_biases,
+                                        inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
+                                        input_weights.transpose(0, 1),
+                                        beta=1., alpha=1.)
 
-        if linear_blaslt is not None:
-            input_lin_results = linear_blaslt.forward(inputs, input_weights, input_biases)
-        else:
-            input_lin_results = torch.addmm(input_biases,
-                                            inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
-                                            input_weights.transpose(0, 1),
-                                            beta=1., alpha=1.)
-
-            input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), input_weights.size(0))
+        input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), input_weights.size(0))
 
         # Slice out q,k,v from one big Input Linear outuput (should only impact meta data, no copies!)
         # Sequences and heads are combined to make the batch of the Batched GEMM
@@ -241,16 +231,12 @@ class SelfAttnFunc(torch.autograd.Function):
         # Input2: (weights)     [ embed_dim, embed_dim ] transpose(0,1)
         # Output:               [ seql_q, seqs, embed_dim ]
         # GEMM: ( seql_q*seqs x embed_dim ) x ( embed_dim x embed_dim ) = ( seql_q*seqs x embed_dim )
+        outputs = torch.addmm(output_biases,
+                              matmul2_results.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
+                              output_weights.transpose(0, 1),
+                              beta=1., alpha=1.)
 
-        if linear_blaslt is not None:
-            outputs = linear_blaslt.forward(matmul2_results, output_weights, output_biases)
-        else:
-            outputs = torch.addmm(output_biases,
-                                  matmul2_results.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
-                                  output_weights.transpose(0, 1),
-                                  beta=1., alpha=1.)
-
-            outputs = outputs.view(inputs.size(0), inputs.size(1), output_weights.size(0))
+        outputs = outputs.view(inputs.size(0), inputs.size(1), output_weights.size(0))
 
         ctx.save_for_backward(heads_t,
                               scale_t,
@@ -377,37 +363,26 @@ class SelfAttnFunc(torch.autograd.Function):
         # GEMM: ( seql_q*seqs x embed_dim ) x ( embed_dim x embed_dim ) = ( seql_q*seqs x embed_dim )
         output_grads = output_grads.contiguous()
 
-
+        output_lin_grads = torch.mm(
+            output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), output_weights)
+        output_lin_grads = output_lin_grads.view(output_grads.size(0), output_grads.size(1), output_weights.size(1))
         # Output Linear GEMM - WGRAD
         # Input1: (data grads)  [seql_q*seqs, embed_dim=heads*head_dim] transpose(0,1)
         # Input2: (activations) [seql_q*seqs, embed_dim ]
         # Output:               [ seql_q, seqs, embed_dim ]
         # GEMM: ( embed_dim x seql_q*seqs ) x ( seql_q*seqs x embed_dim ) = ( embed_dim x embed_dim )
-        if linear_blaslt is not None:
-            if output_weights.requires_grad:
-                output_lin_grads, output_weight_grads, output_bias_grads = \
-                    linear_blaslt.backward(matmul2_results, output_weights, output_grads)
-            else:
-                output_lin_grads = linear_blaslt.backward_input_only(matmul2_results, output_weights, output_grads)
-                output_weight_grads = None
-                output_bias_grads = None
+
+        if output_weights.requires_grad:
+            output_weight_grads = torch.mm(
+                output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)).transpose(0, 1),
+                matmul2_results.view(matmul2_results.size(0) * matmul2_results.size(1), matmul2_results.size(2)))
+            output_bias_grads = torch.sum(
+                output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), 0)
         else:
-            output_lin_grads = torch.mm(
-                output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), output_weights)
-            output_lin_grads = output_lin_grads.view(output_grads.size(0), output_grads.size(1), output_weights.size(1))
-
-            if output_weights.requires_grad:
-                output_weight_grads = torch.mm(
-                    output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)).transpose(0, 1),
-                    matmul2_results.view(matmul2_results.size(0) * matmul2_results.size(1), matmul2_results.size(2)))
-                output_bias_grads = torch.sum(
-                    output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), 0)
-
-            else:
-                output_weight_grads = None
-                output_bias_grads = None
-
+            output_weight_grads = None
+            output_bias_grads = None
         output_lin_grads = output_lin_grads.view(inputs.size(0), inputs.size(1) * heads_t[0], head_dim).transpose(0, 1)
+
         # Matmul2 - DGRAD1
         # Input1: (data grads)  [seql_q, seqs*heads, head_dim] transpose(0,1)
         # Input2: (activations) [seql_k, seqs*heads, head_dim] transpose(0,1).transpose(1,2)
@@ -455,33 +430,22 @@ class SelfAttnFunc(torch.autograd.Function):
         # GEMM: ( (seql_q*seqs) x 3*embed_dim ) x ( 3*embed_dim x embed_dim ) = (seql_q*seqs x embed_dim)
         input_lin_results_grads = input_lin_results_grads.view(inputs.size(0) * inputs.size(1),
                                                                heads_t[0] * 3 * head_dim)
-
+        input_grads = torch.mm(input_lin_results_grads, input_weights)
+        input_grads = input_grads.view(inputs.size(0), inputs.size(1), inputs.size(2))
         # Input Linear GEMM - WGRAD
         # input1: (data grads)  [seql_q*seqs, 3*embed_dim(3072)]
         # input2: (activations) [seql_q*seqs, embed_dim(1024)]
         # output:               [3*embed_dim, embed_dim]
         # GEMM: ( 3*embed_dim x seql_q*seqs ) x ( seql_q*seqs x embed_dim ) = (3*embed_dim x embed_dim)
 
-        if linear_blaslt is not None:
-            if input_weights.requires_grad:
-                input_grads, input_weight_grads, input_bias_grads = \
-                    linear_blaslt.backward(inputs, input_weights, input_lin_results_grads)
-            else:
-                input_grads = linear_blaslt.backward_input_only(inputs, input_weights, input_lin_results_grads)
+        if input_weights.requires_grad:
+            input_weight_grads = torch.mm(input_lin_results_grads.transpose(0, 1),
+                                          inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)))
 
+            input_bias_grads = torch.sum(input_lin_results_grads, 0)
+        else:
             input_weight_grads = None
             input_bias_grads = None
-        else:
-            input_grads = torch.mm(input_lin_results_grads, input_weights)
-            input_grads = input_grads.view(inputs.size(0), inputs.size(1), inputs.size(2))
-            if input_weights.requires_grad:
-                input_weight_grads = torch.mm(input_lin_results_grads.transpose(0, 1),
-                                              inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)))
-
-                input_bias_grads = torch.sum(input_lin_results_grads, 0)
-            else:
-                input_weight_grads = None
-                input_bias_grads = None
 
         return None, None, None, \
                input_grads, \

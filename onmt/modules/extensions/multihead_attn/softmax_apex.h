@@ -192,7 +192,6 @@ int batch_size, int stride, int element_count, at::PhiloxCudaState philox_args, 
         }
     }
 
-    acc_t temp_acc;
     // store result
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {
@@ -206,7 +205,7 @@ int batch_size, int stride, int element_count, at::PhiloxCudaState philox_args, 
                 #pragma unroll
                 for (int element = 0;element < ELEMENTS_PER_LDG_STG;++element) {
                     temp_acc = (elements[i][it + element] / sum[i]);
-                    if (std::isnan(temp_acc)==true)
+                    if (std::isnan((float)temp_acc)==true)
                         temp_acc = 0;
                     out[element] = rands[i][it+element] * (pinv * temp_acc);
                 }
@@ -352,7 +351,7 @@ __global__ void softmax_dropout_warp_forward(output_t *dst, uint8_t *dropout_mas
                 #pragma unroll
                 for (int element = 0;element < 1;++element) {
     	            softmax_out[element] = (elements[i][it + element] / sum[i]);
-    	            if (std::isnan(softmax_out[element])==true)
+    	            if (std::isnan((float)softmax_out[element])==true)
     	                softmax_out[element] = 0;
                     rand_ptr[element] = rand_ptr[element] <= p;
                     out[element] = rand_ptr[element] * pinv * softmax_out[element];

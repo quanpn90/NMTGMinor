@@ -760,6 +760,9 @@ def backward_compatible(opt):
     if not hasattr(opt, 'absolute_position_encoding'):
         opt.absolute_position_encoding = False
 
+    if not hasattr(opt, 'rotary_position_encoding'):
+        opt.rotary_position_encoding = False
+
     if not hasattr(opt, 'decoder_late_emb_scale'):
         opt.decoder_late_emb_scale = False
 

@@ -104,8 +104,8 @@ int gemm_bias_lt(
                           &Cdesc,
                           C,
                           &Cdesc,
-                          //&heuristicResult.algo,
-                          NULL,
+                          &heuristicResult.algo,
+//                           NULL,
                           workspace,
                           workspaceSize,
                           stream);
@@ -351,8 +351,8 @@ int gemm_bias_gelu_lt(
                           &Cdesc,
                           C,
                           &Cdesc,
-                          //&heuristicResult.algo,
-                          NULL,
+                          &heuristicResult.algo,
+//                           NULL,
                           workspace,
                           workspaceSize,
                           stream);
@@ -491,8 +491,8 @@ int gemm_bias_gelu_lt(
                           &Cdesc,
                           C,
                           &Cdesc,
-                          //&heuristicResult.algo,
-                          NULL,
+                          &heuristicResult.algo,
+//                           NULL,
                           workspace,
                           workspaceSize,
                           stream);
@@ -614,8 +614,8 @@ int gemm_bgradb_lt(
                           &Cdesc,
                           C,
                           &Cdesc,
-                          //&heuristicResult.algo,
-                          NULL,
+                          &heuristicResult.algo,
+//                           NULL,
                           workspace,
                           workspaceSize,
                           stream);

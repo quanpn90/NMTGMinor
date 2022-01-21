@@ -84,7 +84,10 @@ class Translator(object):
                 optimize_model(model)
             except RuntimeError:
                 optimize_model(model)
-                model.load_state_dict(checkpoint['model'])
+                try:
+                    model.load_state_dict(checkpoint['model'])
+                except RuntimeError:
+                    model.load_state_dict(checkpoint['model'], strict=True)
 
             if model_opt.model in model_list:
                 # if model.decoder.positional_encoder.len_max < self.opt.max_sent_length:
