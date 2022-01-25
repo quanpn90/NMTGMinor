@@ -313,6 +313,33 @@ ext_modules.append(
                                                '--use_fast_math'] + version_dependent_macros + generator_flag},
                   include_dirs=[os.path.join(this_dir, "fmha/src")]))
 
+ext_modules.append(
+    CUDAExtension(name='fmhalib_sm86',
+                  sources=[
+                      'fmha_sm86/fmha_api.cpp',
+                      'fmha_sm86/src/fmha_noloop_reduce.cu',
+                      'fmha_sm86/src/fmha_fprop_fp16_128_64_kernel.sm86.cu',
+                      'fmha_sm86/src/fmha_fprop_fp16_256_64_kernel.sm86.cu',
+                      'fmha_sm86/src/fmha_fprop_fp16_384_64_kernel.sm86.cu',
+                      'fmha_sm86/src/fmha_fprop_fp16_512_64_kernel.sm86.cu',
+                      # 'fmha/src/fmha_fprop_fp16_768_64_kernel.sm80.cu',
+                      'fmha_sm86/src/fmha_dgrad_fp16_128_64_kernel.sm86.cu',
+                      'fmha_sm86/src/fmha_dgrad_fp16_256_64_kernel.sm86.cu',
+                      'fmha_sm86/src/fmha_dgrad_fp16_384_64_kernel.sm86.cu',
+                      'fmha_sm86/src/fmha_dgrad_fp16_512_64_kernel.sm86.cu',
+                      # 'fmha/src/fmha_dgrad_fp16_768_64_kernel.sm80.cu',
+                  ],
+                  extra_compile_args={'cxx': ['-O3',
+                                              ] + version_dependent_macros + generator_flag,
+                                      'nvcc': ['-O3',
+                                               '-gencode', 'arch=compute_86,code=sm_86',
+                                               '-U__CUDA_NO_HALF_OPERATORS__',
+                                               '-U__CUDA_NO_HALF_CONVERSIONS__',
+                                               '--expt-relaxed-constexpr',
+                                               '--expt-extended-lambda',
+                                               '--use_fast_math'] + version_dependent_macros + generator_flag},
+                  include_dirs=[os.path.join(this_dir, "fmha_sm86/src")]))
+
 setup(
     name='nmtgminor_cuda',
     version='0.1',

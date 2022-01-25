@@ -630,42 +630,14 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # Output:               [len_q, len_k, head_dim]
         # pos_grads = torch.bmm(dropout_results.transpose(0, 1).transpose(1, 2), output_lin_grads.transpose(0, 1))
 
-        if mask_softmax_dropout_cuda is not None and len_k <= 2048 \
-                and matmul2_dgrad1.type() == 'torch.cuda.HalfTensor' and not ctx.double_precision:
-
-            # verification code
-            # matmul2_dgrad1_ref = matmul2_dgrad1.clone()
-            # softmax_results_ref = softmax_results.clone()
-            # dropout_grads = torch._masked_scale(matmul2_dgrad1_ref, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
-            # softmax_grads_ref = torch._softmax_backward_data(dropout_grads,
-            #                                                  softmax_results_ref, -1, softmax_results_ref)
-
-            # softmax_grads_ref = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1_ref, softmax_results,
-            #                                                              dropout_mask, dropout_prob_t[0])
-
-            # note this function doesn't really do recompute
-            # because if we don't store softmax results, we have to store matmul2_dgrad1
-            # so the only difference is that we allocated more memory, but the memory kept for backward is the same
-            softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t[0], matmul2_dgrad1, softmax_results,
-                                                                         dropout_mask, dropout_prob_t[0])
-
-            # verification code (next)
-            # comp = torch.allclose(softmax_grads_ref, softmax_grads, rtol=1e-03, atol=1e-04)
-            # if not comp:
-            #     print("ERROR: Gradients mismatched.")
-            #     print(softmax_grads_ref - softmax_grads)
-            # else:
-            #     print("Gradients matched.")
-
+        if dropout_prob_t[0] > 0.0:
+            dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
         else:
-            # Mask and Scaling for Dropout (not a publically documented op)
-            if dropout_prob_t[0] > 0.0:
-                dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
-            else:
-                dropout_grads = matmul2_dgrad1
+            dropout_grads = matmul2_dgrad1
 
-            # Softmax Grad (not a publically documented op)
-            softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, torch.float16)
+        # Softmax Grad (not a publically documented op)
+        softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results.dtype)
+
 
         attn_score_grads = softmax_grads
         # the grads are evenly distributed to AC and BD

@@ -192,6 +192,7 @@ int batch_size, int stride, int element_count, at::PhiloxCudaState philox_args, 
         }
     }
 
+    acc_t temp_acc;
     // store result
     #pragma unroll
     for (int i = 0;i < WARP_BATCH;++i) {

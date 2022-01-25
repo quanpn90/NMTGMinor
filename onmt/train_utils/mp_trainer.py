@@ -389,8 +389,9 @@ class Trainer(object):
         :return:
         """
 
-        batch = self.train_data[0].get_largest_batch() if isinstance(self.train_data, list) \
-            else self.train_data.get_largest_batch()
+        batch = self.train_data[0].get_largest_batch(bsz=-1, src_size=-1, tgt_size=-1) \
+            if isinstance(self.train_data, list) \
+            else self.train_data.get_largest_batch(bsz=744, src_size=1601, tgt_size=-1)
         opt = self.opt
 
         if self.cuda:
@@ -398,7 +399,15 @@ class Trainer(object):
 
         self.model.train()
         self.loss_function.train()
-        self.model.zero_grad()
+
+        loss = 0
+        for p in self.model.parameters():
+
+            loss = loss + p.sum() * 0
+
+        # this will create zero grads
+        loss.backward()
+        # self.model.zero_grad()
         oom = False
 
         if opt.streaming:
@@ -453,8 +462,11 @@ class Trainer(object):
 
         self.grad_scaler.scale(full_loss).backward(inputs=parameter_list)
 
-        self.model.zero_grad()
-        self.optim.zero_grad()
+        for p in self.model.parameters():
+            if p.grad is not None:
+                p.grad.data.zero_()
+        # self.model.zero_grad()
+        # self.optim.zero_grad()
         # self.optim.step()
         # self.optim.reset()
 
@@ -796,6 +808,8 @@ class Trainer(object):
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
+                    print('Input size at OOM position:', batch.get('source').size(),
+                          batch.get('target').size())
                     raise e
                     loss = 0
                     # for p in self.model.parameters():

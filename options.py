@@ -137,6 +137,8 @@ def make_parser(parser):
                         help="How to init the weight. normal or uniform/xavier.")
     parser.add_argument('-init_embedding', default='normal',
                         help="How to init the embedding matrices. Xavier or Normal.")
+    parser.add_argument('-batch_size_frames', type=int, default=204800,
+                        help='Maximum batch size in frame dimension')
     parser.add_argument('-batch_size_words', type=int, default=2048,
                         help='Maximum batch size in word dimension')
     parser.add_argument('-batch_size_sents', type=int, default=99999999,

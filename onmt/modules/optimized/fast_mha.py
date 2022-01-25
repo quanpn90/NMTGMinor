@@ -30,7 +30,14 @@ import torch
 import torch.nn.functional as F
 
 try:
-    import fmhalib
+    sm = torch.cuda.get_device_capability()
+    if sm[0] == 8 and sm[1] == 0:
+        import fmhalib
+    elif sm[0] == 8 and sm[1] == 6: # sm86
+        import fmhalib_sm86 as fmhalib
+    else:
+        fmhalib = None
+
 except (ModuleNotFoundError, ImportError) as e:
     fmhalib = None
 

@@ -8,7 +8,7 @@ import onmt
 from onmt.speech.Augmenter import Augmenter
 from onmt.modules.dropout import switchout
 import numpy as np
-from .batch_utils import allocate_batch
+from .batch_utils import allocate_batch, allocate_batch_unbalanced
 
 """
 Data management for sequence-to-sequence models
@@ -311,6 +311,7 @@ class Dataset(torch.utils.data.Dataset):
     def __init__(self, src_data, tgt_data,
                  src_sizes=None, tgt_sizes=None,
                  src_langs=None, tgt_langs=None,
+                 batch_size_frames=1280000,
                  batch_size_words=16384,
                  data_type="text", batch_size_sents=128,
                  multiplier=1, sorting=False,
@@ -365,7 +366,7 @@ class Dataset(torch.utils.data.Dataset):
         self.upsampling = kwargs.get('upsampling', False)
 
         self.max_src_len = kwargs.get('max_src_len', None)
-        self.max_tgt_len = kwargs.get('max_tgt_len', 256)
+        self.max_tgt_len = kwargs.get('max_tgt_len', 64 )
         self.cleaning = int(cleaning)
         self.debug = debug
         self.num_split = num_split
@@ -373,6 +374,7 @@ class Dataset(torch.utils.data.Dataset):
         self.use_past_src = self.past_src is not None
         self.min_tgt_len = kwargs.get('min_tgt_len', 4)
         self.min_src_len = kwargs.get('min_src_len', 4)
+        self.batch_size_frames = batch_size_frames
 
         # self.max_tgt_len = 128  # try to hard code this ... so tired of datasets with crappy samples
 
@@ -468,19 +470,30 @@ class Dataset(torch.utils.data.Dataset):
         # group samples into mini-batches
         # if verbose:
         #     print("* Allocating mini-batches ...")
-        self.batches = allocate_batch(self.order, self.data_lengths,
-                                      self.src_sizes, self.tgt_sizes,
-                                      batch_size_words, batch_size_sents, self.multiplier,
-                                      self.max_src_len, self.max_tgt_len,
-                                      self.min_src_len, self.min_tgt_len, self.cleaning)
+        if self._type in ['audio', 'wav']:
+            # print("ALLOCATE FRAMES AND WORDS SEPARATELY")
+            self.batches = allocate_batch_unbalanced(self.order, self.data_lengths,
+                                                     self.src_sizes, self.tgt_sizes,
+                                                     batch_size_frames, batch_size_words,
+                                                     batch_size_sents, self.multiplier,
+                                                     self.max_src_len, self.max_tgt_len,
+                                                     self.min_src_len, self.min_tgt_len, self.cleaning)
+        else:
+            self.batches = allocate_batch(self.order, self.data_lengths,
+                                          self.src_sizes, self.tgt_sizes,
+                                          batch_size_words, batch_size_sents, self.multiplier,
+                                          self.max_src_len, self.max_tgt_len,
+                                          self.min_src_len, self.min_tgt_len, self.cleaning)
 
         # the second to last mini-batch is likely the largest
         # (the last one can be the remnant after grouping samples which has less than max size)
         self.largest_batch_id = len(self.batches) - 3
 
         self.num_batches = len(self.batches)
-        lengths = [len(x) for x in self.batches]
-        print("Number of sentences after cleaning and sorting: %d" % sum(lengths) )
+        self.batch_sizes = [len(x) for x in self.batches]
+        self.batch_src_sizes = [max([self.src_sizes[x] for x in b]) for b in self.batches]
+        self.batch_tgt_sizes = [max([self.tgt_sizes[x] for x in b]) for b in self.batches]
+        print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
         print("Number of batches after cleaning and sorting: %d" % self.num_batches)
 
         self.cur_index = 0
@@ -506,9 +519,37 @@ class Dataset(torch.utils.data.Dataset):
     def set_mask(self, vocab_mask):
         self.vocab_mask = vocab_mask
 
-    def get_largest_batch(self):
+    def get_largest_batch(self, bsz=-1, src_size=-1, tgt_size=-1):
+        if bsz == -1 and src_size == -1 and tgt_size == -1:
+            return self.get_batch(self.largest_batch_id)
+        else:
+            batch = None
+            for i in range(self.num_batches):
 
-        return self.get_batch(self.largest_batch_id)
+                src_size_ = self.batch_src_sizes[i]
+                tgt_size_ = self.batch_tgt_sizes[i]
+                bsz_size_ = self.batch_sizes[i]
+
+                get_batch = True
+                if bsz > 0:
+                    if bsz_size_ != bsz:
+                        get_batch = False
+
+                if src_size > 0:
+                    if src_size_ != src_size:
+                        get_batch = False
+
+                if tgt_size > 0:
+                    if tgt_size_ != tgt_size:
+                        get_batch = False
+
+                if get_batch:
+                    # print("Found batch satisfying the conditions bsz %d src_size %d tgt_size %d" % (bsz, src_size, tgt_size))
+                    return self.get_batch(i)
+
+            # print("Cannot find the batch satisfying those conditions")
+            return self.get_batch(self.largest_batch_id)
+
 
     def __len__(self):
         return self.num_batches

@@ -252,49 +252,21 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
             matmul1_results = matmul1_results.masked_fill_(mask, float('-inf'))
             matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
 
-        if mask_softmax_dropout_cuda and len_k <= 2048 \
-                and matmul1_results.type() == 'torch.cuda.HalfTensor' and not low_precision:
-            dropout_mask, softmax_results, dropout_results = mask_softmax_dropout_cuda.forward(is_training, heads,
-                                                                                               matmul1_results,
-                                                                                               dropout_prob_t[0])
-            if not is_training:
-                dropout_results = softmax_results  # because the cuda returns empty craps
-
-            # Verification code
-            # softmax_results_ref = F.softmax(matmul1_results, dim=-1)
-            # #
-            # if is_training:
-            #     # print(dropout_mask.float().sum(), dropout_mask.numel())
-            #     dropout_results_ref = softmax_results_ref * dropout_mask.half() * (1 / (1 - dropout_prob_t[0]))
-            # else:
-            #     dropout_results_ref = softmax_results_ref
-            # #
-            # comp = torch.allclose(softmax_results_ref, softmax_results, rtol=1e-03, atol=1e-04)
-            # comp = torch.allclose(dropout_results_ref, dropout_results, rtol=1e-03, atol=1e-04)
-            # if comp:
-            #     print("Forward pass verification passed.")
-            # else:
-            #     print("ERROR: Forward pass verification failed")
-            # Verification done
-
-            ctx.fused_softmax_dropout = True
-
+        if matmul1_results.type() == 'torch.cuda.HalfTensor':
+            softmax_results = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
         else:
-            if matmul1_results.type() == 'torch.cuda.HalfTensor':
-                softmax_results = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
-            else:
-                softmax_results = F.softmax(matmul1_results, dim=-1)
+            softmax_results = F.softmax(matmul1_results, dim=-1)
 
-            nan_mask = torch.isnan(softmax_results)
-            if nan_mask.any():
-                softmax_results.masked_fill_(nan_mask, 0)
+        nan_mask = torch.isnan(softmax_results)
+        if nan_mask.any():
+            softmax_results.masked_fill_(nan_mask, 0)
 
-            # Dropout - is not executed for inference
-            if is_training:
-                dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
-            else:
-                dropout_results = softmax_results
-                dropout_mask = null_tensor
+        # Dropout - is not executed for inference
+        if is_training:
+            dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
+        else:
+            dropout_results = softmax_results
+            dropout_mask = null_tensor
 
         # Matmul2 Batched GEMMs
         # The output tensor specification is needed here to specify the non-standard output.
@@ -597,34 +569,11 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         # GEMM: Per batch: ( seql_q x head_dim ) x ( head_dim x seql_k ) = ( seql_q x seql_k )
         values_grads = torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
 
-        if mask_softmax_dropout_cuda is not None and matmul2_dgrad1.type() == 'torch.cuda.HalfTensor' \
-                and len_key <= 2048:
+        # Mask and Scaling for Dropout (not a publically documented op)
+        dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
 
-            # This is a safe implementation
-            # softmax_grads = mask_softmax_dropout_cuda.backward(heads_t[0], matmul2_dgrad1, softmax_results,
-            #                                                    dropout_mask, dropout_prob_t[0])
-
-            # matmul2_dgrad1_ref = matmul2_dgrad1.clone()
-            # softmax_results_ref = softmax_results.clone()
-            # dropout_grads = torch._masked_scale(matmul2_dgrad1_ref, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
-            # softmax_grads_ref = torch._softmax_backward_data(dropout_grads,
-            #                                                  softmax_results_ref, -1, softmax_results_ref)
-
-            softmax_grads = mask_softmax_dropout_cuda.backward_recompute(heads_t[0], matmul2_dgrad1, softmax_results,
-                                                                         dropout_mask, dropout_prob_t[0])
-            # comp = torch.allclose(softmax_grads_ref, softmax_grads, rtol=1e-03, atol=1e-04)
-            # if not comp:
-            #     # print(softmax_grads_ref - softmax_grads)
-            #     print("ERROR: Gradients mismatched.")
-            #     print(softmax_grads_ref - softmax_grads)
-            # else:
-            #     print("Gradients matched.")
-        else:
-            # Mask and Scaling for Dropout (not a publically documented op)
-            dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
-
-            # Softmax Grad (not a publically documented op)
-            softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
+        # Softmax Grad (not a publically documented op)
+        softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results.dtype)
 
         # Matmul1 - DGRAD1
         # Input1: (data grads)  [seqs*heads, seql_q, seql_k]
