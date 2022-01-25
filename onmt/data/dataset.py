@@ -513,6 +513,10 @@ class Dataset(torch.utils.data.Dataset):
         else:
             self.augmenter = None
 
+    def flush_cache(self):
+        if hasattr(self.src, 'flush_cache'):
+            self.src.flush_cache()
+
     def size(self):
         return self.full_size
 

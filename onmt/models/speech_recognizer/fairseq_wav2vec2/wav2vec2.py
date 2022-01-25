@@ -1075,6 +1075,7 @@ class TransformerEncoder(nn.Module):
         if self.fast_bert_mha and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] in [0, 6]) \
                 and not self.deepspeed and fast_attention and x.dtype == torch.half:
             can_run_fast_bert_mha = True
+            # print("Can run FAST BERT MHA")
 
             # masked positions = 1 so to compute length we need the (1 -)
             if padding_mask is None:

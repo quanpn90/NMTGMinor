@@ -47,6 +47,16 @@ class WavDataset(torch.utils.data.Dataset):
             self.cache = None
         self.cache_size = cache_size
 
+    def flush_cache(self):
+
+        if self.cache is not None:
+            for wav_path in self.cache:
+                self.cache[wav_path].close()
+                self.cache[wav_path] = None
+
+        self.cache = dict()
+        self.usage = dict()
+
     @property
     def dtype(self):
         # I'm not sure when this function is called
@@ -77,7 +87,7 @@ class WavDataset(torch.utils.data.Dataset):
                 file_ = soundfile.SoundFile(wav_path, 'r')
                 if len(self.cache) > self.cache_size:
                     # remove 1 file from cache based on lowest usage, maybe?
-                    min_key = max(self.usage, key=self.usage.get)
+                    min_key = min(self.usage, key=self.usage.get)
                     self.cache[min_key].close()
                     self.cache.pop(min_key, None)
                     self.usage.pop(min_key, None)
@@ -89,8 +99,5 @@ class WavDataset(torch.utils.data.Dataset):
             file_ = None
 
         data = safe_readaudio_from_cache(file_, wav_path, start, end, sample_rate)
-
-        if self.cache is not None:
-            self.cache[wav_info] = data
 
         return data
