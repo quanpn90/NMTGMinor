@@ -491,8 +491,16 @@ class Dataset(torch.utils.data.Dataset):
 
         self.num_batches = len(self.batches)
         self.batch_sizes = [len(x) for x in self.batches]
-        self.batch_src_sizes = [max([self.src_sizes[x] for x in b]) for b in self.batches]
-        self.batch_tgt_sizes = [max([self.tgt_sizes[x] for x in b]) for b in self.batches]
+
+        if self.src_sizes is not None:
+            self.batch_src_sizes = [max([self.src_sizes[x] for x in b]) for b in self.batches]
+        else:
+            self.batch_src_sizes = [0 for b in self.batches]
+
+        if self.tgt_sizes is not None:
+            self.batch_tgt_sizes = [max([self.tgt_sizes[x] for x in b]) for b in self.batches]
+        else:
+            self.batch_tgt_sizes = [0 for b in self.batches]
         print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
         print("Number of batches after cleaning and sorting: %d" % self.num_batches)
 

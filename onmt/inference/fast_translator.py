@@ -779,6 +779,7 @@ class FastTranslator(Translator):
         return onmt.Dataset(src_data, tgt_data,
                             src_langs=src_lang_data, tgt_langs=tgt_lang_data,
                             batch_size_words=sys.maxsize,
+                            batch_size_frames=sys.maxsize,
                             max_src_len=sys.maxsize,
                             data_type=data_type,
                             batch_size_sents=sys.maxsize,
