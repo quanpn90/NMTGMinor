@@ -436,64 +436,27 @@ def build_tm_model(opt, dicts):
     elif opt.model == 'pretrain_transformer':
         assert (opt.enc_pretrained_model or opt.dec_pretrained_model)
         from onmt.models.pretrain_transformer import PretrainTransformer
-        if opt.pos_emb_type != "absolute":
-            print(f"pos_emb_type: {opt.pos_emb_type}")
-            print(f"max_pos_length: {opt.max_pos_length}")
-            print(f"Share position embeddings cross heads: {not opt.diff_head_pos}")
-            print()
-        if opt.enc_pretrained_model:
-            print("* Build encoder with enc_pretrained_model: {}".format(opt.enc_pretrained_model))
-        if opt.enc_pretrained_model == "bert":
-            from pretrain_module.configuration_bert import BertConfig
-            from pretrain_module.modeling_bert import BertModel
 
-            enc_bert_config = BertConfig.from_json_file(opt.enc_config_file)
-            encoder = BertModel(enc_bert_config,
-                                bert_word_dropout=opt.enc_pretrain_word_dropout,
-                                bert_emb_dropout=opt.enc_pretrain_emb_dropout,
-                                bert_atten_dropout=opt.enc_pretrain_attn_dropout,
-                                bert_hidden_dropout=opt.enc_pretrain_hidden_dropout,
-                                bert_hidden_size=opt.enc_pretrain_hidden_size,
-                                is_decoder=False,
-                                before_plm_output_ln=opt.before_enc_output_ln,
-                                gradient_checkpointing=opt.enc_gradient_checkpointing,
-                                max_pos_len=opt.max_pos_length,
-                                diff_head_pos=opt.diff_head_pos,
-                                pos_emb_type=opt.pos_emb_type,
-                                )
-
-        elif opt.enc_pretrained_model == "roberta":
-            from pretrain_module.configuration_roberta import RobertaConfig
-            from pretrain_module.modeling_roberta import RobertaModel
-            enc_roberta_config = RobertaConfig.from_json_file(opt.enc_config_file)
-
-            encoder = RobertaModel(enc_roberta_config,
-                                   bert_word_dropout=opt.enc_pretrain_word_dropout,
-                                   bert_emb_dropout=opt.enc_pretrain_emb_dropout,
-                                   bert_atten_dropout=opt.enc_pretrain_attn_dropout,
-                                   bert_hidden_dropout=opt.enc_pretrain_hidden_dropout,
-                                   bert_hidden_size=opt.enc_pretrain_hidden_size,
-                                   is_decoder=False,
-                                   before_plm_output_ln=opt.before_enc_output_ln,
-                                   gradient_checkpointing=opt.enc_gradient_checkpointing,
-                                   max_pos_len=opt.max_pos_length,
-                                   diff_head_pos=opt.diff_head_pos,
-                                   pos_emb_type=opt.pos_emb_type,
-                                   )
-
-        elif opt.enc_pretrained_model in ["mbart", "mbart50"]:
+        if opt.enc_pretrained_model in ["mbart", "mbart50"]:
             from pretrain_module.configuration_mbart import MBartConfig
             from pretrain_module.modeling_mbart import MBartEncoder
             enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
 
             encoder = MBartEncoder(enc_mbart_config, opt)
 
+        elif opt.enc_pretrained_model in ["m2m", "m2m100"]:
+            from pretrain_module.configuration_m2m100 import M2M100Config
+            from pretrain_module.modeling_m2m100 import M2M100Encoder
+            enc_mbart_config = M2M100Config.from_json_file(opt.enc_config_file)
+
+            encoder = M2M100Encoder(enc_mbart_config, opt)
+
         elif not opt.enc_pretrained_model:
             print(" Encoder is not from pretrained model")
             encoder = TransformerEncoder(opt, embedding_src, positional_encoder,
                                          opt.encoder_type, language_embeddings=language_embeddings)
         else:
-            print("Warning: only bert and roberta are implemented for encoder")
+            print("Pretrained Encoder type not supported")
             exit(-1)
 
         if opt.load_from or not opt.enc_state_dict:
@@ -532,26 +495,6 @@ def build_tm_model(opt, dicts):
                                 pos_emb_type=opt.pos_emb_type,
                                 )
 
-        elif opt.dec_pretrained_model == "roberta":
-            if opt.enc_pretrained_model != "roberta":
-                from pretrain_module.configuration_roberta import RobertaConfig
-                from pretrain_module.modeling_roberta import RobertaModel
-
-            dec_roberta_config = RobertaConfig.from_json_file(opt.dec_config_file)
-
-            decoder = RobertaModel(dec_roberta_config,
-                                   bert_word_dropout=opt.dec_pretrain_word_dropout,
-                                   bert_emb_dropout=opt.dec_pretrain_emb_dropout,
-                                   bert_atten_dropout=opt.dec_pretrain_attn_dropout,
-                                   bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
-                                   bert_hidden_size=opt.dec_pretrain_hidden_size,
-                                   is_decoder=True,
-                                   gradient_checkpointing=opt.dec_gradient_checkpointing,
-                                   max_pos_len=opt.max_pos_length,
-                                   diff_head_pos=opt.diff_head_pos,
-                                   pos_emb_type=opt.pos_emb_type,
-                                   )
-
         elif opt.dec_pretrained_model in ["mbart", "mbart50"]:
             if opt.enc_pretrained_model not in ["mbart", "mbart50"]:
                 from pretrain_module.configuration_mbart import MBartConfig
@@ -560,6 +503,20 @@ def build_tm_model(opt, dicts):
             dec_config = MBartConfig.from_json_file(opt.dec_config_file)
 
             decoder = MBartDecoder(dec_config, opt)
+            decoder.embed_tokens.weight = encoder.embed_tokens.weight
+            generators[0].linear.weight = encoder.embed_tokens.weight
+            encoder.embed_tokens.weight.requires_grad = False
+            decoder.embed_tokens.weight.requires_grad = False
+            generators[0].linear.bias.requires_grad = False
+
+        elif opt.dec_pretrained_model in ["m2m", "m2m100"]:
+            if opt.enc_pretrained_model not in ["m2m", "m2m100"]:
+                from pretrain_module.configuration_m2m100 import M2M100Config
+            from pretrain_module.modeling_m2m100 import M2M100Decoder
+
+            dec_config = M2M100Config.from_json_file(opt.dec_config_file)
+
+            decoder = M2M100Decoder(dec_config, opt)
             decoder.embed_tokens.weight = encoder.embed_tokens.weight
             generators[0].linear.weight = encoder.embed_tokens.weight
             encoder.embed_tokens.weight.requires_grad = False

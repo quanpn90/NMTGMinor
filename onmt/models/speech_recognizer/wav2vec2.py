@@ -119,8 +119,9 @@ class FairseqWav2Vec(nn.Module):
 
         # don't override the options for wav2vec yet (some of them can create NaN)
         self.cfg.dropout = self.opt.enc_pretrain_emb_dropout
-        # self.cfg.activation_dropout = self.opt.ffn_dropout
-        self.cfg.attention_dropout = self.opt.enc_pretrain_hidden_dropout
+        self.cfg.activation_dropout = self.opt.ffn_dropout
+        self.cfg.attention_dropout = self.opt.attn_dropout
+        # self.opt.enc_pretrain_hidden_dropout
         self.cfg.encoder_layerdrop = self.opt.death_rate
         # self.cfg.dropout_features = self.opt.emb_dropout
         # self.cfg.mask_channel_before = True

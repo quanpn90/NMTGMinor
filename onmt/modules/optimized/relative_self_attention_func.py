@@ -636,7 +636,10 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             dropout_grads = matmul2_dgrad1
 
         # Softmax Grad (not a publically documented op)
-        softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results.dtype)
+        try:
+            softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results.dtype)
+        except TypeError:
+            softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
 
 
         attn_score_grads = softmax_grads

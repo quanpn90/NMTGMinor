@@ -113,7 +113,11 @@ def main():
     main_model = custom_build_model(model_opt, checkpoint['dicts'], lm=opt.lm, type=opt.type)
 
     print("Loading main model from %s ..." % models[0])
-    main_model.load_state_dict(checkpoint['model'])
+
+    try:
+        main_model.load_state_dict(checkpoint['model'])
+    except RuntimeError as e:
+        main_model.load_state_dict(checkpoint['model'], strict=True)
 
     if opt.cuda:
         main_model = main_model.cuda()
@@ -139,7 +143,10 @@ def main():
         current_model.eval()
 
         print("Loading model from %s ..." % models[i])
-        current_model.load_state_dict(checkpoint['model'])
+        try:
+            current_model.load_state_dict(checkpoint['model'])
+        except RuntimeError as e:
+            current_model.load_state_dict(checkpoint['model'], strict=True)
 
         if opt.cuda:
             current_model = current_model.cuda()

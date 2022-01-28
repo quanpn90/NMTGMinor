@@ -254,7 +254,17 @@ class FastTranslator(Translator):
             self.n_clfs = 0
             self.pretrained_clfs = list()
 
-        print(self.main_model_opt)
+        if "mbart-large-50" in opt.external_tokenizer.lower():
+            print("[INFO] Using the external MBART50 tokenizer...")
+
+            from transformers import MBart50TokenizerFast
+            self.external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
+                                                                           src_lang=opt.src_lang)
+            self.tgt_external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
+                                                                           src_lang=opt.tgt_lang)
+        else:
+            self.external_tokenizer = None
+            self.tgt_external_tokenizer = None
 
     def translate_batch(self, batches, sub_batches=None):
 
@@ -719,30 +729,43 @@ class FastTranslator(Translator):
     # override the "build_data" from parent Translator
     def build_data(self, src_sents, tgt_sents, type='mt', past_sents=None):
         # This needs to be the same as preprocess.py.
-
+        data_type = 'text'
         if type == 'mt':
-            if self.start_with_bos:
-                src_data = [self.src_dict.convertToIdx(b,
-                                                       onmt.constants.UNK_WORD,
-                                                       onmt.constants.BOS_WORD)
-                            for b in src_sents]
-            else:
-                src_data = [self.src_dict.convertToIdx(b,
-                                                       onmt.constants.UNK_WORD)
-                            for b in src_sents]
-            data_type = 'text'
-            if past_sents is not None:
+
+            if self.external_tokenizer is None:
+                # TODO: add external tokenizer
                 if self.start_with_bos:
-                    past_src_data = [self.src_dict.convertToIdx(b,
-                                                                onmt.constants.UNK_WORD,
-                                                                onmt.constants.BOS_WORD)
-                                     for b in past_sents]
+                    src_data = [self.src_dict.convertToIdx(b,
+                                                           onmt.constants.UNK_WORD,
+                                                           onmt.constants.BOS_WORD)
+                                for b in src_sents]
                 else:
-                    past_src_data = [self.src_dict.convertToIdx(b,
-                                                                onmt.constants.UNK_WORD)
-                                     for b in past_sents]
+                    src_data = [self.src_dict.convertToIdx(b,
+                                                           onmt.constants.UNK_WORD)
+                                for b in src_sents]
+
+                if past_sents is not None:
+                    if self.start_with_bos:
+                        past_src_data = [self.src_dict.convertToIdx(b,
+                                                                    onmt.constants.UNK_WORD,
+                                                                    onmt.constants.BOS_WORD)
+                                         for b in past_sents]
+                    else:
+                        past_src_data = [self.src_dict.convertToIdx(b,
+                                                                    onmt.constants.UNK_WORD)
+                                         for b in past_sents]
+                else:
+                    past_src_data = None
             else:
-                past_src_data = None
+                src_data = [torch.LongTensor(self.external_tokenizer(" ".join(b))['input_ids'])
+                            for b in src_sents]
+
+                if past_sents is not None:
+                    past_src_data = [torch.LongTensor(self.external_tokenizer(" ".join(b))['input_ids'])
+                            for b in past_src_data]
+                else:
+                    past_src_data = None
+
         elif type == 'asr':
             # no need to deal with this
             src_data = src_sents
@@ -761,10 +784,14 @@ class FastTranslator(Translator):
             tgt_bos_word = None
         tgt_data = None
         if tgt_sents:
-            tgt_data = [self.tgt_dict.convertToIdx(b,
-                                                   onmt.constants.UNK_WORD,
-                                                   tgt_bos_word,
-                                                   onmt.constants.EOS_WORD) for b in tgt_sents]
+            if self.tgt_external_tokenizer is not None:
+                tgt_data = [torch.LongTensor(self.tgt_external_tokenizer(" ".join(b))['input_ids'])
+                            for b in tgt_sents]
+            else:
+                tgt_data = [self.tgt_dict.convertToIdx(b,
+                                                       onmt.constants.UNK_WORD,
+                                                       tgt_bos_word,
+                                                       onmt.constants.EOS_WORD) for b in tgt_sents]
 
         if self.src_lang in self.lang_dict:
             src_lang_data = [torch.Tensor([self.lang_dict[self.src_lang]])]

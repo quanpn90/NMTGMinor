@@ -252,7 +252,6 @@ class Binarizer:
 
         result = dict()
         unk_word = onmt.constants.UNK_WORD
-
         data = list()
         sizes = list()
 
@@ -260,7 +259,7 @@ class Binarizer:
 
         if "mbart-large-50" in external_tokenizer.lower():
             if worker_id == 0:
-                print("[INFO] Using the external mBART-50 tokenizer...")
+                print("[INFO] Using the external %s tokenizer..." % external_tokenizer)
 
             from transformers import MBart50TokenizerFast
             try:  # check if this tokenizer is saved locally or not
@@ -272,6 +271,15 @@ class Binarizer:
                 ext_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50", src_lang=lang)
                 if ext_tokenizer.src_lang != lang:
                     raise RuntimeError("The language %s does not exist in mBART50." % lang)
+        elif "m2m100" in external_tokenizer.lower():
+            if worker_id == 0:
+                print("[INFO] Using the external %s tokenizer..." % external_tokenizer)
+
+            from transformers import M2M100Tokenizer
+            ext_tokenizer = M2M100Tokenizer .from_pretrained(external_tokenizer, src_lang=lang)
+            ext_tokenizer.src_lang = lang
+            if ext_tokenizer.src_lang != lang:
+                raise RuntimeError("The language %s does not exist in M2M100." % lang)
 
         elif "bart" in external_tokenizer.lower():
             if worker_id == 0:
@@ -310,7 +318,7 @@ class Binarizer:
                 else:
                     tensor = ext_tokenizer(line.strip())['input_ids']
                     # assert that the mbart50 tokenizer uses the correct language ID
-                    if "mbart-large-50" in external_tokenizer.lower():
+                    if   "mbart-large-50" in external_tokenizer.lower():
                         assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID"
                         pad_id = vocab.convertToIdx(["<pad>"], None)[0]
                         assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."

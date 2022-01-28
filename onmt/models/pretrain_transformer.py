@@ -90,7 +90,8 @@ class PretrainTransformer(NMTModel):
             encoder_output['context'] = context
             encoder_output['src_attention_mask'] = src_attention_mask
             encoder_output['streaming_state'] = None
-        if hasattr(self.encoder, 'enc_pretrained_model') and self.encoder.enc_pretrained_model in ["mbart", "mbart50"]:
+        if hasattr(self.encoder, 'enc_pretrained_model') and \
+                self.encoder.enc_pretrained_model in ["mbart", "mbart50", "m2m", "m2m100"]:
             # src_attention_mask = src.ne(onmt.constants.SRC_PAD).long()
             src_attention_mask = batch.get("src_selfattn_mask")
             enc_outputs = self.encoder(src, src_attention_mask)  # the encoder is a pretrained model
@@ -128,7 +129,8 @@ class PretrainTransformer(NMTModel):
             output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
             output_dict = defaultdict(lambda: None)
             context = context.transpose(0, 1)  # to [src_l, b, de_model]
-        elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["mbart", "mbart50"]:
+        elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in \
+                ["mbart", "mbart50", "m2m", "m2m100"]:
             # print("HELLO DECODER")
             # src: [b, src_l]  context: [b, src_l, de_model]
             # src_attention_mask = src.eq(onmt.constants.SRC_PAD).long()
@@ -354,6 +356,7 @@ class PretrainTransformer(NMTModel):
             src_attention_mask = batch.get("src_selfattn_mask")
             enc_outputs = self.encoder(src_transposed, src_attention_mask)
             context = enc_outputs[0]
+            encoder_output = defaultdict(lambda: None)
             encoder_output["context"] = context
         else:
             print("Warning: unknown enc_pretrained_model")
@@ -384,4 +387,14 @@ class PretrainTransformer(NMTModel):
     def set_memory_size(self, src_memory_size, tgt_memory_size):
 
         pass
+
+    def tie_weights(self):
+        assert self.generator is not None, "The generator needs to be created before sharing weights"
+        if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bert", "roberta"]:
+            self.generator[0].linear.weight = self.decoder.embeddings.word_embeddings.weight
+        if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model \
+                in ["mbart", "mbart50", "m2m", "m2m100"]:
+            self.generator[0].linear.weight = self.decoder.embed_tokens.weight
+        else:
+            self.generator[0].linear.weight = self.decoder.word_lut.weight
 

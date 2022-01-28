@@ -188,6 +188,7 @@ class TestFMHA(unittest.TestCase):
         if not torch.allclose(qkv_grad.float(), dqkv2.float(), atol=1e-3):
             print(qkv_grad.float() - dqkv2.float())
         self.assertTrue(torch.allclose(qkv_grad.float(), dqkv2.float(), atol=1e-2))
+        print("grad ok.")
 
         num_iters = 20
 
@@ -308,47 +309,56 @@ class TestFMHA(unittest.TestCase):
         print(F"Python MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
         torch.cuda.profiler.stop()
 
-    def test_128(self):
-        self.run_test(128, 55)
-        self.run_test(128, 47)
-        self.run_test(128, 90)
+    # def test_128(self):
+    #     self.run_test(128, 55)
+    #     self.run_test(128, 47)
+    #     self.run_test(128, 90)
+    #
+    #     self.run_uneven_test(128, 55)
+    #     self.run_uneven_test(128, 47)
+    #     self.run_uneven_test(128, 90)
+    #     self.run_test(128, 3)
+    #     self.run_uneven_test(128, 3)
+    #
+    # def test_256(self):  # 129 - 256?
+    #     #
+    #     self.run_test(256, 32)
+    #     self.run_test(256, 16)
+    #     self.run_test(224, 16)
+    #     self.run_test(224, 3)
+    #     #
+    #     self.run_uneven_test(256, 32)
+    #     self.run_uneven_test(256, 16)
+    #     self.run_uneven_test(224, 16)
+    #     self.run_uneven_test(224, 3)
+    #
+    # def test_384(self):
+    #     self.run_test(384, 32)
+    #     self.run_test(384, 16)
+    #     self.run_test(384, 8)
+    #     #
+    #     self.run_uneven_test(384, 32)
+    #     self.run_uneven_test(384, 16)
+    #     self.run_uneven_test(384, 8)
+    #     self.run_test(384, 3)
+    #
+    # def test_512(self):
+    #     self.run_test(512, 32)
+    #     self.run_test(512, 2)
+    #     self.run_test(512, 3)
+    #     #
+    #     self.run_uneven_test(512, 32)
+    #     self.run_uneven_test(512, 2)
+    #     self.run_uneven_test(512, 3)
 
-        self.run_uneven_test(128, 55)
-        self.run_uneven_test(128, 47)
-        self.run_uneven_test(128, 90)
-        self.run_test(128, 3)
-        self.run_uneven_test(128, 3)
-
-    def test_256(self):  # 129 - 256?
+    def test_768(self):
+        self.run_test(768, 32)
+        # self.run_test(512, 2)
+        # self.run_test(512, 3)
         #
-        self.run_test(256, 32)
-        self.run_test(256, 16)
-        self.run_test(224, 16)
-        self.run_test(224, 3)
-        #
-        self.run_uneven_test(256, 32)
-        self.run_uneven_test(256, 16)
-        self.run_uneven_test(224, 16)
-        self.run_uneven_test(224, 3)
-
-    def test_384(self):
-        self.run_test(384, 32)
-        self.run_test(384, 16)
-        self.run_test(384, 8)
-        #
-        self.run_uneven_test(384, 32)
-        self.run_uneven_test(384, 16)
-        self.run_uneven_test(384, 8)
-        self.run_test(384, 3)
-
-    def test_512(self):
-        self.run_test(512, 32)
-        self.run_test(512, 2)
-        self.run_test(512, 3)
-        #
-        self.run_uneven_test(512, 32)
-        self.run_uneven_test(512, 2)
-        self.run_uneven_test(512, 3)
+        self.run_uneven_test(768, 32)
+        # self.run_uneven_test(512, 2)
+        # self.run_uneven_test(512, 3)
 #
 
 if __name__ == '__main__':
