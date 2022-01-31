@@ -892,6 +892,10 @@ class Wav2Vec2Model(torch.nn.Module):
         for fast_attention in fast_attentions:
             fast_attention.convert_fast_attention()
 
+    # Convert the self-attn module to deep speed transformer
+    def convert_deepspeed(self, training=True, bsz=32):
+        self.encoder.convert_deepspeed(training=training, bsz=bsz)
+
 
 class ConvFeatureExtractionModel(nn.Module):
     def __init__(
@@ -990,6 +994,7 @@ class TransformerEncoder(nn.Module):
         self.num_layers = args.encoder_layers
         self.attention_dropout = args.attention_dropout
         self.activation_dropout = args.activation_dropout
+        self.deepspeed = False
 
         self.pos_conv = nn.Conv1d(
             self.embedding_dim,
@@ -1061,11 +1066,14 @@ class TransformerEncoder(nn.Module):
         sm = torch.cuda.get_device_capability()
         total_bsz = 0
 
-        fast_attention = self.layers[0].self_attn.fast_attention
+        if self.deepspeed:
+            fast_attention = False
+        else:
+            fast_attention = self.layers[0].self_attn.fast_attention
 
         # only run this when seq_len <= 512 and sm = 80/86 and type = half
         if self.fast_bert_mha and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] in [0, 6]) \
-                and fast_attention and x.dtype == torch.half:
+                and not self.deepspeed and fast_attention and x.dtype == torch.half:
             can_run_fast_bert_mha = True
             # print("Can run FAST BERT MHA")
 
@@ -1100,31 +1108,51 @@ class TransformerEncoder(nn.Module):
             cu_seqlens = None
             non_pad_indices = None
 
-        if not self.favor and not can_run_fast_bert_mha:
+        if not self.favor and not self.deepspeed and not can_run_fast_bert_mha:
             # B x T x C -> T x B x C  (only for vanilla self-attention)
             x = x.transpose(0, 1)
         x = x.contiguous()
 
-        layer_results = []
-        r = None
-        for i, layer in enumerate(self.layers):
-            dropout_probability = np.random.random()
-            if not self.training or (dropout_probability > self.layerdrop):
-                x, z = layer(x, self_attn_padding_mask=padding_mask, need_weights=False,
-                             max_len=max_len, cu_seqlens=cu_seqlens,
-                             lang=lang, mixture=mixture)
-                if tgt_layer is not None:
-                    layer_results.append((x, z))
-            if i == tgt_layer:
-                r = x
-                break
+        # If not using deepspeed: proceed like normal
+        if not self.deepspeed:
+            layer_results = []
+            r = None
+            for i, layer in enumerate(self.layers):
+                dropout_probability = np.random.random()
+                if not self.training or (dropout_probability > self.layerdrop):
+                    x, z = layer(x, self_attn_padding_mask=padding_mask, need_weights=False,
+                                 max_len=max_len, cu_seqlens=cu_seqlens,
+                                 lang=lang, mixture=mixture)
+                    if tgt_layer is not None:
+                        layer_results.append((x, z))
+                if i == tgt_layer:
+                    r = x
+                    break
 
-        if r is not None:
-            x = r
+            if r is not None:
+                x = r
 
-        # T x B x C -> B x T x C
-        if not self.favor and not can_run_fast_bert_mha:
-            x = x.transpose(0, 1)
+            # T x B x C -> B x T x C
+            if not self.favor and not can_run_fast_bert_mha:
+                x = x.transpose(0, 1)
+
+        else:
+            # deepspeed has strict requirement so better disable autocast
+            with autocast(enabled=False):
+                dtype = x.dtype
+                x = x.half()
+
+                layer_results = []
+                if padding_mask is None:
+                    padding_mask = x.new(x.size(0), x.size(1)).fill_(0)
+                padding_mask = padding_mask.unsqueeze(1).unsqueeze(1)
+                padding_mask = padding_mask.type_as(x).fill_(-10000)
+                for i, layer in enumerate(self.layers):
+                    dropout_probability = np.random.random()
+                    if not self.training or (dropout_probability > self.layerdrop):
+                        x = layer(x, padding_mask)
+
+            x = x.to(dtype)
 
         # if we remove padding before (for fast bert MHA) then remember to put padding back
         # to restore the form B x T X H
@@ -1162,6 +1190,60 @@ class TransformerEncoder(nn.Module):
                 p.requires_grad = not p.requires_grad
             for p in layer.fc2.parameters():
                 p.requires_grad = not p.requires_grad
+
+    def convert_deepspeed(self, training=True, bsz=32):
+
+        from deepspeed import DeepSpeedTransformerConfig, DeepSpeedTransformerLayer
+        self.deepspeed = True
+
+        config = DeepSpeedTransformerConfig(batch_size=bsz,
+                                            hidden_size=self.embedding_dim,
+                                            heads=self.num_heads,
+                                            attn_dropout_ratio=self.attention_dropout,
+                                            hidden_dropout_ratio=self.activation_dropout,
+                                            num_hidden_layers=-1,
+                                            initializer_range=0.02,
+                                            local_rank=-1,
+                                            seed=1234,
+                                            fp16=True,
+                                            pre_layer_norm=True,
+                                            adjust_init_range=False,
+                                            attn_dropout_checkpoint=False,
+                                            normalize_invertible=False,
+                                            gelu_checkpoint=False,
+                                            return_tuple=False,
+                                            training=training)
+
+        old_layers = self.layers
+
+        self.layers = nn.ModuleList([
+            copy.deepcopy(DeepSpeedTransformerLayer(config))
+            for _ in range(self.num_layers)
+        ])
+
+        # self.layers = nn.ModuleList()
+        # for i in range(self.num_layers):
+        #
+        #     old_layer = old_layers[i]
+        #
+        # new_layer = DeepSpeedTransformerLayer(config)
+        #
+        #     with torch.no_grad():
+        #         new_layer.attn_qkvw.copy_(old_layer.self_attn.proj_weight)
+        #         new_layer.attn_qkvb.copy_(old_layer.self_attn.proj_bias)
+        #         new_layer.attn_ow.copy_(old_layer.self_attn.out_proj.weight)
+        #         new_layer.attn_ob.copy_(old_layer.self_attn.out_proj.bias)
+        #         new_layer.attn_nw.copy_(old_layer.self_attn_layer_norm.weight)
+        #         new_layer.attn_nb.copy_(old_layer.self_attn_layer_norm.bias)
+        #         new_layer.inter_w.copy_(old_layer.fc1.weight)
+        #         new_layer.inter_b.copy_(old_layer.fc1.bias)
+        #         new_layer.output_w.copy_(old_layer.fc2.weight)
+        #         new_layer.output_b.copy_(old_layer.fc2.bias)
+        #         new_layer.norm_w.copy_(old_layer.final_layer_norm.weight)
+        #         new_layer.norm_b.copy_(old_layer.final_layer_norm.bias)
+        #
+        # self.layers.append(new_layer)
+
 
 # noinspection PyAttributeOutsideInit
 class TransformerSentenceEncoderLayer(nn.Module):
@@ -1391,7 +1473,10 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 lang=lang, mixture=mixture
             )
 
-            x = self.dropout1(x) + residual
+            if is_fast:
+                x = fused_dropout_add(x, residual, self.residual_dropout, self.training)
+            else:
+                x = self.dropout1(x) + residual
 
             residual = x
 
@@ -1409,8 +1494,11 @@ class TransformerSentenceEncoderLayer(nn.Module):
                          self.dropout2.p, self.training,
                          self.fused, self.fused_function)
 
-            x = self.dropout3(x)
-            x = residual + x
+            if is_fast:
+                x = fused_dropout_add(x, residual, self.residual_dropout, self.training)
+            else:
+                x = self.dropout3(x)
+                x = residual + x
 
         else:
             x, attn = self.self_attn(
