@@ -171,42 +171,7 @@ def build_tm_model(opt, dicts):
 
         sub_encoder = None
 
-        if opt.dec_pretrained_model == "bert":
-            from pretrain_module.configuration_bert import BertConfig
-            from pretrain_module.modeling_bert import BertModel
-            dec_bert_config = BertConfig.from_json_file(opt.dec_config_file)
-            decoder = BertModel(dec_bert_config,
-                                bert_word_dropout=opt.dec_pretrain_word_dropout,
-                                bert_emb_dropout=opt.dec_pretrain_emb_dropout,
-                                bert_atten_dropout=opt.dec_pretrain_attn_dropout,
-                                bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
-                                bert_hidden_size=opt.dec_pretrain_hidden_size,
-                                is_decoder=True,
-                                gradient_checkpointing=opt.dec_gradient_checkpointing,
-                                max_pos_len=opt.max_pos_length,
-                                diff_head_pos=opt.diff_head_pos,
-                                pos_emb_type=opt.pos_emb_type,
-                                )
-
-        elif opt.dec_pretrained_model == "roberta":
-            from pretrain_module.configuration_roberta import RobertaConfig
-            from pretrain_module.modeling_roberta import RobertaModel
-
-            dec_roberta_config = RobertaConfig.from_json_file(opt.dec_config_file)
-
-            decoder = RobertaModel(dec_roberta_config,
-                                   bert_word_dropout=opt.dec_pretrain_word_dropout,
-                                   bert_emb_dropout=opt.dec_pretrain_emb_dropout,
-                                   bert_atten_dropout=opt.dec_pretrain_attn_dropout,
-                                   bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
-                                   bert_hidden_size=opt.dec_pretrain_hidden_size,
-                                   is_decoder=True,
-                                   gradient_checkpointing=opt.dec_gradient_checkpointing,
-                                   max_pos_len=opt.max_pos_length,
-                                   diff_head_pos=opt.diff_head_pos,
-                                   pos_emb_type=opt.pos_emb_type,
-                                   )
-        elif "mbart" in opt.dec_pretrained_model:
+        if "mbart" in opt.dec_pretrained_model:
             from pretrain_module.configuration_mbart import MBartConfig
             from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder
 
@@ -217,6 +182,13 @@ def build_tm_model(opt, dicts):
             # if opt.enc_config_file:
             #     enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
             #     sub_encoder = MBartEncoder(enc_mbart_config, opt)
+        elif opt.dec_pretrained_model in ['deltalm']:
+            from pretrain_module.configuration_deltalm import DeltaLMConfig
+            from pretrain_module.modeling_deltalm import DeltaLMDecoder
+
+            dec_mbart_config = DeltaLMConfig.from_json_file(opt.dec_config_file)
+
+            decoder = DeltaLMDecoder(dec_mbart_config, opt)
 
         elif opt.dec_pretrained_model == "bart":
             from pretrain_module.configuration_bart import BartConfig
@@ -451,6 +423,13 @@ def build_tm_model(opt, dicts):
 
             encoder = M2M100Encoder(enc_mbart_config, opt)
 
+        elif opt.enc_pretrained_model in ["deltalm"]:
+            from pretrain_module.configuration_deltalm import DeltaLMConfig
+            from pretrain_module.modeling_deltalm import DeltaLMEncoder
+            enc_mbart_config = DeltaLMConfig.from_json_file(opt.enc_config_file)
+
+            encoder = DeltaLMEncoder(enc_mbart_config, opt)
+
         elif not opt.enc_pretrained_model:
             print(" Encoder is not from pretrained model")
             encoder = TransformerEncoder(opt, embedding_src, positional_encoder,
@@ -466,13 +445,15 @@ def build_tm_model(opt, dicts):
             print("[INFO] Loading weights for encoder from: \n", opt.enc_state_dict)
 
             enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
-            # encoder.load_state_dict(enc_model_state_dict)
 
-            encoder.from_pretrained(state_dict=enc_model_state_dict,
-                                    model=encoder,
-                                    output_loading_info=opt.verbose,
-                                    model_prefix=opt.enc_pretrained_model
-                                    )
+            if opt.enc_pretrained_model in ["deltalm"]:
+                encoder.load_state_dict(enc_model_state_dict)
+            else:
+                encoder.from_pretrained(state_dict=enc_model_state_dict,
+                                        model=encoder,
+                                        output_loading_info=opt.verbose,
+                                        model_prefix=opt.enc_pretrained_model
+                                        )
 
         if opt.dec_pretrained_model:
             print("* Build decoder with dec_pretrained_model: {}".format(opt.dec_pretrained_model))
@@ -523,6 +504,20 @@ def build_tm_model(opt, dicts):
             decoder.embed_tokens.weight.requires_grad = False
             generators[0].linear.bias.requires_grad = False
 
+        elif opt.dec_pretrained_model in ["deltalm"]:
+            if opt.enc_pretrained_model not in ["deltalm"]:
+                from pretrain_module.configuration_deltalm import DeltaLMConfig
+            from pretrain_module.modeling_deltalm import DeltaLMDecoder
+
+            dec_config = DeltaLMConfig.from_json_file(opt.dec_config_file)
+
+            decoder = DeltaLMDecoder(dec_config, opt)
+            decoder.embed_tokens.weight = encoder.embed_tokens.weight
+            generators[0].linear.weight = encoder.embed_tokens.weight  # share all embeddings
+            encoder.embed_tokens.weight.requires_grad = False
+            decoder.embed_tokens.weight.requires_grad = False
+            generators[0].linear.bias.requires_grad = False
+
         elif not opt.dec_pretrained_model:
             print(" Decoder is not from pretrained model")
             decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder,
@@ -538,11 +533,14 @@ def build_tm_model(opt, dicts):
             print("  Loading weights for decoder from: \n", opt.dec_state_dict)
             dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
 
-            decoder.from_pretrained(state_dict=dec_model_state_dict,
-                                    model=decoder,
-                                    output_loading_info=opt.verbose,
-                                    model_prefix=opt.dec_pretrained_model
-                                    )
+            if opt.dec_pretrained_model in ["deltalm"]:
+                decoder.load_state_dict(dec_model_state_dict)
+            else:
+                decoder.from_pretrained(state_dict=dec_model_state_dict,
+                                        model=decoder,
+                                        output_loading_info=opt.verbose,
+                                        model_prefix=opt.dec_pretrained_model
+                                        )
 
         encoder.enc_pretrained_model = opt.enc_pretrained_model
         decoder.dec_pretrained_model = opt.dec_pretrained_model

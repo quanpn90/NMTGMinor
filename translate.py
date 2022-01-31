@@ -247,22 +247,31 @@ def main():
     else:
         translator = FastTranslator(opt)
 
-    if "mbart-large-50" in opt.external_tokenizer.lower():
-        print("[INFO] Using the external MBART50 tokenizer...")
-
-        from transformers import MBart50TokenizerFast
-        external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50", src_lang=opt.src_lang)
-
-    elif "bart" in opt.external_tokenizer.lower():
-        print("[INFO] Using the external BART tokenizer...")
-
-        from transformers import BartTokenizer
-        external_tokenizer = BartTokenizer.from_pretrained(opt.external_tokenizer)
-
-    elif opt.external_tokenizer is None or len(opt.external_tokenizer) == 0:
-        external_tokenizer = None
+    if hasattr(translator, 'tgt_external_tokenizer'):
+        external_tokenizer = translator.tgt_external_tokenizer
     else:
-        raise NotImplementedError
+        external_tokenizer = None
+    # if "mbart-large-50" in opt.external_tokenizer.lower():
+    #     print("[INFO] Using the external MBART50 tokenizer...")
+    #
+    #     from transformers import MBart50TokenizerFast
+    #     external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50", src_lang=opt.src_lang)
+    #
+    # elif "bart" in opt.external_tokenizer.lower():
+    #     print("[INFO] Using the external BART tokenizer...")
+    #
+    #     from transformers import BartTokenizer
+    #     external_tokenizer = BartTokenizer.from_pretrained(opt.external_tokenizer)
+    #
+    # elif "m2m100" in opt.external_tokenizer.lower():
+    #     print("[INFO] Using the external %s tokenizer..." % opt.external_tokenizer)
+    #     from transformers import M2M100Tokenizer
+    #     external_tokenizer = M2M100Tokenizer.from_pretrained(opt.external_tokenizer, src_lang=opt.src_lang)
+    #
+    # elif opt.external_tokenizer is None or len(opt.external_tokenizer) == 0:
+    #     external_tokenizer = None
+    # else:
+    #     raise NotImplementedError
 
     # Audio processing for the source batch
     if opt.encoder_type == "audio" and opt.asr_format in ['scp', 'kaldi']:

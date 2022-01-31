@@ -595,22 +595,8 @@ class Wav2vecBERT(Wav2vecTransformer):
         src_attention_mask = encoder_output['src']
         contrastive_loss = 0
 
-        if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bert", "roberta"]:
-            # src: [b, src_l]  context: [b, src_l, de_model]
-            tgt_token_type = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
-            tgt_attention_mask = tgt.new(*tgt.size()).fill_(1)  # [bsz, len]
-            decoder_output = self.decoder(input_ids=tgt,
-                                          attention_mask=tgt_attention_mask,
-                                          token_type_ids=tgt_token_type,
-                                          encoder_hidden_states=context,
-                                          encoder_attention_mask=src_attention_mask,
-                                          no_offset=True)
 
-            decoder_output = decoder_output[0]
-            output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
-            output_dict = defaultdict(lambda: None)
-            context = context.transpose(0, 1)  # to [src_l, b, de_model]
-        elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bart"]:
+        if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bart"]:
             tgt_token_type = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
             tgt_attention_mask = tgt.new(*tgt.size()).fill_(1)  # [bsz, len]
 
@@ -625,7 +611,8 @@ class Wav2vecBERT(Wav2vecTransformer):
             output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
             context = context.transpose(0, 1)
             output_dict = defaultdict(lambda: None)
-        elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["mbart", "mbart50"]:
+        elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model \
+                in ["mbart", "mbart50", "deltalm"]:
             if self.sub_encoder is not None:
                 src_text_input = batch.get('target')
                 sub_context_mask = batch.get('tgt_selfattn_mask')
@@ -749,12 +736,9 @@ class Wav2vecBERT(Wav2vecTransformer):
         dec_pretrained_model = self.decoder.dec_pretrained_model
         if not dec_pretrained_model:
             mask_src = None
-        elif dec_pretrained_model in ["bert", "roberta"]:
-            mask_src = src_attention_mask.unsqueeze(1)  # batch_size  x 1 x len_src for broadcasting
-
         elif dec_pretrained_model in ["bart"]:
             mask_src = 1 - (src_attention_mask.long())
-        elif dec_pretrained_model in ["mbart", "mbart50"]:
+        elif dec_pretrained_model in ["mbart", "mbart50", "deltalm"]:
             mask_src = src_attention_mask
         else:
             print("Warning: unknown dec_pretrained_model")
@@ -771,7 +755,8 @@ class Wav2vecBERT(Wav2vecTransformer):
         assert self.generator is not None, "The generator needs to be created before sharing weights"
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bert", "roberta"]:
             self.generator[0].linear.weight = self.decoder.embeddings.word_embeddings.weight
-        elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["mbart", "mbart50"]:
+        elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model \
+                in ["mbart", "mbart50", "deltalm"]:
             self.generator[0].linear.weight = self.decoder.embed_tokens.weight
         else:
             self.generator[0].linear.weight = self.decoder.word_lut.weight
