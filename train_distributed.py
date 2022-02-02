@@ -191,7 +191,7 @@ def main():
                 else:
                     past_train_src = None
             elif opt.data_format in ['wav']:
-                train_src = WavDataset(audio_data['train'])
+                train_src = WavDataset(audio_data['train'], cache=opt.use_cache)
                 past_train_src = None
             else:
                 train_src = MMapIndexedDataset(train_path + '.src')
@@ -266,7 +266,7 @@ def main():
                 else:
                     past_valid_src = None
             elif opt.data_format in ['wav']:
-                valid_src = WavDataset(audio_data['valid'])
+                valid_src = WavDataset(audio_data['valid'], cache=opt.use_cache)
                 past_valid_src = None
             else:
                 valid_src = MMapIndexedDataset(valid_path + '.src')
@@ -373,7 +373,7 @@ def main():
                     src_data = SCPIndexDataset(audio_data, concat=opt.concat)
                 elif opt.data_format in ['wav']:
                     audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
-                    src_data = WavDataset(audio_data)
+                    src_data = WavDataset(audio_data, cache=opt.use_cache)
                 else:
                     src_data = MMapIndexedDataset(os.path.join(data_dir, "data.src"))
 
@@ -434,7 +434,7 @@ def main():
                     src_data = SCPIndexDataset(audio_data, concat=opt.concat)
                 elif opt.data_format in ['wav']:
                     audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
-                    src_data = WavDataset(audio_data)
+                    src_data = WavDataset(audio_data, cache=opt.use_cache)
                 else:
                     src_data = MMapIndexedDataset(os.path.join(data_dir, "data.src"))
 

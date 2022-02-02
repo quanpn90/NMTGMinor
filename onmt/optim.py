@@ -274,61 +274,86 @@ def clip_grad_norm(parameters, max_norm, norm_type=2):
 
 class Optim(object):
 
+
     def set_parameters(self, params):
 
-        params_ = filter(lambda p: p.requires_grad, params)
+        # params_ = filter(lambda p: p.requires_grad, params)
+        params_ = params  # not sure about this
         self.params = list(params_)  # careful: params may be a generator
         if self.method == 'sgd':
-            self.optimizer = optim.SGD(self.params, lr=self.lr, weight_decay=self.weight_decay, momentum=0.0)
-        elif self.method == 'multi_adam':
-            from torch.optim._multi_tensor import Adam, AdamW
-            if self.weight_decay > 0:
-                self.optimizer = AdamW(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-                                             weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+
+            if not self.zeror:
+                self.optimizer = optim.SGD(self.params, lr=self.lr, weight_decay=self.weight_decay, momentum=0.0)
             else:
-                self.optimizer = Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-                                            weight_decay=0.0, amsgrad=self.amsgrad)
+                from torch.distributed.optim import ZeroRedundancyOptimizer
+                optimizer = ZeroRedundancyOptimizer(
+                    self.params,
+                    optimizer_class=optim.SGD,
+                    lr=self.lr, weight_decay=self.weight_decay, momentum=0.0
+                )
+                self.optimizer = optimizer
+        # elif self.method == 'multi_adam':
+        #     from torch.optim._multi_tensor import Adam, AdamW
+        #     if self.weight_decay > 0:
+        #         self.optimizer = AdamW(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+        #                                      weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+        #     else:
+        #         self.optimizer = Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+        #                                     weight_decay=0.0, amsgrad=self.amsgrad)
         elif self.method == 'adam':
-            if self.weight_decay > 0:
-                self.optimizer = optim.AdamW(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-                                             weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+
+            if not self.zeror:
+                if self.weight_decay > 0:
+                    self.optimizer = optim.AdamW(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                                                 weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+                else:
+                    self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                                                weight_decay=0.0, amsgrad=self.amsgrad)
             else:
-                self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-                                            weight_decay=0.0, amsgrad=self.amsgrad)
-        elif self.method == 'adafactor':
-            relative_step = False if self.lr > 0 else True
-            self.optimizer = Adafactor(self.params, lr=self.lr if self.lr > 0 else None,
-                                       eps=(1e-30, 1e-3), beta1=None,
-                                       weight_decay=self.weight_decay,
-                                       relative_step=relative_step,
-                                       scale_parameter=False if self.lr > 0 else True,
-                                       warmup_init=relative_step)
-        elif self.method in ['fused_adam']:
+                from torch.distributed.optim import ZeroRedundancyOptimizer
+                optimizer = ZeroRedundancyOptimizer(
+                                self.params,
+                                optimizer_class=optim.AdamW if self.weight_decay > 0 else optim.Adam,
+                                lr=1e-5,
+                                betas=(self.beta1, self.beta2), eps=1e-9,
+                                weight_decay=self.weight_decay
+                            )
+                self.optimizer = optimizer
 
-            fast_adam = True
-            try:
-                import fused_optim
-                if self.amsgrad:
-                    print("Note: AMSGRAD is not compatible with Fused Adam")
-                from onmt.modules.optimized.fused_adam import FusedAdam
-                self.optimizer = FusedAdam(self.params, lr=self.lr,
-                                           betas=(self.beta1, self.beta2), eps=1e-9,
-                                           weight_decay=self.weight_decay, amsgrad=False,
-                                           set_grad_none=False)
-            except (RuntimeError, ModuleNotFoundError):
-                fast_adam = False
-
-            if not fast_adam:
-                self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-                                            weight_decay=self.weight_decay, amsgrad=self.amsgrad)
-        elif self.method in ['fused_lamb', 'fused_nvlamb']:
-
-            from onmt.modules.optimized.fused_lamb import FusedLAMB
-            self.optimizer = FusedLAMB(self.params, lr=self.lr,
-                                       betas=(self.beta1, self.beta2), eps=1e-6,
-                                       weight_decay=self.weight_decay, amsgrad=self.amsgrad,
-                                       set_grad_none=False, max_grad_norm=self.max_grad_norm,
-                                       use_nvlamb=(self.method == 'fused_nvlamb'))
+        # elif self.method == 'adafactor':
+        #     relative_step = False if self.lr > 0 else True
+        #     self.optimizer = Adafactor(self.params, lr=self.lr if self.lr > 0 else None,
+        #                                eps=(1e-30, 1e-3), beta1=None,
+        #                                weight_decay=self.weight_decay,
+        #                                relative_step=relative_step,
+        #                                scale_parameter=False if self.lr > 0 else True,
+        #                                warmup_init=relative_step)
+        # elif self.method in ['fused_adam']:
+        #
+        #     fast_adam = True
+        #     try:
+        #         import fused_optim
+        #         if self.amsgrad:
+        #             print("Note: AMSGRAD is not compatible with Fused Adam")
+        #         from onmt.modules.optimized.fused_adam import FusedAdam
+        #         self.optimizer = FusedAdam(self.params, lr=self.lr,
+        #                                    betas=(self.beta1, self.beta2), eps=1e-9,
+        #                                    weight_decay=self.weight_decay, amsgrad=False,
+        #                                    set_grad_none=False)
+        #     except (RuntimeError, ModuleNotFoundError):
+        #         fast_adam = False
+        #
+        #     if not fast_adam:
+        #         self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+        #                                     weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+        # elif self.method in ['fused_lamb', 'fused_nvlamb']:
+        #
+        #     from onmt.modules.optimized.fused_lamb import FusedLAMB
+        #     self.optimizer = FusedLAMB(self.params, lr=self.lr,
+        #                                betas=(self.beta1, self.beta2), eps=1e-6,
+        #                                   weight_decay=self.weight_decay, amsgrad=self.amsgrad,
+        #                                set_grad_none=False, max_grad_norm=self.max_grad_norm,
+        #                                use_nvlamb=(self.method == 'fused_nvlamb'))
 
         # elif self.method in ['novograd']:
         #     try:
@@ -344,14 +369,22 @@ class Optim(object):
         else:
             raise RuntimeError("Invalid optim method: " + self.method)
 
+        if self.zeror:
+            self._optim = self.optimizer.optim
+        else:
+            self._optim = self.optimizer
+
     def __init__(self, opt):
         self.optimizer = None
+        self._optim = None
         self.params = None
         self.lr = opt.learning_rate
         self.model_size = opt.model_size
         self.max_grad_norm = opt.max_grad_norm
         self.update_method = opt.update_method
         self.method = opt.optim
+
+        self.zeror = opt.zeror_optim
 
         if self.lr > 0:
             if 'noam' in self.update_method:
@@ -408,7 +441,6 @@ class Optim(object):
         # return grad_norm
 
     """Reset the denom for normalization"""
-
     def normalize_grad(self, denom=None):
 
         if denom is None:
@@ -442,30 +474,30 @@ class Optim(object):
             # self.scheduler.step(self._step)
             self.lr = self.min_lr + 0.5 * (self.init_lr - self.min_lr) * \
                       (1 + math.cos((self._step / self.max_step) * math.pi))
-            self.optimizer.param_groups[0]['lr'] = self.lr
-            # self.lr = self.optimizer.param_groups[0]['lr']
-            # self.lr = self.min_lr + (self.init_lr - self.min_lr) * \
-            #           (1 + math.cos(math.pi * self._step / self.max_steps)) / 2
+
+            self._optim.param_groups[0]['lr'] = self.lr
+
         elif self.update_method in ['regular', 'basic']:
 
             " :) "
-            self.lr = self.optimizer.param_groups[0]['lr']
-            self.optimizer.param_groups[0]['lr'] = self.lr
+            pass
+            # self.lr = self.optimizer.param_groups[0]['lr']
+            # self.optimizer.param_groups[0]['lr'] = self.lr
 
     def set_learning_rate(self, lr):
-        self.optimizer.param_groups[0]['lr'] = lr
+        self._optim.param_groups[0]['lr'] = lr
         self.lr = lr
 
     def get_learning_rate(self):
 
-        if self.optimizer.param_groups[0]['lr'] is None:
+        if self._optim.param_groups[0]['lr'] is None:
             return self.lr
         else:
-            return self.optimizer.param_groups[0]['lr']
+            return self._optim.param_groups[0]['lr']
 
     def reset(self):
         self._step = self._first_step
-        for group in self.optimizer.param_groups:
+        for group in self._optim.param_groups:
             if 'step' in group:
                 group['step'] = self._first_step
 

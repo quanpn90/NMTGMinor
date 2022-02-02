@@ -1,10 +1,11 @@
 import torch
 import torchaudio as taudio
 from functools import lru_cache
-# from onmt.utils import safe_readaudio
+from onmt.utils import safe_readaudio
 import numpy as np
 import soundfile
 import math
+import torchaudio
 
 
 # this function reads wav file based on the timestamp in seconds
@@ -18,22 +19,21 @@ def safe_readaudio_from_cache(file_, wav_path, start=0.0, end=0.0, sample_rate=1
         frames = file_._prepare_read(offset, None, num_frames)
         waveform = file_.read(frames, dtype, always_2d=True)
         sample_rate_ = file_.samplerate
+        tensor = torch.from_numpy(waveform)
+        tensor = tensor[:, 0].unsqueeze(1)
     else:
-        with soundfile.SoundFile(wav_path, "r") as file_:
-            dtype = "float32"
-            frames = file_._prepare_read(frame_offset, None, num_frames)
-            waveform = file_.read(frames, dtype, always_2d=True)
-            sample_rate_ = file_.samplerate
+        tensor, _ = torchaudio.load(wav_path, frame_offset=offset, num_frames=num_frames,
+                                    normalize=True, channels_first=False)
+        tensor = tensor[:, 0].unsqueeze(1)
 
-    tensor = torch.from_numpy(waveform)
-    tensor = tensor[:, 0].unsqueeze(1)  # select the first channel?
+     # select the first channel?
     # tensor has size [length, num_channel] in which channel should be 1 for wav2vec
 
     return tensor
 
 
 class WavDataset(torch.utils.data.Dataset):
-    def __init__(self, wav_path_list, cache=True, cache_size=2048):
+    def __init__(self, wav_path_list, cache=False, cache_size=2048):
         """
         :param scp_path_list: list of path to the ark matrices
         """
@@ -95,9 +95,10 @@ class WavDataset(torch.utils.data.Dataset):
                 # add the object to the cache
                 self.cache[wav_path] = file_
                 self.usage[wav_path] = 1
+
+            data = safe_readaudio_from_cache(file_, wav_path, start, end, sample_rate)
         else:
             file_ = None
-
-        data = safe_readaudio_from_cache(file_, wav_path, start, end, sample_rate)
+            data = safe_readaudio(wav_path, start, end, sample_rate)
 
         return data

@@ -779,6 +779,12 @@ class DeltaLMEncoder(MBartPreTrainedModel):
         sm = torch.cuda.get_device_capability()
         total_bsz = 0
 
+        if torch.is_autocast_enabled():
+            try:
+                hidden_states =  torch.cuda.amp.autocast_mode._cast(hidden_states, torch.get_autocast_gpu_dtype())
+            except AttributeError:
+                hidden_states =  torch.cuda.amp.autocast_mode._cast(hidden_states, torch.half)
+
         # only run this when seq_len <= 512 and sm = 80/86 and type = half
         if self.fast_bert_mha and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] in [0, 6]) \
                 and hidden_states.dtype == torch.half:

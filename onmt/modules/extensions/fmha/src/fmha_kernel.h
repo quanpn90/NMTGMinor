@@ -128,7 +128,7 @@ struct Noloop_traits<3, Cta_tile>{
     enum{ STEP = Cta_tile::M };
     enum{ SEQLEN = Cta_tile::N };
 
-    static_assert(STEP == 16 && (SEQLEN == 512 || SEQLEN == 768));
+    static_assert(STEP == 16 && (SEQLEN == 512 || SEQLEN == 640 || SEQLEN == 768 || SEQLEN == 896 ));
 
     inline __device__ Noloop_traits(const int bidc)
         : bidc_(bidc)

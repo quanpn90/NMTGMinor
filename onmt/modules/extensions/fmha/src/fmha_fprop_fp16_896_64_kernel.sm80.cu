@@ -26,80 +26,73 @@
  ******************************************************************************/
 
 #include "fmha.h"
-#include "fmha_dgrad_kernel_1xN_reload.h"
-#include "fmha_dgrad_kernel_1xN_reload_nl.h"
+#include "fmha_fprop_kernel_1xN.h"
+#include "fmha_fprop_kernel_1xN_nl.h"
 
-using Kernel_traits = FMHA_kernel_traits< 768, 64, 16, 1, 8, 0x08u>;
+using Kernel_traits = FMHA_kernel_traits< 896, 64, 16, 1, 8, 0x08u>;
 
-extern "C" __global__ void fmha_dgrad_fp16_768_64_sm80_kernel(Fused_multihead_attention_fprop_params params) {
-    fmha::compute_dv_1xN<Kernel_traits>(params);
-    fmha::compute_dq_dk_1xN<Kernel_traits>(params);
+extern "C" __global__ void fmha_fprop_fp16_896_64_sm80_train_kernel(Fused_multihead_attention_fprop_params params) {
+    fmha::device_1xN<Kernel_traits, true>(params);
+}
+
+extern "C" __global__ void fmha_fprop_fp16_896_64_sm80_predict_kernel(Fused_multihead_attention_fprop_params params) {
+    fmha::device_1xN<Kernel_traits, false>(params);
 }
 
 template<int CHUNKS>
-__global__
-void fmha_dgrad_fp16_768_64_sm80_nl_kernel(Fused_multihead_attention_fprop_params params){
-    fmha::compute_dv_1xN_nl<CHUNKS, Kernel_traits>(params);
-    fmha::compute_dq_dk_1xN_nl<CHUNKS, Kernel_traits>(params);
+__global__ void fmha_fprop_fp16_896_64_sm80_train_nl_kernel(Fused_multihead_attention_fprop_params params) {
+    fmha::device_1xN_nl<CHUNKS,Kernel_traits, true>(params);
 }
 
-void run_fmha_dgrad_fp16_768_64_sm80(const Fused_multihead_attention_fprop_params &params, cudaStream_t stream) {
+template<int CHUNKS>
+__global__ void fmha_fprop_fp16_896_64_sm80_predict_nl_kernel(Fused_multihead_attention_fprop_params params) {
+    fmha::device_1xN_nl<CHUNKS, Kernel_traits, false>(params);
+}
+
+
+void run_fmha_fp16_896_64_sm80(const Fused_multihead_attention_fprop_params &params, bool is_training, cudaStream_t stream) {
+
+    auto kernel = is_training ? &fmha_fprop_fp16_896_64_sm80_train_kernel : &fmha_fprop_fp16_896_64_sm80_predict_kernel;
 
     constexpr int smem_size_softmax = Kernel_traits::Cta_tile_p::M * Kernel_traits::Cta_tile_p::WARPS_N * sizeof(float);
     constexpr int smem_size_q = Kernel_traits::Smem_tile_q::BYTES_PER_TILE;
     constexpr int smem_size_v = Kernel_traits::Smem_tile_v::BYTES_PER_TILE;
     constexpr int smem_size_o = Kernel_traits::Smem_tile_o::BYTES_PER_TILE;
 
-    using Smem_tile_s = fmha::Smem_tile_mma_transposed< Kernel_traits::Cta_tile_p>;
-    constexpr int smem_size_s = Smem_tile_s::BYTES_PER_TILE;
-    static_assert(smem_size_s == 16 * 768 * 2);
-    static_assert(smem_size_o == 16 * 64 * 4 * Kernel_traits::Cta_tile_p::WARPS_N);
-
-    constexpr int smem_size_dv = smem_size_s + 2 * smem_size_q + smem_size_v + smem_size_softmax;
-    constexpr int smem_size_dq_dk = smem_size_s + smem_size_o + smem_size_q + smem_size_v;
-    constexpr int smem_size = std::max(smem_size_dv, smem_size_dq_dk);
-
+    constexpr int smem_size = smem_size_q + std::max(smem_size_v, smem_size_o + smem_size_softmax);
     if( smem_size >= 48 * 1024 ) {
-        FMHA_CHECK_CUDA(cudaFuncSetAttribute(
-            fmha_dgrad_fp16_768_64_sm80_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+        FMHA_CHECK_CUDA(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
     }
     dim3 grid(params.h, params.b);
-    fmha_dgrad_fp16_768_64_sm80_kernel<<<grid, Kernel_traits::THREADS, smem_size, stream>>>(params);
+    kernel<<<grid, Kernel_traits::THREADS, smem_size, stream>>>(params);
 }
 
-void run_fmha_dgrad_fp16_768_64_sm80_nl(const Fused_multihead_attention_fprop_params &params, const int num_chunks, cudaStream_t stream) {
+void run_fmha_fp16_896_64_sm80_nl(const Fused_multihead_attention_fprop_params &params, const bool is_training, const int num_chunks, cudaStream_t stream) {
+
+    auto kernel = is_training ? &fmha_fprop_fp16_896_64_sm80_train_nl_kernel<2> : &fmha_fprop_fp16_896_64_sm80_predict_nl_kernel<2>;
+    if( num_chunks == 2 ) {
+        kernel = is_training ? &fmha_fprop_fp16_896_64_sm80_train_nl_kernel<2>
+                             : &fmha_fprop_fp16_896_64_sm80_predict_nl_kernel<2>;
+    } else if( num_chunks == 3 ) {
+        kernel = is_training ? &fmha_fprop_fp16_896_64_sm80_train_nl_kernel<3>
+                             : &fmha_fprop_fp16_896_64_sm80_predict_nl_kernel<3>;
+    } else if( num_chunks == 4 ) {
+        kernel = is_training ? &fmha_fprop_fp16_896_64_sm80_train_nl_kernel<4>
+                             : &fmha_fprop_fp16_896_64_sm80_predict_nl_kernel<4>;
+    } else {
+        assert(false && "Unsupported num_chunks");
+    }
 
     constexpr int smem_size_softmax = Kernel_traits::Cta_tile_p::M * Kernel_traits::Cta_tile_p::WARPS_N * sizeof(float);
     constexpr int smem_size_q = Kernel_traits::Smem_tile_q::BYTES_PER_TILE;
     constexpr int smem_size_v = Kernel_traits::Smem_tile_v::BYTES_PER_TILE;
     constexpr int smem_size_o = Kernel_traits::Smem_tile_o::BYTES_PER_TILE;
 
-    using Smem_tile_s = fmha::Smem_tile_mma_transposed<Kernel_traits::Cta_tile_p>;
-    constexpr int smem_size_s = Smem_tile_s::BYTES_PER_TILE;
-    static_assert(smem_size_s == 16 * 768 * 2);
-    static_assert(smem_size_o == 16 * 64 * 4 * Kernel_traits::Cta_tile_p::WARPS_N);
-
-    constexpr int smem_size_dv = smem_size_s + 2 * smem_size_q + smem_size_v + smem_size_softmax;
-    constexpr int smem_size_dq_dk = smem_size_s + smem_size_o + smem_size_q + smem_size_v;
-    constexpr int smem_size = std::max(smem_size_dv, smem_size_dq_dk);
-
-    auto kernel = fmha_dgrad_fp16_768_64_sm80_nl_kernel<2>;
-       
-    if( num_chunks == 2 ) {
-        kernel = fmha_dgrad_fp16_768_64_sm80_nl_kernel<2>;
-    }else if( num_chunks == 3 ) {
-        kernel = fmha_dgrad_fp16_768_64_sm80_nl_kernel<3>;
-    } else {
-        assert(false && "Unsupperted number of chunks");
-    }
-
+    constexpr int smem_size = smem_size_q + std::max(smem_size_v, smem_size_o + smem_size_softmax);
     if( smem_size >= 48 * 1024 ) {
         FMHA_CHECK_CUDA(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
     }
 
     dim3 grid(params.h, params.b, num_chunks);
-
     kernel<<<grid, Kernel_traits::THREADS, smem_size, stream>>>(params);
-
-    FMHA_CHECK_CUDA(cudaPeekAtLastError());
 }

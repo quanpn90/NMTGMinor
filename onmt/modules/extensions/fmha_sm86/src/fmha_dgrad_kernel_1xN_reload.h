@@ -318,7 +318,8 @@ inline __device__ void compute_dq_dk_1xN(const Params &params) {
     // The description of the CTA tile for the 2nd batched GEMM.
     using Cta_tile_dk =
         fmha::Cta_tile_extd<Cta_tile_p::N, Cta_tile_p::K, Cta_tile_p::M, Cta_tile_p::WARPS_N, 1, Cta_tile_p::WARPS_M>;
-    static_assert(Cta_tile_dk::M == 512 || Cta_tile_dk::M == 384 || Cta_tile_dk::M == 256 || Cta_tile_dk::M == 128);
+    static_assert(Cta_tile_dk::M == 512 ||
+                  Cta_tile_dk::M == 384 || Cta_tile_dk::M == 256 || Cta_tile_dk::M == 128);
     static_assert(Cta_tile_dk::N == 64);
     static_assert(Cta_tile_dk::K == 16);
 

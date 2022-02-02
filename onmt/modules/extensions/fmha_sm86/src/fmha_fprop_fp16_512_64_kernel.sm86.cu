@@ -29,7 +29,7 @@
 #include "fmha_fprop_kernel_1xN.h"
 #include "fmha_fprop_kernel_1xN_nl.h"
 
-using Kernel_traits = FMHA_kernel_traits< 512, 64, 16, 1, 4, 0x08u>;
+using Kernel_traits = FMHA_kernel_traits< 512, 64, 16, 1, 8, 0x08u>;
 
 extern "C" __global__ void fmha_fprop_fp16_512_64_sm86_train_kernel(Fused_multihead_attention_fprop_params params) {
     fmha::device_1xN<Kernel_traits, true>(params);

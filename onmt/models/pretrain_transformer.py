@@ -343,7 +343,7 @@ class PretrainTransformer(NMTModel):
         if not self.encoder.enc_pretrained_model:
             encoder_output = self.encoder(src_transposed, input_pos=src_pos, input_lang=src_lang)
 
-        elif self.encoder.enc_pretrained_model in ['mbart', 'mbart50', 'm2m', 'm2m100']:
+        elif self.encoder.enc_pretrained_model in ['mbart', 'mbart50', 'm2m', 'm2m100', "deltalm"]:
             src_attention_mask = batch.get("src_selfattn_mask")
             enc_outputs = self.encoder(src_transposed, src_attention_mask)
             context = enc_outputs[0]
@@ -356,7 +356,7 @@ class PretrainTransformer(NMTModel):
         dec_pretrained_model = self.decoder.dec_pretrained_model
         if not dec_pretrained_model:
             mask_src = None
-        elif dec_pretrained_model in["mbart", "mbart50", "m2m", "m2m100"]:
+        elif dec_pretrained_model in["mbart", "mbart50", "m2m", "m2m100", "deltalm"]:
             mask_src = src_attention_mask  # batch_size  x 1 x len_src for broadcasting
         else:
             print("Warning: unknown dec_pretrained_model")

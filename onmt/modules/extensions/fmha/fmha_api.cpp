@@ -91,33 +91,48 @@ mha_fwd(const at::Tensor &qkv,  // total x num_heads x 3 x head_size, total := \
         const bool is_training,
         c10::optional<at::Generator> gen_) {
     auto dprops = at::cuda::getCurrentDeviceProperties();
+    int warps_n;
+
     TORCH_CHECK(dprops->major == 8 && dprops->minor == 0);
-    int seq_len = 768;
-    auto launch = &run_fmha_fp16_768_64_sm80;
+    int seq_len = 896;
+    auto launch = &run_fmha_fp16_896_64_sm80;
     if( max_seq_len <= 128 ) {
         seq_len = 128;
         launch = &run_fmha_fp16_128_64_sm80;
+        warps_n = 4;
     } else if( max_seq_len <= 256 ) {
         seq_len = 256;
         launch = &run_fmha_fp16_256_64_sm80;
+        warps_n = 4;
     } else if( max_seq_len <= 384 ) {
         seq_len = 384;
         launch = &run_fmha_fp16_384_64_sm80;
+        warps_n = 4;
     } else if( max_seq_len <= 512 ) {
         seq_len = 512;
         launch = &run_fmha_fp16_512_64_sm80;
+        warps_n = 4;
+    } else if( max_seq_len <= 640 ) {
+        seq_len = 640;
+        launch = &run_fmha_fp16_640_64_sm80;
+        warps_n = 5;
     } else if( max_seq_len <= 768 ) {
         seq_len = 768;
         launch = &run_fmha_fp16_768_64_sm80;
+        warps_n = 6;
+    } else if( max_seq_len <= 896 ) {
+        seq_len = 896;
+        launch = &run_fmha_fp16_896_64_sm80;
+        warps_n = 7;
     } else {
         TORCH_CHECK(false);
     }
 
     constexpr int warps_m = 1;
-    constexpr int warps_n = 4;  // this leads to an upper bound
+//    int warps_n = 4;  // this leads to an upper bound
     const int mmas_m = seq_len / 16 / warps_m;
     const int mmas_n = seq_len / 16 / warps_n;
-    
+
     const int elts_per_thread = 8 * mmas_m * mmas_n;
 
     auto stream = at::cuda::getCurrentCUDAStream().stream();
@@ -192,8 +207,8 @@ mha_bwd(const at::Tensor &dout,  // total x num_heads, x head_size
 ) {
     auto dprops = at::cuda::getCurrentDeviceProperties();
     TORCH_CHECK(dprops->major == 8 && dprops->minor == 0);
-    int seq_len = 768;
-    auto launch = &run_fmha_dgrad_fp16_768_64_sm80;
+    int seq_len = 896;
+    auto launch = &run_fmha_dgrad_fp16_896_64_sm80;
     if( max_seq_len <= 128 ) {
         seq_len = 128;
         launch = &run_fmha_dgrad_fp16_128_64_sm80;
@@ -206,9 +221,15 @@ mha_bwd(const at::Tensor &dout,  // total x num_heads, x head_size
     } else if( max_seq_len <= 512 ) {
         seq_len = 512;
         launch = &run_fmha_dgrad_fp16_512_64_sm80;
+    } else if( max_seq_len <= 640 ) {
+        seq_len = 640;
+        launch = &run_fmha_dgrad_fp16_640_64_sm80;
     } else if( max_seq_len <= 768 ) {
         seq_len = 768;
         launch = &run_fmha_dgrad_fp16_768_64_sm80;
+    } else if( max_seq_len <= 896 ) {
+        seq_len = 896;
+        launch = &run_fmha_dgrad_fp16_896_64_sm80;
     } else {
         TORCH_CHECK(false);
     }
@@ -271,12 +292,33 @@ std::vector<at::Tensor> mha_fwd_nl(const at::Tensor &qkv,         // total x num
                                 const int max_seq_len,
                                 const bool is_training,
                                 c10::optional<at::Generator> gen_) {
-    int seq_len = 512;
-    auto launch = &run_fmha_fp16_512_64_sm80_nl;
+    int seq_len = 896;
+    auto launch = &run_fmha_fp16_896_64_sm80_nl;
+    int warps_n;
+    if( max_seq_len <= 512 ) {
+        seq_len = 512;
+        launch = &run_fmha_fp16_512_64_sm80_nl;
+        warps_n = 4;
+    } else if( max_seq_len <= 640 ) {
+        seq_len = 640;
+        launch = &run_fmha_fp16_640_64_sm80_nl;
+        warps_n = 5;
+    } else if( max_seq_len <= 768 ) {
+        seq_len = 768;
+        launch = &run_fmha_fp16_768_64_sm80_nl;
+        warps_n = 6;
+    } else if( max_seq_len <= 896 ) {
+        seq_len = 896;
+        launch = &run_fmha_fp16_896_64_sm80_nl;
+        warps_n = 7;
+    } else {
+        TORCH_CHECK(false);
+    }
 //    TORCH_CHECK(max_seq_len == seq_len);
 
+//    const int _warp_n = seq_len / 128;
     constexpr int warps_m = 1;
-    constexpr int warps_n = 4;  // this leads to an upper bound
+//    constexpr int warps_n = _warp_n;  // this leads to an upper bound
     const int mmas_m = seq_len / 16 / warps_m;
     const int mmas_n = seq_len / 16 / warps_n;
     // static_assert( mmas_m == 32 );
@@ -335,10 +377,12 @@ std::vector<at::Tensor> mha_fwd_nl(const at::Tensor &qkv,         // total x num
         std::lock_guard<std::mutex> lock(gen->mutex_);
         params.philox_args = gen->philox_cuda_state(counter_offset);
     }
-    int num_chunks = 3;
-    if(batch_size == 3) {
-        num_chunks = 2;
-    }
+    int num_chunks = 4;
+//    if( batch_size == 1 ) {
+//        num_chunks = 4;
+//    } else if( batch_size == 2 ) {
+//        num_chunks = 3;
+//    }
 
     launch(params, is_training, num_chunks, stream);
 
@@ -379,19 +423,33 @@ std::vector<at::Tensor> mha_bwd_nl(const at::Tensor &dout,        // total x num
     TORCH_CHECK(batch_size > 0);
     TORCH_CHECK(head_size == 64);
 
-    int seq_len = 512;
-    auto launch = &run_fmha_dgrad_fp16_512_64_sm80_nl;
+    int seq_len = 896;
+    auto launch = &run_fmha_dgrad_fp16_896_64_sm80_nl;
+    if( max_seq_len <= 512 ) {
+        seq_len = 512;
+        launch = &run_fmha_dgrad_fp16_512_64_sm80_nl;
+    } else if( max_seq_len <= 640 ) {
+        seq_len = 640;
+        launch = &run_fmha_dgrad_fp16_640_64_sm80_nl;
+    } else if( max_seq_len <= 768 ) {
+        seq_len = 768;
+        launch = &run_fmha_dgrad_fp16_768_64_sm80_nl;
+    } else if( max_seq_len <= 896 ) {
+        seq_len = 896;
+        launch = &run_fmha_dgrad_fp16_896_64_sm80_nl;
+    } else {
+        TORCH_CHECK(false);
+    }
 
     auto opts = qkv.options();
-
     auto dqkv = torch::empty_like(qkv);
 
-    int num_chunks = 2;
-    if( batch_size == 1 ) {
-        num_chunks = 4;
-    }else if( batch_size == 2 ) {
-        num_chunks = 3;
-    }
+    int num_chunks = 4;
+//    if( batch_size == 1 ) {
+//        num_chunks = 4;
+//    }else if( batch_size == 2 ) {
+//        num_chunks = 3;
+//    }
     auto dkv = torch::empty({total, num_chunks, 2, num_heads, head_size}, opts);
 
     Fused_multihead_attention_fprop_params params;
