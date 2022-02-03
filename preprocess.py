@@ -454,7 +454,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
     binarized_src = SpeechBinarizer.binarize_file(src_file, input_format=asr_format,
                                                   output_format=output_format, concat=concat,
                                                   stride=stride, fp16=fp16, prev_context=prev_context,
-                                                  num_workers=num_workers)
+                                                  num_workers=num_workers, verbose=verbose)
 
     src = binarized_src['data']
     src_sizes = binarized_src['sizes']
@@ -576,7 +576,7 @@ def main():
                                                                      output_format=opt.format,
                                                                      num_workers=opt.num_threads,
                                                                      external_tokenizer=opt.external_tokenizer,
-                                                                     tgt_lang=tgt_lang)
+                                                                     tgt_lang=tgt_lang, verbose=opt.verbose)
 
             n_samples = len(src_data)
             if n_input_files == 1 or opt.multi_dataset:
@@ -603,7 +603,7 @@ def main():
                                                                     output_format=opt.format,
                                                                     num_workers=opt.num_threads,
                                                                     external_tokenizer=opt.external_tokenizer,
-                                                                    tgt_lang=tgt_lang)
+                                                                    tgt_lang=tgt_lang, verbose=opt.verbose)
 
                 if opt.multi_dataset:
                     data['prev_src'] = prev_src_data
@@ -679,7 +679,7 @@ def main():
                                                                      asr_format=opt.asr_format,
                                                                      output_format=opt.format,
                                                                      external_tokenizer=opt.external_tokenizer,
-                                                                     tgt_lang=tgt_lang)
+                                                                     tgt_lang=tgt_lang, verbose=opt.verbose)
 
             n_samples = len(src_data)
             if n_input_files == 1 or opt.multi_dataset:
@@ -706,7 +706,7 @@ def main():
                                                                     output_format=opt.format,
                                                                     num_workers=opt.num_threads,
                                                                     external_tokenizer=opt.external_tokenizer,
-                                                                    tgt_lang=tgt_lang)
+                                                                    tgt_lang=tgt_lang, verbose=opt.verbose)
 
                 valid['past_src'] += past_src_data
                 valid['past_src_sizes'] += past_src_sizes

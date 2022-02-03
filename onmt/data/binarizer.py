@@ -48,9 +48,8 @@ class SpeechBinarizer:
     @staticmethod
     def binarize_file_single_thread(filename, ark_loader, offset=0, end=-1, worker_id=0,
                                     input_format='scp', output_format='raw',
-                                    prev_context=0, concat=4, stride=1, fp16=False, sample_rate=16000):
+                                    prev_context=0, concat=4, stride=1, fp16=False, sample_rate=16000, verbose=False):
         # if output_format is scp, we only read the length for sorting
-
         if output_format == 'scp':
             assert input_format in ['kaldi', 'scp']
         if output_format == 'wav':
@@ -120,12 +119,16 @@ class SpeechBinarizer:
 
                     # an wav input file should have format uttid wav_file start end
                     # in which the start and end (by second) can be 0 0
+
                     if len(parts) >= 4:
                         wavpath, start_time, end_time = parts[1], float(parts[2]), float(parts[3])
                     else:
                         wavpath = parts[1]
                         start_time = 0
                         end_time = -1
+
+                    if verbose:
+                        print("processing wav file ...", wavpath)
                     feature_vector = safe_readaudio(wavpath, start_time, end_time, sample_rate=sample_rate)
                     # store a tuple of data and information to load the wav again during training
                     data.append((wavpath, start_time, end_time, sample_rate))
@@ -148,11 +151,7 @@ class SpeechBinarizer:
 
     @staticmethod
     def binarize_file(filename, input_format='scp', output_format='raw',
-                      prev_context=0, concat=4, stride=1, fp16=False, num_workers=1):
-
-        if input_format == 'h5':
-            return SpeechBinarizer.binarize_h5_file(filename, output_format, prev_context, concat,
-                                                    stride, fp16)
+                      prev_context=0, concat=4, stride=1, fp16=False, num_workers=1, verbose=False):
 
         result = dict()
 
@@ -180,7 +179,7 @@ class SpeechBinarizer:
                 mp_results.append(pool.apply_async(
                     SpeechBinarizer.binarize_file_single_thread,
                     args=(filename, ark_loaders[worker_id], offsets[worker_id], offsets[worker_id + 1], worker_id,
-                          input_format, output_format, prev_context, concat, stride, fp16),
+                          input_format, output_format, prev_context, concat, stride, fp16, 160000, verbose),
                 ))
 
             pool.close()
@@ -193,7 +192,7 @@ class SpeechBinarizer:
             sp_result = SpeechBinarizer.binarize_file_single_thread(filename, ark_loaders[0], offsets[0], offsets[1], 0,
                                                                     input_format='scp', output_format=output_format,
                                                                     prev_context=prev_context, concat=concat,
-                                                                    stride=stride, fp16=fp16)
+                                                                    stride=stride, fp16=fp16, verbose=verbose)
             merge_result(sp_result)
 
         final_result['data'] = list()

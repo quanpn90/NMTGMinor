@@ -12,6 +12,8 @@ def make_parser(parser):
 
     parser.add_argument('-multi_dataset', action='store_true',
                         help='Reading multiple datasets (sharing the same dictionary)')
+    parser.add_argument('-delay_sync', action="store_true",
+                        help="""Delay syncing in DDP""")
 
     parser.add_argument('-patch_vocab_multiplier', type=int, default=1,
                         help='Pad vocab so that the size divides by this multiplier')

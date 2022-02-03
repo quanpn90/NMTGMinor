@@ -71,7 +71,7 @@ def zero_tensor(device=None):
         return torch.Tensor([0]).to(device)
 
 
-def all_reduce_and_rescale_tensors(tensors, rescale_denom,
+def all_reduce_and_rescale_tensors(tensors,
                                    buffer_size=10485760):
     """All-reduce and rescale tensors in chunks of the specified size.
     Args:
@@ -94,7 +94,6 @@ def all_reduce_and_rescale_tensors(tensors, rescale_denom,
 
         # all-reduce and rescale
         torch.distributed.all_reduce(buffer_t[:offset])
-        buffer_t.div_(rescale_denom)
 
         # copy all-reduced buffer back into tensors
         offset = 0
@@ -676,13 +675,12 @@ class Trainer(object):
 
             # TODO: dealing with oom during distributed training
             oom = zero_tensor()
+            counter = counter + 1
+            reduce = True if counter >= opt.update_frequency or i == (n_samples - 1) else False
 
             try:
-                counter = counter + 1
-                reduce = True if counter >= opt.update_frequency or i == (n_samples - 1) else False
-
                 def maybe_no_sync():
-                    if not reduce and isinstance(self.model, DDP_model):
+                    if not reduce and isinstance(self.model, DDP_model) and opt.delay_sync:
                         return self.model.no_sync()
                     else:
                         # when we dont reach the updating step, we do not need to synchronize the gradients
@@ -805,6 +803,9 @@ class Trainer(object):
                         self.grad_scaler.scale(full_loss).backward(inputs=grad_list)
                         del outputs
 
+                # if isinstance(self.model, DDP_model):
+                #     torch.cuda.synchronize(device=self.rank)
+
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
@@ -846,11 +847,11 @@ class Trainer(object):
             num_accumulated_sents.add_(batch_size)
 
             # We only update the parameters after getting gradients from n mini-batches
-            update_flag = False
-            if counter >= opt.update_frequency:
-                update_flag = True
-            elif i == n_samples - 1:  # update for the last minibatch
-                update_flag = True
+            update_flag = reduce
+            # if counter >= opt.update_frequency:
+            #     update_flag = True
+            # elif i == n_samples - 1:  # update for the last minibatch
+            #     update_flag = True
 
             if update_flag:
                 # accumulated gradient case, in this case the update frequency
@@ -868,14 +869,13 @@ class Trainer(object):
                 # the gradient is scaled by world size, so in order to match the model without multiGPU
                 # we rescale the model parameters w.r.t the world size
                 # grad_denom = grad_denom / self.world_size
-
+                
                 # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
-                if grad_denom != 1.0:
-                    normalize_gradients(self.model.parameters(), grad_denom, self.opt.max_grad_norm)
+                if grad_denom != 1:
+                    normalize_gradients(self.model.parameters(), grad_denom)
 
-                # Update the parameters.
-                if self.opt.max_grad_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.opt.max_grad_norm)
+                # Update the pagrameters.
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.opt.max_grad_norm)
                 self.optim.step(scaler=self.grad_scaler)
                 self.grad_scaler.update()
                 self.optim.zero_grad()
@@ -930,9 +930,10 @@ class Trainer(object):
                 self.all_reduce(report_contrastive_loss, op=dist.ReduceOp.SUM, group=self.group)
 
                 if self.is_main():
-                    log_string = ("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; " %
+                    log_string = ("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; grad_norm: %6.4f " %
                                   (epoch, i + 1, len(data_iterator),
-                                   math.exp(report_loss.item() / report_tgt_words.item())))
+                                   math.exp(report_loss.item() / report_tgt_words.item()),
+                                   grad_norm))
 
                     # if opt.reconstruct:
                     #     self.all_reduce(report_rec_loss, op=dist.ReduceOp.SUM, group=self.group)
