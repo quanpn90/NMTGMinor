@@ -139,6 +139,7 @@ class Trainer(object):
         self.device = device
         opt.node_rank = 0
         opt.nodes = 1
+
         self.world_size = len(opt.gpus)
 
         # in the case of single node distributed, it should equal self.device
@@ -617,6 +618,7 @@ class Trainer(object):
         opt = self.opt
         train_data = self.train_data
         streaming = opt.streaming
+        grad_norm = -1
 
         # Clear the gradients of the model
         self.model.zero_grad()

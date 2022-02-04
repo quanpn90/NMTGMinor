@@ -1072,8 +1072,7 @@ class TransformerEncoder(nn.Module):
             fast_attention = self.layers[0].self_attn.fast_attention
 
         # only run this when seq_len <= 512 and sm = 80/86 and type = half
-        if self.fast_bert_mha and ((seq_len <= 896 and sm[0] == 8 and sm[1] == 0) or
-                                   (seq_len <= 512 and sm[0] == 8 and sm[1] == 6)) \
+        if self.fast_bert_mha and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] == 0) \
                 and not self.deepspeed and fast_attention and x.dtype == torch.half:
             can_run_fast_bert_mha = True
 

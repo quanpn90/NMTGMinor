@@ -632,8 +632,7 @@ class MultiheadAttention(nn.Module):
                     sm = torch.cuda.get_device_capability()
 
                     # Only Ampere supported at the moment
-                    assert ((sm[0] == 8 and (sm[1] in [0]) and max_len <= 896) or
-                            (sm[0] == 8 and (sm[1] in [6]) and max_len <= 512))
+                    assert (sm[0] == 8 and (sm[1] in [0]) and max_len <= 512)
 
                     total_bsz = query.size(0)
                     qkv = linear_function(query, in_proj_weight, self.proj_bias)  # B x H

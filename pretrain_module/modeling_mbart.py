@@ -307,7 +307,7 @@ class MBartAttention(nn.Module):
                 sm = torch.cuda.get_device_capability()
 
                 # Only Ampere supported at the moment
-                assert (sm[0] == 8 and (sm[1] in [0, 6]) and max_len <= 512)
+                assert (sm[0] == 8 and (sm[1] in [0]) and max_len <= 512)
                 total_bsz = hidden_states.size(0)
                 qkv = linear_function(hidden_states, in_proj_weight, self.proj_bias)  # B x H
                 # B x 3 x H x d
@@ -1431,7 +1431,7 @@ class MBartEncoder(MBartPreTrainedModel):
         total_bsz = 0
 
         # only run this when seq_len <= 512 and sm = 80/86 and type = half
-        if self.fast_bert_mha and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] in [0, 6]) \
+        if self.fast_bert_mha and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] in [0]) \
                 and hidden_states.dtype == torch.half:
             can_run_fast_bert_mha = True
             # print("Can run FAST BERT MHA")
