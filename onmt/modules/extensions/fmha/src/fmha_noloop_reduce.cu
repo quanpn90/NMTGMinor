@@ -165,8 +165,6 @@ void fmha_run_noloop_reduce(void *out,
             fmha_noloop_reduce_kernel<half, THREADS, HIDDEN_SIZE, 2><<<blocks, THREADS, 0, stream>>>(out, in, cu_seqlens, batch_size);
         } else if( num_chunks == 3 ) {
             fmha_noloop_reduce_kernel<half, THREADS, HIDDEN_SIZE, 3><<<blocks, THREADS, 0, stream>>>(out, in, cu_seqlens, batch_size);
-        } else if( num_chunks == 4 ) {
-            fmha_noloop_reduce_kernel<half, THREADS, HIDDEN_SIZE, 4><<<blocks, THREADS, 0, stream>>>(out, in, cu_seqlens, batch_size);
         } else {
             assert(false && "Unsupported num_chunks");
         }

@@ -107,31 +107,15 @@ void run_fmha_fp16_128_64_sm80(const Fused_multihead_attention_fprop_params &par
 void run_fmha_fp16_256_64_sm80(const Fused_multihead_attention_fprop_params &params, bool is_training, cudaStream_t stream);
 void run_fmha_fp16_384_64_sm80(const Fused_multihead_attention_fprop_params &params, bool is_training, cudaStream_t stream);
 void run_fmha_fp16_512_64_sm80(const Fused_multihead_attention_fprop_params &params, bool is_training, cudaStream_t stream);
-void run_fmha_fp16_640_64_sm80(const Fused_multihead_attention_fprop_params &params, bool is_training, cudaStream_t stream);
-void run_fmha_fp16_768_64_sm80(const Fused_multihead_attention_fprop_params &params, bool is_training, cudaStream_t stream);
-void run_fmha_fp16_896_64_sm80(const Fused_multihead_attention_fprop_params &params, bool is_training, cudaStream_t stream);
-
 
 void run_fmha_dgrad_fp16_128_64_sm80(const Fused_multihead_attention_fprop_params &params, cudaStream_t stream);
 void run_fmha_dgrad_fp16_256_64_sm80(const Fused_multihead_attention_fprop_params &params, cudaStream_t stream);
 void run_fmha_dgrad_fp16_384_64_sm80(const Fused_multihead_attention_fprop_params &params, cudaStream_t stream);
 void run_fmha_dgrad_fp16_512_64_sm80(const Fused_multihead_attention_fprop_params &params, cudaStream_t stream);
-void run_fmha_dgrad_fp16_640_64_sm80(const Fused_multihead_attention_fprop_params &params, cudaStream_t stream);
-void run_fmha_dgrad_fp16_768_64_sm80(const Fused_multihead_attention_fprop_params &params, cudaStream_t stream);
-void run_fmha_dgrad_fp16_896_64_sm80(const Fused_multihead_attention_fprop_params &params, cudaStream_t stream);
 
-
-void run_fmha_fp16_512_64_sm80_nl(const Fused_multihead_attention_fprop_params &params, const bool is_training, const int num_chunks, cudaStream_t stream);
-void run_fmha_fp16_640_64_sm80_nl(const Fused_multihead_attention_fprop_params &params, const bool is_training, const int num_chunks, cudaStream_t stream);
-void run_fmha_fp16_768_64_sm80_nl(const Fused_multihead_attention_fprop_params &params, const bool is_training, const int num_chunks, cudaStream_t stream);
-void run_fmha_fp16_896_64_sm80_nl(const Fused_multihead_attention_fprop_params &params, const bool is_training, const int num_chunks, cudaStream_t stream);
-
+void run_fmha_fp16_512_64_sm80_nl(const Fused_multihead_attention_fprop_params &params, const bool is_training, const int num_chunks, cudaStream_t stream); 
 
 void run_fmha_dgrad_fp16_512_64_sm80_nl(const Fused_multihead_attention_fprop_params &params, const int num_chunks, cudaStream_t stream);
-void run_fmha_dgrad_fp16_640_64_sm80_nl(const Fused_multihead_attention_fprop_params &params, const int num_chunks, cudaStream_t stream);
-void run_fmha_dgrad_fp16_768_64_sm80_nl(const Fused_multihead_attention_fprop_params &params, const int num_chunks, cudaStream_t stream);
-void run_fmha_dgrad_fp16_896_64_sm80_nl(const Fused_multihead_attention_fprop_params &params, const int num_chunks, cudaStream_t stream);
-
 
 void fmha_run_noloop_reduce(void *out,
                             const void *in,

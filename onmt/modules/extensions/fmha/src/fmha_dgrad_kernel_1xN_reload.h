@@ -44,8 +44,7 @@ inline __device__ void compute_dv_1xN(const Params &params) {
     using Cta_tile_dv =
         fmha::Cta_tile_extd<Cta_tile_p::N, Cta_tile_p::K, Cta_tile_p::M, Cta_tile_p::WARPS_N, 1, Cta_tile_p::WARPS_M>;
 
-    static_assert(Cta_tile_dv::M == 896 || Cta_tile_dv::M == 768 || Cta_tile_dv::M == 640 ||
-                        Cta_tile_dv::M == 512 || Cta_tile_dv::M == 384 || Cta_tile_dv::M == 256 || Cta_tile_dv::M == 128);
+    static_assert(Cta_tile_dv::M == 512 || Cta_tile_dv::M == 384 || Cta_tile_dv::M == 256 || Cta_tile_dv::M == 128);
     static_assert(Cta_tile_dv::N == 64);
     static_assert(Cta_tile_dv::K == 16);
 
@@ -319,9 +318,7 @@ inline __device__ void compute_dq_dk_1xN(const Params &params) {
     // The description of the CTA tile for the 2nd batched GEMM.
     using Cta_tile_dk =
         fmha::Cta_tile_extd<Cta_tile_p::N, Cta_tile_p::K, Cta_tile_p::M, Cta_tile_p::WARPS_N, 1, Cta_tile_p::WARPS_M>;
-    static_assert(Cta_tile_dk::M == 1024 || Cta_tile_dk::M == 896 ||
-                  Cta_tile_dk::M == 768 || Cta_tile_dk::M == 640 || Cta_tile_dk::M == 512 ||
-                  Cta_tile_dk::M == 384 || Cta_tile_dk::M == 256 || Cta_tile_dk::M == 128);
+    static_assert(Cta_tile_dk::M == 512 || Cta_tile_dk::M == 384 || Cta_tile_dk::M == 256 || Cta_tile_dk::M == 128);
     static_assert(Cta_tile_dk::N == 64);
     static_assert(Cta_tile_dk::K == 16);
 

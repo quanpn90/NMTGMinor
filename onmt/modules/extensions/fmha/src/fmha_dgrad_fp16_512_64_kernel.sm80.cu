@@ -89,8 +89,6 @@ void run_fmha_dgrad_fp16_512_64_sm80_nl(const Fused_multihead_attention_fprop_pa
         kernel = fmha_dgrad_fp16_512_64_sm80_nl_kernel<2>;
     }else if( num_chunks == 3 ) {
         kernel = fmha_dgrad_fp16_512_64_sm80_nl_kernel<3>;
-    }else if( num_chunks == 4 ) {
-        kernel = fmha_dgrad_fp16_512_64_sm80_nl_kernel<4>;
     } else {
         assert(false && "Unsupperted number of chunks");
     }
