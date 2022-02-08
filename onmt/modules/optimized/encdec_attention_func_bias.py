@@ -25,7 +25,7 @@ except (ModuleNotFoundError, ImportError) as e:
 try:
     import encdec_multihead_attn_bias_blaslt
 except (ModuleNotFoundError, ImportError) as e:
-    self_multihead_attn_blaslt = None
+    encdec_multihead_attn_bias_blaslt = None
 
 
 def rotate_half(x):
