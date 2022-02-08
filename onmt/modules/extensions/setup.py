@@ -283,31 +283,31 @@ if bare_metal_minor >= 5 and bare_metal_major >= 11:
 
     # TODO: self-attn and enc-attn blaslt
 
-    ext_modules.append(
-        CUDAExtension(name='self_multihead_attn_blaslt',
-                      sources=['multihead_attn_blaslt/self_multihead_attn.cpp',
-                               'multihead_attn_blaslt/self_multihead_attn_cuda.cu'],
-                      extra_compile_args={'cxx': ['-O3', ] + version_dependent_macros + generator_flag,
-                                          'nvcc': ['-O3',
-                                                   '-U__CUDA_NO_HALF_OPERATORS__',
-                                                   '-U__CUDA_NO_HALF_CONVERSIONS__',
-                                                   '--expt-relaxed-constexpr',
-                                                   '--expt-extended-lambda',
-                                                   '--use_fast_math'] + version_dependent_macros +
-                                                  generator_flag}))
-
-    ext_modules.append(
-        CUDAExtension(name='encdec_multihead_attn_bias_blaslt',
-                      sources=['multihead_attn_blaslt/encdec_multihead_attn_bias.cpp',
-                               'multihead_attn_blaslt/encdec_multihead_attn_bias_cuda.cu'],
-                      extra_compile_args={'cxx': ['-O3', ] + version_dependent_macros + generator_flag,
-                                          'nvcc': ['-O3',
-                                                   '-U__CUDA_NO_HALF_OPERATORS__',
-                                                   '-U__CUDA_NO_HALF_CONVERSIONS__',
-                                                   '--expt-relaxed-constexpr',
-                                                   '--expt-extended-lambda',
-                                                   '--use_fast_math'] + version_dependent_macros +
-                                                  generator_flag}))
+    # ext_modules.append(
+    #     CUDAExtension(name='self_multihead_attn_blaslt',
+    #                   sources=['multihead_attn_blaslt/self_multihead_attn.cpp',
+    #                            'multihead_attn_blaslt/self_multihead_attn_cuda.cu'],
+    #                   extra_compile_args={'cxx': ['-O3', ] + version_dependent_macros + generator_flag,
+    #                                       'nvcc': ['-O3',
+    #                                                '-U__CUDA_NO_HALF_OPERATORS__',
+    #                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
+    #                                                '--expt-relaxed-constexpr',
+    #                                                '--expt-extended-lambda',
+    #                                                '--use_fast_math'] + version_dependent_macros +
+    #                                               generator_flag}))
+    #
+    # ext_modules.append(
+    #     CUDAExtension(name='encdec_multihead_attn_bias_blaslt',
+    #                   sources=['multihead_attn_blaslt/encdec_multihead_attn_bias.cpp',
+    #                            'multihead_attn_blaslt/encdec_multihead_attn_bias_cuda.cu'],
+    #                   extra_compile_args={'cxx': ['-O3', ] + version_dependent_macros + generator_flag,
+    #                                       'nvcc': ['-O3',
+    #                                                '-U__CUDA_NO_HALF_OPERATORS__',
+    #                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
+    #                                                '--expt-relaxed-constexpr',
+    #                                                '--expt-extended-lambda',
+    #                                                '--use_fast_math'] + version_dependent_macros +
+    #                                               generator_flag}))
 
 # check build if sm80
 ext_modules.append(
