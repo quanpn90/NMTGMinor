@@ -28,6 +28,7 @@ from .kaldiio.wavio import write_wav
 PY3 = sys.version_info[0] == 3
 
 
+
 if PY3:
     from collections.abc import Mapping
     binary_type = bytes

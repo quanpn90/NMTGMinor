@@ -6,6 +6,7 @@ import numpy as np
 import soundfile
 import math
 import torchaudio
+import os
 
 
 # this function reads wav file based on the timestamp in seconds
@@ -33,14 +34,14 @@ def safe_readaudio_from_cache(file_, wav_path, start=0.0, end=0.0, sample_rate=1
 
 
 class WavDataset(torch.utils.data.Dataset):
-    def __init__(self, wav_path_list, cache=False, cache_size=2048):
+    def __init__(self, wav_path_list, cache_size=0):
         """
         :param scp_path_list: list of path to the ark matrices
         """
         self.wav_path_list = wav_path_list
         self._sizes = len(self.wav_path_list)
         self._dtype = torch.float32
-        if cache:
+        if cache_size > 0:
             self.cache = dict()
             self.usage = dict()
         else:
@@ -84,6 +85,7 @@ class WavDataset(torch.utils.data.Dataset):
                 self.usage[wav_path] = self.usage[wav_path] + 1
             else:
                 # read the audio file
+                # print(os.path.exists(wav_path), wav_path)
                 file_ = soundfile.SoundFile(wav_path, 'r')
                 if len(self.cache) > self.cache_size:
                     # remove 1 file from cache based on lowest usage, maybe?

@@ -7,7 +7,7 @@ def make_parser(parser):
                         help='Path to the *-train.pt file from preprocess.py')
     parser.add_argument('-data_format', required=False, default='raw',
                         help='Default data format: raw')
-    parser.add_argument('-use_cache', action='store_true',
+    parser.add_argument('-data_cache_size', type=int, default=0,
                         help="""Caching for dataset (if implemented)""")
 
     parser.add_argument('-multi_dataset', action='store_true',

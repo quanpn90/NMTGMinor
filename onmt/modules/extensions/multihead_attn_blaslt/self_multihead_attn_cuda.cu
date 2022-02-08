@@ -335,27 +335,54 @@ std::vector<torch::Tensor> bwd_cuda(
   TORCH_CUDABLAS_CHECK(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
 
   // Output Linear Dgrad
-  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
-                             CUBLAS_OP_N,
-                             CUBLAS_OP_N,
-                             embed_dim,
-                             batches,
-                             embed_dim,
-                             static_cast<const void*>(&alpha),
-                             static_cast<const void*>(output_weights.data_ptr()),
-                             CUDA_R_16F,
-                             embed_dim,
-                             static_cast<const void*>(output_grads.data_ptr()),
-                             CUDA_R_16F,
-                             embed_dim,
-                             static_cast<const void*>(&beta),
-                             static_cast<void*>(output_lin_grads.data_ptr()),
-                             CUDA_R_16F,
-                             embed_dim,
-                             CUDA_R_32F,
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+//   TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
+//                              CUBLAS_OP_N,
+//                              CUBLAS_OP_N,
+//                              embed_dim,
+//                              batches,
+//                              embed_dim,
+//                              static_cast<const void*>(&alpha),
+//                              static_cast<const void*>(output_weights.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              static_cast<const void*>(output_grads.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              static_cast<const void*>(&beta),
+//                              static_cast<void*>(output_lin_grads.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              CUDA_R_32F,
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
   int cublas_status = 1;
+
+  cublas_status = gemm_bias_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_N,
+            CUBLAS_OP_N,
+            embed_dim,
+            batches,
+            embed_dim,
+            &alpha, /* host pointer */
+            static_cast<const void*>(output_weights.data_ptr()),
+            embed_dim,
+            static_cast<const void*>(output_grads.data_ptr()),
+            embed_dim,
+            &beta, /* host pointer */
+            static_cast<void*>(output_lin_grads.data_ptr()),
+            embed_dim,
+            lt_workspace_ptr, // TODO: get lt_workspace
+            1 << 22,
+            stream,
+            false,
+            static_cast<const void*>(nullptr));
+
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM output lin grad backward failed with %d\n", cublas_status);
+      exit(0);
+  }
+
   cublas_status = gemm_bgradb_lt(
             (cublasLtHandle_t)handle,
             CUBLAS_OP_N,
@@ -431,7 +458,7 @@ std::vector<torch::Tensor> bwd_cuda(
             stream);
 
   if (cublas_status != CUBLAS_STATUS_SUCCESS) {
-      printf("Strided Batched GEMM QKV forward failed with %d\n", cublas_status);
+      printf("Strided Batched GEMM backward 1 failed with %d\n", cublas_status);
       exit(0);
   }
 
@@ -482,6 +509,11 @@ std::vector<torch::Tensor> bwd_cuda(
             lt_workspace_ptr,
             1 << 22,
             stream);
+
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("Strided Batched GEMM backward 2 failed with %d\n", cublas_status);
+      exit(0);
+  }
   // Apply Dropout Mask and Scale by Dropout Probability
   // Softmax Grad
 
@@ -557,6 +589,11 @@ std::vector<torch::Tensor> bwd_cuda(
             1 << 22,
             stream);
 
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM backward 1 failed with %d\n", cublas_status);
+      exit(0);
+  }
+
   // Matmul1 Dgrad2
 //   TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
 //                              CUBLAS_OP_N,
@@ -604,27 +641,57 @@ std::vector<torch::Tensor> bwd_cuda(
             1 << 22,
             stream);
 
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM backward 2 failed with %d\n", cublas_status);
+      exit(0);
+  }
+
   // Input Linear Dgrad
-  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
-                             CUBLAS_OP_N,
-                             CUBLAS_OP_N,
-                             embed_dim,
-                             batches,
-                             output_lin_dim,
-                             static_cast<const void*>(&alpha),
-                             static_cast<const void*>(input_weights.data_ptr()),
-                             CUDA_R_16F,
-                             embed_dim,
-			                 static_cast<const void*>(input_lin_output_grads.data_ptr()),
-                             CUDA_R_16F,
-                             output_lin_dim,
-                             static_cast<const void*>(&beta),
-                             static_cast<void*>(input_grads.data_ptr()),
-                             CUDA_R_16F,
-                             embed_dim,
-                             CUDA_R_32F,
-                             //CUBLAS_GEMM_ALGO10_TENSOR_OP));
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+//   TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
+//                              CUBLAS_OP_N,
+//                              CUBLAS_OP_N,
+//                              embed_dim,
+//                              batches,
+//                              output_lin_dim,
+//                              static_cast<const void*>(&alpha),
+//                              static_cast<const void*>(input_weights.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+// 			                 static_cast<const void*>(input_lin_output_grads.data_ptr()),
+//                              CUDA_R_16F,
+//                              output_lin_dim,
+//                              static_cast<const void*>(&beta),
+//                              static_cast<void*>(input_grads.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              CUDA_R_32F,
+//                              //CUBLAS_GEMM_ALGO10_TENSOR_OP));
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+  cublas_status = gemm_bias_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_N,
+            CUBLAS_OP_N,
+            embed_dim,
+            batches,
+            embed_dim,
+            &alpha, /* host pointer */
+            static_cast<const void*>(input_weights.data_ptr()),
+            embed_dim,
+            static_cast<const void*>(input_lin_output_grads.data_ptr()),
+            output_lin_dim,
+            &beta, /* host pointer */
+            static_cast<void*>(input_grads.data_ptr()),
+            embed_dim,
+            lt_workspace_ptr, // TODO: get lt_workspace
+            1 << 22,
+            stream,
+            false,
+            static_cast<const void*>(nullptr));
+
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM output backward final input failed with %d\n", cublas_status);
+      exit(0);
+  }
 
   // Input Linear Wgrad
   cublas_status = gemm_bgradb_lt(

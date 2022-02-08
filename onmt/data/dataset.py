@@ -366,23 +366,21 @@ class Dataset(torch.utils.data.Dataset):
         self.upsampling = kwargs.get('upsampling', False)
 
         self.max_src_len = kwargs.get('max_src_len', None)
-        self.max_tgt_len = kwargs.get('max_tgt_len', 64 )
+        self.max_tgt_len = kwargs.get('max_tgt_len', 256 )
         self.cleaning = int(cleaning)
         self.debug = debug
         self.num_split = num_split
         self.vocab_mask = None
         self.use_past_src = self.past_src is not None
-        self.min_tgt_len = kwargs.get('min_tgt_len', 4)
+        self.min_tgt_len = kwargs.get('min_tgt_len', 3  )
         self.min_src_len = kwargs.get('min_src_len', 4)
         self.batch_size_frames = batch_size_frames
-
-        # self.max_tgt_len = 128  # try to hard code this ... so tired of datasets with crappy samples
 
         if self.max_src_len is None:
             if self._type == 'text':
                 self.max_src_len = 256
             elif self._type == 'wav':
-                self.max_src_len = 160000
+                self.max_src_len = 320000
             else:
                 # for audio set this to 2048 frames
                 self.max_src_len = 2048 if not self.use_past_src else 4095
@@ -399,8 +397,12 @@ class Dataset(torch.utils.data.Dataset):
         # Processing data sizes
         if self.src is not None:
             if src_sizes is not None:
+                if verbose:
+                    print("Loading source size from binarized data ...")
                 self.src_sizes = np.asarray(src_sizes)
             else:
+                if verbose:
+                    print("Source size not available. Computing source size from data...")
                 self.src_sizes = np.asarray([data.size(0) for data in self.src])
         else:
             self.src_sizes = None
@@ -501,6 +503,7 @@ class Dataset(torch.utils.data.Dataset):
             self.batch_tgt_sizes = [max([self.tgt_sizes[x] for x in b]) for b in self.batches]
         else:
             self.batch_tgt_sizes = [0 for b in self.batches]
+        print("Number of sentences before cleaning and sorting: %d" % len(self.src_sizes) )
         print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
         print("Number of batches after cleaning and sorting: %d" % self.num_batches)
 

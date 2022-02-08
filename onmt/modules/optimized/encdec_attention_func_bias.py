@@ -22,6 +22,11 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     encdec_multihead_attn_bias_cuda = None
 
+try:
+    import encdec_multihead_attn_bias_blaslt
+except (ModuleNotFoundError, ImportError) as e:
+    self_multihead_attn_blaslt = None
+
 
 def rotate_half(x):
     x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
@@ -74,13 +79,16 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
             # mask = mask.half() * -10000
             mask = mask.unsqueeze(1).unsqueeze(2).bool()
 
+            cuda_module = encdec_multihead_attn_bias_blaslt if encdec_multihead_attn_bias_blaslt is not None \
+                else encdec_multihead_attn_bias_cuda
+
             input_lin_q_results, input_lin_kv_results, \
                 attn_scores, dropout_results, dropout_mask, \
                 matmul2_results, outputs \
-                = encdec_multihead_attn_bias_cuda.forward(is_training, heads, inputs_q, inputs_kv,
-                                                            input_weights_q, input_weights_kv,
-                                                            output_weights, input_bias_q, input_bias_kv, output_bias,
-                                                            mask, dropout_prob)
+                = cuda_module.forward(is_training, heads, inputs_q, inputs_kv,
+                                      input_weights_q, input_weights_kv,
+                                      output_weights, input_bias_q, input_bias_kv, output_bias,
+                                      mask, dropout_prob)
 
             # input_lin_q_results_ = torch.addmm(input_bias_q,
             #                                   inputs_q.view(inputs_q.size(0) * inputs_q.size(1), inputs_q.size(2)),
@@ -373,21 +381,24 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
 
             if input_weights_q.requires_grad:
 
+                cuda_module = encdec_multihead_attn_bias_blaslt if encdec_multihead_attn_bias_blaslt is not None \
+                    else encdec_multihead_attn_bias_cuda
+
                 input_q_grads, \
                     input_kv_grads, \
                     input_weight_q_grads, \
                     input_weight_kv_grads, \
                     output_weight_grads, \
                     input_bias_q_grads, input_bias_kv_grads, output_bias_grads \
-                    = encdec_multihead_attn_bias_cuda.backward(heads_t[0], output_grads, matmul2_results,
-                                                               dropout_results,
-                                                               attn_scores,
-                                                               input_lin_q_results,
-                                                               input_lin_kv_results,
-                                                               inputs_q, inputs_kv, input_weights_q,
-                                                               input_weights_kv,
-                                                               output_weights, dropout_mask,
-                                                               dropout_prob_t[0])
+                    = cuda_module.backward(heads_t[0], output_grads, matmul2_results,
+                                           dropout_results,
+                                           attn_scores,
+                                           input_lin_q_results,
+                                           input_lin_kv_results,
+                                           inputs_q, inputs_kv, input_weights_q,
+                                           input_weights_kv,
+                                           output_weights, dropout_mask,
+                                           dropout_prob_t[0])
 
             else:
                 input_q_grads, \

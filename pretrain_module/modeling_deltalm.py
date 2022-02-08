@@ -779,43 +779,7 @@ class DeltaLMEncoder(MBartPreTrainedModel):
         sm = torch.cuda.get_device_capability()
         total_bsz = 0
 
-        if torch.is_autocast_enabled():
-            try:
-                hidden_states =  torch.cuda.amp.autocast_mode._cast(hidden_states, torch.get_autocast_gpu_dtype())
-            except AttributeError:
-                hidden_states =  torch.cuda.amp.autocast_mode._cast(hidden_states, torch.half)
-
-        # only run this when seq_len <= 512 and sm = 80/86 and type = half
-        if self.fast_bert_mha and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] in [0]) \
-                and hidden_states.dtype == torch.half:
-            can_run_fast_bert_mha = True
-            # print("Can run FAST BERT MHA")
-
-            x = hidden_states
-            padding_mask = attention_mask  # [B x T]
-            # masked positions = 1 so to compute length we need the (1 -)
-            if padding_mask is None:
-                padding_mask = x.new_zeros(bsz, seq_len)
-            padding_mask = padding_mask.long()
-            lengths = (1 - padding_mask).sum(dim=1)
-            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
-
-            x = x.view(-1, x.size(-1))
-            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
-            hidden_states = x.index_select(0, non_pad_indices)
-
-            max_len = max(lengths)
-            # cumulative sequence lengths (required input for fmha)
-            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
-            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
-        else:
-            max_len = -1
-            cu_seqlens = None
-            non_pad_indices = None
-
-        if not can_run_fast_bert_mha:
-            # transpose from [B x T x H] to [T x B x H]
-            hidden_states = hidden_states.transpose(0, 1).contiguous()
+        hidden_states = hidden_states.transpose(0, 1).contiguous()
 
         for idx, encoder_layer in enumerate(self.layers):
             if output_hidden_states:
@@ -841,13 +805,6 @@ class DeltaLMEncoder(MBartPreTrainedModel):
 
         # if we remove padding before (for fast bert MHA) then remember to put padding back
         # to restore the form B x T X H
-        if can_run_fast_bert_mha:
-            # remove the patch
-            # if x.size(0) > total_bsz:
-            #     x = x[:total_bsz, :]
-            hidden_states = index_copy(hidden_states, non_pad_indices, bsz * seq_len)
-            hidden_states = hidden_states.view(bsz, seq_len, -1)
-            hidden_states = hidden_states.transpose(0, 1).contiguous()
 
         if output_hidden_states:
             encoder_states = encoder_states + (hidden_states,)

@@ -11,13 +11,16 @@
 #include <torch/extension.h>
 
 #include "softmax_apex.h"
+#include "gemm_blaslt.cuh"
+#include "strided_batched_gemm_blaslt.cuh"
+
 
 // symbol to be automatically resolved by PyTorch libs
 // extern THCState *state;
 
 namespace multihead_attn {
 namespace encdec_bias {
-namespace cublas_gemmex {
+namespace cublaslt {
 
 std::vector<torch::Tensor> fwd_cuda(
 							   bool                 is_training,
@@ -31,8 +34,8 @@ std::vector<torch::Tensor> fwd_cuda(
                                torch::Tensor const& input_biases_kv,
                                torch::Tensor const& output_biases,
                                torch::Tensor const& pad_mask,
-                               float                dropout_prob
-                                   ) 
+                               float                dropout_prob,
+                               torch::Tensor lt_workspace    )
 {
   const int   embed_dim         = inputs_q.size(2);
   const int   sequences         = inputs_q.size(1);
@@ -51,7 +54,7 @@ std::vector<torch::Tensor> fwd_cuda(
   const int   dropout_elems     = attn_batches * q_seq_len * k_seq_len;
   const float alpha             = 1.0;
   const float beta_zero              = 0.0;
-  const float beta_one           = 1.0;
+//   const float beta_one           = 1.0;
   const float scale             = 1.0 / sqrt(static_cast<float>(head_dim));
 //  const half alpha = __float2half_rn(alpha);
 //  const half beta_zero = __float2half_rn(beta_zero);
@@ -87,83 +90,160 @@ std::vector<torch::Tensor> fwd_cuda(
   // Softmax Intermediate Result Ptr (used by Matmul1 -> Softmax)
   void* attn_scores_ptr     = static_cast<void*>(attn_scores.data_ptr());
 
-//  char a_layout_t{'t'};
-//  char a_layout_n{'n'};
-//  char b_layout_n{'n'};
+  void* lt_workspace_ptr = static_cast<void*>(lt_workspace.data_ptr());
 
-  TORCH_CUDABLAS_CHECK(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
+//   TORCH_CUDABLAS_CHECK(cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH));
+//
+//   input_lin_q_results.copy_(input_biases_q);
+//   // Input Linear Q Fwd
+//   TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
+//                              CUBLAS_OP_T, // A transpose
+//                              CUBLAS_OP_N, // B wo/ transpose
+//                              output_lin_q_dim, // embed_dim
+//                              batches_q,  // bsz x len_q
+//                              embed_dim,  // embed_dim
+//                              static_cast<const void*>(&alpha),
+//                              static_cast<const void*>(input_weights_q.data_ptr()), // weight emb_out x emb_in transposed
+//                              CUDA_R_16F,
+//                              embed_dim, // lda  so A has size [lda x m] -> [embed_dim x output_lin_q_dim]
+//                              static_cast<const void*>(inputs_q.data_ptr()), // input Q
+//                              CUDA_R_16F,
+//                              embed_dim, // ldb B has size [lda xn] -> [embed_dim x batches_q]
+//                              static_cast<const void*>(&beta_one), // one
+//                              q_lin_results_ptr, // C -> emb * B
+//                              CUDA_R_16F,
+//                              output_lin_q_dim, // ldc C [lda x n] -> [embed_dim x batches_q]
+//                              CUDA_R_32F,
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+  int cublas_status = 1;
+  cublas_status = gemm_bias_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_T,
+            CUBLAS_OP_N,
+            output_lin_q_dim,
+            batches_q,
+            embed_dim,
+            &alpha, /* host pointer */
+            static_cast<const void*>(input_weights_q.data_ptr()),
+            embed_dim,
+            static_cast<const void*>(inputs_q.data_ptr()),
+            embed_dim,
+            &beta_zero, /* host pointer */
+            q_lin_results_ptr,
+            output_lin_q_dim,
+            lt_workspace_ptr, // TODO: get lt_workspace
+            1 << 22,
+            stream,
+            true,
+            static_cast<const void*>(input_biases_q.data_ptr()));
 
-  input_lin_q_results.copy_(input_biases_q);
-  // Input Linear Q Fwd
-  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
-                             CUBLAS_OP_T, // A transpose
-                             CUBLAS_OP_N, // B wo/ transpose
-                             output_lin_q_dim, // embed_dim
-                             batches_q,  // bsz x len_q
-                             embed_dim,  // embed_dim
-                             static_cast<const void*>(&alpha),
-                             static_cast<const void*>(input_weights_q.data_ptr()), // weight emb_out x emb_in transposed
-                             CUDA_R_16F,
-                             embed_dim, // lda  so A has size [lda x m] -> [embed_dim x output_lin_q_dim]
-                             static_cast<const void*>(inputs_q.data_ptr()), // input Q
-                             CUDA_R_16F,
-                             embed_dim, // ldb B has size [lda xn] -> [embed_dim x batches_q]
-                             static_cast<const void*>(&beta_one), // one
-                             q_lin_results_ptr, // C -> emb * B
-                             CUDA_R_16F,
-                             output_lin_q_dim, // ldc C [lda x n] -> [embed_dim x batches_q]
-                             CUDA_R_32F,
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM Q forward failed with %d\n", cublas_status);
+      exit(0);
+  }
 
-  input_lin_kv_results.copy_(input_biases_kv);
-  // Input Linear KV Fwd
-  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
-                             CUBLAS_OP_T, 
-                             CUBLAS_OP_N,
-                             output_lin_kv_dim, 
-                             batches_kv, 
-                             embed_dim,
-                             static_cast<const void*>(&alpha),
-                             static_cast<const void*>(input_weights_kv.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim,
-                             static_cast<const void*>(inputs_kv.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim, 
-                             static_cast<const void*>(&beta_one),
-                             k_lin_results_ptr,
-                             CUDA_R_16F, 
-                             output_lin_kv_dim,
-                             CUDA_R_32F,
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+//   input_lin_kv_results.copy_(input_biases_kv);
+//   // Input Linear KV Fwd
+//   TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
+//                              CUBLAS_OP_T,
+//                              CUBLAS_OP_N,
+//                              output_lin_kv_dim,
+//                              batches_kv,
+//                              embed_dim,
+//                              static_cast<const void*>(&alpha),
+//                              static_cast<const void*>(input_weights_kv.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              static_cast<const void*>(inputs_kv.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              static_cast<const void*>(&beta_one),
+//                              k_lin_results_ptr,
+//                              CUDA_R_16F,
+//                              output_lin_kv_dim,
+//                              CUDA_R_32F,
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+
+  cublas_status = gemm_bias_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_T,
+            CUBLAS_OP_N,
+            output_lin_kv_dim,
+            batches_kv,
+            embed_dim,
+            &alpha, /* host pointer */
+            static_cast<const void*>(input_weights_kv.data_ptr()),
+            embed_dim,
+            static_cast<const void*>(inputs_kv.data_ptr()),
+            embed_dim,
+            &beta_zero, /* host pointer */
+            k_lin_results_ptr,
+            output_lin_kv_dim,
+            lt_workspace_ptr, // TODO: get lt_workspace
+            1 << 22,
+            stream,
+            true,
+            static_cast<const void*>(input_biases_kv.data_ptr()));
+
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM KV forward failed with %d\n", cublas_status);
+      exit(0);
+  }
 
   // MatMul1 of Dot-Product Attention Plus scaling by 1/Sqrt(head size)
-  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
-                             CUBLAS_OP_T,
-                             CUBLAS_OP_N,
-                             k_seq_len,
-                             q_seq_len,
-                             head_dim,
-                             static_cast<const void*>(&scale),
-                             static_cast<const void*>(k_lin_results_ptr),  // A:
-                             CUDA_R_16F,
-                             lead_dim_kv,  // lda
-                             batch_stride_kv, // stride A
-                             static_cast<const void*>(q_lin_results_ptr),
-                             CUDA_R_16F,
-                             lead_dim_q,
-                             batch_stride_q,
-                             static_cast<const void*>(&beta_zero),
-                             static_cast<void*>(attn_scores_ptr), // C
-                             CUDA_R_16F,
-                             k_seq_len,
-                             k_seq_len*q_seq_len,
-                             attn_batches,
-                             CUDA_R_32F,
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+//   TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
+//                              CUBLAS_OP_T,
+//                              CUBLAS_OP_N,
+//                              k_seq_len,
+//                              q_seq_len,
+//                              head_dim,
+//                              static_cast<const void*>(&scale),
+//                              static_cast<const void*>(k_lin_results_ptr),  // A:
+//                              CUDA_R_16F,
+//                              lead_dim_kv,  // lda
+//                              batch_stride_kv, // stride A
+//                              static_cast<const void*>(q_lin_results_ptr),
+//                              CUDA_R_16F,
+//                              lead_dim_q,
+//                              batch_stride_q,
+//                              static_cast<const void*>(&beta_zero),
+//                              static_cast<void*>(attn_scores_ptr), // C
+//                              CUDA_R_16F,
+//                              k_seq_len,
+//                              k_seq_len*q_seq_len,
+//                              attn_batches,
+//                              CUDA_R_32F,
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+  cublas_status = strided_batched_gemm_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_T,
+            CUBLAS_OP_N,
+            k_seq_len,
+            q_seq_len,
+            head_dim,
+            &scale, /* host pointer */
+            static_cast<const void*>(k_lin_results_ptr),
+            lead_dim_kv,
+            batch_stride_kv,
+            static_cast<const void*>(q_lin_results_ptr),
+            lead_dim_q,
+            batch_stride_q,
+            &beta_zero, /* host pointer */
+            static_cast<void*>(attn_scores_ptr), // C
+            k_seq_len, // ldc
+            k_seq_len*q_seq_len, // stride c
+            attn_batches,  // batch = heads * bsz
+            lt_workspace_ptr,
+            1 << 22,
+            stream);
+
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("Strided Batched GEMM QKV forward failed with %d\n", cublas_status);
+      exit(0);
+  }
 
   // need to call padding from torch interface here.
-
+  // - infinity or - 10000?
   attn_scores.view({sequences, heads, q_seq_len, k_seq_len}).masked_fill_(pad_mask,
                                                                           -std::numeric_limits<float>::infinity());
 
@@ -173,25 +253,20 @@ std::vector<torch::Tensor> fwd_cuda(
       softmax_success = dispatch_softmax_dropout<half, half, float>(
                            reinterpret_cast<half*>(dropout_results_ptr),
                            (is_training) ? reinterpret_cast<uint8_t*>(dropout_mask.data_ptr<uint8_t>()) : nullptr,
-//                            reinterpret_cast<uint8_t*>(dropout_mask.data_ptr<uint8_t>()),
                            reinterpret_cast<const half*>(attn_scores_ptr),
-//                            pad_mask,
       		               dropout_elems,
                            k_seq_len,
                            k_seq_len,
                            attn_batches*q_seq_len,
-//                            attn_batches*q_seq_len/sequences, // pad batch strides
       		               1.0f-dropout_prob,
 		                   stream);
   } else {
       softmax_success = dispatch_softmax<half, half, float>(
                              reinterpret_cast<half*>(dropout_results_ptr), // this is actually softmax results, but making it consistent for the next function
                              reinterpret_cast<const half*>(attn_scores_ptr),
-//                              pad_mask,
                              k_seq_len,
                              k_seq_len,
                              attn_batches*q_seq_len,
-//                              attn_batches*q_seq_len/sequences,
                              stream);  // pad batch strides
   }
 
@@ -226,28 +301,54 @@ std::vector<torch::Tensor> fwd_cuda(
                              CUDA_R_32F,
                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
-  outputs.copy_(output_biases);
-  // Output Linear
-  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
-                             CUBLAS_OP_T,
-                             CUBLAS_OP_N,
-                             embed_dim,
-                             batches_q,
-                             embed_dim,
-                             static_cast<const void*>(&alpha),
-                             static_cast<const void*>(output_weights.data_ptr()),
-                             CUDA_R_16F,
-                             embed_dim,
-                             static_cast<const void*>(matmul2_results.data_ptr()),
-                             CUDA_R_16F,
-                             embed_dim,
-                             static_cast<const void*>(&beta_one),
-                             static_cast<void*>(outputs.data_ptr()),
-                             CUDA_R_16F,
-                             embed_dim,
-                             CUDA_R_32F,
-                             //CUBLAS_GEMM_ALGO1_TENSOR_OP));
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+//   outputs.copy_(output_biases);
+//   // Output Linear
+//   TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
+//                              CUBLAS_OP_T,
+//                              CUBLAS_OP_N,
+//                              embed_dim,
+//                              batches_q,
+//                              embed_dim,
+//                              static_cast<const void*>(&alpha),
+//                              static_cast<const void*>(output_weights.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              static_cast<const void*>(matmul2_results.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              static_cast<const void*>(&beta_one),
+//                              static_cast<void*>(outputs.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              CUDA_R_32F,
+//                              //CUBLAS_GEMM_ALGO1_TENSOR_OP));
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+
+  cublas_status = gemm_bias_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_T,
+            CUBLAS_OP_N,
+            embed_dim,
+            batches_q,
+            embed_dim,
+            &alpha, /* host pointer */
+            static_cast<const void*>(output_weights.data_ptr()),
+            embed_dim,
+            static_cast<const void*>(matmul2_results.data_ptr()),
+            embed_dim,
+            &beta_zero, /* host pointer */
+            static_cast<void*>(outputs.data_ptr()),
+            embed_dim,
+            lt_workspace_ptr, // TODO: get lt_workspace
+            1 << 22,
+            stream,
+            true,
+            static_cast<const void*>(output_biases.data_ptr()));
+
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM output forward failed with %d\n", cublas_status);
+      exit(0);
+  }
 
   TORCH_CUDABLAS_CHECK(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
 
@@ -277,7 +378,8 @@ std::vector<torch::Tensor> bwd_cuda(
                                torch::Tensor const& input_weights_kv,
                                torch::Tensor const& output_weights,
                                torch::Tensor const& dropout_mask,
-                               float                dropout_prob
+                               float                dropout_prob,
+                               torch::Tensor lt_workspace
                                                   ) 
 {
   const int   embed_dim         = inputs_q.size(2);
@@ -298,9 +400,6 @@ std::vector<torch::Tensor> bwd_cuda(
   const float alpha             = 1.0;
   const float beta              = 0.0;
   const float scale             = 1.0 / sqrt(static_cast<float>(head_dim));
-//  const half alpha = __float2half_rn(alpha);
-//  const half beta = __float2half_rn(beta);
-//  const half scale = __float2half_rn(scale);
 
 
   // TODO: Streams can be used in Backprop but I haven't added more than one
@@ -315,6 +414,10 @@ std::vector<torch::Tensor> bwd_cuda(
   torch::Tensor input_weight_q_grads   = torch::empty_like(input_weights_q);
   torch::Tensor input_weight_kv_grads  = torch::empty_like(input_weights_kv);
   torch::Tensor output_weight_grads    = torch::empty_like(output_weights);
+
+  at::Tensor input_bias_q_grads = torch::empty({output_lin_q_dim}, inputs_q.type());
+  at::Tensor input_bias_kv_grads = torch::empty({output_lin_kv_dim}, inputs_kv.type());
+  at::Tensor output_biases_grads = torch::empty({embed_dim}, inputs_q.type());
   // Intermediate Tensor Allocations
   at::Tensor output_lin_grads          = torch::empty_like(matmul2_results);
   at::Tensor matmul2_grads             = torch::empty_like(dropout_results);
@@ -329,6 +432,8 @@ std::vector<torch::Tensor> bwd_cuda(
   auto k_lin_grads_ptr   = static_cast<half*>(input_lin_kv_output_grads.data_ptr());
   auto v_lin_grads_ptr   = static_cast<half*>(input_lin_kv_output_grads.data_ptr()) + head_dim;
 
+  void* lt_workspace_ptr = static_cast<void*>(lt_workspace.data_ptr());
+
 //  char a_layout_n{'n'};
 //  char a_layout_t{'t'};
 //  char b_layout_n{'n'};
@@ -339,98 +444,204 @@ std::vector<torch::Tensor> bwd_cuda(
   // Output Linear Dgrad
   // C = alpha * op(A) op(B) + BetaC
   // op(A): mxk, op(B): kxn C: mxn
-  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,  //
-                             CUBLAS_OP_N, // no transpose
-                             CUBLAS_OP_N, // no transpose
-                             embed_dim, // m
-                             batches_q, // n = bsz * len_q
-                             embed_dim, // k
-                             static_cast<const void*>(&alpha),  // alpha = 1.0
-                             static_cast<const void*>(output_weights.data_ptr()), // A mxk
-                             CUDA_R_16F, // data type
-                             embed_dim,  // leading dimension of A (embed dim) (the rows)
-                             static_cast<const void*>(output_grads.data_ptr()), // B kxn
-                             CUDA_R_16F, // data type
-                             embed_dim,  // leading dimension of B (embed dim)
-                             static_cast<const void*>(&beta), // beta
-                             static_cast<void*>(output_lin_grads.data_ptr()), // C mxn
-                             CUDA_R_16F,  // data type
-                             embed_dim, // ldc
-                             CUDA_R_32F, // compute type
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
- 
+//   TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,  //
+//                              CUBLAS_OP_N, // no transpose
+//                              CUBLAS_OP_N, // no transpose
+//                              embed_dim, // m
+//                              batches_q, // n = bsz * len_q
+//                              embed_dim, // k
+//                              static_cast<const void*>(&alpha),  // alpha = 1.0
+//                              static_cast<const void*>(output_weights.data_ptr()), // A mxk
+//                              CUDA_R_16F, // data type
+//                              embed_dim,  // leading dimension of A (embed dim) (the rows)
+//                              static_cast<const void*>(output_grads.data_ptr()), // B kxn
+//                              CUDA_R_16F, // data type
+//                              embed_dim,  // leading dimension of B (embed dim)
+//                              static_cast<const void*>(&beta), // beta
+//                              static_cast<void*>(output_lin_grads.data_ptr()), // C mxn
+//                              CUDA_R_16F,  // data type
+//                              embed_dim, // ldc
+//                              CUDA_R_32F, // compute type
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+  int cublas_status = 1;
+
+  cublas_status = gemm_bias_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_N,
+            CUBLAS_OP_N,
+            embed_dim,
+            batches_q,
+            embed_dim,
+            &alpha, /* host pointer */
+            static_cast<const void*>(output_weights.data_ptr()),
+            embed_dim,
+            static_cast<const void*>(output_grads.data_ptr()),
+            embed_dim,
+            &beta, /* host pointer */
+            static_cast<void*>(output_lin_grads.data_ptr()),
+            embed_dim,
+            lt_workspace_ptr, // TODO: get lt_workspace
+            1 << 22,
+            stream,
+            false,
+            static_cast<const void*>(nullptr));
+
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM output lin grad backward failed with %d\n", cublas_status);
+      exit(0);
+  }
+
   // Output Linear Wgrad
-  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
-                             CUBLAS_OP_N, 
-                             CUBLAS_OP_T,
-                             embed_dim, 
-                             embed_dim,
-                             batches_q, 
-                             static_cast<const void*>(&alpha),
-                             static_cast<const void*>(matmul2_results.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim,
-                             static_cast<const void*>(output_grads.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim, 
-                             static_cast<const void*>(&beta),
-                             static_cast<void*>(output_weight_grads.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim,
-                             CUDA_R_32F,
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+//   TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
+//                              CUBLAS_OP_N,
+//                              CUBLAS_OP_T,
+//                              embed_dim,
+//                              embed_dim,
+//                              batches_q,
+//                              static_cast<const void*>(&alpha),
+//                              static_cast<const void*>(matmul2_results.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              static_cast<const void*>(output_grads.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              static_cast<const void*>(&beta),
+//                              static_cast<void*>(output_weight_grads.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              CUDA_R_32F,
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+//
+//   auto  output_bias_grads = output_grads.view({-1, embed_dim}).sum(0, false);
+  cublas_status = gemm_bgradb_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_N,
+            CUBLAS_OP_T,
+            embed_dim,
+            embed_dim,
+            batches_q,
+            &alpha, /* host pointer */
+            static_cast<const void*>(matmul2_results.data_ptr()),
+            embed_dim,
+            static_cast<const void*>(output_grads.data_ptr()),
+            embed_dim,
+            &beta, /* host pointer */
+            static_cast<void*>(output_weight_grads.data_ptr()),
+            embed_dim,
+            lt_workspace_ptr,
+            1 << 22,
+            stream,
+            true,
+            static_cast<void*>(output_biases_grads.data_ptr()));
 
-  auto  output_bias_grads = output_grads.view({-1, embed_dim}).sum(0, false);
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM output backward failed with %d\n", cublas_status);
+      exit(0);
+  }
 
-  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
-                             CUBLAS_OP_T,
-                             CUBLAS_OP_N,
-                             k_seq_len,    // m
-                             q_seq_len,   // n
-                             head_dim,   // k
-                             static_cast<const void*>(&alpha),
-                             static_cast<const void*>(v_lin_results_ptr),  // A:
-                             CUDA_R_16F,
-                             lead_dim_kv,  // lda
-                             batch_stride_kv, // stride A
-                             static_cast<const void*>(output_lin_grads.data_ptr()),
-                             CUDA_R_16F,
-                             head_dim*attn_batches,
-                             head_dim,
-                             static_cast<const void*>(&beta),
-                             static_cast<void*>(matmul2_grads.data_ptr()), // C
-                             CUDA_R_16F,
-                             k_seq_len,
-                             k_seq_len*q_seq_len,
-                             attn_batches,
-                             CUDA_R_32F,
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+//   TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
+//                              CUBLAS_OP_T,
+//                              CUBLAS_OP_N,
+//                              k_seq_len,    // m
+//                              q_seq_len,   // n
+//                              head_dim,   // k
+//                              static_cast<const void*>(&alpha),
+//                              static_cast<const void*>(v_lin_results_ptr),  // A:
+//                              CUDA_R_16F,
+//                              lead_dim_kv,  // lda
+//                              batch_stride_kv, // stride A
+//                              static_cast<const void*>(output_lin_grads.data_ptr()),
+//                              CUDA_R_16F,
+//                              head_dim*attn_batches,
+//                              head_dim,
+//                              static_cast<const void*>(&beta),
+//                              static_cast<void*>(matmul2_grads.data_ptr()), // C
+//                              CUDA_R_16F,
+//                              k_seq_len,
+//                              k_seq_len*q_seq_len,
+//                              attn_batches,
+//                              CUDA_R_32F,
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+  cublas_status = strided_batched_gemm_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_T,
+            CUBLAS_OP_N,
+            k_seq_len,
+            q_seq_len,
+            head_dim,
+            &alpha, /* host pointer */
+            static_cast<const void*>(v_lin_results_ptr),  // A:
+            lead_dim_kv,
+            batch_stride_kv,
+            static_cast<const void*>(output_lin_grads.data_ptr()),
+            head_dim*attn_batches,
+            head_dim,
+            &beta, /* host pointer */
+            static_cast<void*>(matmul2_grads.data_ptr()), // C
+            k_seq_len,
+            k_seq_len*q_seq_len,
+            attn_batches,  // batch = heads * bsz
+            lt_workspace_ptr,
+            1 << 22,
+            stream);
 
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("Strided Batched GEMM backward 1 failed with %d\n", cublas_status);
+      exit(0);
+  }
 
-  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
-                             CUBLAS_OP_N,
-                             CUBLAS_OP_T,
-                             head_dim,    // m
-                             k_seq_len,   // n
-                             q_seq_len,   // k
-                             static_cast<const void*>(&alpha),
-                             static_cast<const void*>(output_lin_grads.data_ptr()),  // A:
-                             CUDA_R_16F,
-                             head_dim*attn_batches,  // lda
-                             head_dim, // stride A
-                             static_cast<const void*>(dropout_results.data_ptr()),
-                             CUDA_R_16F,
-                             k_seq_len,
-                             k_seq_len*q_seq_len,
-                             static_cast<const void*>(&beta),
-                             static_cast<void*>(v_lin_grads_ptr), // C
-                             CUDA_R_16F,
-                             lead_dim_kv,
-                             batch_stride_kv,
-                             attn_batches,
-                             CUDA_R_32F,
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+//   TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
+//                              CUBLAS_OP_N,
+//                              CUBLAS_OP_T,
+//                              head_dim,    // m
+//                              k_seq_len,   // n
+//                              q_seq_len,   // k
+//                              static_cast<const void*>(&alpha),
+//                              static_cast<const void*>(output_lin_grads.data_ptr()),  // A:
+//                              CUDA_R_16F,
+//                              head_dim*attn_batches,  // lda
+//                              head_dim, // stride A
+//                              static_cast<const void*>(dropout_results.data_ptr()),
+//                              CUDA_R_16F,
+//                              k_seq_len,
+//                              k_seq_len*q_seq_len,
+//                              static_cast<const void*>(&beta),
+//                              static_cast<void*>(v_lin_grads_ptr), // C
+//                              CUDA_R_16F,
+//                              lead_dim_kv,
+//                              batch_stride_kv,
+//                              attn_batches,
+//                              CUDA_R_32F,
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
   // bool softmax_success = false;
+
+  cublas_status = strided_batched_gemm_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_N,
+            CUBLAS_OP_T,
+            head_dim,
+            k_seq_len,
+            q_seq_len,
+            &alpha, /* host pointer */
+            static_cast<const void*>(output_lin_grads.data_ptr()),  // A:
+            head_dim*attn_batches,
+            head_dim,
+            static_cast<const void*>(dropout_results.data_ptr()),
+            k_seq_len,
+            k_seq_len*q_seq_len,
+            &beta, /* host pointer */
+            static_cast<void*>(v_lin_grads_ptr), // C
+            lead_dim_kv,
+            batch_stride_kv,
+            attn_batches,  // batch = heads * bsz
+            lt_workspace_ptr,
+            1 << 22,
+            stream);
+
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("Strided Batched GEMM backward 2 failed with %d\n", cublas_status);
+      exit(0);
+  }
 
   if ( dropout_prob > 0.0f) {
       dispatch_softmax_dropout_backward_recompute<half, half, float, false>(
@@ -457,143 +668,300 @@ std::vector<torch::Tensor> bwd_cuda(
   }
 
 
-  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
-                             CUBLAS_OP_N,
-                             CUBLAS_OP_N,
-                             head_dim,    // m
-                             q_seq_len,   // n
-                             k_seq_len,   // k
-                             static_cast<const void*>(&scale),
-                             static_cast<const void*>(k_lin_results_ptr),  // A:
-                             CUDA_R_16F,
-                             lead_dim_kv,  // lda
-                             batch_stride_kv, // stride A
-                             static_cast<const void*>(matmul2_grads.data_ptr()),
-                             CUDA_R_16F,
-                             k_seq_len,
-                             k_seq_len*q_seq_len,
-                             static_cast<const void*>(&beta),
-                             static_cast<void*>(q_lin_grads_ptr), // C
-                             CUDA_R_16F,
-                             lead_dim_q,
-                             batch_stride_q,
-                             attn_batches,
-                             CUDA_R_32F,
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+//   TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
+//                              CUBLAS_OP_N,
+//                              CUBLAS_OP_N,
+//                              head_dim,    // m
+//                              q_seq_len,   // n
+//                              k_seq_len,   // k
+//                              static_cast<const void*>(&scale),
+//                              static_cast<const void*>(k_lin_results_ptr),  // A:
+//                              CUDA_R_16F,
+//                              lead_dim_kv,  // lda
+//                              batch_stride_kv, // stride A
+//                              static_cast<const void*>(matmul2_grads.data_ptr()),
+//                              CUDA_R_16F,
+//                              k_seq_len,
+//                              k_seq_len*q_seq_len,
+//                              static_cast<const void*>(&beta),
+//                              static_cast<void*>(q_lin_grads_ptr), // C
+//                              CUDA_R_16F,
+//                              lead_dim_q,
+//                              batch_stride_q,
+//                              attn_batches,
+//                              CUDA_R_32F,
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
-  TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
-                             CUBLAS_OP_N,
-                             CUBLAS_OP_T,
-                             head_dim,    // m
-                             k_seq_len,   // n
-                             q_seq_len,   // k
-                             static_cast<const void*>(&scale),
-                             static_cast<const void*>(q_lin_results_ptr),  // A:
-                             CUDA_R_16F,
-                             lead_dim_q,  // lda
-                             batch_stride_q, // stride A
-                             static_cast<const void*>(matmul2_grads.data_ptr()),
-                             CUDA_R_16F,
-                             k_seq_len,
-                             k_seq_len*q_seq_len,
-                             static_cast<const void*>(&beta),
-                             static_cast<void*>(k_lin_grads_ptr), // C
-                             CUDA_R_16F,
-                             lead_dim_kv,
-                             batch_stride_kv,
-                             attn_batches,
-                             CUDA_R_32F,
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+  cublas_status = strided_batched_gemm_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_N,
+            CUBLAS_OP_N,
+            head_dim,
+            q_seq_len,
+            k_seq_len,
+            &scale, /* host pointer */
+            static_cast<const void*>(k_lin_results_ptr),  // A:
+            lead_dim_kv,
+            batch_stride_kv,
+            static_cast<const void*>(matmul2_grads.data_ptr()),
+            k_seq_len,
+            k_seq_len*q_seq_len,
+            &beta, /* host pointer */
+            static_cast<void*>(q_lin_grads_ptr), // C
+            lead_dim_q,
+            batch_stride_q,
+            attn_batches,  // batch = heads * bsz
+            lt_workspace_ptr,
+            1 << 22,
+            stream);
+
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("Strided Batched GEMM backward 3 failed with %d\n", cublas_status);
+      exit(0);
+  }
+
+//   TORCH_CUDABLAS_CHECK(cublasGemmStridedBatchedEx(handle,
+//                              CUBLAS_OP_N,
+//                              CUBLAS_OP_T,
+//                              head_dim,    // m
+//                              k_seq_len,   // n
+//                              q_seq_len,   // k
+//                              static_cast<const void*>(&scale),
+//                              static_cast<const void*>(q_lin_results_ptr),  // A:
+//                              CUDA_R_16F,
+//                              lead_dim_q,  // lda
+//                              batch_stride_q, // stride A
+//                              static_cast<const void*>(matmul2_grads.data_ptr()),
+//                              CUDA_R_16F,
+//                              k_seq_len,
+//                              k_seq_len*q_seq_len,
+//                              static_cast<const void*>(&beta),
+//                              static_cast<void*>(k_lin_grads_ptr), // C
+//                              CUDA_R_16F,
+//                              lead_dim_kv,
+//                              batch_stride_kv,
+//                              attn_batches,
+//                              CUDA_R_32F,
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+
+  cublas_status = strided_batched_gemm_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_N,
+            CUBLAS_OP_T,
+            head_dim,
+            k_seq_len,
+            q_seq_len,
+            &scale, /* host pointer */
+            static_cast<const void*>(q_lin_results_ptr),  // A:
+            lead_dim_q,
+            batch_stride_q,
+            static_cast<const void*>(matmul2_grads.data_ptr()),
+            k_seq_len,
+            k_seq_len*q_seq_len,
+            &beta, /* host pointer */
+            static_cast<void*>(k_lin_grads_ptr), // C
+            lead_dim_kv,
+            batch_stride_kv,
+            attn_batches,  // batch = heads * bsz
+            lt_workspace_ptr,
+            1 << 22,
+            stream);
+
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("Strided Batched GEMM backward 4 failed with %d\n", cublas_status);
+      exit(0);
+  }
 
   // Input Linear Q Dgrad  
-  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
-                             CUBLAS_OP_N, 
-                             CUBLAS_OP_N,
-                             embed_dim,
-                             batches_q, 
-                             output_lin_q_dim,
-                             static_cast<const void*>(&alpha),
-                             static_cast<const void*>(input_weights_q.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim,
-                             static_cast<const void*>(q_lin_grads_ptr),
-                             CUDA_R_16F, 
-                             output_lin_q_dim, 
-                             static_cast<const void*>(&beta),
-                             static_cast<void*>(input_q_grads.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim,
-                             CUDA_R_32F,
-                             //CUBLAS_GEMM_ALGO10_TENSOR_OP));
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
-  
-  // Input Linear Q Wgrad  
-  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
-                             CUBLAS_OP_N, 
-                             CUBLAS_OP_T,
-                             embed_dim, 
-                             output_lin_q_dim,
-                             batches_q, 
-                             static_cast<const void*>(&alpha),
-                             static_cast<const void*>(inputs_q.data_ptr()),
-                             CUDA_R_16F,
-                             embed_dim,
-                             static_cast<const void*>(q_lin_grads_ptr),
-                             CUDA_R_16F,
-                             output_lin_q_dim,
-                             static_cast<const void*>(&beta),
-                             static_cast<void*>(input_weight_q_grads.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim,
-                             CUDA_R_32F,
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+//   TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
+//                              CUBLAS_OP_N,
+//                              CUBLAS_OP_N,
+//                              embed_dim,
+//                              batches_q,
+//                              output_lin_q_dim,
+//                              static_cast<const void*>(&alpha),
+//                              static_cast<const void*>(input_weights_q.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              static_cast<const void*>(q_lin_grads_ptr),
+//                              CUDA_R_16F,
+//                              output_lin_q_dim,
+//                              static_cast<const void*>(&beta),
+//                              static_cast<void*>(input_q_grads.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              CUDA_R_32F,
+//                              //CUBLAS_GEMM_ALGO10_TENSOR_OP));
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+  cublas_status = gemm_bias_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_N,
+            CUBLAS_OP_N,
+            embed_dim,
+            batches_q,
+            output_lin_q_dim,
+            &alpha, /* host pointer */
+            static_cast<const void*>(input_weights_q.data_ptr()),
+            embed_dim,
+            static_cast<const void*>(q_lin_grads_ptr),
+            output_lin_q_dim,
+            &beta, /* host pointer */
+            static_cast<void*>(input_q_grads.data_ptr()),
+            embed_dim,
+            lt_workspace_ptr, // TODO: get lt_workspace
+            1 << 22,
+            stream,
+            false,
+            static_cast<const void*>(nullptr));
 
-  auto  input_bias_q_grads = input_lin_q_output_grads.view({-1, output_lin_q_dim}).sum(0, false);
-  
-  // Input Linear KV Dgrad  
-  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
-                             CUBLAS_OP_N, 
-                             CUBLAS_OP_N,
-                             embed_dim,
-                             batches_kv, 
-                             output_lin_kv_dim,
-                             static_cast<const void*>(&alpha),
-                             static_cast<const void*>(input_weights_kv.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim,
-                             static_cast<const void*>(k_lin_grads_ptr),
-                             CUDA_R_16F, 
-                             output_lin_kv_dim, 
-                             static_cast<const void*>(&beta),
-                             static_cast<void*>(input_kv_grads.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim,
-                             CUDA_R_32F,
-                             //CUBLAS_GEMM_ALGO10_TENSOR_OP));
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM output backward final input q failed with %d\n", cublas_status);
+      exit(0);
+  }
+
+  // Input Linear Q Wgrad  
+//   TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
+//                              CUBLAS_OP_N,
+//                              CUBLAS_OP_T,
+//                              embed_dim,
+//                              output_lin_q_dim,
+//                              batches_q,
+//                              static_cast<const void*>(&alpha),
+//                              static_cast<const void*>(inputs_q.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              static_cast<const void*>(q_lin_grads_ptr),
+//                              CUDA_R_16F,
+//                              output_lin_q_dim,
+//                              static_cast<const void*>(&beta),
+//                              static_cast<void*>(input_weight_q_grads.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              CUDA_R_32F,
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+//
+//   auto  input_bias_q_grads = input_lin_q_output_grads.view({-1, output_lin_q_dim}).sum(0, false);
+//
+  cublas_status = gemm_bgradb_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_N,
+            CUBLAS_OP_T,
+            embed_dim,
+            output_lin_q_dim,
+            batches_q,
+            &alpha, /* host pointer */
+            static_cast<const void*>(inputs_q.data_ptr()),
+            embed_dim,
+            reinterpret_cast<const void*>(q_lin_grads_ptr),
+            output_lin_q_dim,
+            &beta, /* host pointer */
+            static_cast<void*>(input_weight_q_grads.data_ptr()),
+            embed_dim,
+            lt_workspace_ptr, // TODO: get lt_workspace
+            1 << 22,
+            stream,
+            true,
+            static_cast<void*>(input_bias_q_grads.data_ptr()));
+
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM input backward 1 failed with %d\n", cublas_status);
+      exit(0);
+  }
+
+  // Input Linear KV Dgrad
+//   TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
+//                              CUBLAS_OP_N,
+//                              CUBLAS_OP_N,
+//                              embed_dim,
+//                              batches_kv,
+//                              output_lin_kv_dim,
+//                              static_cast<const void*>(&alpha),
+//                              static_cast<const void*>(input_weights_kv.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              static_cast<const void*>(k_lin_grads_ptr),
+//                              CUDA_R_16F,
+//                              output_lin_kv_dim,
+//                              static_cast<const void*>(&beta),
+//                              static_cast<void*>(input_kv_grads.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              CUDA_R_32F,
+//                              //CUBLAS_GEMM_ALGO10_TENSOR_OP));
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+  cublas_status = gemm_bias_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_N,
+            CUBLAS_OP_N,
+            embed_dim,
+            batches_kv,
+            output_lin_kv_dim,
+            &alpha, /* host pointer */
+            static_cast<const void*>(input_weights_kv.data_ptr()),
+            embed_dim,
+            static_cast<const void*>(k_lin_grads_ptr),
+            output_lin_kv_dim,
+            &beta, /* host pointer */
+            static_cast<void*>(input_kv_grads.data_ptr()),
+            embed_dim,
+            lt_workspace_ptr, // TODO: get lt_workspace
+            1 << 22,
+            stream,
+            false,
+            static_cast<const void*>(nullptr));
+
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM output backward final input kv failed with %d\n", cublas_status);
+      exit(0);
+  }
   
   // Input Linear KV Wgrad  
-  TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
-                             CUBLAS_OP_N, 
-                             CUBLAS_OP_T,
-                             embed_dim, 
-                             output_lin_kv_dim,
-                             batches_kv, 
-                             static_cast<const void*>(&alpha),
-                             static_cast<const void*>(inputs_kv.data_ptr()),
-                             CUDA_R_16F,
-                             embed_dim,
-                             static_cast<const void*>(k_lin_grads_ptr),
-                             CUDA_R_16F,
-                             output_lin_kv_dim,
-                             static_cast<const void*>(&beta),
-                             static_cast<void*>(input_weight_kv_grads.data_ptr()),
-                             CUDA_R_16F, 
-                             embed_dim,
-                             CUDA_R_32F,
-                             CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+//   TORCH_CUDABLAS_CHECK(cublasGemmEx(handle,
+//                              CUBLAS_OP_N,
+//                              CUBLAS_OP_T,
+//                              embed_dim,
+//                              output_lin_kv_dim,
+//                              batches_kv,
+//                              static_cast<const void*>(&alpha),
+//                              static_cast<const void*>(inputs_kv.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              static_cast<const void*>(k_lin_grads_ptr),
+//                              CUDA_R_16F,
+//                              output_lin_kv_dim,
+//                              static_cast<const void*>(&beta),
+//                              static_cast<void*>(input_weight_kv_grads.data_ptr()),
+//                              CUDA_R_16F,
+//                              embed_dim,
+//                              CUDA_R_32F,
+//                              CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
-  auto  input_bias_kv_grads = input_lin_kv_output_grads.view({-1, output_lin_kv_dim}).sum(0, false);
+//   auto  input_bias_kv_grads = input_lin_kv_output_grads.view({-1, output_lin_kv_dim}).sum(0, false);
+  cublas_status = gemm_bgradb_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_N,
+            CUBLAS_OP_T,
+            embed_dim,
+            output_lin_kv_dim,
+            batches_kv,
+            &alpha, /* host pointer */
+            static_cast<const void*>(inputs_kv.data_ptr()),
+            embed_dim,
+            reinterpret_cast<const void*>(k_lin_grads_ptr),
+            output_lin_kv_dim,
+            &beta, /* host pointer */
+            static_cast<void*>(input_weight_kv_grads.data_ptr()),
+            embed_dim,
+            lt_workspace_ptr, // TODO: get lt_workspace
+            1 << 22,
+            stream,
+            true,
+            static_cast<void*>(input_bias_kv_grads.data_ptr()));
+
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      printf("GEMM input backward 2 failed with %d\n", cublas_status);
+      exit(0);
+  }
 
   TORCH_CUDABLAS_CHECK(cublasSetMathMode(handle, CUBLAS_DEFAULT_MATH));
 
@@ -605,7 +973,7 @@ std::vector<torch::Tensor> bwd_cuda(
            output_weight_grads,
            input_bias_q_grads,
            input_bias_kv_grads,
-           output_bias_grads
+           output_biases_grads
          };
 }
 

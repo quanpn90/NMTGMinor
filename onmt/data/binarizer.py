@@ -128,12 +128,15 @@ class SpeechBinarizer:
                         end_time = -1
 
                     if verbose:
-                        print("processing wav file ...", wavpath)
+                        print("processing wav file ...", wavpath, start_time, end_time)
                     feature_vector = safe_readaudio(wavpath, start_time, end_time, sample_rate=sample_rate)
                     # store a tuple of data and information to load the wav again during training
                     data.append((wavpath, start_time, end_time, sample_rate))
 
-                lengths.append(feature_vector.size(0))
+                length = feature_vector.size(0)
+                lengths.append(length)
+                # if verbose and length > 256000:
+                #     print('length: ', length)
 
                 line = f.readline()
 

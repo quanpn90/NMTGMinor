@@ -443,6 +443,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
 
         tgt = binarized_tgt['data']
         tgt_sizes = binarized_tgt['sizes']
+        # print(tgt_sizes)
 
         ignored = 0
 
@@ -451,10 +452,12 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
         tgt_sizes = None
 
     print('[INFO] Processing %s  ...' % src_file)
+
+    # speech binarizer has to be 1 thread at the moment
     binarized_src = SpeechBinarizer.binarize_file(src_file, input_format=asr_format,
                                                   output_format=output_format, concat=concat,
                                                   stride=stride, fp16=fp16, prev_context=prev_context,
-                                                  num_workers=num_workers, verbose=verbose)
+                                                  num_workers=1, verbose=verbose)
 
     src = binarized_src['data']
     src_sizes = binarized_src['sizes']

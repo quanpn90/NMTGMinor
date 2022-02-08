@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from copy import deepcopy
 from time import time
 import unittest
+import numpy as np
 
 from self_attention_func import self_attn_func
 
@@ -39,11 +40,11 @@ class SelfMultiheadAttnTest(unittest.TestCase):
     def setUp(self, seed=23272123):
         torch.cuda.set_device(0)
 
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+        # torch.manual_seed(seed)
+        # torch.cuda.manual_seed_all(seed)
 
-        self.seq_length = 1024
-        self.sequences = 16
+        self.seq_length = 32
+        self.sequences = 512
         self.hidden_dim = 1024
         self.heads = 16
         self.dropout_prob = 0.0
@@ -59,11 +60,12 @@ class SelfMultiheadAttnTest(unittest.TestCase):
                                       dtype=torch.float16, device=torch.device("cuda")).requires_grad_(True)
 
         # Reset seed so parameters are identical
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+        # torch.manual_seed(seed)
+        # torch.cuda.manual_seed_all(seed)
 
         self.tst_inputs = torch.randn(self.seq_length, self.sequences, self.hidden_dim,
                                       dtype=torch.float16, device=torch.device("cuda")).requires_grad_(True)
+        self.tst_inputs.data.copy_(self.ref_inputs.data)
 
     def test_input(self):
         print("Checking if all inputs are the same ...")
@@ -122,12 +124,21 @@ class SelfMultiheadAttnTest(unittest.TestCase):
         print("GRAD TEST", self.ref_parameters.in_proj_weight.grad)
         print("GRAD TEST", self.ref_parameters.in_proj_weight.grad - self.tst_parameters.in_proj_weight.grad)
 
-        self.assertTrue(torch.allclose(self.ref_parameters.in_proj_weight.grad,
-                                       self.tst_parameters.in_proj_weight.grad,
-                                       atol=1e-2, rtol=1e-2))
+        # self.assertTrue(torch.allclose(self.ref_parameters.in_proj_weight.grad,
+        #                                self.tst_parameters.in_proj_weight.grad,
+        #                                atol=1e-2, rtol=1e-2))
+        np.testing.assert_allclose(
+            self.ref_parameters.in_proj_weight.grad.detach().cpu().numpy(),
+            self.tst_parameters.in_proj_weight.grad.detach().cpu().numpy(),
+            atol=1e-2, rtol=1e-2)
 
-        self.assertTrue(torch.allclose(self.ref_inputs.grad, self.tst_inputs.grad,
-                                       atol=1e-3, rtol=1e-3))
+        # self.assertTrue(torch.allclose(self.ref_inputs.grad, self.tst_inputs.grad,
+        #                                atol=1e-3, rtol=1e-3))
+
+        np.testing.assert_allclose(
+            self.ref_inputs.grad.detach().cpu().numpy(),
+            self.tst_inputs.grad.detach().cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
 
     def test_output_autoregressive(self):
 
@@ -179,12 +190,22 @@ class SelfMultiheadAttnTest(unittest.TestCase):
         print("GRAD TEST", self.ref_parameters.in_proj_weight.grad)
         print("GRAD TEST", self.ref_parameters.in_proj_weight.grad - self.tst_parameters.in_proj_weight.grad)
 
-        self.assertTrue(torch.allclose(self.ref_parameters.in_proj_weight.grad,
-                                       self.tst_parameters.in_proj_weight.grad,
-                                       atol=1e-2, rtol=1e-2))
+        # self.assertTrue(torch.allclose(self.ref_parameters.in_proj_weight.grad,
+        #                                self.tst_parameters.in_proj_weight.grad,
+        #                                atol=1e-2, rtol=1e-2))
+        #
+        np.testing.assert_allclose(
+            self.ref_parameters.in_proj_weight.grad.data.cpu().numpy(),
+            self.tst_parameters.in_proj_weight.grad.data.cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
 
-        self.assertTrue(torch.allclose(self.ref_inputs.grad, self.tst_inputs.grad,
-                                       atol=1e-3, rtol=1e-3))
+        # self.assertTrue(torch.allclose(self.ref_inputs.grad, self.tst_inputs.grad,
+        #                                atol=1e-3, rtol=1e-3))
+        #
+        np.testing.assert_allclose(
+            self.ref_inputs.detach().cpu().numpy(),
+            self.tst_inputs.detach().cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
 
     def test_performance(self):
         training = True
