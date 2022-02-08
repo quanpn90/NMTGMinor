@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from copy import deepcopy
 from time import time
 import unittest
+import numpy as np
 
 from encdec_attention_func_bias import encdec_attn_bias_func
 
@@ -46,9 +47,9 @@ class SelfMultiheadAttnTest(unittest.TestCase):
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
-        self.seq_length_q = 128
+        self.seq_length_q = 512
         self.seq_length_kv = 1024
-        self.sequences = 16
+        self.sequences = 64
         self.hidden_dim = 1024
         self.heads = 16
         self.dropout_prob = 0.0
@@ -133,24 +134,45 @@ class SelfMultiheadAttnTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(self.ref_parameters.out_proj_weight.grad,
                                        self.tst_parameters.out_proj_weight.grad,
-                                       atol=1e-1, rtol=1e-1))
+                                       atol=1e-3, rtol=1e-3))
+
+        self.assertTrue(torch.allclose(self.ref_parameters.out_proj_bias.grad,
+                                       self.tst_parameters.out_proj_bias.grad,
+                                       atol=1e-2, rtol=1e-2))
 
         print("GRAD TEST", self.tst_parameters.in_proj_weight_kv.grad)
         print("GRAD TEST", self.ref_parameters.in_proj_weight_kv.grad)
         print("GRAD TEST", self.ref_parameters.in_proj_weight_kv.grad - self.tst_parameters.in_proj_weight_kv.grad)
 
-        self.assertTrue(torch.allclose(self.ref_parameters.in_proj_weight_kv.grad,
-                                       self.tst_parameters.in_proj_weight_kv.grad,
-                                       atol=1e-2, rtol=1e-2))
+        np.testing.assert_allclose(
+                    self.ref_parameters.in_proj_weight_kv.grad.detach().cpu().numpy(),
+                    self.tst_parameters.in_proj_weight_kv.grad.detach().cpu().numpy(),
+                    atol=1e-3, rtol=1e-3)
 
-        self.assertTrue(torch.allclose(self.ref_parameters.in_proj_weight_q.grad,
-                                       self.tst_parameters.in_proj_weight_q.grad,
-                                       atol=1e-2, rtol=1e-2))
+        np.testing.assert_allclose(
+            self.ref_parameters.in_proj_bias_kv.grad.detach().cpu().numpy(),
+            self.tst_parameters.in_proj_bias_kv.grad.detach().cpu().numpy(),
+            atol=1e-2, rtol=1e-2)
 
-        self.assertTrue(torch.allclose(self.ref_inputs_q.grad, self.tst_inputs_q.grad,
-                                       atol=1e-3, rtol=1e-3))
-        self.assertTrue(torch.allclose(self.ref_inputs_kv.grad, self.tst_inputs_kv.grad,
-                                       atol=1e-3, rtol=1e-3))
+        np.testing.assert_allclose(
+            self.ref_parameters.in_proj_weight_q.grad.detach().cpu().numpy(),
+            self.tst_parameters.in_proj_weight_q.grad.detach().cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
+
+        np.testing.assert_allclose(
+            self.ref_parameters.in_proj_bias_q.grad.detach().cpu().numpy(),
+            self.tst_parameters.in_proj_bias_q.grad.detach().cpu().numpy(),
+            atol=1e-2, rtol=1e-2)
+
+        np.testing.assert_allclose(
+            self.ref_inputs_q.grad.detach().cpu().numpy(),
+            self.tst_inputs_q.grad.detach().cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
+
+        np.testing.assert_allclose(
+            self.ref_inputs_kv.grad.detach().cpu().numpy(),
+            self.tst_inputs_kv.grad.detach().cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
 
     def test_performance(self):
         training = True

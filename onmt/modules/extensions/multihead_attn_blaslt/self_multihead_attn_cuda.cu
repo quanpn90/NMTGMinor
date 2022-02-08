@@ -621,10 +621,10 @@ std::vector<torch::Tensor> bwd_cuda(
   cublas_status = strided_batched_gemm_lt(
             (cublasLtHandle_t)handle,
             CUBLAS_OP_N,
-            CUBLAS_OP_N,
+            CUBLAS_OP_T,
             head_dim,
-            q_seq_len,
             k_seq_len,
+            q_seq_len,
             &scale, /* host pointer */
             static_cast<const void*>(q_lin_results_ptr),  // A:
             lead_dim,
@@ -657,7 +657,7 @@ std::vector<torch::Tensor> bwd_cuda(
 //                              static_cast<const void*>(input_weights.data_ptr()),
 //                              CUDA_R_16F,
 //                              embed_dim,
-// 			                 static_cast<const void*>(input_lin_output_grads.data_ptr()),
+// 			                    static_cast<const void*>(input_lin_output_grads.data_ptr()),
 //                              CUDA_R_16F,
 //                              output_lin_dim,
 //                              static_cast<const void*>(&beta),
@@ -673,7 +673,7 @@ std::vector<torch::Tensor> bwd_cuda(
             CUBLAS_OP_N,
             embed_dim,
             batches,
-            embed_dim,
+            output_lin_dim,
             &alpha, /* host pointer */
             static_cast<const void*>(input_weights.data_ptr()),
             embed_dim,

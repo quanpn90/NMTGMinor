@@ -128,6 +128,7 @@ std::vector<torch::Tensor> bwd(
   AT_ASSERTM(dropout_mask.type().scalarType()      == at::ScalarType::Byte, "Only BYTE is supported");
   auto lt_workspace = torch::empty({1 << 22}, inputs.type());
 
+
   return bwd_cuda(
                                  use_time_mask,
                                  heads,
