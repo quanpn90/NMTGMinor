@@ -129,7 +129,8 @@ class SpeechBinarizer:
 
                     if verbose:
                         print("processing wav file ...", wavpath, start_time, end_time)
-                    feature_vector = safe_readaudio(wavpath, start_time, end_time, sample_rate=sample_rate)
+                    # feature_vector = safe_readaudio(wavpath, start_time, end_time, sample_rate=sample_rate)
+                    feature_vector = ark_loader.load_wav(wavpath, start_time, end_time, sample_rate=sample_rate)
                     # store a tuple of data and information to load the wav again during training
                     data.append((wavpath, start_time, end_time, sample_rate))
 
@@ -171,7 +172,13 @@ class SpeechBinarizer:
 
         ark_loaders = dict()
         for i in range(num_workers):
-            ark_loaders[i] = ArkLoader()
+            if input_format in ['scp', 'kaldi']:
+                ark_loaders[i] = ArkLoader()
+            elif input_format in ['wav']:
+                from .audio_utils import WavLoader
+                ark_loaders[i] = WavLoader()
+            else:
+                ark_loaders[i] = None
 
         if num_workers > 1:
 
@@ -182,7 +189,7 @@ class SpeechBinarizer:
                 mp_results.append(pool.apply_async(
                     SpeechBinarizer.binarize_file_single_thread,
                     args=(filename, ark_loaders[worker_id], offsets[worker_id], offsets[worker_id + 1], worker_id,
-                          input_format, output_format, prev_context, concat, stride, fp16, 160000, verbose),
+                          input_format, output_format, prev_context, concat, stride, fp16, 16000, verbose),
                 ))
 
             pool.close()
@@ -216,7 +223,8 @@ class SpeechBinarizer:
 
         # remember to close the workers when its done
         for i in range(num_workers):
-            ark_loaders[i].close()
+            if ark_loaders[i] is not None:
+                ark_loaders[i].close()
 
         return final_result
 
@@ -246,7 +254,7 @@ class Binarizer:
     @staticmethod
     def binarize_file_single_thread(filename, tokenizer, vocab, worker_id=0, bos_word=None, eos_word=None,
                                     offset=0, end=-1, data_type='int64', verbose=False,
-                                    external_tokenizer="", lang=None):
+                                    external_tokenizer=[None, None], lang=None):
         """
         This function should read in the lines, convert sentences to tensors
         And then finalize into a dataset?
@@ -258,42 +266,7 @@ class Binarizer:
         sizes = list()
 
         count = 0
-
-        if "mbart-large-50" in external_tokenizer.lower():
-            if worker_id == 0:
-                print("[INFO] Using the external %s tokenizer..." % external_tokenizer)
-
-            from transformers import MBart50TokenizerFast
-            try:  # check if this tokenizer is saved locally or not
-                ext_tokenizer = torch.load("mbart-large-50.tokenizer.pt")
-                ext_tokenizer.src_lang = lang
-                if ext_tokenizer.src_lang != lang:
-                    raise RuntimeError("The language %s does not exist in mBART50." % lang)
-            except FileNotFoundError:
-                ext_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50", src_lang=lang)
-                if ext_tokenizer.src_lang != lang:
-                    raise RuntimeError("The language %s does not exist in mBART50." % lang)
-        elif "m2m100" in external_tokenizer.lower():
-            if worker_id == 0:
-                print("[INFO] Using the external %s tokenizer..." % external_tokenizer)
-
-            from transformers import M2M100Tokenizer
-            ext_tokenizer = M2M100Tokenizer .from_pretrained(external_tokenizer, src_lang=lang)
-            ext_tokenizer.src_lang = lang
-            if ext_tokenizer.src_lang != lang:
-                raise RuntimeError("The language %s does not exist in M2M100." % lang)
-
-        elif "bart" in external_tokenizer.lower():
-            if worker_id == 0:
-                print("[INFO] Using the external BART tokenizer...")
-
-            from transformers import BartTokenizer
-            ext_tokenizer = BartTokenizer.from_pretrained(external_tokenizer)
-
-        elif external_tokenizer is None or len(external_tokenizer) == 0:
-            ext_tokenizer = None
-        else:
-            raise NotImplementedError
+        ext_tokenizer, external_tokenizer_name = external_tokenizer
 
         with open(filename, 'r', encoding='utf-8') as f:
             f.seek(offset)
@@ -320,11 +293,11 @@ class Binarizer:
                 else:
                     tensor = ext_tokenizer(line.strip())['input_ids']
                     # assert that the mbart50 tokenizer uses the correct language ID
-                    if   "mbart-large-50" in external_tokenizer.lower():
+                    if   "mbart-large-50" in external_tokenizer_name.lower():
                         assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID"
                         pad_id = vocab.convertToIdx(["<pad>"], None)[0]
                         assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
-                    if "m2m" in external_tokenizer.lower():
+                    if "m2m" in external_tokenizer_name.lower():
                         lang_token = "__" + lang + "__"
                         assert tensor[0] == vocab.convertToIdx([lang_token], None)[0], \
                             "The first token must be language ID"
@@ -359,6 +332,44 @@ class Binarizer:
                       data_type='int64', num_workers=1, verbose=False, external_tokenizer="",
                       lang=None):
 
+        if "mbart-large-50" in external_tokenizer.lower():
+
+            print("[INFO] Using the external %s tokenizer..." % external_tokenizer)
+
+            from transformers import MBart50TokenizerFast
+            try:  # check if this tokenizer is saved locally or not
+                ext_tokenizer = torch.load("mbart-large-50.tokenizer.pt")
+                ext_tokenizer.src_lang = lang
+                if ext_tokenizer.src_lang != lang:
+                    raise RuntimeError("The language %s does not exist in mBART50." % lang)
+            except FileNotFoundError:
+                ext_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50", src_lang=lang)
+                if ext_tokenizer.src_lang != lang:
+                    raise RuntimeError("The language %s does not exist in mBART50." % lang)
+        elif "m2m100" in external_tokenizer.lower():
+
+            print("[INFO] Using the external %s tokenizer..." % external_tokenizer)
+
+            from transformers import M2M100Tokenizer
+            ext_tokenizer = M2M100Tokenizer .from_pretrained(external_tokenizer, src_lang=lang)
+            ext_tokenizer.src_lang = lang
+            if ext_tokenizer.src_lang != lang:
+                raise RuntimeError("The language %s does not exist in M2M100." % lang)
+
+        elif "bart" in external_tokenizer.lower():
+
+            print("[INFO] Using the external BART tokenizer...")
+
+            from transformers import BartTokenizer
+            ext_tokenizer = BartTokenizer.from_pretrained(external_tokenizer)
+
+        elif external_tokenizer is None or len(external_tokenizer) == 0:
+            ext_tokenizer = None
+        else:
+            raise NotImplementedError
+
+        ext_tokenizer = [ext_tokenizer, external_tokenizer]
+
         result = dict()
 
         for i in range(num_workers):
@@ -381,7 +392,7 @@ class Binarizer:
                 mp_results.append(pool.apply_async(
                     Binarizer.binarize_file_single_thread,
                     args=(filename, tokenizer, vocab, worker_id, bos_word, eos_word,
-                          offsets[worker_id], offsets[worker_id + 1], data_type, verbose, external_tokenizer, lang),
+                          offsets[worker_id], offsets[worker_id + 1], data_type, verbose, ext_tokenizer, lang),
                 ))
 
             pool.close()
@@ -393,7 +404,7 @@ class Binarizer:
         else:
             sp_result = Binarizer.binarize_file_single_thread(filename, tokenizer, vocab, 0, bos_word, eos_word,
                                                               offsets[0], offsets[1], data_type,
-                                                              external_tokenizer=external_tokenizer,
+                                                              external_tokenizer=ext_tokenizer,
                                                               lang=lang)
             merge_result(sp_result)
 

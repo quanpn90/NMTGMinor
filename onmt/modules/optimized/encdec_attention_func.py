@@ -13,11 +13,6 @@ except (ModuleNotFoundError, ImportError) as e:
     from .compat import custom_fwd, custom_bwd
 
 try:
-    import mask_softmax_dropout_cuda
-except (ModuleNotFoundError, ImportError) as e:
-    mask_softmax_dropout_cuda = None
-
-try:
     import encdec_multihead_attn_cuda
 except (ModuleNotFoundError, ImportError) as e:
     encdec_multihead_attn_cuda = None
@@ -204,45 +199,23 @@ class EncdecAttnFunc(torch.autograd.Function):
             matmul1_results = matmul1_results.masked_fill_(mask, float('-inf'))
             matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
 
-        if mask_softmax_dropout_cuda and len_k <= 2048 \
-                and matmul1_results.type() == 'torch.cuda.HalfTensor' and not double_precision:
-            dropout_mask, softmax_results, dropout_results = mask_softmax_dropout_cuda.forward(is_training, heads,
-                                                                                               matmul1_results,
-                                                                                               dropout_prob_t[0])
-            if not is_training:
-                dropout_results = softmax_results  # because the cuda returns empty craps
 
-            # Verification code
-            # softmax_results_ref = F.softmax(matmul1_results, dim=-1)
-            # #
-            # if is_training:
-            #     # print(dropout_mask.float().sum(), dropout_mask.numel())
-            #     dropout_results_ref = softmax_results_ref * dropout_mask.half() * (1 / (1 - dropout_prob_t[0]))
-            # else:
-            #     dropout_results_ref = softmax_results_ref
-            # #
-            # comp = torch.allclose(softmax_results_ref, softmax_results, rtol=1e-03, atol=1e-04)
-            # comp = torch.allclose(dropout_results_ref, dropout_results, rtol=1e-03, atol=1e-04)
-            # if comp:
-            #     print("Forward pass verification passed.")
-            # else:
-            #     print("ERROR: Forward pass verification failed")
-            # Verification done
-
-            ctx.fused_softmax_dropout = True
-
+        if matmul1_results.type() == 'torch.cuda.HalfTensor':
+            softmax_results = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
         else:
-            if matmul1_results.type() == 'torch.cuda.HalfTensor':
-                softmax_results = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
-            else:
-                softmax_results = F.softmax(matmul1_results, dim=-1)
+            softmax_results = F.softmax(matmul1_results, dim=-1)
 
-            # Dropout - is not executed for inference
-            if is_training:
-                dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
-            else:
-                dropout_results = softmax_results
-                dropout_mask = null_tensor
+        nan_mask = torch.isnan(softmax_results)
+        if nan_mask.any():
+            softmax_results.masked_fill_(nan_mask, 0)
+
+        # Dropout - is not executed for inference
+        if is_training:
+            dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
+        else:
+            dropout_results = softmax_results
+            dropout_mask = null_tensor
+
 
         # Matmul2 Batched GEMMs
         # The output tensor specification is needed here to specify the non-standard output.

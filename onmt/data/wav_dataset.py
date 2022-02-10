@@ -90,9 +90,10 @@ class WavDataset(torch.utils.data.Dataset):
                 if len(self.cache) > self.cache_size:
                     # remove 1 file from cache based on lowest usage, maybe?
                     min_key = min(self.usage, key=self.usage.get)
-                    self.cache[min_key].close()
-                    self.cache.pop(min_key, None)
-                    self.usage.pop(min_key, None)
+                    if min_key != file_:
+                        self.cache[min_key].close()
+                        self.cache.pop(min_key, None)
+                        self.usage.pop(min_key, None)
 
                 # add the object to the cache
                 self.cache[wav_path] = file_

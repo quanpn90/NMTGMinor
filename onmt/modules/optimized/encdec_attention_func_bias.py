@@ -13,11 +13,6 @@ except (ModuleNotFoundError, ImportError) as e:
     from .compat import custom_fwd, custom_bwd
 
 try:
-    import mask_softmax_dropout_cuda
-except (ModuleNotFoundError, ImportError) as e:
-    mask_softmax_dropout_cuda = None
-
-try:
     import encdec_multihead_attn_bias_cuda
 except (ModuleNotFoundError, ImportError) as e:
     encdec_multihead_attn_bias_cuda = None

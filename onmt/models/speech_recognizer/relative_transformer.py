@@ -112,6 +112,10 @@ class SpeechTransformerEncoder(TransformerEncoder):
         :param kwargs:
         :return:
         """
+        with torch.no_grad():
+            nan_mask = torch.isnan(input)
+            if nan_mask.any():
+                input.masked_fill_(nan_mask, 0)
 
         if not self.cnn_downsampling:
             mask_src = input.narrow(2, 0, 1).squeeze(2).transpose(0, 1).eq(onmt.constants.PAD).unsqueeze(0)

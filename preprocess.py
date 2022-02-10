@@ -64,22 +64,22 @@ parser.add_argument('-valid_tgt', required=True,
 
 parser.add_argument('-train_src_lang', default="src",
                     help="Language(s) of the source sequences.")
-parser.add_argument('-train_src_atb', default="src",
+parser.add_argument('-train_src_atbs', default="",
                     help="Attributes(s) of the source sequences.")
 
 parser.add_argument('-train_tgt_lang', default="tgt",
                     help="Language(s) of the target sequences.")
-parser.add_argument('-train_tgt_atb', default="src",
+parser.add_argument('-train_tgt_atbs', default="",
                     help="Attributes(s) of the source sequences.")
 
 parser.add_argument('-valid_src_lang', default="src",
                     help="Language(s) of the source sequences.")
-parser.add_argument('-valid_src_tgt', default="src",
+parser.add_argument('-valid_src_atbs', default="",
                     help="Attributes(s) of the source sequences.")
 
 parser.add_argument('-valid_tgt_lang', default="tgt",
                     help="Language(s) of the target sequences.")
-parser.add_argument('-valid_tgt_atb', default="src",
+parser.add_argument('-valid_tgt_atbs', default="",
                     help="Attributes(s) of the source sequences.")
 
 parser.add_argument('-save_data', required=True,
@@ -461,7 +461,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
 
     print('[INFO] Processing %s  ...' % src_file)
 
-    num_workers = num_workers if asr_format in ['scp', 'kaldi'] else 1
+    # num_workers = num_workers if asr_format in ['scp', 'kaldi'] else 1
 
     # speech binarizer has to be 1 thread at the moment
     binarized_src = SpeechBinarizer.binarize_file(src_file, input_format=asr_format,
@@ -497,6 +497,14 @@ def main():
     langs = (src_langs + tgt_langs)
     langs = sorted(list(set(langs)))
 
+    if len (opt.train_src_atbs) > 0:
+        src_atbs = opt.train_src_atbs.split("|")
+        tgt_atbs = opt.train_tgt_atbs.split("|")
+        atbs = (src_atbs + tgt_atbs)
+        atbs = sorted(list(set(atbs)))
+    else:
+        atbs = []
+
     if not opt.load_dict:
         dicts['langs'] = dict()
 
@@ -504,7 +512,15 @@ def main():
             idx = len(dicts['langs'])
             dicts['langs'][lang] = idx
 
-    print(dicts['langs'])
+        dicts['atbs'] = dict()
+
+        for atb in atbs:
+            idx = len(dicts['atbs'])
+            dicts['atbs'][atb] = idx
+
+    print("Languages: ", dicts['langs'])
+    print("Attributes: ", dicts['atbs'])
+
 
     start = time.time()
 
@@ -553,10 +569,14 @@ def main():
 
         src_langs = opt.train_src_lang.split("|")
         tgt_langs = opt.train_tgt_lang.split("|")
+        src_atbs = opt.train_src_atbs.split("|") if len(atbs) > 0 else [None] * len(src_input_files)
+        tgt_atbs = opt.train_tgt_atbs.split("|") if len(atbs) > 0 else [None] * len(tgt_input_files)
 
         assert len(src_input_files) == len(src_langs)
+        assert len(src_input_files) == len(src_atbs)
         assert len(src_input_files) == len(tgt_input_files)
         assert len(tgt_input_files) == len(tgt_langs)
+        assert len(tgt_input_files) == len(tgt_atbs)
 
         past_src_files = opt.past_train_src.split("|")
         idx = 0
@@ -573,8 +593,8 @@ def main():
             train['past_src'] = list()
             train['past_src_sizes'] = list()
 
-        for i, (src_file, tgt_file, src_lang, tgt_lang) in \
-                enumerate(zip(src_input_files, tgt_input_files, src_langs, tgt_langs)):
+        for i, (src_file, tgt_file, src_lang, tgt_lang, src_atb, tgt_atb) in \
+                enumerate(zip(src_input_files, tgt_input_files, src_langs, tgt_langs, src_atbs, tgt_atbs)):
 
             src_data, tgt_data, src_sizes, tgt_sizes = make_asr_data(src_file, tgt_file,
                                                                      dicts['tgt'], tokenizer,
@@ -592,15 +612,26 @@ def main():
                                                                      tgt_lang=tgt_lang, verbose=opt.verbose)
 
             n_samples = len(src_data)
+            src_atb_data, tgt_atb_data = None, None
             if n_input_files == 1 or opt.multi_dataset:
                 # For single-file cases we only need to have 1 language per file
                 # which will be broadcasted
                 src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
                 tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]])]
+
+                # by default its 0
+                if len(atbs) > 0:
+                    src_atb_data = [torch.Tensor([dicts['atbs'][src_atb]])]
+                    tgt_atb_data = [torch.Tensor([dicts['atbs'][tgt_atb]])]
+
             else:
                 # each sample will have a different language id
                 src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
                 tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
+
+                if len(atbs) > 0:
+                    src_atb_data = [torch.Tensor([dicts['atbs'][src_atb]]) for _ in range(n_samples)]
+                    tgt_atb_data = [torch.Tensor([dicts['atbs'][tgt_atb]]) for _ in range(n_samples)]
 
             # processing the previous segment
             if opt.past_train_src and len(past_src_files) == len(src_input_files):
@@ -660,6 +691,8 @@ def main():
 
         src_langs = opt.valid_src_lang.split("|")
         tgt_langs = opt.valid_tgt_lang.split("|")
+        src_atbs = opt.valid_src_atbs.split("|") if len(atbs) > 0 else [None] * len(src_input_files)
+        tgt_atbs = opt.valid_tgt_atbs.split("|") if len(atbs) > 0 else [None] * len(tgt_input_files)
 
         assert len(src_input_files) == len(src_langs)
         assert len(src_input_files) == len(tgt_input_files)
@@ -700,10 +733,19 @@ def main():
                 # which will be broadcasted
                 src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
                 tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]])]
+
+                # by default its 0
+                if len(atbs) > 0:
+                    src_atb_data = [torch.Tensor([dicts['atbs'][src_atb]])]
+                    tgt_atb_data = [torch.Tensor([dicts['atbs'][tgt_atb]])]
             else:
                 # each sample will have a different language id
                 src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
                 tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
+
+                if len(atbs) > 0:
+                    src_atb_data = [torch.Tensor([dicts['atbs'][src_atb]]) for _ in range(n_samples)]
+                    tgt_atb_data = [torch.Tensor([dicts['atbs'][tgt_atb]]) for _ in range(n_samples)]
 
             # validation past file
             if opt.past_train_src and len(past_src_files) == len(src_input_files):

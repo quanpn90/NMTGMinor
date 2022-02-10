@@ -13,6 +13,9 @@ import re
 import struct
 import sys
 import warnings
+import soundfile
+import math
+import torch
 
 from .kaldiio.compression_header import GlobalHeader
 from .kaldiio.compression_header import PerColHeader
@@ -368,3 +371,61 @@ class ArkLoader(object):
 
         for k in self.readers:
             self.readers[k].close()
+
+
+def safe_readaudio_from_cache(file_, start=0.0, end=0.0, sample_rate=16000):
+
+    offset = math.floor(sample_rate * start)
+    num_frames = -1 if end <= start else math.ceil(sample_rate * (end - start))
+
+    dtype = "float32"
+    frames = file_._prepare_read(offset, None, num_frames)
+    waveform = file_.read(frames, dtype, always_2d=True)
+    sample_rate_ = file_.samplerate
+    tensor = torch.from_numpy(waveform)
+    tensor = tensor[:, 0].unsqueeze(1)
+    return tensor
+
+class WavLoader(object):
+
+    def __init__(self, cache_size=512):
+        """
+        :param scp_path_list: list of path to the ark matrices
+        """
+        if cache_size > 0:
+            self.cache = dict()
+            self.usage = dict()
+        else:
+            self.cache = None
+        self.cache_size = cache_size
+
+    def load_wav(self, wav_path, start, end, sample_rate=16000):
+
+        # take the object in cache if exists
+        if wav_path in self.cache:
+            file_ = self.cache[wav_path]
+            self.usage[wav_path] = self.usage[wav_path] + 1
+        else:
+            # read the audio file
+            # print(os.path.exists(wav_path), wav_path)
+            file_ = soundfile.SoundFile(wav_path, 'r')
+            if len(self.cache) > self.cache_size:
+                # remove 1 file from cache based on lowest usage, maybe?
+                min_key = min(self.usage, key=self.usage.get)
+                if min_key != wav_path:  # don't close the current file
+                    self.cache[min_key].close()
+                    self.cache.pop(min_key, None)
+                    self.usage.pop(min_key, None)
+
+            # add the object to the cache
+            self.cache[wav_path] = file_
+            self.usage[wav_path] = 1
+
+        data = safe_readaudio_from_cache(file_, start, end, sample_rate)
+
+        return data
+
+    def close(self):
+
+        for wav_path in self.cache:
+            self.cache[wav_path].close()

@@ -14,11 +14,6 @@ except (ModuleNotFoundError, ImportError) as e:
     from .compat import custom_fwd, custom_bwd
 
 try:
-    import mask_softmax_dropout_cuda
-except (ModuleNotFoundError, ImportError) as e:
-    mask_softmax_dropout_cuda = None
-
-try:
     import rel_self_attn_cuda
 except (ModuleNotFoundError, ImportError) as e:
     rel_self_attn_cuda = None
@@ -309,51 +304,20 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         if mask is not None:
             attn_score.view(bsz, heads, len_q, len_k).masked_fill_(mask, float('-inf'))
 
-        if not (mask_softmax_dropout_cuda is not None and len_k <= 2048
-                and attn_score.type() == 'torch.cuda.HalfTensor') or double_precision:
+        dtype_ = torch.float64 if double_precision else torch.float32
+        softmax_results = F.softmax(attn_score, dim=-1, dtype=dtype_).type_as(attn_score)
 
-            dtype_ = torch.float64 if double_precision else torch.float32
-            softmax_results = F.softmax(attn_score, dim=-1).type_as(attn_score)
+        nan_mask = torch.isnan(softmax_results)
+        if nan_mask.any():
+            softmax_results.masked_fill_(nan_mask, 0)
 
-            # Dropout - is not executed for inference
-            if is_training:
-                dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
-            else:
-                dropout_results = softmax_results
-                dropout_mask = null_tensor
-            ctx.fused_softmax_dropout = False
+        # Dropout - is not executed for inference
+        if is_training:
+            dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
         else:
-            # Fused Softmax and Dropout
-            # ASSERTED To produce the same result with F.softmax
-            dropout_mask, softmax_results, dropout_results = \
-                mask_softmax_dropout_cuda.forward(is_training, heads, attn_score, dropout_prob_t[0])
-
-            if not is_training:
-                dropout_results = softmax_results
-
-            # Verification
-            # softmax_results_ref = F.softmax(attn_score, dim=-1)
-            # if is_training:
-            #     dropout_results_ref = softmax_results_ref * dropout_mask.half() * (1 / (1 - dropout_prob_t[0]))
-            # else:
-            #     dropout_results_ref = softmax_results_ref
-            #
-            # comp = torch.allclose(softmax_results_ref, softmax_results, rtol=1e-03, atol=1e-04)
-            # comp = torch.allclose(dropout_results_ref, dropout_results, rtol=1e-03, atol=1e-04)
-            # if comp:
-            #     print("Forward pass verification passed.")
-            # else:
-            #     print("ERROR: Forward pass verification failed")
-            # print(dropout_results - dropout_results_ref)
-            # print(softmax_results)
-            # Done Verification
-
-            ctx.fused_softmax_dropout = True
-
-        nan_mask = null_tensor
-        # nan_mask = torch.isnan(softmax_results)
-        # if nan_mask.any():
-        #     softmax_results.masked_fill_(nan_mask, 0)
+            dropout_results = softmax_results
+            dropout_mask = null_tensor
+        ctx.fused_softmax_dropout = False
 
         # Matmul2 Batched GEMMs
         # Input1: from_softmax [bsz*heads, len_q, seql_k]
