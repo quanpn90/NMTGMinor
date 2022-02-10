@@ -64,15 +64,23 @@ parser.add_argument('-valid_tgt', required=True,
 
 parser.add_argument('-train_src_lang', default="src",
                     help="Language(s) of the source sequences.")
+parser.add_argument('-train_src_atb', default="src",
+                    help="Attributes(s) of the source sequences.")
 
 parser.add_argument('-train_tgt_lang', default="tgt",
                     help="Language(s) of the target sequences.")
+parser.add_argument('-train_tgt_atb', default="src",
+                    help="Attributes(s) of the source sequences.")
 
 parser.add_argument('-valid_src_lang', default="src",
                     help="Language(s) of the source sequences.")
+parser.add_argument('-valid_src_tgt', default="src",
+                    help="Attributes(s) of the source sequences.")
 
 parser.add_argument('-valid_tgt_lang', default="tgt",
                     help="Language(s) of the target sequences.")
+parser.add_argument('-valid_tgt_atb', default="src",
+                    help="Attributes(s) of the source sequences.")
 
 parser.add_argument('-save_data', required=True,
                     help="Output file for the prepared data")
@@ -453,11 +461,13 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
 
     print('[INFO] Processing %s  ...' % src_file)
 
+    num_workers = num_workers if asr_format in ['scp', 'kaldi'] else 1
+
     # speech binarizer has to be 1 thread at the moment
     binarized_src = SpeechBinarizer.binarize_file(src_file, input_format=asr_format,
                                                   output_format=output_format, concat=concat,
                                                   stride=stride, fp16=fp16, prev_context=prev_context,
-                                                  num_workers=1, verbose=verbose)
+                                                  num_workers=num_workers, verbose=verbose)
 
     src = binarized_src['data']
     src_sizes = binarized_src['sizes']

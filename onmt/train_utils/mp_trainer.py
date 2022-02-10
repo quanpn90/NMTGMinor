@@ -21,7 +21,7 @@ from onmt.model_factory import build_model, build_language_model, optimize_model
 from onmt.model_factory import init_model_parameters
 from onmt.modules.loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.train_utils.stats import Logger
-from onmt.utils import checkpoint_paths, normalize_gradients
+from onmt.utils import checkpoint_paths, normalize_gradients, clip_grad_norm
 from onmt.model_factory import build_model, optimize_model, init_model_parameters
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP_model
@@ -877,7 +877,7 @@ class Trainer(object):
                     normalize_gradients(self.model.parameters(), grad_denom)
 
                 # Update the pagrameters.
-                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.opt.max_grad_norm)
+                grad_norm = clip_grad_norm(self.model.parameters(), self.opt.max_grad_norm)
                 self.optim.step(scaler=self.grad_scaler)
                 self.grad_scaler.update()
                 self.optim.zero_grad()

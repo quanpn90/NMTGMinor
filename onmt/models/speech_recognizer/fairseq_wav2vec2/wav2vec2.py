@@ -1276,6 +1276,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.is_factorized = False
         self.fast_factorize = False
         self.multiplicative_factorize = False
+        self.sub_factorized = False
 
         # Initialize blocks
         self.activation_fn = get_activation_fn(activation_fn)
@@ -1336,12 +1337,20 @@ class TransformerSentenceEncoderLayer(nn.Module):
             self.mid_adapter = MultilingualAdapter(n_languages, self.embedding_dim,
                                                    downsample_factor=downsampling_factor)
 
-    def add_factorized(self, n_languages, rank=4, multiplicative=True, fast=False):
-
+    def add_factorized(self, n_languages, rank=4, multiplicative=True, fast=False,  sub_factors=0):
+        """
+        :param sub_factors:
+        :param n_languages: int or list of ints?
+        :param rank: number of vectors
+        :param multiplicative:
+        :param fast:
+        :return:
+        """
         self.self_attn.add_factorized_weights(n_languages, rank=rank, multiplicative=multiplicative)
         self.multiplicative_factorize = multiplicative
         self.is_factorized = True
         self.fast_factorize = fast
+        self.sub_factorized = sub_factors > 0
 
         embed_dim = self.embedding_dim
         ffn_dim = self.ffn_embedding_dim
