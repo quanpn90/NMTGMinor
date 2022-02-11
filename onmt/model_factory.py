@@ -42,7 +42,7 @@ def build_model(opt, dicts, remove_pretrain=False):
 
     opt.n_languages = len(dicts['langs'])
     opt.n_attributes = len(dicts['atbs']) if 'atbs' in dicts else 0
-    if 'nothingness' in dicts['atbs'] and len(dicts['atbs'] == 1):
+    if 'nothingness' in dicts['atbs'] and len(dicts['atbs']) == 1:
         opt.n_attributes = 0
 
     if opt.bayes_by_backprop:
