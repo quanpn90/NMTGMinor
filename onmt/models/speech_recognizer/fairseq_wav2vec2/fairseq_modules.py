@@ -395,11 +395,12 @@ class MultiheadAttention(nn.Module):
         if self.proj_updater:
             self.proj_updater.feature_redraw_interval = None
 
-    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False):
+    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False, sub_factors=0):
         embed_dim = self.embed_dim
         self.is_factorized = True
         self.multiplicative_factorize = multiplicative
         self.fast_factorize = fast
+        self.sub_factorized = (sub_factors > 0)
 
         self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
         self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
@@ -424,6 +425,31 @@ class MultiheadAttention(nn.Module):
             nn.init.constant_(self.sm_i, constant)
             nn.init.constant_(self.rm_o, constant)
             nn.init.constant_(self.sm_o, constant)
+
+        if self.sub_factorized:
+            self.sub_r_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, 3 * embed_dim))
+            self.sub_s_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
+            self.sub_r_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
+            self.sub_s_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
+
+            std = 0.01 if fast else 0.02
+            nn.init.normal_(self.sub_r_i, 0.0, std)
+            nn.init.normal_(self.sub_s_i, 0.0, std)
+            nn.init.normal_(self.sub_r_o, 0.0, std)
+            nn.init.normal_(self.sub_s_o, 0.0, std)
+
+            if multiplicative:
+                rank = rank if fast else 1
+                self.sub_rm_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, 3 * embed_dim))
+                self.sub_sm_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
+                self.sub_rm_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
+                self.sub_sm_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
+
+                constant = math.sqrt(1.0 / rank) if fast else 1
+                nn.init.constant_(self.sub_rm_i, constant)
+                nn.init.constant_(self.sub_sm_i, constant)
+                nn.init.constant_(self.sub_rm_o, constant)
+                nn.init.constant_(self.sub_sm_o, constant)
 
     def convert_fast_attention(self):
 
@@ -493,37 +519,24 @@ class MultiheadAttention(nn.Module):
             value: Optional[Tensor],
             key_padding_mask: Optional[Tensor] = None,
             incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
-            need_weights: bool = True,
-            static_kv: bool = False,
             attn_mask: Optional[Tensor] = None,
             cu_seqlens=None, max_len=None,
-            need_head_weights: bool = False,
-            lang=None, mixture=None
+            lang=None, atb=None, **kwargs
     ) -> Tuple[Tensor, Optional[Tensor]]:
-        """Input shape: Time x Batch x Channel
-        Args:
-            query
-            key
-            value
-            incremental_state
-            key_padding_mask (ByteTensor, optional): mask to exclude
-                keys that are pads, of shape `(batch, src_len)`, where
-                padding elements are indicated by 1s.
-            need_weights (bool, optional): return the attention weights,
-                averaged over heads (default: False).
-            attn_mask (ByteTensor, optional): typically used to
-                implement causal attention, where the mask prevents the
-                attention from looking forward in time (default: None).
-            before_softmax (bool, optional): return the raw attention
-                weights and values before the attention softmax.
-            need_head_weights (bool, optional): return the attention
-                weights for each head. Implies *need_weights*. Default:
-                return the average attention weights over all heads.
-            mixture:
-            lang:
         """
-        if need_head_weights:
-            need_weights = True
+        :param query:
+        :param key:
+        :param value:
+        :param key_padding_mask:
+        :param incremental_state:
+        :param attn_mask:
+        :param cu_seqlens:
+        :param max_len:
+        :param lang:
+        :param atb:
+        :param kwargs:
+        :return:
+        """
 
         is_tpu = query.device.type == "xla"
 
@@ -534,7 +547,7 @@ class MultiheadAttention(nn.Module):
                 src_len = tgt_len
                 assert embed_dim == self.embed_dim, f"query dim {embed_dim} != {self.embed_dim}"
                 assert list(query.size()) == [tgt_len, bsz, embed_dim]
-
+                need_weight = False
                 assert key is not None and value is not None
 
                 return F.multi_head_attention_forward(
@@ -553,7 +566,7 @@ class MultiheadAttention(nn.Module):
                     self.out_proj.bias,
                     self.training,
                     key_padding_mask,
-                    need_weights,
+                    need_weight,
                     attn_mask,
                     use_separate_proj_weight=True,
                     q_proj_weight=self.q_proj.weight,
@@ -567,7 +580,8 @@ class MultiheadAttention(nn.Module):
 
                 if self.is_factorized:
                     if self.multiplicative_factorize:
-                        rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
+                        # squeeze possible because only 1
+                        rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)
                         sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
                         rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
                         sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
@@ -578,6 +592,23 @@ class MultiheadAttention(nn.Module):
                         else:
                             mul_factor_in = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
                             mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+
+                        if self.sub_factorized and atb is not None:
+                            # squeeze possible because only 1
+                            rm_i = torch.index_select(self.sub_rm_i, 0, atb).squeeze(0)
+                            sm_i = torch.index_select(self.sub_sm_i, 0, atb).squeeze(0)
+                            rm_o = torch.index_select(self.sub_rm_o, 0, atb).squeeze(0)
+                            sm_o = torch.index_select(self.sub_sm_o, 0, atb).squeeze(0)
+
+                            if self.fast_factorize:
+                                sub_mul_factor_in = torch.mm(rm_i.t(), sm_i)
+                                sub_mul_factor_out = torch.mm(rm_o.t(), sm_o)
+                            else:
+                                sub_mul_factor_in = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
+                                sub_mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+
+                            mul_factor_in.mul_(sub_mul_factor_in)
+                            mul_factor_out.mul_(sub_mul_factor_out)
 
                         in_proj_weight = in_proj_weight * mul_factor_in
                         out_proj_weight = out_proj_weight * mul_factor_out
@@ -594,9 +625,27 @@ class MultiheadAttention(nn.Module):
                         add_factor_in = torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
                         add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
 
+                    if self.sub_factorized and atb is not None:
+
+                        r_i = torch.index_select(self.sub_r_i, 0, lang).squeeze(0)
+                        s_i = torch.index_select(self.sub_s_i, 0, lang).squeeze(0)
+                        r_o = torch.index_select(self.sub_r_o, 0, lang).squeeze(0)
+                        s_o = torch.index_select(self.sub_s_o, 0, lang).squeeze(0)
+
+                        if self.fast_factorize:
+                            sub_add_factor_in = torch.mm(r_i.t(), s_i)
+                            sub_add_factor_out = torch.mm(r_o.t(), s_o)
+                        else:
+                            sub_add_factor_in = torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
+                            sub_add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+
+                        add_factor_in.add_(sub_add_factor_in)
+                        add_factor_out.add_(sub_add_factor_out)
+
                     in_proj_weight = in_proj_weight + add_factor_in
                     out_proj_weight = out_proj_weight + add_factor_out
 
+                # Forward Pass starts here
                 if query.ndim == 3:
                     # Call semi-fast attention from CUDA/
                     tgt_len, bsz, embed_dim = query.size()
@@ -605,10 +654,6 @@ class MultiheadAttention(nn.Module):
                     assert list(query.size()) == [tgt_len, bsz, embed_dim]
 
                     inputs = query
-                    heads = self.num_heads
-                    head_dim = self.head_dim
-                    bsz = query.size(1)
-                    len_q = query.size(0)
 
                     is_training = self.training
                     low_precision = True
@@ -623,6 +668,7 @@ class MultiheadAttention(nn.Module):
 
                     return outputs, coverage
 
+                #
                 # Fused attention using packed data (B T H) -> (BxT H) and removing padded positions
                 elif query.ndim == 2:
                     assert self.fast_bert_mha is not None

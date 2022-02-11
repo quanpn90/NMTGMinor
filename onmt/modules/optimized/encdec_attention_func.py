@@ -49,6 +49,11 @@ class EncdecAttnFunc(torch.autograd.Function):
         scale_t = torch.tensor([head_dim ** -0.5])
         use_mask = (mask is not None)
 
+        # it happens!!! when we "factorized the weights"
+        input_weights_q = input_weights_q.contiguous()
+        input_weights_kv = input_weights_kv.contiguous()
+        output_weights = output_weights.contiguous()
+
         bsz, len_q, len_k = inputs_q.size(1), inputs_q.size(0), inputs_kv.size(0)
         ctx.incremental = incremental
         ctx.fused_softmax_dropout = False

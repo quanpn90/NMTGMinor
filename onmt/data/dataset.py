@@ -132,6 +132,7 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
 
 def collect_fn(src_data, tgt_data,
                src_lang_data, tgt_lang_data,
+               src_atbs_data, tgt_atbs_data,
                src_align_right, tgt_align_right,
                src_type='text',
                augmenter=None, upsampling=False,
@@ -192,6 +193,11 @@ def collect_fn(src_data, tgt_data,
         tensors['source_lang'] = torch.cat(src_lang_data).long()
     if tgt_lang_data is not None:
         tensors['target_lang'] = torch.cat(tgt_lang_data).long()
+
+    if src_atbs_data is not None:
+        tensors['source_atbs'] = torch.cat(src_atbs_data).long()
+    if tgt_atbs_data is not None:
+        tensors['target_atbs'] = torch.cat(tgt_atbs_data).long()
 
     tensors['vocab_mask'] = vocab_mask
 
@@ -311,6 +317,7 @@ class Dataset(torch.utils.data.Dataset):
     def __init__(self, src_data, tgt_data,
                  src_sizes=None, tgt_sizes=None,
                  src_langs=None, tgt_langs=None,
+                 src_atbs=None, tgt_atbs=None,
                  batch_size_frames=1280000,
                  batch_size_words=16384,
                  data_type="text", batch_size_sents=128,
@@ -372,8 +379,8 @@ class Dataset(torch.utils.data.Dataset):
         self.num_split = num_split
         self.vocab_mask = None
         self.use_past_src = self.past_src is not None
-        self.min_tgt_len = kwargs.get('min_tgt_len', 3  )
-        self.min_src_len = kwargs.get('min_src_len', 4)
+        self.min_tgt_len = kwargs.get('min_tgt_len', 3)
+        self.min_src_len = kwargs.get('min_src_len', 2)
         self.batch_size_frames = batch_size_frames
 
         if self.max_src_len is None:
@@ -383,7 +390,7 @@ class Dataset(torch.utils.data.Dataset):
                 self.max_src_len = 320000
             else:
                 # for audio set this to 2048 frames
-                self.max_src_len = 2048 if not self.use_past_src else 4095
+                self.max_src_len = 4096 if not self.use_past_src else 8192
 
         # self.reshape_speech = reshape_speech
         if tgt_data:
@@ -448,10 +455,16 @@ class Dataset(torch.utils.data.Dataset):
         if self.src_langs is not None and self.tgt_langs is not None:
             assert (len(src_langs) == len(tgt_langs))
 
+        # Processing attributes
+        self.src_atbs = src_atbs
+        self.tgt_atbs = tgt_atbs
+
         # In "bilingual" case, the src_langs only contains one single vector
         # Which is broadcasted to batch_size
         if len(src_langs) <= 1:
             self.bilingual = True
+            if self.src_atbs is not None:
+                assert(len(src_atbs) <= 1, "For a bilingual dataset, expect attributes to be 'singular' too")
         else:
             self.bilingual = False
 
@@ -572,17 +585,26 @@ class Dataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
 
         src_lang, tgt_lang = None, None
+        src_atb, tgt_atb  = None, None
 
         if self.bilingual:
             if self.src_langs is not None:
                 src_lang = self.src_langs[0]  # should be a tensor [0]
             if self.tgt_langs is not None:
                 tgt_lang = self.tgt_langs[0]  # should be a tensor [1]
+            if self.src_atbs is not None:
+                src_atb = self.src_atbs[0]
+            if self.tgt_atbs is not None:
+                tgt_atb = self.tgt_atbs[0]
         else:
             if self.src_langs is not None:
                 src_lang = self.src_langs[index]
             if self.tgt_langs is not None:
                 tgt_lang = self.tgt_langs[index]
+            if self.src_atbs is not None:
+                src_atb = self.src_atbs[index]
+            if self.tgt_atbs is not None:
+                tgt_atb = self.tgt_atbs[index]
 
         # move augmenter here?
 
@@ -596,6 +618,8 @@ class Dataset(torch.utils.data.Dataset):
             'tgt': self.tgt[index] if self.tgt is not None else None,
             'src_lang': src_lang,
             'tgt_lang': tgt_lang,
+            'src_atb': src_atb,
+            'tgt_atb': tgt_atb,
             'past_src': past_src
         }
 
@@ -623,17 +647,27 @@ class Dataset(torch.utils.data.Dataset):
 
         src_lang_data = None
         tgt_lang_data = None
+        src_atbs_data = None
+        tgt_atbs_data = None
 
         if self.bilingual:
             if self.src_langs is not None:
                 src_lang_data = [self.src_langs[0]]  # should be a tensor [0]
             if self.tgt_langs is not None:
                 tgt_lang_data = [self.tgt_langs[0]]  # should be a tensor [1]
+            if self.src_atbs is not None:
+                src_atbs_data = [self.src_atbs[0]]
+            if self.tgt_atbs is not None:
+                tgt_atbs_data = [self.tgt_atbs[0]]
         else:
             if self.src_langs is not None:
                 src_lang_data = [self.src_langs[i] for i in batch_ids]
             if self.tgt_langs is not None:
                 tgt_lang_data = [self.tgt_langs[i] for i in batch_ids]
+            if self.src_atbs is not None:
+                src_atbs_data = [self.src_atbs[i] for i in batch_ids]
+            if self.tgt_atbs is not None:
+                tgt_atbs_data = [self.tgt_atbs[i] for i in batch_ids]
 
         if self.use_past_src:
             past_src = [self.past_src[i] for i in batch_ids]
@@ -642,6 +676,7 @@ class Dataset(torch.utils.data.Dataset):
 
         batch = rewrap(collect_fn(src_data, tgt_data=tgt_data,
                                   src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
+                                  src_atbs_data=src_atbs_data, tgt_atbs_data=tgt_atbs_data,
                                   src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
                                   src_type=self._type,
                                   augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask,
@@ -669,6 +704,7 @@ class Dataset(torch.utils.data.Dataset):
 
             src_data, tgt_data = None, None
             src_lang_data, tgt_lang_data = None, None
+            src_atbs_data, tgt_atbs_data = None, None
             past_src_data = None
 
             if self.src:
@@ -682,17 +718,26 @@ class Dataset(torch.utils.data.Dataset):
                     src_lang_data = [self.src_langs[0]]  # should be a tensor [0]
                 if self.tgt_langs is not None:
                     tgt_lang_data = [self.tgt_langs[0]]  # should be a tensor [1]
+                if self.src_atbs is not None:
+                    src_atbs_data = [self.src_atbs[0]]
+                if self.tgt_atbs is not None:
+                    tgt_atbs_data = [self.tgt_atbs[0]]
             else:
                 if self.src_langs is not None:
                     src_lang_data = [sample['src_lang'] for sample in samples]  # should be a tensor [0]
                 if self.tgt_langs is not None:
                     tgt_lang_data = [sample['tgt_lang'] for sample in samples]  # should be a tensor [1]
+                if self.src_atbs is not None:
+                    src_atbs_data = [self.src_atbs[i] for i in batch_ids]
+                if self.tgt_atbs is not None:
+                    tgt_atbs_data = [self.tgt_atbs[i] for i in batch_ids]
 
             if self.use_past_src:
                 past_src_data = [sample['past_src'] for sample in samples]
 
             batch = collect_fn(src_data, tgt_data=tgt_data,
                                src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
+                               src_atbs_data=src_atbs_data, tgt_atbs_data=tgt_atbs_data,
                                src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
                                src_type=self._type,
                                augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask,
@@ -748,92 +793,3 @@ class Dataset(torch.utils.data.Dataset):
 
         assert (0 <= iteration < self.num_batches)
         self.cur_index = iteration
-
-#
-# # LANGUAGE MODEL DATASET AND DATAHOLDER
-# class LMBatch(Batch):
-#
-#     def __init__(self, input, target=None):
-#         self.tensors = defaultdict(lambda: None)
-#
-#         self.tensors['target_input'] = input  # T x B
-#         self.tensors['target_output'] = target  # T x B or None
-#
-#         # batch size
-#         self.size = input.size(1)
-#         self.length = input.size(0)
-#
-#         self.tgt_size = self.size * self.length
-#         self.src_size = 0
-#
-#     def collate(self, **kwargs):
-#         raise NotImplementedError
-#
-#
-# class LanguageModelDataset(Dataset):
-#
-#     def __init__(self, data, batch_size_sents=128, seq_length=128):
-#
-#         self.data = data
-#
-#         self.batch_size_sents = batch_size_sents
-#
-#         self.seq_length = seq_length
-#
-#         # group samples into mini batches
-#         self.num_batches = 0
-#         self.allocate_batch()
-#
-#         self.full_size = self.num_batches
-#         # self.cur_index = 0
-#         # self.batchOrder = None
-#
-#     def allocate_batch(self):
-#
-#         nsequence = self.data.size(0) // self.batch_size_sents
-#
-#         self.data = self.data.narrow(0, 0, nsequence * self.batch_size_sents)
-#
-#         # Evenly divide the data across the bsz batches.
-#         self.data = self.data.view(self.batch_size_sents, -1).t().contiguous()
-#
-#         # self.num_steps = nbatch - 1
-#
-#         self.num_batches = math.ceil((self.data.size(0) - 1) / self.seq_length)
-#
-#     # genereate a new batch - order (static)
-#     def create_order(self, random=False):
-#
-#         # For language model order shouldn't be random
-#         if random:
-#             self.batchOrder = torch.randperm(self.num_batches)
-#         else:
-#             self.batchOrder = torch.arange(self.num_batches).long()
-#
-#         self.cur_index = 0
-#
-#         return self.batchOrder
-#
-#     # return the next batch according to the iterator
-#     # for language model
-#     def next(self, curriculum=True, reset=True, split_sizes=1):
-#
-#         # reset iterator if reach data size limit
-#         if self.cur_index >= self.num_batches:
-#             if reset:
-#                 self.cur_index = 0
-#             else:
-#                 return None
-#
-#         batch_index = self.cur_index
-#
-#         seq_len = self.seq_length
-#
-#         top_index = min(batch_index + seq_len, self.data.size(0) - 1)
-#
-#         batch = LMBatch(self.data[batch_index:top_index], target=self.data[batch_index + 1:top_index + 1])
-#
-#         # move the iterator one step
-#         self.cur_index += seq_len
-#
-#         return [batch]

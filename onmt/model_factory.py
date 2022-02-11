@@ -39,7 +39,11 @@ def build_model(opt, dicts, remove_pretrain=False):
 
     if 'langs' not in dicts:
         dicts['langs'] = {'src': 0, 'tgt': 1}
+
     opt.n_languages = len(dicts['langs'])
+    opt.n_attributes = len(dicts['atbs']) if 'atbs' in dicts else 0
+    if 'nothingness' in dicts['atbs'] and len(dicts['atbs'] == 1):
+        opt.n_attributes = 0
 
     if opt.bayes_by_backprop:
         from onmt.bayesian_factory import build_model as build_bayesian_model

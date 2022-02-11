@@ -174,10 +174,12 @@ class FairseqWav2Vec(nn.Module):
 
         # then add factorize
         if opt.multilingual_factorized_weights:
-            print("[INFO] Factorizing Wav2vec model into %d languages" % opt.n_languages)
+            print("[INFO] Factorizing Wav2vec model into %d languages and %d factors"
+                  % (opt.n_languages, opt.n_attributes))
             self.wav2vec_encoder.encoder.add_factorize(opt.n_languages, rank=opt.mfw_rank,
                                                        multiplicative=opt.mfw_multiplicative,
-                                                       fast=opt.fast_factorize)
+                                                       fast=opt.fast_factorize,
+                                                       sub_factors=opt.n_attributes)
 
         if opt.wav2vec_adapter > 0:
             print("[INFO] Adding adapters for Wav2vec model with %d languages" % opt.n_languages)
@@ -573,6 +575,8 @@ class Wav2vecBERT(Wav2vecTransformer):
         tgt_pos = batch.get('target_pos')
         src_lang = batch.get('source_lang')
         tgt_lang = batch.get('target_lang')
+        src_atb = batch.get('source_atbs')
+        tgt_atb = batch.get('target_atbs')
         src_lengths = batch.src_lengths
         tgt_lengths = batch.tgt_lengths
 
@@ -586,7 +590,8 @@ class Wav2vecBERT(Wav2vecTransformer):
             batch_first_output = True
 
         # during training mixture is always None
-        encoder_output = self.encoder(src, batch_first_output=batch_first_output, lang=src_lang, mixture=None)
+        encoder_output = self.encoder(src, batch_first_output=batch_first_output,
+                                      lang=src_lang, atb=src_atb)
 
         encoder_output = defaultdict(lambda: None, encoder_output)
 
@@ -650,7 +655,7 @@ class Wav2vecBERT(Wav2vecTransformer):
                                           encoder_attention_mask=src_attention_mask,
                                           sub_encoder_hidden_states=sub_context,
                                           sub_encoder_attention_mask=sub_context_mask,
-                                          lang=tgt_lang, mixture=None)
+                                          lang=tgt_lang, atb=tgt_atb)
             decoder_output = decoder_outputs[0]
             contrastive_loss = decoder_outputs[-1]
             output = decoder_output

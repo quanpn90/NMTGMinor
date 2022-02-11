@@ -94,10 +94,23 @@ def main():
                 train_src_langs.append(torch.Tensor([dicts['langs']['src']]))
                 train_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
+            if train_dict['src_atb'] is not None:
+                assert 'atbs' in dicts
+                train_src_atbs = train_dict['src_atb']
+                train_tgt_atbs = train_dict['tgt_atb']
+            else:
+                # allocate new languages
+                dicts['atbs'] = {'nothingness': 0}
+                train_src_atbs = list()
+                train_tgt_atbs = list()
+                train_src_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
+                train_tgt_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
+
             if not opt.streaming:
                 train_data = onmt.Dataset(numpy_to_torch(train_dict['src']), numpy_to_torch(train_dict['tgt']),
                                           train_dict['src_sizes'], train_dict['tgt_sizes'],
                                           train_src_langs, train_tgt_langs,
+                                          train_src_atbs, train_tgt_atbs,
                                           batch_size_words=opt.batch_size_words,
                                           batch_size_frames=opt.batch_size_frames,
                                           data_type=dataset.get("type", "text"), sorting=True,
@@ -132,10 +145,23 @@ def main():
                 valid_src_langs.append(torch.Tensor([dicts['langs']['src']]))
                 valid_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
+            if valid_dict['src_atb'] is not None:
+                assert 'atbs' in dicts
+                valid_src_atbs = valid_dict['src_atb']
+                valid_tgt_atbs = valid_dict['tgt_atb']
+            else:
+                # allocate new languages
+                valid_src_atbs = list()
+                valid_tgt_atbs = list()
+
+                valid_src_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
+                valid_tgt_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
+
             if not opt.streaming:
                 valid_data = onmt.Dataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
                                           valid_dict['src_sizes'], valid_dict['tgt_sizes'],
                                           valid_src_langs, valid_tgt_langs,
+                                          valid_src_atbs, valid_tgt_atbs,
                                           batch_size_words=opt.batch_size_words,
                                           batch_size_frames=opt.batch_size_frames,
                                           data_type=dataset.get("type", "text"), sorting=True,
@@ -211,6 +237,17 @@ def main():
                 train_src_langs.append(torch.Tensor([dicts['langs']['src']]))
                 train_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
+            if os.path.exists(train_path + '.src_atb.bin'):
+                assert 'atbs' in dicts
+                train_src_atbs = MMapIndexedDataset(train_path + '.src_atb')
+                train_tgt_atbs = MMapIndexedDataset(train_path + '.tgt_atb')
+            else:
+                dicts['atbs'] = {'nothingness': 0}
+                train_src_atbs = list()
+                train_tgt_atbs = list()
+                train_src_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
+                train_tgt_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
+
             # check the length files if they exist
             if os.path.exists(train_path + '.src_sizes.npy'):
                 train_src_sizes = np.load(train_path + '.src_sizes.npy')
@@ -236,6 +273,7 @@ def main():
                                           train_tgt,
                                           train_src_sizes, train_tgt_sizes,
                                           train_src_langs, train_tgt_langs,
+                                          train_src_atbs, train_tgt_atbs,
                                           batch_size_words=opt.batch_size_words,
                                           batch_size_frames=opt.batch_size_frames,
                                           data_type=data_type, sorting=True,
@@ -286,6 +324,16 @@ def main():
                 valid_src_langs.append(torch.Tensor([dicts['langs']['src']]))
                 valid_tgt_langs.append(torch.Tensor([dicts['langs']['tgt']]))
 
+            if os.path.exists(valid_path + '.src_atb.bin'):
+                assert 'atbs' in dicts
+                valid_src_atbs = MMapIndexedDataset(valid_path + '.src_atb')
+                valid_tgt_atbs = MMapIndexedDataset(valid_path + '.tgt_atb')
+            else:
+                valid_src_atbs = list()
+                valid_tgt_atbs = list()
+                valid_src_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
+                valid_tgt_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
+
             # check the length files if they exist
             if os.path.exists(valid_path + '.src_sizes.npy'):
                 valid_src_sizes = np.load(valid_path + '.src_sizes.npy')
@@ -303,6 +351,7 @@ def main():
                 valid_data = onmt.Dataset(valid_src, valid_tgt,
                                           valid_src_sizes, valid_tgt_sizes,
                                           valid_src_langs, valid_tgt_langs,
+                                          valid_src_atbs, valid_tgt_atbs,
                                           batch_size_words=opt.batch_size_words,
                                           batch_size_frames=opt.batch_size_frames,
                                           multiplier=opt.batch_size_multiplier,
@@ -331,11 +380,16 @@ def main():
         print(' * number of sentences in training data: %d' % train_data.size())
         print(' * number of sentences in validation data: %d' % valid_data.size())
 
+    # Multi-data set handling
     else:
         print("[INFO] Reading multiple dataset ...")
-        # raise NotImplementedError
 
         dicts = torch.load(opt.data + ".dict.pt")
+        print("Languages: ", dicts['langs'])
+        if 'atbs' not in dicts:  # backward compatible
+            dicts['atbs'] = {'nothingness': 0}
+        print("Atributes: ", dicts['atbs'])
+
         onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
 
         root_dir = os.path.dirname(opt.data)
@@ -382,6 +436,15 @@ def main():
                 src_lang_data = MMapIndexedDataset(os.path.join(data_dir, 'data.src_lang'))
                 tgt_lang_data = MMapIndexedDataset(os.path.join(data_dir, 'data.tgt_lang'))
 
+                if os.path.exists(os.path.join(data_dir, 'data.src_atb.bin')):
+                    src_atbs_data = MMapIndexedDataset(os.path.join(data_dir, 'data.src_atb'))
+                    tgt_atbs_data = MMapIndexedDataset(os.path.join(data_dir, 'data.tgt_atb'))
+                else:
+                    src_atbs_data = list()
+                    tgt_atbs_data = list()
+                    src_atbs_data.append(torch.Tensor([dicts['atbs']['nothingness']]))
+                    tgt_atbs_data.append(torch.Tensor([dicts['atbs']['nothingness']]))
+
                 if os.path.exists(os.path.join(data_dir, 'data.src_sizes.npy')):
                     src_sizes = np.load(os.path.join(data_dir, 'data.src_sizes.npy'))
                     tgt_sizes = np.load(os.path.join(data_dir, 'data.tgt_sizes.npy'))
@@ -400,6 +463,7 @@ def main():
                                               tgt_data,
                                               src_sizes, tgt_sizes,
                                               src_lang_data, tgt_lang_data,
+                                              src_atbs_data, tgt_atbs_data,
                                               batch_size_words=opt.batch_size_words,
                                               batch_size_frames=opt.batch_size_frames,
                                               data_type=data_type, sorting=True,
@@ -443,6 +507,17 @@ def main():
                 src_lang_data = MMapIndexedDataset(os.path.join(data_dir, 'data.src_lang'))
                 tgt_lang_data = MMapIndexedDataset(os.path.join(data_dir, 'data.tgt_lang'))
 
+                # load data attributes
+                if os.path.exists(os.path.join(data_dir, 'data.src_atb.bin')):
+                    src_atbs_data = MMapIndexedDataset(os.path.join(data_dir, 'data.src_atb'))
+                    tgt_atbs_data = MMapIndexedDataset(os.path.join(data_dir, 'data.tgt_atb'))
+                else:
+                    src_atbs_data = list()
+                    tgt_atbs_data = list()
+                    src_atbs_data.append(torch.Tensor([dicts['atbs']['nothingness']]))
+                    tgt_atbs_data.append(torch.Tensor([dicts['atbs']['nothingness']]))
+
+                # load data size
                 if os.path.exists(os.path.join(data_dir, 'data.src_sizes.npy')):
                     src_sizes = np.load(os.path.join(data_dir, 'data.src_sizes.npy'))
                     tgt_sizes = np.load(os.path.join(data_dir, 'data.tgt_sizes.npy'))
@@ -460,6 +535,7 @@ def main():
                     valid_data = onmt.Dataset(src_data, tgt_data,
                                               src_sizes, tgt_sizes,
                                               src_lang_data, tgt_lang_data,
+                                              src_atbs_data, tgt_atbs_data,
                                               batch_size_words=opt.batch_size_words,
                                               batch_size_frames=opt.batch_size_frames,
                                               multiplier=opt.batch_size_multiplier,

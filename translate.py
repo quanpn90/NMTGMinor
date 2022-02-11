@@ -43,7 +43,11 @@ parser.add_argument('-past_src', required=False, default="",
                     help='Past Source sequence to decode (one line per sequence)')
 parser.add_argument('-src_lang', default='src',
                     help='Source language')
+parser.add_argument('-src_atb', default='nothingness',
+                    help='Source language')
 parser.add_argument('-tgt_lang', default='tgt',
+                    help='Target language')
+parser.add_argument('-tgt_lang', default='nothingness',
                     help='Target language')
 parser.add_argument('-attributes', default="",
                     help='Attributes for the decoder. Split them by | ')

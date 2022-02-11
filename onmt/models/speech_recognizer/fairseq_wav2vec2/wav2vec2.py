@@ -583,7 +583,8 @@ class Wav2Vec2Model(torch.nn.Module):
             precomputed_tdnn=False,
             quantize=False, quantize_only=False,
             lang=None,
-            mixture=None
+            atb=None,
+            **kwargs
     ):
         # if the tdnn features are precomputed then skip them
         if not precomputed_tdnn:
@@ -692,7 +693,7 @@ class Wav2Vec2Model(torch.nn.Module):
             y = unmasked_features
             mask_indices = None
 
-        x, layer_results = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, mixture=mixture)
+        x, layer_results = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, atb=atb)
 
         if features_only:
             output_dict =  {
@@ -831,10 +832,10 @@ class Wav2Vec2Model(torch.nn.Module):
         return features, padding_mask.long()
 
     def extract_features(self, source, padding_mask, mask=False, layer=None, precomputed_tdnn=False,
-                         lang=None, mixture=None):
+                         lang=None, atb=None):
         res = self.forward(
             source, padding_mask, mask=mask, features_only=True, layer=layer, precomputed_tdnn=precomputed_tdnn,
-            lang=lang, mixture=mixture
+            lang=lang, atb=atb
         )
         return res
 
@@ -1038,15 +1039,15 @@ class TransformerEncoder(nn.Module):
         from onmt.modules.optimized.fast_mha import fast_bert_mha
         self.fast_bert_mha = fast_bert_mha
 
-    def forward(self, x, padding_mask=None, layer=None, lang=None, mixture=None):
-        x, layer_results = self.extract_features(x, padding_mask, layer, lang=lang, mixture=mixture)
+    def forward(self, x, padding_mask=None, layer=None, lang=None, atb=None):
+        x, layer_results = self.extract_features(x, padding_mask, layer, lang=lang, atb=atb)
 
         if self.layer_norm_first and layer is None:
             x = self.layer_norm(x)
 
         return x, layer_results
 
-    def extract_features(self, x, padding_mask=None, tgt_layer=None, lang=None, mixture=None):
+    def extract_features(self, x, padding_mask=None, tgt_layer=None, lang=None, atb=None):
         if padding_mask is not None:
             x = index_put(x, padding_mask, 0)
 
@@ -1119,9 +1120,9 @@ class TransformerEncoder(nn.Module):
             for i, layer in enumerate(self.layers):
                 dropout_probability = np.random.random()
                 if not self.training or (dropout_probability > self.layerdrop):
-                    x, z = layer(x, self_attn_padding_mask=padding_mask, need_weights=False,
+                    x, z = layer(x, self_attn_padding_mask=padding_mask,
                                  max_len=max_len, cu_seqlens=cu_seqlens,
-                                 lang=lang, mixture=mixture)
+                                 lang=lang, atb=atb)
                     if tgt_layer is not None:
                         layer_results.append((x, z))
                 if i == tgt_layer:
@@ -1177,10 +1178,11 @@ class TransformerEncoder(nn.Module):
         for layer in self.layers:
             layer.add_adapters(n_languages, adapter_location=adapter_location)
 
-    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False):
+    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False, sub_factors=0):
 
         for layer in self.layers:
-            layer.add_factorized(n_languages, rank=rank, multiplicative=multiplicative, fast=fast)
+            layer.add_factorized(n_languages, rank=rank,
+                                 multiplicative=multiplicative, fast=fast, sub_factors=sub_factors)
 
     def freeze_or_unfreeze_ffn_params(self):
 
@@ -1337,7 +1339,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             self.mid_adapter = MultilingualAdapter(n_languages, self.embedding_dim,
                                                    downsample_factor=downsampling_factor)
 
-    def add_factorized(self, n_languages, rank=4, multiplicative=True, fast=False,  sub_factors=0):
+    def add_factorized(self, n_languages, rank=4, multiplicative=True, fast=False, sub_factors=0):
         """
         :param sub_factors:
         :param n_languages: int or list of ints?
@@ -1346,7 +1348,12 @@ class TransformerSentenceEncoderLayer(nn.Module):
         :param fast:
         :return:
         """
-        self.self_attn.add_factorized_weights(n_languages, rank=rank, multiplicative=multiplicative)
+
+        # first, tell the attention modules to add factorize
+        self.self_attn.add_factorized_weights(n_languages, rank=rank,
+                                              multiplicative=multiplicative, sub_factors=sub_factors)
+
+        # add factorized for the sub-factors
         self.multiplicative_factorize = multiplicative
         self.is_factorized = True
         self.fast_factorize = fast
@@ -1377,7 +1384,31 @@ class TransformerSentenceEncoderLayer(nn.Module):
             nn.init.constant_(self.rm_o, constant)
             nn.init.constant_(self.sm_o, constant)
 
-    def get_mlp_weights(self, lang=None, mixture=None):
+        if self.sub_factorized:
+            self.sub_r_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.ffn_embedding_dim))
+            self.sub_s_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.embedding_dim))
+            self.sub_r_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.embedding_dim))
+            self.sub_s_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.ffn_embedding_dim))
+
+            nn.init.normal_(self.sub_r_i, 0.0, 0.02)
+            nn.init.normal_(self.sub_s_i, 0.0, 0.02)
+            nn.init.normal_(self.sub_r_o, 0.0, 0.02)
+            nn.init.normal_(self.sub_s_o, 0.0, 0.02)
+
+            if multiplicative:
+                rank = rank if fast else 1
+                self.sub_rm_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.ffn_embedding_dim))
+                self.sub_sm_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.embedding_dim))
+                self.sub_rm_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.embedding_dim))
+                self.sub_sm_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.ffn_embedding_dim))
+
+                constant = math.sqrt(1.0 / rank) if fast else 1
+                nn.init.constant_(self.sub_rm_i, constant)
+                nn.init.constant_(self.sub_sm_i, constant)
+                nn.init.constant_(self.sub_rm_o, constant)
+                nn.init.constant_(self.sub_sm_o, constant)
+
+    def get_mlp_weights(self, lang=None, atb=None):
 
         in_weight = self.fc1.weight
         out_weight = self.fc2.weight
@@ -1385,9 +1416,9 @@ class TransformerSentenceEncoderLayer(nn.Module):
         out_bias = self.fc2.bias
 
         if lang is not None:
-            assert mixture is None
-
             if self.is_factorized:
+
+                # First check if we use multiplicative
                 if self.multiplicative_factorize:
                     rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
                     sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
@@ -1401,9 +1432,28 @@ class TransformerSentenceEncoderLayer(nn.Module):
                         mul_factor_in = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
                         mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
 
+                    # TODO: allow for multiple sub factorizers
+                    if self.sub_factorized and atb is not None:
+                        rm_i = torch.index_select(self.sub_rm_i, 0, atb).squeeze(0)  # squeeze possible because only 1
+                        sm_i = torch.index_select(self.sub_sm_i, 0, atb).squeeze(0)
+                        rm_o = torch.index_select(self.sub_rm_o, 0, atb).squeeze(0)
+                        sm_o = torch.index_select(self.sub_sm_o, 0, atb).squeeze(0)
+
+                        if self.fast_factorize:
+                            sub_mul_factor_in = torch.mm(rm_i.t(), sm_i)
+                            sub_mul_factor_out = torch.mm(rm_o.t(), sm_o)
+                        else:
+                            sub_mul_factor_in = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
+                            sub_mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+
+                        # has to be multiplicative here
+                        mul_factor_in.mul_(sub_mul_factor_in)
+                        mul_factor_out.mul_(sub_mul_factor_out)
+
                     in_weight = in_weight * mul_factor_in
                     out_weight = out_weight * mul_factor_out
 
+                # For addictive
                 r_i = torch.index_select(self.r_i, 0, lang).squeeze(0)
                 s_i = torch.index_select(self.s_i, 0, lang).squeeze(0)
                 r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
@@ -1416,11 +1466,25 @@ class TransformerSentenceEncoderLayer(nn.Module):
                     add_factor_in = torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
                     add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
 
+                if self.sub_factorized and atb is not None:
+                    r_i = torch.index_select(self.sub_r_i, 0, atb).squeeze(0)
+                    s_i = torch.index_select(self.sub_s_i, 0, atb).squeeze(0)
+                    r_o = torch.index_select(self.sub_r_o, 0, atb).squeeze(0)
+                    s_o = torch.index_select(self.sub_s_o, 0, atb).squeeze(0)
+
+                    if self.fast_factorize:
+                        sub_add_factor_in = torch.mm(r_i.t(), s_i)
+                        sub_add_factor_out = torch.mm(r_o.t(), s_o)
+                    else:
+                        sub_add_factor_in = torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
+                        sub_add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+
+                    # has to be additive here
+                    add_factor_in.add(sub_add_factor_in)
+                    add_factor_out.add(sub_add_factor_out)
+
                 in_weight = in_weight + add_factor_in
                 out_weight = out_weight + add_factor_out
-
-        if mixture is not None:
-            raise NotImplementedError
 
         return in_weight, out_weight, in_bias, out_bias
 
@@ -1430,7 +1494,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             self_attn_mask: torch.Tensor = None,
             self_attn_padding_mask: torch.Tensor = None,
             max_len=-1, cu_seqlens=None,
-            lang=None, mixture=None,
+            lang=None, atb=None,
             **kwargs
     ):
         """
@@ -1438,13 +1502,14 @@ class TransformerSentenceEncoderLayer(nn.Module):
         modules similar to the original Transformer imlementation.
         """
         residual = x
-        is_fast = self.self_attn.fast_attention
+        # is_fast = self.self_attn.fast_attention
+        is_fast = False
 
         def call_mlp(x, in_weight, out_weight, in_bias, out_bias, activation_fn, dropout_p, training_,
                      fused, fused_function):
 
             # TODO: check type x torch.half or torch.float32
-            if fused and x.is_cuda and is_fast:
+            if fused and x.is_cuda:
                 dropout_p_ = dropout_p if training_ else 0.0
 
                 weights = [in_weight, out_weight]
@@ -1469,7 +1534,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             residual = x
 
         if self.layer_norm_first:
-            x = self.self_attn_layer_norm(x, fast=is_fast)
+            x = self.self_attn_layer_norm(x)
 
             x, attn = self.self_attn(
                 query=x,
@@ -1478,13 +1543,13 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 key_padding_mask=self_attn_padding_mask,
                 attn_mask=self_attn_mask,
                 max_len=max_len, cu_seqlens=cu_seqlens,
-                lang=lang, mixture=mixture
+                lang=lang, atb=atb
             )
 
             if is_fast:
                 x = fused_dropout_add(x, residual, self.residual_dropout, self.training)
             else:
-                x = self.dropout1(x) + residual
+                x = self.dropout1(x).add_(residual)
 
             residual = x
 
@@ -1495,20 +1560,18 @@ class TransformerSentenceEncoderLayer(nn.Module):
                     x.add_(residual)
                     residual = x
 
-            x = self.final_layer_norm(x, fast=is_fast)
+            x = self.final_layer_norm(x)
 
-            in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, mixture=mixture)
+            in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
             x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
                          self.dropout2.p, self.training,
                          self.fused, self.fused_function)
 
-            if is_fast:
-                x = fused_dropout_add(x, residual, self.residual_dropout, self.training)
-            else:
-                x = self.dropout3(x)
-                x = residual + x
+            x = self.dropout3(x).add_(residual)
 
         else:
+            # THE BELOW CODE HAS NEVER BEEN RUN AND TESTED
+
             x, attn = self.self_attn(
                 query=x,
                 key=x,

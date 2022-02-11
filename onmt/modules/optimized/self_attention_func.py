@@ -58,6 +58,9 @@ class SelfAttnFunc(torch.autograd.Function):
         ctx.low_precision = low_precision
         ctx.use_time_mask = use_time_mask
 
+        input_weights = input_weights.contiguous()
+        output_weights = output_weights.contiguous()
+
         bsz, len_q = inputs.size(1), inputs.size(0)
 
         # print(low_precision, incremental, inputs.type())

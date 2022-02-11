@@ -250,8 +250,8 @@ def save_dataset(path, data, format, dicts, src_type):
         # torch.save(dicts, opt.save_data + '.dict.pt')
 
         # binarize the training set first
-        for set_ in ['tgt', 'src_lang', 'tgt_lang']:
-            if data[set_] is None:
+        for set_ in ['tgt', 'src_lang', 'tgt_lang', 'src_atb', 'tgt_atb']:
+            if set_ not in data or data[set_] is None:
                 continue
 
             if opt.data_type == 'int64':
@@ -297,8 +297,8 @@ def save_dataset(path, data, format, dicts, src_type):
         # torch.save(dicts, opt.save_data + '.dict.pt')
 
         # binarize the training set first
-        for set_ in ['src', 'tgt', 'src_lang', 'tgt_lang']:
-            if data[set_] is None:
+        for set_ in ['src', 'tgt', 'src_lang', 'tgt_lang', 'src_atb', 'tgt_atb']:
+            if set_ not in data or data[set_] is None:
                 continue
 
             if opt.data_type == 'int64':
@@ -451,7 +451,6 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
 
         tgt = binarized_tgt['data']
         tgt_sizes = binarized_tgt['sizes']
-        # print(tgt_sizes)
 
         ignored = 0
 
@@ -582,10 +581,12 @@ def main():
         idx = 0
         n_input_files = len(src_input_files)
 
+        ################# Training data  ###################################################################
+
         train = dict()
         train['src'], train['tgt'] = list(), list()
         train['src_sizes'], train['tgt_sizes'] = list(), list()
-        train['src_lang'], train['tgt_lang'] = list(), list()
+        train['src_atb'], train['tgt_atb'] = list(), list()
 
         data = dict()
 
@@ -655,6 +656,8 @@ def main():
                     train['past_src'] += past_src_data
                     train['past_src_sizes'] += past_src_sizes
 
+        ################# Finalizing Training data  ###################################################################
+
             if opt.multi_dataset:
 
                 data['src'] = src_data
@@ -664,6 +667,10 @@ def main():
                 data['tgt_sizes'] = tgt_sizes
                 data['src_lang'] = src_lang_data
                 data['tgt_lang'] = tgt_lang_data
+
+                if len(atbs) > 0:
+                    data['src_atb'] = src_atb_data
+                    data['tgt_atb'] = tgt_atb_data
                 print("Saving training set %i %s-%s to disk ..." % (idx, src_lang, tgt_lang))
 
                 # take basedir from opt.save_data
@@ -682,6 +689,11 @@ def main():
                 train['tgt_sizes'] += tgt_sizes
                 train['src_lang'] += src_lang_data
                 train['tgt_lang'] += tgt_lang_data
+                if len(atbs) > 0:
+                    train['src_atb'] += src_atb_data
+                    train['tgt_atb'] += tgt_atb_data
+
+        ################# Validation data  ###################################################################
 
         print('Preparing validation ...')
 
@@ -705,13 +717,14 @@ def main():
         valid['src'], valid['tgt'] = list(), list()
         valid['src_sizes'], valid['tgt_sizes'] = list(), list()
         valid['src_lang'], valid['tgt_lang'] = list(), list()
+        valid['src_atb'], valid['tgt_atb'] = list(), list()
 
         if opt.past_train_src and len(past_src_files) == len(src_input_files):
             valid['past_src'] = list()
             valid['past_src_sizes'] = list()
 
-        for i, (src_file, tgt_file, src_lang, tgt_lang) in \
-                enumerate(zip(src_input_files, tgt_input_files, src_langs, tgt_langs)):
+        for i, (src_file, tgt_file, src_lang, tgt_lang, src_atb, tgt_atb) in \
+                enumerate(zip(src_input_files, tgt_input_files, src_langs, tgt_langs, src_atbs, tgt_atbs)):
 
             src_data, tgt_data, src_sizes, tgt_sizes = make_asr_data(src_file, tgt_file,
                                                                      dicts['tgt'], tokenizer,
@@ -766,6 +779,8 @@ def main():
                 valid['past_src'] += past_src_data
                 valid['past_src_sizes'] += past_src_sizes
 
+        ### Finalizing Validation data ... #########################
+
             if opt.multi_dataset:
                 data['src'] = src_data
                 data['tgt'] = tgt_data
@@ -774,6 +789,9 @@ def main():
                 data['tgt_sizes'] = tgt_sizes
                 data['src_lang'] = src_lang_data
                 data['tgt_lang'] = tgt_lang_data
+                if len(atbs) > 0:
+                    data['src_atb'] = src_atb_data
+                    data['tgt_atb'] = tgt_atb_data
 
                 print("Saving validation set %i %s-%s to disk ..." % (idx, src_lang, tgt_lang))
 
@@ -791,6 +809,9 @@ def main():
                 valid['tgt_sizes'] += tgt_sizes
                 valid['src_lang'] += src_lang_data
                 valid['tgt_lang'] += tgt_lang_data
+                if len(atbs) > 0:
+                    valid['src_atb'] += src_atb_data
+                    valid['tgt_atb'] += tgt_atb_data
 
     else:
 
