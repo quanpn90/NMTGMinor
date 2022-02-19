@@ -67,6 +67,7 @@ class FastTranslator(Translator):
                   % (self.src_bos, self.src_eos, self.src_pad, self.src_unk))
             print("tgt bos id is %d; tgt eos id is %d;  tgt_pad id is %d; tgt unk id is %d"
                   % (self.tgt_bos, self.tgt_eos, self.tgt_pad, self.tgt_unk))
+
             print('* Using fast beam search implementation')
 
         if opt.vocab_list:
@@ -822,10 +823,9 @@ class FastTranslator(Translator):
         else:
             tgt_atb_data = None
 
-
         return onmt.Dataset(src_data, tgt_data,
                             src_langs=src_lang_data, tgt_langs=tgt_lang_data,
-                            src_atb_data=src_atb_data, tgt_atb_data=tgt_atb_data,
+                            src_atbs=src_atb_data, tgt_atbs=tgt_atb_data,
                             batch_size_words=sys.maxsize,
                             batch_size_frames=sys.maxsize,
                             cut_off_size=sys.maxsize,

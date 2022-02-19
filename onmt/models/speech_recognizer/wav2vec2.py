@@ -746,7 +746,7 @@ class Wav2vecBERT(Wav2vecTransformer):
 
         return output_dict
 
-    def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True, mixture=None, **kwargs):
+    def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True, **kwargs):
         """
         Generate a new decoder state based on the batch input
         :param buffering:
@@ -760,10 +760,14 @@ class Wav2vecBERT(Wav2vecTransformer):
         src_pos = batch.get('source_pos')
         src_lang = batch.get('source_lang')
         tgt_lang = batch.get('target_lang')
+        src_atb = batch.get('source_atbs')
+        tgt_atb = batch.get('target_atbs')
 
-        if mixture is not None:
-            raise NotImplementedError
-        encoder_output = self.encoder(src.transpose(0, 1), batch_first_output=False, lang=src_lang, mixture=mixture)
+        if src_atb is not None and tgt_atb is not None:
+            print("[INFO] Attributes: ", src_atb, tgt_atb)
+
+        encoder_output = self.encoder(src.transpose(0, 1), batch_first_output=False,
+                                      lang=src_lang, atb=src_atb)
         src_attention_mask = encoder_output['src']
 
         dec_pretrained_model = self.decoder.dec_pretrained_model
@@ -783,7 +787,8 @@ class Wav2vecBERT(Wav2vecTransformer):
         decoder_state = TransformerDecodingState(src, tgt_lang, encoder_output['context'], src_lang,
                                                  beam_size=beam_size, model_size=self.model_size,
                                                  type=type, buffering=buffering, src_mask=mask_src,
-                                                 dec_pretrained_model=self.decoder.dec_pretrained_model)
+                                                 dec_pretrained_model=self.decoder.dec_pretrained_model,
+                                                 tgt_atb=tgt_atb)
 
         return decoder_state
 
