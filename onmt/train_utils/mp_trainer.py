@@ -391,7 +391,7 @@ class Trainer(object):
 
         batch = self.train_data[0].get_largest_batch(bsz=-1, src_size=-1, tgt_size=-1) \
             if isinstance(self.train_data, list) \
-            else self.train_data.get_largest_batch(bsz=744, src_size=1601, tgt_size=-1)
+            else self.train_data.get_largest_batch(bsz=8, src_size=312961, tgt_size=78)
         opt = self.opt
 
         if self.cuda:
@@ -422,7 +422,8 @@ class Trainer(object):
             outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                  zero_encoder=opt.zero_encoder,
                                  mirror=opt.mirror_loss, streaming_state=streaming_state,
-                                 nce=opt.nce)
+                                 nce=opt.nce, checkpointing_ffn=opt.checkpointing_ffn,
+                                 checkpointing_cross_attn=opt.checkpointing_cross_attn)
 
             outputs['tgt_mask'] = tgt_mask
 
@@ -703,7 +704,10 @@ class Trainer(object):
                                              zero_encoder=opt.zero_encoder,
                                              mirror=opt.mirror_loss, streaming_state=streaming_state,
                                              nce=opt.nce, pretrained_layer_states=layer_states,
-                                             adv_ptb_grad=opt.virtual_adversarial_training_mode > 0)
+                                             adv_ptb_grad=opt.virtual_adversarial_training_mode > 0,
+                                             checkpointing_ffn=opt.checkpointing_ffn,
+                                             checkpointing_cross_attn=opt.checkpointing_cross_attn
+                                             )
 
                         batch_size = batch.size
                         # outputs is a dictionary containing keys/values necessary for loss function
@@ -1003,7 +1007,7 @@ class Trainer(object):
                 itr_progress = None
 
                 resume = True
-                start_epoch = math.floor(checkpoint['epoch']) if 'epoch' in checkpoint else 1
+                start_epoch = math.floor(checkpoint['epoch']) + 1 if 'epoch' in checkpoint else 1
                 if start_epoch is None:
                     start_epoch = 1
             else:
@@ -1030,7 +1034,7 @@ class Trainer(object):
         if self.cuda:
             self.warm_up()
 
-        if opt.load_from:
+        if opt.run_validation_before_training:
             valid_loss, valid_accuracy = self.eval(self.valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
 

@@ -351,31 +351,67 @@ __global__ void GeLU_fprop(T *X, T *Y, uint batch_size, uint features) {
 }
 
 
+// Bias ADD + ReLU. Assume input X is [features x batch size], column major.
+// Activation support fuesed ReLU. Safe to call in-place.
+template <typename T>
+__global__ void DropoutGeLU_presampled_fprop(T *X, T *Y, uint8_t *mask, uint batch_size, uint features, float p) {
+  T r_x[ILP];
+  T r_y[ILP];
+  uint8_t r_m[ILP];
+//  uint8_t r_m[ILP];
+  float pinv = 1.f/(1.f-p);
 
-// Compute grid size for pointwise backward kernel.
-// block_x/y is total elment being handled per block, not number of threads
-void get_biasAddRelu_bprop_grid_size(
-    int yfeat,
-    int batch_size,
-    int block_x,
-    int block_y,
-    int* grid_x,
-    int* grid_y) {
+  if(is_aligned(X) && is_aligned(Y) && features % ILP ==0) {
 
-  *grid_x = (yfeat + block_x - 1) / block_x;
-  // Get number of SMs for efficient reduction.
-  int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
-  // can switch to occupancy calculation. use 4 below now for sm_70
-  int max_blocks_y = (num_SMs * 4+(*grid_x)-1) / (*grid_x);
-  // block_y should be from minimal work per thread
-  int nRedSplits = (batch_size + block_y - 1) / block_y;
-  // increase number of elem per thread redcution to not launch more than enough
-  // kernel adjust work, so here we just launch max block
-  *grid_y = std::min(nRedSplits, max_blocks_y);
-  return;
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
+      load_store(r_x, X, 0 , tid);
+      load_store(r_y, Y, 0 , tid);
+      load_store(r_m, mask, 0, tid);  // mask has the same size with X
+
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        float bias_sum = static_cast<float>(r_x[ii]);
+        r_y[ii] = bias_sum;  // store the mm + bias output
+        r_x[ii] = gelu(bias_sum) * (float)(r_m[ii]) *pinv;  // gelu * dropout mask
+      }
+      load_store(X, r_x, tid , 0);  // X stores gelu output
+      load_store(Y, r_y, tid , 0);  // Y stores gelu input
+    }
+  } else {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          r_x[ii] = X[idx];
+          r_m[ii] = mask[idx];
+          r_y[ii] = Y[idx];
+        }
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        float bias_sum = static_cast<float>(r_x[ii]);
+        r_y[ii] = bias_sum;
+        r_x[ii] = gelu(bias_sum)*(float)(r_m[ii])*pinv;
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          X[idx] = r_x[ii];
+          Y[idx] = r_y[ii];
+        }
+      }
+    }
+  }
 }
 
 
+//////////////////////// BACKPROP///////////////////////////////////////
 
 
 // ReLU. Assume input X is [features x batch size], column major.
@@ -546,41 +582,6 @@ size_t get_mlp_bp_workspace (int batch_size, int num_layers, const int* output_f
 }
 #endif
 
-// Scratch space needed for reductions in number of elements
-size_t get_reduction_scratch_space(int batch_size, int num_layers, const int* output_features) {
-  size_t max_scratch_space = 0;
-  // Loop over all layers to see which one needs the max scratch space
-  for (int l = 0; l < num_layers; l++) {
-    // need to find max(aligned, not_aligned)
-    int tmp, res0, res1;
-
-    int block_x = BIAS_RELU_BW_NTHREADS_X;
-    int block_y = BIAS_RELU_RED_PER_THREAD * BIAS_RELU_BW_NTHREADS_Y;
-    get_biasAddRelu_bprop_grid_size(
-      output_features[l], batch_size, block_x, block_y, &tmp, &res0);
-
-    block_x = ILP * BIAS_RELU_BW_NTHREADS_X;
-    get_biasAddRelu_bprop_grid_size(
-      output_features[l], batch_size, block_x, block_y, &tmp, &res1);
-
-    max_scratch_space = std::max(max_scratch_space, (size_t)(output_features[l] * res0));
-    max_scratch_space = std::max(max_scratch_space, (size_t)(output_features[l] * res1));
-  }
-
-  return max_scratch_space;
-}
-
-// Buffer for semaphores
-size_t get_semaphores_size(int num_layers, const int* output_features) {
-  // Upper bound on semaphores is one per feature for the layer
-  // with the most features.
-  int max_features = 0;
-  for (int l = 0; l < num_layers; l++) {
-    max_features = std::max(max_features, output_features[l]);
-  }
-  return (size_t)max_features;
-}
-
 // Returns the work space (in elements) needed for the MLP bprop.
 template <typename T>
 size_t get_mlp_bp_workspace_in_bytes(int batch_size, int num_layers, const int* output_features) {
@@ -589,9 +590,6 @@ size_t get_mlp_bp_workspace_in_bytes(int batch_size, int num_layers, const int* 
   // Store each intermediate dY explicitly. Need 2 dYs per MLP layer (one for o/p
   // of biasReLU_bp and one for o/p of dgrad GEMM).
   work_space += 2 * get_all_activations_size(batch_size, num_layers, output_features) * sizeof(T);
-//   work_space +=
-//       get_reduction_scratch_space(batch_size, num_layers, output_features) * sizeof(float);
-//   work_space += get_semaphores_size(num_layers, output_features) * sizeof(int);
 
   return work_space;
 }
@@ -629,9 +627,9 @@ int mlp_fp(
     int input_features,
     int batch_size,
     T** WPtr,
+    T** BPtr,
     int num_layers,
     int* output_features,
-    T** BPtr,
     T* Y,
     T* reserved_space,
     T* reserved_activations,
@@ -789,6 +787,7 @@ int mlp_bp(
     int input_features,
     int batch_size,
     T** WPtr,
+    T** BPtr,
     int num_layers,
     int* output_features,
     T* dY,
@@ -801,22 +800,137 @@ int mlp_bp(
     T** dbPtr,
     bool requires_grad,
     void* lt_workspace,
-    float p) {
-  T* weight;
+    float p,
+    bool recompute) {
+  T *weight, *input, *output, *hidden, *bias;
   T *dweight, *dx, *dy, *dbias;
   T *x, *y, *h;
   uint8_t *mask;
-//  int activation = 1;
+  float one = 1.f;
+  float zero = 0.f;
+  int cublas_status;
+  int xfeat, yfeat, ofeat, ifeat;
+
+  // if recompute: reserved space, reserved activation have to be recompute from X, Weights and biases
+
+  // Get cublas handle from Pytorch
+  cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
+  // Get the stream from cublas handle to reuse for biasReLU kernel.
+  cudaStream_t stream;
+  cublasGetStream(handle, &stream);
+
+  if (recompute)    {
+    uint8_t *mask,  *reserved_space_m;
+    T *reserved_space_x, *reserved_space_y, *reserved_space_a;
+    reserved_space_x = NULL;
+    reserved_space_a = reserved_activations;
+    reserved_space_y = reserved_space;
+    reserved_space_m = reserved_mask;
+
+    for (int layer = 0; layer < num_layers; layer++) {
+        weight = WPtr[layer];
+        input = (layer == 0) ? X : reserved_space_x;
+        output = (layer == num_layers - 1) ? Y : reserved_space_y;  // after activation/dropout
+        mask = (layer == num_layers - 1 || p == 0) ? NULL : reserved_space_m;
+        hidden = (layer == num_layers - 1) ? NULL : reserved_space_a; // before activation/dropout
+        bias = BPtr[layer];
+        ifeat = (layer == 0) ? input_features : output_features[layer - 1];
+        ofeat = output_features[layer];
+
+        bool use_gelu = (layer < (num_layers - 1) && p == 0);
+
+        if (use_gelu)
+            cublas_status = gemm_bias_gelu_lt(
+                (cublasLtHandle_t)handle,
+                CUBLAS_OP_T,
+                CUBLAS_OP_N,
+                ofeat,
+                batch_size,
+                ifeat,
+                &one, /* host pointer */
+                weight,
+                ifeat,
+                input,
+                ifeat,
+                &zero, /* host pointer */
+                output,
+                ofeat,
+                lt_workspace,
+                1 << 22,
+                stream,
+                true,
+                static_cast<const void*>(hidden),
+                static_cast<const void*>(bias));
+
+        else
+            cublas_status = gemm_bias_lt(
+                (cublasLtHandle_t)handle,
+                CUBLAS_OP_T,
+                CUBLAS_OP_N,
+                ofeat,
+                batch_size,
+                ifeat,
+                &one, /* host pointer */
+                weight,
+                ifeat,
+                input,
+                ifeat,
+                &zero, /* host pointer */
+                output,
+                ofeat,
+                lt_workspace,
+                1 << 22,
+                stream,
+                true,
+                static_cast<const void*>(bias));
+
+        if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+            printf("GEMM fprop failed with %d\n", cublas_status);
+            return 1;
+        }
+
+        const uint &input_size = ofeat;
+        int num_blocks = 0;
+        int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
+
+        if (layer == (num_layers -1)) { // no activation
+          // do nothing here
+        } else {  // GELU
+          if (p == 0) {
+               // gelu has already been applied at mlp_gemm
+          } else {
+            cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, DropoutGeLU_presampled_fprop<T>,
+                                                          BIAS_RELU_FW_NTHREADS, 0);
+            //number of times random will be generated per thread, to offset philox counter in thc random state
+            int64_t counter_offset = ((input_size*batch_size-1)/(BIAS_RELU_FW_NTHREADS*num_SMs*num_blocks*ILP)+1)*ILP;
+            // actually its gelu -> dropout
+            DropoutGeLU_presampled_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0,
+                                 stream>>>(output, hidden, mask, batch_size, input_size, p);
+          }
+        }
+
+        // Set current output (after activation) as next layer input
+        reserved_space_x = reserved_space_y;
+        // Set next layer output
+
+        if (layer < (num_layers -1)) {
+            reserved_space_y += ofeat * batch_size;
+            reserved_space_a += ofeat * batch_size;
+            if (p > 0.0)
+                reserved_space_m += ofeat * batch_size;
+        }
+
+    }
+
+  }
+
+  // Backward starts
 
   // Where the dx of the biasReLU (== dy of gemm) is stored. Can be thrown away
   // after bp call.
   T* dy_gemm_base;
   // Where the dx after GEMM is stored.
   T* dx_gemm_base;
-  // Where partial reduction results are stored.
-//   float* db_scratch;
-  // Semaphores for reduction.
-//   int* semaphores;
 
   partition_mlp_bp_workspace<T>(
       batch_size,
@@ -825,16 +939,6 @@ int mlp_bp(
       work_space,
       &dy_gemm_base,
       &dx_gemm_base);
-//       &db_scratch,
-//       &semaphores);
-
-//   size_t semaphore_size = get_semaphores_size(num_layers, output_features) * sizeof(int);
-
-  // Get cublas handle from Pytorch
-  cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
-  // Get the stream from cublas handle to reuse for biasReLU kernel.
-  cudaStream_t stream;
-  cublasGetStream(handle, &stream);
 
   int* y_offsets = (int*)malloc(num_layers * sizeof(int));
   get_y_offsets(batch_size, num_layers, output_features, y_offsets);
@@ -862,31 +966,14 @@ int mlp_bp(
     T* dy_gemm = dy_gemm_base + y_offsets[layer];
 
     dbias = dbPtr[layer];
-    int xfeat = (layer == 0) ? input_features : output_features[layer - 1];
-    int yfeat = output_features[layer];
+    xfeat = (layer == 0) ? input_features : output_features[layer - 1];
+    yfeat = output_features[layer];
 
-    float one = 1.f;
-    float zero = 0.f;
-
-    if (layer == (num_layers -1)) { // no activation
-        // bgrad
-//         dim3 block(BIAS_RELU_BW_NTHREADS_X, BIAS_RELU_BW_NTHREADS_Y);
-//         int grid_x, grid_y;
-//         cudaMemsetAsync(semaphores, 0, semaphore_size, stream);
-//
-//         int block_x = BIAS_RELU_BW_NTHREADS_X;
-//         int block_y = BIAS_RELU_RED_PER_THREAD * BIAS_RELU_BW_NTHREADS_Y;
-//         get_biasAddRelu_bprop_grid_size(yfeat, batch_size, block_x, block_y, &grid_x, &grid_y);
-//         dim3 grid(grid_x, grid_y);
-//         biasAdd_bprop<T, 4><<<grid, block, 0, stream>>>(
-//           dy, yfeat, batch_size, db_scratch, semaphores, dbias);
+    if (layer == (num_layers - 1)) { // no activation
         // Don't need to do anything
         // bypass dgrad through reset pointer
         dy_gemm = dy;
     } else  { // gelu
-//         dim3 block(BIAS_RELU_BW_NTHREADS_X, BIAS_RELU_BW_NTHREADS_Y);
-//         int grid_x, grid_y;
-//         cudaMemsetAsync(semaphores, 0, semaphore_size, stream);
         int num_blocks = 0;
         int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
 
@@ -925,9 +1012,8 @@ int mlp_bp(
     }
 
     // Call GEMM wgrad and bgrad
-
-    int cublaslt_status = 1;
-    cublaslt_status = gemm_bgradb_lt(
+    int cublaslt_status_ = 1;
+    cublaslt_status_ = gemm_bgradb_lt(
         (cublasLtHandle_t)handle,
         CUBLAS_OP_N,
         CUBLAS_OP_T,
@@ -948,7 +1034,7 @@ int mlp_bp(
         true,
         static_cast<void*>(dbias));
 
-    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+    if (cublaslt_status_ != CUBLAS_STATUS_SUCCESS) {
       printf("GEMM wgrad failed with %d\n", cublas_status);
       return 1;
     }
@@ -1083,15 +1169,19 @@ int mlp_bp_input_only(
 }
 
 
+
+
+
+
 // Instantiate for floating point types
 template int mlp_fp<float>(
     float* X,
     int input_features,
     int batch_size,
     float** WPtr,
+    float** BPtr,
     int num_layers,
     int* output_features,
-    float** BPtr,
     float* Y,
     float* reserved_space,
     float* reserved_activations,
@@ -1105,6 +1195,7 @@ template int mlp_bp<float>(
     int input_features,
     int batch_size,
     float** WPtr,
+    float** BPtr,
     int num_layers,
     int* output_features,
     float* dY,
@@ -1117,7 +1208,8 @@ template int mlp_bp<float>(
     float** dbPtr,
     bool requires_grad,
     void* lt_workspace,
-    float p);
+    float p,
+    bool recompute);
 
 template int mlp_bp_input_only<float>(
     float* X,
@@ -1142,9 +1234,9 @@ template int mlp_fp<at::Half>(
     int input_features,
     int batch_size,
     at::Half** WPtr,
+    at::Half** BPtr,
     int num_layers,
     int* output_features,
-    at::Half** BPtr,
     at::Half* Y,
     at::Half* reserved_space,
     at::Half* reserved_activations,
@@ -1158,6 +1250,7 @@ template int mlp_bp<at::Half>(
     int input_features,
     int batch_size,
     at::Half** WPtr,
+    at::Half** BPtr,
     int num_layers,
     int* output_features,
     at::Half* dY,
@@ -1170,7 +1263,8 @@ template int mlp_bp<at::Half>(
     at::Half** dbPtr,
     bool requires_grad,
     void* lt_workspace,
-    float p);
+    float p,
+    bool recompute);
 
 template int mlp_bp_input_only<at::Half>(
     at::Half* X,
@@ -1195,9 +1289,9 @@ template int mlp_fp<double>(
     int input_features,
     int batch_size,
     double** WPtr,
+    double** BPtr,
     int num_layers,
     int* output_features,
-    double** BPtr,
     double* Y,
     double* reserved_space,
     double* reserved_activations,
@@ -1211,6 +1305,7 @@ template int mlp_bp<double>(
     int input_features,
     int batch_size,
     double** WPtr,
+    double** Btr,
     int num_layers,
     int* output_features,
     double* dY,
@@ -1223,7 +1318,8 @@ template int mlp_bp<double>(
     double** dbPtr,
     bool requires_grad,
     void* lt_workspace,
-    float p);
+    float p,
+    bool recompute);
 
 template int mlp_bp_input_only<double>(
     double* X,

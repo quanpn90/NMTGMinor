@@ -238,9 +238,10 @@ class FairseqWav2Vec(nn.Module):
         return context
 
     def forward(self, input, batch_first_output=False, adv_ptb_grad=False, input_ptb=None,
-                lang=None, mixture=None, **kwargs):
+                lang=None, atb=None, checkpointing_ffn=False, **kwargs):
         """
-        :param mixture:
+        :param checkpointing_ffn:
+        :param atb:
         :param lang:
         :param input_ptb: perturbation added to the input itself
         :param adv_ptb_grad: adversarial perturbation step which we need the gradients w.r.t the input (wavs)
@@ -293,7 +294,8 @@ class FairseqWav2Vec(nn.Module):
                                               mask=self.training, features_only=True, layer=None,
                                               precomputed_tdnn=precomputed_tdnn, quantize=self.quantize,
                                               quantize_only=quantize_only,
-                                              lang=lang, mixture=mixture)
+                                              lang=lang, atb=atb,
+                                              checkpointing_ffn=checkpointing_ffn)
 
         # if self.quantize:
         #     quantized_codebooks = wav2vec_output['quantized_target']
@@ -488,7 +490,8 @@ class Wav2vecTransformer(Transformer):
         """
         src = batch.get('source')
         src_pos = batch.get('source_pos')
-        tgt_atb = batch.get('target_atb')
+        tgt_atb = batch.get('target_atbs')
+        src_atb = batch.get('source_atbs')
         src_lang = batch.get('source_lang')
         tgt_lang = batch.get('target_lang')
 
@@ -562,9 +565,17 @@ class Wav2vecBERT(Wav2vecTransformer):
         if self.ctc:
             self.ctc_linear = nn.Linear(encoder.model_size, self.tgt_vocab_size)
 
-    def forward(self, batch, zero_encoder=False, factorize=False, target_mask=None, mirror=False, **kwargs):
+    def forward(self, batch, zero_encoder=False, factorize=False, target_mask=None, mirror=False,
+                checkpointing_ffn=False, checkpointing_cross_attn=False, **kwargs):
         """
-        :param batch: data object sent from the dataset
+        :param checkpointing_cross_attn:
+        :param checkpointing_ffn:
+        :param batch:
+        :param zero_encoder:
+        :param factorize:
+        :param target_mask:
+        :param mirror:
+        :param kwargs:
         :return:
         """
         if self.switchout > 0 and self.training:
@@ -591,7 +602,8 @@ class Wav2vecBERT(Wav2vecTransformer):
 
         # during training mixture is always None
         encoder_output = self.encoder(src, batch_first_output=batch_first_output,
-                                      lang=src_lang, atb=src_atb)
+                                      lang=src_lang, atb=src_atb,
+                                      checkpointing_ffn=checkpointing_ffn)
 
         encoder_output = defaultdict(lambda: None, encoder_output)
 
@@ -608,7 +620,8 @@ class Wav2vecBERT(Wav2vecTransformer):
                                           token_type_ids=tgt_token_type,
                                           encoder_hidden_states=context,
                                           encoder_attention_mask=src_attention_mask,
-                                          no_offset=True)
+                                          no_offset=True,
+                                          )
 
             decoder_output = decoder_output[0]
             output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
@@ -655,7 +668,9 @@ class Wav2vecBERT(Wav2vecTransformer):
                                           encoder_attention_mask=src_attention_mask,
                                           sub_encoder_hidden_states=sub_context,
                                           sub_encoder_attention_mask=sub_context_mask,
-                                          lang=tgt_lang, atb=tgt_atb)
+                                          lang=tgt_lang, atb=tgt_atb,
+                                          checkpointing_ffn=checkpointing_ffn,
+                                          checkpointing_cross_attn=checkpointing_cross_attn)
             decoder_output = decoder_outputs[0]
             contrastive_loss = decoder_outputs[-1]
             output = decoder_output

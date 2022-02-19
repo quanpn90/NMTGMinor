@@ -131,12 +131,19 @@ class MlpGELUFunction(torch.autograd.Function):
 
         if mlp_gelu_blaslt is not None:
             output = mlp_gelu_blaslt.forward(p, args)
+            if recompute:
+                ctx.outputs = (output[0], output[-1])
+                del output[1]
+                del output[2]
+            else:
+                ctx.outputs = output
         else:
             output = fused_mlp_gelu.forward(p, args)
+            ctx.outputs = output
         ctx.save_for_backward(*args)
-        ctx.outputs = output
-        dropout_mask = output[-1]
+        # dropout_mask = output[-1]
         ctx.p = p
+        ctx.recompute = recompute
         ctx.requires_grad_weight = args[1].requires_grad
         return output[0]
 
@@ -144,9 +151,10 @@ class MlpGELUFunction(torch.autograd.Function):
     @custom_bwd
     def backward(ctx, *grad_o):
         p = ctx.p
+        recompute = ctx.recompute
         if ctx.requires_grad_weight:
             if mlp_gelu_blaslt is not None:
-                grads = mlp_gelu_blaslt.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
+                grads = mlp_gelu_blaslt.backward(p, recompute, grad_o[0], ctx.outputs, ctx.saved_tensors)
             else:
                 grads = fused_mlp_gelu.backward(p, grad_o[0], ctx.outputs, ctx.saved_tensors)
         else:
@@ -159,6 +167,9 @@ class MlpGELUFunction(torch.autograd.Function):
 
         del ctx.requires_grad_weight
         del ctx.outputs
+        del ctx.p
+        del ctx.recompute
+
         return (None, None, *grads)
 
 

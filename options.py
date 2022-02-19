@@ -12,6 +12,8 @@ def make_parser(parser):
 
     parser.add_argument('-multi_dataset', action='store_true',
                         help='Reading multiple datasets (sharing the same dictionary)')
+    parser.add_argument('-run_validation_before_training', action='store_true',
+                        help='Run validation before training')
     parser.add_argument('-delay_sync', action="store_true",
                         help="""Delay syncing in DDP""")
 
@@ -220,7 +222,7 @@ def make_parser(parser):
                         help="""Number of steps to train the model""")
     parser.add_argument('-noam_step_interval', type=int, default=1,
                         help="""How many steps before updating the parameters""")
-    parser.add_argument('-max_step', type=int, default=40000,
+    parser.add_argument('-max_step', type=int, default=4000000,
                         help="""How many steps before updating the parameters""")
     parser.add_argument('-starting_step', type=int, default=-1,
                         help="""How many steps before updating the parameters""")
@@ -415,8 +417,11 @@ def make_parser(parser):
     parser.add_argument('-enc_pretrain_hidden_dropout', type=float, default=0.0,
                         help="""dropout applied on bert hidden, corresponds to hidden_dropout_prob""")
 
-    parser.add_argument('-enc_gradient_checkpointing', action='store_true',
-                        help='use gradient checkpointing on encdoer')
+    parser.add_argument('-checkpointing_ffn', action='store_true',
+                        help='use gradient checkpointing on FFN layers')
+
+    parser.add_argument('-checkpointing_cross_attn', action='store_true',
+                        help='use gradient checkpointing on Cross Attn layers')
 
     parser.add_argument('-before_enc_output_ln', action='store_true',
                         help='LayersNnormalization before output for plm as encoder')

@@ -71,6 +71,11 @@ class Translator(object):
                 else:
                     self.lang_dict = {'src': 0, 'tgt': 1}
 
+                if "atbs" in checkpoint["dicts"]:
+                    self.atb_dict = checkpoint['dicts']['atbs']
+                else:
+                    self.atb_dict = {'nothingness': 0}
+
                 self.bos_id = self.tgt_dict.labelToIdx[self.bos_token]
                 print("[INFO] Bos Token: %s Bos_ID: %d" % (self.bos_token, self.bos_id))
 

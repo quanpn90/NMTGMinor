@@ -7,7 +7,8 @@ cimport numpy as np
 DTYPE=np.int64
 ctypedef np.int64_t DTYPE_t
 
-cdef _oversized(list batch, long new_sent_length, list cur_batch_sizes, long batch_size_words, long batch_size_sents):
+cdef _oversized(list batch, long new_sent_length, list cur_batch_sizes, long batch_size_words, long batch_size_sents,
+                ):
 
     if len(batch) == 0:
         return 0
@@ -28,8 +29,7 @@ cpdef list fast_batch_allocate(
         np.ndarray[DTYPE_t, ndim=1] src_sizes, np.ndarray[DTYPE_t, ndim=1] tgt_sizes,
         long batch_size_words, long batch_size_sents, long batch_size_multiplier,
         long max_src_len, long max_tgt_len,
-        long min_src_len, long min_tgt_len, int cleaning
-):
+        long min_src_len, long min_tgt_len, int cleaning):
 
     cdef long batch_size = 0
     cdef list batch = []
@@ -82,7 +82,8 @@ cpdef list fast_batch_allocate(
 
 cdef _oversized_frames(list batch, long new_size_frames, long new_size_words,
                        list cur_batch_size_frames, list cur_batch_size_words,
-                       long batch_size_frames, long batch_size_words, long batch_size_sents):
+                       long batch_size_frames, long batch_size_words, long batch_size_sents,
+                       long cut_off_size, long smallest_batch_size):
 
     if len(batch) == 0:
         return 0
@@ -92,12 +93,16 @@ cdef _oversized_frames(list batch, long new_size_frames, long new_size_words,
     #
     # if max(max(cur_batch_sizes), new_sent_length) * (len(batch) + 1) > batch_size_words:
     #     return 1
+    # check if the current batch is too long
+    if max(max(cur_batch_size_frames), new_size_frames) > cut_off_size:
+        if len(batch) >= smallest_batch_size:
+            return 1
 
-    # try adding the new utterance and check if its oversized in frame limit?
+    # try adding the new utterance and check if it's oversized in frame limit?
     if max(max(cur_batch_size_frames), new_size_frames) * (len(batch) + 1) > batch_size_frames:
         return 1
 
-    # try adding the new sentence and check if its oversized in word limit?
+    # try adding the new sentence and check if it's oversized in word limit?
     if max(max(cur_batch_size_words), new_size_words) * (len(batch) + 1) > batch_size_words:
         return 1
 
@@ -112,7 +117,8 @@ cpdef list fast_batch_allocate_unbalance(
         np.ndarray[DTYPE_t, ndim=1] src_sizes, np.ndarray[DTYPE_t, ndim=1] tgt_sizes,
         long batch_size_frames, long batch_size_words, long batch_size_sents, long batch_size_multiplier,
         long max_src_len, long max_tgt_len,
-        long min_src_len, long min_tgt_len, int cleaning
+        long min_src_len, long min_tgt_len, int cleaning,
+        long cut_off_size, long smallest_batch_size
 ):
 
     cdef long batch_size = 0
@@ -145,7 +151,8 @@ cpdef list fast_batch_allocate_unbalance(
 
         oversized = _oversized_frames(batch, src_size, tgt_size,
                                       cur_batch_size_frames, cur_batch_size_words,
-                                      batch_size_frames, batch_size_words, batch_size_sents)
+                                      batch_size_frames, batch_size_words, batch_size_sents,
+                                      cut_off_size, smallest_batch_size)
 
         if oversized:
             current_size = len(batch)

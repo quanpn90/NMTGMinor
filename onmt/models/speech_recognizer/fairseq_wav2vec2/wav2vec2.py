@@ -584,6 +584,7 @@ class Wav2Vec2Model(torch.nn.Module):
             quantize=False, quantize_only=False,
             lang=None,
             atb=None,
+            checkpointing_ffn=False,
             **kwargs
     ):
         # if the tdnn features are precomputed then skip them
@@ -693,7 +694,8 @@ class Wav2Vec2Model(torch.nn.Module):
             y = unmasked_features
             mask_indices = None
 
-        x, layer_results = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, atb=atb)
+        x, layer_results = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, atb=atb,
+                                        checkpointing_ffn=checkpointing_ffn)
 
         if features_only:
             output_dict =  {
@@ -1039,15 +1041,17 @@ class TransformerEncoder(nn.Module):
         from onmt.modules.optimized.fast_mha import fast_bert_mha
         self.fast_bert_mha = fast_bert_mha
 
-    def forward(self, x, padding_mask=None, layer=None, lang=None, atb=None):
-        x, layer_results = self.extract_features(x, padding_mask, layer, lang=lang, atb=atb)
+    def forward(self, x, padding_mask=None, layer=None, lang=None, atb=None, checkpointing_ffn=False, **kwargs):
+        x, layer_results = self.extract_features(x, padding_mask, layer, lang=lang, atb=atb,
+                                                 checkpointing_ffn=checkpointing_ffn)
 
         if self.layer_norm_first and layer is None:
             x = self.layer_norm(x)
 
         return x, layer_results
 
-    def extract_features(self, x, padding_mask=None, tgt_layer=None, lang=None, atb=None):
+    def extract_features(self, x, padding_mask=None, tgt_layer=None, lang=None, atb=None,
+                         checkpointing_ffn=False):
         if padding_mask is not None:
             x = index_put(x, padding_mask, 0)
 
@@ -1122,7 +1126,7 @@ class TransformerEncoder(nn.Module):
                 if not self.training or (dropout_probability > self.layerdrop):
                     x, z = layer(x, self_attn_padding_mask=padding_mask,
                                  max_len=max_len, cu_seqlens=cu_seqlens,
-                                 lang=lang, atb=atb)
+                                 lang=lang, atb=atb, checkpointing_ffn=checkpointing_ffn)
                     if tgt_layer is not None:
                         layer_results.append((x, z))
                 if i == tgt_layer:
@@ -1434,6 +1438,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
                     # TODO: allow for multiple sub factorizers
                     if self.sub_factorized and atb is not None:
+                        # print("Found atb at multiplication:", atb)
                         rm_i = torch.index_select(self.sub_rm_i, 0, atb).squeeze(0)  # squeeze possible because only 1
                         sm_i = torch.index_select(self.sub_sm_i, 0, atb).squeeze(0)
                         rm_o = torch.index_select(self.sub_rm_o, 0, atb).squeeze(0)
@@ -1467,6 +1472,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
                     add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
 
                 if self.sub_factorized and atb is not None:
+                    # print("Found atb at addition:", atb)
                     r_i = torch.index_select(self.sub_r_i, 0, atb).squeeze(0)
                     s_i = torch.index_select(self.sub_s_i, 0, atb).squeeze(0)
                     r_o = torch.index_select(self.sub_r_o, 0, atb).squeeze(0)
@@ -1495,6 +1501,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             self_attn_padding_mask: torch.Tensor = None,
             max_len=-1, cu_seqlens=None,
             lang=None, atb=None,
+            checkpointing_ffn=False,
             **kwargs
     ):
         """
@@ -1506,7 +1513,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         is_fast = False
 
         def call_mlp(x, in_weight, out_weight, in_bias, out_bias, activation_fn, dropout_p, training_,
-                     fused, fused_function):
+                     fused, fused_function, checkpointing):
 
             # TODO: check type x torch.half or torch.float32
             if fused and x.is_cuda:
@@ -1515,7 +1522,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 weights = [in_weight, out_weight]
                 biases = [in_bias, out_bias]
 
-                x = fused_function(dropout_p_, False, x, *weights, *biases)
+                x = fused_function(dropout_p_, checkpointing, x, *weights, *biases)
 
             else:
                 x = F.linear(x, in_weight, in_bias)
@@ -1532,7 +1539,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
             x.add_(residual)  # residual is before the big FFN
             residual = x
-
         if self.layer_norm_first:
             x = self.self_attn_layer_norm(x)
 
@@ -1565,7 +1571,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
             x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
                          self.dropout2.p, self.training,
-                         self.fused, self.fused_function)
+                         self.fused, self.fused_function, checkpointing_ffn)
 
             x = self.dropout3(x).add_(residual)
 

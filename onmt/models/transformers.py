@@ -829,7 +829,7 @@ class Transformer(NMTModel):
 class TransformerDecodingState(DecoderState):
 
     def __init__(self, src, tgt_lang, context, src_lang, beam_size=1, model_size=512, type=2,
-                 cloning=True, buffering=False, src_mask=None,
+                 cloning=True, buffering=False, src_mask=None, tgt_atb=None,
                  dec_pretrained_model="", ):
 
         """
@@ -849,6 +849,7 @@ class TransformerDecodingState(DecoderState):
         self.attention_buffers = dict()
         self.buffering = buffering
         self.dec_pretrained_model = dec_pretrained_model
+        self.tgt_atb = tgt_atb
 
         if type == 1:
             # if audio only take one dimension since only used for mask

@@ -383,6 +383,9 @@ class Dataset(torch.utils.data.Dataset):
         self.min_src_len = kwargs.get('min_src_len', 2)
         self.batch_size_frames = batch_size_frames
 
+        cut_off_size = kwargs.get('cut_off_size', 200000)
+        smallest_batch_size = kwargs.get('smallest_batch_size', 4)
+
         if self.max_src_len is None:
             if self._type == 'text':
                 self.max_src_len = 256
@@ -486,13 +489,14 @@ class Dataset(torch.utils.data.Dataset):
         # if verbose:
         #     print("* Allocating mini-batches ...")
         if self._type in ['audio', 'wav']:
-            # print("ALLOCATE FRAMES AND WORDS SEPARATELY")
+
             self.batches = allocate_batch_unbalanced(self.order, self.data_lengths,
                                                      self.src_sizes, self.tgt_sizes,
                                                      batch_size_frames, batch_size_words,
                                                      batch_size_sents, self.multiplier,
                                                      self.max_src_len, self.max_tgt_len,
-                                                     self.min_src_len, self.min_tgt_len, self.cleaning)
+                                                     self.min_src_len, self.min_tgt_len, self.cleaning,
+                                                     cut_off_size, smallest_batch_size)
         else:
             self.batches = allocate_batch(self.order, self.data_lengths,
                                           self.src_sizes, self.tgt_sizes,

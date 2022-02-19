@@ -544,7 +544,7 @@ class MBartCrossAttention(MBartAttention):
             key_value_states: Optional[torch.Tensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
             output_attentions: bool = False,
-            lang=None, atb=None,
+            lang=None, atb=None, checkpointing=False,
             incremental=False, incremental_cache=None, **kwargs
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
@@ -645,7 +645,7 @@ class MBartCrossAttention(MBartAttention):
                 in_proj_weight_kv = in_proj_weight_kv + add_factor_kv
                 out_proj_weight = out_proj_weight + add_factor_out
 
-            recompute = False
+            recompute = checkpointing
             key_value_states = key_value_states
 
             # TODO: Add factorize
@@ -984,12 +984,6 @@ class MBartDecoderLayer(nn.Module):
             dropout=config.attention_dropout
         )
 
-        # self.encoder_attn = MBartCrossAttentionSlow(
-        #     self.embed_dim,
-        #     config.decoder_attention_heads,
-        #     dropout=config.attention_dropout
-        # )
-
         self.activation_fn_name = config.activation_function
         self.fused = False
         self.fused_function = None
@@ -1191,7 +1185,7 @@ class MBartDecoderLayer(nn.Module):
         return in_weight, out_weight, in_bias, out_bias
 
     def call_mlp(self, x, in_weight, out_weight, in_bias, out_bias, activation_fn, dropout_p, training_,
-                 fused, fused_function):
+                 fused, fused_function, checkpointing):
         """
         Move the MLP section to a different function to choose between pytorch and custom mlp
         :param x:
@@ -1214,7 +1208,7 @@ class MBartDecoderLayer(nn.Module):
             weights = [in_weight, out_weight]
             biases = [in_bias, out_bias]
 
-            x = fused_function(dropout_p_, False, x, *weights, *biases)
+            x = fused_function(dropout_p_, checkpointing, x, *weights, *biases)
 
         else:
             x = F.linear(x, in_weight, in_bias)
@@ -1235,9 +1229,13 @@ class MBartDecoderLayer(nn.Module):
             output_attentions: Optional[bool] = False,
             incremental: Optional[bool] = False,
             incremental_cache=None,
+            checkpointing_ffn=False,
+            checkpointing_cross_attn=False,
             lang=None, atb=None, **kwargs
     ):
         """
+        :param checkpointing_cross_attn:
+        :param checkpointing_ffn: Recompute the middle-layer of FFN to save memory
         :param hidden_states:
         :param attention_mask:
         :param encoder_hidden_states:
@@ -1289,6 +1287,7 @@ class MBartDecoderLayer(nn.Module):
                 attention_mask=encoder_attention_mask,
                 output_attentions=output_attentions,
                 incremental=incremental, incremental_cache=incremental_cache,
+                checkpointing=checkpointing_cross_attn,
                 lang=lang, atb=atb
             )
 
@@ -1334,7 +1333,7 @@ class MBartDecoderLayer(nn.Module):
         in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
         hidden_states = self.call_mlp(hidden_states, in_weight, out_weight, in_bias, out_bias,
                                       self.activation_fn, self.activation_dropout, self.training,
-                                      self.fused, self.fused_function)
+                                      self.fused, self.fused_function, checkpointing_ffn)
 
         # hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
@@ -1828,9 +1827,11 @@ class MBartDecoder(MBartPreTrainedModel):
             lang=None, atb=None,
             output_attentions=None,
             output_hidden_states=None,
-            return_dict=None,
+            checkpointing_ffn=False,
+            checkpointing_cross_attn=False,
     ):
         """
+        :param checkpointing_cross_attn:
         :param input_ids: [batch_size x seq_len]
         :param attention_mask:
         :param encoder_hidden_states:
@@ -1844,7 +1845,7 @@ class MBartDecoder(MBartPreTrainedModel):
         :param atb:
         :param output_attentions:
         :param output_hidden_states:
-        :param return_dict:
+        :param checkpointing_ffn:
         :return:
         """
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -1924,7 +1925,9 @@ class MBartDecoder(MBartPreTrainedModel):
                 sub_encoder_attention_mask=sub_encoder_attention_mask,
                 output_attentions=output_attentions,
                 lang=lang,
-                atb=atb
+                atb=atb,
+                checkpointing_ffn=checkpointing_ffn,
+                checkpointing_cross_attn=checkpointing_cross_attn,
             )
             hidden_states = layer_outputs[0]
 

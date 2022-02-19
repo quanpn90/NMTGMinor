@@ -627,10 +627,10 @@ class MultiheadAttention(nn.Module):
 
                     if self.sub_factorized and atb is not None:
 
-                        r_i = torch.index_select(self.sub_r_i, 0, lang).squeeze(0)
-                        s_i = torch.index_select(self.sub_s_i, 0, lang).squeeze(0)
-                        r_o = torch.index_select(self.sub_r_o, 0, lang).squeeze(0)
-                        s_o = torch.index_select(self.sub_s_o, 0, lang).squeeze(0)
+                        r_i = torch.index_select(self.sub_r_i, 0, atb).squeeze(0)
+                        s_i = torch.index_select(self.sub_s_i, 0, atb).squeeze(0)
+                        r_o = torch.index_select(self.sub_r_o, 0, atb).squeeze(0)
+                        s_o = torch.index_select(self.sub_s_o, 0, atb).squeeze(0)
 
                         if self.fast_factorize:
                             sub_add_factor_in = torch.mm(r_i.t(), s_i)

@@ -809,10 +809,27 @@ class FastTranslator(Translator):
         else:
             tgt_lang_data = [torch.Tensor([0])]
 
+        src_atb = self.opt.src_atb
+        tgt_atb = self.opt.tgt_atb
+
+        if src_atb in self.atb_dict:
+            src_atb_data = [torch.Tensor([self.atb_dict[src_atb]])]
+        else:
+            src_atb_data = None
+
+        if tgt_atb in self.atb_dict:
+            tgt_atb_data = [torch.Tensor([self.atb_dict[tgt_atb]])]
+        else:
+            tgt_atb_data = None
+
+
         return onmt.Dataset(src_data, tgt_data,
                             src_langs=src_lang_data, tgt_langs=tgt_lang_data,
+                            src_atb_data=src_atb_data, tgt_atb_data=tgt_atb_data,
                             batch_size_words=sys.maxsize,
                             batch_size_frames=sys.maxsize,
+                            cut_off_size=sys.maxsize,
+                            smallest_batch_size=sys.maxsize,
                             max_src_len=sys.maxsize,
                             data_type=data_type,
                             batch_size_sents=sys.maxsize,

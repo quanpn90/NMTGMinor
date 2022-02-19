@@ -29,7 +29,7 @@ class Parameters(torch.nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        std_ = 0.02
+        std_ = 0.002
         torch.nn.init.normal_(self.in_proj_weight_q, 0.0, std_)
         torch.nn.init.normal_(self.in_proj_weight_kv, 0.0, std_)
         torch.nn.init.normal_(self.out_proj_weight, 0.0, std_)
@@ -47,8 +47,8 @@ class SelfMultiheadAttnTest(unittest.TestCase):
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
-        self.seq_length_q = 512
-        self.seq_length_kv = 1024
+        self.seq_length_q = 64
+        self.seq_length_kv = 512
         self.sequences = 64
         self.hidden_dim = 1024
         self.heads = 16
@@ -132,16 +132,22 @@ class SelfMultiheadAttnTest(unittest.TestCase):
 
         self.assertTrue(torch.allclose(ref_output, tst_output, atol=1e-2, rtol=1e-2))
 
-        self.assertTrue(torch.allclose(self.ref_parameters.out_proj_weight.grad,
-                                       self.tst_parameters.out_proj_weight.grad,
-                                       atol=1e-3, rtol=1e-3))
+        np.testing.assert_allclose(
+            self.ref_parameters.out_proj_weight.grad.detach().cpu().numpy(),
+            self.tst_parameters.out_proj_weight.grad.detach().cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
 
-        self.assertTrue(torch.allclose(self.ref_parameters.out_proj_bias.grad,
-                                       self.tst_parameters.out_proj_bias.grad,
-                                       atol=1e-2, rtol=1e-2))
+        np.testing.assert_allclose(
+            self.ref_parameters.out_proj_bias.grad.detach().cpu().numpy(),
+            self.tst_parameters.out_proj_bias.grad.detach().cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
+        #
+        # self.assertTrue(torch.allclose(self.ref_parameters.out_proj_bias.grad,
+        #                                self.tst_parameters.out_proj_bias.grad,
+        #                                atol=1e-2, rtol=1e-2))
 
-        print("GRAD TEST", self.tst_parameters.in_proj_weight_kv.grad)
-        print("GRAD TEST", self.ref_parameters.in_proj_weight_kv.grad)
+        # print("GRAD TEST", self.tst_parameters.in_proj_weight_kv.grad)
+        # print("GRAD TEST", self.ref_parameters.in_proj_weight_kv.grad)
         print("GRAD TEST", self.ref_parameters.in_proj_weight_kv.grad - self.tst_parameters.in_proj_weight_kv.grad)
 
         np.testing.assert_allclose(
@@ -163,6 +169,93 @@ class SelfMultiheadAttnTest(unittest.TestCase):
             self.ref_parameters.in_proj_bias_q.grad.detach().cpu().numpy(),
             self.tst_parameters.in_proj_bias_q.grad.detach().cpu().numpy(),
             atol=1e-2, rtol=1e-2)
+
+        np.testing.assert_allclose(
+            self.ref_inputs_q.grad.detach().cpu().numpy(),
+            self.tst_inputs_q.grad.detach().cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
+
+        np.testing.assert_allclose(
+            self.ref_inputs_kv.grad.detach().cpu().numpy(),
+            self.tst_inputs_kv.grad.detach().cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
+
+    def test_output_recompute(self):
+
+        training = True
+        recompute = True
+
+        mask = ((torch.randn(self.sequences, self.seq_length_kv) > 0)).bool().cuda()
+
+        ref_output, ref_coverage = encdec_attn_bias_func(False, training, self.heads,
+                                                         self.ref_inputs_q, self.ref_inputs_kv,
+                                                         self.ref_parameters.in_proj_weight_q,
+                                                         self.ref_parameters.in_proj_weight_kv,
+                                                         self.ref_parameters.out_proj_weight,
+                                                         self.ref_parameters.in_proj_bias_q,
+                                                         self.ref_parameters.in_proj_bias_kv,
+                                                         self.ref_parameters.out_proj_bias,
+                                                         mask, self.dropout_prob,
+                                                         False, None,
+                                                         False, None, None,
+                                                         False, True)
+
+        tst_output, tst_coverage = encdec_attn_bias_func(True, training, self.heads,
+                                                         self.tst_inputs_q, self.tst_inputs_kv,
+                                                         self.tst_parameters.in_proj_weight_q,
+                                                         self.tst_parameters.in_proj_weight_kv,
+                                                         self.tst_parameters.out_proj_weight,
+                                                         self.tst_parameters.in_proj_bias_q,
+                                                         self.tst_parameters.in_proj_bias_kv,
+                                                         self.tst_parameters.out_proj_bias,
+                                                         mask, self.dropout_prob,
+                                                         False, None,
+                                                         False, None, None,
+                                                         True, True)
+
+        grad_outputs_ref = torch.randn_like(tst_output)
+
+        grad_outputs_tst = torch.randn_like(tst_output).copy_(grad_outputs_ref)
+
+        tst_output.data.copy_(ref_output.data)
+        ref_output.backward(grad_outputs_ref)
+        tst_output.backward(grad_outputs_tst)
+
+        self.assertTrue(torch.allclose(ref_output, tst_output, atol=1e-2, rtol=1e-2))
+
+        np.testing.assert_allclose(
+            self.ref_parameters.out_proj_weight.grad.detach().cpu().numpy(),
+            self.tst_parameters.out_proj_weight.grad.detach().cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
+
+        np.testing.assert_allclose(
+            self.ref_parameters.out_proj_bias.grad.detach().cpu().numpy(),
+            self.tst_parameters.out_proj_bias.grad.detach().cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
+
+        # print("GRAD TEST", self.tst_parameters.in_proj_weight_kv.grad)
+        # print("GRAD TEST", self.ref_parameters.in_proj_weight_kv.grad)
+        print("GRAD TEST", self.ref_parameters.in_proj_weight_kv.grad - self.tst_parameters.in_proj_weight_kv.grad)
+
+        np.testing.assert_allclose(
+                    self.ref_parameters.in_proj_weight_kv.grad.detach().cpu().numpy(),
+                    self.tst_parameters.in_proj_weight_kv.grad.detach().cpu().numpy(),
+                    atol=1e-2, rtol=1e-2)
+
+        np.testing.assert_allclose(
+            self.ref_parameters.in_proj_bias_kv.grad.detach().cpu().numpy(),
+            self.tst_parameters.in_proj_bias_kv.grad.detach().cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
+
+        np.testing.assert_allclose(
+            self.ref_parameters.in_proj_weight_q.grad.detach().cpu().numpy(),
+            self.tst_parameters.in_proj_weight_q.grad.detach().cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
+
+        np.testing.assert_allclose(
+            self.ref_parameters.in_proj_bias_q.grad.detach().cpu().numpy(),
+            self.tst_parameters.in_proj_bias_q.grad.detach().cpu().numpy(),
+            atol=1e-3, rtol=1e-3)
 
         np.testing.assert_allclose(
             self.ref_inputs_q.grad.detach().cpu().numpy(),
@@ -247,6 +340,31 @@ class SelfMultiheadAttnTest(unittest.TestCase):
             torch.cuda.synchronize()
             start_time = time()
             for _ in range(num_iters):
+                ref_output, ref_coverage = encdec_attn_bias_func(True, training, self.heads,
+                                                                 self.ref_inputs_q, self.ref_inputs_kv,
+                                                                 self.ref_parameters.in_proj_weight_q,
+                                                                 self.ref_parameters.in_proj_weight_kv,
+                                                                 self.ref_parameters.out_proj_weight,
+                                                                 self.ref_parameters.in_proj_bias_q,
+                                                                 self.ref_parameters.in_proj_bias_kv,
+                                                                 self.ref_parameters.out_proj_bias,
+                                                                 mask, dropout,
+                                                                 False, None,
+                                                                 False, None, None,
+                                                                 False, True)
+
+                grad_outputs_ref = torch.randn_like(ref_output)
+                ref_output.backward(grad_outputs_ref)
+                self.ref_parameters.zero_grad()
+
+            torch.cuda.synchronize()
+            stop_time = time()
+            print(F"\nPytorch Self-Attn Recompute time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+
+            torch.cuda.profiler.start()
+            torch.cuda.synchronize()
+            start_time = time()
+            for _ in range(num_iters):
                 tst_output, tst_coverage = encdec_attn_bias_func(False, training, self.heads,
                                                                  self.tst_inputs_q, self.tst_inputs_kv,
                                                                  self.tst_parameters.in_proj_weight_q,
@@ -267,6 +385,31 @@ class SelfMultiheadAttnTest(unittest.TestCase):
             torch.cuda.synchronize()
             stop_time = time()
             print(F"\nCUDA Self-Attn time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+
+            torch.cuda.profiler.start()
+            torch.cuda.synchronize()
+            start_time = time()
+            for _ in range(num_iters):
+                tst_output, tst_coverage = encdec_attn_bias_func(True, training, self.heads,
+                                                                 self.tst_inputs_q, self.tst_inputs_kv,
+                                                                 self.tst_parameters.in_proj_weight_q,
+                                                                 self.tst_parameters.in_proj_weight_kv,
+                                                                 self.tst_parameters.out_proj_weight,
+                                                                 self.tst_parameters.in_proj_bias_q,
+                                                                 self.tst_parameters.in_proj_bias_kv,
+                                                                 self.tst_parameters.out_proj_bias,
+                                                                 mask, dropout,
+                                                                 False, None,
+                                                                 False, None, None,
+                                                                 True, True)
+
+                grad_outputs_tst = torch.randn_like(tst_output)
+                tst_output.backward(grad_outputs_tst)
+                self.tst_parameters.zero_grad()
+
+            torch.cuda.synchronize()
+            stop_time = time()
+            print(F"\nCUDA Self-Attn Recompute time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
 
 
 

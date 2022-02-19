@@ -73,13 +73,19 @@ def allocate_batch_slow(indices, lengths,
 
 def _is_oversized_frames(cur_batch, new_size_frames, new_size_words,
                          cur_batch_size_frames, cur_batch_size_words,
-                         batch_size_frames, batch_size_words, batch_size_sents):
+                         batch_size_frames, batch_size_words, batch_size_sents,
+                         cut_off_size, smallest_batch_size):
 
     if len(cur_batch) == 0:
         return False
 
     if len(cur_batch) >= batch_size_sents:
         return True
+
+    # check if the current batch is too long
+    if max(max(cur_batch_size_frames), new_size_frames) > cut_off_size:
+        if len(cur_batch) >= smallest_batch_size:
+            return True
 
     # try adding the new utterance and check if its oversized in frame limit?
     if max(max(cur_batch_size_frames), new_size_frames) * (len(cur_batch) + 1) > batch_size_frames:
@@ -97,7 +103,8 @@ def allocate_batch_unbalanced_slow(indices, lengths,
                                    batch_size_frames, batch_size_words,
                                    batch_size_sents, batch_size_multiplier,
                                    max_src_len, max_tgt_len,
-                                   min_src_len, min_tgt_len, cleaning=1):
+                                   min_src_len, min_tgt_len, cleaning=1,
+                                   cut_off_size=240000, smallest_batch_size=4):
     batches = list()
     batch = list()
     cur_batch_size_words = []
@@ -120,7 +127,8 @@ def allocate_batch_unbalanced_slow(indices, lengths,
 
         oversized = _is_oversized_frames(batch, src_size, tgt_size,
                                          cur_batch_size_frames, cur_batch_size_words,
-                                         batch_size_frames, batch_size_words, batch_size_sents)
+                                         batch_size_frames, batch_size_words, batch_size_sents,
+                                         cut_off_size, smallest_batch_size)
 
         if oversized:
             # trim the current batch so that batch size divides by the bsz multiplier
@@ -188,7 +196,8 @@ def allocate_batch_unbalanced(indices, lengths,
                                batch_size_frames, batch_size_words,
                                batch_size_sents, batch_size_multiplier,
                                max_src_len, max_tgt_len,
-                               min_src_len, min_tgt_len, cleaning=1):
+                               min_src_len, min_tgt_len, cleaning=1,
+                               cut_off_size=180000, smallest_batch_size=4):
 
     try:
         import pyximport
@@ -201,7 +210,8 @@ def allocate_batch_unbalanced(indices, lengths,
                                               batch_size_frames, batch_size_words,
                                               batch_size_sents, batch_size_multiplier,
                                               max_src_len, max_tgt_len,
-                                              min_src_len, min_tgt_len, cleaning)
+                                              min_src_len, min_tgt_len, cleaning,
+                                              cut_off_size, smallest_batch_size)
 
     pyximport.install(setup_args={"include_dirs": np.get_include()},
                       inplace=True)
@@ -218,4 +228,5 @@ def allocate_batch_unbalanced(indices, lengths,
                                          batch_size_frames, batch_size_words,
                                          batch_size_sents, batch_size_multiplier,
                                          max_src_len, max_tgt_len,
-                                         min_src_len, min_tgt_len, cleaning)
+                                         min_src_len, min_tgt_len, cleaning,
+                                         cut_off_size, smallest_batch_size)

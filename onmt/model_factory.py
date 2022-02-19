@@ -474,7 +474,6 @@ def build_tm_model(opt, dicts):
                                 bert_hidden_dropout=opt.dec_pretrain_hidden_dropout,
                                 bert_hidden_size=opt.dec_pretrain_hidden_size,
                                 is_decoder=True,
-                                gradient_checkpointing=opt.dec_gradient_checkpointing,
                                 max_pos_len=opt.max_pos_length,
                                 diff_head_pos=opt.diff_head_pos,
                                 pos_emb_type=opt.pos_emb_type,
