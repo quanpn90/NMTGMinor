@@ -8,12 +8,22 @@ import onmt
 
 class CTC(torch.nn.Module):
 
-    def __init__(self, vocab_size, hidden_size, dropout_rate, ctc_type="builtin", reduce=True):
+    def __init__(self, vocab_size, hidden_size, dropout_rate,
+                 ctc_type="builtin", reduce=True,
+                 padding_idx=-1, blank_idx=0):
         super().__init__()
 
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
-        self.padding_idx = onmt.constants.PAD
+        if padding_idx == -1:
+            self.padding_idx = onmt.constants.PAD
+        else:
+            self.padding_idx = padding_idx
+
+        if blank_idx == -1:
+            self.blank_idx = onmt.constants.TGT_PAD
+        else:
+            self.blank_idx = blank_idx
 
         # why do we need dropout at ctc ?
         self.dropout_rate = dropout_rate
@@ -30,7 +40,7 @@ class CTC(torch.nn.Module):
 
         if self.ctc_type == "builtin":
             reduction_type = "sum" if reduce else "none"
-            self.ctc_loss = torch.nn.CTCLoss(blank=onmt.constants.PAD, reduction=reduction_type, zero_infinity=True)
+            self.ctc_loss = torch.nn.CTCLoss(blank=onmt.constants.TGT_PAD, reduction=reduction_type, zero_infinity=True)
 
         elif self.ctc_type == "warpctc":
             import warpctc_pytorch as warp_ctc
@@ -77,7 +87,10 @@ class CTC(torch.nn.Module):
         # targets: T x B
         logits = model_outputs['encoder_logits']
 
-        source_mask = model_outputs['src_mask'].long()
+        if 'wav2vec_padding_mask' in model_outputs:
+            source_mask = model_outputs['wav2vec_padding_mask'].long()
+        else:
+            source_mask = model_outputs['src_mask'].long()
 
         # target mask should be T x B
         target_mask = targets.ne(self.padding_idx)
@@ -96,6 +109,7 @@ class CTC(torch.nn.Module):
         # print(target_lengths)
 
         if self.ctc_type == 'builtin':
+            # target is batch first
             targets = targets.transpose(0, 1)
         loss = self.compute_loss(logits, targets, input_lengths, target_lengths)
 

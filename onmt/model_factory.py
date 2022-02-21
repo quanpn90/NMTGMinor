@@ -171,8 +171,22 @@ def build_tm_model(opt, dicts):
         # else:
         #     discrete_encoder = None
 
+        # TODO: create a stacked encoder here
+        # if len(opt.dec_pretrained_model)
+        stacked_encoder = None
+        if len(opt.enc_stacked_pretrained_model) > 0:
+            if "mbart" in opt.enc_stacked_pretrained_model:
+                print("[INFO] Created a stacked encoder MBART-50")
+                from pretrain_module.modeling_mbart import MBartEncoder
+                from pretrain_module.configuration_mbart import MBartConfig
+                enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
+                stacked_encoder = MBartEncoder(enc_mbart_config, opt)
+            else:
+                raise NotImplementedError
+
         discrete_encoder = None
-        encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model, discrete_encoder=discrete_encoder)
+        encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model,
+                                 discrete_encoder=discrete_encoder, stacked_encoder=stacked_encoder)
 
         sub_encoder = None
 
@@ -239,6 +253,8 @@ def build_tm_model(opt, dicts):
 
         model = Wav2vecBERT(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0,
                             sub_encoder=sub_encoder)
+
+        # TODO: share the ctc_loss weight with the decoder weights
 
     elif opt.model in ['wav2vec2_transformer']:
         from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecTransformer

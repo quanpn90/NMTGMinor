@@ -5,12 +5,7 @@ from onmt.models.transformers import Transformer, TransformerDecodingState
 from typing import List, Optional, Union
 from collections import defaultdict
 import onmt
-
-
-# # the input should have size [b x t x d]
-#
-# #
-# #
+from onmt.modules.optimized.linear import Linear
 
 #
 # # maybe just need d / F.normalize(d, p=2, dim=2)
@@ -76,7 +71,6 @@ class FairseqWav2VecQuantizer(nn.Module):
         self.cfg = state['cfg']['model']
         self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg)
         self.wav2vec_encoder.load_state_dict(state['model'])
-        # self.wav2vec_encoder.remove_pretraining_modules()
 
     def forward(self, batch, **kwargs):
         """
@@ -104,7 +98,8 @@ class FairseqWav2VecQuantizer(nn.Module):
 
 class FairseqWav2Vec(nn.Module):
 
-    def __init__(self, opt, model_path="wav2vec_vox_new.pt", discrete_encoder=None):
+    def __init__(self, opt, model_path="wav2vec_vox_new.pt",
+                 stacked_encoder=None, **kwargs):
 
         super().__init__()
         # do we need opt for this?
@@ -149,7 +144,7 @@ class FairseqWav2Vec(nn.Module):
         self.wav2vec_encoder.load_state_dict(state['model'])
         removing_quantizer = not opt.wav2vec2_quantize
         # remove the quantization modules
-        print("removing quantization modules", removing_quantizer)
+        # print("removing quantization modules", removing_quantizer)
         self.wav2vec_encoder.remove_pretraining_modules(removing_quantizer=removing_quantizer)
 
         cfg = self.wav2vec_encoder.cfg
@@ -185,13 +180,47 @@ class FairseqWav2Vec(nn.Module):
             print("[INFO] Adding adapters for Wav2vec model with %d languages" % opt.n_languages)
             self.wav2vec_encoder.encoder.add_adapters(opt.n_languages, adapter_location=opt.wav2vec_adapter)
 
-        # discrete encoder that works on top of the wav quantized output
-        self.discrete_encoder = None # discrete_encoder
+        # can receive an mbart or deltalm encoder
+        self.stacked_encoder = stacked_encoder
+        # TODO: length conversion layer
 
-        if self.quantize:
-            var_dim = self.wav2vec_encoder.quantizer.vars.size(-1) * self.wav2vec_encoder.quantizer.groups
-            model_dim = self.model_size
-            self.discrete_encoder = nn.Linear(var_dim, model_dim)
+        if stacked_encoder is not None:
+
+            self.stacked_encoder = stacked_encoder
+            self.conv_downsampler =  nn.ModuleList()
+
+            from .fairseq_wav2vec2.fairseq_modules import TransposeLast
+            from onmt.modules.layer_norm import LayerNorm
+            for i in range(3):
+
+                def make_conv(n_in, n_out, k, stride=2, padding=1):
+                    conv = nn.Conv1d(n_in, n_out, k, stride=stride, padding=padding, bias=False)
+                    torch.nn.init.kaiming_normal_(conv.weight)
+                    return conv
+
+                conv = nn.Sequential(
+                    make_conv(self.model_size, self.model_size, 4, stride=2, padding=1),
+                    nn.Sequential(
+                        TransposeLast(),
+                        LayerNorm(self.model_size),
+                        TransposeLast(),
+                    ),
+                    nn.GELU(),
+                )
+
+                self.conv_downsampler.append(conv)
+
+        else:
+            self.stacked_encoder = None
+            self.conv_downsampler = None
+
+        # discrete encoder that works on top of the wav quantized output
+        # self.discrete_encoder = None # discrete_encoder
+
+        # if self.quantize:
+        #     var_dim = self.wav2vec_encoder.quantizer.vars.size(-1) * self.wav2vec_encoder.quantizer.groups
+        #     model_dim = self.model_size
+        #     self.discrete_encoder = nn.Linear(var_dim, model_dim)
         # if discrete_encoder is not None:
         #     assert self.quantize is True
         #
@@ -282,13 +311,9 @@ class FairseqWav2Vec(nn.Module):
                 # print("Redraw projection ....")
                 self.proj_updater.redraw_projections()
 
-        # don't mask when precomputed tdnn is used, because spec augmentation is used in the dataset
-        # wav2vec_output = self.wav2vec_encoder.extract_features(input, attn_mask,
-        #                                                        mask=self.training,
-        #                                                        precomputed_tdnn=precomputed_tdnn,
-        #                                                        lang=lang, mixture=mixture)
 
         quantize_only = False # self.quantize and not self.dual_output
+        # don't mask when precomputed tdnn is used, because spec augmentation is used in the dataset
 
         wav2vec_output = self.wav2vec_encoder(input, attn_mask,
                                               mask=self.training, features_only=True, layer=None,
@@ -319,43 +344,89 @@ class FairseqWav2Vec(nn.Module):
         # else:
         #     discrete_output = None
 
-        # if not self.quantize or self.dual_output:
-        # TODO: move batch_first_output up to avoid confusion
-        if not batch_first_output:
-            continuous_output = wav2vec_output['x'].transpose(0, 1).contiguous()
-            batch_size, time = continuous_output.size(1), continuous_output.size(0)
-        else:
-            continuous_output = wav2vec_output['x']
-            time, batch_size = continuous_output.size(1), continuous_output.size(0)
+        # output size is always T x B x C
+        continuous_output = wav2vec_output['x']
+        time, batch_size = continuous_output.size(0), continuous_output.size(1)
 
+        # mask size is B x T (1 for padded positions, 0 for unpadded)
         dec_attn_mask = wav2vec_output['padding_mask']
 
         if self.quantize:
             quantized_output = wav2vec_output['quantized_x']
             discrete_output = self.discrete_encoder(quantized_output)
-            if not batch_first_output:
-                discrete_output = discrete_output.transpose(0, 1).contiguous()
+            discrete_output = discrete_output.transpose(0, 1).contiguous()
 
             context = continuous_output + discrete_output
         else:
             context = continuous_output
-
-        # if not self.dual_output:
-        #     if self.quantize:
-        #         context = discrete_output
-        #     else:
-        #         context = continuous_output
-        # else:
-        #     context = discrete_output + continuous_output  # summing those two guys
 
         if dec_attn_mask is None:
             dec_attn_mask = context.new_zeros(batch_size, time).byte()
         else:
             dec_attn_mask = dec_attn_mask.byte()
 
+        wav2vec_context = context
+        wav2vec_padding_mask = dec_attn_mask
+
+        # TODO: make the stacked encoder run here
+        if self.stacked_encoder is not None:
+            assert self.conv_downsampler is not None
+
+            # T x B x C -> B x C x T
+            context = context.transpose(0, 1).transpose(1, 2).contiguous()
+
+            # apply convolutions to downsample the size
+            for conv in self.conv_downsampler:
+                context = conv(context)
+
+            # B x C x T -> B x T x C
+            context = context.transpose(1, 2).contiguous()
+
+            padding_mask = dec_attn_mask
+
+            # TODO: recompute the padding_mask from length
+            with torch.no_grad():
+                input_lengths = (1 - padding_mask.long()).sum(-1)
+
+                def _conv_out_length(input_length, conv):
+                    kernel_size = conv.kernel_size[0]
+                    stride = conv.kernel_size[0]
+                    padding = conv.padding[0]
+
+                    return torch.floor((input_length - kernel_size + 2 * padding) / stride + 1)
+
+                for conv_block in self.conv_downsampler:
+                    input_lengths = _conv_out_length(
+                        input_lengths, conv_block[0]
+                    )
+
+                input_lengths = input_lengths.to(torch.long)
+
+                padding_mask = torch.zeros(
+                    context.shape[:2], dtype=context.dtype, device=context.device
+                )
+
+                padding_mask[
+                    (
+                        torch.arange(padding_mask.shape[0], device=padding_mask.device),
+                        input_lengths - 1,
+                    )
+                ] = 1
+
+                padding_mask = (1 - padding_mask.flip([-1]).cumsum(-1).flip([-1])).bool()
+
+            dec_attn_mask = padding_mask
+
+            # run the output through the stacked encoder
+            stacked_encoder_output = self.stacked_encoder(inputs_embeds=context, attention_mask=dec_attn_mask)
+            context = stacked_encoder_output[0]
+
+
         # how to get the correct attention mask?
         output_dict = defaultdict(lambda: None, {'source': input, 'context': context, 'src_mask': dec_attn_mask,
-                                                 'src': dec_attn_mask, 'pos_emb': None})
+                                                 'src': dec_attn_mask, 'pos_emb': None,
+                                                 'wav2vec_context':wav2vec_context,
+                                                 'wav2vec_padding_mask': wav2vec_padding_mask})
 
         return output_dict
 
@@ -376,7 +447,7 @@ class Wav2vecTransformer(Transformer):
             self.mirror_generator[0].linear.weight = self.decoder.word_lut.weight
 
         if self.ctc:
-            self.ctc_linear = nn.Linear(encoder.model_size, self.tgt_vocab_size)
+            self.ctc_linear = Linear(encoder.model_size, self.tgt_vocab_size)
 
     def reset_states(self):
         return
@@ -693,6 +764,9 @@ class Wav2vecBERT(Wav2vecTransformer):
         output_dict['target_mask'] = target_mask
         output_dict['target'] = batch.get('target_output')
 
+        output_dict['wav2vec_context'] = encoder_output['wav2vec_context']
+        output_dict['wav2vec_padding_mask'] = encoder_output['wav2vec_padding_mask']
+
         # final layer: computing softmax
         logprobs = self.generator[0](output_dict)['logits']
         output_dict['logprobs'] = logprobs
@@ -729,8 +803,8 @@ class Wav2vecBERT(Wav2vecTransformer):
 
         # compute the logits for each encoder step
         if self.ctc:
-            # raise NotImplementedError
-            output_dict['encoder_logits'] = self.ctc_linear(output_dict['context'])
+            # run the ctcoutput via the wav2vec context (not context)
+            output_dict['encoder_logits'] = self.ctc_linear(output_dict['wav2vec_context'])
 
         if self.sub_encoder is not None:
             # contrastive loss has size: t x b x h

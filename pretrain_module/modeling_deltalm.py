@@ -350,7 +350,7 @@ class DeltaLMDecoderLayer(nn.Module):
         from .adapter import MultilingualAdapter
         self.adapter = MultilingualAdapter(n_languages, self.embed_dim, downsample_factor=downsampling_factor)
 
-    def get_mlp_weights(self, lang=None, mixture=None):
+    def get_mlp_weights(self, lang=None, atb=None):
 
         in_weight = self.fc1.weight
         out_weight = self.fc2.weight
@@ -358,7 +358,6 @@ class DeltaLMDecoderLayer(nn.Module):
         out_bias = self.fc2.bias
 
         if lang is not None:
-            assert mixture is None
 
             if self.is_factorized:
                 if self.multiplicative_factorize:
@@ -392,12 +391,9 @@ class DeltaLMDecoderLayer(nn.Module):
                 in_weight = in_weight + add_factor_in
                 out_weight = out_weight + add_factor_out
 
-        if mixture is not None:
-            raise NotImplementedError
-
         return in_weight, out_weight, in_bias, out_bias
 
-    def get_interleaved_mlp_weights(self, lang=None, mixture=None):
+    def get_interleaved_mlp_weights(self, lang=None, atb=None):
 
         in_weight = self.fc3.weight
         out_weight = self.fc4.weight
@@ -405,7 +401,6 @@ class DeltaLMDecoderLayer(nn.Module):
         out_bias = self.fc4.bias
 
         if lang is not None:
-            assert mixture is None
 
             if self.is_factorized:
                 if self.multiplicative_factorize:
@@ -438,9 +433,6 @@ class DeltaLMDecoderLayer(nn.Module):
 
                 in_weight = in_weight + add_factor_in
                 out_weight = out_weight + add_factor_out
-
-        if mixture is not None:
-            raise NotImplementedError
 
         return in_weight, out_weight, in_bias, out_bias
 
@@ -489,7 +481,7 @@ class DeltaLMDecoderLayer(nn.Module):
             output_attentions: Optional[bool] = False,
             incremental: Optional[bool] = False,
             incremental_cache=None,
-            lang=None, mixture=None
+            lang=None, atb=None
     ):
         """
         :param hidden_states:
@@ -502,7 +494,7 @@ class DeltaLMDecoderLayer(nn.Module):
         :param incremental:
         :param incremental_cache:
         :param lang:
-        :param mixture:
+        :param atb:
         :return:
         """
         if incremental and incremental_cache is None:
@@ -523,11 +515,11 @@ class DeltaLMDecoderLayer(nn.Module):
             attention_mask=attention_mask,
             output_attentions=output_attentions,
             incremental=incremental, incremental_cache=incremental_cache,
-            lang=lang, mixture=mixture
+            lang=lang, atb=atb
         )
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
-        # hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
+
         if not self.normalize_before:
             hidden_states = self.self_attn_layer_norm(hidden_states)
 
@@ -538,7 +530,7 @@ class DeltaLMDecoderLayer(nn.Module):
         if self.normalize_before:
             hidden_states = self.ffn_layer_norm(hidden_states)
 
-        in_weight, out_weight, in_bias, out_bias = self.get_interleaved_mlp_weights(lang=lang, mixture=mixture)
+        in_weight, out_weight, in_bias, out_bias = self.get_interleaved_mlp_weights(lang=lang, atb=atb)
         hidden_states = self.call_mlp(hidden_states, in_weight, out_weight, in_bias, out_bias,
                                       self.activation_fn, self.activation_dropout, self.training,
                                       self.fused, self.fused_function)
@@ -566,7 +558,7 @@ class DeltaLMDecoderLayer(nn.Module):
                 attention_mask=encoder_attention_mask,
                 output_attentions=output_attentions,
                 incremental=incremental, incremental_cache=incremental_cache,
-                lang=lang, mixture=mixture
+                lang=lang, atb=atb
             )
 
             # perform cross-attention on the sub-hidden states
@@ -588,7 +580,6 @@ class DeltaLMDecoderLayer(nn.Module):
 
             hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
             hidden_states = residual + hidden_states
-            # hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
 
             if not self.normalize_before:
                 hidden_states = self.encoder_attn_layer_norm(hidden_states)
@@ -599,7 +590,7 @@ class DeltaLMDecoderLayer(nn.Module):
         if self.normalize_before:
             hidden_states = self.final_layer_norm(hidden_states)
 
-        in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, mixture=mixture)
+        in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
         hidden_states = self.call_mlp(hidden_states, in_weight, out_weight, in_bias, out_bias,
                                       self.activation_fn, self.activation_dropout, self.training,
                                       self.fused, self.fused_function)
@@ -611,11 +602,12 @@ class DeltaLMDecoderLayer(nn.Module):
         if not self.normalize_before:
             hidden_states = self.final_layer_norm(hidden_states)
 
+        # ADAPTER
+
         if self.has_adapter:
             residual = hidden_states
             if self.adapter_location == 1:
-                assert lang is not None or mixture is not None
-                hidden_states = self.adapter(hidden_states, lang=lang, mixture=mixture)
+                hidden_states = self.adapter(hidden_states, lang=lang, atb=atb)
 
             hidden_states.add_(residual)
 
@@ -933,12 +925,14 @@ class DeltaLMDecoder(MBartPreTrainedModel):
             sub_encoder_attention_mask=None,
             inputs_embeds=None,
             incremental=False, incremental_cache=None,
-            lang=None, mixture=None,
+            lang=None, atb=None,
             output_attentions=None,
             output_hidden_states=None,
-            return_dict=None,
+            checkpointing_ffn=False,
+            checkpointing_cross_attn=False,
     ):
         """
+        :param atb:
         :param input_ids:
         :param attention_mask:
         :param encoder_hidden_states:
@@ -949,10 +943,8 @@ class DeltaLMDecoder(MBartPreTrainedModel):
         :param incremental:
         :param incremental_cache:
         :param lang:
-        :param mixture:
         :param output_attentions:
         :param output_hidden_states:
-        :param return_dict:
         :return:
         """
 
@@ -1033,7 +1025,7 @@ class DeltaLMDecoder(MBartPreTrainedModel):
                 sub_encoder_attention_mask=sub_encoder_attention_mask,
                 output_attentions=output_attentions,
                 lang=lang,
-                mixture=mixture
+                atb=atb
             )
             hidden_states = layer_outputs[0]
 
@@ -1068,6 +1060,7 @@ class DeltaLMDecoder(MBartPreTrainedModel):
 
         buffers = decoder_state.attention_buffers
         lang = decoder_state.tgt_lang
+        atb = decoder_state.tgt_atb
         src_lang = decoder_state.src_lang
         buffering = decoder_state.buffering
 
@@ -1125,7 +1118,7 @@ class DeltaLMDecoder(MBartPreTrainedModel):
                 encoder_attention_mask=encoder_attention_mask,
                 output_attentions=None,
                 incremental=buffering, incremental_cache=buffer,
-                lang=lang, mixture=None
+                lang=lang, atb=atb
             )
 
             if buffering:

@@ -397,6 +397,8 @@ def make_parser(parser):
     # pretrained encoder
     parser.add_argument('-enc_pretrained_model', default="", type=str,
                         help=""" the name of trained model""")
+    parser.add_argument('-enc_stacked_pretrained_model', default="", type=str,
+                        help=""" the name of trained model""")
     parser.add_argument('-enc_pretrain_hidden_size', type=int, default=768,
                         help='Size of bert hidden')
 
@@ -819,4 +821,7 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'freeze_cross_attention'):
         opt.freeze_cross_attention = False
+
+    if not hasattr(opt, 'enc_stacked_pretrained_model'):
+        opt.enc_stacked_pretrained_model = ""
     return opt

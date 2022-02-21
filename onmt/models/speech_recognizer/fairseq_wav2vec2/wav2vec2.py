@@ -1137,8 +1137,8 @@ class TransformerEncoder(nn.Module):
                 x = r
 
             # T x B x C -> B x T x C
-            if not self.favor and not can_run_fast_bert_mha:
-                x = x.transpose(0, 1)
+            # if not self.favor and not can_run_fast_bert_mha:
+            #     x = x.transpose(0, 1)
 
         else:
             # deepspeed has strict requirement so better disable autocast
@@ -1157,6 +1157,7 @@ class TransformerEncoder(nn.Module):
                         x = layer(x, padding_mask)
 
             x = x.to(dtype)
+            x = x.transpose(0, 1).contiguous()
 
         # if we remove padding before (for fast bert MHA) then remember to put padding back
         # to restore the form B x T X H
@@ -1165,7 +1166,7 @@ class TransformerEncoder(nn.Module):
             if x.size(0) > total_bsz:
                 x = x[:total_bsz, :]
             x = index_copy(x, non_pad_indices, bsz * seq_len)
-            x = x.view(bsz, seq_len, -1)
+            x = x.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
 
         return x, layer_results
 

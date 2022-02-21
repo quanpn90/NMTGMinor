@@ -180,16 +180,17 @@ class Trainer(object):
         model = build_model(opt, dicts)
 
         """ Building the loss function """
+        tgt_pad = self.train_data[0].tgt_pad if isinstance(self.train_data, list) else self.train_data.tgt_pad
         if opt.ctc_loss > 0.0:
             from onmt.speech.ctc_loss import CTC
-            self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True)
+            self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True,
+                                         padding_idx=tgt_pad, blank_idx=0)
 
         if opt.nce:
             from onmt.modules.nce.nce_loss import NCELoss
             loss_function = NCELoss(opt.model_size, dicts['tgt'].size(), noise_ratio=opt.nce_noise,
                                     logz=9, label_smoothing=opt.label_smoothing)
         else:
-            tgt_pad = self.train_data[0].tgt_pad if isinstance(self.train_data, list) else self.train_data.tgt_pad
             loss_function = NMTLossFunc(opt.model_size, dicts['tgt'].size(),
                                         label_smoothing=opt.label_smoothing,
                                         mirror=opt.mirror_loss,

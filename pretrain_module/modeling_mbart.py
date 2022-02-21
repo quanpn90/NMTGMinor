@@ -1614,7 +1614,7 @@ class MBartEncoder(MBartPreTrainedModel):
             bsz, seq_len = input_ids.size(0), input_ids.size(1)
             input_shape = torch.Size([bsz, seq_len])
 
-        else:
+        elif inputs_embeds is None:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
         if inputs_embeds is None:
@@ -1622,12 +1622,17 @@ class MBartEncoder(MBartPreTrainedModel):
                                              dropout=self.word_dropout if self.training else 0)
             inputs_embeds = inputs_embeds * self.embed_scale
 
-        inputs_embeds = inputs_embeds.view(bsz, seq_len, -1)
+            inputs_embeds = inputs_embeds.view(bsz, seq_len, -1)
 
-        embed_pos = self.embed_positions(input_shape)
+            embed_pos = self.embed_positions(input_shape)
+            hidden_states = inputs_embeds + embed_pos
+            hidden_states = self.layernorm_embedding(hidden_states)
+        else:
+            # use the input embeds from another stack
+            # maybe don't use layernorm_embedding
+            hidden_states = inputs_embeds
 
-        hidden_states = inputs_embeds + embed_pos
-        hidden_states = self.layernorm_embedding(hidden_states)
+        # should we use layernorm embedding here?
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
         encoder_states = () if output_hidden_states else None
