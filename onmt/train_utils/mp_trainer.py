@@ -71,7 +71,7 @@ def zero_tensor(device=None):
         return torch.Tensor([0]).to(device)
 
 
-def all_reduce_and_rescale_tensors(tensors,
+def all_reduce_and_rescale_tensors(tensors, rescale_denom=1,
                                    buffer_size=10485760):
     """All-reduce and rescale tensors in chunks of the specified size.
     Args:
@@ -94,6 +94,7 @@ def all_reduce_and_rescale_tensors(tensors,
 
         # all-reduce and rescale
         torch.distributed.all_reduce(buffer_t[:offset])
+        buffer_t.div_(rescale_denom)
 
         # copy all-reduced buffer back into tensors
         offset = 0
@@ -392,7 +393,7 @@ class Trainer(object):
 
         batch = self.train_data[0].get_largest_batch(bsz=-1, src_size=-1, tgt_size=-1) \
             if isinstance(self.train_data, list) \
-            else self.train_data.get_largest_batch(bsz=8, src_size=312961, tgt_size=78)
+            else self.train_data.get_largest_batch(bsz=328, src_size=319520, tgt_size=18)
         opt = self.opt
 
         if self.cuda:
@@ -463,6 +464,13 @@ class Trainer(object):
         # Later if we need to do Adversarial Perturbation:
 
         self.grad_scaler.scale(full_loss).backward(inputs=parameter_list)
+
+        loss = 0
+
+        for p in parameter_list:
+            loss += p.sum() * 0.0
+
+        loss.backward(inputs=parameter_list)
 
         for p in self.model.parameters():
             if p.grad is not None:
@@ -623,7 +631,7 @@ class Trainer(object):
         grad_norm = -1
 
         # Clear the gradients of the model
-        self.model.zero_grad()
+        self.optim.zero_grad(set_to_none=opt.true_zero_grad)
         # self.model.module.reset_states()
 
         # note: for Training split_even=True
@@ -684,7 +692,10 @@ class Trainer(object):
 
             try:
                 def maybe_no_sync():
-                    if not reduce and isinstance(self.model, DDP_model) and opt.delay_sync:
+                    if not isinstance(self.model, DDP_model):
+                        return contextlib.ExitStack()
+
+                    if opt.manually_delay_sync or (not reduce and isinstance(self.model, DDP_model)):
                         return self.model.no_sync()
                     else:
                         # when we dont reach the updating step, we do not need to synchronize the gradients
@@ -861,6 +872,15 @@ class Trainer(object):
             #     update_flag = True
 
             if update_flag:
+                if opt.manually_delay_sync:
+                    grads = list()
+                    for p in self.model.parameters():
+                        if p.requires_grad:
+                            if p.grad is None:
+                                p.grad = p.new_zeros(p.size(), dtype=p.dtype, device=p.device)
+                            grads.append(p.grad)
+                    all_reduce_and_rescale_tensors(grads, self.world_size)
+
                 # accumulated gradient case, in this case the update frequency
                 self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
 
@@ -885,8 +905,7 @@ class Trainer(object):
                 grad_norm = clip_grad_norm(self.model.parameters(), self.opt.max_grad_norm)
                 self.optim.step(scaler=self.grad_scaler)
                 self.grad_scaler.update()
-                self.optim.zero_grad()
-                self.model.zero_grad()
+                self.optim.zero_grad(set_to_none=opt.true_zero_grad)
                 counter = 0
                 num_accumulated_words.zero_()
                 num_accumulated_sents.zero_()

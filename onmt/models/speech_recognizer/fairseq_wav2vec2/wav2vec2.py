@@ -884,6 +884,9 @@ class Wav2Vec2Model(torch.nn.Module):
         self.target_glu = None
         self.final_proj = None
 
+    def add_stacked_encoder(self, stacked_encoder):
+        self.encoder.add_stacked_encoder(stacked_encoder)
+
     def convert_fast_attention(self):
 
         model = self.encoder
@@ -1035,11 +1038,44 @@ class TransformerEncoder(nn.Module):
         self.layer_norm_first = args.layer_norm_first
         self.layer_norm = LayerNorm(self.embedding_dim)
         self.layerdrop = args.encoder_layerdrop
+        self.args = args
 
         self.apply(init_bert_params)
 
         from onmt.modules.optimized.fast_mha import fast_bert_mha
         self.fast_bert_mha = fast_bert_mha
+
+    # add stacked encoder
+    def add_stacked_encoder(self, stacked_encoder):
+        stacked_layers = stacked_encoder.layers
+        args = self.args
+
+        for old_layer in stacked_layers:
+
+            new_layer = TransformerSentenceEncoderLayer(
+                            embedding_dim=self.embedding_dim,
+                            ffn_embedding_dim=args.encoder_ffn_embed_dim,
+                            num_attention_heads=args.encoder_attention_heads,
+                            dropout=self.dropout,
+                            weight_drop=self.weight_drop,
+                            attention_dropout=args.attention_dropout,
+                            activation_dropout=args.activation_dropout,
+                            activation_fn=args.activation_fn,
+                            layer_norm_first=args.layer_norm_first,
+                            favor=self.favor
+                        )
+
+            # # TODO: check layer norm first between new and old layer
+            # def find_modules(nn_module, type):
+            #     return [module for module in nn_module.modules() if isinstance(module, type)]
+            #
+            # fast_attentions = find_modules(new_layer, MultiheadAttention)
+            # for fast_attention in fast_attentions:
+            #     fast_attention.convert_fast_attention()
+
+            new_layer.load_state_dict(old_layer.state_dict())
+            self.layers.append(new_layer)
+
 
     def forward(self, x, padding_mask=None, layer=None, lang=None, atb=None, checkpointing_ffn=False, **kwargs):
         x, layer_results = self.extract_features(x, padding_mask, layer, lang=lang, atb=atb,
@@ -1135,10 +1171,6 @@ class TransformerEncoder(nn.Module):
 
             if r is not None:
                 x = r
-
-            # T x B x C -> B x T x C
-            # if not self.favor and not can_run_fast_bert_mha:
-            #     x = x.transpose(0, 1)
 
         else:
             # deepspeed has strict requirement so better disable autocast

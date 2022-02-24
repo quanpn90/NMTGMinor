@@ -16,11 +16,12 @@ def make_parser(parser):
                         help='Run validation before training')
     parser.add_argument('-delay_sync', action="store_true",
                         help="""Delay syncing in DDP""")
+    parser.add_argument('-manually_delay_sync', action="store_true",
+                        help="""Delay syncing in DDP""")
 
     parser.add_argument('-patch_vocab_multiplier', type=int, default=1,
                         help='Pad vocab so that the size divides by this multiplier')
-    parser.add_argument('-src_align_right', action="store_true",
-                        help="""Aligning the source sentences to the right (default=left for Transformer)""")
+
     parser.add_argument('-buffer_size', type=int, default=16,
                         help='The iterator fills the data buffer with this size')
     parser.add_argument('-num_workers', type=int, default=0,
@@ -69,8 +70,6 @@ def make_parser(parser):
                         help="""Use embeddings as learnable position encoding.""")
     parser.add_argument('-rotary_position_encoding', action='store_true',
                         help="""Use rotary position encoding.""")
-    parser.add_argument('-diff_head_pos', action='store_true',
-                        help="""Not share relative pos embedding cross heads""")
     parser.add_argument('-pos_emb_type', default='absolute',
                         help="Position embedding type. [absolute| relative_k| relative_kv]")
 
@@ -188,8 +187,8 @@ def make_parser(parser):
     # Loss function
     parser.add_argument('-label_smoothing', type=float, default=0.0,
                         help='Label smoothing value for loss functions.')
-    parser.add_argument('-scheduled_sampling_rate', type=float, default=0.0,
-                        help='Scheduled sampling rate.')
+    parser.add_argument('-true_zero_grad', action="store_true",
+                        help='truly set grad to zero instead of None.')
 
     # parser.add_argument('-curriculum', type=int, default=-1,
     #                     help="""For this many epochs, order the minibatches based
@@ -259,8 +258,6 @@ def make_parser(parser):
                         help="Use CUDA on the listed devices.")
     parser.add_argument('-fp16', action='store_true',
                         help='Use half precision training')
-    parser.add_argument('-fp16_mixed', action='store_true',
-                        help='Use mixed half precision training. fp16 must be enabled.')
     parser.add_argument('-seed', default=-1, type=int,
                         help="Seed for deterministic runs.")
 
@@ -450,6 +447,8 @@ def make_parser(parser):
 
     parser.add_argument('-dec_gradient_checkpointing', action='store_true',
                         help='use gradient checkpointing on decoder')
+    parser.add_argument('-enc_gradient_checkpointing', action='store_true',
+                        help='use gradient checkpointing on encoder')
 
     parser.add_argument('-find_unused_parameters', action='store_true',
                         help='find unused parameters for torch DistributedDataParallel')
@@ -584,8 +583,6 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'max_pos_length'):
         opt.max_pos_length = 0
-    if not hasattr(opt, 'diff_head_pos'):
-        opt.diff_head_pos = False
 
     if not hasattr(opt, 'learnable_position_encoding'):
         opt.learnable_position_encoding = False
@@ -616,9 +613,6 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'extra_context_size'):
         opt.extra_context_size = 0
-
-    if opt.model == 'relative_unified_transformer' and not opt.src_align_right:
-        print(" !!! Warning: model %s requires source sentences aligned to the right (-src_align_right)" % opt.model)
 
     if not hasattr(opt, 'experimental'):
         opt.experimental = False

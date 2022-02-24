@@ -515,8 +515,8 @@ class Optim(object):
         state_dict.pop('_step', None)
         self.optimizer.load_state_dict(state_dict)
 
-    def zero_grad(self):
-        self.optimizer.zero_grad()
+    def zero_grad(self, set_to_none=False):
+        self.optimizer.zero_grad(set_to_none=set_to_none)
 
     def set_starting_step(self, step):
         self._step = step

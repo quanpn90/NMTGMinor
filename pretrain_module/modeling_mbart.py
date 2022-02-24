@@ -902,19 +902,15 @@ class MBartEncoderLayer(nn.Module):
             attention_mask: torch.Tensor,
             output_attentions: bool = False,
             max_len=-1, cu_seqlens=None,
+            checkpointing_ffn=False
     ):
         """
-        Args:
-            hidden_states (:obj:`torch.FloatTensor`): input to the layer of shape
-            attention_mask (:obj:`torch.FloatTensor`): attention mask of size
-                where padding elements are indicated by very large negative values.
-            output_attentions (:obj:`bool`, `optional`):
-
-                :param output_attentions: Whether or not to return the attentions tensors of all attention layers.
-                :param attention_mask:  `(batch, src_len)`
-                :param hidden_states:  `(seq_len, batch, embed_dim)`
-                :param cu_seqlens:
-                :param max_len:
+        :param checkpointing_ffn:
+        :param output_attentions: Whether or not to return the attentions tensors of all attention layers.
+        :param attention_mask:  `(batch, src_len)`
+        :param hidden_states:  `(seq_len, batch, embed_dim)`
+        :param cu_seqlens:
+        :param max_len:
         """
         residual = hidden_states
 
@@ -929,7 +925,7 @@ class MBartEncoderLayer(nn.Module):
         )
 
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states.add_(residual)
+        hidden_states = hidden_states + residual
 
         residual = hidden_states
         hidden_states = self.final_layer_norm(hidden_states)
@@ -939,14 +935,14 @@ class MBartEncoderLayer(nn.Module):
             biases = [self.fc1.bias, self.fc2.bias]
 
             dropout = self.activation_dropout if self.training else 0.0
-            hidden_states = self.fused_function(dropout, False, hidden_states, *weights, *biases).type_as(hidden_states)
+            hidden_states = self.fused_function(dropout, checkpointing_ffn, hidden_states, *weights, *biases)
         else:
             hidden_states = self.activation_fn(self.fc1(hidden_states))
             hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
             hidden_states = self.fc2(hidden_states)
 
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states.add_(residual)
+        hidden_states = hidden_states + residual
 
         if hidden_states.dtype == torch.float16 and (
                 torch.isinf(hidden_states).any() or torch.isnan(hidden_states).any()
@@ -1580,7 +1576,8 @@ class MBartEncoder(MBartPreTrainedModel):
             attention_mask=None,
             inputs_embeds=None,
             output_attentions=None,
-            output_hidden_states=None
+            output_hidden_states=None,
+            checkpointing_ffn=False
     ):
         """
         :param input_ids: [T x B] discrete input tokens
@@ -1631,6 +1628,7 @@ class MBartEncoder(MBartPreTrainedModel):
             # use the input embeds from another stack
             # maybe don't use layernorm_embedding
             hidden_states = inputs_embeds
+            hidden_states = self.layernorm_embedding(hidden_states)
 
         # should we use layernorm embedding here?
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
@@ -1691,6 +1689,7 @@ class MBartEncoder(MBartPreTrainedModel):
                     attention_mask,
                     output_attentions=output_attentions,
                     max_len=max_len, cu_seqlens=cu_seqlens,
+                    checkpointing_ffn=checkpointing_ffn
                 )
 
                 hidden_states = layer_outputs[0]

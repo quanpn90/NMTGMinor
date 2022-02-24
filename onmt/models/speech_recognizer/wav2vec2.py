@@ -158,6 +158,9 @@ class FairseqWav2Vec(nn.Module):
         self.quantize = opt.wav2vec2_quantize
         self.dual_output = opt.wav2vec2_dual_output and self.quantize
 
+        if stacked_encoder is not None:
+            self.wav2vec_encoder.add_stacked_encoder(stacked_encoder)
+
         # freezing the parameters of the Convolutional feature extractors (by default)
         for param in self.wav2vec_encoder.feature_extractor.parameters():
             param.requires_grad = False
@@ -181,34 +184,34 @@ class FairseqWav2Vec(nn.Module):
             self.wav2vec_encoder.encoder.add_adapters(opt.n_languages, adapter_location=opt.wav2vec_adapter)
 
         # can receive an mbart or deltalm encoder
-        self.stacked_encoder = stacked_encoder
+        # self.stacked_encoder = stacked_encoder
         # TODO: length conversion layer
 
-        if stacked_encoder is not None:
+        # if stacked_encoder is not None:
 
-            self.stacked_encoder = stacked_encoder
-            self.conv_downsampler =  nn.ModuleList()
-
-            from .fairseq_wav2vec2.fairseq_modules import TransposeLast
-            from onmt.modules.layer_norm import LayerNorm
-            for i in range(3):
-
-                def make_conv(n_in, n_out, k, stride=2, padding=1):
-                    conv = nn.Conv1d(n_in, n_out, k, stride=stride, padding=padding, bias=False)
-                    torch.nn.init.kaiming_normal_(conv.weight)
-                    return conv
-
-                conv = nn.Sequential(
-                    make_conv(self.model_size, self.model_size, 4, stride=2, padding=1),
-                    nn.Sequential(
-                        TransposeLast(),
-                        LayerNorm(self.model_size),
-                        TransposeLast(),
-                    ),
-                    nn.GELU(),
-                )
-
-                self.conv_downsampler.append(conv)
+            # self.stacked_encoder = stacked_encoder
+            # self.conv_downsampler =  nn.ModuleList()
+            #
+            # from .fairseq_wav2vec2.fairseq_modules import TransposeLast
+            # from onmt.modules.layer_norm import LayerNorm
+            # for i in range(3):
+            #
+            #     def make_conv(n_in, n_out, k, stride=2, padding=1):
+            #         conv = nn.Conv1d(n_in, n_out, k, stride=stride, padding=padding, bias=False)
+            #         torch.nn.init.kaiming_normal_(conv.weight)
+            #         return conv
+            #
+            #     conv = nn.Sequential(
+            #         make_conv(self.model_size, self.model_size, 4, stride=2, padding=1),
+            #         nn.Sequential(
+            #             TransposeLast(),
+            #             LayerNorm(self.model_size),
+            #             TransposeLast(),
+            #         ),
+            #         nn.GELU(),
+            #     )
+            #
+            #     self.conv_downsampler.append(conv)
 
         else:
             self.stacked_encoder = None
@@ -368,58 +371,60 @@ class FairseqWav2Vec(nn.Module):
         wav2vec_context = context
         wav2vec_padding_mask = dec_attn_mask
 
-        # TODO: make the stacked encoder run here
-        if self.stacked_encoder is not None:
-            assert self.conv_downsampler is not None
-
-            # T x B x C -> B x C x T
-            context = context.transpose(0, 1).transpose(1, 2).contiguous()
-
-            # apply convolutions to downsample the size
-            for conv in self.conv_downsampler:
-                context = conv(context)
-
-            # B x C x T -> B x T x C
-            context = context.transpose(1, 2).contiguous()
-
-            padding_mask = dec_attn_mask
-
-            # TODO: recompute the padding_mask from length
-            with torch.no_grad():
-                input_lengths = (1 - padding_mask.long()).sum(-1)
-
-                def _conv_out_length(input_length, conv):
-                    kernel_size = conv.kernel_size[0]
-                    stride = conv.kernel_size[0]
-                    padding = conv.padding[0]
-
-                    return torch.floor((input_length - kernel_size + 2 * padding) / stride + 1)
-
-                for conv_block in self.conv_downsampler:
-                    input_lengths = _conv_out_length(
-                        input_lengths, conv_block[0]
-                    )
-
-                input_lengths = input_lengths.to(torch.long)
-
-                padding_mask = torch.zeros(
-                    context.shape[:2], dtype=context.dtype, device=context.device
-                )
-
-                padding_mask[
-                    (
-                        torch.arange(padding_mask.shape[0], device=padding_mask.device),
-                        input_lengths - 1,
-                    )
-                ] = 1
-
-                padding_mask = (1 - padding_mask.flip([-1]).cumsum(-1).flip([-1])).bool()
-
-            dec_attn_mask = padding_mask
-
-            # run the output through the stacked encoder
-            stacked_encoder_output = self.stacked_encoder(inputs_embeds=context, attention_mask=dec_attn_mask)
-            context = stacked_encoder_output[0]
+        # # TODO: make the stacked encoder run here
+        # if self.stacked_encoder is not None:
+        #     # assert self.conv_downsampler is not None
+        #     #
+        #     # # T x B x C -> B x C x T
+        #     # context = context.transpose(0, 1).transpose(1, 2).contiguous()
+        #     #
+        #     # # apply convolutions to downsample the size
+        #     # for conv in self.conv_downsampler:
+        #     #     context = conv(context)
+        #     #
+        #     # # B x C x T -> B x T x C
+        #     # context = context.transpose(1, 2).contiguous()
+        #     #
+        #     # padding_mask = dec_attn_mask
+        #     #
+        #     # # TODO: recompute the padding_mask from length
+        #     # with torch.no_grad():
+        #     #     input_lengths = (1 - padding_mask.long()).sum(-1)
+        #     #
+        #     #     def _conv_out_length(input_length, conv):
+        #     #         kernel_size = conv.kernel_size[0]
+        #     #         stride = conv.kernel_size[0]
+        #     #         padding = conv.padding[0]
+        #     #
+        #     #         return torch.floor((input_length - kernel_size + 2 * padding) / stride + 1)
+        #     #
+        #     #     for conv_block in self.conv_downsampler:
+        #     #         input_lengths = _conv_out_length(
+        #     #             input_lengths, conv_block[0]
+        #     #         )
+        #     #
+        #     #     input_lengths = input_lengths.to(torch.long)
+        #     #
+        #     #     padding_mask = torch.zeros(
+        #     #         context.shape[:2], dtype=context.dtype, device=context.device
+        #     #     )
+        #     #
+        #     #     padding_mask[
+        #     #         (
+        #     #             torch.arange(padding_mask.shape[0], device=padding_mask.device),
+        #     #             input_lengths - 1,
+        #     #         )
+        #     #     ] = 1
+        #     #
+        #     #     padding_mask = (1 - padding_mask.flip([-1]).cumsum(-1).flip([-1])).bool()
+        #     #
+        #     # dec_attn_mask = padding_mask
+        #     context = context.transpose(0, 1).contiguous()
+        #
+        #     # run the output through the stacked encoder
+        #     stacked_encoder_output = self.stacked_encoder(inputs_embeds=context, attention_mask=dec_attn_mask,
+        #                                                   checkpointing_ffn=checkpointing_ffn)
+        #     context = stacked_encoder_output[0]
 
 
         # how to get the correct attention mask?

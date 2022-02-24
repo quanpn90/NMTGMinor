@@ -184,6 +184,26 @@ def build_tm_model(opt, dicts):
             else:
                 raise NotImplementedError
 
+            if opt.enc_state_dict is not None and len(opt.enc_state_dict) > 1:
+                print("[INFO] Loading weights for stacked encoder from: %s ..." % opt.enc_state_dict)
+                enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+
+                # load parameters from state dict to model (using huggingface's approach)
+                # decoder.from_pretrained(state_dict=dec_model_state_dict,
+                #                         model=decoder,
+                #                         output_loading_info=opt.verbose,
+                #                         model_prefix=opt.dec_pretrained_model
+                #                         )
+                # current_dict = decoder.state_dict()
+                #
+                # for key in current_dict:
+                #     if key not in dec_model_state_dict:
+                #         dec_model_state_dict[key] = current_dict[key]
+
+                stacked_encoder.load_state_dict(enc_model_state_dict)
+                print("[INFO] ... Done")
+
+
         discrete_encoder = None
         encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model,
                                  discrete_encoder=discrete_encoder, stacked_encoder=stacked_encoder)
@@ -492,7 +512,6 @@ def build_tm_model(opt, dicts):
                                 bert_hidden_size=opt.dec_pretrain_hidden_size,
                                 is_decoder=True,
                                 max_pos_len=opt.max_pos_length,
-                                diff_head_pos=opt.diff_head_pos,
                                 pos_emb_type=opt.pos_emb_type,
                                 )
 

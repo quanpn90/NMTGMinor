@@ -469,7 +469,6 @@ def main():
                                               data_type=data_type, sorting=True,
                                               batch_size_sents=opt.batch_size_sents,
                                               multiplier=opt.batch_size_multiplier,
-                                              src_align_right=opt.src_align_right,
                                               upsampling=opt.upsampling,
                                               augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
                                               cleaning=True, verbose=True,
@@ -541,7 +540,6 @@ def main():
                                               multiplier=opt.batch_size_multiplier,
                                               data_type=data_type, sorting=True,
                                               batch_size_sents=opt.batch_size_sents,
-                                              src_align_right=opt.src_align_right,
                                               min_src_len=1, min_tgt_len=3,
                                               input_size=opt.input_size,
                                               cleaning=True, verbose=True, constants=onmt.constants)
