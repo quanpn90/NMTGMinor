@@ -692,10 +692,7 @@ class Trainer(object):
 
             try:
                 def maybe_no_sync():
-                    if not isinstance(self.model, DDP_model):
-                        return contextlib.ExitStack()
-
-                    if opt.manually_delay_sync or (not reduce and isinstance(self.model, DDP_model)):
+                    if not reduce and isinstance(self.model, DDP_model):
                         return self.model.no_sync()
                     else:
                         # when we dont reach the updating step, we do not need to synchronize the gradients
@@ -872,14 +869,6 @@ class Trainer(object):
             #     update_flag = True
 
             if update_flag:
-                if opt.manually_delay_sync:
-                    grads = list()
-                    for p in self.model.parameters():
-                        if p.requires_grad:
-                            if p.grad is None:
-                                p.grad = p.new_zeros(p.size(), dtype=p.dtype, device=p.device)
-                            grads.append(p.grad)
-                    all_reduce_and_rescale_tensors(grads, self.world_size)
 
                 # accumulated gradient case, in this case the update frequency
                 self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)

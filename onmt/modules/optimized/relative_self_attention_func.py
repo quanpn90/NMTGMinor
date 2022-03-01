@@ -197,8 +197,6 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
         # reshape [len_q*bsz, embed_dim*3 -> len_q x bsz x embed_dim*3]
         input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), input_weights.size(0))
-        # check = torch.allclose(input_lin_results, input_lin_results2)
-        # print("Check linear in", check)
 
         if not learnable_pos:
             pos_lin_results = torch.addmm(pos_biases,
@@ -260,9 +258,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         else:
             matmul_ac = torch.bmm(rw_head_q.transpose(0, 1), keys.transpose(0, 1).transpose(1, 2)).mul_(scale_t[0])
 
-        rr_head_q = queries.view(len_q, bsz, heads, head_dim) + r_r_bias  #
-        # check = torch.allclose(rr_head_q.view(len_q, bsz, -1), rr_head_q2, rtol=1e-03, atol=1e-04)
-        # print("Check rr_head_q", check)
+        rr_head_q = queries.view(len_q, bsz, heads, head_dim) + r_r_bias
         rr_head_q = rr_head_q.view(len_q, bsz * heads, head_dim)
 
         if not learnable_pos:

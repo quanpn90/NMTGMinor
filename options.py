@@ -14,10 +14,6 @@ def make_parser(parser):
                         help='Reading multiple datasets (sharing the same dictionary)')
     parser.add_argument('-run_validation_before_training', action='store_true',
                         help='Run validation before training')
-    parser.add_argument('-delay_sync', action="store_true",
-                        help="""Delay syncing in DDP""")
-    parser.add_argument('-manually_delay_sync', action="store_true",
-                        help="""Delay syncing in DDP""")
 
     parser.add_argument('-patch_vocab_multiplier', type=int, default=1,
                         help='Pad vocab so that the size divides by this multiplier')
@@ -62,10 +58,10 @@ def make_parser(parser):
                         help='Number of layers in the Transformer encoder/decoder')
     parser.add_argument('-encoder_layers', type=int, default=-1,
                         help='Number of layers in the LSTM encoder if different')
-    parser.add_argument('-max_pos_length', type=int, default=128,
+    parser.add_argument('-max_pos_length', type=int, default=2048,
                         help='Maximum distance length for relative self-attention')
-    parser.add_argument('-max_src_length', type=int, default=2048,
-                        help='Maximum distance length for relative self-attention')
+    parser.add_argument('-max_src_length', type=int, default=999000,
+                        help='Maximum source length for training')
     parser.add_argument('-learnable_position_encoding', action='store_true',
                         help="""Use embeddings as learnable position encoding.""")
     parser.add_argument('-rotary_position_encoding', action='store_true',

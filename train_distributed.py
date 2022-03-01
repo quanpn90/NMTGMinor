@@ -284,6 +284,7 @@ def main():
                                           input_size=opt.input_size,
                                           past_src_data=past_train_src,
                                           past_src_data_sizes=past_train_src_sizes,
+                                          max_src_len=opt.max_src_length,
                                           constants=onmt.constants)
             else:
                 train_data = onmt.StreamDataset(train_src,
@@ -472,6 +473,7 @@ def main():
                                               upsampling=opt.upsampling,
                                               augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
                                               cleaning=True, verbose=True,
+                                              max_src_len=opt.max_src_length,
                                               input_size=opt.input_size,
                                               constants=onmt.constants)
 
