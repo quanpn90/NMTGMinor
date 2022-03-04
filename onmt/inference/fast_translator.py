@@ -269,6 +269,11 @@ class FastTranslator(Translator):
             self.external_tokenizer = M2M100Tokenizer.from_pretrained(opt.external_tokenizer, src_lang=opt.src_lang)
 
             self.tgt_external_tokenizer = M2M100Tokenizer.from_pretrained(opt.external_tokenizer, src_lang=opt.tgt_lang)
+        elif "deltalm" in opt.external_tokenizer.lower():
+            print("[INFO] Using the external %s tokenizer..." % opt.external_tokenizer)
+            from pretrain_module.tokenization_deltalm import DeltaLMTokenizer
+            self.external_tokenizer = DeltaLMTokenizer.from_pretrained("facebook/mbart-large-50", src_lang=opt.src_lang)
+            self.tgt_external_tokenizer = DeltaLMTokenizer.from_pretrained("facebook/mbart-large-50", src_lang=opt.tgt_lang)
         else:
             self.external_tokenizer = None
             self.tgt_external_tokenizer = None

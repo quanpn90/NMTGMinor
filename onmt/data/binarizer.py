@@ -297,7 +297,7 @@ class Binarizer:
                         assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID"
                         pad_id = vocab.convertToIdx(["<pad>"], None)[0]
                         assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
-                    if "m2m" in external_tokenizer_name.lower():
+                    elif "m2m" in external_tokenizer_name.lower():
                         lang_token = "__" + lang + "__"
                         assert tensor[0] == vocab.convertToIdx([lang_token], None)[0], \
                             "The first token must be language ID"
@@ -362,6 +362,15 @@ class Binarizer:
 
             from transformers import BartTokenizer
             ext_tokenizer = BartTokenizer.from_pretrained(external_tokenizer)
+        elif "deltalm" in external_tokenizer.lower():
+
+            print("[INFO] Using the DeltaLM tokenizer...")
+            from pretrain_module.tokenization_deltalm import DeltaLMTokenizer
+            try:  # check if this tokenizer is saved locally or not
+                ext_tokenizer = torch.load("deltalm.tokenizer.pt")
+                ext_tokenizer.src_lang = lang
+            except FileNotFoundError:
+                ext_tokenizer = DeltaLMTokenizer.from_pretrained("facebook/mbart-large-50", src_lang=lang)
 
         elif external_tokenizer is None or len(external_tokenizer) == 0:
             ext_tokenizer = None

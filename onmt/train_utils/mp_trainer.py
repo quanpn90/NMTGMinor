@@ -28,6 +28,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP_model
 from torch.cuda.amp import autocast
 import warnings
 from onmt.constants import add_tokenidx
+import dill
 
 # ignore the pytorch -> numpy conversion warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -127,7 +128,7 @@ def all_reduce_and_rescale_tensors(tensors, rescale_denom=1,
 
 class Trainer(object):
 
-    def __init__(self, device, train_data, valid_data, dicts, opt, setup_optimizer=True):
+    def __init__(self, device, train_data, valid_data, dicts, opt, constants=None, setup_optimizer=True):
         """
         :param model:
         :param device: int (GPU id)
@@ -142,6 +143,7 @@ class Trainer(object):
         opt.nodes = 1
 
         self.world_size = len(opt.gpus)
+        self.constants = dill.loads(constants) if constants is not None else None
 
         # in the case of single node distributed, it should equal self.device
         self.rank = self.device
@@ -178,7 +180,7 @@ class Trainer(object):
 
         if self.is_main():
             print("[INFO] Building models .... ", flush=True)
-        model = build_model(opt, dicts)
+        model = build_model(opt, dicts, self.constants)
 
         """ Building the loss function """
         tgt_pad = self.train_data[0].tgt_pad if isinstance(self.train_data, list) else self.train_data.tgt_pad
@@ -1043,7 +1045,7 @@ class Trainer(object):
         if self.cuda:
             self.warm_up()
 
-        if opt.run_validation_before_training:
+        if opt.run_validation_before_training or opt.max_step <= 0:
             valid_loss, valid_accuracy = self.eval(self.valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
 
@@ -1051,6 +1053,12 @@ class Trainer(object):
                 print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
                 # percent is never used in plural :)
                 print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
+
+            if opt.max_step <= 0:
+                if self.is_main():
+                    self.save(0, valid_ppl if opt.save_metrics in ['ppl', 'perplexity'] else 1 - valid_accuracy)
+
+                return
 
         self.start_time = time.time()
 

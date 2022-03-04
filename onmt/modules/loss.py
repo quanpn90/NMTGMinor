@@ -72,7 +72,7 @@ class CrossEntropyLossBase(_Loss):
         eps_i = self.smoothing_value if self.training else 0.0
         fast_entropy = self.fast_xentropy and not softmaxed
 
-        go_to_slow_code = False
+        go_to_slow_code = True
         if not softmaxed:
             # Try the fastest softmax + loglikelihood implementation first
             if fast_entropy:

@@ -332,11 +332,10 @@ class MultiheadAttention(nn.Module):
             add_zero_attn=False,
             self_attention=False,
             encoder_decoder_attention=False,
-            q_noise=0.0,
-            qn_block_size=8,
             favor=False,
             generalized_attention=False,
             nb_features=256,
+            **kwargs,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -395,7 +394,8 @@ class MultiheadAttention(nn.Module):
         if self.proj_updater:
             self.proj_updater.feature_redraw_interval = None
 
-    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False, sub_factors=0):
+    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False,
+                               sub_factors=0, sub_factor_rank=-1):
         embed_dim = self.embed_dim
         self.is_factorized = True
         self.multiplicative_factorize = multiplicative
@@ -427,10 +427,10 @@ class MultiheadAttention(nn.Module):
             nn.init.constant_(self.sm_o, constant)
 
         if self.sub_factorized:
-            self.sub_r_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, 3 * embed_dim))
-            self.sub_s_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-            self.sub_r_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-            self.sub_s_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
+            self.sub_r_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, 3 * embed_dim))
+            self.sub_s_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+            self.sub_r_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+            self.sub_s_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
 
             std = 0.01 if fast else 0.02
             nn.init.normal_(self.sub_r_i, 0.0, std)
@@ -439,13 +439,13 @@ class MultiheadAttention(nn.Module):
             nn.init.normal_(self.sub_s_o, 0.0, std)
 
             if multiplicative:
-                rank = rank if fast else 1
-                self.sub_rm_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, 3 * embed_dim))
-                self.sub_sm_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-                self.sub_rm_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-                self.sub_sm_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
+                sub_factor_rank = sub_factor_rank if fast else 1
+                self.sub_rm_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, 3 * embed_dim))
+                self.sub_sm_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+                self.sub_rm_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+                self.sub_sm_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
 
-                constant = math.sqrt(1.0 / rank) if fast else 1
+                constant = math.sqrt(1.0 / sub_factor_rank) if fast else 1
                 nn.init.constant_(self.sub_rm_i, constant)
                 nn.init.constant_(self.sub_sm_i, constant)
                 nn.init.constant_(self.sub_rm_o, constant)
@@ -668,7 +668,6 @@ class MultiheadAttention(nn.Module):
 
                     return outputs, coverage
 
-                #
                 # Fused attention using packed data (B T H) -> (BxT H) and removing padded positions
                 elif query.ndim == 2:
                     assert self.fast_bert_mha is not None

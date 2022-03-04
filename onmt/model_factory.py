@@ -10,10 +10,21 @@ from onmt.modules.copy_generator import CopyGenerator
 from options import backward_compatible
 from onmt.constants import add_tokenidx
 import math
+import json
+from types import SimpleNamespace
 
 init = torch.nn.init
 
 MAX_LEN = onmt.constants.max_position_length  # This should be the longest sentence from the dataset
+
+def json_to_namespace(json_file):
+    with open(json_file) as f:
+        x = json.load(f, object_hook=lambda d: SimpleNamespace(**d))
+
+    for name in x.__dict__:
+        if x.__dict__[name] in ['False', 'True']:
+            x.__dict__[name] = (x.__dict__[name] == 'True')
+    return x
 
 
 def remove_pretrain_weights(opt):
@@ -22,7 +33,7 @@ def remove_pretrain_weights(opt):
     return opt
 
 
-def build_model(opt, dicts, remove_pretrain=False):
+def build_model(opt, dicts, remove_pretrain=False, constants=None):
     # adding missing options if the opt was built before. (for loading old models)
     opt = backward_compatible(opt)
     if remove_pretrain:
@@ -52,7 +63,7 @@ def build_model(opt, dicts, remove_pretrain=False):
         return model
 
     if not opt.fusion:
-        model = build_tm_model(opt, dicts)
+        model = build_tm_model(opt, dicts, constants=constants)
     else:
         raise NotImplementedError
         model = build_fusion(opt, dicts)
@@ -94,8 +105,10 @@ def build_classifier(opt, dicts):
     return model
 
 
-def build_tm_model(opt, dicts):
+def build_tm_model(opt, dicts, constants=None):
     # onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
+    if constants is None:
+        constants = onmt.constants
 
     # BUILD POSITIONAL ENCODING
     if opt.time == 'positional_encoding':
@@ -133,7 +146,7 @@ def build_tm_model(opt, dicts):
         if (not hasattr(opt, "enc_pretrained_model")) or (not opt.enc_pretrained_model):
             embedding_src = nn.Embedding(dicts['src'].size(),
                                          opt.model_size,
-                                         padding_idx=onmt.constants.SRC_PAD)
+                                         padding_idx=constants.SRC_PAD)
     else:
         embedding_src = None
 
@@ -143,7 +156,7 @@ def build_tm_model(opt, dicts):
     elif not opt.dec_pretrained_model:
         embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                      opt.model_size,
-                                     padding_idx=onmt.constants.TGT_PAD)
+                                     padding_idx=constants.TGT_PAD)
     else:
         assert opt.model in ["pretrain_transformer", "wav2vec2_bert",
                              "wav2vec_mbart50", "quantize_wav2vec2_bert", "quantize_wav2vec2_mbart50"], \
@@ -222,12 +235,12 @@ def build_tm_model(opt, dicts):
             #     enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
             #     sub_encoder = MBartEncoder(enc_mbart_config, opt)
         elif opt.dec_pretrained_model in ['deltalm']:
-            from pretrain_module.configuration_deltalm import DeltaLMConfig
-            from pretrain_module.modeling_deltalm import DeltaLMDecoder
-
-            dec_mbart_config = DeltaLMConfig.from_json_file(opt.dec_config_file)
-
-            decoder = DeltaLMDecoder(dec_mbart_config, opt)
+            from onmt.models.deltalm.deltalm import DeltaLMDecoder
+            deltalm_config = json_to_namespace(opt.dec_config_file)
+            embedding_tgt = nn.Embedding(dicts['tgt'].size(),
+                                         deltalm_config.decoder_embed_dim,
+                                         padding_idx=constants.TGT_PAD)
+            decoder = DeltaLMDecoder(deltalm_config, embedding_tgt)
 
         elif opt.dec_pretrained_model == "bart":
             from pretrain_module.configuration_bart import BartConfig
@@ -465,11 +478,12 @@ def build_tm_model(opt, dicts):
             encoder = M2M100Encoder(enc_mbart_config, opt)
 
         elif opt.enc_pretrained_model in ["deltalm"]:
-            from pretrain_module.configuration_deltalm import DeltaLMConfig
-            from pretrain_module.modeling_deltalm import DeltaLMEncoder
-            enc_mbart_config = DeltaLMConfig.from_json_file(opt.enc_config_file)
-
-            encoder = DeltaLMEncoder(enc_mbart_config, opt)
+            from onmt.models.deltalm.deltalm import DeltaLMEncoder
+            deltalm_config = json_to_namespace(opt.dec_config_file)
+            embedding_src = nn.Embedding(dicts['src'].size(),
+                                         deltalm_config.encoder_embed_dim,
+                                         padding_idx=constants.SRC_PAD)
+            encoder = DeltaLMEncoder(deltalm_config, embedding_src)
 
         elif not opt.enc_pretrained_model:
             print(" Encoder is not from pretrained model")
@@ -487,9 +501,7 @@ def build_tm_model(opt, dicts):
 
             enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
 
-            if opt.enc_pretrained_model in ["deltalm"]:
-                encoder.load_state_dict(enc_model_state_dict)
-            else:
+            if opt.enc_pretrained_model not in ["deltalm"]:
                 encoder.from_pretrained(state_dict=enc_model_state_dict,
                                         model=encoder,
                                         output_loading_info=opt.verbose,
@@ -539,23 +551,30 @@ def build_tm_model(opt, dicts):
             decoder = M2M100Decoder(dec_config, opt)
             decoder.embed_tokens.weight = encoder.embed_tokens.weight
             generators[0].linear.weight = encoder.embed_tokens.weight
-            encoder.embed_tokens.weight.requires_grad = False
-            decoder.embed_tokens.weight.requires_grad = False
-            generators[0].linear.bias.requires_grad = False
+            # encoder.embed_tokens.weight.requires_grad = False
+            # decoder.embed_tokens.weight.requires_grad = False
+            # generators[0].linear.bias.requires_grad = False
 
         elif opt.dec_pretrained_model in ["deltalm"]:
-            if opt.enc_pretrained_model not in ["deltalm"]:
-                from pretrain_module.configuration_deltalm import DeltaLMConfig
-            from pretrain_module.modeling_deltalm import DeltaLMDecoder
-
-            dec_config = DeltaLMConfig.from_json_file(opt.dec_config_file)
-
-            decoder = DeltaLMDecoder(dec_config, opt)
+            from onmt.models.deltalm.deltalm import DeltaLMDecoder
+            deltalm_config = json_to_namespace(opt.dec_config_file)
+            embedding_tgt = nn.Embedding(dicts['tgt'].size(),
+                                         deltalm_config.decoder_embed_dim,
+                                         padding_idx=constants.TGT_PAD)
+            decoder = DeltaLMDecoder(deltalm_config, embedding_tgt)
+            # if opt.enc_pretrained_model not in ["deltalm"]:
+            #     from pretrain_module.configuration_deltalm import DeltaLMConfig
+            # from pretrain_module.modeling_deltalm import DeltaLMDecoder
+            #
+            # dec_config = DeltaLMConfig.from_json_file(opt.dec_config_file)
+            #
+            # decoder = DeltaLMDecoder(dec_config, opt)
+            # share all embeddings
             decoder.embed_tokens.weight = encoder.embed_tokens.weight
-            generators[0].linear.weight = encoder.embed_tokens.weight  # share all embeddings
+            generators[0].linear.weight = encoder.embed_tokens.weight
             encoder.embed_tokens.weight.requires_grad = False
-            decoder.embed_tokens.weight.requires_grad = False
-            generators[0].linear.bias.requires_grad = False
+            # decoder.embed_tokens.weight.requires_grad = False
+            # generators[0].linear.bias.requires_grad = False
 
         elif not opt.dec_pretrained_model:
             print(" Decoder is not from pretrained model")
@@ -568,13 +587,11 @@ def build_tm_model(opt, dicts):
         if opt.load_from or not opt.dec_state_dict:
             if opt.verbose:
                 print("  No weights loading from {} for decoder".format(opt.dec_pretrained_model))
-        elif opt.enc_pretrained_model:
+        elif opt.dec_pretrained_model:
             print("  Loading weights for decoder from: \n", opt.dec_state_dict)
             dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
 
-            if opt.dec_pretrained_model in ["deltalm"]:
-                decoder.load_state_dict(dec_model_state_dict)
-            else:
+            if opt.dec_pretrained_model not in ["deltalm"]:
                 decoder.from_pretrained(state_dict=dec_model_state_dict,
                                         model=decoder,
                                         output_loading_info=opt.verbose,

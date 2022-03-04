@@ -130,7 +130,7 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
         raise NotImplementedError
 
 
-def collect_fn(src_data, tgt_data,
+def collate_fn(src_data, tgt_data,
                src_lang_data, tgt_lang_data,
                src_atbs_data, tgt_atbs_data,
                src_align_right, tgt_align_right,
@@ -678,7 +678,7 @@ class Dataset(torch.utils.data.Dataset):
         else:
             past_src = None
 
-        batch = rewrap(collect_fn(src_data, tgt_data=tgt_data,
+        batch = rewrap(collate_fn(src_data, tgt_data=tgt_data,
                                   src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
                                   src_atbs_data=src_atbs_data, tgt_atbs_data=tgt_atbs_data,
                                   src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
@@ -739,7 +739,7 @@ class Dataset(torch.utils.data.Dataset):
             if self.use_past_src:
                 past_src_data = [sample['past_src'] for sample in samples]
 
-            batch = collect_fn(src_data, tgt_data=tgt_data,
+            batch = collate_fn(src_data, tgt_data=tgt_data,
                                src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
                                src_atbs_data=src_atbs_data, tgt_atbs_data=tgt_atbs_data,
                                src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,

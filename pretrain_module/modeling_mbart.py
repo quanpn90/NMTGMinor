@@ -160,10 +160,12 @@ class MBartAttention(nn.Module):
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
-    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False, sub_factors=0):
+    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False,
+                               sub_factors=0, sub_factor_rank=-1):
         """
         Add factorized weights for self-attention
 
+        :param sub_factor_rank:
         :param n_languages:
         :param rank:
         :param multiplicative:
@@ -202,10 +204,10 @@ class MBartAttention(nn.Module):
             nn.init.constant_(self.sm_o, constant)
 
         if self.sub_factorized:
-            self.sub_r_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, 3 * embed_dim))
-            self.sub_s_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-            self.sub_r_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-            self.sub_s_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
+            self.sub_r_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, 3 * embed_dim))
+            self.sub_s_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+            self.sub_r_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+            self.sub_s_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
 
             std = 0.01 if fast else 0.02
             nn.init.normal_(self.sub_r_i, 0.0, std)
@@ -214,13 +216,13 @@ class MBartAttention(nn.Module):
             nn.init.normal_(self.sub_s_o, 0.0, std)
 
             if multiplicative:
-                rank = rank if fast else 1
-                self.sub_rm_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, 3 * embed_dim))
-                self.sub_sm_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-                self.sub_rm_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-                self.sub_sm_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
+                sub_factor_rank = sub_factor_rank if fast else 1
+                self.sub_rm_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, 3 * embed_dim))
+                self.sub_sm_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+                self.sub_rm_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+                self.sub_sm_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
 
-                constant = math.sqrt(1.0 / rank) if fast else 1
+                constant = math.sqrt(1.0 / sub_factor_rank) if fast else 1
                 nn.init.constant_(self.sub_rm_i, constant)
                 nn.init.constant_(self.sub_sm_i, constant)
                 nn.init.constant_(self.sub_rm_o, constant)
@@ -360,6 +362,7 @@ class MBartAttention(nn.Module):
                 mask = attention_mask
                 low_precision = True  # Use CUDA impl
 
+                # print("USING FAST ATTENTION - DECODER=" + str(self.is_decoder))
                 attn_output, coverage = self_attn_func(use_time_mask, self.training, self.num_heads, hidden_states,
                                                        in_proj_weight, out_proj_weight,
                                                        self.proj_bias, self.out_proj.bias,
@@ -465,7 +468,8 @@ class MBartCrossAttention(MBartAttention):
         # self.proj_bias_q = Parameter(bias_t)
         # del self.q_proj
 
-    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False, sub_factors=0):
+    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False,
+                               sub_factors=0, sub_factor_rank=-1):
 
         embed_dim = self.embed_dim
         self.is_factorized = True
@@ -506,12 +510,12 @@ class MBartCrossAttention(MBartAttention):
             nn.init.constant_(self.sm_o, constant)
 
         if self.sub_factorized:
-            self.sub_r_q = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-            self.sub_s_q = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-            self.sub_r_kv = torch.nn.Parameter(torch.Tensor(sub_factors, rank, 2 * embed_dim))
-            self.sub_s_kv = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-            self.sub_r_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-            self.sub_s_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
+            self.sub_r_q = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+            self.sub_s_q = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+            self.sub_r_kv = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, 2 * embed_dim))
+            self.sub_s_kv = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+            self.sub_r_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+            self.sub_s_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
 
             std = 0.01 if fast else 0.02
             nn.init.normal_(self.sub_r_q, 0.0, std)
@@ -522,15 +526,15 @@ class MBartCrossAttention(MBartAttention):
             nn.init.normal_(self.sub_s_o, 0.0, std)
 
             if multiplicative:
-                rank = rank if fast else 1
-                self.sub_rm_q = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-                self.sub_sm_q = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-                self.sub_rm_kv = torch.nn.Parameter(torch.Tensor(sub_factors, rank, 2 * embed_dim))
-                self.sub_sm_kv = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-                self.sub_rm_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
-                self.sub_sm_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, embed_dim))
+                sub_factor_rank = sub_factor_rank if fast else 1
+                self.sub_rm_q = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+                self.sub_sm_q = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+                self.sub_rm_kv = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, 2 * embed_dim))
+                self.sub_sm_kv = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+                self.sub_rm_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+                self.sub_sm_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
 
-                constant = math.sqrt(1.0 / rank) if fast else 1
+                constant = math.sqrt(1.0 / sub_factor_rank) if fast else 1
                 nn.init.constant_(self.sub_rm_q, constant)
                 nn.init.constant_(self.sub_sm_q, constant)
                 nn.init.constant_(self.sub_rm_kv, constant)
@@ -652,6 +656,7 @@ class MBartCrossAttention(MBartAttention):
 
             # attention_mask should have size Bxlen_k
             low_precision = True
+
             attn_output, coverage = encdec_attn_bias_func(recompute, self.training, self.num_heads,
                                                           hidden_states, key_value_states,
                                                           in_proj_weight_q, in_proj_weight_kv, out_proj_weight,
@@ -1028,13 +1033,14 @@ class MBartDecoderLayer(nn.Module):
         self.fc1.bias.requires_grad = False
         self.fc2.bias.requires_grad = False
 
-    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False, sub_factors=0):
+    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False,
+                      sub_factors=0, sub_factor_rank=-1):
 
         # add factorized weights for self-attention
         self.self_attn.add_factorized_weights(n_languages, rank=rank, multiplicative=multiplicative,
-                                              fast=fast, sub_factors=sub_factors)
+                                              fast=fast, sub_factors=sub_factors, sub_factor_rank=sub_factor_rank)
         self.encoder_attn.add_factorized_weights(n_languages, rank=rank, multiplicative=multiplicative,
-                                                 fast=fast, sub_factors=sub_factors)
+                                                 fast=fast, sub_factors=sub_factors, sub_factor_rank=sub_factor_rank)
 
         # add factorized_weights for ffn
         self.is_factorized = True
@@ -1066,10 +1072,10 @@ class MBartDecoderLayer(nn.Module):
             nn.init.constant_(self.sm_o, constant)
 
         if self.sub_factorized:
-            self.sub_r_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.ffn_dim))
-            self.sub_s_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.embed_dim))
-            self.sub_r_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.embed_dim))
-            self.sub_s_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.ffn_dim))
+            self.sub_r_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.ffn_dim))
+            self.sub_s_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.embed_dim))
+            self.sub_r_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.embed_dim))
+            self.sub_s_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.ffn_dim))
 
             nn.init.normal_(self.sub_r_i, 0.0, 0.02)
             nn.init.normal_(self.sub_s_i, 0.0, 0.02)
@@ -1077,13 +1083,13 @@ class MBartDecoderLayer(nn.Module):
             nn.init.normal_(self.sub_s_o, 0.0, 0.02)
 
             if multiplicative:
-                rank = rank if fast else 1
-                self.sub_rm_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.ffn_dim))
-                self.sub_sm_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.embed_dim))
-                self.sub_rm_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.embed_dim))
-                self.sub_sm_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.ffn_dim))
+                sub_factor_rank = sub_factor_rank if fast else 1
+                self.sub_rm_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.ffn_dim))
+                self.sub_sm_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.embed_dim))
+                self.sub_rm_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.embed_dim))
+                self.sub_sm_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.ffn_dim))
 
-                constant = math.sqrt(1.0 / rank) if fast else 1
+                constant = math.sqrt(1.0 / sub_factor_rank) if fast else 1
                 nn.init.constant_(self.sub_rm_i, constant)
                 nn.init.constant_(self.sub_sm_i, constant)
                 nn.init.constant_(self.sub_rm_o, constant)
@@ -1785,7 +1791,8 @@ class MBartDecoder(MBartPreTrainedModel):
                   % (opt.n_languages, opt.n_attributes))
             self.add_factorize(opt.n_languages, rank=opt.mfw_rank,
                                multiplicative=opt.mfw_multiplicative,
-                               fast=opt.fast_factorize, sub_factors=opt.n_attributes)
+                               fast=opt.fast_factorize,
+                               sub_factors=opt.n_attributes, sub_factor_rank=opt.mfw_rank * opt.mfw_atb_rank_scale)
 
         # adapter
         if opt.decoder_adapter > 0:
@@ -1812,11 +1819,12 @@ class MBartDecoder(MBartPreTrainedModel):
     def set_input_embeddings(self, value):
         self.embed_tokens = value
 
-    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False, sub_factors=0):
+    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False,
+                      sub_factors=0, sub_factor_rank=-1):
 
         for layer in self.layers:
             layer.add_factorize(n_languages, rank=rank, multiplicative=multiplicative,
-                                fast=fast, sub_factors=sub_factors)
+                                fast=fast, sub_factors=sub_factors, sub_factor_rank=sub_factor_rank)
 
     def forward(
             self,

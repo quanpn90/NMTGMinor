@@ -25,7 +25,6 @@ def _cast_if_autocast_enabled(*args):
 class LinearFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, weight, bias):
-
         output = linear_blaslt.forward(input, weight, bias)
         ctx.save_for_backward(input, weight)
         return output
@@ -44,10 +43,13 @@ class LinearFunction(torch.autograd.Function):
         return d_input, d_weight, d_bias
 
 if linear_blaslt:
-    def linear_function(*args):
-        args = _cast_if_autocast_enabled(*args)
+    def linear_function(input, weight, bias):
+        if bias is None:
+            return torch.nn.functional.linear(input, weight, bias)
+        else:
+            _input, _weight, _bias = _cast_if_autocast_enabled(input, weight, bias)
         with torch.cuda.amp.autocast(enabled=False):
-            return LinearFunction.apply(*args)
+            return LinearFunction.apply(_input, _weight, _bias)
 else:
     linear_function = torch.nn.functional.linear
 

@@ -340,6 +340,8 @@ def make_parser(parser):
     parser.add_argument('-mfw_activation', type=str, default="none",
                         help="Using activation function for the MFW so  W = f(W^ * M + A'). "
                              "Currently accepting gelu/silu")
+    parser.add_argument('-mfw_atb_rank_scale', type=int, default=1,
+                        help="Rank of the mfw atb vectors.")
     parser.add_argument('-freezing_steps', type=int, default=0,
                         help="Number of steps for freezing the mfw vectors.")
 
@@ -814,4 +816,7 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'enc_stacked_pretrained_model'):
         opt.enc_stacked_pretrained_model = ""
+
+    if not hasattr(opt, 'mfw_atb_rank_scale'):
+        opt.mfw_atb_rank_scale = 1
     return opt

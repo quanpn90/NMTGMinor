@@ -15,6 +15,7 @@ from onmt.constants import add_tokenidx
 import os
 import numpy as np
 import warnings
+import dill
 
 warnings.filterwarnings("ignore", message="The given NumPy array is not writeable ")
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -52,10 +53,10 @@ def numpy_to_torch(tensor_list):
     return out_list
 
 
-def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint):
+def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
     from onmt.train_utils.mp_trainer import Trainer
 
-    trainer = Trainer(gpu, train_data, valid_data, dicts, opt)
+    trainer = Trainer(gpu, train_data, valid_data, dicts, opt, constants)
     trainer.run(checkpoint=checkpoint)
 
 
@@ -576,11 +577,12 @@ def main():
 
     # spawn N processes for N gpus
     # each process has a different trainer
+    constants = dill.dumps(onmt.constants)
     if len(opt.gpus) > 1:
         torch.multiprocessing.spawn(run_process, nprocs=len(opt.gpus),
-                                    args=(train_data, valid_data, dicts, opt, checkpoint))
+                                    args=(train_data, valid_data, dicts, opt, checkpoint, constants))
     else:
-        run_process(0, train_data, valid_data, dicts, opt, checkpoint)
+        run_process(0, train_data, valid_data, dicts, opt, checkpoint, constants)
 
 
 if __name__ == "__main__":

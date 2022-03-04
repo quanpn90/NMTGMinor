@@ -1215,11 +1215,13 @@ class TransformerEncoder(nn.Module):
         for layer in self.layers:
             layer.add_adapters(n_languages, adapter_location=adapter_location)
 
-    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False, sub_factors=0):
+    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False,
+                      sub_factors=0, sub_factor_rank=-1):
 
         for layer in self.layers:
             layer.add_factorized(n_languages, rank=rank,
-                                 multiplicative=multiplicative, fast=fast, sub_factors=sub_factors)
+                                 multiplicative=multiplicative, fast=fast,
+                                 sub_factors=sub_factors, sub_factor_rank=sub_factor_rank)
 
     def freeze_or_unfreeze_ffn_params(self):
 
@@ -1376,8 +1378,10 @@ class TransformerSentenceEncoderLayer(nn.Module):
             self.mid_adapter = MultilingualAdapter(n_languages, self.embedding_dim,
                                                    downsample_factor=downsampling_factor)
 
-    def add_factorized(self, n_languages, rank=4, multiplicative=True, fast=False, sub_factors=0):
+    def add_factorized(self, n_languages, rank=4, multiplicative=True, fast=False,
+                       sub_factors=0, sub_factor_rank=-1):
         """
+        :param sub_factor_rank:
         :param sub_factors:
         :param n_languages: int or list of ints?
         :param rank: number of vectors
@@ -1388,7 +1392,8 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
         # first, tell the attention modules to add factorize
         self.self_attn.add_factorized_weights(n_languages, rank=rank,
-                                              multiplicative=multiplicative, sub_factors=sub_factors)
+                                              multiplicative=multiplicative,
+                                              sub_factors=sub_factors, sub_factor_rank=sub_factor_rank)
 
         # add factorized for the sub-factors
         self.multiplicative_factorize = multiplicative
@@ -1422,10 +1427,11 @@ class TransformerSentenceEncoderLayer(nn.Module):
             nn.init.constant_(self.sm_o, constant)
 
         if self.sub_factorized:
-            self.sub_r_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.ffn_embedding_dim))
-            self.sub_s_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.embedding_dim))
-            self.sub_r_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.embedding_dim))
-            self.sub_s_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.ffn_embedding_dim))
+
+            self.sub_r_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.ffn_embedding_dim))
+            self.sub_s_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.embedding_dim))
+            self.sub_r_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.embedding_dim))
+            self.sub_s_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.ffn_embedding_dim))
 
             nn.init.normal_(self.sub_r_i, 0.0, 0.02)
             nn.init.normal_(self.sub_s_i, 0.0, 0.02)
@@ -1433,11 +1439,11 @@ class TransformerSentenceEncoderLayer(nn.Module):
             nn.init.normal_(self.sub_s_o, 0.0, 0.02)
 
             if multiplicative:
-                rank = rank if fast else 1
-                self.sub_rm_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.ffn_embedding_dim))
-                self.sub_sm_i = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.embedding_dim))
-                self.sub_rm_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.embedding_dim))
-                self.sub_sm_o = torch.nn.Parameter(torch.Tensor(sub_factors, rank, self.ffn_embedding_dim))
+                sub_factor_rank = sub_factor_rank if fast else 1
+                self.sub_rm_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.ffn_embedding_dim))
+                self.sub_sm_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.embedding_dim))
+                self.sub_rm_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.embedding_dim))
+                self.sub_sm_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.ffn_embedding_dim))
 
                 constant = math.sqrt(1.0 / rank) if fast else 1
                 nn.init.constant_(self.sub_rm_i, constant)

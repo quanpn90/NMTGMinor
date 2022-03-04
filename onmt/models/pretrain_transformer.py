@@ -20,22 +20,24 @@ class PretrainTransformer(NMTModel):
     def __init__(self, encoder, decoder, generator=None, rec_decoder=None, rec_generator=None,
                  mirror=False, ctc=False):
         super().__init__(encoder, decoder, generator, rec_decoder, rec_generator, ctc=ctc)
-        if hasattr(decoder, 'dec_pretrained_model') and decoder.dec_pretrained_model:
-            self.model_size = self.decoder.config.bert_hidden_size
-            self.tgt_vocab_size = self.decoder.config.vocab_size
-            self.switchout = 0
-        else:
-            self.model_size = self.decoder.model_size
-            self.tgt_vocab_size = self.decoder.word_lut.weight.size(0)
-            self.switchout = self.decoder.switchout
+        # if hasattr(decoder, 'dec_pretrained_model') and decoder.dec_pretrained_model:
+        #     self.model_size = self.decoder.config.bert_hidden_size
+        #     self.tgt_vocab_size = self.decoder.config.vocab_size
+        #     self.switchout = 0
+        # else:
+        #     self.model_size = self.decoder.model_size
+        #     self.tgt_vocab_size = self.decoder.word_lut.weight.size(0)
+        #     self.switchout = self.decoder.switchout
+        self.model_size = self.generator[0].linear.weight.size(1)
+        self.tgt_vocab_size = self.generator[0].linear.weight.size(0)
 
-        if self.encoder.input_type == 'text':
-            if hasattr(encoder, 'enc_pretrained_model') and encoder.enc_pretrained_model:
-                self.src_vocab_size = self.encoder.config.vocab_size
-            else:
-                self.src_vocab_size = self.encoder.word_lut.weight.size(0)
-        else:
-            self.src_vocab_size = 0
+        # if self.encoder.input_type == 'text':
+            # if hasattr(encoder, 'enc_pretrained_model') and encoder.enc_pretrained_model:
+            #     self.src_vocab_size = self.encoder.config.vocab_size
+            # else:
+            #     self.src_vocab_size = self.encoder.word_lut.weight.size(0)
+        # else:
+        self.src_vocab_size = self.tgt_vocab_size
 
         if mirror:
             self.mirror_decoder = copy.deepcopy(self.decoder)
@@ -64,8 +66,8 @@ class PretrainTransformer(NMTModel):
         :param zero_encoder: zero out the encoder output (if necessary)
         :return:
         """
-        if self.switchout > 0 and self.training:
-            batch.switchout(self.switchout, self.src_vocab_size, self.tgt_vocab_size)
+        # if self.switchout > 0 and self.training:
+        #     batch.switchout(self.switchout, self.src_vocab_size, self.tgt_vocab_size)
 
         src = batch.get('source')
         tgt = batch.get('target_input')
