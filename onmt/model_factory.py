@@ -37,6 +37,7 @@ def build_model(opt, dicts, remove_pretrain=False, constants=None):
     # adding missing options if the opt was built before. (for loading old models)
     opt = backward_compatible(opt)
     if remove_pretrain:
+        print("[INFO] Removing pretrained weights from opt")
         opt = remove_pretrain_weights(opt)
 
     onmt.constants.layer_norm = opt.layer_norm
@@ -226,7 +227,7 @@ def build_tm_model(opt, dicts, constants=None):
         if "mbart" in opt.dec_pretrained_model:
             from pretrain_module.configuration_mbart import MBartConfig
             from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder
-
+            print("[INFO] Created MBART decoder from: %s ..." % opt.dec_config_file )
             dec_mbart_config = MBartConfig.from_json_file(opt.dec_config_file)
 
             decoder = MBartDecoder(dec_mbart_config, opt)
@@ -242,6 +243,9 @@ def build_tm_model(opt, dicts, constants=None):
                                          padding_idx=constants.TGT_PAD)
             decoder = DeltaLMDecoder(deltalm_config, embedding_tgt)
 
+            generators[0].linear.weight = decoder.embed_tokens.weight
+            decoder.embed_tokens.weight.requires_grad = False
+
         elif opt.dec_pretrained_model == "bart":
             from pretrain_module.configuration_bart import BartConfig
             from pretrain_module.modeling_bart import BartDecoder
@@ -254,6 +258,7 @@ def build_tm_model(opt, dicts, constants=None):
         #     if opt.verbose:
         #         print("[INFO] No weights loading from {} for decoder".format(opt.dec_pretrained_model))
         # else:
+
         if opt.dec_state_dict is not None and len(opt.dec_state_dict) > 1:
             print("[INFO] Loading weights for decoder from: %s ..." % opt.dec_state_dict)
             dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
@@ -572,7 +577,7 @@ def build_tm_model(opt, dicts, constants=None):
             # share all embeddings
             decoder.embed_tokens.weight = encoder.embed_tokens.weight
             generators[0].linear.weight = encoder.embed_tokens.weight
-            encoder.embed_tokens.weight.requires_grad = False
+            # encoder.embed_tokens.weight.requires_grad = False
             # decoder.embed_tokens.weight.requires_grad = False
             # generators[0].linear.bias.requires_grad = False
 

@@ -165,10 +165,17 @@ class FairseqWav2Vec(nn.Module):
         for param in self.wav2vec_encoder.feature_extractor.parameters():
             param.requires_grad = False
 
+        # TODO:
+        # add relative attention
+        if opt.wav2vec2_relative_attention:
+            self.wav2vec_encoder.add_relative_attention()
+
         # freeze the whole encoder. needs to do this first before adding customized parameters
         if opt.freeze_encoder:
             for p in self.wav2vec_encoder.parameters():
                 p.requires_grad = False
+
+
 
         # then add factorize
         if opt.multilingual_factorized_weights:
@@ -626,8 +633,13 @@ class Wav2vecBERT(Wav2vecTransformer):
         self.sub_encoder = sub_encoder
 
         if hasattr(decoder, 'dec_pretrained_model') and decoder.dec_pretrained_model:
-            self.model_size = self.decoder.config.bert_hidden_size
-            self.tgt_vocab_size = self.decoder.config.vocab_size
+            try:
+                self.model_size = self.decoder.config.bert_hidden_size
+                self.tgt_vocab_size = self.decoder.config.vocab_size
+            except AttributeError:
+                self.model_size = self.decoder.model_size
+                self.tgt_vocab_size = self.generator[0].linear.weight.size(0)
+
             self.switchout = 0
         else:
             self.model_size = self.decoder.model_size

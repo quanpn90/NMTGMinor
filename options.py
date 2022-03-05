@@ -7,7 +7,7 @@ def make_parser(parser):
                         help='Path to the *-train.pt file from preprocess.py')
     parser.add_argument('-data_format', required=False, default='raw',
                         help='Default data format: raw')
-    parser.add_argument('-data_cache_size', type=int, default=0,
+    parser.add_argument('-data_cache_size', type=int, default=32,
                         help="""Caching for dataset (if implemented)""")
 
     parser.add_argument('-multi_dataset', action='store_true',
@@ -420,8 +420,7 @@ def make_parser(parser):
     parser.add_argument('-checkpointing_cross_attn', action='store_true',
                         help='use gradient checkpointing on Cross Attn layers')
 
-    parser.add_argument('-before_enc_output_ln', action='store_true',
-                        help='LayersNnormalization before output for plm as encoder')
+
 
     # pretrained decoder
     parser.add_argument('-dec_pretrained_model', default="", type=str,
@@ -500,6 +499,8 @@ def make_parser(parser):
                         help='Keep the quantization part of Wav2vec 2.0')
     parser.add_argument('-wav2vec2_dual_output', action='store_true',
                         help='Use both wav2vec quantized and continuous outputs for decoder')
+    parser.add_argument('-wav2vec2_relative_attention', action='store_true',
+                        help='Add relative attention to Wav2vec 2.0 ')
 
     parser.add_argument('-freeze_encoder', action='store_true',
                         help='Freeze the whole wav2vec weights.')
@@ -819,4 +820,7 @@ def backward_compatible(opt):
 
     if not hasattr(opt, 'mfw_atb_rank_scale'):
         opt.mfw_atb_rank_scale = 1
+
+    if not hasattr(opt, 'wav2vec2_relative_attention'):
+        opt.wav2vec2_relative_attention = False
     return opt

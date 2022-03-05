@@ -340,7 +340,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                               output_weights.transpose(0, 1),
                               beta=1., alpha=1.)
 
-        outputs = outputs.view(inputs.size(0), inputs.size(1), output_weights.size(0))
+        outputs = outputs.view(inputs.size(0), inputs.size(1), output_weights.size(0)).contiguous()
 
         if recompute:
             ctx.save_for_backward(heads_t,
@@ -423,6 +423,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         else:
             output_grads = output_grads[0]
 
+        output_grads = output_grads.contiguous()
         head_dim = inputs.size(2) // heads_t[0]
         len_q, bsz = inputs.size(0), inputs.size(1)
         len_k = len_q
@@ -599,8 +600,8 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         try:
             softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results.dtype)
         except TypeError:
+            # catch the error for older pytorch ver
             softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
-
 
         attn_score_grads = softmax_grads
         # the grads are evenly distributed to AC and BD
@@ -621,7 +622,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
         if not learnable_pos:
 
-            if len_r > len_q:  # if we cut off the BDs from before, then put the zero gradients behind
+            if len_r > len_q:  # if we cut off the BDs from before, then put the zero gradients at the back
                 grad_cut = matmul_bd_grads.new_zeros((matmul_bd_grads.size(0), matmul_bd_grads.size(1), len_r - len_q))
                 matmul_bd_grads = torch.cat([matmul_bd_grads, grad_cut], dim=-1)
 
@@ -645,7 +646,6 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             queries_grads_bd = queries_grads.new_empty(*queries_grads.size())
             torch.baddbmm(queries_grads_bd, matmul_bd_grads.transpose(0, 1), pos,
                           out=queries_grads_bd, beta=0.0, alpha=scale_t[0])
-            # queries_grads_bd = torch.bmm(matmul_bd_grads.transpose(0, 1), pos).mul_(scale_t[0])
 
         # len_q x batch*heads x d_head
         r_r_bias_grads = torch.sum(queries_grads_bd.view(len_q, bsz, heads_t[0], -1), dim=[0, 1])
@@ -699,6 +699,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                                                                heads_t[0] * 3 * head_dim)
         input_grads = torch.mm(input_lin_results_grads, input_weights)
         input_grads = input_grads.view(inputs.size(0), inputs.size(1), inputs.size(2))
+        input_grads = input_grads.contiguous()
         # Input Linear GEMM - WGRAD
         # input1: (data grads)  [len_q*bsz, 3*embed_dim(3072)]
         # input2: (activations) [len_q*bsz, embed_dim(1024)]

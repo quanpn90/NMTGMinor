@@ -9,6 +9,7 @@ from torch.cuda.amp import custom_fwd, custom_bwd
 
 from onmt.modules.performer import Performer, ProjectionUpdater
 from onmt.modules.optimized.self_attention_func import self_attn_func
+from onmt.modules.optimized.relative_self_attention_func import relative_self_attn_func
 from onmt.modules.optimized.linear import linear_function
 
 
@@ -338,6 +339,7 @@ class MultiheadAttention(nn.Module):
             **kwargs,
     ):
         super().__init__()
+        self.relative = False
         self.embed_dim = embed_dim
         self.kdim = kdim if kdim is not None else embed_dim
         self.vdim = vdim if vdim is not None else embed_dim
@@ -492,6 +494,22 @@ class MultiheadAttention(nn.Module):
         self.proj_bias.requires_grad = self.q_proj.bias.requires_grad
         del self.q_proj, self.k_proj, self.v_proj
 
+    #TODO: Add relative attention here
+    def add_relative_attention(self):
+
+        self.relative = True
+        self.pos_proj_weight = Parameter(torch.Tensor(self.embed_dim, self.embed_dim))
+        self.pos_proj_bias =  Parameter(torch.Tensor(self.embed_dim))
+        self.r_w_bias = Parameter(torch.Tensor(self.num_heads, self.head_dim))
+        self.r_r_bias = Parameter(torch.Tensor(self.num_heads, self.head_dim))
+
+        std_ = math.sqrt(2.0 / (self.embed_dim + self.embed_dim))
+        nn.init.normal_(self.pos_proj_weight, 0.0, std_)
+        # nn.init.uniform_(self.pos_proj_weight, -std_, std_)
+        nn.init.constant_(self.pos_proj_bias, 0.)
+        nn.init.normal_(self.r_w_bias, 0.0, 0.02)
+        nn.init.normal_(self.r_r_bias, 0.0, 0.02)
+
     def reset_parameters(self):
         if self.qkv_same_dim:
             # Empirically observed the convergence to be much better with
@@ -518,17 +536,17 @@ class MultiheadAttention(nn.Module):
             key: Optional[Tensor],
             value: Optional[Tensor],
             key_padding_mask: Optional[Tensor] = None,
-            incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
+            positions: Optional[Tensor] = None,
             attn_mask: Optional[Tensor] = None,
             cu_seqlens=None, max_len=None,
             lang=None, atb=None, **kwargs
     ) -> Tuple[Tensor, Optional[Tensor]]:
         """
+        :param positions:
         :param query:
         :param key:
         :param value:
         :param key_padding_mask:
-        :param incremental_state:
         :param attn_mask:
         :param cu_seqlens:
         :param max_len:
@@ -549,6 +567,7 @@ class MultiheadAttention(nn.Module):
                 assert list(query.size()) == [tgt_len, bsz, embed_dim]
                 need_weight = False
                 assert key is not None and value is not None
+                assert self.relative == False
 
                 return F.multi_head_attention_forward(
                     query,
@@ -658,13 +677,24 @@ class MultiheadAttention(nn.Module):
                     is_training = self.training
                     low_precision = True
 
-                    outputs, coverage = self_attn_func(False, is_training, self.num_heads, inputs,
-                                                       in_proj_weight, out_proj_weight,
-                                                       self.proj_bias, self.out_proj.bias,
-                                                       key_padding_mask, self.dropout_p,
-                                                       False, None,
-                                                       False, None,  # incremental and state
-                                                       low_precision, True)  # low-precision and return coverage
+                    if self.relative:
+                        recompute = False
+                        outputs, coverage = relative_self_attn_func(inputs, positions, False,
+                                               is_training, self.num_heads,
+                                               in_proj_weight, out_proj_weight, self.pos_proj_weight,
+                                               self.proj_bias, self.out_proj.bias, self.pos_proj_bias,
+                                               self.r_w_bias, self.r_r_bias,
+                                               key_padding_mask, self.dropout_p,
+                                               False, None, False, # incremental and state and double precision
+                                               False, True, recompute)  # learnable_pos + return-coverage
+                    else:
+                        outputs, coverage = self_attn_func(False, is_training, self.num_heads, inputs,
+                                                           in_proj_weight, out_proj_weight,
+                                                           self.proj_bias, self.out_proj.bias,
+                                                           key_padding_mask, self.dropout_p,
+                                                           False, None,
+                                                           False, None,  # incremental and state
+                                                           low_precision, True)  # low-precision and return coverage
 
                     return outputs, coverage
 
@@ -674,6 +704,7 @@ class MultiheadAttention(nn.Module):
                     assert query.dtype == torch.half
                     assert cu_seqlens is not None
                     assert max_len is not None  # and max_len <= 512
+                    assert self.relative == False
                     sm = torch.cuda.get_device_capability()
 
                     # Only Ampere supported at the moment
@@ -683,7 +714,6 @@ class MultiheadAttention(nn.Module):
                     qkv = linear_function(query, in_proj_weight, self.proj_bias)  # B x H
                     # B x 3 x H x d
 
-                    # TODO: moving to CUDA to remove overhead?
                     qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
 
                     context, coverage = self.fast_bert_mha(qkv, cu_seqlens, self.dropout_p, max_len, self.training)

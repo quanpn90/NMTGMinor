@@ -180,7 +180,7 @@ class Trainer(object):
 
         if self.is_main():
             print("[INFO] Building models .... ", flush=True)
-        model = build_model(opt, dicts, self.constants)
+        model = build_model(opt, dicts, False, self.constants)
 
         """ Building the loss function """
         tgt_pad = self.train_data[0].tgt_pad if isinstance(self.train_data, list) else self.train_data.tgt_pad
@@ -319,7 +319,7 @@ class Trainer(object):
             print("Loading pretrained Encoder Weights from %s" % checkpoint_file, flush=True)
             checkpoint = torch.load(checkpoint_file, map_location=lambda storage, loc: storage)
 
-            pretrained_model = build_model(checkpoint['opt'], checkpoint['dicts'])
+            pretrained_model = build_model(checkpoint['opt'], checkpoint['dicts'], False, self.constants)
             pretrained_model.load_state_dict(checkpoint['model'])
 
             model = self.model.module if self.world_size > 1 else self.model
@@ -339,7 +339,7 @@ class Trainer(object):
         checkpoint = torch.load(checkpoint_file, map_location=lambda storage, loc: storage)
         chkpoint_dict = checkpoint['dicts']
 
-        pretrained_model = build_model(checkpoint['opt'], chkpoint_dict)
+        pretrained_model = build_model(checkpoint['opt'], chkpoint_dict, False, self.constants)
         pretrained_model.load_state_dict(checkpoint['model'])
 
         self.print("Loading pretrained decoder weights ...")

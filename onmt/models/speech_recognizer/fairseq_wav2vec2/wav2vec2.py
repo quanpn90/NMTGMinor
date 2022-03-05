@@ -34,6 +34,7 @@ from .utils import buffered_arange, index_put, is_xla_tensor
 
 from fairseq.dataclass import FairseqDataclass
 from fairseq.models.wav2vec import Wav2Vec2Config
+from onmt.modules.sinusoidal_positional_encoding import SinusoidalPositionalEmbedding
 
 EXTRACTOR_MODE_CHOICES = ChoiceEnum(["default", "layer_norm"])
 MASKING_DISTRIBUTION_CHOICES = ChoiceEnum(["static", "uniform", "normal", "poisson"])
@@ -281,6 +282,7 @@ class Wav2Vec2Model(torch.nn.Module):
                  favor=False, feature_redraw_interval=1000, auto_check_redraw=True,
                  weight_drop=0.0):
         super().__init__()
+        self.relative_attention = False
         self.cfg = cfg
 
         feature_enc_layers = eval(cfg.conv_feature_layers)
@@ -574,6 +576,7 @@ class Wav2Vec2Model(torch.nn.Module):
             self,
             source,
             padding_mask=None,
+            positions=None,
             mask=True,
             features_only=False,
             layer=None,
@@ -887,6 +890,11 @@ class Wav2Vec2Model(torch.nn.Module):
     def add_stacked_encoder(self, stacked_encoder):
         self.encoder.add_stacked_encoder(stacked_encoder)
 
+    def add_relative_attention(self):
+
+        self.relative_attention = True
+        self.encoder.add_relative_attention()
+
     def convert_fast_attention(self):
 
         model = self.encoder
@@ -992,6 +1000,8 @@ class TransformerEncoder(nn.Module):
         """
         super().__init__()
 
+        self.positional_encoder = None
+        self.relative_attention = False
         self.dropout = args.dropout
         self.embedding_dim = args.encoder_embed_dim
         self.favor = favor
@@ -1065,20 +1075,25 @@ class TransformerEncoder(nn.Module):
                             favor=self.favor
                         )
 
-            # # TODO: check layer norm first between new and old layer
-            # def find_modules(nn_module, type):
-            #     return [module for module in nn_module.modules() if isinstance(module, type)]
-            #
-            # fast_attentions = find_modules(new_layer, MultiheadAttention)
-            # for fast_attention in fast_attentions:
-            #     fast_attention.convert_fast_attention()
-
+            # TODO: check layer norm first between new and old layer
             new_layer.load_state_dict(old_layer.state_dict())
             self.layers.append(new_layer)
 
+    def add_relative_attention(self):
 
-    def forward(self, x, padding_mask=None, layer=None, lang=None, atb=None, checkpointing_ffn=False, **kwargs):
-        x, layer_results = self.extract_features(x, padding_mask, layer, lang=lang, atb=atb,
+        self.relative_attention = True
+        def convert(m_):
+            classname = m_.__class__.__name__
+            if classname.find('MultiheadAttention') != -1:
+                m_.add_relative_attention()
+
+        self.layers.apply(convert)
+
+        self.positional_encoder = SinusoidalPositionalEmbedding(self.embedding_dim)
+
+
+    def forward(self, x, padding_mask=None, positions=None, layer=None, lang=None, atb=None, checkpointing_ffn=False, **kwargs):
+        x, layer_results = self.extract_features(x, padding_mask, positions, layer, lang=lang, atb=atb,
                                                  checkpointing_ffn=checkpointing_ffn)
 
         if self.layer_norm_first and layer is None:
@@ -1086,7 +1101,7 @@ class TransformerEncoder(nn.Module):
 
         return x, layer_results
 
-    def extract_features(self, x, padding_mask=None, tgt_layer=None, lang=None, atb=None,
+    def extract_features(self, x, padding_mask=None, positions=None, tgt_layer=None, lang=None, atb=None,
                          checkpointing_ffn=False):
         if padding_mask is not None:
             x = index_put(x, padding_mask, 0)
@@ -1094,6 +1109,16 @@ class TransformerEncoder(nn.Module):
         x_conv = self.pos_conv(x.transpose(1, 2))
         x_conv = x_conv.transpose(1, 2)
         x = x + x_conv
+
+        if not self.relative_attention:
+            positions = None
+        else:
+            klen = x.size(1)
+            bsz = x.size(0)
+            positions = torch.arange(klen - 1, -klen, -1.0, device=x.device, dtype=x.dtype)
+            pos_emb = self.positional_encoder(positions, bsz=bsz)
+            pos_emb = F.dropout(pos_emb, p=self.dropout, training=self.training)
+            positions = pos_emb
 
         if not self.layer_norm_first:
             x = self.layer_norm(x)
@@ -1114,7 +1139,7 @@ class TransformerEncoder(nn.Module):
 
         # only run this when seq_len <= 512 and sm = 80/86 and type = half
         if self.fast_bert_mha and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] == 0) \
-                and not self.deepspeed and fast_attention and x.dtype == torch.half:
+                and not self.relative_attention and not self.deepspeed and fast_attention and x.dtype == torch.half:
             can_run_fast_bert_mha = True
 
             # masked positions = 1 so to compute length we need the (1 -)
@@ -1160,7 +1185,7 @@ class TransformerEncoder(nn.Module):
             for i, layer in enumerate(self.layers):
                 dropout_probability = np.random.random()
                 if not self.training or (dropout_probability > self.layerdrop):
-                    x, z = layer(x, self_attn_padding_mask=padding_mask,
+                    x, z = layer(x, self_attn_padding_mask=padding_mask, positions=positions,
                                  max_len=max_len, cu_seqlens=cu_seqlens,
                                  lang=lang, atb=atb, checkpointing_ffn=checkpointing_ffn)
                     if tgt_layer is not None:
@@ -1538,6 +1563,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             x: torch.Tensor,
             self_attn_mask: torch.Tensor = None,
             self_attn_padding_mask: torch.Tensor = None,
+            positions=None,
             max_len=-1, cu_seqlens=None,
             lang=None, atb=None,
             checkpointing_ffn=False,
@@ -1586,6 +1612,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 key=x,
                 value=x,
                 key_padding_mask=self_attn_padding_mask,
+                positions=positions,
                 attn_mask=self_attn_mask,
                 max_len=max_len, cu_seqlens=cu_seqlens,
                 lang=lang, atb=atb
@@ -1594,7 +1621,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             if is_fast:
                 x = fused_dropout_add(x, residual, self.residual_dropout, self.training)
             else:
-                x = self.dropout1(x).add_(residual)
+                x = self.dropout1(x) + residual
 
             residual = x
 
