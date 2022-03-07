@@ -167,7 +167,9 @@ class FairseqWav2Vec(nn.Module):
 
         # TODO:
         # add relative attention
-        if opt.wav2vec2_relative_attention:
+        if (hasattr(opt, 'wav2vec2_relative_attention') and opt.wav2vec2_relative_attention) or \
+            (hasattr(opt, 'add_relative_attention') and opt.add_relative_attention):
+            print("[INFO] Add relative attention for wav2vec")  
             self.wav2vec_encoder.add_relative_attention()
 
         # freeze the whole encoder. needs to do this first before adding customized parameters
