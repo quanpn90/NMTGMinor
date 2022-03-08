@@ -363,6 +363,7 @@ def main():
                                           cleaning=True, verbose=True, debug=True,
                                           past_src_data=past_valid_src,
                                           past_src_data_sizes=past_valid_src_sizes,
+                                          max_src_len=opt.max_src_length,
                                           min_src_len=1, min_tgt_len=3,
                                           constants=onmt.constants)
             else:

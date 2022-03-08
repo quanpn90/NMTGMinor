@@ -339,6 +339,7 @@ class MultiheadAttention(nn.Module):
             **kwargs,
     ):
         super().__init__()
+        self.pos_proj_weight = None
         self.relative = False
         self.embed_dim = embed_dim
         self.kdim = kdim if kdim is not None else embed_dim
@@ -408,12 +409,18 @@ class MultiheadAttention(nn.Module):
         self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
         self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
         self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        if self.relative:
+            self.r_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.s_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
         std = 0.01 if fast else 0.02
         nn.init.normal_(self.r_i, 0.0, std)
         nn.init.normal_(self.s_i, 0.0, std)
         nn.init.normal_(self.r_o, 0.0, std)
         nn.init.normal_(self.s_o, 0.0, std)
+        if self.relative:
+            nn.init.normal_(self.r_p, 0.0, std)
+            nn.init.normal_(self.s_p, 0.0, std)
 
         if multiplicative:
             rank = rank if fast else 1
@@ -421,24 +428,36 @@ class MultiheadAttention(nn.Module):
             self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
             self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
             self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            if self.relative:
+                self.rm_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+                self.sm_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
             constant = math.sqrt(1.0 / rank) if fast else 1
             nn.init.constant_(self.rm_i, constant)
             nn.init.constant_(self.sm_i, constant)
             nn.init.constant_(self.rm_o, constant)
             nn.init.constant_(self.sm_o, constant)
+            if self.relative:
+                nn.init.constant_(self.rm_p, constant)
+                nn.init.constant_(self.sm_p, constant)
 
         if self.sub_factorized:
             self.sub_r_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, 3 * embed_dim))
             self.sub_s_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
             self.sub_r_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
             self.sub_s_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+            if self.relative:
+                self.sub_r_p = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+                self.sub_s_p = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
 
             std = 0.01 if fast else 0.02
             nn.init.normal_(self.sub_r_i, 0.0, std)
             nn.init.normal_(self.sub_s_i, 0.0, std)
             nn.init.normal_(self.sub_r_o, 0.0, std)
             nn.init.normal_(self.sub_s_o, 0.0, std)
+            if self.relative:
+                nn.init.normal_(self.sub_r_p, 0.0, std)
+                nn.init.normal_(self.sub_s_p, 0.0, std)
 
             if multiplicative:
                 sub_factor_rank = sub_factor_rank if fast else 1
@@ -446,12 +465,18 @@ class MultiheadAttention(nn.Module):
                 self.sub_sm_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
                 self.sub_rm_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
                 self.sub_sm_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+                if self.relative:
+                    self.sub_rm_p = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
+                    self.sub_sm_p = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, embed_dim))
 
                 constant = math.sqrt(1.0 / sub_factor_rank) if fast else 1
                 nn.init.constant_(self.sub_rm_i, constant)
                 nn.init.constant_(self.sub_sm_i, constant)
                 nn.init.constant_(self.sub_rm_o, constant)
                 nn.init.constant_(self.sub_sm_o, constant)
+                if self.relative:
+                    nn.init.constant_(self.sub_rm_p, constant)
+                    nn.init.constant_(self.sub_sm_p, constant)
 
     def convert_fast_attention(self):
 
@@ -596,6 +621,8 @@ class MultiheadAttention(nn.Module):
 
                 in_proj_weight = F.dropout(self.proj_weight, self.weight_drop, training=self.training)
                 out_proj_weight = F.dropout(self.out_proj.weight, self.weight_drop, training=self.training)
+                pos_proj_weight = F.dropout(self.pos_proj_weight, self.weight_drop, training=self.training) \
+                                  if self.pos_proj_weight is not None else None
 
                 if self.is_factorized:
                     if self.multiplicative_factorize:
@@ -604,13 +631,20 @@ class MultiheadAttention(nn.Module):
                         sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
                         rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
                         sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+                        if self.relative:
+                            rm_p = torch.index_select(self.rm_p, 0, lang).squeeze(0)
+                            sm_p = torch.index_select(self.sm_p, 0, lang).squeeze(0)
 
                         if self.fast_factorize:
                             mul_factor_in = torch.mm(rm_i.t(), sm_i)
                             mul_factor_out = torch.mm(rm_o.t(), sm_o)
+                            if self.relative:
+                                pos_factor = torch.mm(rm_p.t(), sm_p)
                         else:
                             mul_factor_in = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
                             mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+                            if self.relative:
+                                pos_factor = torch.bmm(rm_p.unsqueeze(-1), sm_p.unsqueeze(1)).sum(dim=0)
 
                         if self.sub_factorized and atb is not None:
                             # squeeze possible because only 1
@@ -618,31 +652,45 @@ class MultiheadAttention(nn.Module):
                             sm_i = torch.index_select(self.sub_sm_i, 0, atb).squeeze(0)
                             rm_o = torch.index_select(self.sub_rm_o, 0, atb).squeeze(0)
                             sm_o = torch.index_select(self.sub_sm_o, 0, atb).squeeze(0)
+                            if self.relative:
+                                rm_p = torch.index_select(self.sub_rm_p, 0, atb).squeeze(0)
+                                sm_p = torch.index_select(self.sub_sm_p, 0, atb).squeeze(0)
 
                             if self.fast_factorize:
                                 sub_mul_factor_in = torch.mm(rm_i.t(), sm_i)
                                 sub_mul_factor_out = torch.mm(rm_o.t(), sm_o)
+                                if self.relative:
+                                    sub_pos_factor = torch.mm(rm_p.t(), sm_p)
                             else:
                                 sub_mul_factor_in = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
                                 sub_mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+                                if self.relative:
+                                    sub_pos_factor = torch.bmm(rm_p.unsqueeze(-1), sm_p.unsqueeze(1)).sum(dim=0)
 
                             mul_factor_in.mul_(sub_mul_factor_in)
                             mul_factor_out.mul_(sub_mul_factor_out)
+                            if self.relative: pos_factor.mul_(sub_pos_factor)
 
                         in_proj_weight = in_proj_weight * mul_factor_in
                         out_proj_weight = out_proj_weight * mul_factor_out
+                        if self.relative: pos_proj_weight = pos_proj_weight * pos_factor
 
                     r_i = torch.index_select(self.r_i, 0, lang).squeeze(0)
                     s_i = torch.index_select(self.s_i, 0, lang).squeeze(0)
                     r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
                     s_o = torch.index_select(self.s_o, 0, lang).squeeze(0)
+                    if self.relative:
+                        r_p = torch.index_select(self.r_p, 0, lang).squeeze(0)
+                        s_p = torch.index_select(self.s_p, 0, lang).squeeze(0)
 
                     if self.fast_factorize:
                         add_factor_in = torch.mm(r_i.t(), s_i)
                         add_factor_out = torch.mm(r_o.t(), s_o)
+                        if self.relative: pos_factor = torch.mm(r_p.t(), s_p)
                     else:
                         add_factor_in = torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
                         add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+                        if self.relative: pos_factor = torch.bmm(r_p.unsqueeze(-1), s_p.unsqueeze(1)).sum(dim=0)
 
                     if self.sub_factorized and atb is not None:
 
@@ -650,19 +698,28 @@ class MultiheadAttention(nn.Module):
                         s_i = torch.index_select(self.sub_s_i, 0, atb).squeeze(0)
                         r_o = torch.index_select(self.sub_r_o, 0, atb).squeeze(0)
                         s_o = torch.index_select(self.sub_s_o, 0, atb).squeeze(0)
+                        if self.relative:
+                            r_p = torch.index_select(self.sub_r_p, 0, atb).squeeze(0)
+                            s_p = torch.index_select(self.sub_s_p, 0, atb).squeeze(0)
 
                         if self.fast_factorize:
                             sub_add_factor_in = torch.mm(r_i.t(), s_i)
                             sub_add_factor_out = torch.mm(r_o.t(), s_o)
+                            if self.relative:
+                                sub_pos_factor = torch.mm(r_p.t(), s_p)
                         else:
                             sub_add_factor_in = torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
                             sub_add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+                            if self.relative:
+                                sub_pos_factor = torch.bmm(r_p.unsqueeze(-1), s_p.unsqueeze(1)).sum(dim=0)
 
                         add_factor_in.add_(sub_add_factor_in)
                         add_factor_out.add_(sub_add_factor_out)
+                        if self.relative: pos_factor.add_(sub_pos_factor)
 
                     in_proj_weight = in_proj_weight + add_factor_in
                     out_proj_weight = out_proj_weight + add_factor_out
+                    if self.relative: pos_proj_weight = pos_proj_weight + sub_pos_factor
 
                 # Forward Pass starts here
                 if query.ndim == 3:
@@ -681,7 +738,7 @@ class MultiheadAttention(nn.Module):
                         recompute = False
                         outputs, coverage = relative_self_attn_func(inputs, positions, False,
                                                is_training, self.num_heads,
-                                               in_proj_weight, out_proj_weight, self.pos_proj_weight,
+                                               in_proj_weight, out_proj_weight, pos_proj_weight,
                                                self.proj_bias, self.out_proj.bias, self.pos_proj_bias,
                                                self.r_w_bias, self.r_r_bias,
                                                key_padding_mask, self.dropout_p,
