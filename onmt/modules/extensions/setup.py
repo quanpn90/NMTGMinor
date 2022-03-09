@@ -309,6 +309,18 @@ if bare_metal_minor >= 5 and bare_metal_major >= 11:
                                                    '--use_fast_math'] + version_dependent_macros +
                                                   generator_flag}))
 
+    ext_modules.append(
+        CUDAExtension(name='relative_self_attn_blaslt',
+                      sources=['multihead_attn_blaslt/relative_self_attn.cpp',
+                               'multihead_attn_blaslt/relative_self_attn_cuda.cu'],
+                      extra_compile_args={'cxx': ['-O3', ] + version_dependent_macros + generator_flag,
+                                          'nvcc': ['-O3',
+                                                   '-U__CUDA_NO_HALF_OPERATORS__',
+                                                   '-U__CUDA_NO_HALF_CONVERSIONS__',
+                                                   '--expt-relaxed-constexpr',
+                                                   '--expt-extended-lambda',
+                                                   '--use_fast_math'] + version_dependent_macros +
+                                                  generator_flag}))
 # check build if sm80
 ext_modules.append(
     CUDAExtension(name='fmhalib',

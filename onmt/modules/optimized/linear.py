@@ -35,7 +35,7 @@ class LinearFunction(torch.autograd.Function):
         input, weight = ctx.saved_tensors
 
         if weight.requires_grad:
-            d_input, d_weight, d_bias = linear_blaslt.backward(input, weight, grad_output)
+            d_input, d_weight, d_bias = linear_blaslt.backward(input, weight, grad_output, True)
         else:
             d_input = linear_blaslt.backward_input_only(input, weight, grad_output)
             d_weight, d_bias = None, None

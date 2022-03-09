@@ -10,7 +10,7 @@ int linear_bias_forward_cuda(at::Tensor input, T *weight, at::Tensor bias,
 int in_features, int batch_size, int out_features, at::Tensor output, void *lt_workspace);
 
 template <typename T>
-int linear_bias_backward_cuda(T *input, T *weight, T *d_output, int in_features,
+int linear_bias_backward_cuda(bool compute_grad_input, T *input, T *weight, T *d_output, int in_features,
                               int batch_size, int out_features, T *d_weight, T *d_bias, T *d_input,  void *lt_workspace);
 
 template <typename T>
@@ -56,7 +56,8 @@ at::Tensor linear_bias_forward(at::Tensor input, at::Tensor weight, at::Tensor b
   return {out};
 }
 
-std::vector<at::Tensor> linear_bias_backward(at::Tensor input, at::Tensor weight, at::Tensor d_output) {
+std::vector<at::Tensor> linear_bias_backward(at::Tensor input, at::Tensor weight,
+                                             at::Tensor d_output, bool compute_grad_input) {
 
   // compute batch size as the product of the first dimensions
   // -> more flexible input size
@@ -73,7 +74,13 @@ std::vector<at::Tensor> linear_bias_backward(at::Tensor input, at::Tensor weight
 
   auto d_bias = at::empty({out_features}, input.type());
 //  auto d_input = at::empty({batch_size, in_features}, input.type());
-  auto d_input = at::empty(input.sizes(), input.type());
+  at::Tensor d_input;
+
+  if (compute_grad_input)    {
+    d_input = at::empty(input.sizes(), input.type());
+  } else {
+    d_input = at::empty({0}, input.type());
+  }
   // allocate fixed 4MB workspace for cublaslt for now, and this gets at least 4 MB
   auto lt_workspace = at::empty({1 << 22}, input.type());
 
@@ -81,6 +88,7 @@ std::vector<at::Tensor> linear_bias_backward(at::Tensor input, at::Tensor weight
     scalar_t* w_ptr = weight.data_ptr<scalar_t>();
     scalar_t* d_b_ptr = d_bias.data_ptr<scalar_t>();
     auto result = linear_bias_backward_cuda<scalar_t>(
+        compute_grad_input,
         input.data_ptr<scalar_t>(),
         w_ptr,
         d_output.data_ptr<scalar_t>(),

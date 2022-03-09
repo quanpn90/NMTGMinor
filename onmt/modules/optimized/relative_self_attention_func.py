@@ -14,9 +14,14 @@ except (ModuleNotFoundError, ImportError) as e:
     from .compat import custom_fwd, custom_bwd
 
 try:
-    import rel_self_attn_cuda
+    import relative_self_attn_blaslt
 except (ModuleNotFoundError, ImportError) as e:
-    rel_self_attn_cuda = None
+    relative_self_attn_blaslt = None
+
+try:
+    import linear_blaslt
+except (ModuleNotFoundError, ImportError) as e:
+    linear_blaslt = None
 
 
 class RelativeShift(object):
@@ -32,10 +37,10 @@ class RelativeShift(object):
             zero_pad = torch.zeros((bsz, x.size(1), 1),
                                    device=x.device, dtype=x.dtype)
 
-            # padded into [T x T+1 x (B x H)]
+            # padded into [(B x H) T x T+1 x ]
             x_padded = torch.cat([zero_pad, x], dim=2)
 
-            # view into [T+1 x T x (BxH)]
+            # view into [(B x H) T+1 x T x (BxH)]
             x_view = x_padded.view(bsz, x.size(2) + 1, x.size(1))
 
             # remove the first collumn
@@ -81,12 +86,12 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                 r_w_bias, r_r_bias,
                 mask, dropout_prob,
                 incremental, incremental_cache,
-                double_precision, learnable_pos, return_coverage, recompute):
+                low_precision, learnable_pos, return_coverage, recompute):
         """
         :param recompute:
         :param return_coverage:
         :param learnable_pos:
-        :param double_precision: ops at float64, only for debugging
+        :param low_precision: ops at float64, only for debugging
         :param ctx: context object to stash information for backward
         :param inputs: input hidden states [len_q x batch_size x hidden]
         :param pos: [len_k x 1 x hidden]
@@ -113,12 +118,12 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         null_tensor = torch.tensor([]).to(inputs.device)
         head_dim = inputs.size(2) // heads
         scale_t = torch.tensor([head_dim ** -0.5])
-        ctx.double_precision = double_precision
         ctx.fused_softmax_dropout = False
         ctx.learnable_pos = learnable_pos
         ctx.return_coverage = return_coverage
         ctx.fused_all = False
         ctx.recompute = recompute
+        ctx.use_time_mask = use_time_mask
 
         bsz, len_q = inputs.size(1), inputs.size(0)
         len_r = pos.size(0)  # r can be longer than query, i.e for bidirectional attention we need 2k+1 positions
@@ -130,57 +135,11 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             if use_time_mask:
                 assert (len(mask.size()) == 2), "Timing mask is not 2D!"
                 # assert (mask.size(0) == mask.size(1)), "Sequence length should match!"
-                mask = mask.unsqueeze(0).unsqueeze(0)
+                # mask = mask.unsqueeze(0).unsqueeze(0)
             # Key Padding Mask
             else:
                 # attn_score = attn_score.view(bsz, heads, len_q, len_k)
                 mask = mask.unsqueeze(1).unsqueeze(2)
-
-        if rel_self_attn_cuda is not None and not incremental and len_k <= 2048 and \
-                inputs.type() == 'torch.cuda.HalfTensor' and learnable_pos:
-
-            input_lin_results, rr_head_q, rw_head_q, \
-            softmax_results, dropout_results, dropout_mask, \
-            matmul2_results, outputs \
-                = rel_self_attn_cuda.forward(is_training, heads, inputs, pos,
-                                             input_weights, output_weights,
-                                             input_biases, output_biases,
-                                             r_w_bias, r_r_bias,
-                                             mask, dropout_prob)
-
-            pos_lin_results = None
-            r_head_k = None
-            nan_mask = null_tensor
-
-            if recompute:
-                ctx.save_for_backward(heads_t,
-                                      scale_t,
-                                      inputs, pos, r_head_k,
-                                      input_weights, pos_weights, output_weights,
-                                      input_biases, pos_biases, output_biases,
-                                      r_w_bias, r_r_bias,
-                                      dropout_mask, nan_mask, mask,
-                                      dropout_prob_t)
-            else:
-                ctx.save_for_backward(heads_t,
-                                      scale_t,
-                                      matmul2_results,
-                                      dropout_results,
-                                      softmax_results,
-                                      input_lin_results,
-                                      pos_lin_results,
-                                      rw_head_q, rr_head_q,
-                                      inputs, pos, r_head_k,
-                                      input_weights, pos_weights,
-                                      output_weights,
-                                      dropout_mask, nan_mask,
-                                      dropout_prob_t)
-
-            ctx.fused_all = True
-            if return_coverage:
-                return (outputs, dropout_results)
-            else:
-                return outputs
 
         if pos.size(1) == 1 and not learnable_pos:
             pos = pos.repeat(1, bsz, 1)  # we have to use repeat instead of expand here because mm needs contiguous
@@ -190,21 +149,27 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # input2: (weights)     [hidden*3 (3072), hidden (1024)] (transpose [0,1])
         # output:               [len_q, bsz, hidden*3]
         # GEMM: ( (len_q*bsz) x embed_dim ) x ( embed_dim x embed_dim*3 ) = (len_q*bsz x embed_dim*3)
-        input_lin_results = torch.addmm(input_biases,
-                                        inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
-                                        input_weights.transpose(0, 1),
-                                        beta=1., alpha=1.)
+        if linear_blaslt is not None and inputs.dtype != torch.float64 and inputs.is_cuda:
+            input_lin_results = linear_blaslt.forward(inputs, input_weights, input_biases)
+        else:
+            input_lin_results = torch.addmm(input_biases,
+                                            inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
+                                            input_weights.transpose(0, 1),
+                                            beta=1., alpha=1.)
 
-        # reshape [len_q*bsz, embed_dim*3 -> len_q x bsz x embed_dim*3]
-        input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), input_weights.size(0))
+            # reshape [len_q*bsz, embed_dim*3 -> len_q x bsz x embed_dim*3]
+            input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), input_weights.size(0))
 
         if not learnable_pos:
-            pos_lin_results = torch.addmm(pos_biases,
-                                          pos.view(pos.size(0) * pos.size(1), pos.size(2)),
-                                          pos_weights.transpose(0, 1),
-                                          beta=1., alpha=1.)
+            if linear_blaslt is not None and inputs.dtype != torch.float64 and inputs.is_cuda:
+                pos_lin_results = linear_blaslt.forward(pos, pos_weights, pos_biases)
+            else:
+                pos_lin_results = torch.addmm(pos_biases,
+                                              pos.view(pos.size(0) * pos.size(1), pos.size(2)),
+                                              pos_weights.transpose(0, 1),
+                                              beta=1., alpha=1.)
 
-            pos_lin_results = pos_lin_results.view(pos.size(0), pos.size(1), pos_weights.size(0))
+                pos_lin_results = pos_lin_results.view(pos.size(0), pos.size(1), pos_weights.size(0))
 
             r_head_k = pos_lin_results.view(pos.size(0), bsz * heads, head_dim)  # T x BxH x D
         else:
@@ -246,6 +211,8 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # r_w_bias size: head * head_dim
         rw_head_q = queries.view(len_q, bsz, heads, head_dim) + r_w_bias  #
         rw_head_q = rw_head_q.view(len_q, bsz * heads, head_dim)
+        rr_head_q = queries.view(len_q, bsz, heads, head_dim) + r_r_bias
+        rr_head_q = rr_head_q.view(len_q, bsz * heads, head_dim)
 
         # matmul_ac batched GEMMs
         # queries+bias: [len_q, bsz*heads, head_dim] transpose(0, 1)
@@ -257,9 +224,6 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                                       out=matmul_ac, beta=0.0, alpha=scale_t[0])
         else:
             matmul_ac = torch.bmm(rw_head_q.transpose(0, 1), keys.transpose(0, 1).transpose(1, 2)).mul_(scale_t[0])
-
-        rr_head_q = queries.view(len_q, bsz, heads, head_dim) + r_r_bias
-        rr_head_q = rr_head_q.view(len_q, bsz * heads, head_dim)
 
         if not learnable_pos:
             if queries.is_cuda:
@@ -276,7 +240,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                     .mul_(scale_t[0])
 
             # shift so that the relative positions are aligned
-            # the first element will have 0 -1 ... -n relative positions compared to other elements
+            # the first element will have 0 q-1 ... -n relative positions compared to other elements
             # the last element will have  n-1 n-2 ...  0
             matmul_bd = RelativeShift.forward(matmul_bd, True, False)
 
@@ -300,7 +264,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         if mask is not None:
             attn_score.view(bsz, heads, len_q, len_k).masked_fill_(mask, float('-inf'))
 
-        dtype_ = torch.float64 if double_precision else torch.float32
+        dtype_ = torch.float64 if attn_score.dtype == torch.float64 else torch.float32
         softmax_results = F.softmax(attn_score, dim=-1, dtype=dtype_).type_as(attn_score)
 
         nan_mask = torch.isnan(softmax_results)
@@ -335,12 +299,16 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # Input2: (weights)     [ embed_dim, embed_dim ] transpose(0,1)
         # Output:               [ len_q, bsz, embed_dim ]
         # GEMM: ( len_q*bsz x embed_dim ) x ( embed_dim x embed_dim ) = ( len_q*bsz x embed_dim )
-        outputs = torch.addmm(output_biases,
-                              matmul2_results.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
-                              output_weights.transpose(0, 1),
-                              beta=1., alpha=1.)
+        if linear_blaslt is not None and inputs.dtype != torch.float64 and inputs.is_cuda:
+            # pos_lin_results = linear_blaslt.forward(pos, pos_weights, pos_biases)
+            outputs = linear_blaslt.forward(matmul2_results, output_weights, output_biases)
+        else:
+            outputs = torch.addmm(output_biases,
+                                  matmul2_results.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
+                                  output_weights.transpose(0, 1),
+                                  beta=1., alpha=1.)
 
-        outputs = outputs.view(inputs.size(0), inputs.size(1), output_weights.size(0)).contiguous()
+            outputs = outputs.view(inputs.size(0), inputs.size(1), output_weights.size(0)).contiguous()
 
         if recompute:
             ctx.save_for_backward(heads_t,
@@ -369,7 +337,8 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                                   softmax_results,
                                   input_lin_results,
                                   pos_lin_results,
-                                  rw_head_q, rr_head_q,
+                                  # rw_head_q, rr_head_q,
+                                  r_r_bias, r_w_bias,
                                   inputs, pos, r_head_k,
                                   input_weights, pos_weights,
                                   output_weights,
@@ -400,7 +369,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             dropout_results, \
             softmax_results, \
             input_lin_results, pos_lin_results, \
-            rw_head_q, rr_head_q, \
+            r_w_bias, r_r_bias, \
             inputs, pos, r_head_k, \
             input_weights, pos_weights, \
             output_weights, \
@@ -417,6 +386,11 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             dropout_mask, nan_mask, pad_mask, \
             dropout_prob_t = ctx.saved_tensors
 
+            input_lin_results, matmul2_results, \
+            dropout_results, softmax_results, pos_lin_results = None, None, None, None, None
+            rw_head_q = None
+            rr_head_q = None
+
         learnable_pos = ctx.learnable_pos
         if ctx.return_coverage:
             output_grads, softmax_grads = output_grads
@@ -431,39 +405,39 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         len_r = pos.size(0)
 
         if ctx.fused_all:  # only applicable for learnable position and len_k <= 2048
+            # softmax results -> attn scores
+            # rw_head_q -> r_w_bias
+            # rr_head_q -> r_r_bias
+            input_grads, \
+            input_weights_grads, \
+            pos_weights_grads, \
+            output_weights_grads, \
+            input_biases_grads, \
+            pos_biases_grads, \
+            output_biases_grads, \
+            r_w_bias_grads, r_r_bias_grads = relative_self_attn_blaslt.backward(
+                heads_t[0], output_grads, matmul2_results,
+                dropout_results, softmax_results,
+                input_lin_results, pos_lin_results,
+                rw_head_q, rr_head_q,
+                inputs, pos,
+                input_weights, output_weights, pos_weights,
+                dropout_mask, dropout_prob_t[0])
+            # pos_weight_grads = None
+            # pos_bias_grads = None
+            pos_grads = None
 
-            if ctx.recompute:
-                input_grads, pos_grads, \
-                input_weight_grads, \
-                input_bias_grads, \
-                output_weight_grads, \
-                output_bias_grads, \
-                r_w_bias_grads, r_r_bias_grads = rel_self_attn_cuda.backward_recompute(
-                    heads_t[0], output_grads,
-                    inputs, pos,
-                    input_weights, output_weights,
-                    input_biases, output_biases,
-                    r_w_bias, r_r_bias,
-                    dropout_mask, pad_mask, dropout_prob_t[0])
-            else:
-                input_grads, pos_grads, \
-                input_weight_grads, \
-                input_bias_grads, \
-                output_weight_grads, \
-                output_bias_grads, \
-                r_w_bias_grads, r_r_bias_grads = rel_self_attn_cuda.backward(
-                    heads_t[0], output_grads, matmul2_results,
-                    dropout_results, softmax_results,
-                    input_lin_results, rw_head_q, rr_head_q,
-                    inputs, pos, input_weights, output_weights,
-                    dropout_mask, dropout_prob_t[0])
-            pos_weight_grads = None
-            pos_bias_grads = None
+            del ctx.fused_all, ctx.recompute, ctx.return_coverage
 
-            return input_grads, pos_grads, None, None, None, input_weight_grads, \
-                   output_weight_grads, pos_weight_grads, \
-                   input_bias_grads, output_bias_grads, pos_bias_grads, r_w_bias_grads, r_r_bias_grads, \
+            return input_grads, pos_grads, None, None, None, input_weights_grads, \
+                   output_weights_grads, pos_weights_grads, \
+                   input_biases_grads, output_biases_grads, pos_biases_grads, r_w_bias_grads, r_r_bias_grads, \
                    None, None, None, None, None, None, None, None
+
+            # return input_grads, pos_grads, None, None, None, input_weights_grads, \
+            #        output_weights_grads, pos_weights_grads, \
+            #        input_biases_grads, output_biases_grads, pos_biases_grads, r_w_bias_grads, r_r_bias_grads, \
+            #        None, None, None, None, None, None, None, None
 
         if ctx.recompute:
             heads = heads_t[0]
@@ -533,6 +507,8 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1)).transpose(0, 1)
             matmul2_results = matmul2_results.contiguous().view(inputs.size(0), inputs.size(1), inputs.size(2))
 
+        # BACKWARD PASS STARTS HERE
+
         # Slice out q,k,v from one big Input Linear outuput (should only impact meta data, no copies!)
         # input_lin_results: [len_q, bsz, heads(16), 3, head_dim(64)]
         # input_lin_results: [len_q, batches=bsz*heads, 3, head_dim]
@@ -540,6 +516,11 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         queries = input_lin_results[:, :, 0, :]
         keys = input_lin_results[:, :, 1, :]
         values = input_lin_results[:, :, 2, :]
+
+        rw_head_q = queries.view(len_q, bsz, heads_t[0], head_dim) + r_w_bias  #
+        rw_head_q = rw_head_q.view(len_q, bsz * heads_t[0], head_dim)
+        rr_head_q = queries.view(len_q, bsz, heads_t[0], head_dim) + r_r_bias
+        rr_head_q = rr_head_q.view(len_q, bsz * heads_t[0], head_dim)
 
         # The tensor is declared before hand to properly slice out query, key, and value grads.
         input_lin_results_grads = torch.empty_like(input_lin_results)
@@ -552,21 +533,30 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # Input2: (weights)     [ embed_dim, embed_dim ]
         # Output:               [ len_q, bsz, embed_dim ]
         # GEMM: ( len_q*bsz x embed_dim ) x ( embed_dim x embed_dim ) = ( len_q*bsz x embed_dim )
-        output_lin_grads = torch.mm(
-            output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), output_weights)
-        output_lin_grads = output_lin_grads.view(output_grads.size(0), output_grads.size(1), output_weights.size(1))
+
         # Output Linear GEMM - WGRAD
         # Input1: (data grads)  [len_q*bsz, embed_dim=heads*head_dim] transpose(0,1)
         # Input2: (activations) [len_q*bsz, embed_dim ]
         # Output:               [ len_q, bsz, embed_dim ]
         # GEMM: ( embed_dim x len_q*bsz ) x ( len_q*bsz x embed_dim ) = ( embed_dim x embed_dim )
-        output_weight_grads = torch.mm(
-            output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)).transpose(0, 1),
-            matmul2_results.view(matmul2_results.size(0) * matmul2_results.size(1), matmul2_results.size(2)))
-        output_lin_grads = output_lin_grads.view(inputs.size(0), inputs.size(1) * heads_t[0], head_dim).transpose(0, 1)
+        if linear_blaslt is not None and inputs.dtype != torch.float64 and inputs.is_cuda:
+            # pos_lin_results = linear_blaslt.forward(pos, pos_weights, pos_biases)
+            output_lin_grads, output_weight_grads, output_bias_grads = \
+                linear_blaslt.backward(matmul2_results, output_weights, output_grads, True)
+        else:
+            output_lin_grads = torch.mm(
+                output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), output_weights)
 
-        output_bias_grads = torch.sum(
-            output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), 0)
+            output_lin_grads = output_lin_grads.view(output_grads.size(0), output_grads.size(1), output_weights.size(1))
+
+            output_weight_grads = torch.mm(
+                output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)).transpose(0, 1),
+                matmul2_results.view(matmul2_results.size(0) * matmul2_results.size(1), matmul2_results.size(2)))
+
+            output_bias_grads = torch.sum(
+                output_grads.view(output_grads.size(0) * output_grads.size(1), output_grads.size(2)), 0)
+
+        output_lin_grads = output_lin_grads.view(inputs.size(0), inputs.size(1) * heads_t[0], head_dim).transpose(0, 1)
 
         # Matmul2 - DGRAD1
         # Input1: (data grads)  [bsz*heads, len_q,  head_dim]
@@ -671,13 +661,16 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             torch.baddbmm(r_head_k_grad.transpose(0, 1), matmul_bd_grads.transpose(1, 2).contiguous(),
                           rr_head_q.transpose(0, 1), out=r_head_k_grad.transpose(0, 1), beta=0.0, alpha=scale_t[0])
 
-            r_head_k_grad = r_head_k_grad.view(len_r, bsz, heads_t[0], head_dim). \
-                view(len_r * bsz, heads_t[0] * head_dim)
+            r_head_k_grad = r_head_k_grad.view(len_r, bsz, heads_t[0] * head_dim)
 
-            pos_weight_grads = torch.mm(r_head_k_grad.transpose(0, 1),
-                                        pos.view(pos.size(0) * pos.size(1), pos.size(2)))
 
-            pos_bias_grads = torch.sum(r_head_k_grad, 0)
+            if linear_blaslt is not None and inputs.dtype != torch.float64 and inputs.is_cuda:
+                _, pos_weight_grads, pos_bias_grads = linear_blaslt.backward(pos, pos_weights, r_head_k_grad, False)
+            else:
+                pos_weight_grads = torch.mm(r_head_k_grad.view(len_r * bsz, heads_t[0] * head_dim).transpose(0, 1),
+                                            pos.view(pos.size(0) * pos.size(1), pos.size(2)))
+
+                pos_bias_grads = torch.sum(r_head_k_grad, [0, 1])
             pos_grads = None
         else:
             pos_weight_grads, pos_bias_grads = None, None
@@ -695,20 +688,24 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # input2: (weights)    [embed_dim*3 (3072), embed_dim (1024)]
         # output:              [len_q, bsz, embed_dim]
         # GEMM: ( (len_q*bsz) x 3*embed_dim ) x ( 3*embed_dim x embed_dim ) = (len_q*bsz x embed_dim)
-        input_lin_results_grads = input_lin_results_grads.view(inputs.size(0) * inputs.size(1),
-                                                               heads_t[0] * 3 * head_dim)
-        input_grads = torch.mm(input_lin_results_grads, input_weights)
-        input_grads = input_grads.view(inputs.size(0), inputs.size(1), inputs.size(2))
-        input_grads = input_grads.contiguous()
-        # Input Linear GEMM - WGRAD
-        # input1: (data grads)  [len_q*bsz, 3*embed_dim(3072)]
-        # input2: (activations) [len_q*bsz, embed_dim(1024)]
-        # output:               [3*embed_dim, embed_dim]
-        # GEMM: ( 3*embed_dim x len_q*bsz ) x ( len_q*bsz x embed_dim ) = (3*embed_dim x embed_dim)
-        input_weight_grads = torch.mm(input_lin_results_grads.transpose(0, 1),
-                                      inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)))
+        if linear_blaslt is not None and inputs.dtype != torch.float64 and inputs.is_cuda:
+            input_grads, input_weight_grads, input_bias_grads \
+                = linear_blaslt.backward(inputs, input_weights, input_lin_results_grads, True)
+        else:
+            input_lin_results_grads = input_lin_results_grads.view(inputs.size(0) * inputs.size(1),
+                                                                   heads_t[0] * 3 * head_dim)
+            input_grads = torch.mm(input_lin_results_grads, input_weights)
+            input_grads = input_grads.view(inputs.size(0), inputs.size(1), inputs.size(2))
+            input_grads = input_grads.contiguous()
+            # Input Linear GEMM - WGRAD
+            # input1: (data grads)  [len_q*bsz, 3*embed_dim(3072)]
+            # input2: (activations) [len_q*bsz, embed_dim(1024)]
+            # output:               [3*embed_dim, embed_dim]
+            # GEMM: ( 3*embed_dim x len_q*bsz ) x ( len_q*bsz x embed_dim ) = (3*embed_dim x embed_dim)
+            input_weight_grads = torch.mm(input_lin_results_grads.transpose(0, 1),
+                                          inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)))
 
-        input_bias_grads = torch.sum(input_lin_results_grads, 0)
+            input_bias_grads = torch.sum(input_lin_results_grads, 0)
 
         return input_grads, pos_grads, None, None, None, input_weight_grads, output_weight_grads, pos_weight_grads, \
                input_bias_grads, output_bias_grads, pos_bias_grads, r_w_bias_grads, r_r_bias_grads, \
@@ -721,14 +718,14 @@ def relative_self_attn_func(input, pos, use_mask, is_training, num_heads,
                             r_w_bias, r_r_bias,
                             mask, dropout,
                             incremental, incremental_cache,
-                            double_precision, learnable_pos, return_coverage, recompute):
+                            low_precision, learnable_pos, return_coverage, recompute):
     return RelativeSelfAttnFunc.apply(input, pos, use_mask, is_training, num_heads,
                                       in_proj_weight, out_proj_weight, pos_proj_weight,
                                       in_proj_bias, out_proj_bias, pos_proj_bias,
                                       r_w_bias, r_r_bias,
                                       mask, dropout,
                                       incremental, incremental_cache,
-                                      double_precision, learnable_pos, return_coverage, recompute)
+                                      low_precision, learnable_pos, return_coverage, recompute)
 
 
 # TODO: write test function
@@ -806,7 +803,7 @@ if __name__ == "__main__":
             use_time_mask = False
             is_training = True
             dropout = 0.0
-            double_precision = True
+            low_precision = False
             return_coverage = False
 
             return self.function(input, pos, use_time_mask, is_training, self.heads,
@@ -815,7 +812,7 @@ if __name__ == "__main__":
                                  r_w_bias, r_r_bias,
                                  mask, dropout,
                                  False, None,  # For the incremental stuff
-                                 double_precision, learnable_embedding,
+                                 low_precision, learnable_embedding,
                                  return_coverage, recompute)  # double precision set to true
 
 

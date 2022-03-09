@@ -683,7 +683,7 @@ int linear_bias_forward_cuda(at::Tensor input, T *weight, at::Tensor bias, int i
 
 
 template <typename T>
-int linear_bias_backward_cuda(T *input, T *weight, T *d_output, int in_features, int batch_size, int out_features, T *d_weight, T *d_bias, T *d_input,  void *lt_workspace) {
+int linear_bias_backward_cuda(bool compute_grad_input, T *input, T *weight, T *d_output, int in_features, int batch_size, int out_features, T *d_weight, T *d_bias, T *d_input,  void *lt_workspace) {
     cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
     // Get the stream from cublas handle to reuse for biasReLU kernel.
     cudaStream_t stream;
@@ -717,21 +717,22 @@ int linear_bias_backward_cuda(T *input, T *weight, T *d_output, int in_features,
         return 1;
     }
 
-    status = gemm_bias(
-      handle,
-      CUBLAS_OP_N,
-      CUBLAS_OP_N,
-      in_features,
-      batch_size,
-      out_features,
-      &alpha,
-      weight,
-      in_features,
-      d_output,
-      out_features,
-      &beta_zero,
-      d_input,
-      in_features);
+    if (compute_grad_input)
+        status = gemm_bias(
+          handle,
+          CUBLAS_OP_N,
+          CUBLAS_OP_N,
+          in_features,
+          batch_size,
+          out_features,
+          &alpha,
+          weight,
+          in_features,
+          d_output,
+          out_features,
+          &beta_zero,
+          d_input,
+          in_features);
 
     return status;
 
@@ -777,11 +778,11 @@ template int linear_bias_forward_cuda<float>(at::Tensor input, float *weight, at
 
 template int linear_bias_forward_cuda<double>(at::Tensor input, double *weight, at::Tensor bias, int in_features, int batch_size, int out_features, at::Tensor output, void *lt_workspace);
 
-template int linear_bias_backward_cuda<at::Half>(at::Half *input, at::Half *weight, at::Half *d_output, int in_features, int batch_size, int out_features, at::Half *d_weight, at::Half *d_bias, at::Half *d_input,  void *lt_workspace) ;
+template int linear_bias_backward_cuda<at::Half>(bool compute_grad_input, at::Half *input, at::Half *weight, at::Half *d_output, int in_features, int batch_size, int out_features, at::Half *d_weight, at::Half *d_bias, at::Half *d_input,  void *lt_workspace) ;
 
-template int linear_bias_backward_cuda<float>(float *input, float *weight, float *d_output, int in_features, int batch_size, int out_features, float *d_weight, float *d_bias, float *d_input,  void *lt_workspace) ;
+template int linear_bias_backward_cuda<float>(bool compute_grad_input, float *input, float *weight, float *d_output, int in_features, int batch_size, int out_features, float *d_weight, float *d_bias, float *d_input,  void *lt_workspace) ;
 
-template int linear_bias_backward_cuda<double>(double *input, double *weight, double *d_output, int in_features, int batch_size, int out_features, double *d_weight, double *d_bias, double *d_input,  void *lt_workspace) ;
+template int linear_bias_backward_cuda<double>(bool compute_grad_input, double *input, double *weight, double *d_output, int in_features, int batch_size, int out_features, double *d_weight, double *d_bias, double *d_input,  void *lt_workspace) ;
 
 template int linear_bias_backward_input_only_cuda<at::Half>(at::Half *input, at::Half *weight, at::Half *d_output, int in_features, int batch_size, int out_features, at::Half *d_input,  void *lt_workspace) ;
 

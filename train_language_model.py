@@ -133,9 +133,7 @@ def main():
     if len(opt.gpus) > 1 or opt.virtual_gpu > 1:
         raise NotImplementedError("Multi-GPU training is not supported ATM.")
     else:
-        # if opt.fp16:
-        #     trainer = FP16XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
-        # else:
+
         trainer = XETrainer(model, loss_function, train_data, valid_data, dicts, opt)
 
     trainer.run(checkpoint=checkpoint)
