@@ -503,6 +503,9 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
             dtype_ = torch.float64 if attn_score.dtype == torch.float64 else torch.float32
             softmax_results = F.softmax(attn_score, dim=-1, dtype=dtype_).type_as(attn_score)
+            nan_mask = torch.isnan(softmax_results)
+            if nan_mask.any():
+                softmax_results.masked_fill_(nan_mask, 0)
             del attn_score
 
             if dropout_prob_t[0] > 0:
