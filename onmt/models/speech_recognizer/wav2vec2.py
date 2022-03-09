@@ -281,8 +281,10 @@ class FairseqWav2Vec(nn.Module):
         return context
 
     def forward(self, input, batch_first_output=False, adv_ptb_grad=False, input_ptb=None,
-                lang=None, atb=None, checkpointing_ffn=False, **kwargs):
+                lang=None, atb=None,
+                checkpointing_ffn=False, checkpointing_self_attn=False, **kwargs):
         """
+        :param checkpointing_self_attn:
         :param checkpointing_ffn:
         :param atb:
         :param lang:
@@ -334,7 +336,8 @@ class FairseqWav2Vec(nn.Module):
                                               precomputed_tdnn=precomputed_tdnn, quantize=self.quantize,
                                               quantize_only=quantize_only,
                                               lang=lang, atb=atb,
-                                              checkpointing_ffn=checkpointing_ffn)
+                                              checkpointing_ffn=checkpointing_ffn,
+                                              checkpointing_self_attn=checkpointing_self_attn)
 
         # if self.quantize:
         #     quantized_codebooks = wav2vec_output['quantized_target']
@@ -658,8 +661,9 @@ class Wav2vecBERT(Wav2vecTransformer):
             self.ctc_linear = nn.Linear(encoder.model_size, self.tgt_vocab_size)
 
     def forward(self, batch, zero_encoder=False, factorize=False, target_mask=None, mirror=False,
-                checkpointing_ffn=False, checkpointing_cross_attn=False, **kwargs):
+                checkpointing_ffn=False, checkpointing_cross_attn=False, checkpointing_self_attn=False, **kwargs):
         """
+        :param checkpointing_self_attn:
         :param checkpointing_cross_attn:
         :param checkpointing_ffn:
         :param batch:
@@ -695,7 +699,8 @@ class Wav2vecBERT(Wav2vecTransformer):
         # during training mixture is always None
         encoder_output = self.encoder(src, batch_first_output=batch_first_output,
                                       lang=src_lang, atb=src_atb,
-                                      checkpointing_ffn=checkpointing_ffn)
+                                      checkpointing_ffn=checkpointing_ffn,
+                                      checkpointing_self_attn=checkpointing_self_attn)
 
         encoder_output = defaultdict(lambda: None, encoder_output)
 

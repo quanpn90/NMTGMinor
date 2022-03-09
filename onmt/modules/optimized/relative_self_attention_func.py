@@ -118,7 +118,6 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         null_tensor = torch.tensor([]).to(inputs.device)
         head_dim = inputs.size(2) // heads
         scale_t = torch.tensor([head_dim ** -0.5])
-        ctx.fused_softmax_dropout = False
         ctx.learnable_pos = learnable_pos
         ctx.return_coverage = return_coverage
         ctx.fused_all = False
@@ -272,12 +271,11 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             softmax_results.masked_fill_(nan_mask, 0)
 
         # Dropout - is not executed for inference
-        if is_training:
+        if is_training and dropout_prob_t[0] > 0:
             dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
         else:
             dropout_results = softmax_results
             dropout_mask = null_tensor
-        ctx.fused_softmax_dropout = False
 
         # Matmul2 Batched GEMMs
         # Input1: from_softmax [bsz*heads, len_q, seql_k]
@@ -434,28 +432,32 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                    input_biases_grads, output_biases_grads, pos_biases_grads, r_w_bias_grads, r_r_bias_grads, \
                    None, None, None, None, None, None, None, None
 
-            # return input_grads, pos_grads, None, None, None, input_weights_grads, \
-            #        output_weights_grads, pos_weights_grads, \
-            #        input_biases_grads, output_biases_grads, pos_biases_grads, r_w_bias_grads, r_r_bias_grads, \
-            #        None, None, None, None, None, None, None, None
-
         if ctx.recompute:
+            # RECOMPUTE STARTS HERE
+
             heads = heads_t[0]
 
             # Recomputing the activations in the forward pass here
-            input_lin_results = torch.addmm(input_biases,
-                                            inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
-                                            input_weights.transpose(0, 1),
-                                            beta=1., alpha=1.)
+            if linear_blaslt is not None and inputs.dtype != torch.float64 and inputs.is_cuda:
+                input_lin_results = linear_blaslt.forward(inputs, input_weights, input_biases)
+            else:
+                input_lin_results = torch.addmm(input_biases,
+                                                inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
+                                                input_weights.transpose(0, 1),
+                                                beta=1., alpha=1.)
 
-            input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), input_weights.size(0))
+                input_lin_results = input_lin_results.view(inputs.size(0), inputs.size(1), input_weights.size(0))
+
             if not learnable_pos:
-                pos_lin_results = torch.addmm(pos_biases,
-                                              pos.view(pos.size(0) * pos.size(1), pos.size(2)),
-                                              pos_weights.transpose(0, 1),
-                                              beta=1., alpha=1.)
+                if linear_blaslt is not None and inputs.dtype != torch.float64 and inputs.is_cuda:
+                    pos_lin_results = linear_blaslt.forward(pos, pos_weights, pos_biases)
+                else:
+                    pos_lin_results = torch.addmm(pos_biases,
+                                                  pos.view(pos.size(0) * pos.size(1), pos.size(2)),
+                                                  pos_weights.transpose(0, 1),
+                                                  beta=1., alpha=1.)
 
-                pos_lin_results = pos_lin_results.view(pos.size(0), pos.size(1), pos_weights.size(0))
+                    pos_lin_results = pos_lin_results.view(pos.size(0), pos.size(1), pos_weights.size(0))
 
                 r_head_k = pos_lin_results.view(pos.size(0), bsz * heads, head_dim)  # T x BxH x D
             else:
@@ -499,11 +501,15 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             if pad_mask is not None:
                 attn_score.view(bsz, heads, len_q, len_k).masked_fill_(pad_mask, float('-inf'))
 
-            softmax_results = F.softmax(attn_score, dim=-1).type_as(attn_score)
+            dtype_ = torch.float64 if attn_score.dtype == torch.float64 else torch.float32
+            softmax_results = F.softmax(attn_score, dim=-1, dtype=dtype_).type_as(attn_score)
             del attn_score
 
-            pinv = 1.0 / (1.0 - dropout_prob_t[0])
-            dropout_results = softmax_results * dropout_mask * pinv
+            if dropout_prob_t[0] > 0:
+                pinv = 1.0 / (1.0 - dropout_prob_t[0])
+                dropout_results = softmax_results * dropout_mask * pinv
+            else:
+                dropout_results = softmax_results
             matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1)).transpose(0, 1)
             matmul2_results = matmul2_results.contiguous().view(inputs.size(0), inputs.size(1), inputs.size(2))
 

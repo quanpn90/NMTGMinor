@@ -588,6 +588,7 @@ class Wav2Vec2Model(torch.nn.Module):
             lang=None,
             atb=None,
             checkpointing_ffn=False,
+            checkpointing_self_attn=False,
             **kwargs
     ):
         # if the tdnn features are precomputed then skip them
@@ -698,7 +699,8 @@ class Wav2Vec2Model(torch.nn.Module):
             mask_indices = None
 
         x, layer_results = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, atb=atb,
-                                        checkpointing_ffn=checkpointing_ffn)
+                                        checkpointing_ffn=checkpointing_ffn,
+                                        checkpointing_self_attn=checkpointing_self_attn)
 
         if features_only:
             output_dict =  {
@@ -1092,9 +1094,11 @@ class TransformerEncoder(nn.Module):
         self.positional_encoder = SinusoidalPositionalEmbedding(self.embedding_dim)
 
 
-    def forward(self, x, padding_mask=None, positions=None, layer=None, lang=None, atb=None, checkpointing_ffn=False, **kwargs):
+    def forward(self, x, padding_mask=None, positions=None, layer=None, lang=None, atb=None, checkpointing_ffn=False,
+                checkpointing_self_attn=False, **kwargs):
         x, layer_results = self.extract_features(x, padding_mask, positions, layer, lang=lang, atb=atb,
-                                                 checkpointing_ffn=checkpointing_ffn)
+                                                 checkpointing_ffn=checkpointing_ffn,
+                                                 checkpointing_self_attn=checkpointing_self_attn)
 
         if self.layer_norm_first and layer is None:
             x = self.layer_norm(x)
@@ -1102,7 +1106,7 @@ class TransformerEncoder(nn.Module):
         return x, layer_results
 
     def extract_features(self, x, padding_mask=None, positions=None, tgt_layer=None, lang=None, atb=None,
-                         checkpointing_ffn=False):
+                         checkpointing_ffn=False, checkpointing_self_attn=False):
         if padding_mask is not None:
             x = index_put(x, padding_mask, 0)
 
@@ -1187,7 +1191,9 @@ class TransformerEncoder(nn.Module):
                 if not self.training or (dropout_probability > self.layerdrop):
                     x, z = layer(x, self_attn_padding_mask=padding_mask, positions=positions,
                                  max_len=max_len, cu_seqlens=cu_seqlens,
-                                 lang=lang, atb=atb, checkpointing_ffn=checkpointing_ffn)
+                                 lang=lang, atb=atb,
+                                 checkpointing_ffn=checkpointing_ffn,
+                                 checkpointing_self_attn=checkpointing_self_attn)
                     if tgt_layer is not None:
                         layer_results.append((x, z))
                 if i == tgt_layer:
@@ -1567,6 +1573,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             max_len=-1, cu_seqlens=None,
             lang=None, atb=None,
             checkpointing_ffn=False,
+            checkpointing_self_attn=False,
             **kwargs
     ):
         """
@@ -1615,7 +1622,8 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 positions=positions,
                 attn_mask=self_attn_mask,
                 max_len=max_len, cu_seqlens=cu_seqlens,
-                lang=lang, atb=atb
+                lang=lang, atb=atb,
+                checkpointing=checkpointing_self_attn
             )
 
             if is_fast:

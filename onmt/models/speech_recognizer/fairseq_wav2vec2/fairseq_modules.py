@@ -564,9 +564,11 @@ class MultiheadAttention(nn.Module):
             positions: Optional[Tensor] = None,
             attn_mask: Optional[Tensor] = None,
             cu_seqlens=None, max_len=None,
-            lang=None, atb=None, **kwargs
+            lang=None, atb=None,
+            checkpointing=False, **kwargs
     ) -> Tuple[Tensor, Optional[Tensor]]:
         """
+        :param checkpointing:
         :param positions:
         :param query:
         :param key:
@@ -735,7 +737,7 @@ class MultiheadAttention(nn.Module):
                     low_precision = True
 
                     if self.relative:
-                        recompute = False
+                        recompute = checkpointing
                         outputs, coverage = relative_self_attn_func(inputs, positions, False,
                                                is_training, self.num_heads,
                                                in_proj_weight, out_proj_weight, pos_proj_weight,
@@ -757,6 +759,8 @@ class MultiheadAttention(nn.Module):
 
                 # Fused attention using packed data (B T H) -> (BxT H) and removing padded positions
                 elif query.ndim == 2:
+                    # this doesn't support checkpointing at the moment
+                    # maybe add it later in the future?
                     assert self.fast_bert_mha is not None
                     assert query.dtype == torch.half
                     assert cu_seqlens is not None

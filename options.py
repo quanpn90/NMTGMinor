@@ -420,7 +420,8 @@ def make_parser(parser):
     parser.add_argument('-checkpointing_cross_attn', action='store_true',
                         help='use gradient checkpointing on Cross Attn layers')
 
-
+    parser.add_argument('-checkpointing_self_attn', action='store_true',
+                        help='use gradient checkpointing on (wav2vec) self attn layers')
 
     # pretrained decoder
     parser.add_argument('-dec_pretrained_model', default="", type=str,

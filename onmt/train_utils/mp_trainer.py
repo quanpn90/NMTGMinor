@@ -427,7 +427,8 @@ class Trainer(object):
                                  zero_encoder=opt.zero_encoder,
                                  mirror=opt.mirror_loss, streaming_state=streaming_state,
                                  nce=opt.nce, checkpointing_ffn=opt.checkpointing_ffn,
-                                 checkpointing_cross_attn=opt.checkpointing_cross_attn)
+                                 checkpointing_cross_attn=opt.checkpointing_cross_attn,
+                                 checkpointing_self_attn=opt.checkpointing_self_attn)
 
             outputs['tgt_mask'] = tgt_mask
 
@@ -717,7 +718,8 @@ class Trainer(object):
                                              nce=opt.nce, pretrained_layer_states=layer_states,
                                              adv_ptb_grad=opt.virtual_adversarial_training_mode > 0,
                                              checkpointing_ffn=opt.checkpointing_ffn,
-                                             checkpointing_cross_attn=opt.checkpointing_cross_attn
+                                             checkpointing_cross_attn=opt.checkpointing_cross_attn,
+                                             checkpointing_self_attn=opt.checkpointing_self_attn
                                              )
 
                         batch_size = batch.size
