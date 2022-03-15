@@ -169,10 +169,15 @@ def _is_oversized(batch, new_sent_size, batch_size):
 
 
 def report_score(name, score_total, words_total):
-    print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (
-        name, score_total / (words_total + 1e-9),
-        name, math.exp(-score_total / (words_total + 1e-9))))
 
+    try:
+        print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (
+            name, score_total / (words_total + 1e-9),
+            name, math.exp(-score_total / (words_total + 1e-9))))
+    except OverflowError:
+        print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (
+            name, -100 / (words_total + 1e-9),
+            name, math.exp(-100 / (words_total + 1e-9))))
 
 def addone(f):
     for line in f:

@@ -472,7 +472,10 @@ class FastTranslator(Translator):
 
             lprobs, avg_attn_scores = self._decode(decode_input, decoder_states,
                                                    sub_decoder_states=sub_decoder_states)
+
             avg_attn_scores = None
+
+            lprobs = lprobs.contiguous()
 
             if self.use_filter:
                 # the marked words are 1, so fill the reverse to inf
@@ -490,24 +493,18 @@ class FastTranslator(Translator):
             # handle prefix tokens (possibly with different lengths)
             # here prefix tokens is a list of word-ids
             if prefix_tokens is not None:
-                # print("Prefix tensor:", prefix_tokens)
-
-                # if step == 0 and bsz == 1:
-                #     # run the decoder through the prefix_tokens
-                #     # store the scores and store the incremental states
-                #
-                #     pass
-                # else:
                 if step < prefix_tokens.size(1) and step < max_len:
-                    prefix_tokens = torch.tensor(prefix_tokens).type_as(tokens)
                     prefix_toks = prefix_tokens[:, step].unsqueeze(-1).repeat(1, beam_size).view(-1)
                     prefix_lprobs = lprobs.gather(-1, prefix_toks.unsqueeze(-1))
                     prefix_mask = prefix_toks.ne(self.tgt_pad)
-                    lprobs[prefix_mask] = torch.tensor(-math.inf).to(lprobs)
+                    # originally infinity here, this number can return nan so thats quite dangerous
+                    # put a large negative number here is better
+                    lprobs[prefix_mask] = torch.tensor(-21111993    ).to(lprobs)
 
                     lprobs[prefix_mask] = lprobs[prefix_mask].scatter(
                         -1, prefix_toks[prefix_mask].unsqueeze(-1), prefix_lprobs[prefix_mask]
                     )
+                    # lprobs[prefix_mask].scatter_()
 
                     # if prefix includes eos, then we should make sure tokens and
                     # scores are the same across all beams
@@ -770,6 +767,8 @@ class FastTranslator(Translator):
             offset = 0
             tensor[i].narrow(0, offset, data_length).copy_(prefix_data[i])
 
+        # print(tensor)
+
         return tensor
 
     # override the "build_data" from parent Translator
@@ -877,6 +876,8 @@ class FastTranslator(Translator):
                             past_src_data=past_src_data)
 
     def translate(self, src_data, tgt_data, past_src_data=None, sub_src_data=None, type='mt', prefix=None):
+        print(prefix)
+
         if past_src_data is None or len(past_src_data) == 0:
             past_src_data = None
 

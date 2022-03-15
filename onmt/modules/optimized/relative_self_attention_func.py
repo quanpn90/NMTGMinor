@@ -7,7 +7,6 @@ https://github.com/NVIDIA/apex/tree/master/apex/contrib/csrc/multihead_attn
 import torch
 import torch.nn.functional as F
 
-
 try:
     from torch.cuda.amp import custom_fwd, custom_bwd
 except (ModuleNotFoundError, ImportError) as e:
@@ -79,7 +78,7 @@ class RelativeShift(object):
 
 class RelativeSelfAttnFunc(torch.autograd.Function):
     @staticmethod
-    @custom_fwd(cast_inputs=torch.float16)
+    @custom_fwd
     def forward(ctx, inputs, pos, use_time_mask, is_training, heads,
                 input_weights, output_weights, pos_weights,
                 input_biases, output_biases, pos_biases,
@@ -664,7 +663,6 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
             r_head_k_grad = r_head_k_grad.view(len_r, bsz, heads_t[0] * head_dim)
 
-
             if linear_blaslt is not None and inputs.dtype != torch.float64 and inputs.is_cuda:
                 _, pos_weight_grads, pos_bias_grads = linear_blaslt.backward(pos, pos_weights, r_head_k_grad, False)
             else:
@@ -713,6 +711,16 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                None, None, None, None, None, None, None, None
 
 
+def _cast_if_autocast_enabled(*args):
+    if not torch.is_autocast_enabled():
+        return args
+    else:
+        try:
+            return torch.cuda.amp.autocast_mode._cast(args, torch.get_autocast_gpu_dtype())
+        except AttributeError:
+            return torch.cuda.amp.autocast_mode._cast(args, torch.half)
+
+
 def relative_self_attn_func(input, pos, use_mask, is_training, num_heads,
                             in_proj_weight, out_proj_weight, pos_proj_weight,
                             in_proj_bias, out_proj_bias, pos_proj_bias,
@@ -720,6 +728,21 @@ def relative_self_attn_func(input, pos, use_mask, is_training, num_heads,
                             mask, dropout,
                             incremental, incremental_cache,
                             low_precision, learnable_pos, return_coverage, recompute):
+    input, pos, use_mask, is_training, num_heads, \
+        in_proj_weight, out_proj_weight, pos_proj_weight, \
+        in_proj_bias, out_proj_bias, pos_proj_bias, \
+        r_w_bias, r_r_bias, \
+        mask, dropout, \
+        incremental, incremental_cache, \
+        low_precision, learnable_pos, return_coverage, recompute = _cast_if_autocast_enabled(
+        input, pos, use_mask, is_training, num_heads,
+        in_proj_weight, out_proj_weight, pos_proj_weight,
+        in_proj_bias, out_proj_bias, pos_proj_bias,
+        r_w_bias, r_r_bias,
+        mask, dropout,
+        incremental, incremental_cache,
+        low_precision, learnable_pos, return_coverage, recompute)
+
     return RelativeSelfAttnFunc.apply(input, pos, use_mask, is_training, num_heads,
                                       in_proj_weight, out_proj_weight, pos_proj_weight,
                                       in_proj_bias, out_proj_bias, pos_proj_bias,
@@ -893,7 +916,3 @@ if __name__ == "__main__":
                              eps=1e-6, atol=1e-5, rtol=1e-3)
 
     print("gradchecking w/ learnable position encodings completed.")
-
-
-
-

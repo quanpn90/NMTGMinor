@@ -140,7 +140,7 @@ class LayerNorm(torch.nn.Module):
 
         eps = self.eps
 
-        if fast and fast_layer_norm_cuda is not None and input.size(-1) in [768, 1024, 2048, 3072, 4096]:
+        if input.is_cuda and fast and fast_layer_norm_cuda is not None and input.size(-1) in [768, 1024, 2048, 3072, 4096]:
             return fast_layer_norm_affine(input, self.weight, self.bias, self.normalized_shape, eps)
 
         return F.layer_norm(

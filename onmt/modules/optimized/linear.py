@@ -42,6 +42,7 @@ class LinearFunction(torch.autograd.Function):
 
         return d_input, d_weight, d_bias
 
+
 if linear_blaslt:
     def linear_function(input, weight, bias):
         if bias is None:
@@ -58,7 +59,7 @@ class Linear(torch.nn.Linear):
 
     def forward(self, input: Tensor) -> Tensor:
 
-        if linear_function is not None and self.bias is not None:
+        if input.is_cuda and linear_function is not None and self.bias is not None:
             return linear_function(input, self.weight, self.bias)
         else:
             return torch.nn.functional.linear(input, self.weight, self.bias)

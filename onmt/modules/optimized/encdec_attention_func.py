@@ -35,7 +35,7 @@ def rotate_backward(dx):
 
 class EncdecAttnFunc(torch.autograd.Function):
     @staticmethod
-    @custom_fwd(cast_inputs=torch.float16)
+    @custom_fwd
     def forward(ctx, recompute, is_training, heads, inputs_q, inputs_kv,
                 input_weights_q, input_weights_kv, output_weights,
                 mask, dropout_prob,
@@ -203,7 +203,6 @@ class EncdecAttnFunc(torch.autograd.Function):
             # after unsqueezing the mask should have size [bsz x 1 x 1 x seql_k]
             matmul1_results = matmul1_results.masked_fill_(mask, float('-inf'))
             matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
-
 
         if matmul1_results.type() == 'torch.cuda.HalfTensor':
             softmax_results = F.softmax(matmul1_results, dim=-1, dtype=torch.float32).type_as(matmul1_results)
