@@ -278,12 +278,12 @@ class FastTranslator(Translator):
             self.external_tokenizer = None
             self.tgt_external_tokenizer = None
 
-    def translate_batch(self, batches, sub_batches=None):
+    def translate_batch(self, batches, sub_batches=None, prefix_tokens=None):
 
         with torch.no_grad():
-            return self._translate_batch(batches, sub_batches=sub_batches)
+            return self._translate_batch(batches, sub_batches=sub_batches, prefix_tokens=prefix_tokens)
 
-    def _translate_batch(self, batches, sub_batches):
+    def _translate_batch(self, batches, sub_batches, prefix_tokens=None):
         batch = batches[0]
         # Batch size is in different location depending on data.
 
@@ -316,7 +316,8 @@ class FastTranslator(Translator):
         src_tokens = src.transpose(0, 1)  # batch x time
         src_lengths = (src_tokens.ne(self.src_eos) & src_tokens.ne(self.src_pad)).long().sum(dim=1)
         blacklist = src_tokens.new_zeros(bsz, beam_size).eq(-1)  # forward and backward-compatible False mask
-        prefix_tokens = None
+        if prefix_tokens is not None:
+            prefix_tokens = prefix_tokens.to(src.device)
 
         # list of completed sentences
         finalized = [[] for i in range(bsz)]
@@ -489,44 +490,44 @@ class FastTranslator(Translator):
             # handle prefix tokens (possibly with different lengths)
             # here prefix tokens is a list of word-ids
             if prefix_tokens is not None:
+                # print("Prefix tensor:", prefix_tokens)
 
-                if step == 0 and bsz == 1:
-                    # run the decoder through the prefix_tokens
-                    # store the scores and store the incremental states
-                    pass
-                else:
+                # if step == 0 and bsz == 1:
+                #     # run the decoder through the prefix_tokens
+                #     # store the scores and store the incremental states
+                #
+                #     pass
+                # else:
+                if step < prefix_tokens.size(1) and step < max_len:
                     prefix_tokens = torch.tensor(prefix_tokens).type_as(tokens)
+                    prefix_toks = prefix_tokens[:, step].unsqueeze(-1).repeat(1, beam_size).view(-1)
+                    prefix_lprobs = lprobs.gather(-1, prefix_toks.unsqueeze(-1))
+                    prefix_mask = prefix_toks.ne(self.tgt_pad)
+                    lprobs[prefix_mask] = torch.tensor(-math.inf).to(lprobs)
 
-                    if step < prefix_tokens.size(1) and step < max_len:
-                        prefix_tokens = torch.tensor(prefix_tokens).type_as(tokens)
-                        prefix_toks = prefix_tokens[:, step].unsqueeze(-1).repeat(1, beam_size).view(-1)
-                        prefix_lprobs = lprobs.gather(-1, prefix_toks.unsqueeze(-1))
-                        prefix_mask = prefix_toks.ne(self.tgt_pad)
-                        lprobs[prefix_mask] = torch.tensor(-math.inf).to(lprobs)
+                    lprobs[prefix_mask] = lprobs[prefix_mask].scatter(
+                        -1, prefix_toks[prefix_mask].unsqueeze(-1), prefix_lprobs[prefix_mask]
+                    )
 
-                        lprobs[prefix_mask] = lprobs[prefix_mask].scatter(
-                            -1, prefix_toks[prefix_mask].unsqueeze(-1), prefix_lprobs[prefix_mask]
-                        )
+                    # if prefix includes eos, then we should make sure tokens and
+                    # scores are the same across all beams
+                    eos_mask = prefix_toks.eq(self.tgt_eos)
+                    if eos_mask.any():
+                        # validate that the first beam matches the prefix
+                        first_beam = tokens[eos_mask].view(-1, beam_size, tokens.size(-1))[:, 0, 1:step + 1]
+                        eos_mask_batch_dim = eos_mask.view(-1, beam_size)[:, 0]
+                        target_prefix = prefix_tokens[eos_mask_batch_dim][:, :step]
+                        assert (first_beam == target_prefix).all()
 
-                        # if prefix includes eos, then we should make sure tokens and
-                        # scores are the same across all beams
-                        eos_mask = prefix_toks.eq(self.tgt_eos)
-                        if eos_mask.any():
-                            # validate that the first beam matches the prefix
-                            first_beam = tokens[eos_mask].view(-1, beam_size, tokens.size(-1))[:, 0, 1:step + 1]
-                            eos_mask_batch_dim = eos_mask.view(-1, beam_size)[:, 0]
-                            target_prefix = prefix_tokens[eos_mask_batch_dim][:, :step]
-                            assert (first_beam == target_prefix).all()
+                        def replicate_first_beam(tensor, mask):
+                            tensor = tensor.view(-1, beam_size, tensor.size(-1))
+                            tensor[mask] = tensor[mask][:, :1, :]
+                            return tensor.view(-1, tensor.size(-1))
 
-                            def replicate_first_beam(tensor, mask):
-                                tensor = tensor.view(-1, beam_size, tensor.size(-1))
-                                tensor[mask] = tensor[mask][:, :1, :]
-                                return tensor.view(-1, tensor.size(-1))
-
-                            # copy tokens, scores and lprobs from the first beam to all beams
-                            tokens = replicate_first_beam(tokens, eos_mask_batch_dim)
-                            scores = replicate_first_beam(scores, eos_mask_batch_dim)
-                            lprobs = replicate_first_beam(lprobs, eos_mask_batch_dim)
+                        # copy tokens, scores and lprobs from the first beam to all beams
+                        tokens = replicate_first_beam(tokens, eos_mask_batch_dim)
+                        scores = replicate_first_beam(scores, eos_mask_batch_dim)
+                        lprobs = replicate_first_beam(lprobs, eos_mask_batch_dim)
 
             if self.no_repeat_ngram_size > 0:
                 # for each beam and batch sentence, generate a list of previous ngrams
@@ -617,6 +618,8 @@ class FastTranslator(Translator):
                 cand_indices = cand_indices[batch_idxs]
                 # if prefix_tokens is not None:
                 #     prefix_tokens = prefix_tokens[batch_idxs]
+                if prefix_tokens is not None:
+                    prefix_tokens = prefix_tokens[batch_idxs]
                 src_lengths = src_lengths[batch_idxs]
                 blacklist = blacklist[batch_idxs]
 
@@ -738,10 +741,42 @@ class FastTranslator(Translator):
 
         return out, attn
 
+    def build_prefix(self, prefixes, bsz=None):
+        """
+        :param bsz:
+        :param prefixes: List of strings
+        :return:
+        """
+        if self.external_tokenizer is None:
+            prefix_data = [self.tgt_dict.convertToIdx(sent.split(),
+                                                      onmt.constants.UNK_WORD)
+                            for sent in prefixes]
+        else:
+            prefix_data = [torch.LongTensor(self.external_tokenizer(" ".join(sent))['input_ids'])
+                            for sent in src_sents]
+
+        # clone the same prefix for multiple sentences
+        if len(prefix_data) == 1 and bsz > 1:
+            prefix_data = prefix_data * bsz
+
+        # collate into the same tensor with padding
+        lengths = [x.size(0) for x in prefix_data]
+        max_length = max(lengths)
+
+        tensor = prefix_data[0].new(len(prefix_data), max_length).fill_(self.tgt_pad)
+
+        for i in range(len(prefix_data)):
+            data_length = prefix_data[i].size(0)
+            offset = 0
+            tensor[i].narrow(0, offset, data_length).copy_(prefix_data[i])
+
+        return tensor
+
     # override the "build_data" from parent Translator
     def build_data(self, src_sents, tgt_sents, type='mt', past_sents=None):
         # This needs to be the same as preprocess.py.
         data_type = 'text'
+
         if type == 'mt':
 
             if self.external_tokenizer is None:
@@ -841,7 +876,7 @@ class FastTranslator(Translator):
                             src_align_right=self.opt.src_align_right,
                             past_src_data=past_src_data)
 
-    def translate(self, src_data, tgt_data, past_src_data=None, sub_src_data=None, type='mt'):
+    def translate(self, src_data, tgt_data, past_src_data=None, sub_src_data=None, type='mt', prefix=None):
         if past_src_data is None or len(past_src_data) == 0:
             past_src_data = None
 
@@ -878,9 +913,13 @@ class FastTranslator(Translator):
                 for i, _ in enumerate(sub_batches):
                     sub_batches[i].cuda(fp16=self.fp16)
 
+        if prefix is not None:
+            prefix_tensor = self.build_prefix(prefix, bsz=batch_size)
+
         #  (2) translate
         #  each model in the ensemble uses one batch in batches
-        finalized, gold_score, gold_words, allgold_words = self.translate_batch(batches, sub_batches=sub_batches)
+        finalized, gold_score, gold_words, allgold_words = self.translate_batch(batches, sub_batches=sub_batches,
+                                                                                prefix_tokens=prefix_tensor)
         pred_length = []
 
         #  (3) convert indexes to words

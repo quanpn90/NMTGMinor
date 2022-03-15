@@ -7,7 +7,6 @@ from typing import Dict, Optional, Tuple
 import torch
 from torch.cuda.amp import custom_fwd, custom_bwd
 
-from onmt.modules.performer import Performer, ProjectionUpdater
 from onmt.modules.optimized.self_attention_func import self_attn_func
 from onmt.modules.optimized.relative_self_attention_func import relative_self_attn_func
 from onmt.modules.optimized.linear import linear_function
@@ -380,6 +379,7 @@ class MultiheadAttention(nn.Module):
         self.reset_parameters()
         self.favor = favor
         if self.favor:
+            from onmt.modules.performer import Performer
             self.performer = Performer(self.head_dim, nb_features, generalized_attention=generalized_attention)
         else:
             self.performer = None

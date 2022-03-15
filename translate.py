@@ -74,6 +74,11 @@ parser.add_argument('-tgt',
 parser.add_argument('-output', default='pred.txt',
                     help="""Path to output the predictions (each line will
                     be the decoded sequence""")
+parser.add_argument('-prefix_string', default='',
+                    help="""Prefix string for all of the translation""")
+parser.add_argument('-prefix_tgt', default='',
+                    help="""Prefix file that contains prefix string for each of the translation
+                    (must use either this or prefix_string, not both""")
 parser.add_argument('-beam_size', type=int, default=5,
                     help='Beam size')
 parser.add_argument('-batch_size', type=int, default=30,
@@ -306,6 +311,15 @@ def main():
         sub_src = open(opt.sub_src) if opt.sub_src else None
         sub_src_batch = list()
 
+        prefix = None
+        prefix_reader = None
+        if len(opt.prefix_string) > 0:
+            assert len(opt.prefix_tgt) <= 0
+            prefix = [opt.prefix_string]
+        elif len(opt.prefix_tgt) > 0:
+            prefix = list()
+            prefix_reader = open(opt.prefix_tgt)
+
         while True:
             try:
                 scp_path = next(audio_data).strip().split()[1]
@@ -344,7 +358,10 @@ def main():
                     print("Batch sizes :", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
                 pred_batch, pred_ids, \
                 pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = translator.translate(
-                    src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr')
+                    src_batches, tgt_batch,
+                    sub_src_data=sub_src_batch, past_src_data=past_src_batches,
+                    type='asr',
+                    prefix=prefix)
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
                     translate_batch(opt, tgtF, count, outF, translator,
@@ -362,6 +379,9 @@ def main():
                 for j, _ in enumerate(src_batches):
                     src_batches[j] = []
                     if past_audio_data: past_src_batches[j] = []
+                # only refresh when prefix reader is not None
+                if prefix is not None and prefix_reader is not None:
+                    prefix = []
 
             # handling different concatenation settings (for example 4|1|4)
             for j, concat_ in enumerate(concats):
@@ -415,6 +435,9 @@ def main():
 
                 sub_src_batch += [src_tokens]
 
+            if prefix is not None and prefix_reader is not None:
+                prefix.append(prefix_reader.readline().strip())
+
         # catch the last batch
         if len(src_batches[0]) != 0:
             print("Batch size:", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
@@ -423,7 +446,8 @@ def main():
                 src_batches,
                 tgt_batch,
                 past_src_data=past_src_batches,
-                sub_src_data=sub_src_batch, type='asr')
+                sub_src_data=sub_src_batch,
+                type='asr', prefix=prefix)
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
                 = translate_batch(opt, tgtF, count, outF, translator,
@@ -437,10 +461,12 @@ def main():
             pred_words_total += pred_words
             gold_score_total += gold_score
             gold_words_total += goldWords
-            src_batch, tgt_batch = [], []
+            src_batch, tgt_batch, sub_src_batch = [], [], []
             for j, _ in enumerate(src_batches):
                 src_batches[j] = []
                 if past_audio_data: past_src_batches[j] = []
+            if prefix is not None and prefix_reader is not None:
+                prefix = []
 
     # Text processing for MT
     elif opt.asr_format == 'wav':
@@ -507,7 +533,8 @@ def main():
                     print("Batch sizes :", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
                 pred_batch, pred_ids, pred_score, pred_length, \
                 gold_score, num_gold_words, all_gold_scores = translator.translate(
-                    src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr')
+                    src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr',
+                    prefix=prefix)
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
                     translate_batch(opt, tgtF, count, outF, translator,
@@ -525,6 +552,8 @@ def main():
                 for j, _ in enumerate(src_batches):
                     src_batches[j] = []
                     if past_audio_data: past_src_batches[j] = []
+                if prefix is not None and prefix_reader is not None:
+                    prefix = []
 
             # handling different concatenation settings (for example 4|1|4)
             for j in range(n_models):
@@ -564,6 +593,9 @@ def main():
 
                 sub_src_batch += [src_tokens]
 
+            if prefix is not None and prefix_reader is not None:
+                prefix.append(prefix_reader.readline().strip())
+
         # catch the last batch
         if len(src_batches[0]) != 0:
             print("Batch size:", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
@@ -572,7 +604,7 @@ def main():
                 src_batches,
                 tgt_batch,
                 past_src_data=past_src_batches,
-                sub_src_data=sub_src_batch, type='asr')
+                sub_src_data=sub_src_batch, type='asr', prefix=prefix)
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
                 = translate_batch(opt, tgtF, count, outF, translator,
@@ -590,6 +622,8 @@ def main():
             for j, _ in enumerate(src_batches):
                 src_batches[j] = []
                 if past_audio_data: past_src_batches[j] = []
+            if prefix is not None and prefix_reader is not None:
+                prefix = []
 
     else:
         past_text_data = open(opt.past_src) if opt.past_src else None
@@ -628,6 +662,9 @@ def main():
                         raise NotImplementedError("Input type unknown")
                     past_src_batch += [past_src_tokens]
 
+                if prefix is not None and prefix_reader is not None:
+                    prefix.append(prefix_reader.readline().strip())
+
                 if len(src_batch) < opt.batch_size:
                     continue
             else:
@@ -637,10 +674,11 @@ def main():
 
             # actually done beam search from the model
             pred_batch, pred_ids, pred_score, pred_length, \
-                gold_score, num_gold_words, all_gold_scores = translator.translate(
-                    src_batch,
-                    tgt_batch,
-                    past_src_batch)
+            gold_score, num_gold_words, all_gold_scores = translator.translate(
+                src_batch,
+                tgt_batch,
+                past_src_batch,
+                prefix=prefix)
 
             # convert output tensor to words
             count, pred_score, pred_words, gold_score, goldWords = translate_batch(opt, tgtF, count, outF, translator,
@@ -655,6 +693,8 @@ def main():
             gold_score_total += gold_score
             gold_words_total += goldWords
             src_batch, tgt_batch, past_src_batch = [], [], []
+            if prefix is not None and prefix_reader is not None:
+                prefix = []
 
     if opt.verbose:
         report_score('PRED', pred_score_total, pred_words_total)
@@ -665,6 +705,12 @@ def main():
 
     if opt.dump_beam:
         json.dump(translator.beam_accum, open(opt.dump_beam, 'w'))
+
+    if prefix_reader is not None:
+        prefix_reader.close()
+
+    if sub_src is not None:
+        sub_src.close()
 
 
 def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch,
@@ -723,7 +769,7 @@ def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch,
                 src_sent = " ".join(src_batch[b])
                 print('SRC %d: %s' % (count, src_sent))
             print('PRED %d: %s' % (
-            count, get_sentence_from_tokens(pred_batch[b][0], pred_ids[b][0], input_type, external_tokenizer)))
+                count, get_sentence_from_tokens(pred_batch[b][0], pred_ids[b][0], input_type, external_tokenizer)))
             print("PRED SCORE: %.4f" % pred_score[b][0])
 
             if tgtF is not None:

@@ -703,7 +703,7 @@ class Wav2Vec2Model(torch.nn.Module):
                                         checkpointing_self_attn=checkpointing_self_attn)
 
         if features_only:
-            output_dict =  {
+            output_dict = {
                 "x": x,
                 "padding_mask": padding_mask,
                 "features": unmasked_features,
@@ -713,7 +713,7 @@ class Wav2Vec2Model(torch.nn.Module):
             if quantize:
                 quantized_x, quantized_target = quantizer_output
                 output_dict['quantized_x'] = quantized_x  # b x t x ?
-                output_dict['quantized_target'] = quantized_target # b x t x num_groups
+                output_dict['quantized_target'] = quantized_target  # b x t x num_groups
                 # print(quantized_x.size(), quantized_target.size())
                 # print(quantized_target)
 
@@ -1063,19 +1063,18 @@ class TransformerEncoder(nn.Module):
         args = self.args
 
         for old_layer in stacked_layers:
-
             new_layer = TransformerSentenceEncoderLayer(
-                            embedding_dim=self.embedding_dim,
-                            ffn_embedding_dim=args.encoder_ffn_embed_dim,
-                            num_attention_heads=args.encoder_attention_heads,
-                            dropout=self.dropout,
-                            weight_drop=self.weight_drop,
-                            attention_dropout=args.attention_dropout,
-                            activation_dropout=args.activation_dropout,
-                            activation_fn=args.activation_fn,
-                            layer_norm_first=args.layer_norm_first,
-                            favor=self.favor
-                        )
+                embedding_dim=self.embedding_dim,
+                ffn_embedding_dim=args.encoder_ffn_embed_dim,
+                num_attention_heads=args.encoder_attention_heads,
+                dropout=self.dropout,
+                weight_drop=self.weight_drop,
+                attention_dropout=args.attention_dropout,
+                activation_dropout=args.activation_dropout,
+                activation_fn=args.activation_fn,
+                layer_norm_first=args.layer_norm_first,
+                favor=self.favor
+            )
 
             # TODO: check layer norm first between new and old layer
             new_layer.load_state_dict(old_layer.state_dict())
@@ -1084,6 +1083,7 @@ class TransformerEncoder(nn.Module):
     def add_relative_attention(self):
 
         self.relative_attention = True
+
         def convert(m_):
             classname = m_.__class__.__name__
             if classname.find('MultiheadAttention') != -1:
@@ -1092,7 +1092,6 @@ class TransformerEncoder(nn.Module):
         self.layers.apply(convert)
 
         self.positional_encoder = SinusoidalPositionalEmbedding(self.embedding_dim)
-
 
     def forward(self, x, padding_mask=None, positions=None, layer=None, lang=None, atb=None, checkpointing_ffn=False,
                 checkpointing_self_attn=False, **kwargs):
