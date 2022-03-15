@@ -1271,7 +1271,8 @@ class MBartDecoderLayer(nn.Module):
             lang=lang, atb=atb
         )
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states.add_(residual)
+        # hidden_states.add_(residual)
+        hidden_states = hidden_states + residual
         # hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
 
         # Cross-Attention Block
@@ -1311,7 +1312,7 @@ class MBartDecoderLayer(nn.Module):
             contrastive_loss = None
 
             hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-            hidden_states.add_(residual)
+            hidden_states = hidden_states + residual
             # hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
 
         # Fully Connected
@@ -1339,7 +1340,8 @@ class MBartDecoderLayer(nn.Module):
 
         # hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states.add_(residual)
+        hidden_states = hidden_states + residual
+        # hidden_states.add_(residual)
 
         if self.has_adapter:
             residual = hidden_states
@@ -1347,7 +1349,7 @@ class MBartDecoderLayer(nn.Module):
                 assert lang is not None or mixture is not None
                 hidden_states = self.adapter(hidden_states, lang=lang, mixture=mixture)
 
-            hidden_states.add_(residual)
+            hidden_states = hidden_states + residual
 
         # hidden_states = hidden_states.transpose(0, 1).contiguous()
 

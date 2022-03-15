@@ -172,8 +172,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
             r_head_k = pos_lin_results.view(pos.size(0), bsz * heads, head_dim)  # T x BxH x D
         else:
-            # pos_lin_results = pos.view(pos.size(0), bsz * heads, head_dim)  # T x BxH x D
-            # r_head_k = pos_lin_results
+            # the position embedding matrix is multiplied directly with queries + w_bias
             pos_lin_results = None
             r_head_k = None
 
@@ -283,12 +282,6 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # Output:              [bsz*heads, len_q, head_dim]
         # GEMM: Per batch: ( len_q x seql_k ) x ( seql_k x head_dim ) = (len_q x head_dim)
         matmul2_results = torch.bmm(dropout_results, values.transpose(0, 1)).transpose(0, 1)
-        # if learnable_pos:
-        #     # Input1: from_softmax [bsz*heads, len_q, seql_k].transpose(0, 1)
-        #     # Input2: R [len_q, len_k, head_dim]
-        #     # Output: [ len_q, bsz*heads, head_dim]
-        #     torch.baddbmm(matmul2_results, dropout_results.transpose(0, 1), pos, beta=1.0, alpha=1.0,
-        #                   out=matmul2_results)
 
         matmul2_results = matmul2_results.contiguous().view(inputs.size(0), inputs.size(1), inputs.size(2))
 
@@ -298,7 +291,6 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         # Output:               [ len_q, bsz, embed_dim ]
         # GEMM: ( len_q*bsz x embed_dim ) x ( embed_dim x embed_dim ) = ( len_q*bsz x embed_dim )
         if linear_blaslt is not None and inputs.dtype != torch.float64 and inputs.is_cuda:
-            # pos_lin_results = linear_blaslt.forward(pos, pos_weights, pos_biases)
             outputs = linear_blaslt.forward(matmul2_results, output_weights, output_biases)
         else:
             outputs = torch.addmm(output_biases,
