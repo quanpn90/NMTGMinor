@@ -857,7 +857,8 @@ class DeltaLMDecoder(MBartPreTrainedModel):
         self.config.bert_hidden_size = config.d_model
         self.layerdrop = opt.death_rate_decoder
         self.dec_pretrained_model = 'mbart'
-        self.embed_tokens.weight.requires_grad = False
+        if opt.freeze_embedding:
+            self.embed_tokens.weight.requires_grad = False
         self.word_dropout = opt.word_dropout
 
         # freeze parameters if declared

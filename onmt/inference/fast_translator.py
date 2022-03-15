@@ -876,7 +876,6 @@ class FastTranslator(Translator):
                             past_src_data=past_src_data)
 
     def translate(self, src_data, tgt_data, past_src_data=None, sub_src_data=None, type='mt', prefix=None):
-        print(prefix)
 
         if past_src_data is None or len(past_src_data) == 0:
             past_src_data = None
