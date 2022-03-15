@@ -916,6 +916,8 @@ class FastTranslator(Translator):
 
         if prefix is not None:
             prefix_tensor = self.build_prefix(prefix, bsz=batch_size)
+        else:
+            prefix_tensor = None
 
         #  (2) translate
         #  each model in the ensemble uses one batch in batches

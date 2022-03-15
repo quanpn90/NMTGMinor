@@ -287,6 +287,15 @@ def main():
     # else:
     #     raise NotImplementedError
 
+    prefix = None
+    prefix_reader = None
+    if len(opt.prefix_string) > 0:
+        assert len(opt.prefix_tgt) <= 0
+        prefix = [opt.prefix_string]
+    elif len(opt.prefix_tgt) > 0:
+        prefix = list()
+        prefix_reader = open(opt.prefix_tgt)
+
     # Audio processing for the source batch
     if opt.encoder_type == "audio" and opt.asr_format in ['scp', 'kaldi']:
 
@@ -315,15 +324,6 @@ def main():
 
         sub_src = open(opt.sub_src) if opt.sub_src else None
         sub_src_batch = list()
-
-        prefix = None
-        prefix_reader = None
-        if len(opt.prefix_string) > 0:
-            assert len(opt.prefix_tgt) <= 0
-            prefix = [opt.prefix_string]
-        elif len(opt.prefix_tgt) > 0:
-            prefix = list()
-            prefix_reader = open(opt.prefix_tgt)
 
         while True:
             try:
