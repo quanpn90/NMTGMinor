@@ -6,6 +6,7 @@ from typing import List, Optional, Union
 from collections import defaultdict
 import onmt
 from onmt.modules.optimized.linear import Linear
+import math
 
 #
 # # maybe just need d / F.normalize(d, p=2, dim=2)
@@ -187,7 +188,7 @@ class FairseqWav2Vec(nn.Module):
                                                        multiplicative=opt.mfw_multiplicative,
                                                        fast=opt.fast_factorize,
                                                        sub_factors=opt.n_attributes,
-                                                       sub_factor_rank=opt.mfw_rank * opt.mfw_atb_rank_scale)
+                                                       sub_factor_rank=math.floor(opt.mfw_rank * opt.mfw_atb_rank_scale))
 
         # or adapter
         if opt.wav2vec_adapter > 0:
@@ -439,7 +440,6 @@ class FairseqWav2Vec(nn.Module):
         #     stacked_encoder_output = self.stacked_encoder(inputs_embeds=context, attention_mask=dec_attn_mask,
         #                                                   checkpointing_ffn=checkpointing_ffn)
         #     context = stacked_encoder_output[0]
-
 
         # how to get the correct attention mask?
         output_dict = defaultdict(lambda: None, {'source': input, 'context': context, 'src_mask': dec_attn_mask,

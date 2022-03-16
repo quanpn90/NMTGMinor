@@ -581,12 +581,13 @@ def main():
         idx = 0
         n_input_files = len(src_input_files)
 
-        ################# Training data  ###################################################################
+        # Training data  ###################################################################
 
         train = dict()
         train['src'], train['tgt'] = list(), list()
         train['src_sizes'], train['tgt_sizes'] = list(), list()
         train['src_atb'], train['tgt_atb'] = list(), list()
+        train['src_lang'], train['tgt_lang'] = list(), list()
 
         data = dict()
 
@@ -656,7 +657,7 @@ def main():
                     train['past_src'] += past_src_data
                     train['past_src_sizes'] += past_src_sizes
 
-        ################# Finalizing Training data  ###################################################################
+        # Finalizing Training data  ###################################################################
 
             if opt.multi_dataset:
 
@@ -693,7 +694,7 @@ def main():
                     train['src_atb'] += src_atb_data
                     train['tgt_atb'] += tgt_atb_data
 
-        ################# Validation data  ###################################################################
+        # Validation data  ###################################################################
 
         print('Preparing validation ...')
 
@@ -779,7 +780,7 @@ def main():
                 valid['past_src'] += past_src_data
                 valid['past_src_sizes'] += past_src_sizes
 
-        ### Finalizing Validation data ... #########################
+        # Finalizing Validation data ... #########################
 
             if opt.multi_dataset:
                 data['src'] = src_data

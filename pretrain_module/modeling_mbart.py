@@ -1346,8 +1346,8 @@ class MBartDecoderLayer(nn.Module):
         if self.has_adapter:
             residual = hidden_states
             if self.adapter_location == 1:
-                assert lang is not None or mixture is not None
-                hidden_states = self.adapter(hidden_states, lang=lang, mixture=mixture)
+                assert lang is not None
+                hidden_states = self.adapter(hidden_states, lang=lang)
 
             hidden_states = hidden_states + residual
 
@@ -1795,7 +1795,8 @@ class MBartDecoder(MBartPreTrainedModel):
             self.add_factorize(opt.n_languages, rank=opt.mfw_rank,
                                multiplicative=opt.mfw_multiplicative,
                                fast=opt.fast_factorize,
-                               sub_factors=opt.n_attributes, sub_factor_rank=opt.mfw_rank * opt.mfw_atb_rank_scale)
+                               sub_factors=opt.n_attributes,
+                               sub_factor_rank=math.floor(opt.mfw_rank * opt.mfw_atb_rank_scale))
 
         # adapter
         if opt.decoder_adapter > 0:

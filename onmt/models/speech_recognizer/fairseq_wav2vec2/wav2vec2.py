@@ -1605,8 +1605,8 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
         if self.has_adapter:
             if self.adapter_location == 1:
-                assert lang is not None or mixture is not None
-                x = self.adapter(x, lang=lang, mixture=mixture)
+                assert lang is not None
+                x = self.adapter(x, lang=lang)
 
             x.add_(residual)  # residual is before the big FFN
             residual = x
@@ -1634,8 +1634,8 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
             if self.has_adapter:
                 if self.adapter_location == 2:
-                    assert lang is not None or mixture is not None
-                    x = self.mid_adapter(x, lang=lang, mixture=mixture)
+                    assert lang is not None
+                    x = self.mid_adapter(x, lang=lang)
                     x.add_(residual)
                     residual = x
 
