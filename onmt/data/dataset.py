@@ -467,7 +467,7 @@ class Dataset(torch.utils.data.Dataset):
         if len(src_langs) <= 1:
             self.bilingual = True
             if self.src_atbs is not None:
-                assert(len(src_atbs) <= 1, "For a bilingual dataset, expect attributes to be 'singular' too")
+                assert(len(src_atbs) <= 1), "For a bilingual dataset, expect attributes to be 'singular' too"
         else:
             self.bilingual = False
 
@@ -582,7 +582,6 @@ class Dataset(torch.utils.data.Dataset):
             # print("Cannot find the batch satisfying those conditions")
             return self.get_batch(self.largest_batch_id)
 
-
     def __len__(self):
         return self.num_batches
 
@@ -605,10 +604,12 @@ class Dataset(torch.utils.data.Dataset):
                 src_lang = self.src_langs[index]
             if self.tgt_langs is not None:
                 tgt_lang = self.tgt_langs[index]
-            if self.src_atbs is not None:
-                src_atb = self.src_atbs[index]
-            if self.tgt_atbs is not None:
-                tgt_atb = self.tgt_atbs[index]
+            # if self.src_atbs is not None:
+            #     src_atb = self.src_atbs[index]
+            # if self.tgt_atbs is not None:
+            #     tgt_atb = self.tgt_atbs[index]
+            src_atb = None
+            tgt_atb = None
 
         # move augmenter here?
 
@@ -668,10 +669,12 @@ class Dataset(torch.utils.data.Dataset):
                 src_lang_data = [self.src_langs[i] for i in batch_ids]
             if self.tgt_langs is not None:
                 tgt_lang_data = [self.tgt_langs[i] for i in batch_ids]
-            if self.src_atbs is not None:
-                src_atbs_data = [self.src_atbs[i] for i in batch_ids]
-            if self.tgt_atbs is not None:
-                tgt_atbs_data = [self.tgt_atbs[i] for i in batch_ids]
+            # if self.src_atbs is not None:
+            #     src_atbs_data = [self.src_atbs[i] for i in batch_ids]
+            # if self.tgt_atbs is not None:
+            #     tgt_atbs_data = [self.tgt_atbs[i] for i in batch_ids]
+            src_atbs_data = None
+            tgt_atbs_data = None
 
         if self.use_past_src:
             past_src = [self.past_src[i] for i in batch_ids]
@@ -731,10 +734,12 @@ class Dataset(torch.utils.data.Dataset):
                     src_lang_data = [sample['src_lang'] for sample in samples]  # should be a tensor [0]
                 if self.tgt_langs is not None:
                     tgt_lang_data = [sample['tgt_lang'] for sample in samples]  # should be a tensor [1]
-                if self.src_atbs is not None:
-                    src_atbs_data = [self.src_atbs[i] for i in batch_ids]
-                if self.tgt_atbs is not None:
-                    tgt_atbs_data = [self.tgt_atbs[i] for i in batch_ids]
+                # if self.src_atbs is not None:
+                #     src_atbs_data = [self.src_atbs[i] for i in batch_ids]
+                # if self.tgt_atbs is not None:
+                #     tgt_atbs_data = [self.tgt_atbs[i] for i in batch_ids]
+                src_atbs_data = None
+                tgt_atbs_data = None
 
             if self.use_past_src:
                 past_src_data = [sample['past_src'] for sample in samples]

@@ -749,8 +749,18 @@ class FastTranslator(Translator):
                                                       onmt.constants.UNK_WORD)
                             for sent in prefixes]
         else:
-            prefix_data = [torch.LongTensor(self.external_tokenizer(" ".join(sent))['input_ids'])
+            _prefix_data = [torch.LongTensor(self.external_tokenizer(" ".join(sent))['input_ids'])
                             for sent in src_sents]
+
+            prefix_data = _prefix_data
+
+            for prefix_tensor in prefix_data:
+                _listed_tensor = prefix_tensor.tolist()
+                if _listed_tensor[0] == self.tgt_bos:
+                    _listed_tensor = _listed_tensor[1:]
+                if _listed_tensor[0] == self.tgt_eos:
+                    _listed_tensor = _listed_tensor[:-1]
+                prefix_data.append(torch.LongTensor(_listed_tensor))
 
         # clone the same prefix for multiple sentences
         if len(prefix_data) == 1 and bsz > 1:
@@ -766,8 +776,6 @@ class FastTranslator(Translator):
             data_length = prefix_data[i].size(0)
             offset = 0
             tensor[i].narrow(0, offset, data_length).copy_(prefix_data[i])
-
-        # print(tensor)
 
         return tensor
 

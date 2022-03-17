@@ -236,20 +236,22 @@ def build_tm_model(opt, dicts, constants=None):
             #     enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
             #     sub_encoder = MBartEncoder(enc_mbart_config, opt)
         elif opt.dec_pretrained_model in ['deltalm']:
-            # from onmt.models.deltalm.deltalm import DeltaLMDecoder
-            # deltalm_config = json_to_namespace(opt.dec_config_file)
-            # embedding_tgt = nn.Embedding(dicts['tgt'].size(),
-            #                              deltalm_config.decoder_embed_dim,
-            #                              padding_idx=constants.TGT_PAD)
-            # decoder = DeltaLMDecoder(deltalm_config, embedding_tgt)
-            from pretrain_module.configuration_deltalm import DeltaLMConfig
-            from pretrain_module.modeling_deltalm import DeltaLMDecoder
             print("[INFO] Created DeltaLM decoder from: %s ..." % opt.dec_config_file)
-            dec_mbart_config = DeltaLMConfig.from_json_file(opt.dec_config_file)
-            decoder = DeltaLMDecoder(dec_mbart_config, opt)
+            from onmt.models.deltalm.deltalm import DeltaLMDecoder
+            deltalm_config = json_to_namespace(opt.dec_config_file)
+            embedding_tgt = nn.Embedding(dicts['tgt'].size(),
+                                         deltalm_config.decoder_embed_dim,
+                                         padding_idx=constants.TGT_PAD)
+            decoder = DeltaLMDecoder(deltalm_config, embedding_tgt)
+            # from pretrain_module.configuration_deltalm import DeltaMConfig
+            # from pretrain_module.modeling_deltalm import DeltaLMDecoder
+            # print("[INFO] Created DeltaLM decoder from: %s ..." % opt.dec_config_file)
+            # dec_mbart_config = DeltaLMConfig.from_json_file(opt.dec_config_file)
+            # decoder = DeltaLMDecoder(dec_mbart_config, opt)
 
-            # generators[0].linear.weight = decoder.embed_tokens.weight
-            # decoder.embed_tokens.weight.requires_grad = False
+            generators[0].linear.weight = decoder.embed_tokens.weight
+            if opt.freeze_embedding:
+                decoder.embed_tokens.weight.requires_grad = False
 
         elif opt.dec_pretrained_model == "bart":
             from pretrain_module.configuration_bart import BartConfig
@@ -578,8 +580,9 @@ def build_tm_model(opt, dicts, constants=None):
             # share all embeddings
             decoder.embed_tokens.weight = encoder.embed_tokens.weight
             generators[0].linear.weight = encoder.embed_tokens.weight
-            # encoder.embed_tokens.weight.requires_grad = False
-            # decoder.embed_tokens.weight.requires_grad = False
+
+            if opt.freeze_embedding:
+                decoder.embed_tokens.weight.requires_grad = False
             # generators[0].linear.bias.requires_grad = False
 
         elif not opt.dec_pretrained_model:
