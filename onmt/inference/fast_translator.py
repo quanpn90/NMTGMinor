@@ -499,7 +499,7 @@ class FastTranslator(Translator):
                     prefix_mask = prefix_toks.ne(self.tgt_pad)
                     # originally infinity here, this number can return nan so thats quite dangerous
                     # put a large negative number here is better
-                    lprobs[prefix_mask] = torch.tensor(-21111993    ).to(lprobs)
+                    lprobs[prefix_mask] = torch.tensor(-21111993).to(lprobs)
 
                     lprobs[prefix_mask] = lprobs[prefix_mask].scatter(
                         -1, prefix_toks[prefix_mask].unsqueeze(-1), prefix_lprobs[prefix_mask]
@@ -525,6 +525,9 @@ class FastTranslator(Translator):
                         tokens = replicate_first_beam(tokens, eos_mask_batch_dim)
                         scores = replicate_first_beam(scores, eos_mask_batch_dim)
                         lprobs = replicate_first_beam(lprobs, eos_mask_batch_dim)
+                    else:
+                        # force tgt_eos to not appear
+                        lprobs[:, self.tgt_eos] = -math.inf
 
             if self.no_repeat_ngram_size > 0:
                 # for each beam and batch sentence, generate a list of previous ngrams

@@ -8,6 +8,7 @@ import onmt
 from onmt.modules.optimized.linear import Linear
 import math
 
+
 #
 # # maybe just need d / F.normalize(d, p=2, dim=2)
 #
@@ -169,7 +170,7 @@ class FairseqWav2Vec(nn.Module):
         # TODO:
         # add relative attention
         if (hasattr(opt, 'wav2vec2_relative_attention') and opt.wav2vec2_relative_attention) or \
-            (hasattr(opt, 'add_relative_attention') and opt.add_relative_attention):
+                (hasattr(opt, 'add_relative_attention') and opt.add_relative_attention):
             print("[INFO] Add relative attention for wav2vec")
             self.wav2vec_encoder.add_relative_attention()
 
@@ -177,8 +178,6 @@ class FairseqWav2Vec(nn.Module):
         if opt.freeze_encoder:
             for p in self.wav2vec_encoder.parameters():
                 p.requires_grad = False
-
-
 
         # then add factorize
         if opt.multilingual_factorized_weights:
@@ -188,7 +187,8 @@ class FairseqWav2Vec(nn.Module):
                                                        multiplicative=opt.mfw_multiplicative,
                                                        fast=opt.fast_factorize,
                                                        sub_factors=opt.n_attributes,
-                                                       sub_factor_rank=math.floor(opt.mfw_rank * opt.mfw_atb_rank_scale))
+                                                       sub_factor_rank=math.floor(
+                                                           opt.mfw_rank * opt.mfw_atb_rank_scale))
 
         # or adapter
         if opt.wav2vec_adapter > 0:
@@ -201,29 +201,29 @@ class FairseqWav2Vec(nn.Module):
 
         # if stacked_encoder is not None:
 
-            # self.stacked_encoder = stacked_encoder
-            # self.conv_downsampler =  nn.ModuleList()
-            #
-            # from .fairseq_wav2vec2.fairseq_modules import TransposeLast
-            # from onmt.modules.layer_norm import LayerNorm
-            # for i in range(3):
-            #
-            #     def make_conv(n_in, n_out, k, stride=2, padding=1):
-            #         conv = nn.Conv1d(n_in, n_out, k, stride=stride, padding=padding, bias=False)
-            #         torch.nn.init.kaiming_normal_(conv.weight)
-            #         return conv
-            #
-            #     conv = nn.Sequential(
-            #         make_conv(self.model_size, self.model_size, 4, stride=2, padding=1),
-            #         nn.Sequential(
-            #             TransposeLast(),
-            #             LayerNorm(self.model_size),
-            #             TransposeLast(),
-            #         ),
-            #         nn.GELU(),
-            #     )
-            #
-            #     self.conv_downsampler.append(conv)
+        # self.stacked_encoder = stacked_encoder
+        # self.conv_downsampler =  nn.ModuleList()
+        #
+        # from .fairseq_wav2vec2.fairseq_modules import TransposeLast
+        # from onmt.modules.layer_norm import LayerNorm
+        # for i in range(3):
+        #
+        #     def make_conv(n_in, n_out, k, stride=2, padding=1):
+        #         conv = nn.Conv1d(n_in, n_out, k, stride=stride, padding=padding, bias=False)
+        #         torch.nn.init.kaiming_normal_(conv.weight)
+        #         return conv
+        #
+        #     conv = nn.Sequential(
+        #         make_conv(self.model_size, self.model_size, 4, stride=2, padding=1),
+        #         nn.Sequential(
+        #             TransposeLast(),
+        #             LayerNorm(self.model_size),
+        #             TransposeLast(),
+        #         ),
+        #         nn.GELU(),
+        #     )
+        #
+        #     self.conv_downsampler.append(conv)
 
         else:
             self.stacked_encoder = None
@@ -328,8 +328,7 @@ class FairseqWav2Vec(nn.Module):
                 # print("Redraw projection ....")
                 self.proj_updater.redraw_projections()
 
-
-        quantize_only = False # self.quantize and not self.dual_output
+        quantize_only = False  # self.quantize and not self.dual_output
         # don't mask when precomputed tdnn is used, because spec augmentation is used in the dataset
 
         wav2vec_output = self.wav2vec_encoder(input, attn_mask,
@@ -444,7 +443,7 @@ class FairseqWav2Vec(nn.Module):
         # how to get the correct attention mask?
         output_dict = defaultdict(lambda: None, {'source': input, 'context': context, 'src_mask': dec_attn_mask,
                                                  'src': dec_attn_mask, 'pos_emb': None,
-                                                 'wav2vec_context':wav2vec_context,
+                                                 'wav2vec_context': wav2vec_context,
                                                  'wav2vec_padding_mask': wav2vec_padding_mask})
 
         return output_dict
@@ -755,19 +754,20 @@ class Wav2vecBERT(Wav2vecTransformer):
                 sub_context = None
                 sub_context_mask = None
 
-            src_attention_mask = src_attention_mask   # new version
+            src_attention_mask = src_attention_mask  # new version
             # tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
             tgt_attention_mask = tgt.new(*tgt.size()).fill_(1)
 
             decoder_outputs = self.decoder(input_ids=tgt,
-                                          attention_mask=tgt_attention_mask,
-                                          encoder_hidden_states=context,
-                                          encoder_attention_mask=src_attention_mask,
-                                          sub_encoder_hidden_states=sub_context,
-                                          sub_encoder_attention_mask=sub_context_mask,
-                                          lang=tgt_lang, atb=tgt_atb,
-                                          checkpointing_ffn=checkpointing_ffn,
-                                          checkpointing_cross_attn=checkpointing_cross_attn)
+                                           attention_mask=tgt_attention_mask,
+                                           encoder_hidden_states=context,
+                                           encoder_attention_mask=src_attention_mask,
+                                           sub_encoder_hidden_states=sub_context,
+                                           sub_encoder_attention_mask=sub_context_mask,
+                                           lang=tgt_lang, atb=tgt_atb,
+                                           checkpointing_ffn=checkpointing_ffn,
+                                           checkpointing_cross_attn=checkpointing_cross_attn,
+                                           checkpointing_self_attn=checkpointing_self_attn)
             decoder_output = decoder_outputs[0]
             contrastive_loss = decoder_outputs[-1]
             output = decoder_output

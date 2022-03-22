@@ -390,8 +390,9 @@ class MultiheadAttention(nn.Module):
         self.multiplicative_factorize = False
         self.fast_factorize = False
 
-        from onmt.modules.optimized.fast_mha import fast_bert_mha
+        from onmt.modules.optimized.fast_mha import fast_bert_mha, fast_self_attn_func
         self.fast_bert_mha = fast_bert_mha
+        self.fast_self_attn_func = fast_self_attn_func
 
     def fix_projection_matrices_(self):
         if self.proj_updater:
@@ -519,7 +520,6 @@ class MultiheadAttention(nn.Module):
         self.proj_bias.requires_grad = self.q_proj.bias.requires_grad
         del self.q_proj, self.k_proj, self.v_proj
 
-    #TODO: Add relative attention here
     def add_relative_attention(self):
 
         self.relative = True
@@ -584,6 +584,7 @@ class MultiheadAttention(nn.Module):
         """
 
         is_tpu = query.device.type == "xla"
+        checkpointing = False # temporarily not checkpoint atm
 
         if not self.favor:
 
@@ -753,7 +754,8 @@ class MultiheadAttention(nn.Module):
                                                            key_padding_mask, self.dropout_p,
                                                            False, None,
                                                            False, None,  # incremental and state
-                                                           low_precision, True)  # low-precision and return coverage
+                                                           low_precision,
+                                                           True, checkpointing)  # low-precision and return coverage
 
                     return outputs, coverage
 
@@ -762,6 +764,7 @@ class MultiheadAttention(nn.Module):
                     # this doesn't support checkpointing at the moment
                     # maybe add it later in the future?
                     assert self.fast_bert_mha is not None
+                    assert self.fast_self_attn_func is not None
                     assert query.dtype == torch.half
                     assert cu_seqlens is not None
                     assert max_len is not None  # and max_len <= 512
@@ -781,6 +784,11 @@ class MultiheadAttention(nn.Module):
 
                     context = context.view(-1, self.num_heads * self.head_dim).contiguous()
                     outputs = linear_function(context, out_proj_weight, self.out_proj.bias)
+                    # outputs, coverage = self.fast_self_attn_func(query, cu_seqlens, self.dropout_p, max_len,
+                    #                                              self.training, self.num_heads, self.head_dim,
+                    #                                              checkpointing,
+                    #                                              in_proj_weight, self.proj_bias,
+                    #                                              out_proj_weight, self.out_proj.bias)
 
                     return outputs, coverage
 

@@ -16,6 +16,7 @@ from onmt.modules.layer_norm import LayerNorm
 from .modules.transformer_layer import TransformerDecoderLayerBase
 from torch import Tensor
 
+
 class TransformerDecoderBase(nn.Module):
     """
         Transformer decoder consisting of *cfg.decoder_layers* layers. Each layer
@@ -110,14 +111,11 @@ class TransformerDecoderBase(nn.Module):
             attention_mask=None,
             encoder_hidden_states=None,
             encoder_attention_mask=None,
+            checkpointing_ffn=False,
+            checkpointing_self_attn=False,
+            checkpointing_cross_attn=False,
             **kwargs,
-            # prev_output_tokens,
-            # encoder_hidden_states,
-            # encoder_attn_mask,
-            # encoder_out: Optional[Dict[str, List[Tensor]]] = None,
-
     ):
-
         bs, slen = input_ids.size()
 
         # embed positions
@@ -145,8 +143,6 @@ class TransformerDecoderBase(nn.Module):
         x = x.transpose(0, 1)
 
         self_attn_padding_mask: Optional[Tensor] = None
-        # if prev_output_tokens.eq(self.padding_idx).any():
-        #     self_attn_padding_mask = prev_output_tokens.eq(self.padding_idx)
 
         qlen = x.size(0)
         self_attn_mask = torch.triu(
@@ -161,7 +157,10 @@ class TransformerDecoderBase(nn.Module):
                 encoder_hidden_states,
                 encoder_attention_mask,
                 self_attn_mask=self_attn_mask,
-                self_attn_padding_mask=self_attn_padding_mask
+                self_attn_padding_mask=self_attn_padding_mask,
+                checkpointing_ffn=checkpointing_ffn,
+                checkpointing_self_attn=checkpointing_self_attn,
+                checkpointing_cross_attn=checkpointing_cross_attn,
             )
             attns.append(layer_attn)
 

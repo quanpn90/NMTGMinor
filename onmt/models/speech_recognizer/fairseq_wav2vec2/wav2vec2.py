@@ -40,6 +40,13 @@ EXTRACTOR_MODE_CHOICES = ChoiceEnum(["default", "layer_norm"])
 MASKING_DISTRIBUTION_CHOICES = ChoiceEnum(["static", "uniform", "normal", "poisson"])
 
 
+def dropout_residual_connection(x, residual, dropout_module, is_training):
+    if fused_dropout_add is not None and dropout_module.p > 0 and is_training:
+        return fused_dropout_add(x, residual, dropout_module.p, is_training)
+
+    return dropout_module(x) + residual
+
+
 def init_bert_params(module):
     """
     Initialize the weights specific to the BERT Model.
@@ -1625,10 +1632,11 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 checkpointing=checkpointing_self_attn
             )
 
-            if is_fast:
-                x = fused_dropout_add(x, residual, self.residual_dropout, self.training)
-            else:
-                x = self.dropout1(x) + residual
+            # if is_fast:
+            #     x = fused_dropout_add(x, residual, self.residual_dropout, self.training)
+            # else:
+            #     x = self.dropout1(x) + residual
+            x = dropout_residual_connection(x, residual, self.dropout1, self.training)
 
             residual = x
 
@@ -1646,7 +1654,8 @@ class TransformerSentenceEncoderLayer(nn.Module):
                          self.dropout2.p, self.training,
                          self.fused, self.fused_function, checkpointing_ffn)
 
-            x = self.dropout3(x).add_(residual)
+            # x = self.dropout3(x).add_(residual)
+            x = dropout_residual_connection(x, residual, self.dropout3, self.training)
 
         else:
             # THE BELOW CODE HAS NEVER BEEN RUN AND TESTED

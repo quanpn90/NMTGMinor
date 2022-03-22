@@ -41,6 +41,8 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     fmhalib = None
 
+from .linear import linear_blaslt
+
 
 class FMHAFun(torch.autograd.Function):
     """
@@ -75,6 +77,74 @@ class FMHAFun(torch.autograd.Function):
         return dqkv, None, None, None, None, None, None
 
 
+class FastSelfAttnFunc(torch.autograd.Function):
+    """
+    BERT Style Multihead Self Attention (Encoder only)
+    Can be used for wav2vec 2.0
+    """
+
+    @staticmethod
+    def forward(ctx, input, cu_seqlens, p_dropout, max_s, is_training, num_heads, head_dim, recompute,
+                in_proj_weight, in_proj_bias, out_proj_weight, out_proj_bias):
+        batch_size = cu_seqlens.numel() - 1
+        total_bsz = input.size(0)
+
+        if batch_size < 4:
+            output, qkv, context, S_dmask = fmhalib.full_fwd_nl(input, in_proj_weight, in_proj_bias,
+                                                                out_proj_weight, out_proj_bias,
+                                                                cu_seqlens, p_dropout, max_s, is_training,
+                                                                head_dim, num_heads, None)
+        else:
+            output, qkv, context, S_dmask = fmhalib.full_fwd(input, in_proj_weight, in_proj_bias,
+                                                             out_proj_weight, out_proj_bias,
+                                                             cu_seqlens, p_dropout, max_s, is_training,
+                                                             head_dim, num_heads, None)
+
+        ctx.save_for_backward(context, qkv, input, S_dmask,
+                              in_proj_weight, out_proj_weight, in_proj_bias, out_proj_bias)
+
+        ctx.cu_seqlens = cu_seqlens
+        ctx.p_dropout = p_dropout
+        ctx.max_s = max_s
+        ctx.num_heads = num_heads
+        ctx.head_dim = head_dim
+        ctx.recompute = recompute
+
+        return output, S_dmask
+
+    @staticmethod
+    def backward(ctx, dout, dsoftmax):
+
+        batch_size = ctx.cu_seqlens.numel() - 1
+        head_dim = ctx.head_dim
+        num_heads = ctx.num_heads
+        total_bsz = dout.size(0)
+
+        context, qkv, input, S_dmask, in_proj_weight, out_proj_weight, in_proj_bias, out_proj_bias = ctx.saved_tensors
+
+        if batch_size < 4:
+            d_input, in_proj_weight_grad, in_proj_bias_grad, out_proj_weight_grad, out_proj_bias_grad = \
+                fmhalib.full_bwd_nl(dout, qkv, context, S_dmask, input, in_proj_weight, in_proj_bias,
+                                    out_proj_weight, out_proj_bias, ctx.cu_seqlens, ctx.p_dropout,
+                                    ctx.head_dim, ctx.num_heads, ctx.max_s)
+        else:
+            d_input, in_proj_weight_grad, in_proj_bias_grad, out_proj_weight_grad, out_proj_bias_grad =\
+                fmhalib.full_bwd(dout, qkv, context, S_dmask, input, in_proj_weight, in_proj_bias,
+                                    out_proj_weight, out_proj_bias, ctx.cu_seqlens, ctx.p_dropout,
+                                    ctx.head_dim, ctx.num_heads, ctx.max_s)
+
+        del ctx.cu_seqlens
+        del ctx.p_dropout
+        del ctx.max_s
+        del ctx.head_dim
+        del ctx.num_heads
+        del ctx.recompute
+        del context, S_dmask, qkv
+
+        return input_grad, None, None, None, None, None, None, \
+               in_proj_weight_grad, in_proj_bias_grad, out_proj_weight_grad, out_proj_bias_grad
+
+
 def _cast_if_autocast_enabled(*args):
     if not torch.is_autocast_enabled():
         return args
@@ -90,5 +160,13 @@ if fmhalib is not None:
         args = _cast_if_autocast_enabled(*args)
         with torch.cuda.amp.autocast(enabled=False):
             return FMHAFun.apply(*args)
+
+    def fast_self_attn_func(*args):
+        args = _cast_if_autocast_enabled(*args)
+        with torch.cuda.amp.autocast(enabled=False):
+            return FastSelfAttnFunc.apply(*args)
 else:
     fast_bert_mha = None
+    fast_self_attn_func = None
+
+

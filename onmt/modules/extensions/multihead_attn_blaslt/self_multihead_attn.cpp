@@ -35,6 +35,19 @@ std::vector<torch::Tensor> bwd_cuda(
                                float                dropout_prob,
                                torch::Tensor lt_workspace);
 
+std::vector<torch::Tensor> bwd_cuda_recompute(
+                               bool use_time_mask,
+                               int                  heads,
+                               torch::Tensor const& output_grads,
+                               torch::Tensor const& inputs,
+                               torch::Tensor const& input_weights,
+                               torch::Tensor const& output_weights,
+                               torch::Tensor const& input_biases,
+                               torch::Tensor const& output_biases,
+                               torch::Tensor const& pad_mask,
+                               torch::Tensor const& dropout_mask,
+                               float                dropout_prob,
+                               torch::Tensor lt_workspace);
 
 //torch::Tensor bwd_cuda_input_only(
 //                               bool use_time_mask,
@@ -145,6 +158,48 @@ std::vector<torch::Tensor> bwd(
                                  lt_workspace);
 
 }
+
+std::vector<torch::Tensor> bwd_recompute(
+                               bool use_time_mask,
+                               int                  heads,
+                               torch::Tensor const& output_grads,
+                               torch::Tensor const& inputs,
+                               torch::Tensor const& input_weights,
+                               torch::Tensor const& output_weights,
+                               torch::Tensor const& input_biases,
+                               torch::Tensor const& output_biases,
+                               torch::Tensor const& pad_mask,
+                               torch::Tensor const& dropout_mask,
+                               float                dropout_prob
+                                                  )
+{
+  AT_ASSERTM(inputs.dim()            == 3, "expected 3D tensor");
+  AT_ASSERTM(input_weights.dim()     == 2, "expected 2D tensor");
+  AT_ASSERTM(output_weights.dim()    == 2, "expected 2D tensor");
+  AT_ASSERTM(dropout_mask.dim()      == 3, "expected 3D tensor");
+
+  AT_ASSERTM(inputs.type().scalarType()            == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(input_weights.type().scalarType()     == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(output_weights.type().scalarType()    == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(dropout_mask.type().scalarType()      == at::ScalarType::Byte, "Only BYTE is supported");
+  auto lt_workspace = torch::empty({1 << 22}, inputs.type());
+
+
+  return bwd_cuda_recompute(
+                                 use_time_mask,
+                                 heads,
+                                 output_grads,
+                                 inputs,
+                                 input_weights,
+                                 output_weights,
+                                 input_biases,
+                                 output_biases,
+                                 pad_mask,
+                                 dropout_mask,
+                                 dropout_prob,
+                                 lt_workspace);
+
+}
 //
 //torch::Tensor bwd_input_only(
 //                               bool use_time_mask,
@@ -202,6 +257,7 @@ std::vector<torch::Tensor> bwd(
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("forward", &multihead_attn::self_bias::cublaslt::fwd, "Self Multihead Attention with Bias -- Forward.");
   m.def("backward", &multihead_attn::self_bias::cublaslt::bwd, "Self Multihead Attention with Bias -- Backward.");
+  m.def("backward_recompute", &multihead_attn::self_bias::cublaslt::bwd_recompute, "Self Multihead Attention with Bias -- Backward.");
 //  m.def("backward_input_only", &multihead_attn::self_bias_additive_mask::cublas_gemmex::bwd_input_only,
 //  "Self Multihead Attention with Bias -- Backward input only (ignore weights).");
 }

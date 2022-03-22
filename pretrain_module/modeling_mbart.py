@@ -61,6 +61,7 @@ class IndexCopy(torch.autograd.Function):
     This function is kinda similar to rnn pad_packed_sequence
     It remaps nonpadded values for a (N-1)-d tensor into a (N)-d tensor
     """
+
     @staticmethod
     @custom_fwd
     def forward(ctx, input, non_pad_indices, total_batch_size):
@@ -275,7 +276,8 @@ class MBartAttention(nn.Module):
             output_attentions: bool = False,
             cu_seqlens=None, max_len=None,
             lang=None, atb=None,
-            incremental=False, incremental_cache=None
+            incremental=False, incremental_cache=None,
+            checkpointing=False
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
 
@@ -368,7 +370,8 @@ class MBartAttention(nn.Module):
                                                        self.proj_bias, self.out_proj.bias,
                                                        mask, self.dropout,
                                                        False, None,
-                                                       incremental, incremental_cache, low_precision, True)
+                                                       incremental, incremental_cache, low_precision,
+                                                       True, checkpointing)
 
                 attn_output = attn_output
 
@@ -377,7 +380,7 @@ class MBartAttention(nn.Module):
                 assert hidden_states.dtype == torch.half
                 assert cu_seqlens is not None
                 assert max_len is not None  # and max_len <= 512
-                assert self.is_decoder is False # only encoder
+                assert self.is_decoder is False  # only encoder
                 sm = torch.cuda.get_device_capability()
 
                 # Only Ampere supported at the moment
@@ -397,7 +400,6 @@ class MBartAttention(nn.Module):
                 attn_output = outputs
 
             return attn_output, coverage, incremental_cache
-
 
 
 class MBartCrossAttention(MBartAttention):
@@ -663,7 +665,7 @@ class MBartCrossAttention(MBartAttention):
                                                           self.q_proj.bias, self.proj_bias_kv, self.out_proj.bias,
                                                           attention_mask, self.dropout,
                                                           incremental, incremental_cache,
-                                                          False, None, None,   # no rotary encodings
+                                                          False, None, None,  # no rotary encodings
                                                           low_precision, True)
 
         return attn_output, coverage, incremental_cache
@@ -968,7 +970,7 @@ class MBartDecoderLayer(nn.Module):
         super().__init__()
         self.embed_dim = config.d_model
 
-        self.self_attn = MBartAttention(  #MBartAutoRegressiveSelfAttentionSLow(
+        self.self_attn = MBartAttention(  # MBartAutoRegressiveSelfAttentionSLow(
             embed_dim=self.embed_dim,
             num_heads=config.decoder_attention_heads,
             dropout=config.attention_dropout,
@@ -1366,7 +1368,7 @@ class MBartDecoderLayer(nn.Module):
 
         if contrastive_loss is not None:
             # print("Return contrastive loss here,", contrastive_loss.size())
-            outputs += (contrastive_loss, )
+            outputs += (contrastive_loss,)
 
         return outputs, incremental_cache
 
@@ -2002,7 +2004,7 @@ class MBartDecoder(MBartPreTrainedModel):
         qlen = input_ids.size(1)
         klen = qlen
         attention_mask = torch.triu(
-                inputs_embeds.new_ones(qlen, klen), diagonal=1).bool()
+            inputs_embeds.new_ones(qlen, klen), diagonal=1).bool()
 
         if buffering:
             attention_mask = attention_mask[-1:, :]

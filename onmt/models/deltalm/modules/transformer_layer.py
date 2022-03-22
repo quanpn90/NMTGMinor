@@ -297,6 +297,7 @@ class TransformerDecoderLayerBase(nn.Module):
         # )
 
     def residual_connection(self, x, residual):
+
         return residual + x
 
     def forward(

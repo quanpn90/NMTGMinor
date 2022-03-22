@@ -326,6 +326,7 @@ ext_modules.append(
     CUDAExtension(name='fmhalib',
                   sources=[
                       'fmha/fmha_api.cpp',
+                      'fmha/linear_cuda.cu',
                       'fmha/src/fmha_noloop_reduce.cu',
                       'fmha/src/fmha_fprop_fp16_128_64_kernel.sm80.cu',
                       'fmha/src/fmha_fprop_fp16_256_64_kernel.sm80.cu',
