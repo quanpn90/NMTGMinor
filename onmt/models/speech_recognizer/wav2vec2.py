@@ -176,6 +176,7 @@ class FairseqWav2Vec(nn.Module):
 
         # freeze the whole encoder. needs to do this first before adding customized parameters
         if opt.freeze_encoder:
+            print("[INFO] Freezing encoder parameters")
             for p in self.wav2vec_encoder.parameters():
                 p.requires_grad = False
 
@@ -862,9 +863,6 @@ class Wav2vecBERT(Wav2vecTransformer):
         tgt_lang = batch.get('target_lang')
         src_atb = batch.get('source_atbs')
         tgt_atb = batch.get('target_atbs')
-
-        if src_atb is not None and tgt_atb is not None:
-            print("[INFO] Attributes: ", src_atb, tgt_atb)
 
         encoder_output = self.encoder(src.transpose(0, 1), batch_first_output=False,
                                       lang=src_lang, atb=src_atb)

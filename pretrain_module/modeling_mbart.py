@@ -1235,6 +1235,7 @@ class MBartDecoderLayer(nn.Module):
             incremental_cache=None,
             checkpointing_ffn=False,
             checkpointing_cross_attn=False,
+            checkpointing_self_attn=False,
             lang=None, atb=None, **kwargs
     ):
         """
@@ -1270,7 +1271,7 @@ class MBartDecoderLayer(nn.Module):
             attention_mask=attention_mask,
             output_attentions=output_attentions,
             incremental=incremental, incremental_cache=incremental_cache,
-            lang=lang, atb=atb
+            lang=lang, atb=atb, checkpointing=checkpointing_self_attn
         )
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         # hidden_states.add_(residual)
@@ -1780,16 +1781,17 @@ class MBartDecoder(MBartPreTrainedModel):
             self.freeze_ffn_params()
 
         if opt.freeze_decoder:
+            print("[INFO] Freezing decoder parameters ...")
             for p in self.parameters():
                 p.requires_grad = False
 
-            if not opt.freeze_cross_attention:
-                # but we need to enable the cross attention
-                for layer in self.layers:
-                    for p in layer.encoder_attn.parameters():
-                        p.requires_grad = True
-                    for p in layer.encoder_attn_layer_norm.parameters():
-                        p.requires_grad = True
+            # if not opt.freeze_cross_attention:
+            #     # but we need to enable the cross attention
+            #     for layer in self.layers:
+            #         for p in layer.encoder_attn.parameters():
+            #             p.requires_grad = True
+            #         for p in layer.encoder_attn_layer_norm.parameters():
+            #             p.requires_grad = True
 
         if opt.multilingual_factorized_weights_decoder:
             print("[INFO] Factorizing MBART model into %d languages and %d factors"
@@ -1847,6 +1849,7 @@ class MBartDecoder(MBartPreTrainedModel):
             output_hidden_states=None,
             checkpointing_ffn=False,
             checkpointing_cross_attn=False,
+            checkpointing_self_attn=False,
     ):
         """
         :param checkpointing_cross_attn:
@@ -1946,6 +1949,7 @@ class MBartDecoder(MBartPreTrainedModel):
                 atb=atb,
                 checkpointing_ffn=checkpointing_ffn,
                 checkpointing_cross_attn=checkpointing_cross_attn,
+                checkpointing_self_attn=checkpointing_self_attn
             )
             hidden_states = layer_outputs[0]
 

@@ -232,6 +232,9 @@ def build_tm_model(opt, dicts, constants=None):
 
             decoder = MBartDecoder(dec_mbart_config, opt)
 
+            if opt.freeze_embedding:
+                decoder.embed_tokens.weight.requires_grad = False
+
             # if opt.enc_config_file:
             #     enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
             #     sub_encoder = MBartEncoder(enc_mbart_config, opt)

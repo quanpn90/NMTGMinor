@@ -389,7 +389,7 @@ def main():
 
         dicts = torch.load(opt.data + ".dict.pt")
         print("Languages: ", dicts['langs'])
-        if 'atbs' not in dicts:  # backward compatible
+        if 'atbs' not in dicts or len(dicts['atbs']) == 0:  # backward compatible
             dicts['atbs'] = {'nothingness': 0}
         print("Atributes: ", dicts['atbs'])
 
