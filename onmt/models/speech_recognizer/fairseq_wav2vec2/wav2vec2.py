@@ -1260,13 +1260,13 @@ class TransformerEncoder(nn.Module):
                                  multiplicative=multiplicative, fast=fast,
                                  sub_factors=sub_factors, sub_factor_rank=sub_factor_rank)
 
-    def freeze_or_unfreeze_ffn_params(self):
+    def freeze_ffn_params(self):
 
         for layer in self.layers:
             for p in layer.fc1.parameters():
-                p.requires_grad = not p.requires_grad
+                p.requires_grad = False
             for p in layer.fc2.parameters():
-                p.requires_grad = not p.requires_grad
+                p.requires_grad = False
 
     def convert_deepspeed(self, training=True, bsz=32):
 

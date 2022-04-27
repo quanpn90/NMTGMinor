@@ -14,6 +14,8 @@ def make_parser(parser):
                         help='Reading multiple datasets (sharing the same dictionary)')
     parser.add_argument('-run_validation_before_training', action='store_true',
                         help='Run validation before training')
+    parser.add_argument('-estimate_fisher_information', action='store_true',
+                        help='Run validation before training')
 
     parser.add_argument('-patch_vocab_multiplier', type=int, default=1,
                         help='Pad vocab so that the size divides by this multiplier')

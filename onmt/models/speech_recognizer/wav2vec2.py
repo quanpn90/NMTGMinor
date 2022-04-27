@@ -180,6 +180,9 @@ class FairseqWav2Vec(nn.Module):
             for p in self.wav2vec_encoder.parameters():
                 p.requires_grad = False
 
+        if opt.freeze_encoder_ffn:
+            self.freeze_ffn_params()
+
         # then add factorize
         if opt.multilingual_factorized_weights:
             print("[INFO] Factorizing Wav2vec model into %d languages and %d factors"
@@ -261,6 +264,13 @@ class FairseqWav2Vec(nn.Module):
 
     def convert_fast_attention(self):
         self.wav2vec_encoder.convert_fast_attention()
+
+    def freeze_ffn_params(self):
+        for layer in self.wav2vec_encoder.encoder.layers:
+            for p in layer.fc1.parameters():
+                p.requires_grad = False
+            for p in layer.fc2.parameters():
+                p.requires_grad = False
 
     def test_run(self, input, mask):
 

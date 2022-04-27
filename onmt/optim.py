@@ -477,7 +477,7 @@ class Optim(object):
 
             self._optim.param_groups[0]['lr'] = self.lr
 
-        elif self.update_method in ['regular', 'basic']:
+        elif self.update_method in ['regular', 'basic', 'none']:
 
             " :) "
             pass

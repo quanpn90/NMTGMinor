@@ -626,6 +626,8 @@ class Trainer(object):
 
         return total_loss.item() / total_words.item(), total_correct.item() / total_words.item()
 
+
+
     def train_epoch(self, epoch, resume=False, itr_progress=None):
 
         opt = self.opt
@@ -1006,6 +1008,337 @@ class Trainer(object):
 
         return total_loss / total_words
 
+    def estimate_fisher(self, data):
+        """
+        This function estimates the Fisher Information (only diagonal) on a data
+
+        :param data: train or dev data
+        :return: fisher
+        """
+        if self.rank == 0:
+            print("[INFO] Estimating fisher information ...\n")
+
+        opt = self.opt
+        epoch = 0
+        assert len(opt.load_from) > 0
+
+        # Clear the gradients of the model
+        self.optim.zero_grad(set_to_none=False)
+        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+            model = self.model.module
+        else:
+            model = self.model
+
+        parameters =  {n: p for n, p in model.named_parameters() if p.requires_grad}
+        precision_matrices = dict()
+
+        for n, p in parameters.items():
+            precision_matrices[n] = torch.zeros_like(p)
+
+        # note: for Training split_even=True
+        dataset = data
+        data_iterator = generate_data_iterator(dataset, self.rank, self.world_size,
+                                               seed=self.opt.seed, num_workers=opt.num_workers,
+                                               epoch=0, buffer_size=opt.buffer_size, split_even=True)
+
+        streaming = False
+        epoch_iterator = data_iterator.next_epoch_itr(not streaming, pin_memory=opt.pin_memory)
+
+        total_tokens, total_loss, total_words = zero_tensor(), zero_tensor(), zero_tensor()
+        total_non_pads = zero_tensor()
+        report_loss, report_tgt_words = zero_tensor(), zero_tensor()
+        report_ctc_loss = zero_tensor()
+        report_src_words = zero_tensor()
+        report_rec_loss, report_rev_loss, report_mirror_loss = zero_tensor(), zero_tensor(), zero_tensor()
+        start = time.time()
+        n_samples = len(data_iterator)
+
+        counter = 0
+        num_accumulated_words = zero_tensor()
+        num_accumulated_sents = zero_tensor()
+        report_contrastive_loss = zero_tensor()
+
+        if opt.streaming:
+            streaming_state = self.model.init_stream()
+        else:
+            streaming_state = None
+
+        i = data_iterator.iterations_in_epoch if not isinstance(dataset, list) else epoch_iterator.n_yielded
+        i = i * self.world_size  # incorrect?
+        self.model.train()  # eliminate dropout (is it necessary)?
+
+        while not data_iterator.end_of_epoch():
+
+            # this batch generator is not very clean atm
+            # TODO: move everything to the multiGPU trainer
+            samples = next(epoch_iterator)
+
+            batch = prepare_sample(samples, device=self.device)
+            targets = batch.get('target_output')
+
+            if opt.streaming:
+                if train_data.is_new_stream():
+                    streaming_state = self.model.init_stream()
+            else:
+                streaming_state = None
+
+            # TODO: dealing with oom during distributed training
+            oom = zero_tensor()
+            counter = counter + 1
+            # reduce = True if counter >= opt.update_frequency or i == (n_samples - 1) else False
+            reduce = False # never reduce :))))
+
+            try:
+                def maybe_no_sync():
+                    if not reduce and isinstance(self.model, DDP_model):
+                        return self.model.no_sync()
+                    else:
+                        # when we dont reach the updating step, we do not need to synchronize the gradients
+                        # thus disabling the backward grad sync to improve speed
+                        return contextlib.ExitStack()  # dummy contextmanager
+
+                with maybe_no_sync():
+                    with autocast(enabled=opt.fp16):
+
+                        tgt_mask = targets.ne(onmt.constants.PAD)
+                        if opt.load_pretrained_classifier:
+                            with torch.no_grad():
+                                layer_states = self.classifier.encode(batch)
+                        else:
+                            layer_states = None
+
+                        outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                                             zero_encoder=opt.zero_encoder,
+                                             mirror=opt.mirror_loss, streaming_state=streaming_state,
+                                             nce=opt.nce, pretrained_layer_states=layer_states,
+                                             adv_ptb_grad=opt.virtual_adversarial_training_mode > 0,
+                                             checkpointing_ffn=opt.checkpointing_ffn,
+                                             checkpointing_cross_attn=opt.checkpointing_cross_attn,
+                                             checkpointing_self_attn=opt.checkpointing_self_attn
+                                             )
+
+                        batch_size = batch.size
+                        # outputs is a dictionary containing keys/values necessary for loss function
+                        # can be flexibly controlled within models for easier extensibility
+                        outputs['tgt_mask'] = tgt_mask
+
+                        loss_dict = self.loss_function(outputs, targets, model=self.model)
+                        loss_data = loss_dict['data']
+                        loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
+                        full_loss = loss
+
+                        if opt.ctc_loss > 0.0:
+                            ctc_loss = self.ctc_loss_function(outputs, targets)
+                            ctc_loss_data = ctc_loss.item()
+                            full_loss = full_loss + opt.ctc_loss * ctc_loss
+
+                        if opt.mirror_loss:
+                            rev_loss = loss_dict['rev_loss']
+                            rev_loss_data = loss_dict['rev_loss_data']
+                            mirror_loss = loss_dict['mirror_loss']
+                            full_loss = full_loss + rev_loss + mirror_loss
+                            mirror_loss_data = loss_dict['mirror_loss'].item()
+                        else:
+                            rev_loss_data = None
+                            mirror_loss_data = 0
+
+                        # reconstruction loss
+                        if opt.reconstruct:
+                            rec_loss = loss_dict['rec_loss']
+                            rec_loss = rec_loss
+                            full_loss = full_loss + rec_loss
+                            rec_loss_data = loss_dict['rec_loss_data']
+                        else:
+                            rec_loss_data = None
+
+                        if opt.contrastive_loss_coeff > 0 and 'contrastive_loss' in outputs:
+                            contrastive_loss = outputs['contrastive_loss']
+                            full_loss = full_loss + opt.contrastive_loss_coeff * contrastive_loss
+                            report_contrastive_loss.add_(contrastive_loss.item())
+
+                        correct, total = loss_dict['correct'], loss_dict['total']
+                        optimizer = self.optim.optimizer
+
+                    # grad scaler has to be done outside of the autocast
+
+                    # TODO for adversarial:
+
+                    grad_list = [p for p in self.model.parameters() if p.requires_grad]
+                    if opt.virtual_adversarial_training_mode > 0:
+                        # if we use virtual adversarial training: add the input to the list of gradient to take
+                        model_input = outputs['source']
+                        vanilla_logits = outputs['logprobs']
+                        grad_list += [model_input]
+                    else:
+                        model_input = None
+                        vanilla_logits = None
+
+                    self.grad_scaler.scale(full_loss).backward(inputs=grad_list)
+
+                    # del outputs
+                    if opt.virtual_adversarial_training_mode > 0:
+                        # run forward pass one more time
+                        # the perturbation is the gradient of the model w.r.t the input
+                        perturb = model_input.grad.data.new(*model_input.size()).copy_(model_input.grad.data)
+
+                        with autocast(enabled=opt.fp16):
+                            assert model_input.grad is not None
+                            outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                                                 pretrained_layer_states=layer_states,
+                                                 input_ptb=perturb)
+
+                            full_loss = None
+                            # compute loss for mode 2 3
+                            # In this mode, we add noise to the input and minimise the loss given the noisy inputs
+                            if opt.virtual_adversarial_training_mode in [2, 3]:
+                                loss_dict = self.loss_function(outputs, targets, model=self.model)
+                                full_loss = loss_dict['loss']
+
+                            # for mode 1, 3 compute kl divergence
+                            # In this mode, we minimise the kl divergence between the model output with and without noise
+                            if opt.virtual_adversarial_training_mode in [1, 3]:
+                                logits = outputs['logprobs']
+
+                                with torch.no_grad():
+                                    vanilla_probs = \
+                                        F.softmax(vanilla_logits.float().view(-1, vanilla_logits.size(-1)), dim=-1)
+                                    vanilla_probs.detach_()
+                                noisy_probs = F.softmax(logits.float().view(-1, logits.view(-1, logits.size(-1))),
+                                                        dim=-1)
+
+                                # Note: with the kl_div_loss we don't backward w.r.t the vanilla probs
+                                kl_div_loss = F.kl_div(noisy_probs, vanilla_probs, reduction='sum')
+                                if full_loss is None:
+                                    full_loss = kl_div_loss
+                                else:
+                                    full_loss += kl_div_loss
+
+                        # Now we only get the gradients for the weights of the network
+                        grad_list = [p for p in self.model.parameters() if p.requires_grad]
+                        self.grad_scaler.scale(full_loss).backward(inputs=grad_list)
+                        del outputs
+
+            except RuntimeError as e:
+                if 'out of memory' in str(e):
+                    print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
+                    print('Input size at OOM position:', batch.get('source').size(),
+                          batch.get('target').size())
+                    raise e
+
+            batch_size = batch.size
+
+            src_size = batch.src_size
+            tgt_size = batch.tgt_size
+            num_accumulated_words.add_(tgt_size)
+            num_accumulated_sents.add_(batch_size)
+
+            # unscale the gradient first
+            self.grad_scaler.unscale_(self.optim.optimizer)
+
+            # fake update. we need a learning rate = 0 for this
+            grad_norm = clip_grad_norm(self.model.parameters(), 0)
+            # self.optim.step(scaler=self.grad_scaler)
+            self.grad_scaler.update()
+            # Update the precision matrices.
+
+            for n, p in parameters.items():
+                grad = p.grad.data
+                grad.masked_fill_(torch.logical_or(torch.isinf(grad), torch.isnan(grad)), 0)
+
+                precision_matrices[n].add_(torch.square(p.grad.data))
+
+            self.optim.zero_grad(set_to_none=opt.true_zero_grad)
+            counter = 0
+
+            num_words = tgt_size
+            report_loss.add_(loss_data)
+            report_tgt_words.add_(num_words)
+            report_src_words.add_(src_size)
+            total_loss.add_(loss_data)
+            total_words.add_(num_words)
+
+            # control the index a little bit to ensure the log is always printed
+            if i == 0 or ((i + 1) % opt.log_interval < self.world_size):
+
+                self.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(report_src_words, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(report_contrastive_loss, op=dist.ReduceOp.SUM, group=self.group)
+
+                if self.is_main():
+                    log_string = ("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; grad_norm: %6.4f; gradscaler: %9.9f " %
+                                  (epoch, i + 1, len(data_iterator),
+                                   math.exp(report_loss.item() / report_tgt_words.item()),
+                                   grad_norm,
+                                   self.grad_scaler.get_scale()))
+
+                    log_string += ("lr: %.7f ; updates: %7d; " %
+                                   (self.optim.get_learning_rate(),
+                                    self.optim._step))
+
+                    log_string += ("%5.0f src tok/s; %5.0f tgt tok/s; " %
+                                   (report_src_words.item() / (time.time() - start),
+                                    report_tgt_words.item() / (time.time() - start)))
+
+                    log_string += ("%s elapsed" %
+                                   str(datetime.timedelta(seconds=int(time.time() - self.start_time))))
+
+                    self.print(log_string, flush=True)
+
+                report_loss.zero_()
+                report_tgt_words.zero_()
+                report_src_words.zero_()
+                report_rec_loss.zero_()
+                report_rev_loss.zero_()
+                report_mirror_loss.zero_()
+                report_ctc_loss.zero_()
+                if report_contrastive_loss is not None:
+                    report_contrastive_loss.zero_()
+                start = time.time()
+
+            # increase i by world size
+            i = i + self.world_size
+
+        if isinstance(self.model, DDP_model):
+            torch.cuda.synchronize(device=self.rank)
+
+        loss = 0
+        for n, p in parameters.items():
+            loss = loss + p.sum() * 0
+        # to force ddp to synchronize the last time (based on a zero loss -> zero grad
+        loss.backward()
+
+        self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
+
+        if self.world_size > 1:
+            if self.rank == 0:
+                print("[INFO] Synchronizing precision matrices")
+            for n in precision_matrices:
+                self.all_reduce(precision_matrices[n], op=dist.ReduceOp.SUM, group=self.group)
+
+            if self.rank == 0:
+                print("Done...")
+
+        if self.rank == 0:
+            for n in precision_matrices:
+                precision_matrices[n].div_(num_accumulated_words)
+
+            means = dict()
+            for n, p in parameters.items():
+                means[n] = p
+
+            checkpoint = {
+                'mean': means,
+                'fisher_diag': precision_matrices,
+                'opt': opt
+                }
+
+            file_name = opt.load_from + ".fisher"
+            print("[INFO] Saving means and fisher information to %s" % file_name)
+            torch.save(checkpoint, file_name)
+
+        return total_loss / total_words
+
     def run(self, checkpoint=None):
 
         opt = self.opt
@@ -1046,6 +1379,11 @@ class Trainer(object):
         # if we are on a GPU: warm up the memory allocator
         if self.cuda:
             self.warm_up()
+
+        if opt.estimate_fisher_information:
+            self.start_time = time.time()
+            self.estimate_fisher(self.train_data)
+            return
 
         if opt.run_validation_before_training or opt.max_step <= 0:
             valid_loss, valid_accuracy = self.eval(self.valid_data)

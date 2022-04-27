@@ -1775,6 +1775,7 @@ class MBartDecoder(MBartPreTrainedModel):
 
         # freeze parameters if declared
         if opt.freeze_decoder_self_attn:
+            print("[INFO] Freezing decoder self-attn paramaters")
             self.freeze_self_attn_params()
 
         if opt.freeze_decoder_ffn:
@@ -1809,9 +1810,9 @@ class MBartDecoder(MBartPreTrainedModel):
                 layer.add_adapters(opt.n_languages, adapter_location=opt.decoder_adapter)
 
     def freeze_self_attn_params(self):
-
-        self.layer_norm.weight.requires_grad = False
-        self.layer_norm.bias.requires_grad = False
+        #
+        # self.layer_norm.weight.requires_grad = False
+        # self.layer_norm.bias.requires_grad = False
 
         for layer in self.layers:
             layer.freeze_self_attn_params()
