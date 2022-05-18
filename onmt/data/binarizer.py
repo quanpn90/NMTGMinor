@@ -338,11 +338,13 @@ class Binarizer:
 
             from transformers import MBart50TokenizerFast
             try:  # check if this tokenizer is saved locally or not
+                print("Looking for pre-downloaded tokenizer ...")
                 ext_tokenizer = torch.load("mbart-large-50.tokenizer.pt")
                 ext_tokenizer.src_lang = lang
                 if ext_tokenizer.src_lang != lang:
                     raise RuntimeError("The language %s does not exist in mBART50." % lang)
-            except FileNotFoundError:
+            except FileNotFoundError as e:
+                print("Expected error: ", e, "Downloading tokenizer ...")
                 ext_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50", src_lang=lang)
                 if ext_tokenizer.src_lang != lang:
                     raise RuntimeError("The language %s does not exist in mBART50." % lang)

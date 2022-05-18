@@ -487,7 +487,7 @@ def main():
     tokenizer = onmt.Tokenizer(opt.input_type, opt.lower)
 
     # We can load the dictionary from another project to ensure consistency
-    if len(opt.load_dict) > 0:
+    if opt.load_dict is not None and len(opt.load_dict) > 0:
         print("[INFO] Loading dictionary from ... %s" % opt.load_dict)
         dicts = torch.load(opt.load_dict)
 
