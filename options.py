@@ -12,10 +12,20 @@ def make_parser(parser):
 
     parser.add_argument('-multi_dataset', action='store_true',
                         help='Reading multiple datasets (sharing the same dictionary)')
+    parser.add_argument('-train_sets', default=[], nargs='+', type=int,
+                        help="IDs.")
+    parser.add_argument('-valid_sets', default=[], nargs='+', type=int,
+                        help="Use CUDA on the listed devices.")
     parser.add_argument('-run_validation_before_training', action='store_true',
                         help='Run validation before training')
     parser.add_argument('-estimate_fisher_information', action='store_true',
-                        help='Run validation before training')
+                        help='Only estimate Fisher Information')
+    parser.add_argument('-load_fisher', default='', type=str,
+                        help="""Load the fisher information from a checkpoint.""")
+    parser.add_argument('-ewc_importance', type=float, default=0.0,
+                        help='Importance of EWC penalty')
+    parser.add_argument('-ewc_delay', type=int, default=0,
+                        help='EWC penalty only applies after this delay (steps)')
 
     parser.add_argument('-patch_vocab_multiplier', type=int, default=1,
                         help='Pad vocab so that the size divides by this multiplier')

@@ -136,12 +136,28 @@ class MultiDataIterator(EpochBatchIterating):
     # each dataset = dataiterator > generate 1 epoch iterator
     # this class gen
     def __init__(self, datasets, seed=1., num_workers=0, epoch=1, buffer_size=0,
-                 timeout=0, round_robin=False, num_shards=1, shard_id=0, split_even=True):
-
+                 timeout=0, round_robin=False, num_shards=1, shard_id=0, split_even=True, dataset_ids=None):
+        """
+        :param datasets: list of Datasets
+        :param seed: randomizing seed to
+        :param num_workers:
+        :param epoch:
+        :param buffer_size:
+        :param timeout:
+        :param round_robin:
+        :param num_shards:
+        :param shard_id:
+        :param split_even:  Split the datasets evenly (otherwise adding samples)
+        :param dataset_ids: Selectively choose datasets involved
+        """
         self.datasets = datasets
         self.data_iterators = list()
 
-        for dataset in datasets:
+        for i, dataset in enumerate(datasets):
+            if dataset_ids is not None and len(dataset_ids) > 0:
+                if i not in dataset_ids:
+                    continue
+
             self.data_iterators.append(DataIterator(dataset, dataset.collater, dataset.batches, seed=seed,
                                                     num_workers=num_workers, epoch=epoch, buffer_size=buffer_size,
                                                     timeout=timeout, num_shards=num_shards,

@@ -50,13 +50,15 @@ def prepare_sample(batch, device=None):
 
 
 def generate_data_iterator(dataset, rank, world_size, seed,
-                           num_workers=1, epoch=1., buffer_size=0, split_even=True):
+                           num_workers=1, epoch=1., buffer_size=0, split_even=True,
+                           dataset_ids=None):
     # check if dataset is a list:
     if isinstance(dataset, list):
         # this is a multidataset
         data_iterator = MultiDataIterator(dataset, seed=seed, num_workers=num_workers,
                                           epoch=epoch, buffer_size=buffer_size,
-                                          num_shards=world_size, shard_id=rank, split_even=split_even)
+                                          num_shards=world_size, shard_id=rank, split_even=split_even,
+                                          dataset_ids=dataset_ids)
     else:
         data_iterator = DataIterator(dataset, dataset.collater, dataset.batches, seed=seed,
                                      num_workers=num_workers, epoch=epoch, buffer_size=buffer_size,
@@ -288,6 +290,18 @@ class Trainer(object):
             print("[INFO] Total number of trainable paramaters: %d" % nparams)
             nparams = sum(p.numel() for p in model.parameters())
             print("[INFO] Total number of paramaters: %d" % nparams)
+
+        if opt.load_fisher:
+            if self.is_main():
+                print("[INFO] Loading fisher information from: %s" % opt.load_fisher)
+            self.fisher_info = torch.load(opt.load_fisher, map_location=lambda storage, loc: storage)
+            if self.cuda:
+                for n in self.fisher_info['mean']:
+                    self.fisher_info['mean'][n] = self.fisher_info['mean'][n].cuda()
+                for n in self.fisher_info['fisher_diag']:
+                    self.fisher_info['fisher_diag'][n] = self.fisher_info['fisher_diag'][n].cuda()
+        else:
+            self.fisher_info = None
 
         print("[INFO] Process %d ready." % self.rank, flush=True)
 
@@ -542,7 +556,8 @@ class Trainer(object):
         world_size = self.world_size
         # the data iterator creates an epoch iterator
         data_iterator = generate_data_iterator(data, rank, world_size, seed=self.opt.seed,
-                                               num_workers=1, epoch=1, buffer_size=opt.buffer_size, split_even=False)
+                                               num_workers=1, epoch=1, buffer_size=opt.buffer_size, split_even=False,
+                                               dataset_ids=opt.valid_sets)
         epoch_iterator = data_iterator.next_epoch_itr(False, pin_memory=False)
 
         data_size = len(data_iterator)
@@ -643,7 +658,8 @@ class Trainer(object):
         dataset = train_data
         data_iterator = generate_data_iterator(dataset, self.rank, self.world_size,
                                                seed=self.opt.seed, num_workers=opt.num_workers,
-                                               epoch=epoch, buffer_size=opt.buffer_size, split_even=True)
+                                               epoch=epoch, buffer_size=opt.buffer_size, split_even=True,
+                                               dataset_ids=opt.train_sets)
 
         # TODO: fix resume which is currently buggy
         if resume:
@@ -655,7 +671,9 @@ class Trainer(object):
         total_non_pads = zero_tensor()
         report_loss, report_tgt_words = zero_tensor(), zero_tensor()
         report_ctc_loss = zero_tensor()
+        report_ewc_loss = zero_tensor()
         report_src_words = zero_tensor()
+        report_sents = zero_tensor()
         report_rec_loss, report_rev_loss, report_mirror_loss = zero_tensor(), zero_tensor(), zero_tensor()
         start = time.time()
         n_samples = len(data_iterator)
@@ -669,6 +687,20 @@ class Trainer(object):
             streaming_state = self.model.init_stream()
         else:
             streaming_state = None
+
+        ewc_importance = opt.ewc_importance
+        if ewc_importance > 0:
+            assert self.fisher_info is not None
+            if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                model = self.model.module
+            else:
+                model = self.model
+
+            # parameters = {n: p for n, p in model.named_parameters() if p.requires_grad}
+            parameters = dict()
+            for n, p in model.named_parameters():
+                if n in self.fisher_info['mean'] and p.requires_grad:
+                    parameters[n] = p
 
         i = data_iterator.iterations_in_epoch if not isinstance(train_data, list) else epoch_iterator.n_yielded
         i = i * self.world_size
@@ -766,10 +798,11 @@ class Trainer(object):
                         correct, total = loss_dict['correct'], loss_dict['total']
                         optimizer = self.optim.optimizer
 
-                    # grad scaler has to be done outside of the autocast
+                    #         ewc_penalty = ewc_penalty + (torch.square(parameters[n] - self.fisher_info['mean'][n]) *
+                    #                                      self.fisher_info['fisher_diag'][n]).sum()
+                    #     full_loss += ewc_penalty * ewc_importance
 
                     # TODO for adversarial:
-
                     grad_list = [p for p in self.model.parameters() if p.requires_grad]
                     if opt.virtual_adversarial_training_mode > 0:
                         # if we use virtual adversarial training: add the input to the list of gradient to take
@@ -780,6 +813,7 @@ class Trainer(object):
                         model_input = None
                         vanilla_logits = None
 
+                    # grad scaler has to be done outside of the autocast
                     self.grad_scaler.scale(full_loss).backward(inputs=grad_list)
 
                     # del outputs
@@ -823,6 +857,11 @@ class Trainer(object):
                         grad_list = [p for p in self.model.parameters() if p.requires_grad]
                         self.grad_scaler.scale(full_loss).backward(inputs=grad_list)
                         del outputs
+
+                    # EWC training: no need for autograd here?
+                    ewc_importance = opt.ewc_importance
+
+                    # only run this ewc everytime we reduce
 
                 # if isinstance(self.model, DDP_model):
                 #     torch.cuda.synchronize(device=self.rank)
@@ -869,10 +908,6 @@ class Trainer(object):
 
             # We only update the parameters after getting gradients from n mini-batches
             update_flag = reduce
-            # if counter >= opt.update_frequency:
-            #     update_flag = True
-            # elif i == n_samples - 1:  # update for the last minibatch
-            #     update_flag = True
 
             if update_flag:
 
@@ -898,6 +933,29 @@ class Trainer(object):
 
                 # Update the pagrameters.
                 grad_norm = clip_grad_norm(self.model.parameters(), self.opt.max_grad_norm)
+
+                if ewc_importance > 0:
+                    ewc_penalty = 0
+
+                    if self.optim._step >= opt.ewc_delay:
+                        # if at the moment weights/gradients/mean and fisher_diag are all the same and unscaled
+                        # then we don't need to synchronize the gradients
+                        with self.model.no_sync():
+                            for n, p in self.model.named_parameters():
+                                if isinstance(self.model, DDP_model):
+                                    n = n[len("module."):]
+                                if n in self.fisher_info['mean']:
+                                    penalty = self.fisher_info['fisher_diag'][n] * \
+                                              torch.square(p - self.fisher_info['mean'][n].data)
+
+                                    ewc_penalty = ewc_penalty + penalty.sum()
+
+                            loss = ewc_penalty * ewc_importance
+                            ewc_loss = ewc_penalty.item()
+                            # accumulate the gradients from EWC loss
+                            loss.backward()
+                            report_ewc_loss.add_(ewc_loss)
+
                 self.optim.step(scaler=self.grad_scaler)
                 self.grad_scaler.update()
                 self.optim.zero_grad(set_to_none=opt.true_zero_grad)
@@ -928,6 +986,7 @@ class Trainer(object):
             report_src_words.add_(src_size)
             total_loss.add_(loss_data)
             total_words.add_(num_words)
+            report_sents.add_(1)
             # total_tokens += batch.get('target_output').nelement()
             # total_non_pads += batch.get('target_output').ne(onmt.constants.PAD).sum().item()
             # batch_efficiency = total_non_pads / total_tokens
@@ -946,9 +1005,11 @@ class Trainer(object):
             if i == 0 or ((i + 1) % opt.log_interval < self.world_size):
 
                 self.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
+                # self.all_reduce(report_ewc_loss, op=dist.ReduceOp.SUM, group=self.group)
                 self.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
                 self.all_reduce(report_src_words, op=dist.ReduceOp.SUM, group=self.group)
-                self.all_reduce(report_contrastive_loss, op=dist.ReduceOp.SUM, group=self.group)
+                # self.all_reduce(report_sents, op=dist.ReduceOp.SUM, group=self.group)
+                # self.all_reduce(report_contrastive_loss, op=dist.ReduceOp.SUM, group=self.group)
 
                 if self.is_main():
                     log_string = ("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; grad_norm: %6.4f " %
@@ -979,6 +1040,10 @@ class Trainer(object):
                         ctv_loss = report_contrastive_loss.item() / report_tgt_words.item()
                         log_string += (" ctv_loss: %8.2f ; " % ctv_loss)
 
+                    if ewc_importance > 0.0:
+                        _ewc_loss = report_ewc_loss.item()
+                        log_string += (" ewc_loss: %8.8f ; " % _ewc_loss)
+
                     log_string += ("lr: %.7f ; updates: %7d; " %
                                    (self.optim.get_learning_rate(),
                                     self.optim._step))
@@ -999,6 +1064,8 @@ class Trainer(object):
                 report_rev_loss.zero_()
                 report_mirror_loss.zero_()
                 report_ctc_loss.zero_()
+                report_ewc_loss.zero_()
+                # report_sents.zero_()
                 if report_contrastive_loss is not None:
                     report_contrastive_loss.zero_()
                 start = time.time()
@@ -1015,6 +1082,54 @@ class Trainer(object):
         :param data: train or dev data
         :return: fisher
         """
+        def is_factorize_params(p_name):
+
+            # feed forward neural net
+            if p_name.endswith(".r_i") or p_name.endswith(".s_i") \
+                    or p_name.endswith(".r_o") or p_name.endswith(".s_o") \
+                    or p_name.endswith(".r_p") or p_name.endswith(".s_p"):
+                return True
+
+            if p_name.endswith(".r_q") or p_name.endswith(".s_q") \
+                    or p_name.endswith(".r_o") or p_name.endswith(".s_o") \
+                    or p_name.endswith(".r_kv") or p_name.endswith(".s_kv"):
+                return True
+
+            if p_name.endswith(".rm_q") or p_name.endswith(".sm_q") \
+                    or p_name.endswith(".rm_o") or p_name.endswith(".sm_o") \
+                    or p_name.endswith(".rm_kv") or p_name.endswith(".sm_kv"):
+                return True
+
+            if p_name.endswith(".sub_r_i") or p_name.endswith(".sub_s_i") \
+                    or p_name.endswith(".sub_r_o") or p_name.endswith(".sub_s_o") \
+                    or p_name.endswith(".sub_r_p") or p_name.endswith(".sub_s_p"):
+                return True
+
+            if p_name.endswith(".sub_r_q") or p_name.endswith(".sub_s_q") \
+                    or p_name.endswith(".sub_r_o") or p_name.endswith(".sub_s_o") \
+                    or p_name.endswith(".sub_r_kv") or p_name.endswith(".sub_s_kv"):
+                return True
+
+            if p_name.endswith(".sub_rm_q") or p_name.endswith(".sub_sm_q") \
+                    or p_name.endswith(".sub_rm_o") or p_name.endswith(".sub_sm_o") \
+                    or p_name.endswith(".sub_rm_kv") or p_name.endswith(".sub_sm_kv"):
+                return True
+
+            if p_name.endswith(".rm_i") or p_name.endswith(".sm_i") or \
+                    p_name.endswith(".rm_o") or p_name.endswith(".sm_o") or \
+                    p_name.endswith(".rm_p") or p_name.endswith(".sm_p"):
+                return True
+
+            if p_name.endswith(".sub_rm_i") or p_name.endswith(".sub_sm_i") or \
+                    p_name.endswith(".sub_rm_o") or p_name.endswith(".sub_sm_o") or \
+                    p_name.endswith(".sub_rm_p") or p_name.endswith(".sub_sm_p"):
+                return True
+
+            if "adapter" in p_name:
+                return True
+
+            return False
+
         if self.rank == 0:
             print("[INFO] Estimating fisher information ...\n")
 
@@ -1033,13 +1148,15 @@ class Trainer(object):
         precision_matrices = dict()
 
         for n, p in parameters.items():
-            precision_matrices[n] = torch.zeros_like(p)
+            if not is_factorize_params(n):
+                precision_matrices[n] = torch.zeros_like(p)
 
         # note: for Training split_even=True
         dataset = data
         data_iterator = generate_data_iterator(dataset, self.rank, self.world_size,
                                                seed=self.opt.seed, num_workers=opt.num_workers,
-                                               epoch=0, buffer_size=opt.buffer_size, split_even=True)
+                                               epoch=0, buffer_size=opt.buffer_size, split_even=True,
+                                               dataset_ids=train_sets)
 
         streaming = False
         epoch_iterator = data_iterator.next_epoch_itr(not streaming, pin_memory=opt.pin_memory)
@@ -1175,49 +1292,6 @@ class Trainer(object):
 
                     self.grad_scaler.scale(full_loss).backward(inputs=grad_list)
 
-                    # del outputs
-                    if opt.virtual_adversarial_training_mode > 0:
-                        # run forward pass one more time
-                        # the perturbation is the gradient of the model w.r.t the input
-                        perturb = model_input.grad.data.new(*model_input.size()).copy_(model_input.grad.data)
-
-                        with autocast(enabled=opt.fp16):
-                            assert model_input.grad is not None
-                            outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                                 pretrained_layer_states=layer_states,
-                                                 input_ptb=perturb)
-
-                            full_loss = None
-                            # compute loss for mode 2 3
-                            # In this mode, we add noise to the input and minimise the loss given the noisy inputs
-                            if opt.virtual_adversarial_training_mode in [2, 3]:
-                                loss_dict = self.loss_function(outputs, targets, model=self.model)
-                                full_loss = loss_dict['loss']
-
-                            # for mode 1, 3 compute kl divergence
-                            # In this mode, we minimise the kl divergence between the model output with and without noise
-                            if opt.virtual_adversarial_training_mode in [1, 3]:
-                                logits = outputs['logprobs']
-
-                                with torch.no_grad():
-                                    vanilla_probs = \
-                                        F.softmax(vanilla_logits.float().view(-1, vanilla_logits.size(-1)), dim=-1)
-                                    vanilla_probs.detach_()
-                                noisy_probs = F.softmax(logits.float().view(-1, logits.view(-1, logits.size(-1))),
-                                                        dim=-1)
-
-                                # Note: with the kl_div_loss we don't backward w.r.t the vanilla probs
-                                kl_div_loss = F.kl_div(noisy_probs, vanilla_probs, reduction='sum')
-                                if full_loss is None:
-                                    full_loss = kl_div_loss
-                                else:
-                                    full_loss += kl_div_loss
-
-                        # Now we only get the gradients for the weights of the network
-                        grad_list = [p for p in self.model.parameters() if p.requires_grad]
-                        self.grad_scaler.scale(full_loss).backward(inputs=grad_list)
-                        del outputs
-
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
@@ -1242,10 +1316,11 @@ class Trainer(object):
             # Update the precision matrices.
 
             for n, p in parameters.items():
-                grad = p.grad.data
-                grad.masked_fill_(torch.logical_or(torch.isinf(grad), torch.isnan(grad)), 0)
+                if n in precision_matrices:
+                    grad = p.grad.data
+                    grad.masked_fill_(torch.logical_or(torch.isinf(grad), torch.isnan(grad)), 0)
 
-                precision_matrices[n].add_(torch.square(p.grad.data))
+                    precision_matrices[n].add_(torch.square(p.grad.data))
 
             self.optim.zero_grad(set_to_none=opt.true_zero_grad)
             counter = 0
@@ -1309,6 +1384,7 @@ class Trainer(object):
         loss.backward()
 
         self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
+        self.all_reduce(num_accumulated_sents, op=dist.ReduceOp.SUM, group=self.group)
 
         if self.world_size > 1:
             if self.rank == 0:
@@ -1320,12 +1396,14 @@ class Trainer(object):
                 print("Done...")
 
         if self.rank == 0:
-            for n in precision_matrices:
-                precision_matrices[n].div_(num_accumulated_words)
+            # normalizing by the number of sentences
+            # for n in precision_matrices:
+            #     precision_matrices[n].div_(num_accumulated_sents)
 
             means = dict()
             for n, p in parameters.items():
-                means[n] = p
+                if n in precision_matrices:
+                    means[n] = p
 
             checkpoint = {
                 'mean': means,

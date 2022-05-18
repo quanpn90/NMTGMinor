@@ -487,7 +487,8 @@ def main():
     tokenizer = onmt.Tokenizer(opt.input_type, opt.lower)
 
     # We can load the dictionary from another project to ensure consistency
-    if opt.load_dict:
+    if len(opt.load_dict) > 0:
+        print("[INFO] Loading dictionary from ... %s" % opt.load_dict)
         dicts = torch.load(opt.load_dict)
 
     # construct set of languages from the training languages
@@ -516,6 +517,27 @@ def main():
         for atb in atbs:
             idx = len(dicts['atbs'])
             dicts['atbs'][atb] = idx
+    else:
+
+        if 'langs' not in dicts:
+            dicts['langs'] = dict()
+        else:
+            print("Adding languages to existing dictionary ...")
+
+        for lang in langs:
+            idx = len(dicts['langs'])
+            if lang not in dicts['langs']:
+                dicts['langs'][lang] = idx
+
+        if 'atbs' not in dicts:
+            dicts['atbs'] = dict()
+        else:
+            print("Adding attributes to existing dictionary ...")
+
+        for atb in atbs:
+            idx = len(dicts['atbs'])
+            if atb not in dicts['atbs']:
+                dicts['atbs'][atb] = idx
 
     print("Languages: ", dicts['langs'])
     print("Attributes: ", dicts['atbs'])

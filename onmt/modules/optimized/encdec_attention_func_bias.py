@@ -18,7 +18,7 @@ except (ModuleNotFoundError, ImportError) as e:
     encdec_multihead_attn_bias_cuda = None
 
 try:
-    import encdec_multihead_attn_bias_blaslt
+        import encdec_multihead_attn_bias_blaslt
 except (ModuleNotFoundError, ImportError) as e:
     encdec_multihead_attn_bias_blaslt = None
 
