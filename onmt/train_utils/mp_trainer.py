@@ -1156,7 +1156,7 @@ class Trainer(object):
         data_iterator = generate_data_iterator(dataset, self.rank, self.world_size,
                                                seed=self.opt.seed, num_workers=opt.num_workers,
                                                epoch=0, buffer_size=opt.buffer_size, split_even=True,
-                                               dataset_ids=train_sets)
+                                               dataset_ids=opt.train_sets)
 
         streaming = False
         epoch_iterator = data_iterator.next_epoch_itr(not streaming, pin_memory=opt.pin_memory)
@@ -1396,9 +1396,16 @@ class Trainer(object):
                 print("Done...")
 
         if self.rank == 0:
+            # Accumulate fisher info from previous iteration
+            if self.fisher_info is not None:
+                print("[INFO] Accumulating fisher information from a previous iteration...")
+                for n in precision_matrices:
+                    if n in self.fisher_info:
+                        precision_matrices[n] = self.fisher_info['fisher_diag'][n] + precision_matrices[n]
+
             # normalizing by the number of sentences
             # for n in precision_matrices:
-            #     precision_matrices[n].div_(num_accumulated_sents)
+            #     precision_matrices[n].div_(num_d_sents)
 
             means = dict()
             for n, p in parameters.items():

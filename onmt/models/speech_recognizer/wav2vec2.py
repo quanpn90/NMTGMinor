@@ -706,6 +706,8 @@ class Wav2vecBERT(Wav2vecTransformer):
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bart"]:
             batch_first_output = True
 
+        # print(src_lang, src_atb, tgt_lang, tgt_atb)
+
         # during training mixture is always None
         encoder_output = self.encoder(src, batch_first_output=batch_first_output,
                                       lang=src_lang, atb=src_atb,

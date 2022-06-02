@@ -348,6 +348,7 @@ class Binarizer:
                 ext_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50", src_lang=lang)
                 if ext_tokenizer.src_lang != lang:
                     raise RuntimeError("The language %s does not exist in mBART50." % lang)
+                torch.save(ext_tokenizer, "mbart-large-50.tokenizer.pt")
         elif "m2m100" in external_tokenizer.lower():
 
             print("[INFO] Using the external %s tokenizer..." % external_tokenizer)

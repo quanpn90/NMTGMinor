@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/asrMT.iml" filepath="$PROJECT_DIR$/.idea/asrMT.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/NMTGMinor.iml" filepath="$PROJECT_DIR$/.idea/NMTGMinor.iml" />
     </modules>
   </component>
 </project>

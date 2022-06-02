@@ -13,7 +13,7 @@ def make_parser(parser):
     parser.add_argument('-multi_dataset', action='store_true',
                         help='Reading multiple datasets (sharing the same dictionary)')
     parser.add_argument('-train_sets', default=[], nargs='+', type=int,
-                        help="IDs.")
+                        help="Use CUDA on the listed devices.")
     parser.add_argument('-valid_sets', default=[], nargs='+', type=int,
                         help="Use CUDA on the listed devices.")
     parser.add_argument('-run_validation_before_training', action='store_true',

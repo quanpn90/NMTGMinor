@@ -627,6 +627,7 @@ class MultiheadAttention(nn.Module):
                 pos_proj_weight = F.dropout(self.pos_proj_weight, self.weight_drop, training=self.training) \
                                   if self.pos_proj_weight is not None else None
 
+                sub_pos_factor = None
                 if self.is_factorized:
                     if self.multiplicative_factorize:
                         # squeeze possible because only 1
@@ -718,11 +719,15 @@ class MultiheadAttention(nn.Module):
 
                         add_factor_in.add_(sub_add_factor_in)
                         add_factor_out.add_(sub_add_factor_out)
-                        if self.relative: pos_factor.add_(sub_pos_factor)
+                        if self.relative:
+                            pos_factor.add_(sub_pos_factor)
 
                     in_proj_weight = in_proj_weight + add_factor_in
                     out_proj_weight = out_proj_weight + add_factor_out
-                    if self.relative: pos_proj_weight = pos_proj_weight + sub_pos_factor
+                    if self.relative:
+                        if sub_pos_factor is None:
+                            sub_pos_factor = pos_factor
+                        pos_proj_weight = pos_proj_weight + sub_pos_factor
 
                 # Forward Pass starts here
                 if query.ndim == 3:
