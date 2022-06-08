@@ -2004,7 +2004,6 @@ class MBartDecoder(MBartPreTrainedModel):
             past_key_values_length = 0
 
         inputs_embeds = self.embed_tokens(input_) * self.embed_scale
-        # inputs_embeds = self.embed_tokens(input_ids) * self.embed_scale
 
         qlen = input_ids.size(1)
         klen = qlen

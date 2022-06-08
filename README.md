@@ -26,7 +26,13 @@ NMTG supports a couple of modules written using custom Pytorch/C++/CUDA modules 
 Installation requires CUDA and nvcc with the same version with PyTorch. Its possible to install CUDA from conda via:
 
 ```
+conda install -c nvidia/label/cuda-11.3.1 cuda-toolkit
+
+or if using a custom version with CUDA 11.5
+
 conda install -c nvidia/label/cuda-11.5.2 cuda-toolkit
+
+(depending on the CUDA version that comes with your PyTorch)
 ```
 
 And then navigate to the extension modules and install nmtgminor-cuda via

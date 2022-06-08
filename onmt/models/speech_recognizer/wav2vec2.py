@@ -577,7 +577,7 @@ class Wav2vecTransformer(Transformer):
     def load_encoder_weights(self, checkpoint):
         self.encoder.wav2vec_encoder.load_state_dict(checkpoint['model'])
 
-    def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True,
+    def create_decoder_state(self, batch, beam_size=1, type=2, buffering=True,
                              pretrained_layer_states=None, **kwargs):
         """
         Generate a new decoder state based on the batch input

@@ -853,30 +853,30 @@ class TransformerDecodingState(DecoderState):
 
         if type == 1:
             # if audio only take one dimension since only used for mask
-            # raise NotImplementedError
-            self.original_src = src  # TxBxC
-            self.concat_input_seq = True
-
-            if src is not None:
-                if src.dim() == 3:
-                    # print(self.src.size())
-                    self.src = src.narrow(2, 0, 1).squeeze(2).repeat(1, beam_size)
-                    # self.src = src.repeat(1, beam_size, 1)
-                    # print(self.src.size())
-                    # self.src = src.repeat(1, beam_size, 1) # T x Bb x c
-                else:
-                    self.src = src.repeat(1, beam_size)
-            else:
-                self.src = None
-
-            if context is not None:
-                self.context = context.repeat(1, beam_size, 1)
-            else:
-                self.context = None
-
-            self.input_seq = None
-            self.src_lang = src_lang
-            self.tgt_lang = tgt_lang
+            raise NotImplementedError
+            # self.original_src = src  # TxBxC
+            # self.concat_input_seq = True
+            #
+            # if src is not None:
+            #     if src.dim() == 3:
+            #         # print(self.src.size())
+            #         self.src = src.narrow(2, 0, 1).squeeze(2).repeat(1, beam_size)
+            #         # self.src = src.repeat(1, beam_size, 1)
+            #         # print(self.src.size())
+            #         # self.src = src.repeat(1, beam_size, 1) # T x Bb x c
+            #     else:
+            #         self.src = src.repeat(1, beam_size)
+            # else:
+            #     self.src = None
+            #
+            # if context is not None:
+            #     self.context = context.repeat(1, beam_size, 1)
+            # else:
+            #     self.context = None
+            #
+            # self.input_seq = None
+            # self.src_lang = src_lang
+            # self.tgt_lang = tgt_lang
 
         elif type == 2:
             bsz = src.size(1)  # src is T x B
