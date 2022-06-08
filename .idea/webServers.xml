@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="055e9eda-f99c-4e1b-8763-4274cdd31637" name="i13hpc1.ira.uka.de">
+        <fileTransfer accessType="SFTP" host="i13hpc1.ira.uka.de" port="22" sshConfigId="7555318a-f6cb-4b79-8b73-16083af49b61" sshConfig="pquan@i13hpc1.ira.uka.de:22 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>

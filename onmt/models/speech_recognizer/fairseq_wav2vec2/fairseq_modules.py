@@ -390,9 +390,10 @@ class MultiheadAttention(nn.Module):
         self.multiplicative_factorize = False
         self.fast_factorize = False
 
-        from onmt.modules.optimized.fast_mha import fast_bert_mha, fast_self_attn_func
-        self.fast_bert_mha = fast_bert_mha
-        self.fast_self_attn_func = fast_self_attn_func
+        # from onmt.modules.optimized.fast_mha import fast_bert_mha, fast_self_attn_func
+        # self.fast_bert_mha = fast_bert_mha
+        from onmt.modules.optimized.flash_mha import flash_bert_mha
+        self.fast_bert_mha = flash_bert_mha
 
     def fix_projection_matrices_(self):
         if self.proj_updater:
@@ -766,18 +767,16 @@ class MultiheadAttention(nn.Module):
 
                 # Fused attention using packed data (B T H) -> (BxT H) and removing padded positions
                 elif query.ndim == 2:
-                    # this doesn't support checkpointing at the moment
-                    # maybe add it later in the future?
+                    # this doesn't need checkpointing because fmha is doing checkpointing
                     assert self.fast_bert_mha is not None
-                    assert self.fast_self_attn_func is not None
                     assert query.dtype == torch.half
                     assert cu_seqlens is not None
                     assert max_len is not None  # and max_len <= 512
                     assert self.relative == False
                     sm = torch.cuda.get_device_capability()
 
-                    # Only Ampere supported at the moment
-                    assert (sm[0] == 8 and (sm[1] in [0]) and max_len <= 512)
+                    # All gpus that support fp16 should be supported atm
+                    # assert (sm[0] == 8 and (sm[1] in [0]) and max_len <= 512)
 
                     total_bsz = query.size(0)
                     qkv = linear_function(query, in_proj_weight, self.proj_bias)  # B x H
@@ -785,15 +784,14 @@ class MultiheadAttention(nn.Module):
 
                     qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
 
-                    context, coverage = self.fast_bert_mha(qkv, cu_seqlens, self.dropout_p, max_len, self.training)
+                    dropout_p = self.dropout_p if self.training else 0.0
+                    causal = False
+                    softmax_scale = 1.0 / math.sqrt(64)
+                    context = self.fast_bert_mha(qkv, cu_seqlens, dropout_p, max_len, softmax_scale, causal)
+                    coverage = None
 
                     context = context.view(-1, self.num_heads * self.head_dim).contiguous()
                     outputs = linear_function(context, out_proj_weight, self.out_proj.bias)
-                    # outputs, coverage = self.fast_self_attn_func(query, cu_seqlens, self.dropout_p, max_len,
-                    #                                              self.training, self.num_heads, self.head_dim,
-                    #                                              checkpointing,
-                    #                                              in_proj_weight, self.proj_bias,
-                    #                                              out_proj_weight, self.out_proj.bias)
 
                     return outputs, coverage
 

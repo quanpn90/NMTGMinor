@@ -1061,8 +1061,10 @@ class TransformerEncoder(nn.Module):
 
         self.apply(init_bert_params)
 
-        from onmt.modules.optimized.fast_mha import fast_bert_mha
-        self.fast_bert_mha = fast_bert_mha
+        # from onmt.modules.optimized.fast_mha import fast_bert_mha
+        # self.fast_bert_mha = fast_bert_mha
+        from onmt.modules.optimized.flash_mha import flash_bert_mha
+        self.fast_bert_mha = flash_bert_mha
 
     # add stacked encoder
     def add_stacked_encoder(self, stacked_encoder):
@@ -1148,8 +1150,8 @@ class TransformerEncoder(nn.Module):
             fast_attention = self.layers[0].self_attn.fast_attention
 
         # only run this when seq_len <= 512 and sm = 80/86 and type = half
-        if self.fast_bert_mha and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] == 0) \
-                and not self.relative_attention and not self.deepspeed and fast_attention and x.dtype == torch.half:
+        if self.fast_bert_mha and not self.relative_attention and not self.deepspeed and \
+                fast_attention and x.dtype == torch.half:
             can_run_fast_bert_mha = True
 
             # masked positions = 1 so to compute length we need the (1 -)
@@ -1173,7 +1175,8 @@ class TransformerEncoder(nn.Module):
             #     # treat the "tail" like a normal sequence that attends to itself
             #     lengths.append(patch_size)
 
-            max_len = max(lengths)
+            # max_len = max(lengths)
+            max_len = lengths.max().item()
             # cumulative sequence lengths (required input for fmha)
             a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
             cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
@@ -1189,44 +1192,24 @@ class TransformerEncoder(nn.Module):
         x = x.contiguous()
 
         # If not using deepspeed: proceed like normal
-        if not self.deepspeed:
-            layer_results = []
-            r = None
-            for i, layer in enumerate(self.layers):
-                dropout_probability = np.random.random()
-                if not self.training or (dropout_probability > self.layerdrop):
-                    x, z = layer(x, self_attn_padding_mask=padding_mask, positions=positions,
-                                 max_len=max_len, cu_seqlens=cu_seqlens,
-                                 lang=lang, atb=atb,
-                                 checkpointing_ffn=checkpointing_ffn,
-                                 checkpointing_self_attn=checkpointing_self_attn)
-                    if tgt_layer is not None:
-                        layer_results.append((x, z))
-                if i == tgt_layer:
-                    r = x
-                    break
+        layer_results = []
+        r = None
+        for i, layer in enumerate(self.layers):
+            dropout_probability = np.random.random()
+            if not self.training or (dropout_probability > self.layerdrop):
+                x, z = layer(x, self_attn_padding_mask=padding_mask, positions=positions,
+                             max_len=max_len, cu_seqlens=cu_seqlens,
+                             lang=lang, atb=atb,
+                             checkpointing_ffn=checkpointing_ffn,
+                             checkpointing_self_attn=checkpointing_self_attn)
+                if tgt_layer is not None:
+                    layer_results.append((x, z))
+            if i == tgt_layer:
+                r = x
+                break
 
-            if r is not None:
-                x = r
-
-        else:
-            # deepspeed has strict requirement so better disable autocast
-            with autocast(enabled=False):
-                dtype = x.dtype
-                x = x.half()
-
-                layer_results = []
-                if padding_mask is None:
-                    padding_mask = x.new(x.size(0), x.size(1)).fill_(0)
-                padding_mask = padding_mask.unsqueeze(1).unsqueeze(1)
-                padding_mask = padding_mask.type_as(x).fill_(-10000)
-                for i, layer in enumerate(self.layers):
-                    dropout_probability = np.random.random()
-                    if not self.training or (dropout_probability > self.layerdrop):
-                        x = layer(x, padding_mask)
-
-            x = x.to(dtype)
-            x = x.transpose(0, 1).contiguous()
+        if r is not None:
+            x = r
 
         # if we remove padding before (for fast bert MHA) then remember to put padding back
         # to restore the form B x T X H

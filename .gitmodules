@@ -1,0 +1,3 @@
+[submodule "onmt/modules/extensions/flashattn/cutlass"]
+	path = onmt/modules/extensions/flashattn/cutlass
+	url = https://github.com/NVIDIA/cutlass.git
