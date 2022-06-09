@@ -782,6 +782,8 @@ class MultiheadAttention(nn.Module):
                     qkv = linear_function(query, in_proj_weight, self.proj_bias)  # B x H
                     # B x 3 x H x d
 
+                    # transpose 1 2 is necessary here because the weights are designed to be heads x 3 x d
+                    # (for the more simple version without transposing)
                     qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
 
                     dropout_p = self.dropout_p if self.training else 0.0

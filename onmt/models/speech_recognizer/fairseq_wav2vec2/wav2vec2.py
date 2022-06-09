@@ -1150,9 +1150,10 @@ class TransformerEncoder(nn.Module):
             fast_attention = self.layers[0].self_attn.fast_attention
 
         # only run this when seq_len <= 512 and sm = 80/86 and type = half
-        if self.fast_bert_mha and not self.relative_attention and not self.deepspeed and \
+        if self.fast_bert_mha and not self.relative_attention and \
                 fast_attention and x.dtype == torch.half:
             can_run_fast_bert_mha = True
+            from onmt.utils import unpad_input
 
             # masked positions = 1 so to compute length we need the (1 -)
             if padding_mask is None:
@@ -1165,18 +1166,12 @@ class TransformerEncoder(nn.Module):
             x = x.view(-1, x.size(-1))
             non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
             x = x.index_select(0, non_pad_indices)
+            # x = unpad_input(x, non_pad_indices)
 
             # maybe pad it so the first dim % 8 = 0?
             total_bsz = x.size(0)
-            # if total_bsz % 16 != 0:
-            #     patch_size = total_bsz - (total_bsz // 16) * 16
-            #     patch = torch.randn(patch_size, x.size(-1), dtype=x.dtype, device=x.device)
-            #     x = torch.cat([x, patch], dim=0)
-            #     # treat the "tail" like a normal sequence that attends to itself
-            #     lengths.append(patch_size)
 
-            # max_len = max(lengths)
-            max_len = lengths.max().item()
+            max_len = max(lengths)
             # cumulative sequence lengths (required input for fmha)
             a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
             cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
@@ -1186,7 +1181,7 @@ class TransformerEncoder(nn.Module):
             cu_seqlens = None
             non_pad_indices = None
 
-        if not self.favor and not self.deepspeed and not can_run_fast_bert_mha:
+        if not self.favor and not can_run_fast_bert_mha:
             # B x T x C -> T x B x C  (only for vanilla self-attention)
             x = x.transpose(0, 1)
         x = x.contiguous()
@@ -1217,6 +1212,9 @@ class TransformerEncoder(nn.Module):
             # remove the patch
             if x.size(0) > total_bsz:
                 x = x[:total_bsz, :]
+
+            from onmt.utils import pad_input
+            # x = pad_input(x, non_pad_indices, bsz, seq_len)
             x = index_copy(x, non_pad_indices, bsz * seq_len)
             x = x.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
 

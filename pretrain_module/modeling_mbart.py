@@ -155,8 +155,8 @@ class MBartAttention(nn.Module):
         self.multiplicative_factorize = False
         self.fast_factorize = False
 
-        from onmt.modules.optimized.fast_mha import fast_bert_mha
-        self.fast_bert_mha = fast_bert_mha
+        from onmt.modules.optimized.flash_mha import flash_bert_mha
+        self.fast_bert_mha = flash_bert_mha
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -379,20 +379,26 @@ class MBartAttention(nn.Module):
                 assert self.fast_bert_mha is not None
                 assert hidden_states.dtype == torch.half
                 assert cu_seqlens is not None
-                assert max_len is not None  # and max_len <= 512
-                assert self.is_decoder is False  # only encoder
-                sm = torch.cuda.get_device_capability()
+                assert max_len is not None
+                # assert self.is_decoder is False  # only encoder
+                # sm = torch.cuda.get_device_capability()
 
-                # Only Ampere supported at the moment
-                assert (sm[0] == 8 and (sm[1] in [0]) and max_len <= 512)
+                # Only Ampere supported at the moment-
                 total_bsz = hidden_states.size(0)
                 qkv = linear_function(hidden_states, in_proj_weight, self.proj_bias)  # B x H
                 # B x 3 x H x d
 
                 # TODO: moving to CUDA to remove overhead?
+                # qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
+
+                # context, coverage = self.fast_bert_mha(qkv, cu_seqlens, self.dropout, max_len, self.training)
                 qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
 
-                context, coverage = self.fast_bert_mha(qkv, cu_seqlens, self.dropout, max_len, self.training)
+                dropout_p = self.dropout if self.training else 0.0
+                causal = self.is_decoder
+                softmax_scale = 1.0 / math.sqrt(64)
+                context = self.fast_bert_mha(qkv, cu_seqlens, dropout_p, max_len, softmax_scale, causal)
+                coverage = None
 
                 context = context.view(-1, self.num_heads * self.head_dim).contiguous()
                 outputs = linear_function(context, out_proj_weight, self.out_proj.bias)
@@ -445,30 +451,6 @@ class MBartCrossAttention(MBartAttention):
 
         del self.k_proj
         del self.v_proj
-
-        # # Convert Weight_Q
-        # w_q = self.q_proj.weight.clone()
-        # weight_ = w_q
-        #
-        # b_q = self.q_proj.bias.clone()
-        # bias_ = b_q
-        #
-        # head_dim = self.head_dim
-        # heads = self.num_heads
-        # input_dim = self.embed_dim
-        #
-        # weight_ = weight_.reshape(head_dim * heads, input_dim).view(1, heads, head_dim, input_dim).transpose(0, 1). \
-        #     reshape(-1, input_dim)
-        #
-        # bias_ = bias_.reshape(head_dim * heads).view(1, heads, head_dim).transpose(0, 1).reshape(-1)
-        #
-        # weight_t = torch.Tensor(input_dim, input_dim)
-        # bias_t = torch.Tensor(input_dim)
-        # weight_t.copy_(weight_)
-        # bias_t.copy_(bias_)
-        # self.proj_weight_q = Parameter(weight_t)
-        # self.proj_bias_q = Parameter(bias_t)
-        # del self.q_proj
 
     def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False,
                                sub_factors=0, sub_factor_rank=-1):
@@ -1014,6 +996,8 @@ class MBartDecoderLayer(nn.Module):
         self.n_languages = -1
         self.has_adapter = False
         self.adapter_location = -1
+        from onmt.modules.optimized.flash_mha import flash_bert_mha
+        self.fast_bert_mha = flash_bert_mha
 
     @property
     def word_lut(self):
@@ -1236,7 +1220,8 @@ class MBartDecoderLayer(nn.Module):
             checkpointing_ffn=False,
             checkpointing_cross_attn=False,
             checkpointing_self_attn=False,
-            lang=None, atb=None, **kwargs
+            lang=None, atb=None,
+            max_len=None, cu_seqlens=None, **kwargs
     ):
         """
         :param checkpointing_cross_attn:
@@ -1258,6 +1243,7 @@ class MBartDecoderLayer(nn.Module):
         if incremental and incremental_cache is None:
             incremental_cache = dict()
 
+        bsz, seq_len = hidden_states.size(1), hidden_states.size(0)
         # hidden_states = hidden_states.transpose(0, 1).contiguous()
         residual = hidden_states
         hidden_states = self.self_attn_layer_norm(hidden_states)
@@ -1265,18 +1251,31 @@ class MBartDecoderLayer(nn.Module):
         # Self Attention
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
         # self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
-        # add present self-attn cache to positions 1,2 of present_key_value tuple
+        # add present self-attn cache to positions 1,2 of present_key_value
+        if self.fast_bert_mha and max_len is not None and cu_seqlens is not None \
+                and incremental_cache is None and incremental is False:
+            hidden_states = hidden_states.transpose(0, 1).contiguous().view(-1, hidden_states.size(-1))
+            can_run_fast_mha = True
+        else:
+            can_run_fast_mha = False
+
         hidden_states, self_attn_weights, _ = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             output_attentions=output_attentions,
             incremental=incremental, incremental_cache=incremental_cache,
-            lang=lang, atb=atb, checkpointing=checkpointing_self_attn
+            lang=lang, atb=atb, checkpointing=checkpointing_self_attn,
+            cu_seqlens=cu_seqlens, max_len=max_len
         )
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+
+        if can_run_fast_mha:
+            hidden_states = hidden_states.view(bsz, seq_len, -1)
+            hidden_states = hidden_states.transpose(0, 1).contiguous()
+
+        # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         # hidden_states.add_(residual)
-        hidden_states = hidden_states + residual
-        # hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
+        # hidden_states = hidden_states + residual
+        hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
 
         # Cross-Attention Block
         cross_attn_weights = None
@@ -1314,9 +1313,9 @@ class MBartDecoderLayer(nn.Module):
             # else:
             contrastive_loss = None
 
-            hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-            hidden_states = hidden_states + residual
-            # hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
+            # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+            # hidden_states = hidden_states + residual
+            hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
 
         # Fully Connected
         residual = hidden_states
@@ -1341,9 +1340,9 @@ class MBartDecoderLayer(nn.Module):
                                       self.activation_fn, self.activation_dropout, self.training,
                                       self.fused, self.fused_function, checkpointing_ffn)
 
-        # hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states = hidden_states + residual
+        hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
+        # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        # hidden_states = hidden_states + residual
         # hidden_states.add_(residual)
 
         if self.has_adapter:
@@ -1354,13 +1353,12 @@ class MBartDecoderLayer(nn.Module):
 
             hidden_states = hidden_states + residual
 
-        # hidden_states = hidden_states.transpose(0, 1).contiguous()
-
-        if hidden_states.dtype == torch.float16 and (
-                torch.isinf(hidden_states).any() or torch.isnan(hidden_states).any()
-        ):
-            clamp_value = torch.finfo(hidden_states.dtype).max - 1000
-            hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
+        #
+        # if hidden_states.dtype == torch.float16 and (
+        #         torch.isinf(hidden_states).any() or torch.isnan(hidden_states).any()
+        # ):
+        #     clamp_value = torch.finfo(hidden_states.dtype).max - 1000
+        #     hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
 
         outputs = (hidden_states,)
 
@@ -1809,6 +1807,9 @@ class MBartDecoder(MBartPreTrainedModel):
             for layer in self.layers:
                 layer.add_adapters(opt.n_languages, adapter_location=opt.decoder_adapter)
 
+        from onmt.modules.optimized.flash_mha import flash_bert_mha
+        self.fast_bert_mha = flash_bert_mha
+
     def freeze_self_attn_params(self):
         #
         # self.layer_norm.weight.requires_grad = False
@@ -1929,6 +1930,17 @@ class MBartDecoder(MBartPreTrainedModel):
             # encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
             encoder_attention_mask = encoder_attention_mask
 
+        if self.fast_bert_mha is not None:
+            # we do not need to unpad because in this case the input is right-padded
+            # which doesn't have any effect on causal attention
+            bsz, seq_len = hidden_states.size(1), hidden_states.size(0)
+            lengths = [seq_len] * bsz
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=hidden_states.device)
+            max_len = seq_len
+        else:
+            max_len, cu_seqlens = None, None
+
         for idx, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
@@ -1950,7 +1962,8 @@ class MBartDecoder(MBartPreTrainedModel):
                 atb=atb,
                 checkpointing_ffn=checkpointing_ffn,
                 checkpointing_cross_attn=checkpointing_cross_attn,
-                checkpointing_self_attn=checkpointing_self_attn
+                checkpointing_self_attn=checkpointing_self_attn,
+                max_len=max_len, cu_seqlens=cu_seqlens
             )
             hidden_states = layer_outputs[0]
 
@@ -2015,8 +2028,9 @@ class MBartDecoder(MBartPreTrainedModel):
 
         encoder_attention_mask = decoder_state.src_mask
         if not self.layers[0].encoder_attn.fast_attention:
-            encoder_attention_mask = 1 - encoder_attention_mask
-            encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_.size(-1))
+            raise NotImplementedError
+            # encoder_attention_mask = 1 - encoder_attention_mask
+            # encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_.size(-1))
         else:
             encoder_attention_mask = encoder_attention_mask.bool()
 
@@ -2052,7 +2066,7 @@ class MBartDecoder(MBartPreTrainedModel):
         hidden_states = self.layer_norm(hidden_states)
         output = hidden_states[-1].unsqueeze(0)
 
-        # just a fake coverage
+        # just a fake coverage, at the moment coverage is not returned during step
         coverage = hidden_states.new(hidden_states.size(1), 1, encoder_hidden_states.size(0)).zero_()
 
         output_dict = defaultdict(lambda: None)
