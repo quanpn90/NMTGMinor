@@ -24,11 +24,21 @@ except (ModuleNotFoundError, ImportError) as e:
 
 
 def rotate_half(x):
+    # this function works the same with 3D or 2D tensors
     x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
     return torch.cat((-x2, x1), dim=x1.ndim - 1)  # dim=-1 triggers a bug in torch < 1.8.0
 
-
 def apply_rotary_pos_emb(q, k, cos, sin):
+    # q: seq_len x (bszxhead) x headsize
+    # k: seq_len x (bszxhead) x headsize
+    # cos: seq_len x 1 x head_size
+    # sin: seq_len x 1 x head_Size
+    # or
+    # q: (total_bsz) x head x head_size
+    # k: (total_bsz) x head x head_size
+    # sin: (total_bsz) x 1 x head_size
+    # cos: (total_bsz) x 1 x head_size
+
     return (q * cos) + (rotate_half(q) * sin), (k * cos) + (rotate_half(k) * sin)
 
 

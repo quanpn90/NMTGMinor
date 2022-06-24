@@ -31,11 +31,10 @@ class MultiTensorApply(object):
                   *args)
 
 
-multi_tensor_applier = MultiTensorApply(2048*32)
+multi_tensor_applier = MultiTensorApply(2048 * 32)
 
 
 class FusedAdam(torch.optim.Optimizer):
-
     """Implements Adam algorithm.
     Currently GPU-only.  Requires Apex to be installed via
     ``pip install -v --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" ./``.
@@ -99,8 +98,8 @@ class FusedAdam(torch.optim.Optimizer):
         else:
             raise RuntimeError('apex.optimizers.FusedAdam requires cuda extensions')
 
-    def zero_grad(self):
-        if self.set_grad_none:
+    def zero_grad(self, set_to_none=True):
+        if set_to_none:
             for group in self.param_groups:
                 for p in group['params']:
                     p.grad = None
@@ -115,7 +114,8 @@ class FusedAdam(torch.optim.Optimizer):
         The remaining arguments are deprecated, and are only retained (for the moment) for error-checking purposes.
         """
         if any(p is not None for p in [grads, output_params, scale, grad_norms]):
-            raise RuntimeError('FusedAdam has been updated.  Simply initialize it identically to torch.optim.Adam, and call step() with no arguments.')
+            raise RuntimeError(
+                'FusedAdam has been updated.  Simply initialize it identically to torch.optim.Adam, and call step() with no arguments.')
         loss = None
         if closure is not None:
             loss = closure()
@@ -139,7 +139,8 @@ class FusedAdam(torch.optim.Optimizer):
                 if p.grad is None:
                     continue
                 if p.grad.data.is_sparse:
-                    raise RuntimeError('FusedAdam does not support sparse gradients, please consider SparseAdam instead')
+                    raise RuntimeError(
+                        'FusedAdam does not support sparse gradients, please consider SparseAdam instead')
 
                 state = self.state[p]
                 # State initialization
@@ -162,7 +163,7 @@ class FusedAdam(torch.optim.Optimizer):
                 else:
                     raise RuntimeError('FusedAdam only support fp16 and fp32.')
 
-            if(len(g_16) > 0):
+            if len(g_16) > 0:
                 multi_tensor_applier(self.multi_tensor_adam,
                                      self._dummy_overflow_buf,
                                      [g_16, p_16, m_16, v_16],
@@ -174,7 +175,7 @@ class FusedAdam(torch.optim.Optimizer):
                                      self.adam_w_mode,
                                      bias_correction,
                                      group['weight_decay'])
-            if(len(g_32) > 0):
+            if len(g_32) > 0:
                 multi_tensor_applier(self.multi_tensor_adam,
                                      self._dummy_overflow_buf,
                                      [g_32, p_32, m_32, v_32],
@@ -186,6 +187,5 @@ class FusedAdam(torch.optim.Optimizer):
                                      self.adam_w_mode,
                                      bias_correction,
                                      group['weight_decay'])
-
 
         return loss

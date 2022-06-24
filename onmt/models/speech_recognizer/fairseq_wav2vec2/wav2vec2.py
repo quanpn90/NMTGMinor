@@ -289,6 +289,7 @@ class Wav2Vec2Model(torch.nn.Module):
                  favor=False, feature_redraw_interval=1000, auto_check_redraw=True,
                  weight_drop=0.0):
         super().__init__()
+        self.rotary_attention = False
         self.relative_attention = False
         self.cfg = cfg
 
@@ -904,6 +905,11 @@ class Wav2Vec2Model(torch.nn.Module):
         self.relative_attention = True
         self.encoder.add_relative_attention()
 
+    def add_rotary_attention(self):
+
+        self.rotary_attention = True
+        self.encoder.add_rotary_attention()
+
     def convert_fast_attention(self):
 
         model = self.encoder
@@ -1009,6 +1015,7 @@ class TransformerEncoder(nn.Module):
         """
         super().__init__()
 
+        self.rotary_attention = False
         self.positional_encoder = None
         self.relative_attention = False
         self.dropout = args.dropout
@@ -1102,6 +1109,20 @@ class TransformerEncoder(nn.Module):
 
         self.positional_encoder = SinusoidalPositionalEmbedding(self.embedding_dim)
 
+    def add_rotary_attention(self):
+
+        self.rotary_attention = True
+
+        def convert(m_):
+            classname = m_.__class__.__name__
+            if classname.find('MultiheadAttention') != -1:
+                m_.add_rotary_attention()
+
+        self.layers.apply(convert)
+
+        from onmt.modules.rotary_postional_encodings import SinusoidalEmbeddings
+        self.positional_encoder = SinusoidalEmbeddings(self.embedding_dim // self.num_heads)
+
     def forward(self, x, padding_mask=None, positions=None, layer=None, lang=None, atb=None, checkpointing_ffn=False,
                 checkpointing_self_attn=False, **kwargs):
         x, layer_results = self.extract_features(x, padding_mask, positions, layer, lang=lang, atb=atb,
@@ -1122,15 +1143,17 @@ class TransformerEncoder(nn.Module):
         x_conv = x_conv.transpose(1, 2)
         x = x + x_conv
 
-        if not self.relative_attention:
+        if not self.relative_attention and not self.rotary_attention:
             positions = None
-        else:
+        elif self.relative_attention:
             klen = x.size(1)
             bsz = x.size(0)
             positions = torch.arange(klen - 1, -klen, -1.0, device=x.device, dtype=x.dtype)
             pos_emb = self.positional_encoder(positions, bsz=bsz)
             pos_emb = F.dropout(pos_emb, p=self.dropout, training=self.training)
             positions = pos_emb
+        elif self.rotary_attention:
+            positions = self.positional_encoder(x.transpose(0, 1), seq_dim=0)
 
         if not self.layer_norm_first:
             x = self.layer_norm(x)

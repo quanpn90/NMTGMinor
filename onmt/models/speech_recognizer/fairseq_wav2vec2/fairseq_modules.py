@@ -338,6 +338,7 @@ class MultiheadAttention(nn.Module):
             **kwargs,
     ):
         super().__init__()
+        self.rotary_position = False
         self.pos_proj_weight = None
         self.relative = False
         self.embed_dim = embed_dim
@@ -535,6 +536,10 @@ class MultiheadAttention(nn.Module):
         nn.init.constant_(self.pos_proj_bias, 0.)
         nn.init.normal_(self.r_w_bias, 0.0, 0.02)
         nn.init.normal_(self.r_r_bias, 0.0, 0.02)
+
+    def add_rotary_attention(self):
+        self.rotary_position = True
+        assert not self.relative
 
     def reset_parameters(self):
         if self.qkv_same_dim:
@@ -754,11 +759,13 @@ class MultiheadAttention(nn.Module):
                                                False, None, False, # incremental and state and double precision
                                                False, True, recompute)  # learnable_pos + return-coverage
                     else:
+                        rotary = self.rotary_position
+
                         outputs, coverage = self_attn_func(False, is_training, self.num_heads, inputs,
                                                            in_proj_weight, out_proj_weight,
                                                            self.proj_bias, self.out_proj.bias,
                                                            key_padding_mask, self.dropout_p,
-                                                           False, None,
+                                                           rotary, positions,
                                                            False, None,  # incremental and state
                                                            low_precision,
                                                            True, checkpointing)  # low-precision and return coverage
@@ -784,7 +791,15 @@ class MultiheadAttention(nn.Module):
 
                     # transpose 1 2 is necessary here because the weights are designed to be heads x 3 x d
                     # (for the more simple version without transposing)
-                    qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
+
+                    if not self.rotary_position:
+                        qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
+                    else:
+                        assert positions is not None
+                        cos, sin = positions
+                        queries, keys, values = qkv.view(total_bsz, self.num_heads, 3, self.head_dim)
+                        queries, keys = apply_rotary_pos_emb(queries, keys, cos, sin)
+                        qkv = torch.stack([queries, keys, values], dim=2).transpose(1, 2).contiguous()
 
                     dropout_p = self.dropout_p if self.training else 0.0
                     causal = False
@@ -825,6 +840,16 @@ class MultiheadAttention(nn.Module):
             out = self.out_proj(out)
 
             return out, attn
+
+
+def rotate_half(x):
+    x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
+    return torch.cat((-x2, x1), dim=x1.ndim - 1)  # dim=-1 triggers a bug in torch < 1.8.0
+
+
+def apply_rotary_pos_emb(q, k, cos, sin):
+    return (q * cos) + (rotate_half(q) * sin), (k * cos) + (rotate_half(k) * sin)
+
 
 
 def gelu_accurate(x):

@@ -2042,6 +2042,17 @@ class MBartDecoder(MBartPreTrainedModel):
 
         hidden_states = self.layernorm_embedding(hidden_states)
 
+        if self.fast_bert_mha is not None and not buffering:
+            # we do not need to unpad because in this case the input is right-padded
+            # which doesn't have any effect on causal attention
+            bsz, seq_len = hidden_states.size(1), hidden_states.size(0)
+            lengths = [seq_len] * bsz
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=hidden_states.device)
+            max_len = seq_len
+        else:
+            max_len, cu_seqlens = None, None
+
         for idx, decoder_layer in enumerate(self.layers):
 
             if buffering:
@@ -2056,7 +2067,8 @@ class MBartDecoder(MBartPreTrainedModel):
                 encoder_attention_mask=encoder_attention_mask,
                 output_attentions=None,
                 incremental=buffering, incremental_cache=buffer,
-                lang=lang, atb=atb
+                lang=lang, atb=atb,
+                max_len=max_len, cu_seqlens=cu_seqlens
             )
 
             if buffering:

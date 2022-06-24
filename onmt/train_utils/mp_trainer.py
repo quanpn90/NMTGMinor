@@ -21,7 +21,8 @@ from onmt.model_factory import build_model, build_language_model, optimize_model
 from onmt.model_factory import init_model_parameters
 from onmt.modules.loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.train_utils.stats import Logger
-from onmt.utils import checkpoint_paths, normalize_gradients, clip_grad_norm
+from onmt.utils import checkpoint_paths, normalize_gradients
+from onmt.modules.optimized.fused_clip_norm import fused_clip_grad_norm as clip_grad_norm
 from onmt.model_factory import build_model, optimize_model, init_model_parameters
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP_model

@@ -174,6 +174,11 @@ class FairseqWav2Vec(nn.Module):
             print("[INFO] Add relative attention for wav2vec")
             self.wav2vec_encoder.add_relative_attention()
 
+        self.rotary_position_encoding = opt.rotary_position_encoding
+        if self.rotary_position_encoding:
+            assert not (hasattr(opt, 'wav2vec2_relative_attention') and opt.wav2vec2_relative_attention)
+            self.wav2vec_encoder.add_rotary_attention()
+
         # freeze the whole encoder. needs to do this first before adding customized parameters
         if opt.freeze_encoder:
             print("[INFO] Freezing encoder parameters")

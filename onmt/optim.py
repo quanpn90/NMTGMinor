@@ -328,24 +328,24 @@ class Optim(object):
         #                                relative_step=relative_step,
         #                                scale_parameter=False if self.lr > 0 else True,
         #                                warmup_init=relative_step)
-        # elif self.method in ['fused_adam']:
-        #
-        #     fast_adam = True
-        #     try:
-        #         import fused_optim
-        #         if self.amsgrad:
-        #             print("Note: AMSGRAD is not compatible with Fused Adam")
-        #         from onmt.modules.optimized.fused_adam import FusedAdam
-        #         self.optimizer = FusedAdam(self.params, lr=self.lr,
-        #                                    betas=(self.beta1, self.beta2), eps=1e-9,
-        #                                    weight_decay=self.weight_decay, amsgrad=False,
-        #                                    set_grad_none=False)
-        #     except (RuntimeError, ModuleNotFoundError):
-        #         fast_adam = False
-        #
-        #     if not fast_adam:
-        #         self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-        #                                     weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+        elif self.method in ['fused_adam']:
+
+            fast_adam = True
+            try:
+                import fused_optim
+                if self.amsgrad:
+                    print("Note: AMSGRAD is not compatible with Fused Adam")
+                from onmt.modules.optimized.fused_adam import FusedAdam
+                self.optimizer = FusedAdam(self.params, lr=self.lr,
+                                           betas=(self.beta1, self.beta2), eps=1e-9,
+                                           weight_decay=self.weight_decay, amsgrad=False,
+                                           set_grad_none=False)
+            except (RuntimeError, ModuleNotFoundError):
+                fast_adam = False
+
+            if not fast_adam:
+                self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                                            weight_decay=self.weight_decay, amsgrad=self.amsgrad)
         # elif self.method in ['fused_lamb', 'fused_nvlamb']:
         #
         #     from onmt.modules.optimized.fused_lamb import FusedLAMB

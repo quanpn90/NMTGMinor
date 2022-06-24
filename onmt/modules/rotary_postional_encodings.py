@@ -42,7 +42,14 @@ class SinusoidalEmbeddings(torch.nn.Module):
             t = torch.arange(x.shape[seq_dim], device=x.device).type_as(self.inv_freq)
             freqs = torch.einsum('i,j->ij', t, self.inv_freq)
             emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
-            self.cos_cached = emb.cos()[:, None, :]
-            self.sin_cached = emb.sin()[:, None, :]
-        return self.cos_cached, self.sin_cached
 
+            if seq_len == 0:
+                self.cos_cached = emb.cos()[:, None, :]
+                self.sin_cached = emb.sin()[:, None, :]
+            elif seq_len == 1:
+                self.cos_cached = emb.cos()[None, :, :]
+                self.sin_cached = emb.sin()[None, :, :]
+            else:
+                raise NotImplementedError
+
+        return self.cos_cached, self.sin_cached
