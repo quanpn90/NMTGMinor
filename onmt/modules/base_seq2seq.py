@@ -37,8 +37,7 @@ class Generator(nn.Module):
         else:
             normalized_weights = F.normalize(self.linear.weight, dim=-1)
             normalized_bias = self.linear.bias
-            logits = linear_function(input, normalized_weights, normalized_bias)
-
+            logits = F.linear(input, normalized_weights, normalized_bias)
 
         # softmax will be done at the loss function
         # output = F.log_softmax(logits, dim=-1, dtype=torch.float32)

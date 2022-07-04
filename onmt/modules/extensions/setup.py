@@ -263,14 +263,6 @@ ext_modules.append(
 
 if bare_metal_minor >= 5 and bare_metal_major >= 11:
     ext_modules.append(
-        CUDAExtension(name='linear_blaslt',
-                      sources=['mlp_blaslt/linear.cpp',
-                               'mlp_blaslt/linear_cuda.cu'],
-                      extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                          'nvcc': ['-O3'] + version_dependent_macros +
-                                                  generator_flag + cc_flag}))
-
-    ext_modules.append(
         CUDAExtension(name='mlp_gelu_blaslt',
                       sources=['mlp_blaslt/mlp_gelu.cpp',
                                'mlp_blaslt/mlp_gelu_cuda.cu'],

@@ -946,8 +946,14 @@ class Trainer(object):
                                 if isinstance(self.model, DDP_model):
                                     n = n[len("module."):]
                                 if n in self.fisher_info['mean']:
-                                    penalty = self.fisher_info['fisher_diag'][n] * \
-                                              torch.square(p - self.fisher_info['mean'][n].data)
+
+                                    if opt.ewc_normalize:
+                                        coeff = self.fisher_info['fisher_diag'][n] / \
+                                                (self.fisher_info['fisher_diag'][n] * ewc_importance + 1 )
+                                        penalty = coeff * torch.square(p - self.fisher_info['mean'][n].data)
+                                    else:
+                                        penalty = self.fisher_info['fisher_diag'][n] * \
+                                                  torch.square(p - self.fisher_info['mean'][n].data)
 
                                     ewc_penalty = ewc_penalty + penalty.sum()
 

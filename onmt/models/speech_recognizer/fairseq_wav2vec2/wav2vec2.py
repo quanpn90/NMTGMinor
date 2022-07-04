@@ -32,8 +32,9 @@ from onmt.modules.optimized.dropout_add import fused_dropout_add
 
 from .utils import buffered_arange, index_put, is_xla_tensor
 
-from fairseq.dataclass import FairseqDataclass
-from fairseq.models.wav2vec import Wav2Vec2Config
+# from fairseq.dataclass import FairseqDataclass
+# from fairseq.models.wav2vec import Wav2Vec2Config
+from .dataclass import Wav2Vec2Config
 from onmt.modules.sinusoidal_positional_encoding import SinusoidalPositionalEmbedding
 
 EXTRACTOR_MODE_CHOICES = ChoiceEnum(["default", "layer_norm"])

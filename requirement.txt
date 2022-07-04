@@ -4,3 +4,5 @@ soundfile
 tqdm
 transformers==4.4.2
 einops
+omegaconf
+iopath

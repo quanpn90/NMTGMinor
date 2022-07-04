@@ -786,7 +786,7 @@ class MultiheadAttention(nn.Module):
                     # assert (sm[0] == 8 and (sm[1] in [0]) and max_len <= 512)
 
                     total_bsz = query.size(0)
-                    qkv = linear_function(query, in_proj_weight, self.proj_bias)  # B x H
+                    qkv = F.linear(query, in_proj_weight, self.proj_bias)  # B x H
                     # B x 3 x H x d
 
                     # transpose 1 2 is necessary here because the weights are designed to be heads x 3 x d
@@ -808,7 +808,7 @@ class MultiheadAttention(nn.Module):
                     coverage = None
 
                     context = context.view(-1, self.num_heads * self.head_dim).contiguous()
-                    outputs = linear_function(context, out_proj_weight, self.out_proj.bias)
+                    outputs = F.linear(context, out_proj_weight, self.out_proj.bias)
 
                     return outputs, coverage
 

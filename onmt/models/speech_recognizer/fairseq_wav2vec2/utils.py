@@ -2,15 +2,130 @@ try:
     from collections.abc import Iterable
 except ImportError:
     from collections import Iterable
+from omegaconf import DictConfig, OmegaConf, open_dict, _utils
 import contextlib
 import itertools
 import logging
 import re
 import warnings
 from typing import Optional, Tuple, Callable, Dict, List, TYPE_CHECKING
+from omegaconf import DictConfig, OmegaConf, open_dict, _utils
+from argparse import ArgumentError, ArgumentParser, Namespace
 
 import numpy as np
 import torch
+
+
+def overwrite_args_by_name(cfg: DictConfig, overrides: Dict[str, any]):
+    # this will be deprecated when we get rid of argparse and model_overrides logic
+
+    REGISTRIES = {}
+
+    with open_dict(cfg):
+        for k in cfg.keys():
+            # "k in cfg" will return false if its a "mandatory value (e.g. ???)"
+            if k in cfg and isinstance(cfg[k], DictConfig):
+                if k in overrides and isinstance(overrides[k], dict):
+                    for ok, ov in overrides[k].items():
+                        if isinstance(ov, dict) and cfg[k][ok] is not None:
+                            overwrite_args_by_name(cfg[k][ok], ov)
+                        else:
+                            cfg[k][ok] = ov
+                else:
+                    overwrite_args_by_name(cfg[k], overrides)
+            elif k in cfg and isinstance(cfg[k], Namespace):
+                for override_key, val in overrides.items():
+                    setattr(cfg[k], override_key, val)
+            elif k in overrides:
+                if (
+                        k in REGISTRIES
+                        and overrides[k] in REGISTRIES[k]["dataclass_registry"]
+                ):
+                    cfg[k] = DictConfig(
+                        REGISTRIES[k]["dataclass_registry"][overrides[k]]
+                    )
+                    overwrite_args_by_name(cfg[k], overrides)
+                    cfg[k]._name = overrides[k]
+                else:
+                    cfg[k] = overrides[k]
+
+
+class omegaconf_no_object_check:
+    def __init__(self):
+        self.old_is_primitive = _utils.is_primitive_type
+
+    def __enter__(self):
+        _utils.is_primitive_type = lambda _: True
+
+    def __exit__(self, type, value, traceback):
+        _utils.is_primitive_type = self.old_is_primitive
+
+
+def convert_namespace_to_omegaconf(args: Namespace) -> DictConfig:
+    """Convert a flat argparse.Namespace to a structured DictConfig."""
+
+    # Here we are using field values provided in args to override counterparts inside config object
+    overrides, deletes = override_module_args(args)
+
+    # configs will be in fairseq/config after installation
+    config_path = os.path.join("..", "config")
+
+    GlobalHydra.instance().clear()
+
+    with initialize(config_path=config_path):
+        try:
+            composed_cfg = compose("config", overrides=overrides, strict=False)
+        except:
+            logger.error("Error when composing. Overrides: " + str(overrides))
+            raise
+
+        for k in deletes:
+            composed_cfg[k] = None
+
+    cfg = OmegaConf.create(
+        OmegaConf.to_container(composed_cfg, resolve=True, enum_to_str=True)
+    )
+
+    # hack to be able to set Namespace in dict config. this should be removed when we update to newer
+    # omegaconf version that supports object flags, or when we migrate all existing models
+    from omegaconf import _utils
+
+    with omegaconf_no_object_check():
+        if cfg.task is None and getattr(args, "task", None):
+            cfg.task = Namespace(**vars(args))
+            from fairseq.tasks import TASK_REGISTRY
+
+            _set_legacy_defaults(cfg.task, TASK_REGISTRY[args.task])
+            cfg.task._name = args.task
+        if cfg.model is None and getattr(args, "arch", None):
+            cfg.model = Namespace(**vars(args))
+            from fairseq.models import ARCH_MODEL_REGISTRY
+
+            _set_legacy_defaults(cfg.model, ARCH_MODEL_REGISTRY[args.arch])
+            cfg.model._name = args.arch
+        if cfg.optimizer is None and getattr(args, "optimizer", None):
+            cfg.optimizer = Namespace(**vars(args))
+            from fairseq.optim import OPTIMIZER_REGISTRY
+
+            _set_legacy_defaults(cfg.optimizer, OPTIMIZER_REGISTRY[args.optimizer])
+            cfg.optimizer._name = args.optimizer
+        if cfg.lr_scheduler is None and getattr(args, "lr_scheduler", None):
+            cfg.lr_scheduler = Namespace(**vars(args))
+            from fairseq.optim.lr_scheduler import LR_SCHEDULER_REGISTRY
+
+            _set_legacy_defaults(
+                cfg.lr_scheduler, LR_SCHEDULER_REGISTRY[args.lr_scheduler]
+            )
+            cfg.lr_scheduler._name = args.lr_scheduler
+        if cfg.criterion is None and getattr(args, "criterion", None):
+            cfg.criterion = Namespace(**vars(args))
+            from fairseq.criterions import CRITERION_REGISTRY
+
+            _set_legacy_defaults(cfg.criterion, CRITERION_REGISTRY[args.criterion])
+            cfg.criterion._name = args.criterion
+
+    OmegaConf.set_struct(cfg, True)
+    return cfg
 
 
 def compute_mask_indices(
@@ -173,9 +288,6 @@ def get_activation_fn(activation: str) -> Callable:
     elif activation == "gelu":
         return gelu
     elif activation == "gelu_fast":
-        deprecation_warning(
-            "--activation-fn=gelu_fast has been renamed to gelu_accurate"
-        )
         return gelu_accurate
     elif activation == "gelu_accurate":
         return gelu_accurate
