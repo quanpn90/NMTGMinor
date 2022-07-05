@@ -35,25 +35,130 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     flash_attn_cuda = None
 
-from .linear import linear_blaslt
+
+def _get_block_size(device, head_dim, is_dropout):
+    assert head_dim in [16, 32, 64, 128]
+    if head_dim in [16, 32]:
+        return 256
+    elif head_dim == 64:
+        return 128 if (torch.cuda.get_device_capability(device) == (7, 5) and is_dropout) else 256
+    elif head_dim == 128:
+        return 256 if (torch.cuda.get_device_capability(device) == (8, 0) and not is_dropout) else 128
 
 
-def _flash_attn_forward(qkv, cu_seqlens, dropout_p, max_s, softmax_scale, causal, return_softmax):
-    context, softmax_lse, *rest = flash_attn_cuda.fwd(qkv, cu_seqlens, dropout_p, max_s, softmax_scale,
-                                                       False, causal, return_softmax, None)
-    # if context.isnan().any() or softmax_lse.isnan().any():
+# def _flash_attn_forward(qkv, cu_seqlens, dropout_p, max_s, softmax_scale, causal, return_softmax):
+#     context, softmax_lse, *rest = flash_attn_cuda.fwd(qkv, cu_seqlens, dropout_p, max_s, softmax_scale,
+#                                                        False, causal, return_softmax, None)
+#     # if context.isnan().any() or softmax_lse.isnan().any():
+#     #     breakpoint()
+#     S_dmask = rest[0] if return_softmax else None
+#     return context, softmax_lse, S_dmask
+#
+#
+# def _flash_attn_backward(dout, qkv, out, S_dmask, softmax_lse, cu_seqlens, dropout_p, max_s,
+#                    softmax_scale, causal):
+#     dqkv, dp, softmax_d = flash_attn_cuda.bwd(dout, qkv, out, S_dmask, softmax_lse, cu_seqlens, dropout_p,
+#                                                softmax_scale, max_s, False, causal, None)
+#     # if dqkv.isnan().any() or softmax_d.isnan().any():
+#     #     breakpoint()
+#     return dqkv
+
+
+def _flash_attn_forward(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, dropout_p,
+                        softmax_scale, causal, return_softmax):
+    out, softmax_lse, *rest = flash_attn_cuda.fwd(
+        q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale,
+        False, causal, return_softmax, None
+    )
+    # if out.isnan().any() or softmax_lse.isnan().any():
     #     breakpoint()
     S_dmask = rest[0] if return_softmax else None
-    return context, softmax_lse, S_dmask
+    return out, softmax_lse, S_dmask
 
 
-def _flash_attn_backward(dout, qkv, out, S_dmask, softmax_lse, cu_seqlens, dropout_p, max_s,
-                   softmax_scale, causal):
-    dqkv, dp, softmax_d = flash_attn_cuda.bwd(dout, qkv, out, S_dmask, softmax_lse, cu_seqlens, dropout_p,
-                                               softmax_scale, max_s, False, causal, None)
-    # if dqkv.isnan().any() or softmax_d.isnan().any():
+def _flash_attn_backward(dout, q, k, v, out, softmax_lse, dq, dk, dv, cu_seqlens_q, cu_seqlens_k,
+                         max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale, causal):
+    softmax_d = flash_attn_cuda.bwd(
+        dout, q, k, v, out, softmax_lse, dq, dk, dv, cu_seqlens_q, cu_seqlens_k,
+        max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale, False, causal, None)
+    # if dk.isnan().any() or dk.isnan().any() or dv.isnan().any() or softmax_d.isnan().any():
     #     breakpoint()
-    return dqkv
+    return dq, dk, dv, softmax_d
+
+
+class FlashAttnQKVPackedFunc(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, qkv, cu_seqlens, max_seqlen, dropout_p, softmax_scale, causal, return_softmax):
+        # Save rng_state because the backward pass will regenerate the dropout mask
+        rng_state = torch.cuda.get_rng_state() if dropout_p > 0 else None
+        if softmax_scale is None:
+            softmax_scale = qkv.shape[-1] ** (-0.5)
+        out, softmax_lse, S_dmask = _flash_attn_forward(
+            qkv[:, 0], qkv[:, 1], qkv[:, 2], cu_seqlens, cu_seqlens, max_seqlen, max_seqlen,
+            dropout_p, softmax_scale, causal=causal, return_softmax=return_softmax
+        )
+        ctx.save_for_backward(qkv, out, softmax_lse, cu_seqlens, rng_state)
+        ctx.dropout_p = dropout_p
+        ctx.max_seqlen = max_seqlen
+        ctx.softmax_scale = softmax_scale
+        ctx.causal = causal
+        return out if not return_softmax else (out, softmax_lse, S_dmask)
+
+    @staticmethod
+    def backward(ctx, dout, *args):
+        qkv, out, softmax_lse, cu_seqlens, rng_state = ctx.saved_tensors
+        if rng_state is not None:
+            cur_rng_state = torch.cuda.get_rng_state()
+            torch.cuda.set_rng_state(rng_state)
+        dqkv = torch.empty_like(qkv)
+        _flash_attn_backward(
+            dout, qkv[:, 0], qkv[:, 1], qkv[:, 2], out, softmax_lse,
+            dqkv[:, 0], dqkv[:, 1], dqkv[:, 2], cu_seqlens, cu_seqlens,
+            ctx.max_seqlen, ctx.max_seqlen, ctx.dropout_p, ctx.softmax_scale, ctx.causal
+        )
+        if rng_state is not None:
+            torch.cuda.set_rng_state(cur_rng_state)
+        return dqkv, None, None, None, None, None, None
+
+
+class FlashAttnKVPackedFunc(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, q, kv, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, dropout_p,
+                softmax_scale, causal, return_softmax):
+        # Save rng_state because the backward pass will regenerate the dropout mask
+        rng_state = torch.cuda.get_rng_state() if dropout_p > 0 else None
+        if softmax_scale is None:
+            softmax_scale = q.shape[-1] ** (-0.5)
+        out, softmax_lse, S_dmask = _flash_attn_forward(
+            q, kv[:, 0], kv[:, 1], cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
+            dropout_p, softmax_scale, causal=causal, return_softmax=return_softmax
+        )
+        ctx.save_for_backward(q, kv, out, softmax_lse, cu_seqlens_q, cu_seqlens_k, rng_state)
+        ctx.dropout_p = dropout_p
+        ctx.max_seqlen_q = max_seqlen_q
+        ctx.max_seqlen_k = max_seqlen_k
+        ctx.softmax_scale = softmax_scale
+        ctx.causal = causal
+        return out if not return_softmax else (out, softmax_lse, S_dmask)
+
+    @staticmethod
+    def backward(ctx, dout, *args):
+        q, kv, out, softmax_lse, cu_seqlens_q, cu_seqlens_k, rng_state = ctx.saved_tensors
+        if rng_state is not None:
+            cur_rng_state = torch.cuda.get_rng_state()
+            torch.cuda.set_rng_state(rng_state)
+        dq = torch.empty_like(q)
+        dkv = torch.empty_like(kv)
+        _flash_attn_backward(
+            dout, q, kv[:, 0], kv[:, 1], out, softmax_lse,
+            dq, dkv[:, 0], dkv[:, 1], cu_seqlens_q, cu_seqlens_k,
+            ctx.max_seqlen_q, ctx.max_seqlen_k, ctx.dropout_p, ctx.softmax_scale, ctx.causal
+        )
+        if rng_state is not None:
+            torch.cuda.set_rng_state(cur_rng_state)
+        return dq, dkv, None, None, None, None, None, None, None, None
 
 
 class FlashMHAFun(torch.autograd.Function):
@@ -64,7 +169,7 @@ class FlashMHAFun(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, qkv, cu_seqlens, dropout_p, max_s, softmax_scale, causal):
-    # def forward(ctx, qkv, cu_seqlens, p_dropout, max_s, is_training):
+        # def forward(ctx, qkv, cu_seqlens, p_dropout, max_s, is_training):
         # Save rng_state because the backward pass will regenerate the dropout mask
         rng_state = torch.cuda.get_rng_state() if dropout_p > 0 else None
 
@@ -99,7 +204,6 @@ class FlashMHAFun(torch.autograd.Function):
         return dqkv, None, None, None, None, None, None
 
 
-
 def _cast_if_autocast_enabled(*args):
     if not torch.is_autocast_enabled():
         return args
@@ -114,9 +218,13 @@ if flash_attn_cuda is not None:
     def flash_bert_mha(*args):
         args = _cast_if_autocast_enabled(*args)
         with torch.cuda.amp.autocast(enabled=False):
-            return FlashMHAFun.apply(*args)
+            return FlashAttnQKVPackedFunc.apply(*args)
+
+    def flash_encdec_mha(*args):
+        args = _cast_if_autocast_enabled(*args)
+        with torch.cuda.amp.autocast(enabled=False):
+            return FlashAttnKVPackedFunc.apply(*args)
 
 else:
     flash_bert_mha = None
-
-
+    flash_encdec_mha = None

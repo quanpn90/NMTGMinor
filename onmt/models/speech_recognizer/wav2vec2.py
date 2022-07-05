@@ -842,7 +842,8 @@ class Wav2vecBERT(Wav2vecTransformer):
 
             src_attention_mask = src_attention_mask  # new version
             # tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
-            tgt_attention_mask = tgt.new(*tgt.size()).fill_(1)
+            # tgt_attention_mask = tgt.new(*tgt.size()).fill_(1)
+            tgt_attention_mask = batch.get('target_input_selfattn_mask')
 
             decoder_outputs = self.decoder(input_ids=tgt,
                                            attention_mask=tgt_attention_mask,

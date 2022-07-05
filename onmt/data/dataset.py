@@ -159,6 +159,7 @@ def collate_fn(src_data, tgt_data,
         target_full = target_full.t().contiguous()  # transpose BxT to TxB
         tensors['target'] = target_full
         tensors['target_input'] = target_full[:-1]
+        tensors['target_input_selfattn_mask'] = tensors['target_input'].transpose(0, 1).eq(tgt_pad)
         tensors['target_output'] = target_full[1:]
         if target_pos is not None:
             tensors['target_pos'] = target_pos.t().contiguous()[:-1]

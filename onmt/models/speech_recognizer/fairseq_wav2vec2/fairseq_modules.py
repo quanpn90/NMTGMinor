@@ -804,7 +804,9 @@ class MultiheadAttention(nn.Module):
                     dropout_p = self.dropout_p if self.training else 0.0
                     causal = False
                     softmax_scale = 1.0 / math.sqrt(64)
-                    context = self.fast_bert_mha(qkv, cu_seqlens, dropout_p, max_len, softmax_scale, causal)
+
+                    # False = return softmax
+                    context = self.fast_bert_mha(qkv, cu_seqlens, max_len, dropout_p, softmax_scale, causal, False)
                     coverage = None
 
                     context = context.view(-1, self.num_heads * self.head_dim).contiguous()

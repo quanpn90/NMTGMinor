@@ -13,13 +13,13 @@ namespace fmha {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <int ROWS, int THREADS_PER_ROW, int M, typename Gmem_softmax_sum>
-inline __device__ void dot_do_o(const uint4 (&do_)[M], const uint4 (&o)[M],
+inline __device__ void dot_do_o(const uint4 (&do_)[M], const uint4 (&o)[M], const float scale,
                                 Gmem_softmax_sum gmem_softmax_d, int tidx) {
     float sum[M];
     fmha::SumOp<float> sum_op;
     #pragma unroll
     for (int mi = 0; mi < M; ++mi) {
-        sum[mi] = fmha::Allreduce<THREADS_PER_ROW>::run(fmha::hmulsum8(do_[mi], o[mi]), sum_op);
+        sum[mi] = fmha::Allreduce<THREADS_PER_ROW>::run(fmha::hmulsum8(do_[mi], o[mi]), sum_op) * scale;
     }
     const int dp_sum_row = tidx / THREADS_PER_ROW;
     if ((dp_sum_row < ROWS) && (tidx % THREADS_PER_ROW == 0)) {
@@ -80,8 +80,7 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
     using Gmem_tile_o = Gmem_tile_do;
 
     // The global memory tile to store dQ.
-    // using Gmem_tile_dq = typename Kernel_traits::Gmem_tile_dq;
-    using Gmem_tile_dq = fmha::Gmem_tile_dq<Cta_tile_dq>;
+    using Gmem_tile_dq = typename Kernel_traits::Gmem_tile_o;
     using Gmem_tile_dq_tmp = fmha::Gmem_tile_o<Cta_tile_dq, 4>;
     // The shared memory tile to swizzle dQ.
     using Smem_tile_dq = typename Kernel_traits::Smem_tile_o;
@@ -120,9 +119,9 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
 
 
     // The block index for the batch.
-    const int bidb = blockIdx.y;
+    const int bidb = blockIdx.x;
     // The block index for the head.
-    const int bidh = blockIdx.x;
+    const int bidh = blockIdx.y;
     // The thread index.
     const int tidx = threadIdx.x;
 
@@ -132,19 +131,19 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
 
     Gemm1 gemm_q_k(&smem_[Smem_tile_do::BYTES_PER_TILE], tidx);
     // Allocate the global memory tile loader for Q.
-    Gmem_tile_q gmem_q(params, 0, binfo, tidx);
+    Gmem_tile_q gmem_q(params.q_ptr, params.q_row_stride_in_elts, params.q_head_stride_in_elts, binfo, tidx, true);
     // Allocate the global memory tile loader for dQ.
-    Gmem_tile_dq gmem_dq(params, 0, binfo, tidx);
-    Gmem_tile_dq_tmp gmem_dq_tmp(params.o_tmp_ptr, params.o_stride_in_elts, binfo, tidx);
+    Gmem_tile_dq gmem_dq(params.dq_ptr, params.dq_row_stride_in_elts, params.dq_head_stride_in_elts, binfo, tidx);
+    Gmem_tile_dq_tmp gmem_dq_tmp(params.o_tmp_ptr, params.o_row_stride_in_elts, params.o_head_stride_in_elts, binfo, tidx);
     // Allocate the global memory tile loader for S.
     Gmem_tile_s gmem_s(params, binfo, tidx);
 
     fmha::Mask<Cta_tile_p, Is_causal> mask(binfo, tidx, loop_step_idx);
 
     // Allocate the global memory tile loader for K.
-    Gmem_tile_k gmem_k(params, 1, binfo, tidx);
+    Gmem_tile_k gmem_k(params.k_ptr, params.k_row_stride_in_elts, params.k_head_stride_in_elts, binfo, tidx, false);
     // Allocate the global memory tile loader for V.
-    Gmem_tile_v gmem_v(params, 2, binfo, tidx);
+    Gmem_tile_v gmem_v(params.v_ptr, params.v_row_stride_in_elts, params.v_head_stride_in_elts, binfo, tidx, false);
     // The base pointer of smem_v;
     char *smem_v_ = &smem_[Smem_tile_do::BYTES_PER_TILE + Gemm1::SMEM_OFFSET_V];
 
@@ -154,7 +153,7 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
     Smem_tile_kt smem_kt(&smem_[Smem_tile_do::BYTES_PER_TILE + Gemm1::Smem_tile_q::BYTES_PER_TILE], tidx);
 
     // Allocate the global memory tile loader for dO.
-    Gmem_tile_do gmem_do(params.do_ptr, params, binfo, tidx);
+    Gmem_tile_do gmem_do(params.do_ptr, params.o_row_stride_in_elts, params.o_head_stride_in_elts, binfo, tidx, true);
     // Allocate the shared memory tile loader for dO.
     Smem_tile_do smem_do(&smem_[0], tidx);
     Smem_tile_dot smem_dot(&smem_[0], tidx);
@@ -166,7 +165,7 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
     Smem_tile_st smem_dp(&smem_[Smem_tile_do::BYTES_PER_TILE + Gemm1::SMEM_OFFSET_O + Smem_tile_dq::BYTES_PER_TILE + Smem_tile_st::BYTES_PER_TILE], tidx);
 
     // Allocate the global memory tile loader for O.
-    Gmem_tile_o gmem_o(params.o_ptr, params, binfo, tidx);
+    Gmem_tile_o gmem_o(params.o_ptr, params.o_row_stride_in_elts, params.o_head_stride_in_elts, binfo, tidx, true);
 
     // Allocate the shared memory tile loader for O. We use the same as K so be careful!!!
     Smem_tile_dq smem_dq(&smem_[Smem_tile_do::BYTES_PER_TILE + Gemm1::SMEM_OFFSET_O], tidx);
@@ -176,8 +175,7 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
 
     static_assert(Cta_tile_p::N % Cta_tile_p::M == 0);
     const int begin = Is_causal ? loop_step_idx * Cta_tile_p::N / Cta_tile_p::M : 0;
-    // constexpr int steps = Cta_tile_p::N / Cta_tile_p::M;
-    const int steps = params.s / Cta_tile_p::M - begin;
+    const int steps = (params.seqlen_q + Cta_tile_p::M - 1) / Cta_tile_p::M - begin;
 
     // Wind gmem tiles to the correct position.
     gmem_q.move(begin);
@@ -215,18 +213,18 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
     gmem_do.commit(smem_do);
     if (Is_first) {
         dot_do_o<Gmem_tile_do::ROWS, Gmem_tile_do::THREADS_PER_ROW>(
-            gmem_do.fetch_, gmem_o.fetch_, gmem_softmax_d, tidx
+            gmem_do.fetch_, gmem_o.fetch_, params.p_dropout, gmem_softmax_d, tidx
         );
     }
 
-    // Instead of scaling dP by rp_dropout, we scale V instead
-    if (Is_dropout) {
-        const uint32_t scale_dropout = params.scale_dropout;
-        #pragma unroll
-        for(int it=0; it < Gmem_tile_v::LDGS; it++){
-            gmem_v.fetch_[it] = fmha::hmul8(scale_dropout, gmem_v.fetch_[it]);
-        }
-    }
+    // // Instead of scaling dP by rp_dropout, we scale V instead
+    // if (Is_dropout) {
+    //     const uint32_t scale_dropout = params.scale_dropout;
+    //     #pragma unroll
+    //     for(int it=0; it < Gmem_tile_v::LDGS; it++){
+    //         gmem_v.fetch_[it] = fmha::hmul8(scale_dropout, gmem_v.fetch_[it]);
+    //     }
+    // }
 
     gmem_v.commit(smem_v);
 
@@ -295,7 +293,7 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
     // Load over the entire sequence length.
     for( int l = 0; l < steps; l++ ) {
         const int loop = (begin + l) * Cta_tile_p::M;
-        if( loop >= binfo.actual_seqlen )
+        if( loop >= binfo.actual_seqlen_q )
             break;
 
         // Load the fragments for V.
@@ -391,6 +389,24 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
             }
         }
 
+        auto pointwise_mult = [](float p, float dp, float d) {
+            return p * ((!Is_dropout) || p >= 0.f ? dp : d);
+        };
+        #pragma unroll
+        for (int mi = 0; mi < Mma_tile_p::MMAS_M; mi++) {
+            #pragma unroll
+            for (int ni = 0; ni < Mma_tile_p::MMAS_N; ni++) {
+                softmax.elt_[2 * mi + 0][4 * ni + 0] = pointwise_mult(softmax.elt_[2 * mi + 0][4 * ni + 0], acc_dp[mi][ni].elt(0), dp_sum[2 * mi + 0]);
+                softmax.elt_[2 * mi + 0][4 * ni + 1] = pointwise_mult(softmax.elt_[2 * mi + 0][4 * ni + 1], acc_dp[mi][ni].elt(1), dp_sum[2 * mi + 0]);
+                softmax.elt_[2 * mi + 0][4 * ni + 2] = pointwise_mult(softmax.elt_[2 * mi + 0][4 * ni + 2], acc_dp[mi][ni].elt(4), dp_sum[2 * mi + 0]);
+                softmax.elt_[2 * mi + 0][4 * ni + 3] = pointwise_mult(softmax.elt_[2 * mi + 0][4 * ni + 3], acc_dp[mi][ni].elt(5), dp_sum[2 * mi + 0]);
+                softmax.elt_[2 * mi + 1][4 * ni + 0] = pointwise_mult(softmax.elt_[2 * mi + 1][4 * ni + 0], acc_dp[mi][ni].elt(2), dp_sum[2 * mi + 1]);
+                softmax.elt_[2 * mi + 1][4 * ni + 1] = pointwise_mult(softmax.elt_[2 * mi + 1][4 * ni + 1], acc_dp[mi][ni].elt(3), dp_sum[2 * mi + 1]);
+                softmax.elt_[2 * mi + 1][4 * ni + 2] = pointwise_mult(softmax.elt_[2 * mi + 1][4 * ni + 2], acc_dp[mi][ni].elt(6), dp_sum[2 * mi + 1]);
+                softmax.elt_[2 * mi + 1][4 * ni + 3] = pointwise_mult(softmax.elt_[2 * mi + 1][4 * ni + 3], acc_dp[mi][ni].elt(7), dp_sum[2 * mi + 1]);
+            }
+        }
+
         // Load the fragments for K^T.
         typename Smem_tile_kt::Fragment frag_kt[2][Mma_tile_dq::MMAS_N];
         smem_kt.load(frag_kt[0], 0);
@@ -406,46 +422,7 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
             }
         }
 
-        softmax.unpack_noscale(acc_dp);
-        // // TD [2022-04-01]: Don't need to apply mask since the corresponding value in softmax
-        // // will be zero.
-        // for (int mi = 0; mi < Mma_tile_p::MMAS_M * 2; mi++) { dp_sum[mi] *= params.p_dropout; }
-
-        Frag_p frag_dp[Mma_tile_dq::MMAS_K][Mma_tile_dq::MMAS_M];
-        softmax.pack(frag_dp);
-
-        if (!Is_dropout) {
-            #pragma unroll
-            for( int mi = 0; mi < Mma_tile_p::MMAS_M; mi++ ) {
-                #pragma unroll
-                for( int ni = 0; ni < Mma_tile_p::MMAS_N; ni++ ) {
-                    frag_p[mi][ni].hmul(frag_dp[mi][ni]);
-                }
-            }
-        } else {
-            __half2 dp_sum_half[Mma_tile_p::MMAS_M * 2];
-            for (int mi = 0; mi < Mma_tile_p::MMAS_M * 2; mi++) {
-                dp_sum_half[mi] = __float2half2_rn(dp_sum[mi]);
-            }
-            const __half zero_h = __half(0.f);
-            #pragma unroll
-            for( int mi = 0; mi < Mma_tile_p::MMAS_M; mi++ ) {
-                #pragma unroll
-                for( int ni = 0; ni < Mma_tile_p::MMAS_N; ni++ ) {
-                    #pragma unroll
-                    for (int ii = 0; ii < 4; ++ii) {
-                        const __half2 p = frag_p[mi][ni].template elt_as<__half2>(ii);
-                        const __half2 pdp = __hmul2(p, frag_dp[mi][ni].template elt_as<__half2>(ii));
-                        // If this element is dropped, then frag_p stores -p instead of p.
-                        // So pd holds -p * dp_sum in that case.
-                        const __half2 pd = __hmul2(p, dp_sum_half[mi * 2 + (ii % 2)]);
-                        const __half low = __low2half(p) >= zero_h ? __low2half(pdp) : __low2half(pd);
-                        const __half high = __high2half(p) >= zero_h ? __high2half(pdp) : __high2half(pd);
-                        frag_p[mi][ni].template elt_as<__half2>(ii) = __halves2half2(low, high);
-                    }
-                }
-            }
-        }
+        softmax.pack(frag_p);
 
         // Store dp to smem for transpose
         smem_dp.store(frag_p);
@@ -476,6 +453,9 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
         static_assert(Gmem_tile_dq::LOOPS == 1);
 
         // Swizzle the elements and do the final reduction.
+        // Need to syncthreads here, otherwise the smem_dq reads from the previous iteration
+        // might happen after the smem_dq writes in this iteration.
+        __syncthreads();
         smem_dq.store(acc_dq, 0);
 
         typename Smem_tile_dot::Fragment frag_dot[2][Mma_tile_dkv::MMAS_N];
@@ -512,6 +492,17 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
             fmha::gemm_cl(acc_dv, frag_s[(ki - 1)], frag_dot[(ki - 1) & 1]);
         }
 
+        // if ((threadIdx.x == 0) && (blockIdx.x == 0) && (blockIdx.y == 0))  {
+        //     float2 tmp0 = __half22float2(reinterpret_cast<__half2 &>(frag_dot[0][0]));
+        //     printf("frag_dot[0][0]=%.6f, %.6f\n", tmp0.x, tmp0.y);
+        //     float2 tmp1 = __half22float2(reinterpret_cast<__half2 &>(frag_dot[0][1]));
+        //     printf("frag_dot[0][1]=%.6f, %.6f\n", tmp1.x, tmp1.y);
+        // }
+
+        // if ((threadIdx.x == 0) && (blockIdx.x == 0) && (blockIdx.y == 0))  {
+        //     printf("l = %d, acc_dv[0][0]=%.6f, %.6f\n", l, acc_dv[0][0].elt(2), acc_dv[0][0].elt(3));
+        //     printf("l = %d, acc_dv[0][1]=%.6f, %.6f\n", l, acc_dv[0][1].elt(2), acc_dv[0][1].elt(3));
+        // }
         // __syncthreads();
         // Commit the values for Q and dO into shared memory.
         if(l < steps - 1) {
@@ -527,7 +518,7 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
             gmem_do.commit(smem_do);
             if (Is_first) {
                 dot_do_o<Gmem_tile_do::ROWS, Gmem_tile_do::THREADS_PER_ROW>(
-                    gmem_do.fetch_, gmem_o.fetch_, gmem_softmax_d, tidx
+                    gmem_do.fetch_, gmem_o.fetch_, params.p_dropout, gmem_softmax_d, tidx
                 );
             }
             gmem_softmax_lse.load(reinterpret_cast<uint32_t(&)[Mma_tile_p::MMAS_M * 2]>(p_lse));
@@ -571,13 +562,16 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
 
         const bool is_final_write =
             Is_last
-            || ((loop_step_idx + 1) * Cta_tile_p::N >= binfo.actual_seqlen)
+            || ((loop_step_idx + 1) * Cta_tile_p::N >= binfo.actual_seqlen_k)
             || ((Is_causal) && ((begin + l) * Cta_tile_p::M < (loop_step_idx + 1) * Cta_tile_p::N));
         if (is_final_write) {
             // if (Is_dropout) {
             //     dq_out[0] = fmha::fmul4(dq_out[0], params.rp_dropout);
             // }
-            dq_out[0] = fmha::fmul4(dq_out[0], params.scale_bmm1f);
+            for (int jj = 0; jj < Gmem_tile_dq::STGS_PER_LOOP; ++jj) {
+                // dq_out[jj] = fmha::fmul4(dq_out[jj], params.scale_bmm1f);
+                dq_out[jj] = fmha::fmul4(dq_out[jj], params.scale_bmm1_rp_dropout);
+            }
             // Output the values.
             gmem_dq.store(dq_out, 0);
             // Move to the next part of the output.
@@ -614,12 +608,14 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
         }
     }
     // if ((threadIdx.x == 0) && (blockIdx.x == 0) && (blockIdx.y == 0))  {
-    //     printf("l final, acc_dk=%.6f, %.6f\n", acc_dk[0][0].elt(0), acc_dk[0][0].elt(1));
+    //     printf("l final, acc_dv[0][0]=%.6f, %.6f\n", acc_dv[0][0].elt(2), acc_dv[0][0].elt(3));
+    //     printf("l final, acc_dv[0][1]=%.6f, %.6f\n", acc_dv[0][1].elt(2), acc_dv[0][1].elt(3));
     // }
     for( int mi = 0; mi < Mma_tile_dkv::MMAS_M; mi++ ) {
         for( int ni = 0; ni < Mma_tile_dkv::MMAS_N; ni++ ) {
             // acc_dk[mi][ni].mul_(Is_dropout ? params.rp_dropout * params.scale_bmm1f : params.scale_bmm1f);
-            acc_dk[mi][ni].mul_(params.scale_bmm1f);
+            // acc_dk[mi][ni].mul_(params.scale_bmm1f);
+            acc_dk[mi][ni].mul_(params.scale_bmm1_rp_dropout);
         }
     }
     // if ((threadIdx.x == 0) && (blockIdx.x == 0) && (blockIdx.y == 0))  {
@@ -640,11 +636,7 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
     __syncthreads();
     uint4 dv_out[Smem_tile_dv::NUM_LDS];
     smem_dv.load(dv_out);
-    Qkv_params dv_params;
-    dv_params.qkv_ptr = params.dqkv_ptr;
-    dv_params.qkv_stride_in_bytes = params.qkv_stride_in_bytes;
-    dv_params.h = params.h;
-    Gmem_tile_dv gmem_dv(dv_params, 2, binfo, tidx);
+    Gmem_tile_dv gmem_dv(params.dv_ptr, params.dv_row_stride_in_elts, params.dv_head_stride_in_elts, binfo, tidx, false);
     if (!Is_first) {
         gmem_dv.move(loop_step_idx);
     }
@@ -655,11 +647,7 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
     // for (int ii = 0; ii < Smem_tile_dk::NUM_LDS; ++ii) {
     //     dk_out[ii] = fmha::fmul4(dk_out[ii], params.scale_bmm1f);
     // }
-    Qkv_params dk_params;
-    dk_params.qkv_ptr = params.dqkv_ptr;
-    dk_params.qkv_stride_in_bytes = params.qkv_stride_in_bytes;
-    dk_params.h = params.h;
-    Gmem_tile_dk gmem_dk(dk_params, 1, binfo, tidx);
+    Gmem_tile_dk gmem_dk(params.dk_ptr, params.dk_row_stride_in_elts, params.dk_head_stride_in_elts, binfo, tidx, false);
     if (!Is_first) {
         gmem_dk.move(loop_step_idx);
     }
@@ -668,16 +656,16 @@ inline __device__ void compute_dq_dk_dv_1xN_one_iter(const Params &params, Prng 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// loop_steps = -1 means the number of steps will be params.s / Kernel_traits::Cta_tile_p::N.
+// loop_steps = -1 means the number of steps will be params.seqlen_k / Kernel_traits::Cta_tile_p::N.
 // This template parameter is there so we can specialize with loop_steps == 1 and loop_steps == 2.
 template<typename Kernel_traits, bool Is_dropout, bool Is_causal, int loop_steps=-1, typename Params>
 inline __device__ void compute_dq_dk_dv_1xN(const Params &params) {
-    constexpr int N_per_loop = Kernel_traits::Cta_tile_p::N;
+    constexpr int blocksize_c = Kernel_traits::Cta_tile_p::N;
 
     // The block index for the batch.
-    const int bidb = blockIdx.y;
+    const int bidb = blockIdx.x;
     // The block index for the head.
-    const int bidh = blockIdx.x;
+    const int bidh = blockIdx.y;
     // The thread index.
     const int tidx = threadIdx.x;
 
@@ -691,10 +679,10 @@ inline __device__ void compute_dq_dk_dv_1xN(const Params &params) {
         compute_dq_dk_dv_1xN_one_iter<Kernel_traits, Is_dropout, Is_causal, true, false>(params, ph, 0);
         compute_dq_dk_dv_1xN_one_iter<Kernel_traits, Is_dropout, Is_causal, false, true>(params, ph, 1);
     } else {
-        if (params.s == N_per_loop) {
+        if (params.seqlen_k == blocksize_c) {
             compute_dq_dk_dv_1xN_one_iter<Kernel_traits, Is_dropout, Is_causal, true, true>(params, ph, 0);
         } else {
-            const int max_loop_steps = (params.s + N_per_loop - 1) / N_per_loop;
+            const int max_loop_steps = (params.seqlen_k + blocksize_c - 1) / blocksize_c;
             compute_dq_dk_dv_1xN_one_iter<Kernel_traits, Is_dropout, Is_causal, true, false>(params, ph, 0);
             for (int loop_step_idx = 1; loop_step_idx < max_loop_steps - 1; loop_step_idx++) {
                 compute_dq_dk_dv_1xN_one_iter<Kernel_traits, Is_dropout, Is_causal, false, false>(params, ph, loop_step_idx);

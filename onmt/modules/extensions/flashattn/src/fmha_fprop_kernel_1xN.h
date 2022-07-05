@@ -247,10 +247,10 @@ inline __device__ void device_1xN_(const Params &params, const int bidb, const i
 
     Gemm1 gemm_q_k(smem_, tidx);
     // Allocate the global memory tile loader for Q.
-    Gmem_tile_q gmem_q(params, 0, binfo, tidx);
+    Gmem_tile_q gmem_q(params.q_ptr, params.q_row_stride_in_elts, params.q_head_stride_in_elts, binfo, tidx, true);
     // Allocate the global memory tile loader for O.
-    Gmem_tile_o gmem_o(params, binfo, tidx);
-    Gmem_tile_o_tmp gmem_o_tmp(params.o_tmp_ptr, params.o_stride_in_elts, binfo, tidx);
+    Gmem_tile_o gmem_o(params.o_ptr, params.o_row_stride_in_elts, params.o_head_stride_in_elts, binfo, tidx);
+    Gmem_tile_o_tmp gmem_o_tmp(params.o_tmp_ptr, params.o_row_stride_in_elts, params.o_head_stride_in_elts, binfo, tidx);
     // Allocate the global memory tile loader for S.
     Gmem_tile_s gmem_s(params, binfo, tidx);
     Gmem_softmax_sum gmem_softmax_lse(params.softmax_lse_ptr, params, tidx);
@@ -273,9 +273,9 @@ inline __device__ void device_1xN_(const Params &params, const int bidb, const i
     fmha::Mask<Cta_tile_p, Is_causal> mask(binfo, tidx, loop_step_idx);
 
     // Allocate the global memory tile loader for K.
-    Gmem_tile_k gmem_k(params, 1, binfo, tidx);
+    Gmem_tile_k gmem_k(params.k_ptr, params.k_row_stride_in_elts, params.k_head_stride_in_elts, binfo, tidx, false);
     // Allocate the global memory tile loader for V.
-    Gmem_tile_v gmem_v(params, 2, binfo, tidx);
+    Gmem_tile_v gmem_v(params.v_ptr, params.v_row_stride_in_elts, params.v_head_stride_in_elts, binfo, tidx, false);
     // The base pointer of smem_v;
     char *smem_v_ = &smem_[Gemm1::SMEM_OFFSET_V];
     
@@ -354,7 +354,7 @@ inline __device__ void device_1xN_(const Params &params, const int bidb, const i
 
     // Load over the entire sequence length.
     for( int l = 0; l < steps; l++ ) {
-        if((begin + l) * Cta_tile_p::M >= binfo.actual_seqlen) break;
+        if((begin + l) * Cta_tile_p::M >= binfo.actual_seqlen_q) break;
 
         // Declare the accumulators for the 1st gemm.
         fmha::Fragment_accumulator acc_p[Mma_tile_p::MMAS_M][Mma_tile_p::MMAS_N];
@@ -382,8 +382,6 @@ inline __device__ void device_1xN_(const Params &params, const int bidb, const i
         // Apply the mask.
         softmax.apply_mask(mask);
 
-        // softmax.unpack_noscale_half_and_apply_mask(acc_p, mask);
-
         if( Kernel_traits::SHARE_SMEM_FOR_K_AND_V && l == 0 ) {
             // if we share K and V, it could be that V was not fully read yet but we write into smem for reduction
             __syncthreads();
@@ -408,7 +406,6 @@ inline __device__ void device_1xN_(const Params &params, const int bidb, const i
             }
         }
 
-        // __half2 p_max[Mma_tile_p::MMAS_M];
         softmax.template reduce_max</*zero_init=*/Is_first>(p_max);
 
         // if ((threadIdx.x == 0) && (l == 38)) {
@@ -498,10 +495,19 @@ inline __device__ void device_1xN_(const Params &params, const int bidb, const i
         #pragma unroll
         for( int ki = 0; ki < Mma_tile_o::MMAS_K; ++ki ) {
             fmha::gemm_cl(acc_o, frag_p[ki], frag_v[ki]);
+            // if ((threadIdx.x == 4) && (blockIdx.x == 0) && (blockIdx.y == 0) && (l == 0))  {
+            //     float2 tmp_p = __half22float2(reinterpret_cast<__half2 &>(frag_p[ki]));
+            //     float2 tmp_v = __half22float2(reinterpret_cast<__half2 &>(frag_v[ki]));
+            //     printf("Per warp, threadIdx.x = %d, frag_p = %.6f, %.6f, frag_v = %.6f, %.6f, acc_o=%.6f\n", threadIdx.x, tmp_p.x, tmp_p.y, tmp_v.x, tmp_v.y, acc_o[0][0].elt(0));
+            // }
         }
 
-        // The mapping from tidx to rows changes between the softmax and the O-reduction.
-        // So we recalculate the max.
+        // if ((threadIdx.x % 32 == 16) && (blockIdx.x == 0) && (blockIdx.y == 0) && (l == 0))  {
+        //     printf("Per warp, threadIdx.x = %d, acc_o=%.6f\n", threadIdx.x, acc_o[0][2].elt(0));
+        // }
+
+        // The mapping from tidx to rows changes between the softmax and the
+        // O-reduction. So we recalculate the max.
         float p_max_o[Gmem_tile_o::STGS_PER_LOOP][Mma_tile_o::MMAS_M];
         // TODO: not sure if this is right for seqlen 128 or 256
         int rows[Gmem_tile_o::STGS_PER_LOOP];
@@ -569,7 +575,7 @@ inline __device__ void device_1xN_(const Params &params, const int bidb, const i
 
         const bool is_final_write =
             Is_last
-            || ((loop_step_idx + 1) * Cta_tile_p::N >= binfo.actual_seqlen)
+            || ((loop_step_idx + 1) * Cta_tile_p::N >= binfo.actual_seqlen_k)
             || ((Is_causal) && ((begin + l) * Cta_tile_p::M < (loop_step_idx + 1) * Cta_tile_p::N));
         #pragma unroll
         for (int jj = 0; jj < Gmem_tile_o::STGS_PER_LOOP; jj++) {
@@ -615,9 +621,9 @@ template<typename Kernel_traits, bool Is_dropout, bool Is_causal, bool Return_so
 inline __device__ void device_1xN_loop(const Params &params) {
 
     // The block index for the batch.
-    const int bidb = blockIdx.y;
+    const int bidb = blockIdx.x;
     // The block index for the head.
-    const int bidh = blockIdx.x;
+    const int bidh = blockIdx.y;
     // The thread index.
     const int tidx = threadIdx.x;
 
@@ -625,13 +631,14 @@ inline __device__ void device_1xN_loop(const Params &params) {
     auto seeds = at::cuda::philox::unpack(params.philox_args);
     Philox ph0(std::get<0>(seeds), tidx_global, std::get<1>(seeds));
     Philox ph1(std::get<0>(seeds), tidx_global + blockDim.x, std::get<1>(seeds));
-    const int STEPS = params.s / Kernel_traits::Cta_tile_p::M;
+    constexpr int M = Kernel_traits::Cta_tile_p::M;
+    const int STEPS = (params.seqlen_q + M - 1) / M;
 
-    constexpr int N_per_loop = Kernel_traits::Cta_tile_p::N;
-    if (params.s == N_per_loop) {
+    constexpr int blocksize_c = Kernel_traits::Cta_tile_p::N;
+    if (params.seqlen_k == blocksize_c) {
         fmha::device_1xN_<Kernel_traits, Is_dropout, Is_causal, Return_softmax, true, true>(params, bidb, bidh, 0, STEPS, ph0, ph1, 0);
     } else {
-        const int max_loop_steps = (params.s + N_per_loop - 1) / N_per_loop;
+        const int max_loop_steps = (params.seqlen_k + blocksize_c - 1) / blocksize_c;
         fmha::device_1xN_<Kernel_traits, Is_dropout, Is_causal, Return_softmax, true, false>(params, bidb, bidh, 0, STEPS, ph0, ph1, 0);
         for (int loop_step_idx = 1; loop_step_idx < max_loop_steps - 1; loop_step_idx++) {
             fmha::device_1xN_<Kernel_traits, Is_dropout, Is_causal, Return_softmax, false, false>(params, bidb, bidh, 0, STEPS, ph0, ph1, loop_step_idx);
