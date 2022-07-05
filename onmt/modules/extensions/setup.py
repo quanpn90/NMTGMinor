@@ -311,33 +311,6 @@ if bare_metal_minor >= 5 and bare_metal_major >= 11:
                                                    '--use_fast_math'] + version_dependent_macros +
                                                   generator_flag}))
 
-# obsolete algorithm
-# # check build if sm80
-# ext_modules.append(
-#     CUDAExtension(name='fmhalib',
-#                   sources=[
-#                       'fmha/fmha_api.cpp',
-#                       'fmha/linear_cuda.cu',
-#                       'fmha/src/fmha_noloop_reduce.cu',
-#                       'fmha/src/fmha_fprop_fp16_128_64_kernel.sm80.cu',
-#                       'fmha/src/fmha_fprop_fp16_256_64_kernel.sm80.cu',
-#                       'fmha/src/fmha_fprop_fp16_384_64_kernel.sm80.cu',
-#                       'fmha/src/fmha_fprop_fp16_512_64_kernel.sm80.cu',
-#                       'fmha/src/fmha_dgrad_fp16_128_64_kernel.sm80.cu',
-#                       'fmha/src/fmha_dgrad_fp16_256_64_kernel.sm80.cu',
-#                       'fmha/src/fmha_dgrad_fp16_384_64_kernel.sm80.cu',
-#                       'fmha/src/fmha_dgrad_fp16_512_64_kernel.sm80.cu',
-#                   ],
-#                   extra_compile_args={'cxx': ['-O3',
-#                                               ] + version_dependent_macros + generator_flag,
-#                                       'nvcc': ['-O3',
-#                                                '-gencode', 'arch=compute_80,code=sm_80',
-#                                                '-U__CUDA_NO_HALF_OPERATORS__',
-#                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
-#                                                '--expt-relaxed-constexpr',
-#                                                '--expt-extended-lambda',
-#                                                '--use_fast_math'] + version_dependent_macros + generator_flag},
-#                   include_dirs=[os.path.join(this_dir, "fmha/src")]))
 
 setup(
     name='nmtgminor_cuda',

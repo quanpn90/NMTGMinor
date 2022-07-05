@@ -1947,12 +1947,6 @@ class MBartDecoder(MBartPreTrainedModel):
         attention_mask = torch.triu(
             inputs_embeds.new_ones(qlen, klen), diagonal=1).bool()
 
-        # expand encoder attention mask
-        if encoder_hidden_states is not None and encoder_attention_mask is not None:
-            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            # encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
-            encoder_attention_mask = encoder_attention_mask
-
         # embed positions
         positions = self.embed_positions(input_shape, past_key_values_length)
 
@@ -1968,11 +1962,6 @@ class MBartDecoder(MBartPreTrainedModel):
         all_cross_attentions = () if (output_attentions and encoder_hidden_states is not None) else None
         # next_decoder_cache = () if use_cache else None
         contrastive_loss = 0
-
-        if encoder_hidden_states is not None and encoder_attention_mask is not None:
-            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            # encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1])
-            encoder_attention_mask = encoder_attention_mask
 
         if self.fast_bert_mha is not None and hidden_states.dtype == torch.half:
             can_run_fast_bert_mha = True
@@ -2018,11 +2007,11 @@ class MBartDecoder(MBartPreTrainedModel):
             a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
             cu_seqlens_kv = torch.cumsum(a, 0).to(dtype=torch.int32, device=encoder_hidden_states.device)
 
-            # print(len(cu_seqlens_kv), len(cu_seqlens), max_len, max_len_kv)
         else:
             max_len, cu_seqlens = None, None
             max_len_kv, cu_seqlens_kv = None, None
             non_pad_indices_q = None
+            can_run_fast_bert_mha = False
 
             hidden_states = hidden_states.transpose(0, 1).contiguous()
 
