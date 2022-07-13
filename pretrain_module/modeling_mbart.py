@@ -1963,6 +1963,7 @@ class MBartDecoder(MBartPreTrainedModel):
         # next_decoder_cache = () if use_cache else None
         contrastive_loss = 0
 
+        self.fast_bert_mha = None
         if self.fast_bert_mha is not None and hidden_states.dtype == torch.half:
             can_run_fast_bert_mha = True
 
@@ -2057,7 +2058,6 @@ class MBartDecoder(MBartPreTrainedModel):
         hidden_states = self.layer_norm(hidden_states)
 
         if can_run_fast_bert_mha:
-
             seq_len = qlen
             hidden_states = index_copy(hidden_states, non_pad_indices_q, bsz * seq_len)
             hidden_states = hidden_states.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
@@ -2133,6 +2133,8 @@ class MBartDecoder(MBartPreTrainedModel):
         #     max_len = seq_len
         # else:
         #     max_len, cu_seqlens = None, None
+        max_len = None
+        cu_seqlens = None
 
         for idx, decoder_layer in enumerate(self.layers):
 
