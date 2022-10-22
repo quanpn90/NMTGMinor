@@ -86,7 +86,13 @@ class WavDataset(torch.utils.data.Dataset):
             else:
                 # read the audio file
                 # print(os.path.exists(wav_path), wav_path)
-                file_ = soundfile.SoundFile(wav_path, 'r')
+
+                try:
+                    file_ = soundfile.SoundFile(wav_path, 'r')
+                except RuntimeError as e:
+
+                    print("Wavpath invalid:", wav_path, os.path.exists(wav_path))
+                    raise e
                 if len(self.cache) > self.cache_size:
                     # remove 1 file from cache based on lowest usage, maybe?
                     min_key = min(self.usage, key=self.usage.get)

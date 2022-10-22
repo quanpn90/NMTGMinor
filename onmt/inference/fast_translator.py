@@ -76,7 +76,7 @@ class FastTranslator(Translator):
                 word = line.strip()
                 word_list.append(word)
 
-            self.filter = torch.Tensor(self.tgt_dict.size()).zero_()
+                self.filter = torch.Tensor(self.tgt_dict.size()).zero_()
             for word_idx in [self.tgt_eos, self.tgt_unk]:
                 self.filter[word_idx] = 1
 

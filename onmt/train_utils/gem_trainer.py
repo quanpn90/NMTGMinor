@@ -1511,3 +1511,17 @@ class Trainer(object):
 
             itr_progress = None
             resume = False
+
+
+# A class for Gradient Episodic Memory trainer
+class GEMTrainer(object):
+
+    def __init__(self, device, train_data, valid_data, dicts, opt, constants=None, setup_optimizer=True):
+
+        # we need past train_data
+        # we need past valid_data???
+
+
+
+
+

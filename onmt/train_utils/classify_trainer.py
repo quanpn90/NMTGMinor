@@ -2,7 +2,7 @@ from __future__ import division
 
 import datetime
 import gc
-import inspect
+import inspect_model
 import math
 import os
 import re
