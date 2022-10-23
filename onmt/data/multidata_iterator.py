@@ -254,10 +254,3 @@ class MultiDataIterator(EpochBatchIterating):
         epoch_iterator = MultiEpochIterator(epoch_iterators, round_robin=self.round_robin)
 
         return epoch_iterator
-
-
-
-
-
-
-

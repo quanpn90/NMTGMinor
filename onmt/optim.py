@@ -3,8 +3,26 @@ import torch
 import torch.optim as optim
 from torch.optim.optimizer import Optimizer
 
+class AdamWrapper(optim.Adam):
+
+    def step(self, closure=None, fake=False):
+
+        if fake:
+            return
+        
+        else:
+            super(AdamWrapper, self).step(closure=closure)
 
 
+class AdamWWrapper(optim.AdamW):
+
+    def step(self, closure=None, fake=False):
+
+        if fake:
+            return
+
+        else:
+            super(AdamWWrapper, self).step(closure=closure)
 
 
 class Adafactor(torch.optim.Optimizer):
@@ -304,10 +322,10 @@ class Optim(object):
 
             if not self.zeror:
                 if self.weight_decay > 0:
-                    self.optimizer = optim.AdamW(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                    self.optimizer = AdamWWrapper(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
                                                  weight_decay=self.weight_decay, amsgrad=self.amsgrad)
                 else:
-                    self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                    self.optimizer = AdamWrapper(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
                                                 weight_decay=0.0, amsgrad=self.amsgrad)
             else:
                 from torch.distributed.optim import ZeroRedundancyOptimizer

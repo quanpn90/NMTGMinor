@@ -60,6 +60,12 @@ def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
     trainer.run(checkpoint=checkpoint)
 
 
+def run_gem_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
+    from onmt.train_utils.gem_trainer import GEMTrainer
+
+    trainer = GEMTrainer(gpu, train_data, valid_data, dicts, opt, constants)
+    trainer.run(checkpoint=checkpoint)
+
 def main():
     if not opt.multi_dataset:
         if opt.data_format in ['bin', 'raw']:
@@ -579,11 +585,19 @@ def main():
     # spawn N processes for N gpus
     # each process has a different trainer
     constants = dill.dumps(onmt.constants)
-    if len(opt.gpus) > 1:
-        torch.multiprocessing.spawn(run_process, nprocs=len(opt.gpus),
-                                    args=(train_data, valid_data, dicts, opt, checkpoint, constants))
+
+    if opt.gem_training:
+        if len(opt.gpus) > 1:
+            torch.multiprocessing.spawn(run_gem_process, nprocs=len(opt.gpus),
+                                        args=(train_data, valid_data, dicts, opt, checkpoint, constants))
+        else:
+            run_gem_process(0, train_data, valid_data, dicts, opt, checkpoint, constants)
     else:
-        run_process(0, train_data, valid_data, dicts, opt, checkpoint, constants)
+        if len(opt.gpus) > 1:
+            torch.multiprocessing.spawn(run_process, nprocs=len(opt.gpus),
+                                        args=(train_data, valid_data, dicts, opt, checkpoint, constants))
+        else:
+            run_process(0, train_data, valid_data, dicts, opt, checkpoint, constants)
 
 
 if __name__ == "__main__":

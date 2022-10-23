@@ -12,10 +12,14 @@ def make_parser(parser):
 
     parser.add_argument('-multi_dataset', action='store_true',
                         help='Reading multiple datasets (sharing the same dictionary)')
+    parser.add_argument('-gem_training', action='store_true',
+                        help='Gradient Episodic Memory training')
     parser.add_argument('-train_sets', default=[], nargs='+', type=int,
-                        help="Use CUDA on the listed devices.")
+                        help="Sets of training data. For example 0 1 2")
     parser.add_argument('-valid_sets', default=[], nargs='+', type=int,
-                        help="Use CUDA on the listed devices.")
+                        help="Sets of validation data.")
+    parser.add_argument('-train_set_orders', default=[], nargs='+', type=int,
+                        help="The order of the training data for gradient episodic memory. For example 0 0 1 1 (must match the number of datasets).")
     parser.add_argument('-run_validation_before_training', action='store_true',
                         help='Run validation before training')
     parser.add_argument('-estimate_fisher_information', action='store_true',

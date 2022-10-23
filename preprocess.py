@@ -522,6 +522,7 @@ def main():
         if 'langs' not in dicts:
             dicts['langs'] = dict()
         else:
+            print(dicts['langs'])
             print("Adding languages to existing dictionary ...")
 
         for lang in langs:
