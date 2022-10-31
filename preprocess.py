@@ -22,6 +22,8 @@ onmt.markdown.add_md_help_argument(parser)
 # **Preprocess Options**
 parser.add_argument('-multi_dataset', action='store_true',
                     help="Save each dataset separately instead of one joined dataset")
+parser.add_argument('-resume', action='store_true',
+                    help="If the dataset is created, ignored and create the next one")
 parser.add_argument('-config', help="Read options from this file")
 
 parser.add_argument('-src_type', default="text",
@@ -706,6 +708,9 @@ def main():
                 save_dataset(path, data, opt.format, dicts, opt.src_type)
                 idx = idx + 1
 
+                del data
+                data = dict()
+
             else:
                 train['src'] += src_data
                 train['tgt'] += tgt_data
@@ -826,6 +831,9 @@ def main():
                 # save data immediately
                 save_dataset(path, data, opt.format, dicts, opt.src_type)
                 idx = idx + 1
+
+                del data
+                data = dict()
             else:
                 valid['src'] += src_data
                 valid['tgt'] += tgt_data
@@ -870,6 +878,14 @@ def main():
         for i, (src_file, tgt_file, src_lang, tgt_lang) in \
                 enumerate(zip(src_input_files, tgt_input_files, src_langs, tgt_langs)):
 
+            data_name = "train.%i.%s-%s" % (idx, src_lang, tgt_lang)
+            dataset_path = os.path.join(dirname(opt.save_data), data_name)
+            if opt.multi_dataset and opt.resume:
+                if os.path.exists(dataset_path):
+                    print("[INFO] Found data %s in the savedir ... Ignoring" % data_name)
+                    idx = idx + 1
+                    continue
+
             src_data, tgt_data, src_sizes, tgt_sizes = make_translation_data(src_file, tgt_file,
                                                                              dicts['src'], dicts['tgt'], tokenizer,
                                                                              max_src_length=opt.src_seq_length,
@@ -883,7 +899,9 @@ def main():
                                                                              tgt_lang=tgt_lang)
 
             n_samples = len(src_data)
-            if n_input_files == 1:
+            #TODO: check
+            # if n_input_files == 1:
+            if n_input_files == 1 or opt.multi_dataset:
                 # For single-file cases we only need to have 1 language per file
                 # which will be broadcasted
                 src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
@@ -927,13 +945,16 @@ def main():
                 print("Saving training set %i %s-%s to disk ..." % (idx, src_lang, tgt_lang))
 
                 # take basedir from opt.save_data
-                path = os.path.join(dirname(opt.save_data), "train.%i.%s-%s" % (idx, src_lang, tgt_lang))
+                path = dataset_path
                 os.makedirs(path, exist_ok=True)
 
                 # save data immediately
                 # TODO: save the prev src as well
                 save_dataset(path, data, opt.format, dicts, opt.src_type)
                 idx = idx + 1
+
+                del data
+                data = dict()
 
             else:
                 train['src'] += src_data
@@ -986,7 +1007,9 @@ def main():
                                                                              tgt_lang=tgt_lang)
 
             n_samples = len(src_data)
-            if n_input_files == 1:
+            #TODO: this has to be changed
+            # if n_input_files == 1:
+            if n_input_files == 1 or opt.multi_dataset:
                 # For single-file cases we only need to have 1 language per file
                 # which will be broadcasted
                 src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
@@ -1233,8 +1256,6 @@ def main():
 
         else:
             raise NotImplementedError
-# >>>>>>> 897ccf588df71ac7202bbd16abc99ae76829f590
-
 
 if __name__ == "__main__":
     main()
