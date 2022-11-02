@@ -242,6 +242,7 @@ def build_tm_model(opt, dicts, constants=None):
             print("[INFO] Created DeltaLM decoder from: %s ..." % opt.dec_config_file)
             from onmt.models.deltalm.deltalm import DeltaLMDecoder
             deltalm_config = json_to_namespace(opt.dec_config_file)
+            print(constants)
             embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                          deltalm_config.decoder_embed_dim,
                                          padding_idx=constants.TGT_PAD)
@@ -490,6 +491,7 @@ def build_tm_model(opt, dicts, constants=None):
 
         elif opt.enc_pretrained_model in ["deltalm"]:
             from onmt.models.deltalm.deltalm import DeltaLMEncoder
+
             deltalm_config = json_to_namespace(opt.dec_config_file)
             embedding_src = nn.Embedding(dicts['src'].size(),
                                          deltalm_config.encoder_embed_dim,

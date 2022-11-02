@@ -11,6 +11,8 @@ from onmt.model_factory import build_model, build_language_model, build_classifi
 from copy import deepcopy
 from onmt.utils import checkpoint_paths, normalize_gradients
 import glob
+from onmt.constants import add_tokenidx
+
 
 
 parser = argparse.ArgumentParser(description='translate.py')
@@ -33,11 +35,11 @@ parser.add_argument('-method', default='mean',
                     help="method to average: mean|gmean")
 
 
-def custom_build_model(opt, dict, lm=False, type='seq2seq'):
+def custom_build_model(opt, dict, lm=False, type='seq2seq', constants=None):
 
     if type == 'seq2seq':
         if not lm:
-            model = build_model(opt, dict)
+            model = build_model(opt, dict, False, constants)
         else:
             model = build_language_model(opt, dict)
     elif type == 'classifier':
@@ -86,7 +88,7 @@ def main():
     main_checkpoint = checkpoint
 
     # best_checkpoint = {
-    #     'model': deepcopy(main_checkpoint['model']),
+    #     'model': deepcpy(main_checkpoint['model']),
     #     'dicts': main_checkpoint['dicts'],
     #     'opt': main_checkpoint['opt'],
     #     'epoch': -1,
@@ -103,6 +105,8 @@ def main():
     model_opt = checkpoint['opt']
 
     dicts = checkpoint['dicts']
+    onmt.constants = add_tokenidx(model_opt, onmt.constants, dicts)
+    constants = onmt.constants
 
     # only create the object
     model_opt.enc_state_dict = None
@@ -110,7 +114,7 @@ def main():
 
     print(model_opt.layers)
 
-    main_model = custom_build_model(model_opt, checkpoint['dicts'], lm=opt.lm, type=opt.type)
+    main_model = custom_build_model(model_opt, checkpoint['dicts'], lm=opt.lm, type=opt.type, constants=constants)
 
     print("Loading main model from %s ..." % models[0])
 
