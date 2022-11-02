@@ -247,6 +247,8 @@ def main():
     else:
         in_file = open(opt.src)
 
+    sub_src = None
+
     if opt.streaming:
         if opt.batch_size != 1:
             opt.batch_size = 1
