@@ -623,6 +623,14 @@ def main():
         for i, (src_file, tgt_file, src_lang, tgt_lang, src_atb, tgt_atb) in \
                 enumerate(zip(src_input_files, tgt_input_files, src_langs, tgt_langs, src_atbs, tgt_atbs)):
 
+            data_name = "train.%i.%s-%s" % (idx, src_lang, tgt_lang)
+            dataset_path = os.path.join(dirname(opt.save_data), data_name)
+            if opt.multi_dataset and opt.resume:
+                if os.path.exists(dataset_path):
+                    print("[INFO] Found data %s in the savedir ... Ignoring" % data_name)
+                    idx = idx + 1
+                    continue
+
             src_data, tgt_data, src_sizes, tgt_sizes = make_asr_data(src_file, tgt_file,
                                                                      dicts['tgt'], tokenizer,
                                                                      max_src_length=opt.src_seq_length,
@@ -682,7 +690,7 @@ def main():
                     train['past_src'] += past_src_data
                     train['past_src_sizes'] += past_src_sizes
 
-        # Finalizing Training data  ###################################################################
+            # Finalizing Training data  ###################################################################
 
             if opt.multi_dataset:
 
@@ -754,6 +762,14 @@ def main():
 
         for i, (src_file, tgt_file, src_lang, tgt_lang, src_atb, tgt_atb) in \
                 enumerate(zip(src_input_files, tgt_input_files, src_langs, tgt_langs, src_atbs, tgt_atbs)):
+
+            data_name = "valid.%i.%s-%s" % (idx, src_lang, tgt_lang)
+            dataset_path = os.path.join(dirname(opt.save_data), data_name)
+            if opt.multi_dataset and opt.resume:
+                if os.path.exists(dataset_path):
+                    print("[INFO] Found data %s in the savedir ... Ignoring" % data_name)
+                    idx = idx + 1
+                    continue
 
             src_data, tgt_data, src_sizes, tgt_sizes = make_asr_data(src_file, tgt_file,
                                                                      dicts['tgt'], tokenizer,
