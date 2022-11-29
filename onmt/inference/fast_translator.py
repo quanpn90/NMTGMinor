@@ -259,10 +259,19 @@ class FastTranslator(Translator):
             print("[INFO] Using the external MBART50 tokenizer...")
 
             from transformers import MBart50TokenizerFast
-            self.external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
-                                                                           src_lang=opt.src_lang)
-            self.tgt_external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
-                                                                           src_lang=opt.tgt_lang)
+            try:
+                self.external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
+                                                                               src_lang=opt.src_lang)
+            except KeyError as e:
+                self.external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
+                                                                               src_lang="en_XX")
+
+            try:
+                self.tgt_external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
+                                                                               src_lang=opt.tgt_lang)
+            except:
+                self.tgt_external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
+                                                                                   src_lang="en_XX")
         elif "m2m100" in opt.external_tokenizer.lower():
             print("[INFO] Using the external %s tokenizer..." % opt.external_tokenizer)
             from transformers import M2M100Tokenizer
