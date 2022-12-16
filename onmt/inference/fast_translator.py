@@ -328,6 +328,15 @@ class FastTranslator(Translator):
         if prefix_tokens is not None:
             prefix_tokens = prefix_tokens.to(src.device)
 
+            if bsz == 1:
+                prefix_tokens = prefix_tokens.repeat(beam_size, 1)
+
+                for b in range(bsz  * beam_size):
+                    for l in range(min(max_len + 2, prefix_tokens.size(1))):
+                        tokens[b, l].fill_(prefix_tokens[b, l])
+
+            # In this case, the scores of the prefix positions should be 0
+
         # list of completed sentences
         finalized = [[] for i in range(bsz)]
         finished = [False for i in range(bsz)]
@@ -465,7 +474,9 @@ class FastTranslator(Translator):
             max_len = math.ceil(int(src_len) * self.dynamic_max_len_scale)
 
         # Start decoding
-        for step in range(max_len + 1):  # one extra step for EOS marker
+        step = 0 if (prefix_tokens is None and bsz == 1) else prefix_tokens.size(1) - 1
+        # for step in range(max_len + 1):  # one extra step for EOS marker
+        while step < (max_len + 1):
             # reorder decoder internal states based on the prev choice of beams
             if reorder_state is not None:
                 if batch_idxs is not None:
@@ -501,7 +512,7 @@ class FastTranslator(Translator):
 
             # handle prefix tokens (possibly with different lengths)
             # here prefix tokens is a list of word-ids
-            if prefix_tokens is not None:
+            if prefix_tokens is not None and bsz > 1:
                 if step < prefix_tokens.size(1) and step < max_len:
                     prefix_toks = prefix_tokens[:, step].unsqueeze(-1).repeat(1, beam_size).view(-1)
                     prefix_lprobs = lprobs.gather(-1, prefix_toks.unsqueeze(-1))
@@ -625,9 +636,7 @@ class FastTranslator(Translator):
                 cand_bbsz_idx = cand_beams.add(bbsz_offsets)
                 cand_scores = cand_scores[batch_idxs]
                 cand_indices = cand_indices[batch_idxs]
-                # if prefix_tokens is not None:
-                #     prefix_tokens = prefix_tokens[batch_idxs]
-                if prefix_tokens is not None:
+                if prefix_tokens is not None and bsz > 1:
                     prefix_tokens = prefix_tokens[batch_idxs]
                 src_lengths = src_lengths[batch_idxs]
                 blacklist = blacklist[batch_idxs]
@@ -717,6 +726,8 @@ class FastTranslator(Translator):
             # reorder incremental state in decoder
             reorder_state = active_bbsz_idx
 
+            step = step + 1
+
         # sort by score descending
         for sent in range(len(finalized)):
             finalized[sent] = sorted(finalized[sent], key=lambda r: r['score'], reverse=True)
@@ -765,14 +776,11 @@ class FastTranslator(Translator):
             _prefix_data = [torch.LongTensor(self.external_tokenizer(sent)['input_ids'][:-1])
                             for sent in prefixes]
 
-            print(_prefix_data)
-
             prefix_data = _prefix_data
 
             for prefix_tensor in prefix_data:
                 prefix_tensor[0] = self.bos_id
 
-            # print(prefix_data)
                 # _listed_tensor = prefix_tensor.tolist()
                 # if _listed_tensor[0] == self.tgt_bos:
                 #     _listed_tensor = _listed_tensor[1:]
@@ -794,7 +802,6 @@ class FastTranslator(Translator):
             data_length = prefix_data[i].size(0)
             offset = 0
             tensor[i].narrow(0, offset, data_length).copy_(prefix_data[i])
-
 
         return tensor
 

@@ -49,9 +49,8 @@ line = safe_readaudio(wav_path, start=start, end=end, sample_rate=16000)
 src_length = line.size(0)
 input = line
 
-prefix = ["My mind was flooded with reactions"]
+prefix = ["My mind was flooded with reactions of my own infection that we had to struggling with for a year over childbirth,"]
 
 output = t.translate(input, prefix)
-
 
 print(output)
