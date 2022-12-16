@@ -269,7 +269,7 @@ class FastTranslator(Translator):
             try:
                 self.tgt_external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
                                                                                src_lang=opt.tgt_lang)
-            except:
+            except KeyError as e:
                 self.tgt_external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
                                                                                    src_lang="en_XX")
         elif "m2m100" in opt.external_tokenizer.lower():
@@ -761,18 +761,24 @@ class FastTranslator(Translator):
                                                       onmt.constants.UNK_WORD)
                             for sent in prefixes]
         else:
-            _prefix_data = [torch.LongTensor(self.external_tokenizer(" ".join(sent))['input_ids'])
-                            for sent in src_sents]
+            # move the last element which is <eos>
+            _prefix_data = [torch.LongTensor(self.external_tokenizer(sent)['input_ids'][:-1])
+                            for sent in prefixes]
+
+            print(_prefix_data)
 
             prefix_data = _prefix_data
 
             for prefix_tensor in prefix_data:
-                _listed_tensor = prefix_tensor.tolist()
-                if _listed_tensor[0] == self.tgt_bos:
-                    _listed_tensor = _listed_tensor[1:]
-                if _listed_tensor[0] == self.tgt_eos:
-                    _listed_tensor = _listed_tensor[:-1]
-                prefix_data.append(torch.LongTensor(_listed_tensor))
+                prefix_tensor[0] = self.bos_id
+
+            # print(prefix_data)
+                # _listed_tensor = prefix_tensor.tolist()
+                # if _listed_tensor[0] == self.tgt_bos:
+                #     _listed_tensor = _listed_tensor[1:]
+                # if _listed_tensor[0] == self.tgt_eos:
+                #     _listed_tensor = _listed_tensor[:-1]
+                # prefix_data.append(torch.LongTensor(_listed_tensor))
 
         # clone the same prefix for multiple sentences
         if len(prefix_data) == 1 and bsz > 1:
@@ -788,6 +794,7 @@ class FastTranslator(Translator):
             data_length = prefix_data[i].size(0)
             offset = 0
             tensor[i].narrow(0, offset, data_length).copy_(prefix_data[i])
+
 
         return tensor
 
@@ -869,18 +876,25 @@ class FastTranslator(Translator):
         else:
             tgt_lang_data = [torch.Tensor([0])]
 
-        src_atb = self.opt.src_atb
-        tgt_atb = self.opt.tgt_atb
-
-        if src_atb in self.atb_dict:
-            src_atb_data = [torch.Tensor([self.atb_dict[src_atb]])]
-        else:
+        try:
+            src_atb = self.opt.src_atb
+            if src_atb in self.atb_dict:
+                src_atb_data = [torch.Tensor([self.atb_dict[src_atb]])]
+            else:
+                src_atb_data = None
+        except AttributeError:
             src_atb_data = None
 
-        if tgt_atb in self.atb_dict:
-            tgt_atb_data = [torch.Tensor([self.atb_dict[tgt_atb]])]
-        else:
+        try:
+            tgt_atb = self.opt.tgt_atb
+
+            if tgt_atb in self.atb_dict:
+                tgt_atb_data = [torch.Tensor([self.atb_dict[tgt_atb]])]
+            else:
+                tgt_atb_data = None
+        except AttributeError:
             tgt_atb_data = None
+
 
         return onmt.Dataset(src_data, tgt_data,
                             src_langs=src_lang_data, tgt_langs=tgt_lang_data,
