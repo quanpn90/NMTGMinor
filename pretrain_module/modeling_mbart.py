@@ -2086,14 +2086,17 @@ class MBartDecoder(MBartPreTrainedModel):
         input_ids = input
         input_shape = input_ids.size()
         time_step = input.size(1)
-        # print("[DEBUGGING] Current time step: %d" % time_step)
 
         input_ = input
         if buffering:
             # use the last value of input to continue decoding
-            if input.size(1) > 1:
+            if input.size(1) > 1 and len(buffers) > 0:
+                # if buffers has not been initilized and we have > 1 input length data
+                # then its a prefix decoding step
                 input_ = input[:, -1:]
-            past_key_values_length = input.size(1) - 1
+                past_key_values_length = input.size(1) - 1
+            else:
+                past_key_values_length = 0
         else:
             past_key_values_length = 0
 
@@ -2104,14 +2107,12 @@ class MBartDecoder(MBartPreTrainedModel):
         attention_mask = torch.triu(
             inputs_embeds.new_ones(qlen, klen), diagonal=1).bool()
 
-        if buffering:
+        if input.size(1) > 1 and len(buffers) > 0:
             attention_mask = attention_mask[-1:, :]
 
         encoder_attention_mask = decoder_state.src_mask
         if not self.layers[0].encoder_attn.fast_attention:
             raise NotImplementedError
-            # encoder_attention_mask = 1 - encoder_attention_mask
-            # encoder_attention_mask = _expand_mask(encoder_attention_mask, inputs_embeds.dtype, tgt_len=input_.size(-1))
         else:
             encoder_attention_mask = encoder_attention_mask.bool()
 
@@ -2123,16 +2124,6 @@ class MBartDecoder(MBartPreTrainedModel):
 
         hidden_states = self.layernorm_embedding(hidden_states)
 
-        # if self.fast_bert_mha is not None and not buffering:
-        #     # we do not need to unpad because in this case the input is right-padded
-        #     # which doesn't have any effect on causal attention
-        #     bsz, seq_len = hidden_states.size(1), hidden_states.size(0)
-        #     lengths = [seq_len] * bsz
-        #     a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
-        #     cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=hidden_states.device)
-        #     max_len = seq_len
-        # else:
-        #     max_len, cu_seqlens = None, None
         max_len = None
         cu_seqlens = None
 

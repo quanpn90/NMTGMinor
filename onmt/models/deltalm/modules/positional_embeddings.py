@@ -60,6 +60,10 @@ class LearnedPositionalEmbedding(nn.Embedding):
                 positions = make_positions(
                     input, self.padding_idx,
                 )
+
+        max_position = self.max_positions - 1
+        positions = torch.clamp(positions, 0, max_position)
+
         return F.embedding(
             positions,
             self.weight,

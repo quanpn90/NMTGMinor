@@ -259,10 +259,19 @@ class FastTranslator(Translator):
             print("[INFO] Using the external MBART50 tokenizer...")
 
             from transformers import MBart50TokenizerFast
-            self.external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
-                                                                           src_lang=opt.src_lang)
-            self.tgt_external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
-                                                                           src_lang=opt.tgt_lang)
+            try:
+                self.external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
+                                                                               src_lang=opt.src_lang)
+            except KeyError as e:
+                self.external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
+                                                                               src_lang="en_XX")
+
+            try:
+                self.tgt_external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
+                                                                               src_lang=opt.tgt_lang)
+            except KeyError as e:
+                self.tgt_external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
+                                                                                   src_lang="en_XX")
         elif "m2m100" in opt.external_tokenizer.lower():
             print("[INFO] Using the external %s tokenizer..." % opt.external_tokenizer)
             from transformers import M2M100Tokenizer
@@ -318,6 +327,15 @@ class FastTranslator(Translator):
         blacklist = src_tokens.new_zeros(bsz, beam_size).eq(-1)  # forward and backward-compatible False mask
         if prefix_tokens is not None:
             prefix_tokens = prefix_tokens.to(src.device)
+
+            if bsz == 1:
+                prefix_tokens = prefix_tokens.repeat(beam_size, 1)
+
+                for b in range(bsz  * beam_size):
+                    for l in range(min(max_len + 2, prefix_tokens.size(1))):
+                        tokens[b, l].fill_(prefix_tokens[b, l])
+
+            # In this case, the scores of the prefix positions should be 0
 
         # list of completed sentences
         finalized = [[] for i in range(bsz)]
@@ -456,7 +474,9 @@ class FastTranslator(Translator):
             max_len = math.ceil(int(src_len) * self.dynamic_max_len_scale)
 
         # Start decoding
-        for step in range(max_len + 1):  # one extra step for EOS marker
+        step = 0 if (prefix_tokens is None and bsz == 1) else prefix_tokens.size(1) - 1
+        # for step in range(max_len + 1):  # one extra step for EOS marker
+        while step < (max_len + 1):
             # reorder decoder internal states based on the prev choice of beams
             if reorder_state is not None:
                 if batch_idxs is not None:
@@ -492,7 +512,7 @@ class FastTranslator(Translator):
 
             # handle prefix tokens (possibly with different lengths)
             # here prefix tokens is a list of word-ids
-            if prefix_tokens is not None:
+            if prefix_tokens is not None and bsz > 1:
                 if step < prefix_tokens.size(1) and step < max_len:
                     prefix_toks = prefix_tokens[:, step].unsqueeze(-1).repeat(1, beam_size).view(-1)
                     prefix_lprobs = lprobs.gather(-1, prefix_toks.unsqueeze(-1))
@@ -616,9 +636,7 @@ class FastTranslator(Translator):
                 cand_bbsz_idx = cand_beams.add(bbsz_offsets)
                 cand_scores = cand_scores[batch_idxs]
                 cand_indices = cand_indices[batch_idxs]
-                # if prefix_tokens is not None:
-                #     prefix_tokens = prefix_tokens[batch_idxs]
-                if prefix_tokens is not None:
+                if prefix_tokens is not None and bsz > 1:
                     prefix_tokens = prefix_tokens[batch_idxs]
                 src_lengths = src_lengths[batch_idxs]
                 blacklist = blacklist[batch_idxs]
@@ -708,6 +726,8 @@ class FastTranslator(Translator):
             # reorder incremental state in decoder
             reorder_state = active_bbsz_idx
 
+            step = step + 1
+
         # sort by score descending
         for sent in range(len(finalized)):
             finalized[sent] = sorted(finalized[sent], key=lambda r: r['score'], reverse=True)
@@ -752,18 +772,21 @@ class FastTranslator(Translator):
                                                       onmt.constants.UNK_WORD)
                             for sent in prefixes]
         else:
-            _prefix_data = [torch.LongTensor(self.external_tokenizer(" ".join(sent))['input_ids'])
-                            for sent in src_sents]
+            # move the last element which is <eos>
+            _prefix_data = [torch.LongTensor(self.external_tokenizer(sent)['input_ids'][:-1])
+                            for sent in prefixes]
 
             prefix_data = _prefix_data
 
             for prefix_tensor in prefix_data:
-                _listed_tensor = prefix_tensor.tolist()
-                if _listed_tensor[0] == self.tgt_bos:
-                    _listed_tensor = _listed_tensor[1:]
-                if _listed_tensor[0] == self.tgt_eos:
-                    _listed_tensor = _listed_tensor[:-1]
-                prefix_data.append(torch.LongTensor(_listed_tensor))
+                prefix_tensor[0] = self.bos_id
+
+                # _listed_tensor = prefix_tensor.tolist()
+                # if _listed_tensor[0] == self.tgt_bos:
+                #     _listed_tensor = _listed_tensor[1:]
+                # if _listed_tensor[0] == self.tgt_eos:
+                #     _listed_tensor = _listed_tensor[:-1]
+                # prefix_data.append(torch.LongTensor(_listed_tensor))
 
         # clone the same prefix for multiple sentences
         if len(prefix_data) == 1 and bsz > 1:
@@ -860,18 +883,25 @@ class FastTranslator(Translator):
         else:
             tgt_lang_data = [torch.Tensor([0])]
 
-        src_atb = self.opt.src_atb
-        tgt_atb = self.opt.tgt_atb
-
-        if src_atb in self.atb_dict:
-            src_atb_data = [torch.Tensor([self.atb_dict[src_atb]])]
-        else:
+        try:
+            src_atb = self.opt.src_atb
+            if src_atb in self.atb_dict:
+                src_atb_data = [torch.Tensor([self.atb_dict[src_atb]])]
+            else:
+                src_atb_data = None
+        except AttributeError:
             src_atb_data = None
 
-        if tgt_atb in self.atb_dict:
-            tgt_atb_data = [torch.Tensor([self.atb_dict[tgt_atb]])]
-        else:
+        try:
+            tgt_atb = self.opt.tgt_atb
+
+            if tgt_atb in self.atb_dict:
+                tgt_atb_data = [torch.Tensor([self.atb_dict[tgt_atb]])]
+            else:
+                tgt_atb_data = None
+        except AttributeError:
             tgt_atb_data = None
+
 
         return onmt.Dataset(src_data, tgt_data,
                             src_langs=src_lang_data, tgt_langs=tgt_lang_data,

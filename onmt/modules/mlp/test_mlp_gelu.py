@@ -33,7 +33,10 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     mlp_gelu_blaslt = None
 
-torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cuda.matmul.allow_tf32 = True
+
+# The flag below controls whether to allow TF32 on cuDNN. This flag defaults to True.
+torch.backends.cudnn.allow_tf32 = True
 
 #
 # class MlpReluFunction(torch.autograd.Function):
@@ -252,9 +255,9 @@ if __name__ == '__main__':
 
 
     seq_len = 1
-    batch_size = 512
-    mlp_sizes = [64, 512, 512, 64]
-    num_iters = 32
+    batch_size = 1024
+    mlp_sizes = [1024, 4096, 1024]
+    num_iters = 512
 
 
     class TestMLP(unittest.TestCase):
@@ -405,7 +408,13 @@ if __name__ == '__main__':
                         mlp_layers.append(torch.nn.GELU())
                         mlp_layers.append(nn.Dropout(dropout))
 
-                ref_mlp = nn.Sequential(*mlp_layers).cuda().half()
+                ref_mlp = nn.Sequential(*mlp_layers)
+                ref_mlp_compiled = nn.Sequential(*mlp_layers)
+                # ref_mlp = torch.compile(ref_mlp)
+                ref_mlp = ref_mlp.cuda().half()
+
+                ref_mlp_compiled = torch.compile(ref_mlp_compiled)
+                ref_mlp_compiled = ref_mlp_compiled.cuda().half()
 
                 test_input = torch.empty(
                     seq_len* batch_size, mlp_sizes[0], device="cuda", dtype=torch.half).fill_(10.).requires_grad_()
@@ -427,13 +436,27 @@ if __name__ == '__main__':
                 torch.cuda.synchronize()
                 start_time = time()
                 for _ in range(num_iters):
+                    ref_out = ref_mlp_compiled(ref_input)
+                    ref_loss = ref_out.mean()
+                    ref_mlp_compiled.zero_grad()
+                    ref_loss.backward()
+                torch.cuda.synchronize()
+                stop_time = time()
+                print(F"\nPytorch MLP compiled time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+
+
+                torch.cuda.synchronize()
+                start_time = time()
+                for _ in range(num_iters):
                     ref_out = ref_mlp(ref_input)
                     ref_loss = ref_out.mean()
                     ref_mlp.zero_grad()
                     ref_loss.backward()
                 torch.cuda.synchronize()
                 stop_time = time()
-                print(F"\nPytorch MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+                print(F"Pytorch MLP time {(stop_time - start_time) * 1000. / num_iters:.4f} ms")
+
+
 
                 # torch.cuda.synchronize()
                 # start_time = time()
