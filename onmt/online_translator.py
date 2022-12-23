@@ -76,6 +76,11 @@ class TranslatorParameter(object):
                 self.no_repeat_ngram_size = int(w[1])
             elif w[0] == "dynamic_quantile":
                 self.dynamic_quantile = int(w[1])
+            elif w[0] == "fp16":
+                self.fp16 = True
+            elif w[0] == "gpu":
+                self.gpu = int(w[1])
+                self.cuda = True
 
             line = f.readline()
 
@@ -83,7 +88,6 @@ class TranslatorParameter(object):
 class RecognizerParameter(TranslatorParameter):
 
     def __init__(self, filename):
-
         super(RecognizerParameter, self).__init__(filename)
 
         # Lazy version of this
@@ -97,8 +101,6 @@ class RecognizerParameter(TranslatorParameter):
         self.encoder_type = "audio"
 
 
-
-
 class OnlineTranslator(object):
     def __init__(self, model):
         opt = TranslatorParameter(model)
@@ -110,6 +112,7 @@ class OnlineTranslator(object):
             self.translator.translate([input.split()], [])
 
         return " ".join(predBatch[0][0])
+
 
 # Checklist to integrate:
 
@@ -140,7 +143,6 @@ class ASROnlineTranslator(object):
         from onmt.inference.fast_translator import FastTranslator
         self.translator = FastTranslator(opt)
 
-
     def translate(self, input, prefix):
         """
         Args:
@@ -151,7 +153,7 @@ class ASROnlineTranslator(object):
         """
 
         # 2 list because the translator is designed to run with 1 audio and potentially 1 text
-        src_batches = [[input]] # ... about the input
+        src_batches = [[input]]  # ... about the input
 
         tgt_batch = []
         sub_src_batch = []
