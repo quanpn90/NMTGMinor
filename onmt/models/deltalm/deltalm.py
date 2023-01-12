@@ -296,3 +296,136 @@ class DeltaLMDecoderLayer(TransformerDecoderLayerBase):
             x = self.final_layer_norm(x)
 
         return x, attn, None
+
+
+class OmniDeltaLMDecoderLayer(DeltaLMDecoderLayer):
+
+    def forward(
+            self,
+            x,
+            encoder_out: Optional[torch.Tensor] = None,
+            encoder_padding_mask: Optional[torch.Tensor] = None,
+            self_attn_mask: Optional[torch.Tensor] = None,
+            self_attn_padding_mask: Optional[torch.Tensor] = None,
+            need_attn: bool = False,
+            need_head_weights: bool = False,
+            checkpointing_ffn=False,
+            checkpointing_self_attn=False,
+            checkpointing_cross_attn=False,
+            stack=None,
+            **kwargs
+    ):
+        """
+        Args:
+            x: [T x B x D]
+            encoder_out: [T x B x D]
+            encoder_padding_mask: [B x T]
+            self_attn_mask: [B x T] or [T x T]?
+            self_attn_padding_mask: [B x T]
+            need_attn:
+            need_head_weights:
+            checkpointing_ffn:
+            checkpointing_self_attn:
+            checkpointing_cross_attn:
+            stack: a list of previously used inputs (used for all-attention)
+            **kwargs:
+
+        Returns:
+
+        """
+        if need_head_weights:
+            need_attn = True
+
+        ###############################################
+
+        residual = x
+
+        # should we need layer norm anymore? (probably)
+        if self.normalize_before:
+            x = self.self_attn_layer_norm(x)
+
+        x, attn, _ = self.self_attn(
+            hidden_states=x,
+            attention_mask=self_attn_mask,
+            output_attentions=False,
+            checkpointing=checkpointing_self_attn
+        )
+
+        # x = self.dropout_module(x)
+        # x = self.residual_connection(x, residual)
+        # x = dropout_residual_connection(x, residual, self.dropout_module, self.training)
+
+        if not self.normalize_before:
+            x = self.self_attn_layer_norm(x)
+
+        ###############################################
+
+        residual = x
+        if self.normalize_before:
+            x = self.ffn_layer_norm(x)
+
+        if self.fused and x.is_cuda:
+            dropout_p = self.activation_dropout_module.p if self.training else 0.0
+
+            weights = [self.fc3.weight, self.fc4.weight]
+            biases = [self.fc3.bias, self.fc4.bias]
+
+            x = self.fused_function(dropout_p, checkpointing_ffn, x, *weights, *biases)
+
+        else:
+            x = self.activation_fn(self.fc3(x))
+            x = self.activation_dropout_module(x)
+            x = self.fc4(x)
+
+        # x = self.dropout_module(x)
+        # x = self.residual_connection(x, residual)
+        x = dropout_residual_connection(x, residual, self.dropout_module, self.training)
+        if not self.normalize_before:
+            x = self.ffn_layer_norm(x)
+
+        ###############################################
+
+        if self.encoder_attn is not None and encoder_out is not None:
+            residual = x
+            if self.normalize_before:
+                x = self.encoder_attn_layer_norm(x)
+
+            x, attn, _ = self.encoder_attn(
+                hidden_states=x,
+                key_value_states=encoder_out,
+                attention_mask=encoder_padding_mask,
+                output_attentions=False,
+                checkpointing=checkpointing_cross_attn
+            )
+
+            # x = self.dropout_module(x)
+            # x = self.residual_connection(x, residual)
+            x = dropout_residual_connection(x, residual, self.dropout_module, self.training)
+            if not self.normalize_before:
+                x = self.encoder_attn_layer_norm(x)
+
+        ###############################################
+        residual = x
+        if self.normalize_before:
+            x = self.final_layer_norm(x)
+
+        if self.fused and x.is_cuda:
+            dropout_p = self.activation_dropout_module.p if self.training else 0.0
+
+            weights = [self.fc1.weight, self.fc2.weight]
+            biases = [self.fc1.bias, self.fc2.bias]
+
+            x = self.fused_function(dropout_p, checkpointing_ffn, x, *weights, *biases)
+
+        else:
+            x = self.activation_fn(self.fc1(x))
+            x = self.activation_dropout_module(x)
+            x = self.fc2(x)
+
+        # x = self.dropout_module(x)
+        # x = self.residual_connection(x, residual)
+        x = dropout_residual_connection(x, residual, self.dropout_module, self.training)
+        if not self.normalize_before:
+            x = self.final_layer_norm(x)
+
+        return x, attn, None

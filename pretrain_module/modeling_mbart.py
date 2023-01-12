@@ -278,7 +278,7 @@ class MBartAttention(nn.Module):
             cu_seqlens=None, max_len=None,
             lang=None, atb=None,
             incremental=False, incremental_cache=None,
-            checkpointing=False
+            checkpointing=False, stacked_kv=None
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
 
@@ -377,6 +377,9 @@ class MBartAttention(nn.Module):
                 attn_output = attn_output
 
             else:
+                """
+                normal multiheaded attention without 
+                """
                 assert self.fast_bert_mha is not None
                 assert hidden_states.dtype == torch.half
                 assert cu_seqlens is not None
@@ -549,7 +552,7 @@ class MBartCrossAttention(MBartAttention):
             lang=None, atb=None, checkpointing=False,
             incremental=False, incremental_cache=None,
             cu_seqlens=None, max_len=None,
-            cu_seqlens_kv=None, max_len_kv=None, **kwargs
+            cu_seqlens_kv=None, max_len_kv=None, stacked_kv=None, **kwargs
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
 
