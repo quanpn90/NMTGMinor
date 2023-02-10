@@ -786,7 +786,7 @@ class Transformer(NMTModel):
         return output_dict
 
     def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True,
-                             pretrained_classifier=None, **kwargs):
+                             pretrained_classifier=None, pretrained_layer_states=None, **kwargs):
         """
         Generate a new decoder state based on the batch input
         :param pretrained_classifier: model to create mixtures
