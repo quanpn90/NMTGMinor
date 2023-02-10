@@ -8,7 +8,7 @@ from onmt.models.bayes_by_backprop.relative_transformer import \
 from onmt.models.transformer_layers import PositionalEncoding
 from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, RelativeTransformer
 from onmt.modules.copy_generator import CopyGenerator
-from options import backward_compatible
+from onmt.options import backward_compatible
 import math
 
 init = torch.nn.init

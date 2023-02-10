@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 
 # from fairseq.checkpoint_utils import load_model_ensemble_and_task, load_checkpoint_to_cpu
 

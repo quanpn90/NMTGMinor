@@ -8,7 +8,7 @@ from ae.Autoencoder import Autoencoder
 import torch.nn.functional as F
 import sys
 from onmt.constants import add_tokenidx
-from options import backward_compatible
+from onmt.options import backward_compatible
 
 model_list = ['transformer', 'stochastic_transformer', 'fusion_network']
 
