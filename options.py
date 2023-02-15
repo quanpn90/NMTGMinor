@@ -80,6 +80,8 @@ def make_parser(parser):
                         help='Maximum distance length for relative self-attention')
     parser.add_argument('-max_src_length', type=int, default=320000,
                         help='Maximum source length for training')
+    parser.add_argument('-max_tgt_length', type=int, default=320000,
+                        help='Maximum target length for training')
     parser.add_argument('-learnable_position_encoding', action='store_true',
                         help="""Use embeddings as learnable position encoding.""")
     parser.add_argument('-rotary_position_encoding', action='store_true',

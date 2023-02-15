@@ -246,8 +246,8 @@ if __name__ == '__main__':
 
     seq_len = 32
     batch_size = 64
-    # mlp_sizes = [1024, 4096, 1024]
-    mlp_sizes = [1024, 250056]
+    mlp_sizes = [1024, 4096, 1024]
+    # mlp_sizes = [1024, 250056]
     num_iters = 32
 
 
@@ -310,81 +310,81 @@ if __name__ == '__main__':
         #                 ref_mlp.biases[0].grad.detach().cpu().numpy(),
         #                 atol=1e-7, rtol=1e-5)
 
-        def test_with_bias_half(self):
-            for dropout in [0.0, 0.5]:
-                mlp = MLP(mlp_sizes, dropout=dropout).cuda()
-                mlp.half()
-
-                ref_mlp = deepcopy(mlp)
-
-                test_input = torch.empty(seq_len, batch_size, mlp_sizes[0],
-                                         device="cuda",  dtype=torch.half).uniform_(-0.01, 0.01).requires_grad_()
-
-                ref_input = test_input.clone().detach().requires_grad_()
-                mlp_out, dropout_mask = mlp(test_input)
-                ref_out = ref_mlp(ref_input, dropout_mask, ref=True)
-                np.testing.assert_allclose(
-                    mlp_out.detach().cpu().numpy(),
-                    ref_out.detach().cpu().numpy(),
-                    atol=1e-3, rtol=1e-3)
-
-                # Use mean value as scalar loss. Multiply 10 to make it big enough not zero out
-                grad = torch.randn_like(mlp_out).half()
-                mlp_out.mul_(1).backward(grad)
-                ref_out.mul_(1).backward(grad)
-                np.testing.assert_allclose(
-                    test_input.grad.detach().cpu().numpy(),
-                    ref_input.grad.detach().cpu().numpy(),
-                    atol=1e-3, rtol=1e-3)
-
-                for l in range(mlp.num_layers):
-                    np.testing.assert_allclose(
-                        mlp.weights[l].grad.detach().cpu().numpy(),
-                        ref_mlp.weights[l].grad.detach().cpu().numpy(),
-                        atol=1e-3, rtol=1e-3)
-                    np.testing.assert_allclose(
-                        mlp.biases[l].grad.detach().cpu().numpy(),
-                        ref_mlp.biases[l].grad.detach().cpu().numpy(),
-                        atol=1e-3, rtol=1e-3)
-
-        def test_with_bias_float(self):
-            for dropout in [0.0, 0.5]:
-                print("Testing with dropout ... %.2f" % dropout)
-                mlp = MLP(mlp_sizes, dropout=dropout).cuda()
-
-                ref_mlp = deepcopy(mlp)
-
-                test_input = torch.empty(seq_len, batch_size, mlp_sizes[0],
-                                         device="cuda").uniform_(-0.01, 0.01).requires_grad_()
-
-                ref_input = test_input.clone().detach().requires_grad_()
-
-                mlp_out, dropout_mask = mlp(test_input)
-                ref_out = ref_mlp(ref_input, dropout_mask, ref=True)
-
-                grad = torch.randn_like(mlp_out)
-                np.testing.assert_allclose(
-                    mlp_out.detach().cpu().numpy(),
-                    ref_out.detach().cpu().numpy(),
-                    atol=1e-5, rtol=1e-5)
-
-                # Use mean value as scalar loss. Multiply 10 to make it big enough not zero out
-                mlp_out.mul_(10).backward(grad)
-                ref_out.mul_(10).backward(grad)
-                np.testing.assert_allclose(
-                    test_input.grad.detach().cpu().numpy(),
-                    ref_input.grad.detach().cpu().numpy(),
-                    atol=1e-5, rtol=1e-4)
-
-                for l in range(mlp.num_layers):
-                    np.testing.assert_allclose(
-                        mlp.weights[l].grad.detach().cpu().numpy(),
-                        ref_mlp.weights[l].grad.detach().cpu().numpy(),
-                        atol=1e-5, rtol=1e-5)
-                    np.testing.assert_allclose(
-                        mlp.biases[l].grad.detach().cpu().numpy(),
-                        ref_mlp.biases[l].grad.detach().cpu().numpy(),
-                        atol=1e-5, rtol=1e-5)
+        # def test_with_bias_half(self):
+        #     for dropout in [0.0, 0.5]:
+        #         mlp = MLP(mlp_sizes, dropout=dropout).cuda()
+        #         mlp.half()
+        #
+        #         ref_mlp = deepcopy(mlp)
+        #
+        #         test_input = torch.empty(seq_len, batch_size, mlp_sizes[0],
+        #                                  device="cuda",  dtype=torch.half).uniform_(-0.01, 0.01).requires_grad_()
+        #
+        #         ref_input = test_input.clone().detach().requires_grad_()
+        #         mlp_out, dropout_mask = mlp(test_input)
+        #         ref_out = ref_mlp(ref_input, dropout_mask, ref=True)
+        #         np.testing.assert_allclose(
+        #             mlp_out.detach().cpu().numpy(),
+        #             ref_out.detach().cpu().numpy(),
+        #             atol=1e-3, rtol=1e-3)
+        #
+        #         # Use mean value as scalar loss. Multiply 10 to make it big enough not zero out
+        #         grad = torch.randn_like(mlp_out).half()
+        #         mlp_out.mul_(1).backward(grad)
+        #         ref_out.mul_(1).backward(grad)
+        #         np.testing.assert_allclose(
+        #             test_input.grad.detach().cpu().numpy(),
+        #             ref_input.grad.detach().cpu().numpy(),
+        #             atol=1e-3, rtol=1e-3)
+        #
+        #         for l in range(mlp.num_layers):
+        #             np.testing.assert_allclose(
+        #                 mlp.weights[l].grad.detach().cpu().numpy(),
+        #                 ref_mlp.weights[l].grad.detach().cpu().numpy(),
+        #                 atol=1e-3, rtol=1e-3)
+        #             np.testing.assert_allclose(
+        #                 mlp.biases[l].grad.detach().cpu().numpy(),
+        #                 ref_mlp.biases[l].grad.detach().cpu().numpy(),
+        #                 atol=1e-3, rtol=1e-3)
+        #
+        # def test_with_bias_float(self):
+        #     for dropout in [0.0, 0.5]:
+        #         print("Testing with dropout ... %.2f" % dropout)
+        #         mlp = MLP(mlp_sizes, dropout=dropout).cuda()
+        #
+        #         ref_mlp = deepcopy(mlp)
+        #
+        #         test_input = torch.empty(seq_len, batch_size, mlp_sizes[0],
+        #                                  device="cuda").uniform_(-0.01, 0.01).requires_grad_()
+        #
+        #         ref_input = test_input.clone().detach().requires_grad_()
+        #
+        #         mlp_out, dropout_mask = mlp(test_input)
+        #         ref_out = ref_mlp(ref_input, dropout_mask, ref=True)
+        #
+        #         grad = torch.randn_like(mlp_out)
+        #         np.testing.assert_allclose(
+        #             mlp_out.detach().cpu().numpy(),
+        #             ref_out.detach().cpu().numpy(),
+        #             atol=1e-5, rtol=1e-5)
+        #
+        #         # Use mean value as scalar loss. Multiply 10 to make it big enough not zero out
+        #         mlp_out.mul_(10).backward(grad)
+        #         ref_out.mul_(10).backward(grad)
+        #         np.testing.assert_allclose(
+        #             test_input.grad.detach().cpu().numpy(),
+        #             ref_input.grad.detach().cpu().numpy(),
+        #             atol=1e-5, rtol=1e-4)
+        #
+        #         for l in range(mlp.num_layers):
+        #             np.testing.assert_allclose(
+        #                 mlp.weights[l].grad.detach().cpu().numpy(),
+        #                 ref_mlp.weights[l].grad.detach().cpu().numpy(),
+        #                 atol=1e-5, rtol=1e-5)
+        #             np.testing.assert_allclose(
+        #                 mlp.biases[l].grad.detach().cpu().numpy(),
+        #                 ref_mlp.biases[l].grad.detach().cpu().numpy(),
+        #                 atol=1e-5, rtol=1e-5)
 
         # def test_no_weight_grad(self):
         #

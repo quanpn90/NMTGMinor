@@ -51,6 +51,7 @@ class TransformerDecoderBase(nn.Module):
         self.embed_dim = embed_dim
 
         self.padding_idx = embed_tokens.padding_idx
+        print("Decoder padding idx:", self.padding_idx)
         self.max_target_positions = cfg.max_target_positions
 
         self.embed_tokens = embed_tokens
@@ -73,6 +74,7 @@ class TransformerDecoderBase(nn.Module):
             if not cfg.no_token_positional_embeddings
             else None
         )
+        self.checkpoint_activations = cfg.checkpoint_activations
 
         if cfg.layernorm_embedding:
             self.layernorm_embedding = LayerNorm(embed_dim)

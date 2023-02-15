@@ -12,7 +12,7 @@ class Generator(nn.Module):
         super(Generator, self).__init__()
         self.hidden_size = hidden_size
         self.output_size = output_size
-        self.linear = Linear(hidden_size, output_size)
+        self.linear = nn.Linear(hidden_size, output_size)
         self.fix_norm = fix_norm
         self.must_softmax = False
         

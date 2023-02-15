@@ -120,11 +120,12 @@ def main():
                                           train_src_atbs, train_tgt_atbs,
                                           batch_size_words=opt.batch_size_words,
                                           batch_size_frames=opt.batch_size_frames,
-                                          data_type=dataset.get("type", "text"), sorting=True,
+                                          data_type=dataset.get("type", "text"), sorting=True, cleaning=True,
                                           batch_size_sents=opt.batch_size_sents,
                                           multiplier=opt.batch_size_multiplier,
                                           augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
                                           max_src_len=opt.max_src_length,
+                                          max_tgt_len=opt.max_tgt_length,
                                           input_size=opt.input_size,
                                           upsampling=opt.upsampling,
                                           num_split=1,
@@ -174,6 +175,7 @@ def main():
                                           data_type=dataset.get("type", "text"), sorting=True,
                                           batch_size_sents=opt.batch_size_sents,
                                           max_src_len=opt.max_src_length,
+                                          max_tgt_len=opt.max_tgt_length,
                                           multiplier=opt.batch_size_multiplier,
                                           upsampling=opt.upsampling,
                                           input_size=opt.input_size,
@@ -292,6 +294,7 @@ def main():
                                           past_src_data=past_train_src,
                                           past_src_data_sizes=past_train_src_sizes,
                                           max_src_len=opt.max_src_length,
+                                          max_tgt_len=opt.max_tgt_length,
                                           constants=onmt.constants)
             else:
                 train_data = onmt.StreamDataset(train_src,
@@ -370,6 +373,7 @@ def main():
                                           past_src_data=past_valid_src,
                                           past_src_data_sizes=past_valid_src_sizes,
                                           max_src_len=opt.max_src_length,
+                                          max_tgt_len=opt.max_tgt_length,
                                           min_src_len=1, min_tgt_len=3,
                                           constants=onmt.constants)
             else:
@@ -482,6 +486,7 @@ def main():
                                               augment=opt.augment_speech, sa_f=opt.sa_f, sa_t=opt.sa_t,
                                               cleaning=True, verbose=True,
                                               max_src_len=opt.max_src_length,
+                                              max_tgt_len=opt.max_tgt_length,
                                               input_size=opt.input_size,
                                               constants=onmt.constants)
 

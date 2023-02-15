@@ -479,14 +479,14 @@ class Trainer(object):
         parameter_list = [p for p in self.model.parameters() if p.requires_grad]
         # Later if we need to do Adversarial Perturbation:
 
-        self.grad_scaler.scale(full_loss).backward(inputs=parameter_list)
+        self.grad_scaler.scale(full_loss).backward()
 
         loss = 0
 
         for p in parameter_list:
             loss += p.sum() * 0.0
 
-        loss.backward(inputs=parameter_list)
+        loss.backward()
 
         for p in self.model.parameters():
             if p.grad is not None:
@@ -812,7 +812,7 @@ class Trainer(object):
                         vanilla_logits = None
 
                     # grad scaler has to be done outside of the autocast
-                    self.grad_scaler.scale(full_loss).backward(inputs=grad_list)
+                    self.grad_scaler.scale(full_loss).backward()
 
                     # del outputs
                     if opt.virtual_adversarial_training_mode > 0:
@@ -854,7 +854,7 @@ class Trainer(object):
 
                         # Now we only get the gradients for the weights of the network
                         grad_list = [p for p in self.model.parameters() if p.requires_grad]
-                        self.grad_scaler.scale(full_loss).backward(inputs=grad_list)
+                        self.grad_scaler.scale(full_loss).backward()
                         del outputs
 
                     # EWC training: no need for autograd here?
@@ -1295,7 +1295,7 @@ class Trainer(object):
                         model_input = None
                         vanilla_logits = None
 
-                    self.grad_scaler.scale(full_loss).backward(inputs=grad_list)
+                    self.grad_scaler.scale(full_loss).backward()
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):

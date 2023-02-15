@@ -71,7 +71,7 @@ int mlp_bp_input_only(
     void* lt_workspace,
     float p);
 
-
+// This function computes MLPs of Gelu(WX + b) and return the output
 std::vector<at::Tensor> mlp_forward(float p, std::vector<at::Tensor> inputs) {
 
   auto num_layers = inputs.size() - 1;
@@ -85,6 +85,8 @@ std::vector<at::Tensor> mlp_forward(float p, std::vector<at::Tensor> inputs) {
   auto input_sizes = inputs[0].sizes();
   auto input_features = input_sizes.back();
   std::vector<int64_t> output_sizes;
+
+  // collect the effective batch size (M x N x P) -> (MxN) x P
   for (unsigned i=0; i < input_sizes.size() - 1 ; i++) {
     batch_size = batch_size * input_sizes[i];
     output_sizes.push_back(input_sizes[i]);
@@ -94,6 +96,7 @@ std::vector<at::Tensor> mlp_forward(float p, std::vector<at::Tensor> inputs) {
   auto reserved_size = get_mlp_reserved_space(batch_size, num_layers, output_features.data());
   size_t dmask_size = 0;
 
+  // dropout mask
   if (p > 0.0)
     dmask_size    = get_mlp_activation_space(batch_size, num_layers, output_features.data());
 
