@@ -8,18 +8,16 @@ import json
 import threading
 import queue
 import uuid
+import traceback
 
 host = sys.argv[1]  # 192.168.0.72
 port = sys.argv[2]  # 5051
 
 app = Flask(__name__)
 
-
-def create_unique_list(list):
-
+def create_unique_list(my_list):
     my_list = list(set(my_list))
     return my_list
-
 
 def initialize_model():
     filename = "model.conf"
@@ -27,7 +25,7 @@ def initialize_model():
     model = ASROnlineTranslator(filename)
     print("ASR initialized")
 
-    max_batch_size = 1
+    max_batch_size = 16
 
     return model, max_batch_size
 
@@ -36,8 +34,8 @@ def use_model(reqs):
     if len(reqs) == 1:
         req = reqs[0]
         audio_tensor, prefix, input_language, output_language = req.get_data()
-        model.change_language(input_language, output_language)
-        hypo = model.translate(audio_tensor, prefix)
+        model.set_language(input_language, output_language)
+        hypo = model.translate(audio_tensor, [prefix])
         result = {"hypo": hypo}
         req.publish(result)
 
@@ -49,9 +47,9 @@ def use_model(reqs):
 
         batch_runnable = False
 
-        for req in reqs: # TODO: use batch decoding here instead of loop
+        for req in reqs:
             audio_tensor, prefix, input_language, output_language = req.get_data()
-            model.change_language(input_language, output_language)
+            model.set_language(input_language, output_language)
             audio_tensors.append(audio_tensor)
             prefixes.append(prefix)
 
@@ -66,19 +64,18 @@ def use_model(reqs):
             batch_runnable = True
 
         if batch_runnable:
-            # TODO: implement this batch translate function
-            model.change_language(input_languages[0], output_languages[0])
+            model.set_language(input_languages[0], output_languages[0])
             hypos = model.translate_batch(audio_tensors, prefixes)
 
-            for hypo in hypos:
+            for req, hypo in zip(reqs, hypos):
                 result = {"hypo": hypo}
                 req.publish(result)
         else:
-            for audio_tensor, prefix, input_language, output_language \
-                    in zip(audio_tensors, prefixes, input_languages, output_languages):
-                model.change_language(input_language, output_language)
+            for req, audio_tensor, prefix, input_language, output_language \
+                    in zip(reqs, audio_tensors, prefixes, input_languages, output_languages):
+                model.set_language(input_language, output_language)
 
-                hypo = model.translate(audio_tensor, prefix)
+                hypo = model.translate(audio_tensor, [prefix])
                 result = {"hypo": hypo}
                 req.publish(result)
 
@@ -97,7 +94,7 @@ def run_decoding():
             use_model(reqs)
         except Exception as e:
             print("An error occured during model inference")
-            print(e)
+            traceback.print_exc()
             for req in reqs:
                 req.publish({"hypo":"", "status":400})
 
@@ -126,7 +123,7 @@ class Priority:
             with self.condition:
                 self.condition.notify()
         except:
-            pass
+            print("ERROR: Count not publish result")
 
 def pcm_s16le_to_tensor(pcm_s16le):
     audio_tensor = np.frombuffer(pcm_s16le, dtype=np.int16)
@@ -146,9 +143,6 @@ def inference(input_language, output_language):
 
     # calculate features corresponding to a torchaudio.load(filepath) call
     audio_tensor = pcm_s16le_to_tensor(pcm_s16le)
-
-    if prefix is not None:
-        prefix = [prefix]
 
     priority = request.files.get("priority") # can be None
     try:

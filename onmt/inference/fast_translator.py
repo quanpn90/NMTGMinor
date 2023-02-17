@@ -287,12 +287,17 @@ class FastTranslator(Translator):
             self.external_tokenizer = None
             self.tgt_external_tokenizer = None
 
-    def change_language(self, new_src_lang=None, new_tgt_lang=None):
+    def change_language(self, new_src_lang=None, new_tgt_lang=None, use_srclang_as_bos=True):
         if new_src_lang is not None:
             self.src_lang = new_src_lang
 
         if new_tgt_lang is not None:
             self.tgt_lang = new_tgt_lang
+
+        if use_srclang_as_bos:
+            self.bos_token = self.src_lang
+            self.bos_id = self.tgt_dict.labelToIdx[self.bos_token]
+            print("[INFO] New Bos Token: %s Bos_ID: %d" % (self.bos_token, self.bos_id))
 
     def translate_batch(self, batches, sub_batches=None, prefix_tokens=None):
 

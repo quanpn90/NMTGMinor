@@ -148,7 +148,7 @@ class ASROnlineTranslator(object):
 
         if language_code_system == "mbart50":
             language_map_dict = {"en": "en_XX", "de": "de_DE", "fr": "fr_XX", "es": "es_XX",
-                                 "pt": "pt_XX", "it": "it_IT", "nl": "nl_XX"}
+                                 "pt": "pt_XX", "it": "it_IT", "nl": "nl_XX", "None": "<s>"}
 
         else:
             language_map_dict = defaultdict(lambda self, missing_key: missing_key)
