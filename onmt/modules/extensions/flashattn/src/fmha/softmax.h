@@ -34,24 +34,6 @@ namespace fmha {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-struct Sum_ {
-    static constexpr bool IS_SUM = true;
-    static inline __device__ float apply(float x, float y) {
-        return x + y;
-    }
-};
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-struct Max_ {
-    static constexpr bool IS_SUM = false;
-    static inline __device__ float apply(float x, float y) {
-        return x > y ? x : y;
-    }
-};
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
 inline __device__ float apply_exp_(float x, float max) {
     return __expf(x - max);
 }
@@ -296,73 +278,6 @@ struct Softmax_base {
     // }
 
     template <bool encode_dropout_in_sign_bit=false>
-    inline __device__ void apply_dropout(Philox &ph, uint32_t p_dropout_in_uint) {
-        // We encode the dropout pattern in the sign bit of the non-negative
-        // softmax to distinguish from pre-existing zeros
-        auto encode_dropout = [](bool keep, float val) {
-            return keep ? val : (encode_dropout_in_sign_bit ? -val : float(0));
-        };
-        #pragma unroll
-        for( int mi = 0; mi < MMAS_M * 2; mi++ ) {
-            #pragma unroll
-            for( int ni = 0; ni < MMAS_N; ni++ ) {
-                uint4 tmp = ph();
-                // if ((threadIdx.x == 0) && (blockIdx.x == 0) && (blockIdx.y == 0)) {
-                //     printf("ni = %d, ph  Philox: %u, %u, %u, %u\n", ni, tmp.x, tmp.y, tmp.z, tmp.w);
-                // }
-                elt_[mi][4 * ni + 0] =
-                    encode_dropout(tmp.x <= p_dropout_in_uint, elt_[mi][4 * ni + 0]);
-                elt_[mi][4 * ni + 1] =
-                    encode_dropout(tmp.y <= p_dropout_in_uint, elt_[mi][4 * ni + 1]);
-                elt_[mi][4 * ni + 2] =
-                    encode_dropout(tmp.z <= p_dropout_in_uint, elt_[mi][4 * ni + 2]);
-                elt_[mi][4 * ni + 3] =
-                    encode_dropout(tmp.w <= p_dropout_in_uint, elt_[mi][4 * ni + 3]);
-            }
-        }
-    }
-
-    template <bool encode_dropout_in_sign_bit=false>
-    inline __device__ void apply_dropout(Philox &ph0, Philox &ph1, uint32_t p_dropout_in_uint) {
-        // We encode the dropout pattern in the sign bit of the non-negative
-        // softmax to distinguish from pre-existing zeros
-        auto encode_dropout = [](bool keep, float val) {
-            return keep ? val : (encode_dropout_in_sign_bit ? -val : float(0));
-        };
-        #pragma unroll
-        for( int mi = 0; mi < MMAS_M * 2; mi++ ) {
-            static_assert(MMAS_N % 2 == 0);
-            #pragma unroll
-            for( int ni = 0; ni < MMAS_N; ni += 2 ) {
-                uint4 tmp = ph0();
-                // if ((threadIdx.x == 0) && (blockIdx.x == 0) && (blockIdx.y == 0)) {
-                //     printf("ni = %d, ph0, Philox: %u, %u, %u, %u\n", ni, tmp.x, tmp.y, tmp.z, tmp.w);
-                // }
-                elt_[mi][4 * ni + 0] =
-                    encode_dropout(tmp.x <= p_dropout_in_uint, elt_[mi][4 * ni + 0]);
-                elt_[mi][4 * ni + 1] =
-                    encode_dropout(tmp.y <= p_dropout_in_uint, elt_[mi][4 * ni + 1]);
-                elt_[mi][4 * ni + 2] =
-                    encode_dropout(tmp.z <= p_dropout_in_uint, elt_[mi][4 * ni + 2]);
-                elt_[mi][4 * ni + 3] =
-                    encode_dropout(tmp.w <= p_dropout_in_uint, elt_[mi][4 * ni + 3]);
-                tmp = ph1();
-                // if ((threadIdx.x == 0) && (blockIdx.x == 0) && (blockIdx.y == 0)) {
-                //     printf("ni = %d, ph1, Philox: %u, %u, %u, %u\n", ni + 1, tmp.x, tmp.y, tmp.z, tmp.w);
-                // }
-                elt_[mi][4 * (ni + 1) + 0] =
-                    encode_dropout(tmp.x <= p_dropout_in_uint, elt_[mi][4 * (ni + 1) + 0]);
-                elt_[mi][4 * (ni + 1) + 1] =
-                    encode_dropout(tmp.y <= p_dropout_in_uint, elt_[mi][4 * (ni + 1) + 1]);
-                elt_[mi][4 * (ni + 1) + 2] =
-                    encode_dropout(tmp.z <= p_dropout_in_uint, elt_[mi][4 * (ni + 1) + 2]);
-                elt_[mi][4 * (ni + 1) + 3] =
-                    encode_dropout(tmp.w <= p_dropout_in_uint, elt_[mi][4 * (ni + 1) + 3]);
-            }
-        }
-    }
-
-    template <bool encode_dropout_in_sign_bit=false>
     inline __device__ void apply_dropout_16bits(Philox &ph, uint16_t p_dropout_in_uint16_t) {
         // We encode the dropout pattern in the sign bit of the non-negative
         // softmax to distinguish from pre-existing zeros
@@ -374,9 +289,44 @@ struct Softmax_base {
             #pragma unroll
             for( int ni = 0; ni < MMAS_N; ni++ ) {
                 uint16_t tmp[8];
-                fmha::uint4_to_ushort8(ph(), tmp);
+                // fmha::uint4_to_ushort8(ph(), tmp);
+                uint4 tmp_32 = ph();
+                fmha::uint4_to_ushort8(tmp_32, tmp);
+                // if ((threadIdx.x % 32 == 0) && (blockIdx.x == 0) && (blockIdx.y == 0)) {
+                //     printf("tidx = %d, ni = %d, ph  Philox: %u, %u, %u, %u\n", threadIdx.x, ni, tmp_32.x, tmp_32.y, tmp_32.z, tmp_32.w);
+                // }
+                #pragma unroll
+                for (int ii = 0; ii < 2; ++ii) {
+                    #pragma unroll
+                    for (int jj = 0; jj < 4; ++jj) {
+                        elt_[mi * 2 + ii][4 * ni + jj] =
+                            encode_dropout(tmp[ii * 4 + jj] <= p_dropout_in_uint16_t, elt_[mi * 2 + ii][4 * ni + jj]);
+                    }
+                }
+            }
+        }
+    }
+
+    template <bool encode_dropout_in_sign_bit=false>
+    inline __device__ void apply_dropout_16bits(Philox &ph, uint16_t p_dropout_in_uint16_t,
+                                                unsigned long long philox_subsequence) {
+        // We encode the dropout pattern in the sign bit of the non-negative
+        // softmax to distinguish from pre-existing zeros
+        auto encode_dropout = [](bool keep, float val) {
+            return keep ? val : (encode_dropout_in_sign_bit ? -val : float(0));
+        };
+        static_assert(MMAS_M == 1);  // We're assuming 16x16 blocks.
+        #pragma unroll
+        for( int mi = 0; mi < MMAS_M; mi++ ) {
+            #pragma unroll
+            for( int ni = 0; ni < MMAS_N; ni++ ) {
+                uint16_t tmp[8];
+                // fmha::uint4_to_ushort8(ph(), tmp);
+                fmha::uint4_to_ushort8(ph(philox_subsequence + ni * Cta_tile::WARPS_N), tmp);
+                // uint4 tmp_32 = ph(philox_subsequence + ni * Cta_tile::WARPS_N);
+                // fmha::uint4_to_ushort8(tmp_32, tmp);
                 // if ((threadIdx.x == 0) && (blockIdx.x == 0) && (blockIdx.y == 0)) {
-                //     printf("ni = %d, ph  Philox: %u, %u, %u, %u\n", ni, tmp.x, tmp.y, tmp.z, tmp.w);
+                //     printf("ni = %d, ph  Philox: %u, %u, %u, %u\n", ni, tmp_32.x, tmp_32.y, tmp_32.z, tmp_32.w);
                 // }
                 #pragma unroll
                 for (int ii = 0; ii < 2; ++ii) {
@@ -508,7 +458,7 @@ struct Softmax : public Softmax_base<Cta_tile, Kernel_traits> {
     }
 
     // Pack the data to a fragment for the next GEMM.
-    template<int K, int M>
+    template<typename elem_type=__half, int K, int M>
     inline __device__ void pack(Fragment_a (&dst)[K][M]) const {
         #pragma unroll
         for( int mi = 0; mi < M; ++mi ) {
@@ -533,21 +483,24 @@ struct Softmax : public Softmax_base<Cta_tile, Kernel_traits> {
                 float tmp_10 = this->elt_[2 * mi + 1][4 * ki + 0];
                 if (std::isnan(tmp_10)==true)
                     tmp_10 = 0;
+
                 float tmp_11 = this->elt_[2 * mi + 1][4 * ki + 1];
-                if (std::isnan(tmp_11)==true)
-                    tmp_11 = 0;
+                if (std::isnan(tmp_10)==true)
+                    tmp_10 = 0;
+
                 float tmp_12 = this->elt_[2 * mi + 1][4 * ki + 2];
                 if (std::isnan(tmp_12)==true)
                     tmp_12 = 0;
+
                 float tmp_13 = this->elt_[2 * mi + 1][4 * ki + 3];
                 if (std::isnan(tmp_13)==true)
                     tmp_13 = 0;
 
                 // Pack to 4 registers.
-                dst[ki][mi].reg(0) = fmha::float2_to_half2(tmp_00, tmp_01);
-                dst[ki][mi].reg(1) = fmha::float2_to_half2(tmp_10, tmp_11);
-                dst[ki][mi].reg(2) = fmha::float2_to_half2(tmp_02, tmp_03);
-                dst[ki][mi].reg(3) = fmha::float2_to_half2(tmp_12, tmp_13);
+                dst[ki][mi].reg(0) = fmha::float2_pack<elem_type>(tmp_00, tmp_01);
+                dst[ki][mi].reg(1) = fmha::float2_pack<elem_type>(tmp_10, tmp_11);
+                dst[ki][mi].reg(2) = fmha::float2_pack<elem_type>(tmp_02, tmp_03);
+                dst[ki][mi].reg(3) = fmha::float2_pack<elem_type>(tmp_12, tmp_13);
             }
         }
     }

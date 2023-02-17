@@ -37,53 +37,67 @@ except (ModuleNotFoundError, ImportError) as e:
 
 
 def _get_block_size(device, head_dim, is_dropout):
-    assert head_dim in [16, 32, 64, 128]
-    if head_dim in [16, 32]:
-        return 256
-    elif head_dim == 64:
-        return 128 if (torch.cuda.get_device_capability(device) == (7, 5) and is_dropout) else 256
-    elif head_dim == 128:
-        return 256 if (torch.cuda.get_device_capability(device) == (8, 0) and not is_dropout) else 128
+    assert head_dim % 8 == 0 and head_dim <= 128
+    return 256 if head_dim <= 64 else 128
 
 
-# def _flash_attn_forward(qkv, cu_seqlens, dropout_p, max_s, softmax_scale, causal, return_softmax):
-#     context, softmax_lse, *rest = flash_attn_cuda.fwd(qkv, cu_seqlens, dropout_p, max_s, softmax_scale,
-#                                                        False, causal, return_softmax, None)
-#     # if context.isnan().any() or softmax_lse.isnan().any():
-#     #     breakpoint()
-#     S_dmask = rest[0] if return_softmax else None
-#     return context, softmax_lse, S_dmask
-#
-#
-# def _flash_attn_backward(dout, qkv, out, S_dmask, softmax_lse, cu_seqlens, dropout_p, max_s,
-#                    softmax_scale, causal):
-#     dqkv, dp, softmax_d = flash_attn_cuda.bwd(dout, qkv, out, S_dmask, softmax_lse, cu_seqlens, dropout_p,
-#                                                softmax_scale, max_s, False, causal, None)
-#     # if dqkv.isnan().any() or softmax_d.isnan().any():
-#     #     breakpoint()
-#     return dqkv
-
-
-def _flash_attn_forward(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, dropout_p,
-                        softmax_scale, causal, return_softmax):
-    out, softmax_lse, *rest = flash_attn_cuda.fwd(
-        q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale,
-        False, causal, return_softmax, None
+def _flash_attn_forward(q, k, v, out, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
+                        dropout_p, softmax_scale, causal, return_softmax, num_splits=0,
+                        generator=None):
+    """
+    num_splits: how much to parallelize over the seqlen_q dimension. num_splits=0 means
+    it will be set by an internal heuristic. We're exposing num_splits mostly for benchmarking.
+    Don't change it unless you know what you're doing.
+    """
+    softmax_lse, *rest = flash_attn_cuda.fwd(
+        q, k, v, out, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, dropout_p,
+        softmax_scale, False, causal, return_softmax, num_splits, generator
     )
     # if out.isnan().any() or softmax_lse.isnan().any():
     #     breakpoint()
     S_dmask = rest[0] if return_softmax else None
     return out, softmax_lse, S_dmask
 
-
 def _flash_attn_backward(dout, q, k, v, out, softmax_lse, dq, dk, dv, cu_seqlens_q, cu_seqlens_k,
-                         max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale, causal):
-    softmax_d = flash_attn_cuda.bwd(
+                         max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale, causal, num_splits=0,
+                         generator=None):
+    """
+    num_splits: whether to parallelize over the seqlen_k dimension (num_splits > 1) or
+    not (num_splits = 1). num_splits=0 means it will be set by an internal heuristic.
+    Any value above 1 will call the same kernel (i.e. num_splits=2 would call the same kernel
+    as num_splits=3), so effectively the choices are 0, 1, and 2.
+    This hyperparameter can be tuned for performance, but default value (heuristic) should work fine.
+    """
+    dout = dout.contiguous()  # CUDA code assumes that dout is contiguous
+    _, _, _, softmax_d = flash_attn_cuda.bwd(
         dout, q, k, v, out, softmax_lse, dq, dk, dv, cu_seqlens_q, cu_seqlens_k,
-        max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale, False, causal, None)
+        max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale, False, causal, num_splits, generator)
     # if dk.isnan().any() or dk.isnan().any() or dv.isnan().any() or softmax_d.isnan().any():
     #     breakpoint()
     return dq, dk, dv, softmax_d
+
+
+
+# def _flash_attn_forward(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, dropout_p,
+#                         softmax_scale, causal, return_softmax):
+#     out, softmax_lse, *rest = flash_attn_cuda.fwd(
+#         q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale,
+#         False, causal, return_softmax, None
+#     )
+#     # if out.isnan().any() or softmax_lse.isnan().any():
+#     #     breakpoint()
+#     S_dmask = rest[0] if return_softmax else None
+#     return out, softmax_lse, S_dmask
+
+
+# def _flash_attn_backward(dout, q, k, v, out, softmax_lse, dq, dk, dv, cu_seqlens_q, cu_seqlens_k,
+#                          max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale, causal):
+#     softmax_d = flash_attn_cuda.bwd(
+#         dout, q, k, v, out, softmax_lse, dq, dk, dv, cu_seqlens_q, cu_seqlens_k,
+#         max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale, False, causal, None)
+#     # if dk.isnan().any() or dk.isnan().any() or dv.isnan().any() or softmax_d.isnan().any():
+#     #     breakpoint()
+#     return dq, dk, dv, softmax_d
 
 
 class FlashAttnQKVPackedFunc(torch.autograd.Function):
@@ -95,7 +109,8 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
         if softmax_scale is None:
             softmax_scale = qkv.shape[-1] ** (-0.5)
         out, softmax_lse, S_dmask = _flash_attn_forward(
-            qkv[:, 0], qkv[:, 1], qkv[:, 2], cu_seqlens, cu_seqlens, max_seqlen, max_seqlen,
+            qkv[:, 0], qkv[:, 1], qkv[:, 2],  torch.empty_like(qkv[:, 0]),
+            cu_seqlens, cu_seqlens, max_seqlen, max_seqlen,
             dropout_p, softmax_scale, causal=causal, return_softmax=return_softmax
         )
         ctx.save_for_backward(qkv, out, softmax_lse, cu_seqlens, rng_state)
@@ -132,7 +147,8 @@ class FlashAttnKVPackedFunc(torch.autograd.Function):
         if softmax_scale is None:
             softmax_scale = q.shape[-1] ** (-0.5)
         out, softmax_lse, S_dmask = _flash_attn_forward(
-            q, kv[:, 0], kv[:, 1], cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
+            q, kv[:, 0], kv[:, 1], torch.empty_like(q),
+            cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
             dropout_p, softmax_scale, causal=causal, return_softmax=return_softmax
         )
         ctx.save_for_backward(q, kv, out, softmax_lse, cu_seqlens_q, cu_seqlens_k, rng_state)

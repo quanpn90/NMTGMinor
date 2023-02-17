@@ -5,17 +5,128 @@ import numpy as np
 import math
 import sys
 import json
+import threading
+import queue
+import uuid
 
 host = sys.argv[1]  # 192.168.0.72
 port = sys.argv[2]  # 5051
 
 app = Flask(__name__)
 
-filename = "model.conf"
 
-model = ASROnlineTranslator(filename)
-print("ASR initialized")
+def create_unique_list(list):
 
+    my_list = list(set(my_list))
+    return my_list
+
+
+def initialize_model():
+    filename = "model.conf"
+
+    model = ASROnlineTranslator(filename)
+    print("ASR initialized")
+
+    max_batch_size = 1
+
+    return model, max_batch_size
+
+def use_model(reqs):
+
+    if len(reqs) == 1:
+        req = reqs[0]
+        audio_tensor, prefix, input_language, output_language = req.get_data()
+        model.change_language(input_language, output_language)
+        hypo = model.translate(audio_tensor, prefix)
+        result = {"hypo": hypo}
+        req.publish(result)
+
+    else:
+        audio_tensors = list()
+        prefixes = list()
+        input_languages = list()
+        output_languages = list()
+
+        batch_runnable = False
+
+        for req in reqs: # TODO: use batch decoding here instead of loop
+            audio_tensor, prefix, input_language, output_language = req.get_data()
+            model.change_language(input_language, output_language)
+            audio_tensors.append(audio_tensor)
+            prefixes.append(prefix)
+
+            input_languages.append(input_language)
+            output_languages.append(output_language)
+
+        unique_prefix_list = create_unique_list(prefixes)
+        unique_input_languages = create_unique_list(input_languages)
+        unique_output_languages = create_unique_list(output_languages)
+
+        if len(unique_prefix_list) == 1 and len(unique_input_languages) == 1 and len(unique_output_languages) == 1:
+            batch_runnable = True
+
+        if batch_runnable:
+            # TODO: implement this batch translate function
+            model.change_language(input_languages[0], output_languages[0])
+            hypos = model.translate_batch(audio_tensors, prefixes)
+
+            for hypo in hypos:
+                result = {"hypo": hypo}
+                req.publish(result)
+        else:
+            for audio_tensor, prefix, input_language, output_language \
+                    in zip(audio_tensors, prefixes, input_languages, output_languages):
+                model.change_language(input_language, output_language)
+
+                hypo = model.translate(audio_tensor, prefix)
+                result = {"hypo": hypo}
+                req.publish(result)
+
+def run_decoding():
+    while True:
+        reqs = [queue_in.get()]
+        while not queue_in.empty() and len(reqs) < max_batch_size:
+            req = queue_in.get()
+            reqs.append(req)
+            if req.priority >= 1:
+                break
+
+        print("Batch size:",len(reqs),"Queue size:",queue_in.qsize())
+
+        try:
+            use_model(reqs)
+        except Exception as e:
+            print("An error occured during model inference")
+            print(e)
+            for req in reqs:
+                req.publish({"hypo":"", "status":400})
+
+class Priority:
+    next_index = 0
+
+    def __init__(self, priority, id, condition, data):
+        self.index = Priority.next_index
+
+        Priority.next_index += 1
+
+        self.priority = priority
+        self.id = id
+        self.condition = condition
+        self.data = data
+
+    def __lt__(self, other):
+        return (-self.priority, self.index) < (-other.priority, other.index)
+
+    def get_data(self):
+        return self.data
+
+    def publish(self, result):
+        dict_out[self.id] = result
+        try:
+            with self.condition:
+                self.condition.notify()
+        except:
+            pass
 
 def pcm_s16le_to_tensor(pcm_s16le):
     audio_tensor = np.frombuffer(pcm_s16le, dtype=np.int16)
@@ -24,37 +135,57 @@ def pcm_s16le_to_tensor(pcm_s16le):
     audio_tensor = audio_tensor.unsqueeze(1)  # shape: frames x 1 (1 channel)
     return audio_tensor
 
-
 # corresponds to an asr_server "http://$host:$port/asr/infer/en,en" in StreamASR.py
 # use None when no input- or output language should be specified
 @app.route("/asr/infer/<input_language>,<output_language>", methods=["POST"])
 def inference(input_language, output_language):
     pcm_s16le: bytes = request.files.get("pcm_s16le").read()
-    prefix = request.files.get("prefix")  # can be None
+    prefix = request.files.get("prefix") # can be None
     if prefix is not None:
         prefix: str = prefix.read().decode("utf-8")
 
     # calculate features corresponding to a torchaudio.load(filepath) call
     audio_tensor = pcm_s16le_to_tensor(pcm_s16le)
 
-    try:
-        if prefix is not None:
-            prefix = [prefix]
-        hypo = model.translate(audio_tensor, prefix)
+    if prefix is not None:
+        prefix = [prefix]
 
-        result = {"hypo": hypo}
-    except Exception as e:
-        print(e)
-        return "An error occured", 400
+    priority = request.files.get("priority") # can be None
+    try:
+        priority = int(priority.read()) # used together with priority queue
+    except:
+        priority = 0
+
+    condition = threading.Condition()
+    with condition:
+        id = str(uuid.uuid4())
+        data = (audio_tensor,prefix,input_language,output_language)
+
+        queue_in.put(Priority(priority,id,condition,data))
+
+        condition.wait()
+
+    result = dict_out.pop(id)
+    status = 200
+    if status in result:
+        status = result.pop(status)
 
     # result has to contain a key "hypo" with a string as value (other optional keys are possible)
-    return json.dumps(result), 200
-
+    return json.dumps(result), status
 
 # called during automatic evaluation of the pipeline to store worker information
 @app.route("/asr/version", methods=["POST"])
 def version():
-    return "ASR-7EU-1.0", 200
+    # return dict or string (as first argument)
+    return "ASR-7EU-2.0", 200
 
+model, max_batch_size = initialize_model()
+
+queue_in = queue.PriorityQueue()
+dict_out = {}
+
+decoding = threading.Thread(target=run_decoding)
+decoding.daemon = True
+decoding.start()
 
 app.run(host=host, port=port)

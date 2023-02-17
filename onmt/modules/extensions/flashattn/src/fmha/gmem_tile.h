@@ -27,9 +27,12 @@
 
 #pragma once
 
-namespace fmha {
+#include <cuda_fp16.h>
+#include <cuda_bf16.h>
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
+#include <fmha/utils.h>
+
+namespace fmha {
 
 template<
     // The dimensions of the tile computed by the CTA.
@@ -39,7 +42,8 @@ template<
     // The number of rows of Q, K or V loaded by this tile.
     int ROWS_,
     // The number of columns.
-    int COLS
+    int COLS,
+    int BYTES_PER_LDGS_ = 16
 >
 struct Gmem_tile_qkv {
 
@@ -47,7 +51,7 @@ struct Gmem_tile_qkv {
 
     static constexpr int BYTES_PER_ELEMENT = BITS_PER_ELEMENT / 8;
     // The size of each LDG.
-    static constexpr int BYTES_PER_LDG = 16;
+    static constexpr int BYTES_PER_LDG = BYTES_PER_LDGS_;
     // The size of a row in bytes.
     static constexpr int BYTES_PER_ROW = COLS * BITS_PER_ELEMENT / 8;
 
@@ -63,11 +67,13 @@ struct Gmem_tile_qkv {
     // Ctor.
     template< typename BInfo >
     inline __device__ Gmem_tile_qkv(void *ptr_, const uint32_t row_stride_in_elts,
-                                    const uint32_t head_stride_in_elts, const BInfo &binfo, const int tidx, bool use_seqlen_q)
+                                    const uint32_t head_stride_in_elts, const int headdim,
+                                    const BInfo &binfo, const int tidx, bool use_seqlen_q)
         : row_stride_in_bytes(row_stride_in_elts * BYTES_PER_ELEMENT)
         , actual_seqlen(use_seqlen_q ? binfo.actual_seqlen_q : binfo.actual_seqlen_k)
         , ptr(reinterpret_cast<char *>(ptr_))
-        , tidx_(tidx) {
+        , tidx_(tidx)
+        , col_predicate((tidx % THREADS_PER_ROW) * (BYTES_PER_LDG / BYTES_PER_ELEMENT) < headdim) {
 
         // Compute the position in the sequence (within the CTA for the moment).
         int row = tidx / THREADS_PER_ROW;
@@ -103,7 +109,7 @@ struct Gmem_tile_qkv {
         for( int ii = 0; ii < LDGS; ++ii ) {
             // ptrs[ii] = ptr + (int64_t)ii * ROWS_PER_LDG * row_stride_in_bytes;
             ptrs[ii] = ptr + (uint32_t)ii * ROWS_PER_LDG * row_stride_in_bytes;
-            preds[ii] = ((row_ + ii * ROWS_PER_LDG) < min(ROWS, actual_seqlen));
+            preds[ii] = col_predicate && ((row_ + ii * ROWS_PER_LDG) < min(ROWS, actual_seqlen));
             fetch_[ii] = make_uint4(0, 0, 0, 0);
         }
 
@@ -122,7 +128,7 @@ struct Gmem_tile_qkv {
         for( int ii = 0; ii < LDGS; ++ii ) {
             // char *ptr_ = ptr + (int64_t)ii * ROWS_PER_LDG * row_stride_in_bytes;
             char *ptr_ = ptr + (uint32_t)ii * ROWS_PER_LDG * row_stride_in_bytes;
-            if( (row_ + ii * ROWS_PER_LDG) < min(ROWS, actual_seqlen) ) {
+            if (col_predicate && (row_ + ii * ROWS_PER_LDG) < min(ROWS, actual_seqlen)) {
                 fmha::stg(ptr_, data[ii]);
             }
         }
@@ -146,6 +152,7 @@ struct Gmem_tile_qkv {
     const int tidx_;
     // The length of the sequence loaded by that memory tile.
     int actual_seqlen;
+    const bool col_predicate;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -191,11 +198,13 @@ struct Gmem_tile_o {
     template<typename BInfo>
     // inline __device__ Gmem_tile_o(void *ptr, const size_t row_stride_in_elts, const BInfo &binfo, const int tidx)
     inline __device__ Gmem_tile_o(void *ptr, const uint32_t row_stride_in_elts,
-                                  const uint32_t head_stride_in_elts, const BInfo &binfo, const int tidx)
+                                  const uint32_t head_stride_in_elts, const int headdim,
+                                  const BInfo &binfo, const int tidx)
         : row_stride_in_bytes(row_stride_in_elts * BYTES_PER_ELEMENT)
         , actual_seqlen_q(binfo.actual_seqlen_q)
         , ptr_(reinterpret_cast<char *>(ptr))
-        , tidx_(tidx) {
+        , tidx_(tidx)
+        , col_predicate((tidx % THREADS_PER_ROW) * (BYTES_PER_STG / BYTES_PER_ELEMENT) < headdim) {
 
         // Compute the position in the sequence (within the CTA for the moment).
         int row = tidx / THREADS_PER_ROW;
@@ -219,12 +228,13 @@ struct Gmem_tile_o {
     }
 
     // Store data to global memory.
+    template<typename elem_type=__half>
     inline __device__ void store(const uint4 (&src)[STGS_PER_LOOP], int mi) {
         int row_ = tidx_ / THREADS_PER_ROW;
         #pragma unroll
         for( int ii = 0; ii < STGS_PER_LOOP; ++ii ) {
             int jj = mi * STGS_PER_LOOP + ii;
-            if( row_ + jj * ROWS_PER_STG >= this->actual_seqlen_q ) {
+            if ((!col_predicate) || (row_ + jj * ROWS_PER_STG >= this->actual_seqlen_q)) {
                 break;
             }
 
@@ -237,7 +247,7 @@ struct Gmem_tile_o {
                 float y = reinterpret_cast<const float &>(src[ii].y);
                 float z = reinterpret_cast<const float &>(src[ii].z);
                 float w = reinterpret_cast<const float &>(src[ii].w);
-                uint2 out = float4_to_half4(x, y, z, w);
+                uint2 out = fmha::float4_pack<elem_type>(x, y, z, w);
                 if( !HAS_INCOMPLETE_STG || (jj < STGS - 1 || this->is_active_for_last_stg_) ) {
                     fmha::stg(this->ptr_ + jj * ROWS_PER_STG * this->row_stride_in_bytes, out);
                 }
@@ -245,14 +255,35 @@ struct Gmem_tile_o {
         }
     }
 
-    // Store data to global memory.
+    // Store data to global memory with atomicAdd.
+    inline __device__ void atomic_add(const uint4 (&src)[STGS_PER_LOOP], int mi) {
+        static_assert(BYTES_PER_ELEMENT == 4);  // Only do atomic add on floats
+        int row_ = tidx_ / THREADS_PER_ROW;
+        #pragma unroll
+        for( int ii = 0; ii < STGS_PER_LOOP; ++ii ) {
+            int jj = mi * STGS_PER_LOOP + ii;
+            if ((!col_predicate) || (row_ + jj * ROWS_PER_STG >= this->actual_seqlen_q)) {
+                break;
+            }
+
+            if( !HAS_INCOMPLETE_STG || (jj < STGS - 1 || this->is_active_for_last_stg_) ) {
+                float *ptr_ = reinterpret_cast<float *>(this->ptr_ + jj * ROWS_PER_STG * this->row_stride_in_bytes);
+                #pragma unroll
+                for (int jj = 0; jj < 4; ++jj) {
+                    atomicAdd(ptr_ + jj, reinterpret_cast<const float(&)[4]>(src[ii])[jj]);
+                }
+            }
+        }
+    }
+
+    // Load data from global memory.
     inline __device__ void load(uint4 (&dst)[STGS_PER_LOOP], int mi) {
         static_assert(BYTES_PER_ELEMENT == 4);
         int row_ = tidx_ / THREADS_PER_ROW;
         #pragma unroll
         for( int ii = 0; ii < STGS_PER_LOOP; ++ii ) {
             int jj = mi * STGS_PER_LOOP + ii;
-            if( row_ + jj * ROWS_PER_STG >= this->actual_seqlen_q ) {
+            if ((!col_predicate) || (row_ + jj * ROWS_PER_STG >= this->actual_seqlen_q)) {
                 break;
             }
 
@@ -279,6 +310,7 @@ struct Gmem_tile_o {
     // The length of the sequence loaded by that memory tile.
     int actual_seqlen_q;
     const int tidx_;
+    const bool col_predicate;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -364,36 +396,6 @@ struct Gmem_tile_mma_s : public Base {
     template< typename Params, typename Block_info >
     inline __device__ Gmem_tile_mma_s(const Params &params, const Block_info& binfo, const int tidx) 
         : Base(params.s_ptr, params, binfo.bidb, binfo.bidh, tidx) {
-    }
-
-    // Store to global memory.
-    template<typename Mask>
-    inline __device__ void store(const float (&softmax)[2 * M][4 * N], const Mask &mask) {
-        #pragma unroll
-        for( int mi = 0; mi < M; mi++ ) {
-            #pragma unroll
-            for( int ni = 0; ni < N; ni++ ) {
-
-                float tmp00 = softmax[2 * mi + 0][4 * ni + 0];
-                float tmp01 = softmax[2 * mi + 0][4 * ni + 1];
-                float tmp02 = softmax[2 * mi + 0][4 * ni + 2];
-                float tmp03 = softmax[2 * mi + 0][4 * ni + 3];
-
-                float tmp10 = softmax[2 * mi + 1][4 * ni + 0];
-                float tmp11 = softmax[2 * mi + 1][4 * ni + 1];
-                float tmp12 = softmax[2 * mi + 1][4 * ni + 2];
-                float tmp13 = softmax[2 * mi + 1][4 * ni + 3];
-
-                uint4 dst;
-                dst.x = fmha::float2_to_half2(tmp00, tmp01);
-                dst.y = fmha::float2_to_half2(tmp02, tmp03);
-                dst.z = fmha::float2_to_half2(tmp10, tmp11);
-                dst.w = fmha::float2_to_half2(tmp12, tmp13);
-                if( mask.is_valid(mi, ni, 0, 0) ) {
-                    Base::store(dst, mi, ni);
-                }
-            }
-        }
     }
 
     // Store to global memory.

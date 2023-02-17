@@ -287,6 +287,13 @@ class FastTranslator(Translator):
             self.external_tokenizer = None
             self.tgt_external_tokenizer = None
 
+    def change_language(self, new_src_lang=None, new_tgt_lang=None):
+        if new_src_lang is not None:
+            self.src_lang = new_src_lang
+
+        if new_tgt_lang is not None:
+            self.tgt_lang = new_tgt_lang
+
     def translate_batch(self, batches, sub_batches=None, prefix_tokens=None):
 
         with torch.no_grad():
@@ -474,7 +481,17 @@ class FastTranslator(Translator):
             max_len = math.ceil(int(src_len) * self.dynamic_max_len_scale)
 
         # Start decoding
-        step = 0 if (prefix_tokens is None and bsz == 1) else prefix_tokens.size(1) - 1
+        if prefix_tokens is not None:
+            if bsz == 1:
+                # for this case we run the whole prefix as a preparation step, decoding starts from the last of the prefix
+                step  = prefix_tokens.size(1) - 1
+            else:
+                # in this case we run decoding as usual but filter the output words for prefix
+                step = 0
+        else:
+            step = 0
+
+        # step = 0 if (prefix_tokens is None and bsz == 1) else prefix_tokens.size(1) - 1
         # for step in range(max_len + 1):  # one extra step for EOS marker
         while step < (max_len + 1):
             # reorder decoder internal states based on the prev choice of beams

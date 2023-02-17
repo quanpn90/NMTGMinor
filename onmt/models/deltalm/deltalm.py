@@ -46,7 +46,13 @@ def upgrade_state_dict_for_deltalm(
 
     with open(pretrained_deltalm_checkpoint, "rb") as f:
         state = torch.load(f, map_location=torch.device("cpu"))
-    deltalm_state_dict = state['weights'] if len(state) == 1 else state
+    if 'weights' in state:
+
+        deltalm_state_dict = state['weights']
+    elif 'model' in state:
+        deltalm_state_dict = state['model']
+    else:
+        deltalm_state_dict = state
 
     new_deltalm_state_dict = {}
 
@@ -64,13 +70,21 @@ def upgrade_state_dict_for_deltalm(
 
     deltalm_state_dict = new_deltalm_state_dict
 
+    # print(deltalm_state_dict.keys())
+
     for key in deltalm_state_dict.keys():
+
+        if "output_projection" in key:
+            continue
+
         map_key = key
         map_key = map_key.replace('.ffn_1.fc1', '.fc3')
         map_key = map_key.replace('.ffn_1.fc2', '.fc4')
         map_key = map_key.replace('.ffn_2', '')
         map_key = map_key.replace('.ffn.', '.')
         map_key = map_key.replace('emb_layer_norm', 'layernorm_embedding')
+
+        # print(key, state_dict[map_key].size(), deltalm_state_dict[key].size())
         assert map_key in state_dict, map_key
         if 'embed_positions' in key or 'embed_tokens' in key:
             left_size = state_dict[map_key].size(0)
@@ -123,7 +137,7 @@ class DeltaLMDecoder(TransformerDecoderBase):
                 pretrained_deltalm_checkpoint=args.pretrained_deltalm_checkpoint,
                 is_encoder=False,
             )
-            self.load_state_dict(deltalm_loaded_state_dict, strict=True)
+            self.load_state_dict(deltalm_loaded_state_dict, strict=False)
             print("Load DeltaLM's decoder from {0}".format(args.pretrained_deltalm_checkpoint))
 
         self.model_size = args.decoder_embed_dim
@@ -260,24 +274,24 @@ class DeltaLMDecoderLayer(TransformerDecoderLayerBase):
         if self.normalize_before:
             x = self.ffn_layer_norm(x)
 
-        # if self.fused and x.is_cuda:
-        #     dropout_p = self.activation_dropout_module.p if self.training else 0.0
-        #
-        #     weights = [self.fc3.weight, self.fc4.weight]
-        #     biases = [self.fc3.bias, self.fc4.bias]
-        #
-        #     x = self.fused_function(dropout_p, checkpointing_ffn, x, *weights, *biases)
-        #
-        # else:
-        # x = self.activation_fn(self.fc3(x))
-        # x = self.activation_dropout_module(x)
-        # x = self.fc4(x)
-        if self.checkpoint_activations and self.training:
-            x = torch.utils.checkpoint.checkpoint(linear_act_linear, x, self.fc3, self.fc4,
-                                       self.dropout_module.p, self.training, self.activation_fn)
+        if self.fused and x.is_cuda:
+            dropout_p = self.activation_dropout_module.p if self.training else 0.0
+
+            weights = [self.fc3.weight, self.fc4.weight]
+            biases = [self.fc3.bias, self.fc4.bias]
+
+            x = self.fused_function(dropout_p, checkpointing_ffn, x, *weights, *biases)
+
         else:
-            x = linear_act_linear(x, self.fc3, self.fc4,
-                                       self.dropout_module.p, self.training, self.activation_fn)
+            x = self.activation_fn(self.fc3(x))
+            x = self.activation_dropout_module(x)
+            x = self.fc4(x)
+        # if self.checkpoint_activations and self.training:
+        #     x = torch.utils.checkpoint.checkpoint(linear_act_linear, x, self.fc3, self.fc4,
+        #                                self.dropout_module.p, self.training, self.activation_fn)
+        # else:
+        #     x = linear_act_linear(x, self.fc3, self.fc4,
+        #                                self.dropout_module.p, self.training, self.activation_fn)
 
         # x = self.dropout_module(x)
         # x = self.residual_connection(x, residual)
@@ -311,24 +325,24 @@ class DeltaLMDecoderLayer(TransformerDecoderLayerBase):
         if self.normalize_before:
             x = self.final_layer_norm(x)
 
-        # if self.fused and x.is_cuda:
-        #     dropout_p = self.activation_dropout_module.p if self.training else 0.0
-        #
-        #     weights = [self.fc1.weight, self.fc2.weight]
-        #     biases = [self.fc1.bias, self.fc2.bias]
-        #
-        #     x = self.fused_function(dropout_p, checkpointing_ffn, x, *weights, *biases)
-        #
-        # else:
-        # x = self.activation_fn(self.fc1(x))
-        # x = self.activation_dropout_module(x)
-        # x = self.fc2(x)
-        if self.checkpoint_activations and self.training:
-            x = torch.utils.checkpoint.checkpoint(linear_act_linear, x, self.fc1, self.fc2,
-                                       self.dropout_module.p, self.training, self.activation_fn)
+        if self.fused and x.is_cuda:
+            dropout_p = self.activation_dropout_module.p if self.training else 0.0
+
+            weights = [self.fc1.weight, self.fc2.weight]
+            biases = [self.fc1.bias, self.fc2.bias]
+
+            x = self.fused_function(dropout_p, checkpointing_ffn, x, *weights, *biases)
+
         else:
-            x = linear_act_linear(x, self.fc1, self.fc2,
-                                  self.dropout_module.p, self.training, self.activation_fn)
+            x = self.activation_fn(self.fc1(x))
+            x = self.activation_dropout_module(x)
+            x = self.fc2(x)
+        # if self.checkpoint_activations and self.training:
+        #     x = torch.utils.checkpoint.checkpoint(linear_act_linear, x, self.fc1, self.fc2,
+        #                                self.dropout_module.p, self.training, self.activation_fn)
+        # else:
+        #     x = linear_act_linear(x, self.fc1, self.fc2,
+        #                           self.dropout_module.p, self.training, self.activation_fn)
 
         # x = self.dropout_module(x)
         # x = self.residual_connection(x, residual)

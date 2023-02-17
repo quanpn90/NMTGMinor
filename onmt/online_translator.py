@@ -1,5 +1,6 @@
 import onmt
 import onmt.modules
+from collections import defaultdict
 
 
 class TranslatorParameter(object):
@@ -143,10 +144,24 @@ class ASROnlineTranslator(object):
         from onmt.inference.fast_translator import FastTranslator
         self.translator = FastTranslator(opt)
 
+    def set_language(self, input_language, output_language, language_code_system="mbart50"):
+
+        if language_code_system == "mbart50":
+            language_map_dict = {"en": "en_XX", "de": "de_DE", "fr": "fr_XX", "es": "es_XX",
+                                 "pt": "pt_XX", "it": "it_IT", "nl": "nl_XX"}
+
+        else:
+            language_map_dict = defaultdict(lambda self, missing_key: missing_key)
+
+        input_lang = language_map_dict[input_language]
+        output_lang = language_map_dict[output_language]
+
+        self.translator.change_language(new_src_lang=input_lang, new_tgt_lang=output_lang)
+
     def translate(self, input, prefix):
         """
         Args:
-            input: audio input? or audio file?
+            input: audio segment (torch.Tensor)
 
         Returns:
 
@@ -172,3 +187,38 @@ class ASROnlineTranslator(object):
         external_tokenizer = self.translator.external_tokenizer
 
         return get_sentence_from_tokens(pred_batch[0][0], pred_ids[0][0], "word", external_tokenizer)
+
+    def translate_batch(self, inputs, prefixes):
+        """
+        Args:
+            inputs: list of audio tensors
+            prefixes: list of prefixes
+
+        Returns:
+
+        """
+        # 2 list because the translator is designed to run with 1 audio and potentially 1 text
+        src_batches = [inputs]  # ... about the input
+
+        tgt_batch = []
+        sub_src_batch = []
+        past_src_batches = []
+
+        # pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = self.translator.translate(
+        #     src_batches, tgt_batch,
+        #     type='asr',
+        #     prefix=prefix)
+
+        pred_batch, pred_ids, pred_score, pred_length, \
+        gold_score, num_gold_words, all_gold_scores = self.translator.translate(
+            src_batches, tgt_batch, type='asr',
+            prefix=prefixes)
+
+        external_tokenizer = self.translator.external_tokenizer
+
+        outputs = list()
+
+        for pred, pred_id in zip(pred_batch, pred_ids):
+            outputs.append(get_sentence_from_tokens(pred[0], pred_id[0], "word", external_tokenizer))
+
+        return outputs

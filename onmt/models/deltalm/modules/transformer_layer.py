@@ -69,7 +69,6 @@ class TransformerEncoderLayerBase(nn.Module):
             activation_dropout_p = cfg.relu_dropout or 0
         self.activation_dropout_module = nn.Dropout(activation_dropout_p)
         self.normalize_before = cfg.encoder_normalize_before
-        print("Encoder layer normalize before:", self.normalize_before)
         self.fc1 = self.build_fc1(
             self.embed_dim,
             cfg.encoder_ffn_embed_dim
@@ -83,18 +82,18 @@ class TransformerEncoderLayerBase(nn.Module):
 
         self.final_layer_norm = LayerNorm(self.embed_dim)
         self.activation_fn_name = cfg.activation_fn
-        # self.fused = False
-        # self.fused_function = None
-        # if self.activation_fn_name == 'relu':
-        #     from onmt.modules.mlp.mlp import mlp_relu_function
-        #     if mlp_relu_function is not None:
-        #         self.fused_function = mlp_relu_function
-        #         self.fused = True
-        # elif self.activation_fn_name == 'gelu':
-        #     from onmt.modules.mlp.mlp import mlp_gelu_function
-        #     if mlp_gelu_function is not None:
-        #         self.fused_function = mlp_gelu_function
-        #         self.fused = True
+        self.fused = False
+        self.fused_function = None
+        if self.activation_fn_name == 'relu':
+            from onmt.modules.mlp.mlp import mlp_relu_function
+            if mlp_relu_function is not None:
+                self.fused_function = mlp_relu_function
+                self.fused = True
+        elif self.activation_fn_name == 'gelu':
+            from onmt.modules.mlp.mlp import mlp_gelu_function
+            if mlp_gelu_function is not None:
+                self.fused_function = mlp_gelu_function
+                self.fused = True
 
     def build_fc1(self, input_dim, output_dim, *args):
         return nn.Linear(input_dim, output_dim)
@@ -177,27 +176,25 @@ class TransformerEncoderLayerBase(nn.Module):
         residual = x
         if self.normalize_before:
             x = self.final_layer_norm(x)
-        # x = self.activation_fn(self.fc1(x))
-        # x = self.activation_dropout_module(x)
-        # x = self.fc2(x)
-        # if self.fused and x.is_cuda:
-        #     dropout_p = self.activation_dropout_module.p if self.training else 0.0
-        #
-        #     weights = [self.fc1.weight, self.fc2.weight]
-        #     biases = [self.fc1.bias, self.fc2.bias]
-        #
-        #     x = self.fused_function(dropout_p, False, x, *weights, *biases)
-        #
-        # else:
-        # x = self.activation_fn(self.fc1(x))
-        # x = self.activation_dropout_module(x)
-        # x = self.fc2(x)
-        if self.checkpoint_activations and self.training:
-            x = torch.utils.checkpoint.checkpoint(linear_act_linear, x, self.fc1, self.fc2,
-                                       self.dropout_module.p, self.training, self.activation_fn)
+
+        if self.fused and x.is_cuda:
+            dropout_p = self.activation_dropout_module.p if self.training else 0.0
+
+            weights = [self.fc1.weight, self.fc2.weight]
+            biases = [self.fc1.bias, self.fc2.bias]
+
+            x = self.fused_function(dropout_p, False, x, *weights, *biases)
+
         else:
-            x = linear_act_linear(x, self.fc1, self.fc2,
-                                       self.dropout_module.p, self.training, self.activation_fn)
+            x = self.activation_fn(self.fc1(x))
+            x = self.activation_dropout_module(x)
+            x = self.fc2(x)
+        # if self.checkpoint_activations and self.training:
+        #     x = torch.utils.checkpoint.checkpoint(linear_act_linear, x, self.fc1, self.fc2,
+        #                                self.dropout_module.p, self.training, self.activation_fn)
+        # else:
+        #     x = linear_act_linear(x, self.fc1, self.fc2,
+        #                                self.dropout_module.p, self.training, self.activation_fn)
 
         # x = self.dropout_module(x)
         # x = self.residual_connection(x, residual)

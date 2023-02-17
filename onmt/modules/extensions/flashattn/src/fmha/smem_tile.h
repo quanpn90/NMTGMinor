@@ -1384,7 +1384,7 @@ struct Smem_tile_mma_epilogue : public Base {
         }
     }
 
-    template<int M, int N>
+    template<typename elem_type=__half, int M, int N>
     inline __device__ void store(const Acc (&acc)[M][N]){
         #pragma unroll
         for( int mi = 0; mi < M; mi++ ) {
@@ -1401,10 +1401,10 @@ struct Smem_tile_mma_epilogue : public Base {
                 float tmp12 = acc[mi][ni].elt(6);
                 float tmp13 = acc[mi][ni].elt(7);
 
-                uint32_t x = fmha::float2_to_half2(tmp00, tmp01);
-                uint32_t y = fmha::float2_to_half2(tmp02, tmp03);
-                uint32_t z = fmha::float2_to_half2(tmp10, tmp11);
-                uint32_t w = fmha::float2_to_half2(tmp12, tmp13);
+                uint32_t x = fmha::float2_pack<elem_type>(tmp00, tmp01);
+                uint32_t y = fmha::float2_pack<elem_type>(tmp02, tmp03);
+                uint32_t z = fmha::float2_pack<elem_type>(tmp10, tmp11);
+                uint32_t w = fmha::float2_pack<elem_type>(tmp12, tmp13);
 
                 // size_t offset = (this->write_offset_ ^ (ni * 32)) + mi * WARPS_M * 16 * BYTES_PER_ROW;
                 // fmha::sts(this->smem_ + offset + 0 * BYTES_PER_ROW, x);
@@ -1643,6 +1643,19 @@ struct Smem_tile_dp_sum {
                     smem_write[row + i * ROWS_PER_LDG] = sum[i];
                 }
             }
+        }
+    }
+
+    inline __device__ void store_pair(const float (&sum)[MMAS_M * 2]) {
+        float *smem_write = smem_;
+        // Extract the position in the warp.
+        int warp = tidx_ / Cta_tile::THREADS_PER_WARP;
+        int lane = tidx_ % Cta_tile::THREADS_PER_WARP;
+        int row = lane / 4;
+        #pragma unroll
+        for (int mi = 0; mi < MMAS_M; ++mi) {
+            smem_write[mi * ROWS_PER_MMA + row + 0] = sum[mi * 2 + 0];
+            smem_write[mi * ROWS_PER_MMA + row + 8] = sum[mi * 2 + 1];
         }
     }
 

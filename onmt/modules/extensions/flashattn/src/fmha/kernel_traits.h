@@ -25,11 +25,13 @@
  *
  ******************************************************************************/
 
+#include <cuda_fp16.h>
+
 #pragma once
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template<int S, int D, int STEP, int WARPS_M, int WARPS_N, uint32_t FLAGS = 0x08u>
+template<int S, int D, int STEP, int WARPS_M, int WARPS_N, uint32_t FLAGS = 0x08u, typename elem_type_=__half>
 struct FMHA_kernel_traits {
 
     // The CTA description for the 1st GEMM.
@@ -74,11 +76,19 @@ struct FMHA_kernel_traits {
 
     using Gmem_tile_do = fmha::Gmem_tile_qkv<Cta_tile_p, fmha::BITS_PER_ELEMENT_A, STEP, D>;
 
+    // // The global memory tile to store the accumulated dK and dV
+    // // Hack: we set BYTES_PER_LDGS=32 to emulate the access pattern of dK and dV
+    // // where there are 16 bits per lements and 16 bytes per load. In reality we won't
+    // // be issue any load or store of size 32 bytes.
+    // using Gmem_tile_dkv_accum = fmha::Gmem_tile_qkv<Cta_tile_o, 32, S, D, 32>;
+
     // The global memory tile to store the softmax sum.
     using Gmem_softmax_sum = fmha::Gmem_summary_stats<Cta_tile_p>;
 
     // The shared memory tile to store dp sum.
     using Smem_dp_sum = fmha::Smem_tile_dp_sum<Gmem_tile_q, 2>;
+
+    using elem_type = elem_type_;
 
     // Make sure the number of threads match.
     static_assert((int)Gmem_tile_o::THREADS_PER_ROW == (int)Smem_tile_o::THREADS_PER_ROW, "");

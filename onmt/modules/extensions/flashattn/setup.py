@@ -117,18 +117,25 @@ ext_modules.append(
         name="flash_attn_cuda",
         sources=[
             "fmha_api.cpp",
-            "src/fmha_fprop_fp16_kernel.sm80.cu",
-            "src/fmha_dgrad_fp16_kernel_loop.sm80.cu",
+            "src/fmha_fwd_hdim32.cu",
+            "src/fmha_fwd_hdim64.cu",
+            "src/fmha_fwd_hdim128.cu",
+            "src/fmha_bwd_hdim32.cu",
+            "src/fmha_bwd_hdim64.cu",
+            "src/fmha_bwd_hdim128.cu",
             "src/fmha_block_fprop_fp16_kernel.sm80.cu",
             "src/fmha_block_dgrad_fp16_kernel_loop.sm80.cu",
         ],
         extra_compile_args={
-            "cxx": ["-O3"] + generator_flag,
+            "cxx": ["-O3", "-std=c++17"] + generator_flag,
             "nvcc": append_nvcc_threads(
                 [
                     "-O3",
+                    "-std=c++17",
                     "-U__CUDA_NO_HALF_OPERATORS__",
                     "-U__CUDA_NO_HALF_CONVERSIONS__",
+                    "-U__CUDA_NO_HALF2_OPERATORS__",
+                    "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
                     "--expt-relaxed-constexpr",
                     "--expt-extended-lambda",
                     "--use_fast_math",
