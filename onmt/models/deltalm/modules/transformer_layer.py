@@ -82,6 +82,8 @@ class TransformerEncoderLayerBase(nn.Module):
 
         self.final_layer_norm = LayerNorm(self.embed_dim)
         self.activation_fn_name = cfg.activation_fn
+
+        # Fused MLP config
         self.fused = False
         self.fused_function = None
         if self.activation_fn_name == 'relu':
@@ -94,6 +96,10 @@ class TransformerEncoderLayerBase(nn.Module):
             if mlp_gelu_function is not None:
                 self.fused_function = mlp_gelu_function
                 self.fused = True
+
+        # Adapter config
+        self.n_languages = -1
+        self.has_adapter = False
 
     def build_fc1(self, input_dim, output_dim, *args):
         return nn.Linear(input_dim, output_dim)
