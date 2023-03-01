@@ -687,6 +687,7 @@ class Trainer(object):
             streaming_state = None
 
         ewc_importance = opt.ewc_importance
+
         if ewc_importance > 0:
             assert self.fisher_info is not None
             if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
@@ -858,7 +859,9 @@ class Trainer(object):
                         del outputs
 
                     # EWC training: no need for autograd here?
-                    ewc_importance = opt.ewc_importance
+                    if self.optim._step % opt.ewc_decay_every == 0:
+
+                        ewc_importance = ewc_importance / opt.ewc_decay_scale
 
                     # only run this ewc everytime we reduce
 
@@ -1333,7 +1336,7 @@ class Trainer(object):
             num_words = tgt_size
             report_loss.add_(loss_data)
             report_tgt_words.add_(num_words)
-            report_src_words.add_(src_size)
+            report_src_words.add_(src_size) 
             total_loss.add_(loss_data)
             total_words.add_(num_words)
 
@@ -1389,7 +1392,6 @@ class Trainer(object):
         loss.backward()
 
         self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
-        self.all_reduce(num_accumulated_sents, op=dist.ReduceOp.SUM, group=self.group)
 
         if self.world_size > 1:
             if self.rank == 0:

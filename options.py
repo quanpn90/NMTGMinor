@@ -32,6 +32,10 @@ def make_parser(parser):
                         help='EWC penalty only applies after this delay (steps)')
     parser.add_argument('-ewc_normalize', action='store_true',
                         help='EWC penalty being normalized')
+    parser.add_argument('-ewc_decay_every', type=int, default=10000,
+                        help='EWC scale reduced after these steps')
+    parser.add_argument('-ewc_decay_scale', type=int, default=10,
+                        help='EWC scale reduced after these steps')
 
     parser.add_argument('-patch_vocab_multiplier', type=int, default=1,
                         help='Pad vocab so that the size divides by this multiplier')

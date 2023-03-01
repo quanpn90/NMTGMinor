@@ -1,7 +1,10 @@
 import onmt
 import onmt.modules
 from collections import defaultdict
-
+try:
+    from mosestokenizer import MosesDetokenizer
+except ImportError:
+    MosesDetokenizer = None
 
 class TranslatorParameter(object):
 
@@ -52,6 +55,7 @@ class TranslatorParameter(object):
         self.vocab_id_list = None  # to be added if necessary
 
         self.pretrained_classifier = None
+        self.detokenize = False
 
         self.read_file(filename)
 
@@ -82,6 +86,8 @@ class TranslatorParameter(object):
             elif w[0] == "gpu":
                 self.gpu = int(w[1])
                 self.cuda = True
+            elif w[0] == "detokenize":
+                self.detokenize = True
 
             line = f.readline()
 
@@ -144,6 +150,10 @@ class ASROnlineTranslator(object):
         from onmt.inference.fast_translator import FastTranslator
         self.translator = FastTranslator(opt)
 
+        self.src_lang = "en"
+        self.tgt_lang = "en"
+        self.detokenize = opt.detokenize
+
     def set_language(self, input_language, output_language, language_code_system="mbart50"):
 
         if language_code_system == "mbart50":
@@ -157,6 +167,9 @@ class ASROnlineTranslator(object):
         output_lang = language_map_dict[output_language]
 
         self.translator.change_language(new_src_lang=input_lang, new_tgt_lang=output_lang)
+
+        self.src_lang = input_language
+        self.tgt_lang = output_language
 
     def translate(self, input, prefix):
         """
@@ -186,7 +199,16 @@ class ASROnlineTranslator(object):
 
         external_tokenizer = self.translator.external_tokenizer
 
-        return get_sentence_from_tokens(pred_batch[0][0], pred_ids[0][0], "word", external_tokenizer)
+        output_sentence = get_sentence_from_tokens(pred_batch[0][0], pred_ids[0][0], "word", external_tokenizer)
+
+        # here if we want to use mosestokenizer, probably we need to split the sentence AFTER the sentencepiece/bpe
+        # model applies their de-tokenization
+        if self.detokenize and MosesDetokenizer is not None:
+            output_sentence_parts = output_sentence.split()
+            with MosesDetokenizer(self.tgt_lang) as detokenize:
+                output_sentence = detokenize(output_sentence_parts)
+
+        return output_sentence
 
     def translate_batch(self, inputs, prefixes):
         """
