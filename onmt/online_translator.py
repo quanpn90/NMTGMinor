@@ -2,9 +2,11 @@ import onmt
 import onmt.modules
 from collections import defaultdict
 try:
-    from mosestokenizer import MosesDetokenizer
+    from mosestokenizer import MosesDetokenizer, MosesTokenizer
 except ImportError:
+    print("[WARNING] Moses tokenizer is not installed. Models with 'detokenize' option won't have Moses-detokenized outputs")
     MosesDetokenizer = None
+    MosesTokenizer = None
 
 class TranslatorParameter(object):
 
@@ -180,6 +182,17 @@ class ASROnlineTranslator(object):
 
         """
 
+        if self.detokenize:
+            prefixes = []
+            for _prefix in prefix:
+                if _prefix is not None:
+                    with MosesTokenizer(self.tgt_lang) as tokenize:
+                        output_sentence = tokenize(_prefix)
+                        output_sentence = " ".join(output_sentence)
+                        _prefix = output_sentence
+                prefixes.append(_prefix)
+            prefix = prefixes
+
         # 2 list because the translator is designed to run with 1 audio and potentially 1 text
         src_batches = [[input]]  # ... about the input
 
@@ -219,6 +232,18 @@ class ASROnlineTranslator(object):
         Returns:
 
         """
+
+        if self.detokenize:
+            new_prefixes = []
+            for _prefix in prefixes:
+                if _prefix is not None:
+                    with MosesTokenizer(self.tgt_lang) as tokenize:
+                        tokenized_sentence = tokenize(_prefix)
+                        tokenized_sentence = " ".join(output_sentence)
+                        _prefix = tokenized_sentence
+                new_prefixes.append(_prefix)
+            prefixes = new_prefixes
+
         # 2 list because the translator is designed to run with 1 audio and potentially 1 text
         src_batches = [inputs]  # ... about the input
 
