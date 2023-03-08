@@ -176,6 +176,7 @@ class ASROnlineTranslator(object):
     def translate(self, input, prefix):
         """
         Args:
+            prefix:
             input: audio segment (torch.Tensor)
 
         Returns:
@@ -187,29 +188,26 @@ class ASROnlineTranslator(object):
             for _prefix in prefix:
                 if _prefix is not None:
                     with MosesTokenizer(self.tgt_lang) as tokenize:
-                        output_sentence = tokenize(_prefix)
-                        output_sentence = " ".join(output_sentence)
-                        _prefix = output_sentence
+                        __prefix = tokenize(_prefix)
+                        __prefix = " ".join(__prefix)
+                        _prefix = __prefixs
                 prefixes.append(_prefix)
             prefix = prefixes
 
-        # 2 list because the translator is designed to run with 1 audio and potentially 1 text
+        # 2 lists because the translator is designed to run with 1 audio and potentially 1 text
         src_batches = [[input]]  # ... about the input
 
         tgt_batch = []
         sub_src_batch = []
         past_src_batches = []
 
-        # pred_score, pred_length, gold_score, num_gold_words, all_gold_scores = self.translator.translate(
-        #     src_batches, tgt_batch,
-        #     type='asr',
-        #     prefix=prefix)
-
+        # perform beam search in the model
         pred_batch, pred_ids, pred_score, pred_length, \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch, type='asr',
             prefix=prefix)
 
+        # use the external sentencepiece model
         external_tokenizer = self.translator.external_tokenizer
 
         output_sentence = get_sentence_from_tokens(pred_batch[0][0], pred_ids[0][0], "word", external_tokenizer)

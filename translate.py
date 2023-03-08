@@ -9,7 +9,6 @@ import argparse
 import math
 import numpy
 import sys
-import h5py as h5
 import numpy as np
 from onmt.inference.fast_translator import FastTranslator
 from onmt.inference.stream_translator import StreamTranslator
@@ -60,8 +59,8 @@ parser.add_argument('-stride', type=int, default=1,
                     help="Stride on input features")
 parser.add_argument('-concat', type=str, default="1",
                     help="Concate sequential audio features to decrease sequence length")
-parser.add_argument('-asr_format', default="h5", required=False,
-                    help="Format of asr data h5 or scp")
+parser.add_argument('-asr_format', default="scp", required=False,
+                    help="Format of asr data (only scp supported for now)")
 parser.add_argument('-encoder_type', default='text',
                     help="Type of encoder to use. Options are [text|img|audio].")
 parser.add_argument('-previous_context', type=int, default=0,
@@ -233,8 +232,6 @@ def main():
     if opt.src == "stdin":
         in_file = sys.stdin
         opt.batch_size = 1
-    elif opt.encoder_type == "audio" and opt.asr_format == "h5":
-        in_file = h5.File(opt.src, 'r')
     elif opt.encoder_type == "audio" and opt.asr_format == "scp":
         # import kaldiio
         # from kaldiio import ReadHelper
