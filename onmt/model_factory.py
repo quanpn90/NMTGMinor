@@ -7,7 +7,7 @@ from onmt.models.relative_transformer import RelativeTransformerEncoder, Relativ
 from onmt.models.transformer_layers import PositionalEncoding
 from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, RelativeTransformer
 from onmt.modules.copy_generator import CopyGenerator
-from options import backward_compatible
+from onmt.options import backward_compatible
 from onmt.constants import add_tokenidx
 import math
 import json

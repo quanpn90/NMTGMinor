@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import os
 from onmt.online_translator import TranslatorParameter, OnlineTranslator
 import sys
