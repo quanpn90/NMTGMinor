@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 from onmt.online_translator import RecognizerParameter, ASROnlineTranslator
 from flask import Flask, request
 import torch

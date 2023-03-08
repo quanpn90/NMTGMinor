@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from onmt.inference.search import BeamSearch, DiverseBeamSearch, Sampling
 from onmt.inference.translator import Translator
 from onmt.constants import add_tokenidx
-from options import backward_compatible
+from onmt.options import backward_compatible
 
 # buggy lines: 392, 442, 384
 model_list = ['transformer', 'stochastic_transformer', 'fusion_network']
