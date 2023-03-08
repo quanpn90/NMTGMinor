@@ -501,7 +501,7 @@ class M2M100DecoderLayer(nn.Module):
             attention_mask=attention_mask,
             output_attentions=output_attentions,
             incremental=incremental, incremental_cache=incremental_cache,
-            lang=lang, mixture=mixture
+            lang=lang
         )
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
@@ -519,7 +519,7 @@ class M2M100DecoderLayer(nn.Module):
                 attention_mask=encoder_attention_mask,
                 output_attentions=output_attentions,
                 incremental=incremental, incremental_cache=incremental_cache,
-                lang=lang, mixture=mixture
+                lang=lang
             )
             hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
             hidden_states = residual + hidden_states
@@ -715,31 +715,31 @@ class M2M100Encoder(M2M100PreTrainedModel):
                 hidden_states =  torch.cuda.amp.autocast_mode._cast(hidden_states, torch.half)
 
         # only run this when seq_len <= 512 and sm = 80/86 and type = half
-        if self.fast_bert_mha is not None and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] in [0, 6]) \
-                and hidden_states.dtype == torch.half:
-            can_run_fast_bert_mha = True
-
-            x = hidden_states
-            padding_mask = attention_mask  # [B x T]
-            # masked positions = 1 so to compute length we need the (1 -)
-            if padding_mask is None:
-                padding_mask = x.new_zeros(bsz, seq_len)
-            padding_mask = padding_mask.long()
-            lengths = (1 - padding_mask).sum(dim=1)
-            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
-
-            x = x.view(-1, x.size(-1))
-            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
-            hidden_states = x.index_select(0, non_pad_indices)
-
-            max_len = max(lengths)
-            # cumulative sequence lengths (required input for fmha)
-            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
-            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
-        else:
-            max_len = -1
-            cu_seqlens = None
-            non_pad_indices = None
+        # if self.fast_bert_mha is not None and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] in [0, 6]) \
+        #         and hidden_states.dtype == torch.half:
+        #     can_run_fast_bert_mha = True
+        #
+        #     x = hidden_states
+        #     padding_mask = attention_mask  # [B x T]
+        #     # masked positions = 1 so to compute length we need the (1 -)
+        #     if padding_mask is None:
+        #         padding_mask = x.new_zeros(bsz, seq_len)
+        #     padding_mask = padding_mask.long()
+        #     lengths = (1 - padding_mask).sum(dim=1)
+        #     lengths = lengths.cpu().tolist()  # list of lengths for B seqs
+        #
+        #     x = x.view(-1, x.size(-1))
+        #     non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+        #     hidden_states = x.index_select(0, non_pad_indices)
+        #
+        #     max_len = max(lengths)
+        #     # cumulative sequence lengths (required input for fmha)
+        #     a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+        #     cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
+        # else:
+        max_len = -1
+        cu_seqlens = None
+        non_pad_indices = None
 
         if not can_run_fast_bert_mha:
             # transpose from [B x T x H] to [T x B x H]

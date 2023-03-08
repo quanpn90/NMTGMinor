@@ -4,7 +4,7 @@ from collections import defaultdict
 try:
     from mosestokenizer import MosesDetokenizer, MosesTokenizer
 except ImportError:
-    print("[WARNING] Moses tokenizer is not installed. Models with 'detokenize' option won't have Moses-detokenized outputs")
+    # print("[WARNING] Moses tokenizer is not installed. Models with 'detokenize' option won't have Moses-detokenized outputs")
     MosesDetokenizer = None
     MosesTokenizer = None
 

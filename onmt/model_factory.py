@@ -513,8 +513,12 @@ def build_tm_model(opt, dicts, constants=None):
             print("[INFO] Loading weights for encoder from: \n", opt.enc_state_dict)
 
             enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+            if opt.enc_pretrained_model in ["m2m"]:
+                enc_model_state_dict["embed_positions.weights"] = encoder.embed_positions.weights
+                encoder.load_state_dict(enc_model_state_dict)
+                print("Done")
 
-            if opt.enc_pretrained_model not in ["deltalm"]:
+            elif opt.enc_pretrained_model not in ["deltalm"]:
                 encoder.from_pretrained(state_dict=enc_model_state_dict,
                                         model=encoder,
                                         output_loading_info=opt.verbose,
@@ -604,8 +608,11 @@ def build_tm_model(opt, dicts, constants=None):
         elif opt.dec_pretrained_model:
             print("  Loading weights for decoder from: \n", opt.dec_state_dict)
             dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
-
-            if opt.dec_pretrained_model not in ["deltalm"]:
+            if opt.dec_pretrained_model in ["m2m"]:
+                dec_model_state_dict["embed_positions.weights"] = decoder.embed_positions.weights
+                decoder.load_state_dict(dec_model_state_dict)
+                print("Done")
+            elif opt.dec_pretrained_model not in ["deltalm"]:
                 decoder.from_pretrained(state_dict=dec_model_state_dict,
                                         model=decoder,
                                         output_loading_info=opt.verbose,

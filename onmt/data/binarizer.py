@@ -355,7 +355,7 @@ class Binarizer:
             print("[INFO] Using the external %s tokenizer..." % external_tokenizer)
 
             from transformers import M2M100Tokenizer
-            ext_tokenizer = M2M100Tokenizer .from_pretrained(external_tokenizer, src_lang=lang)
+            ext_tokenizer = M2M100Tokenizer.from_pretrained(external_tokenizer, src_lang=lang)
             ext_tokenizer.src_lang = lang
             if ext_tokenizer.src_lang != lang:
                 raise RuntimeError("The language %s does not exist in M2M100." % lang)
@@ -375,6 +375,16 @@ class Binarizer:
                 ext_tokenizer.src_lang = lang
             except FileNotFoundError:
                 ext_tokenizer = DeltaLMTokenizer.from_pretrained("facebook/mbart-large-50", src_lang=lang)
+        elif "nllb" in external_tokenizer.lower():
+
+            from transformers import NllbTokenizer
+            from pretrain_module.tokenization_deltalm import DeltaLMTokenizer
+            try:  # check if this tokenizer is saved locally or not
+                ext_tokenizer = torch.load("nllb.tokenizer.pt")
+                ext_tokenizer.src_lang = lang
+            except FileNotFoundError:
+                ext_tokenizer = NllbTokenizer.from_pretrained("facebook/nllb-200-distilled-600M", src_lang=lang)
+                torch.save(ext_tokenizer, "nllb.tokenizer.pt")
 
         elif external_tokenizer is None or len(external_tokenizer) == 0:
             ext_tokenizer = None

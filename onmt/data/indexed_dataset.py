@@ -29,7 +29,7 @@ dtypes = {
     3: np.int16,
     4: np.int32,
     5: np.int64,
-    6: np.float,
+    6: float,
     7: np.double,
 }
 
@@ -123,7 +123,7 @@ class IndexedDatasetBuilder(object):
         np.int16: 2,
         np.int32: 4,
         np.int64: 8,
-        np.float: 4,
+        float: 4,
         np.double: 8
     }
 
