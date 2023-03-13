@@ -78,19 +78,11 @@ class WavLMMultiheadAttention(nn.Module):
         k_embed_dim = embed_dim
         q_embed_dim = embed_dim
 
-        self.k_proj = quant_noise(
-            nn.Linear(self.kdim, k_embed_dim, bias=k_bias), q_noise, qn_block_size
-        )
-        self.v_proj = quant_noise(
-            nn.Linear(self.vdim, embed_dim, bias=bias), q_noise, qn_block_size
-        )
-        self.q_proj = quant_noise(
-            nn.Linear(embed_dim, q_embed_dim, bias=bias), q_noise, qn_block_size
-        )
+        self.k_proj = nn.Linear(self.kdim, k_embed_dim, bias=k_bias)
+        self.v_proj = nn.Linear(self.vdim, embed_dim, bias=bias)
+        self.q_proj = nn.Linear(embed_dim, q_embed_dim, bias=bias)
 
-        self.out_proj = quant_noise(
-            nn.Linear(embed_dim, embed_dim, bias=bias), q_noise, qn_block_size
-        )
+        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
 
         if add_bias_kv:
             self.bias_k = Parameter(torch.Tensor(1, 1, embed_dim))
@@ -235,10 +227,19 @@ class WavLMMultiheadAttention(nn.Module):
             if position_bias is not None:
                 attn_mask_rel_pos = position_bias
                 if self.gru_rel_pos:
+
+                    # from [B x T x H] to [T x B x H]
                     query_layer = query.transpose(0, 1)
+
+                    # [T x B x head x -1]
                     new_x_shape = query_layer.size()[:-1] + (self.num_heads, -1)
+
+                    # [T x B x head x head_size]
                     query_layer = query_layer.view(*new_x_shape)
+
+                    # [T x head x B x head_size]
                     query_layer = query_layer.permute(0, 2, 1, 3)
+
                     _B, _H, _L, __ = query_layer.size()
 
                     gate_a, gate_b = torch.sigmoid(self.grep_linear(query_layer).view(
@@ -344,45 +345,45 @@ class WavLMMultiheadAttention(nn.Module):
                     .transpose(0, 1)
             )
 
-        if saved_state is not None:
-            # saved states are stored with shape (bsz, num_heads, seq_len, head_dim)
-            if "prev_key" in saved_state:
-                _prev_key = saved_state["prev_key"]
-                assert _prev_key is not None
-                prev_key = _prev_key.view(bsz * self.num_heads, -1, self.head_dim)
-                if static_kv:
-                    k = prev_key
-                else:
-                    assert k is not None
-                    k = torch.cat([prev_key, k], dim=1)
-                src_len = k.size(1)
-            if "prev_value" in saved_state:
-                _prev_value = saved_state["prev_value"]
-                assert _prev_value is not None
-                prev_value = _prev_value.view(bsz * self.num_heads, -1, self.head_dim)
-                if static_kv:
-                    v = prev_value
-                else:
-                    assert v is not None
-                    v = torch.cat([prev_value, v], dim=1)
-            prev_key_padding_mask: Optional[Tensor] = None
-            if "prev_key_padding_mask" in saved_state:
-                prev_key_padding_mask = saved_state["prev_key_padding_mask"]
-            assert k is not None and v is not None
-            key_padding_mask = MultiheadAttention._append_prev_key_padding_mask(
-                key_padding_mask=key_padding_mask,
-                prev_key_padding_mask=prev_key_padding_mask,
-                batch_size=bsz,
-                src_len=k.size(1),
-                static_kv=static_kv,
-            )
-
-            saved_state["prev_key"] = k.view(bsz, self.num_heads, -1, self.head_dim)
-            saved_state["prev_value"] = v.view(bsz, self.num_heads, -1, self.head_dim)
-            saved_state["prev_key_padding_mask"] = key_padding_mask
-            # In this branch incremental_state is never None
-            assert incremental_state is not None
-            incremental_state = self._set_input_buffer(incremental_state, saved_state)
+        # if saved_state is not None:
+        #     # saved states are stored with shape (bsz, num_heads, seq_len, head_dim)
+        #     if "prev_key" in saved_state:
+        #         _prev_key = saved_state["prev_key"]
+        #         assert _prev_key is not None
+        #         prev_key = _prev_key.view(bsz * self.num_heads, -1, self.head_dim)
+        #         if static_kv:
+        #             k = prev_key
+        #         else:
+        #             assert k is not None
+        #             k = torch.cat([prev_key, k], dim=1)
+        #         src_len = k.size(1)
+        #     if "prev_value" in saved_state:
+        #         _prev_value = saved_state["prev_value"]
+        #         assert _prev_value is not None
+        #         prev_value = _prev_value.view(bsz * self.num_heads, -1, self.head_dim)
+        #         if static_kv:
+        #             v = prev_value
+        #         else:
+        #             assert v is not None
+        #             v = torch.cat([prev_value, v], dim=1)
+        #     prev_key_padding_mask: Optional[Tensor] = None
+        #     if "prev_key_padding_mask" in saved_state:
+        #         prev_key_padding_mask = saved_state["prev_key_padding_mask"]
+        #     assert k is not None and v is not None
+        #     key_padding_mask = MultiheadAttention._append_prev_key_padding_mask(
+        #         key_padding_mask=key_padding_mask,
+        #         prev_key_padding_mask=prev_key_padding_mask,
+        #         batch_size=bsz,
+        #         src_len=k.size(1),
+        #         static_kv=static_kv,
+        #     )
+        #
+        #     saved_state["prev_key"] = k.view(bsz, self.num_heads, -1, self.head_dim)
+        #     saved_state["prev_value"] = v.view(bsz, self.num_heads, -1, self.head_dim)
+        #     saved_state["prev_key_padding_mask"] = key_padding_mask
+        #     # In this branch incremental_state is never None
+        #     assert incremental_state is not None
+        #     incremental_state = self._set_input_buffer(incremental_state, saved_state)
         assert k is not None
         assert k.size(1) == src_len
 
@@ -539,3 +540,41 @@ class WavLMMultiheadAttention(nn.Module):
 
     def apply_sparse_mask(self, attn_weights, tgt_len: int, src_len: int, bsz: int):
         return attn_weights
+
+    def convert_fast_attention(self):
+
+        pass
+
+
+def get_activation_fn(activation: str):
+    """Returns the activation function corresponding to `activation`"""
+
+    if activation == "relu":
+        return F.relu
+    elif activation == "gelu":
+        return gelu
+    elif activation == "gelu_fast":
+        warnings.warn(
+            "--activation-fn=gelu_fast has been renamed to gelu_accurate"
+        )
+        return gelu_accurate
+    elif activation == "gelu_accurate":
+        return gelu_accurate
+    elif activation == "tanh":
+        return torch.tanh
+    elif activation == "linear":
+        return lambda x: x
+    elif activation == "glu":
+        return lambda x: x
+    else:
+        raise RuntimeError("--activation-fn {} not supported".format(activation))
+
+def gelu_accurate(x):
+    if not hasattr(gelu_accurate, "_a"):
+        gelu_accurate._a = math.sqrt(2 / math.pi)
+    return (
+        0.5 * x * (1 + torch.tanh(gelu_accurate._a * (x + 0.044715 * torch.pow(x, 3))))
+    )
+
+def gelu(x: torch.Tensor) -> torch.Tensor:
+    return torch.nn.functional.gelu(x.float()).type_as(x)

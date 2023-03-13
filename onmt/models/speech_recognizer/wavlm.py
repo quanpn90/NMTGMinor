@@ -57,8 +57,6 @@ def load_checkpoint_to_cpu(path, arg_overrides=None, load_on_all_ranks=False):
     return state
 
 
-
-
 class WavLMEncoder(nn.Module):
 
     def __init__(self, opt, model_path="wav2vec_vox_new.pt",
@@ -72,7 +70,7 @@ class WavLMEncoder(nn.Module):
         # from fairseq.models.wav2vec.wav2vec2 import Wav2Vec2Model
         from .fairseq_wav2vec2.wavlm import WavLM, WavLMConfig
         state = load_checkpoint_to_cpu(model_path)
-        self.cfg = WavLMConfig(checkpoint['cfg'])
+        self.cfg = WavLMConfig(state['cfg'])
 
         self.cfg.dropout = self.opt.enc_pretrain_emb_dropout
         self.cfg.activation_dropout = self.opt.ffn_dropout
@@ -83,7 +81,7 @@ class WavLMEncoder(nn.Module):
         self.cfg.mask_channel_length = 64
         self.cfg.mask_prob = 0.0
 
-        self.wavlm_encoder = WavLM(self.cfg)
+        self.wav2vec_encoder = WavLM(self.cfg)
         # load wav2vec weights
         wav2vec_weights = state['model']
         existed_weights = self.wav2vec_encoder.state_dict()
@@ -166,17 +164,13 @@ class WavLMEncoder(nn.Module):
             precomputed_tdnn = True
 
         attn_mask = long_mask
-        if self.favor:  # favor+ attention
-            if self.auto_check_redraw:
-                # print("Redraw projection ....")
-                self.proj_updater.redraw_projections()
 
         quantize_only = False  # self.quantize and not self.dual_output
         # don't mask when precomputed tdnn is used, because spec augmentation is used in the dataset
 
         wav2vec_output = self.wav2vec_encoder(input, attn_mask,
                                               mask=self.training, features_only=True, layer=None,
-                                              precomputed_tdnn=precomputed_tdnn, quantize=self.quantize,
+                                              precomputed_tdnn=precomputed_tdnn,
                                               quantize_only=quantize_only,
                                               lang=lang, atb=atb,
                                               checkpointing_ffn=checkpointing_ffn,

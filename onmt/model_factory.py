@@ -161,7 +161,7 @@ def build_tm_model(opt, dicts, constants=None):
                                      padding_idx=constants.TGT_PAD)
     else:
         assert opt.model in ["pretrain_transformer", "wav2vec2_bert",
-                             "wav2vec_mbart50", "quantize_wav2vec2_bert", "quantize_wav2vec2_mbart50"], \
+                             "`wav2vec_mbart50`", "quantize_wav2vec2_bert", "quantize_wav2vec2_mbart50"], \
             "Expecting a pretrained model that has a " \
             "separate Embedding initialization"
         embedding_tgt = None
@@ -172,7 +172,8 @@ def build_tm_model(opt, dicts, constants=None):
     else:
         language_embeddings = None
 
-    if opt.model in ['wav2vec2_bert', 'quantize_wav2vec2_bert', 'quantize_wav2vec2_mbart50']:
+    if opt.model in ['wav2vec2_bert', 'quantize_wav2vec2_bert', 'quantize_wav2vec2_mbart50',
+                     'wav2vec2_mbart50']:
         from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecBERT
 
         # if opt.model.startswith("quantize"):
@@ -219,8 +220,15 @@ def build_tm_model(opt, dicts, constants=None):
                 print("[INFO] ... Done")
 
         discrete_encoder = None
-        encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model,
-                                 discrete_encoder=discrete_encoder, stacked_encoder=stacked_encoder)
+
+        if "wavlm" in opt.enc_pretrained_model:
+            from onmt.models.speech_recognizer.wavlm import WavLMEncoder
+            encoder = WavLMEncoder(opt, opt.wav2vec2_pretrained_model)
+
+        else:
+            from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec
+            encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model,
+                                     discrete_encoder=discrete_encoder, stacked_encoder=stacked_encoder)
 
         sub_encoder = None
 

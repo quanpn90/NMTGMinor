@@ -8,19 +8,22 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from onmt.modules.layer_norm import LayerNorm
+
 from .fairseq_modules import (
     Fp32GroupNorm,
     Fp32LayerNorm,
     GradMultiply,
     SamePad,
     init_bert_params,
-    get_activation_fn,
     TransposeLast,
     GLU_Linear,
 )
 
-from .wavlm_modules import WavLMMultiheadAttention
-
+from .wavlm_modules import (
+    WavLMMultiheadAttention,
+    get_activation_fn
+)
 
 def compute_mask_indices(
     shape: Tuple[int, int],
@@ -213,7 +216,7 @@ class WavLM(nn.Module):
         cfg: WavLMConfig,
     ) -> None:
         super().__init__()
-        logger.info(f"WavLM Config: {cfg.__dict__}")
+        # logger.info(f"WavLM Config: {cfg.__dict__}")
 
         self.cfg = cfg
         feature_enc_layers = eval(cfg.conv_feature_layers)
@@ -319,14 +322,14 @@ class WavLM(nn.Module):
             output_layer: Optional[int] = None,
             ret_layer_results: bool = False,
     ):
-
-        if self.feature_grad_mult > 0:
+        #
+        # if self.feature_grad_mult > 0:
+        #     features = self.feature_extractor(source)
+        #     if self.feature_grad_mult != 1.0:
+        #         features = GradMultiply.apply(features, self.feature_grad_mult)
+        # else:
+        with torch.no_grad():
             features = self.feature_extractor(source)
-            if self.feature_grad_mult != 1.0:
-                features = GradMultiply.apply(features, self.feature_grad_mult)
-        else:
-            with torch.no_grad():
-                features = self.feature_extractor(source)
 
         features = features.transpose(1, 2)
         features = self.layer_norm(features)
@@ -412,8 +415,12 @@ class WavLM(nn.Module):
         x, layer_results = self.encoder(
             x,
             padding_mask=padding_mask,
-            layer=None if output_layer is None else output_layer - 1
+            layer=layer
         )
+
+        # transpose from B x T x H to T x B x H
+        # TODO: write a T x B x H multihead attention?
+        x = x.transpose(0, 1).contiguous()
 
         res = {"x": x, "padding_mask": padding_mask, "features": features, "layer_results": layer_results}
 
@@ -582,7 +589,7 @@ class TransformerEncoder(nn.Module):
 
         self.layers = nn.ModuleList(
             [
-                TransformerSentenceEncoderLayer(
+                WavLMSentenceEncoderLayer(
                     embedding_dim=self.embedding_dim,
                     ffn_embedding_dim=args.encoder_ffn_embed_dim,
                     num_attention_heads=args.encoder_attention_heads,
@@ -621,7 +628,7 @@ class TransformerEncoder(nn.Module):
 
         x_conv = self.pos_conv(x.transpose(1, 2))
         x_conv = x_conv.transpose(1, 2)
-        x += x_conv
+        x = x + x_conv
 
         if not self.layer_norm_first:
             x = self.layer_norm(x)
@@ -657,7 +664,7 @@ class TransformerEncoder(nn.Module):
         return x, layer_results
 
 
-class TransformerSentenceEncoderLayer(nn.Module):
+class WavLMSentenceEncoderLayer(nn.Module):
     """
     Implements a Transformer Encoder Layer used in BERT/XLM style pre-trained
     models.
@@ -784,4 +791,4 @@ class TransformerSentenceEncoderLayer(nn.Module):
             x = residual + x
             x = self.final_layer_norm(x)
 
-        return x, attn,
+        return x, attn, pos_bias
