@@ -303,6 +303,15 @@ class Binarizer:
                             "The first token must be language ID"
                         pad_id = vocab.convertToIdx(["<pad>"], None)[0]
                         assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
+                    elif "nllb" in external_tokenizer_name.lower():
+                        tensor_new = [tensor[-1]] + tensor[1:]
+                        # tensor_new[1:].copy_(tensor[0:tensor.size()-1])
+                        # tensor_new[0] = tensor[-1]
+                        tensor = tensor_new
+                        assert tensor[0] == vocab.convertToIdx([lang], None)[0], \
+                            "The first token must be language ID %s , got %d instead of %d" % (lang, tensor[0], vocab.convertToIdx([lang], None)[0])
+                        pad_id = vocab.convertToIdx(["<pad>"], None)[0]
+                        assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
                     if len(tensor) <= 2:
                         n_bad_sentences += 1
                         # print("[Warning] empty sentence with %d tokens including <bos> <eos>" % len(tensor))

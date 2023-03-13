@@ -313,6 +313,7 @@ def build_tm_model(opt, dicts, constants=None):
         model = Wav2vecTransformer(encoder, decoder, nn.ModuleList(generators),
                                    mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
 
+
     elif opt.model in ['discourse_speech_transformer']:
         from onmt.models.discourse.discourse_transformer import DiscourseTransformerEncoder, DiscourseTransformer
         from onmt.models.speech_recognizer.relative_transformer import \

@@ -170,17 +170,14 @@ class FairseqWav2Vec(nn.Module):
         # do we need opt for this?
         self.opt = opt
         self.model_path = model_path
-        # import fairseq
-        # from fairseq.checkpoint_utils import load_model_ensemble_and_task, load_checkpoint_to_cpu
-        # from fairseq.models.wav2vec.wav2vec2 import Wav2Vec2Model
         from .fairseq_wav2vec2.wav2vec2 import Wav2Vec2Model
         state = load_checkpoint_to_cpu(model_path)
         self.cfg = state['cfg']['model']
 
         # don't override the options for wav2vec yet (some of them can create NaN)
         self.cfg.dropout = self.opt.enc_pretrain_emb_dropout
-        # self.cfg.activation_dropout = self.opt.ffn_dropout
-        self.cfg.attention_dropout = self.opt.enc_pretrain_hidden_dropout
+        self.cfg.activation_dropout = self.opt.ffn_dropout
+        # self.cfg.attention_dropout = self.opt.enc_pretrain_hidden_dropout
         self.cfg.encoder_layerdrop = self.opt.death_rate
         # self.cfg.dropout_features = self.opt.emb_dropout
         # self.cfg.mask_channel_before = True
