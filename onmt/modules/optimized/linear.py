@@ -49,8 +49,8 @@ if linear_blaslt:
             return torch.nn.functional.linear(input, weight, bias)
         else:
             _input, _weight, _bias = _cast_if_autocast_enabled(input, weight, bias)
-        with torch.cuda.amp.autocast(enabled=False):
-            return LinearFunction.apply(_input, _weight, _bias)
+            with torch.cuda.amp.autocast(enabled=False):
+                return LinearFunction.apply(_input, _weight, _bias)
 else:
     linear_function = torch.nn.functional.linear
 

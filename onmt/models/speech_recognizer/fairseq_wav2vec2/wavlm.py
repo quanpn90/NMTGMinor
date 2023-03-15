@@ -726,18 +726,136 @@ class WavLMSentenceEncoderLayer(nn.Module):
         # layer norm associated with the position wise feed-forward NN
         self.final_layer_norm = LayerNorm(self.embedding_dim)
 
+        self.fused = False
+        self.fused_function = None
+        if self.activation_name == 'relu':
+            from onmt.modules.mlp.mlp import mlp_relu_function
+            if mlp_relu_function is not None:
+                self.fused_function = mlp_relu_function
+                self.fused = True
+        elif self.activation_name == 'gelu':
+            from onmt.modules.mlp.mlp import mlp_gelu_function
+
+            if mlp_gelu_function is not None:
+                self.fused_function = mlp_gelu_function
+                self.fused = True
+
+    def get_mlp_weights(self, lang=None, atb=None):
+
+        in_weight = self.fc1.weight
+        out_weight = self.fc2.weight
+        in_bias = self.fc1.bias
+        out_bias = self.fc2.bias
+
+        if lang is not None:
+            if self.is_factorized:
+
+                # First check if we use multiplicative
+                if self.multiplicative_factorize:
+                    rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
+                    sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
+                    rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
+                    sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+
+                    if self.fast_factorize:
+                        mul_factor_in = torch.mm(rm_i.t(), sm_i)
+                        mul_factor_out = torch.mm(rm_o.t(), sm_o)
+                    else:
+                        mul_factor_in = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
+                        mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+
+                    # TODO: allow for multiple sub factorizers
+                    if self.sub_factorized and atb is not None:
+                        # print("Found atb at multiplication:", atb)
+                        rm_i = torch.index_select(self.sub_rm_i, 0, atb).squeeze(0)  # squeeze possible because only 1
+                        sm_i = torch.index_select(self.sub_sm_i, 0, atb).squeeze(0)
+                        rm_o = torch.index_select(self.sub_rm_o, 0, atb).squeeze(0)
+                        sm_o = torch.index_select(self.sub_sm_o, 0, atb).squeeze(0)
+
+                        if self.fast_factorize:
+                            sub_mul_factor_in = torch.mm(rm_i.t(), sm_i)
+                            sub_mul_factor_out = torch.mm(rm_o.t(), sm_o)
+                        else:
+                            sub_mul_factor_in = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
+                            sub_mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+
+                        # has to be multiplicative here
+                        mul_factor_in.mul_(sub_mul_factor_in)
+                        mul_factor_out.mul_(sub_mul_factor_out)
+
+                    in_weight = in_weight * mul_factor_in
+                    out_weight = out_weight * mul_factor_out
+
+                # For addictive
+                r_i = torch.index_select(self.r_i, 0, lang).squeeze(0)
+                s_i = torch.index_select(self.s_i, 0, lang).squeeze(0)
+                r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
+                s_o = torch.index_select(self.s_o, 0, lang).squeeze(0)
+
+                if self.fast_factorize:
+                    add_factor_in = torch.mm(r_i.t(), s_i)
+                    add_factor_out = torch.mm(r_o.t(), s_o)
+                else:
+                    add_factor_in = torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
+                    add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+
+                if self.sub_factorized and atb is not None:
+                    # print("Found atb at addition:", atb)
+                    r_i = torch.index_select(self.sub_r_i, 0, atb).squeeze(0)
+                    s_i = torch.index_select(self.sub_s_i, 0, atb).squeeze(0)
+                    r_o = torch.index_select(self.sub_r_o, 0, atb).squeeze(0)
+                    s_o = torch.index_select(self.sub_s_o, 0, atb).squeeze(0)
+
+                    if self.fast_factorize:
+                        sub_add_factor_in = torch.mm(r_i.t(), s_i)
+                        sub_add_factor_out = torch.mm(r_o.t(), s_o)
+                    else:
+                        sub_add_factor_in = torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
+                        sub_add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
+
+                    # has to be additive here
+                    add_factor_in.add(sub_add_factor_in)
+                    add_factor_out.add(sub_add_factor_out)
+
+                in_weight = in_weight + add_factor_in
+                out_weight = out_weight + add_factor_out
+
+        return in_weight, out_weight, in_bias, out_bias
+
     def forward(
             self,
             x: torch.Tensor,
             self_attn_mask: torch.Tensor = None,
             self_attn_padding_mask: torch.Tensor = None,
             need_weights: bool = False,
-            pos_bias=None
+            pos_bias=None, lang=None, atb=None,
+            **kwargs
     ):
         """
         LayerNorm is applied either before or after the self-attention/ffn
         modules similar to the original Transformer imlementation.
         """
+
+        def call_mlp(x, in_weight, out_weight, in_bias, out_bias, activation_fn, dropout_p, training_,
+                     fused, fused_function, checkpointing):
+
+            # TODO: check type x torch.half or torch.float32
+            if fused and x.is_cuda:
+                dropout_p_ = dropout_p if training_ else 0.0
+
+                weights = [in_weight, out_weight]
+                biases = [in_bias, out_bias]
+
+                x = fused_function(dropout_p_, checkpointing, x, *weights, *biases)
+
+            else:
+                x = F.linear(x, in_weight, in_bias)
+                x = activation_fn(x)
+                x = F.dropout(x, dropout_p, training=training_)
+                x = F.linear(x, out_weight, out_bias)
+
+            return x
+
         residual = x
 
         if self.layer_norm_first:
@@ -758,10 +876,19 @@ class WavLMSentenceEncoderLayer(nn.Module):
             x = self.final_layer_norm(x)
             if self.activation_name == "glu":
                 x = self.fc1(x)
+                x = self.dropout2(x)
+                x = self.fc2(x)
             else:
-                x = self.activation_fn(self.fc1(x))
-            x = self.dropout2(x)
-            x = self.fc2(x)
+
+                in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
+                x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
+                             self.dropout2.p, self.training,
+                             self.fused, self.fused_function, False)
+
+                # x = self.activation_fn(self.fc1(x))
+                # x = self.dropout2(x)
+                # x = self.fc2(x)
+
             x = self.dropout3(x)
             x = residual + x
         else:
@@ -781,12 +908,23 @@ class WavLMSentenceEncoderLayer(nn.Module):
             x = self.self_attn_layer_norm(x)
 
             residual = x
+            # if self.activation_name == "glu":
+            #     x = self.fc1(x)
+            # else:
+            #     x = self.activation_fn(self.fc1(x))
+            # x = self.dropout2(x)
+            # x = self.fc2(x)
             if self.activation_name == "glu":
                 x = self.fc1(x)
+                x = self.dropout2(x)
+                x = self.fc2(x)
             else:
-                x = self.activation_fn(self.fc1(x))
-            x = self.dropout2(x)
-            x = self.fc2(x)
+
+                in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
+                x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
+                             self.dropout2.p, self.training,
+                             self.fused, self.fused_function, False)
+
             x = self.dropout3(x)
             x = residual + x
             x = self.final_layer_norm(x)

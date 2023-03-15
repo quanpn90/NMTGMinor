@@ -5,12 +5,111 @@
 #include <stdlib.h>
 #include <string.h>
 #include <torch/torch.h>
+#include <cmath>
 
 /* Includes, cuda */
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
 #include <cublasLt.h>
+
+// Keep Sigmoid in float only. When using half, cast to float before calling.
+__device__ __inline__ float sigmoid(float a) {
+  float retf = 1.f / (1.f + expf(-a));
+  return (retf);
+}
+
+// Sigmoid. Assume input X is [features x batch size], column major.
+// Safe to call in-place.
+template <typename T>
+__global__ void Sigmoid_fprop(T *X, uint batch_size, uint features) {
+  T r_x[ILP];
+  if(is_aligned(X) && features % ILP ==0) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
+      load_store(r_x, X, 0 , tid);
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        r_x[ii] = sigmoid(static_cast<float>(r_x[ii]));
+      }
+      load_store(X, r_x, tid , 0);
+    }
+  } else {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          r_x[ii] = X[idx];
+        }
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        r_x[ii] = sigmoid(static_cast<float>(r_x[ii]));
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          X[idx] = r_x[ii];
+        }
+      }
+    }
+  }
+}
+
+// Sigmoid. Assume input X is [features x batch size], column major.
+// Safe to call in-place.
+template <typename T>
+__global__ void Sigmoid_bprop(T *dY, T *Y, uint batch_size, uint features, T *dX) {
+  T r_dy[ILP];
+  T r_y[ILP];
+  if(is_aligned(dY) &&
+     is_aligned(Y) &&
+     is_aligned(dX) &&
+     features % ILP ==0) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (; tid*ILP < features * batch_size; tid += blockDim.x * gridDim.x) {
+      load_store(r_dy, dY, 0 , tid);
+      load_store(r_y, Y, 0 , tid);
+#pragma unroll
+      for(int ii=0;ii<ILP;ii++){
+        float grad_out = r_dy[ii];
+        float out = r_y[ii];
+        float grad_i = out * ( 1.f - out) * grad_out;
+        r_dy[ii] = grad_i;
+      }
+      load_store(dX, r_dy, tid, 0);
+    }
+  } else {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    for (; tid < features * batch_size; tid += ILP * blockDim.x * gridDim.x) {
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          r_dy[ii] = dY[idx];
+          r_y[ii] = Y[idx];
+        }
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        float grad_out = r_dy[ii];
+        float out = r_y[ii];
+        float grad_i = out * ( 1.f - out) * grad_out;
+        r_dy[ii] = grad_i;
+      }
+#pragma unroll
+      for(int ii = 0; ii < ILP; ii++) {
+        int idx = tid + ii * blockDim.x * gridDim.x;
+        if(idx < features * batch_size) {
+          dX[idx] = r_dy[ii];
+        }
+      }
+    }
+  }
+}
 
 // FP64 Wrapper around cublas GEMMEx
 cublasStatus_t gemm_bias(
@@ -683,6 +782,45 @@ int linear_bias_forward_cuda(at::Tensor input, T *weight, at::Tensor bias, int i
 
 
 template <typename T>
+int linear_bias_forward_sigmoid_cuda(at::Tensor input, T *weight, at::Tensor bias, int in_features, int batch_size, int out_features, at::Tensor output, void *lt_workspace) {
+    cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
+    // Get the stream from cublas handle to reuse for biasReLU kernel.
+    cudaStream_t stream;
+    cublasGetStream(handle, &stream);
+    const float alpha          = 1.0;
+    const float beta_zero       = 0.0;
+    const float beta_one       = 1.0;
+    int status = 1;
+    status = gemm_bias_lt(
+        (cublasLtHandle_t)handle,
+        CUBLAS_OP_T,
+        CUBLAS_OP_N,
+        out_features,
+        batch_size,
+        in_features,
+        &alpha, /* host pointer */
+        weight,
+        in_features,
+        input.data_ptr<T>(),
+        in_features,
+        &beta_zero, /* host pointer */
+        output.data_ptr<T>(),
+        out_features,
+        lt_workspace,
+        1 << 22,
+        stream,
+        true,
+        static_cast<const void*>(bias.data_ptr<T>()));
+
+    if (status != 0){
+//         printf("GEMM BIAS LT not available. Backoff to GEMM and manual bias.");
+        return 1;
+    }
+    return status;
+}
+
+
+template <typename T>
 int linear_bias_backward_cuda(bool compute_grad_input, T *input, T *weight, T *d_output, int in_features, int batch_size, int out_features, T *d_weight, T *d_bias, T *d_input,  void *lt_workspace) {
     cublasHandle_t handle = at::cuda::getCurrentCUDABlasHandle();
     // Get the stream from cublas handle to reuse for biasReLU kernel.
@@ -771,19 +909,35 @@ int linear_bias_backward_input_only_cuda(T *input, T *weight, T *d_output, int i
 
 }
 
-
+// FORWARD
 template int linear_bias_forward_cuda<at::Half>(at::Tensor input, at::Half *weight, at::Tensor bias, int in_features, int batch_size, int out_features, at::Tensor output, void *lt_workspace);
 
 template int linear_bias_forward_cuda<float>(at::Tensor input, float *weight, at::Tensor bias, int in_features, int batch_size, int out_features, at::Tensor output, void *lt_workspace);
 
 template int linear_bias_forward_cuda<double>(at::Tensor input, double *weight, at::Tensor bias, int in_features, int batch_size, int out_features, at::Tensor output, void *lt_workspace);
 
+// FORWARD with sigmoid
+template int linear_bias_sigmoid_forward_cuda<at::Half>(at::Tensor input, at::Half *weight, at::Tensor bias, int in_features, int batch_size, int out_features, at::Tensor output, void *lt_workspace);
+
+template int linear_bias_sigmoid_forward_cuda<float>(at::Tensor input, float *weight, at::Tensor bias, int in_features, int batch_size, int out_features, at::Tensor output, void *lt_workspace);
+
+template int linear_bias_sigmoid_forward_cuda<double>(at::Tensor input, double *weight, at::Tensor bias, int in_features, int batch_size, int out_features, at::Tensor output, void *lt_workspace);
+
+// BACKWARD
 template int linear_bias_backward_cuda<at::Half>(bool compute_grad_input, at::Half *input, at::Half *weight, at::Half *d_output, int in_features, int batch_size, int out_features, at::Half *d_weight, at::Half *d_bias, at::Half *d_input,  void *lt_workspace) ;
 
 template int linear_bias_backward_cuda<float>(bool compute_grad_input, float *input, float *weight, float *d_output, int in_features, int batch_size, int out_features, float *d_weight, float *d_bias, float *d_input,  void *lt_workspace) ;
 
 template int linear_bias_backward_cuda<double>(bool compute_grad_input, double *input, double *weight, double *d_output, int in_features, int batch_size, int out_features, double *d_weight, double *d_bias, double *d_input,  void *lt_workspace) ;
 
+// BACKWARD with sigmoid
+template int linear_bias_sigmoid_backward_cuda<at::Half>(bool compute_grad_input, at::Half *input, at::Half *weight, at::Half *d_output, int in_features, int batch_size, int out_features, at::Half *d_weight, at::Half *d_bias, at::Half *d_input,  void *lt_workspace) ;
+
+template int linear_bias_sigmoid_backward_cuda<float>(bool compute_grad_input, float *input, float *weight, float *d_output, int in_features, int batch_size, int out_features, float *d_weight, float *d_bias, float *d_input,  void *lt_workspace) ;
+
+template int linear_bias_sigmoid_backward_cuda<double>(bool compute_grad_input, double *input, double *weight, double *d_output, int in_features, int batch_size, int out_features, double *d_weight, double *d_bias, double *d_input,  void *lt_workspace) ;
+
+// BACKWARD input only (no weight computation)
 template int linear_bias_backward_input_only_cuda<at::Half>(at::Half *input, at::Half *weight, at::Half *d_output, int in_features, int batch_size, int out_features, at::Half *d_input,  void *lt_workspace) ;
 
 template int linear_bias_backward_input_only_cuda<float>(float *input, float *weight, float *d_output, int in_features, int batch_size, int out_features, float *d_input,  void *lt_workspace) ;

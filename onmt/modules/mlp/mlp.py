@@ -36,10 +36,10 @@ try:
 except (ModuleNotFoundError, ImportError) as e:
     fused_mlp_gelu_dropout_add = None
 
-try:
-    import mlp_gelu_blaslt
-except (ModuleNotFoundError, ImportError) as e:
-    mlp_gelu_blaslt = None
+# try:
+#     import mlp_gelu_blaslt
+# except (ModuleNotFoundError, ImportError) as e:
+mlp_gelu_blaslt = None
 
 
 def _cast_if_autocast_enabled(*args):

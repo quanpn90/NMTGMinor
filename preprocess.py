@@ -591,6 +591,7 @@ def main():
 
         src_input_files = opt.train_src.split("|")
         tgt_input_files = opt.train_tgt.split("|")
+        aux_tgt_input_files = opt.aux_train_tgt.split("|")
 
         src_langs = opt.train_src_lang.split("|")
         tgt_langs = opt.train_tgt_lang.split("|")
@@ -602,6 +603,7 @@ def main():
         assert len(src_input_files) == len(tgt_input_files)
         assert len(tgt_input_files) == len(tgt_langs)
         assert len(tgt_input_files) == len(tgt_atbs)
+        assert (len(aux_tgt_input_files) == 0 or len(aux_tgt_input_files) ==  len(tgt_input_files))
 
         past_src_files = opt.past_train_src.split("|")
         idx = 0

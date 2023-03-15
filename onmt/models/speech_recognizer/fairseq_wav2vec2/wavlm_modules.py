@@ -15,6 +15,9 @@ from torch import Tensor, nn
 from torch.nn import Parameter
 import torch.nn.functional as F
 
+from onmt.modules.optimized.linear import Linear
+from onmt.modules.optimized.self_attention_func import self_attn_bias_func
+
 
 class WavLMMultiheadAttention(nn.Module):
     """Multi-headed attention.
@@ -78,11 +81,11 @@ class WavLMMultiheadAttention(nn.Module):
         k_embed_dim = embed_dim
         q_embed_dim = embed_dim
 
-        self.k_proj = nn.Linear(self.kdim, k_embed_dim, bias=k_bias)
-        self.v_proj = nn.Linear(self.vdim, embed_dim, bias=bias)
-        self.q_proj = nn.Linear(embed_dim, q_embed_dim, bias=bias)
+        self.k_proj = Linear(self.kdim, k_embed_dim, bias=k_bias)
+        self.v_proj = Linear(self.vdim, embed_dim, bias=bias)
+        self.q_proj = Linear(embed_dim, q_embed_dim, bias=bias)
 
-        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        self.out_proj = Linear(embed_dim, embed_dim, bias=bias)
 
         if add_bias_kv:
             self.bias_k = Parameter(torch.Tensor(1, 1, embed_dim))
@@ -94,10 +97,12 @@ class WavLMMultiheadAttention(nn.Module):
 
         self.gru_rel_pos = gru_rel_pos
         if self.gru_rel_pos:
-            self.grep_linear = nn.Linear(self.q_head_dim, 8)
+            self.grep_linear = Linear(self.q_head_dim, 8)
             self.grep_a = nn.Parameter(torch.ones(1, num_heads, 1, 1))
 
         self.reset_parameters()
+
+        self.fast_attention = False
 
     def reset_parameters(self):
         if self.qkv_same_dim:
@@ -242,307 +247,111 @@ class WavLMMultiheadAttention(nn.Module):
 
                     _B, _H, _L, __ = query_layer.size()
 
-                    gate_a, gate_b = torch.sigmoid(self.grep_linear(query_layer).view(
-                        _B, _H, _L, 2, 4).sum(-1, keepdim=False)).chunk(2, dim=-1)
+                    gate_input = self.grep_linear(query_layer).view(
+                        _B, _H, _L, 2, 4).sum(-1, keepdim=False)
+
+                    # inplace sigmoid
+                    gate_a, gate_b = gate_input.sigmoid_().chunk(2, dim=-1)
                     gate_a_1 = gate_a * (gate_b * self.grep_a - 1.0) + 2.0
                     attn_mask_rel_pos = gate_a_1.view(bsz * self.num_heads, -1, 1) * position_bias
 
                 attn_mask_rel_pos = attn_mask_rel_pos.view((-1, tgt_len, tgt_len))
-            k_proj_bias = self.k_proj.bias
-            if k_proj_bias is None:
-                k_proj_bias = torch.zeros_like(self.q_proj.bias)
+            else:
+                attn_mask_rel_pos = query.new_zeros(*(bsz * self.num_heads, tgt_len, tgt_len))
 
-            x, attn = F.multi_head_attention_forward(
-                query,
-                key,
-                value,
-                self.embed_dim,
-                self.num_heads,
-                torch.empty([0]),
-                torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias)),
-                self.bias_k,
-                self.bias_v,
-                self.add_zero_attn,
-                self.dropout_module.p,
-                self.out_proj.weight,
-                self.out_proj.bias,
-                self.training,
-                # self.training or self.dropout_module.apply_during_inference,
-                key_padding_mask,
-                need_weights,
-                attn_mask_rel_pos,
-                use_separate_proj_weight=True,
-                q_proj_weight=self.q_proj.weight,
-                k_proj_weight=self.k_proj.weight,
-                v_proj_weight=self.v_proj.weight,
-            )
+            # k_proj_bias = self.k_proj.bias
+            # if k_proj_bias is None:
+            #     k_proj_bias = torch.zeros_like(self.q_proj.bias)
+
+            if self.fast_attention:
+                is_training = self.training
+                low_precision = True
+                in_proj_weight = self.proj_weight
+                out_proj_weight = self.out_proj.weight
+                recompute = False
+                rotary = False
+                positions = None
+
+                x, attn = self_attn_bias_func(False, is_training, self.num_heads, query, attn_mask_rel_pos,
+                                                   in_proj_weight, out_proj_weight,
+                                                   self.proj_bias, self.out_proj.bias,
+                                                   key_padding_mask, self.dropout_module.p,
+                                                   rotary, positions,
+                                                   False, None,       # incremental and state and double precision
+                                                   low_precision, True, recompute)  # learnable_pos + return-coverage
+            else:
+
+                x, attn = F.multi_head_attention_forward(
+                    query,
+                    key,
+                    value,
+                    self.embed_dim,
+                    self.num_heads,
+                    torch.empty([0]),
+                    torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias)),
+                    self.bias_k,
+                    self.bias_v,
+                    self.add_zero_attn,
+                    self.dropout_module.p,
+                    self.out_proj.weight,
+                    self.out_proj.bias,
+                    self.training,
+                    # self.training or self.dropout_module.apply_during_inference,
+                    key_padding_mask,
+                    need_weights,
+                    attn_mask_rel_pos,
+                    use_separate_proj_weight=True,
+                    q_proj_weight=self.q_proj.weight,
+                    k_proj_weight=self.k_proj.weight,
+                    v_proj_weight=self.v_proj.weight,
+                )
+
             return x, attn, position_bias
 
-        if incremental_state is not None:
-            saved_state = self._get_input_buffer(incremental_state)
-            if saved_state is not None and "prev_key" in saved_state:
-                # previous time steps are cached - no need to recompute
-                # key and value if they are static
-                if static_kv:
-                    assert self.encoder_decoder_attention and not self.self_attention
-                    key = value = None
         else:
-            saved_state = None
-
-        if self.self_attention:
-            q = self.q_proj(query)
-            k = self.k_proj(query)
-            v = self.v_proj(query)
-        elif self.encoder_decoder_attention:
-            # encoder-decoder attention
-            q = self.q_proj(query)
-            if key is None:
-                assert value is None
-                k = v = None
-            else:
-                k = self.k_proj(key)
-                v = self.v_proj(key)
-
-        else:
-            assert key is not None and value is not None
-            q = self.q_proj(query)
-            k = self.k_proj(key)
-            v = self.v_proj(value)
-        q *= self.scaling
-
-        if self.bias_k is not None:
-            assert self.bias_v is not None
-            k = torch.cat([k, self.bias_k.repeat(1, bsz, 1)])
-            v = torch.cat([v, self.bias_v.repeat(1, bsz, 1)])
-            if attn_mask is not None:
-                attn_mask = torch.cat(
-                    [attn_mask, attn_mask.new_zeros(attn_mask.size(0), 1)], dim=1
-                )
-            if key_padding_mask is not None:
-                key_padding_mask = torch.cat(
-                    [
-                        key_padding_mask,
-                        key_padding_mask.new_zeros(key_padding_mask.size(0), 1),
-                    ],
-                    dim=1,
-                )
-
-        q = (
-            q.contiguous()
-                .view(tgt_len, bsz * self.num_heads, self.q_head_dim)
-                .transpose(0, 1)
-        )
-        if k is not None:
-            k = (
-                k.contiguous()
-                    .view(-1, bsz * self.num_heads, self.k_head_dim)
-                    .transpose(0, 1)
-            )
-        if v is not None:
-            v = (
-                v.contiguous()
-                    .view(-1, bsz * self.num_heads, self.head_dim)
-                    .transpose(0, 1)
-            )
-
-        # if saved_state is not None:
-        #     # saved states are stored with shape (bsz, num_heads, seq_len, head_dim)
-        #     if "prev_key" in saved_state:
-        #         _prev_key = saved_state["prev_key"]
-        #         assert _prev_key is not None
-        #         prev_key = _prev_key.view(bsz * self.num_heads, -1, self.head_dim)
-        #         if static_kv:
-        #             k = prev_key
-        #         else:
-        #             assert k is not None
-        #             k = torch.cat([prev_key, k], dim=1)
-        #         src_len = k.size(1)
-        #     if "prev_value" in saved_state:
-        #         _prev_value = saved_state["prev_value"]
-        #         assert _prev_value is not None
-        #         prev_value = _prev_value.view(bsz * self.num_heads, -1, self.head_dim)
-        #         if static_kv:
-        #             v = prev_value
-        #         else:
-        #             assert v is not None
-        #             v = torch.cat([prev_value, v], dim=1)
-        #     prev_key_padding_mask: Optional[Tensor] = None
-        #     if "prev_key_padding_mask" in saved_state:
-        #         prev_key_padding_mask = saved_state["prev_key_padding_mask"]
-        #     assert k is not None and v is not None
-        #     key_padding_mask = MultiheadAttention._append_prev_key_padding_mask(
-        #         key_padding_mask=key_padding_mask,
-        #         prev_key_padding_mask=prev_key_padding_mask,
-        #         batch_size=bsz,
-        #         src_len=k.size(1),
-        #         static_kv=static_kv,
-        #     )
-        #
-        #     saved_state["prev_key"] = k.view(bsz, self.num_heads, -1, self.head_dim)
-        #     saved_state["prev_value"] = v.view(bsz, self.num_heads, -1, self.head_dim)
-        #     saved_state["prev_key_padding_mask"] = key_padding_mask
-        #     # In this branch incremental_state is never None
-        #     assert incremental_state is not None
-        #     incremental_state = self._set_input_buffer(incremental_state, saved_state)
-        assert k is not None
-        assert k.size(1) == src_len
-
-        # This is part of a workaround to get around fork/join parallelism
-        # not supporting Optional types.
-        if key_padding_mask is not None and key_padding_mask.dim() == 0:
-            key_padding_mask = None
-
-        if key_padding_mask is not None:
-            assert key_padding_mask.size(0) == bsz
-            assert key_padding_mask.size(1) == src_len
-
-        if self.add_zero_attn:
-            assert v is not None
-            src_len += 1
-            k = torch.cat([k, k.new_zeros((k.size(0), 1) + k.size()[2:])], dim=1)
-            v = torch.cat([v, v.new_zeros((v.size(0), 1) + v.size()[2:])], dim=1)
-            if attn_mask is not None:
-                attn_mask = torch.cat(
-                    [attn_mask, attn_mask.new_zeros(attn_mask.size(0), 1)], dim=1
-                )
-            if key_padding_mask is not None:
-                key_padding_mask = torch.cat(
-                    [
-                        key_padding_mask,
-                        torch.zeros(key_padding_mask.size(0), 1).type_as(
-                            key_padding_mask
-                        ),
-                    ],
-                    dim=1,
-                )
-
-        attn_weights = torch.bmm(q, k.transpose(1, 2))
-        attn_weights = self.apply_sparse_mask(attn_weights, tgt_len, src_len, bsz)
-
-        assert list(attn_weights.size()) == [bsz * self.num_heads, tgt_len, src_len]
-
-        if attn_mask is not None:
-            attn_mask = attn_mask.unsqueeze(0)
-            attn_weights += attn_mask
-
-        if key_padding_mask is not None:
-            # don't attend to padding symbols
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            if not is_tpu:
-                attn_weights = attn_weights.masked_fill(
-                    key_padding_mask.unsqueeze(1).unsqueeze(2).to(torch.bool),
-                    float("-inf"),
-                )
-            else:
-                attn_weights = attn_weights.transpose(0, 2)
-                attn_weights = attn_weights.masked_fill(key_padding_mask, float("-inf"))
-                attn_weights = attn_weights.transpose(0, 2)
-            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
-
-        if before_softmax:
-            return attn_weights, v, position_bias
-
-        if position_bias is not None:
-            if self.gru_rel_pos == 1:
-                query_layer = q.view(bsz, self.num_heads, tgt_len, self.q_head_dim)
-                _B, _H, _L, __ = query_layer.size()
-                gate_a, gate_b = torch.sigmoid(self.grep_linear(query_layer).view(
-                    _B, _H, _L, 2, 4).sum(-1, keepdim=False)).chunk(2, dim=-1)
-                gate_a_1 = gate_a * (gate_b * self.grep_a - 1.0) + 2.0
-                position_bias = gate_a_1.view(bsz * self.num_heads, -1, 1) * position_bias
-
-            position_bias = position_bias.view(attn_weights.size())
-
-            attn_weights = attn_weights + position_bias
-
-        attn_weights_float = F.softmax(
-            attn_weights, dim=-1
-        )
-        attn_weights = attn_weights_float.type_as(attn_weights)
-        attn_probs = self.dropout_module(attn_weights)
-
-        assert v is not None
-        attn = torch.bmm(attn_probs, v)
-        assert list(attn.size()) == [bsz * self.num_heads, tgt_len, self.head_dim]
-        attn = attn.transpose(0, 1).contiguous().view(tgt_len, bsz, embed_dim)
-        attn = self.out_proj(attn)
-        attn_weights: Optional[Tensor] = None
-        if need_weights:
-            attn_weights = attn_weights_float.view(
-                bsz, self.num_heads, tgt_len, src_len
-            ).transpose(1, 0)
-            if not need_head_weights:
-                # average attention weights over heads
-                attn_weights = attn_weights.mean(dim=0)
-
-        return attn, attn_weights, position_bias
-
-    @staticmethod
-    def _append_prev_key_padding_mask(
-            key_padding_mask: Optional[Tensor],
-            prev_key_padding_mask: Optional[Tensor],
-            batch_size: int,
-            src_len: int,
-            static_kv: bool,
-    ) -> Optional[Tensor]:
-        # saved key padding masks have shape (bsz, seq_len)
-        if prev_key_padding_mask is not None and static_kv:
-            new_key_padding_mask = prev_key_padding_mask
-        elif prev_key_padding_mask is not None and key_padding_mask is not None:
-            new_key_padding_mask = torch.cat(
-                [prev_key_padding_mask.float(), key_padding_mask.float()], dim=1
-            )
-        # During incremental decoding, as the padding token enters and
-        # leaves the frame, there will be a time when prev or current
-        # is None
-        elif prev_key_padding_mask is not None:
-            if src_len > prev_key_padding_mask.size(1):
-                filler = torch.zeros(
-                    (batch_size, src_len - prev_key_padding_mask.size(1)),
-                    device=prev_key_padding_mask.device,
-                )
-                new_key_padding_mask = torch.cat(
-                    [prev_key_padding_mask.float(), filler.float()], dim=1
-                )
-            else:
-                new_key_padding_mask = prev_key_padding_mask.float()
-        elif key_padding_mask is not None:
-            if src_len > key_padding_mask.size(1):
-                filler = torch.zeros(
-                    (batch_size, src_len - key_padding_mask.size(1)),
-                    device=key_padding_mask.device,
-                )
-                new_key_padding_mask = torch.cat(
-                    [filler.float(), key_padding_mask.float()], dim=1
-                )
-            else:
-                new_key_padding_mask = key_padding_mask.float()
-        else:
-            new_key_padding_mask = prev_key_padding_mask
-        return new_key_padding_mask
-
-    def _get_input_buffer(
-            self, incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]]
-    ) -> Dict[str, Optional[Tensor]]:
-        result = self.get_incremental_state(incremental_state, "attn_state")
-        if result is not None:
-            return result
-        else:
-            empty_result: Dict[str, Optional[Tensor]] = {}
-            return empty_result
-
-    def _set_input_buffer(
-            self,
-            incremental_state: Dict[str, Dict[str, Optional[Tensor]]],
-            buffer: Dict[str, Optional[Tensor]],
-    ):
-        return self.set_incremental_state(incremental_state, "attn_state", buffer)
-
-    def apply_sparse_mask(self, attn_weights, tgt_len: int, src_len: int, bsz: int):
-        return attn_weights
+            # this code path is never reached with wavlm
+            raise NotImplementedError
 
     def convert_fast_attention(self):
 
+        # if self.fast_attention:
+        #     return
+        # self.fast_attention = True
+        # assert self.qkv_same_dim, "Only works with QKV same dim."
+        # w_q = self.q_proj.weight.clone()
+        # w_k = self.k_proj.weight.clone()
+        # w_v = self.v_proj.weight.clone()
+        # weights = [w_q, w_k, w_v]
+        # weight_ = torch.cat(weights, dim=0).contiguous()
+        #
+        # b_q = self.q_proj.bias.clone()
+        # b_k = self.k_proj.bias.clone()
+        # b_v = self.v_proj.bias.clone()
+        # biases = [b_q, b_k, b_v]
+        # bias_ = torch.cat(biases, dim=0).contiguous()
+        #
+        # head_dim = self.head_dim
+        # heads = self.num_heads
+        # input_dim = self.embed_dim
+        #
+        # # when we concatenate the weights, the output has the size 3 * D (3 -> heads -> head_dim)
+        # # the fast attention module requires (heads -> 3 -> head_dim)
+        # weight_ = weight_.reshape(3 * head_dim * heads, input_dim).view(3, heads, head_dim, input_dim).transpose(0, 1). \
+        #     reshape(-1, input_dim)
+        #
+        # bias_ = bias_.reshape(3 * head_dim * heads).view(3, heads, head_dim).transpose(0, 1).reshape(-1)
+        #
+        # weight_t = torch.Tensor(3 * input_dim, input_dim)
+        # bias_t = torch.Tensor(3 * input_dim)
+        # weight_t.copy_(weight_)
+        # bias_t.copy_(bias_)
+        # self.proj_weight = Parameter(weight_t)
+        # self.proj_bias = Parameter(bias_t)
+        #
+        # self.proj_weight.requires_grad = self.q_proj.weight.requires_grad
+        # self.proj_bias.requires_grad = self.q_proj.bias.requires_grad
+        #
+        # del self.q_proj, self.k_proj, self.v_proj
         pass
 
 
