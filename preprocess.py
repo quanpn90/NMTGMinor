@@ -52,10 +52,12 @@ parser.add_argument('-train_src', required=True,
                     help="Path to the training source data")
 parser.add_argument('-past_train_src', default="",
                     help="Path to the training source data")
-parser.add_argument('-future_train_src', default="",
-                    help="Path to the training source data")
+
 parser.add_argument('-train_tgt', required=True,
                     help="Path to the training target data")
+parser.add_argument('-aux_train_tgt', default="",
+                    help="Path to the training source data")
+
 parser.add_argument('-valid_src', required=True,
                     help="Path to the validation source data")
 parser.add_argument('-past_valid_src', default="",
@@ -64,6 +66,8 @@ parser.add_argument('-future_valid_src', default="",
                     help="Path to the validation source data")
 parser.add_argument('-valid_tgt', required=True,
                     help="Path to the validation target data")
+parser.add_argument('-aux_valid_tgt', default="",
+                    help="Path to the training source data")
 
 parser.add_argument('-train_src_lang', default="src",
                     help="Language(s) of the source sequences.")
@@ -430,7 +434,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
                   max_src_length=64, max_tgt_length=64, add_bos=True, data_type='int64', num_workers=1, verbose=False,
                   input_type='word', stride=1, concat=4, prev_context=0, fp16=False, reshape=True,
                   asr_format="scp", output_format="raw",
-                  external_tokenizer=None, src_lang=None, tgt_lang=None):
+                  external_tokenizer=None, src_lang=None, tgt_lang=None, aux_tgt_file=None):
     src, tgt = [], []
     src_sizes = []
     tgt_sizes = []
@@ -461,6 +465,26 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
         tgt = None
         tgt_sizes = None
 
+    if aux_tgt_file is not None:
+        aux_tgt = []
+
+        print("[INFO] Binarizing auxiliary target file %s ..." % aux_tgt_file)
+
+        aux_binarized_tgt = Binarizer.binarize_file(aux_tgt_file, tgt_dicts, tokenizer,
+                                                    bos_word=tgt_bos_word, eos_word=opt.tgt_eos_token,
+                                                    data_type=data_type,
+                                                    num_workers=num_workers, verbose=verbose,
+                                                    external_tokenizer=external_tokenizer,
+                                                    lang=tgt_lang)
+
+        aux_tgt = aux_binarized_tgt['data']
+        aux_tgt_sizes = aux_binarized_tgt['sizes']
+
+        ignored = 0
+    else:
+        aux_tgt = None
+        aux_tgt_sizes = None
+
     print('[INFO] Processing %s  ...' % src_file)
 
     # num_workers = num_workers if asr_format in ['scp', 'kaldi'] else 1
@@ -481,7 +505,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
            '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
           (len(src), ignored, max_src_length, max_tgt_length))
 
-    return src, tgt, src_sizes, tgt_sizes
+    return src, tgt, src_sizes, tgt_sizes, aux_tgt, aux_tgt_sizes
 
 
 def main():
@@ -634,7 +658,8 @@ def main():
                     idx = idx + 1
                     continue
 
-            src_data, tgt_data, src_sizes, tgt_sizes = make_asr_data(src_file, tgt_file,
+            src_data, tgt_data, src_sizes, tgt_sizes, aux_tgt_data, aux_tgt_sizes = \
+                                                       make_asr_data(src_file, tgt_file,
                                                                      dicts['tgt'], tokenizer,
                                                                      max_src_length=opt.src_seq_length,
                                                                      max_tgt_length=opt.tgt_seq_length,
@@ -647,7 +672,9 @@ def main():
                                                                      output_format=opt.format,
                                                                      num_workers=opt.num_threads,
                                                                      external_tokenizer=opt.external_tokenizer,
-                                                                     tgt_lang=tgt_lang, verbose=opt.verbose)
+                                                                     tgt_lang=tgt_lang, verbose=opt.verbose,
+                                                                     aux_tgt_file=aux_tgt_input_files[i]
+                                                                     if len(aux_tgt_input_files) > 0 else None)
 
             n_samples = len(src_data)
             src_atb_data, tgt_atb_data = None, None

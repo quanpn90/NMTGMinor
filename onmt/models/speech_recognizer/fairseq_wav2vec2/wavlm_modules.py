@@ -233,16 +233,16 @@ class WavLMMultiheadAttention(nn.Module):
                 attn_mask_rel_pos = position_bias
                 if self.gru_rel_pos:
 
-                    # from [B x T x H] to [T x B x H]
+                    # from [T x B x H] to [B x T x H]
                     query_layer = query.transpose(0, 1)
 
-                    # [T x B x head x -1]
+                    # [B x T x head x -1]
                     new_x_shape = query_layer.size()[:-1] + (self.num_heads, -1)
 
-                    # [T x B x head x head_size]
+                    # [B x T x head x head_size]
                     query_layer = query_layer.view(*new_x_shape)
 
-                    # [T x head x B x head_size]
+                    # [B x H x T x head_size]
                     query_layer = query_layer.permute(0, 2, 1, 3)
 
                     _B, _H, _L, __ = query_layer.size()
@@ -313,6 +313,7 @@ class WavLMMultiheadAttention(nn.Module):
             raise NotImplementedError
 
     def convert_fast_attention(self):
+        pass
 
         # if self.fast_attention:
         #     return
@@ -350,9 +351,8 @@ class WavLMMultiheadAttention(nn.Module):
         #
         # self.proj_weight.requires_grad = self.q_proj.weight.requires_grad
         # self.proj_bias.requires_grad = self.q_proj.bias.requires_grad
-        #
+
         # del self.q_proj, self.k_proj, self.v_proj
-        pass
 
 
 def get_activation_fn(activation: str):

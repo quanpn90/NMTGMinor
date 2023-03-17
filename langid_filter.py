@@ -50,7 +50,7 @@ def langid_file_single_thread(filename, worker_id=0, offset=0, end=-1):
             if 0 < end < f.tell():
                 break
 
-            class_result = langid.classify(line)
+            class_result = langid.classify(line.strip())
             lang = class_result[0]
             prob = class_result[1]
 
@@ -118,28 +118,51 @@ def lang_classify_file(filename, num_workers=1):
     return final_result
 
 
+
 if __name__ == "__main__":
 
     import sys
 
-    input_file = sys.argv[1]
-    num_workers = int(sys.argv[2])
+    src_file = sys.argv[1]
+    tgt_file = sys.argv[2]
+    src_lang = sys.argv[3]
+    tgt_lang = sys.argv[4]
+    num_workers = int(sys.argv[5])
 
-    print("Start language idenfitication ....")
-    final_result = lang_classify_file(input_file, num_workers=num_workers)
+    print("Start language idenfitication for source %s ...." % (src_file))
+    src_final_result = lang_classify_file(src_file, num_workers=num_workers)
     print("Finished.")
 
-    c = 0
-    print("Writing the output ....")
-    # output_file = open(input_file + ".langid", 'w')
-    with open(input_file + ".langid", 'w') as w:
+    print("Start language idenfitication for target %s ...." % (tgt_file))
+    tgt_final_result = lang_classify_file(tgt_file, num_workers=num_workers)
+    print("Finished.")
 
-        for (lang, prob) in zip(final_result['lang'], final_result['prob']):
+    index = 0
+    count = 0
+    print("Filtering the output ....")
 
-            w.write(lang + " " + str(prob) + "\n")
-            c += 1
+    with open(src_file + ".filtered", 'w') as src_w:
+        with open(tgt_file + ".filtered", 'w') as tgt_w:
+            with open(src_file) as src_r:
+                with open(tgt_file) as tgt_r:
 
-            if (c + 1) % 100000 == 0:
-                print("[INFO] Written %d lines." % c)
+                    src_line = safe_readline(src_r)
+                    tgt_line = safe_readline(tgt_r)
+                    while src_line and tgt_line:
+
+                        src_pred_lang = src_final_result['lang'][index]
+                        tgt_pred_lang = tgt_final_result['lang'][index]
+
+                        if src_pred_lang == src_lang and tgt_pred_lang == tgt_lang:
+                            src_w.write(src_line)
+                            tgt_w.write(tgt_line)
+                            count += 1
+
+                        index = index + 1
+                        src_line = src_r.readline()
+                        tgt_line = tgt_r.readline()
+
+                        if (index) % 100000 == 0:
+                            print("[INFO] Processed %d lines. %d lines counted" % (index, count))
 
 
