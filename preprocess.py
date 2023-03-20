@@ -257,7 +257,7 @@ def save_dataset(path, data, format, dicts, src_type):
         # torch.save(dicts, opt.save_data + '.dict.pt')
 
         # binarize the training set first
-        for set_ in ['tgt', 'src_lang', 'tgt_lang', 'src_atb', 'tgt_atb']:
+        for set_ in ['tgt', 'aux_tgt', 'src_lang', 'tgt_lang', 'src_atb', 'tgt_atb']:
             if set_ not in data or data[set_] is None:
                 continue
 
@@ -276,9 +276,9 @@ def save_dataset(path, data, format, dicts, src_type):
 
             del indexed_data
 
-        for set_ in ['src_sizes', 'tgt_sizes']:
+        for set_ in ['src_sizes', 'tgt_sizes', 'aux_tgt_sizes']:
 
-            if data[set_] is not None:
+            if set_ in data and data[set_] is not None:
 
                 np_array = np.asarray(data[set_])
                 np.save(os.path.join(path, "data.%s.npy") % set_, np_array)
@@ -641,6 +641,10 @@ def main():
         train['src_atb'], train['tgt_atb'] = list(), list()
         train['src_lang'], train['tgt_lang'] = list(), list()
 
+        if len(aux_tgt_input_files) > 0:
+            train['aux_tgt'] = list()
+            train['aux_tgt_sizes'] = list()
+
         data = dict()
 
         if opt.past_train_src and len(past_src_files) == len(src_input_files):
@@ -678,6 +682,7 @@ def main():
 
             n_samples = len(src_data)
             src_atb_data, tgt_atb_data = None, None
+
             if n_input_files == 1 or opt.multi_dataset:
                 # For single-file cases we only need to have 1 language per file
                 # which will be broadcasted
@@ -698,27 +703,30 @@ def main():
                     src_atb_data = [torch.Tensor([dicts['atbs'][src_atb]]) for _ in range(n_samples)]
                     tgt_atb_data = [torch.Tensor([dicts['atbs'][tgt_atb]]) for _ in range(n_samples)]
 
-            # processing the previous segment
-            if opt.past_train_src and len(past_src_files) == len(src_input_files):
-                past_src_file = past_src_files[i]
-
-                past_src_data, _, past_src_sizes, _ = make_asr_data(past_src_file, None, None, None,
-                                                                    input_type=opt.input_type,
-                                                                    stride=opt.stride, concat=opt.concat,
-                                                                    prev_context=opt.previous_context,
-                                                                    add_bos=not opt.no_bos,
-                                                                    fp16=opt.fp16,
-                                                                    asr_format=opt.asr_format,
-                                                                    output_format=opt.format,
-                                                                    num_workers=opt.num_threads,
-                                                                    external_tokenizer=opt.external_tokenizer,
-                                                                    tgt_lang=tgt_lang, verbose=opt.verbose)
-
-                if opt.multi_dataset:
-                    data['prev_src'] = prev_src_data
-                else:
-                    train['past_src'] += past_src_data
-                    train['past_src_sizes'] += past_src_sizes
+            # # processing the previous segment
+            # if opt.past_train_src and len(past_src_files) == len(src_input_files):
+            #     # past_src_file = past_src_files[i]
+            #     #
+            #     # past_src_data, _, past_src_sizes, _, _, _ = make_asr_data(past_src_file, None, None, None,
+            #     #                                                             input_type=opt.input_type,
+            #     #                                                             stride=opt.stride, concat=opt.concat,
+            #     #                                                             prev_context=opt.previous_context,
+            #     #                                                             add_bos=not opt.no_bos,
+            #     #                                                             fp16=opt.fp16,
+            #     #                                                             asr_format=opt.asr_format,
+            #     #                                                             output_format=opt.format,
+            #     #                                                             num_workers=opt.num_threads,
+            #     #                                                             external_tokenizer=opt.external_tokenizer,
+            #     #                                                             tgt_lang=tgt_lang, verbose=opt.verbose,
+            #     #                                                             aux_tgt_file=None)                                                                          )
+            #     prev_src_data = None
+            #     past_src_sizes = None
+            #
+            #     if opt.multi_dataset:
+            #         data['prev_src'] = prev_src_data
+            #     else:
+            #         train['past_src'] += past_src_data
+            #         train['past_src_sizes'] += past_src_sizes
 
             # Finalizing Training data  ###################################################################
 
@@ -731,6 +739,11 @@ def main():
                 data['tgt_sizes'] = tgt_sizes
                 data['src_lang'] = src_lang_data
                 data['tgt_lang'] = tgt_lang_data
+
+                # add the auxiliary target if its not None
+                if aux_tgt_data is not None:
+                    data['aux_tgt'] = aux_tgt_data
+                    data['aux_tgt_sizes'] = aux_tgt_sizes
 
                 if len(atbs) > 0:
                     data['src_atb'] = src_atb_data
@@ -760,6 +773,11 @@ def main():
                     train['src_atb'] += src_atb_data
                     train['tgt_atb'] += tgt_atb_data
 
+                if len(aux_tgt_input_files) > 0:
+                    train['aux_tgt'] += aux_tgt_data
+                    train['aux_tgt_sizes'] += aux_tgt_sizes
+
+
         # Validation data  ###################################################################
 
         print('Preparing validation ...')
@@ -772,10 +790,13 @@ def main():
         tgt_langs = opt.valid_tgt_lang.split("|")
         src_atbs = opt.valid_src_atbs.split("|") if len(atbs) > 0 else [None] * len(src_input_files)
         tgt_atbs = opt.valid_tgt_atbs.split("|") if len(atbs) > 0 else [None] * len(tgt_input_files)
+        aux_tgt_input_files = opt.aux_train_tgt.split("|")
 
         assert len(src_input_files) == len(src_langs)
         assert len(src_input_files) == len(tgt_input_files)
         assert len(tgt_input_files) == len(tgt_langs)
+        assert (len(aux_tgt_input_files) == 0 or len(aux_tgt_input_files) == len(tgt_input_files))
+
         idx = 0
         n_input_files = len(src_input_files)
 
@@ -785,6 +806,10 @@ def main():
         valid['src_sizes'], valid['tgt_sizes'] = list(), list()
         valid['src_lang'], valid['tgt_lang'] = list(), list()
         valid['src_atb'], valid['tgt_atb'] = list(), list()
+
+        if len(aux_tgt_input_files) > 0:
+            valid['aux_tgt'] = list()
+            valid['aux_tgt_sizes'] = list()
 
         if opt.past_train_src and len(past_src_files) == len(src_input_files):
             valid['past_src'] = list()
@@ -801,7 +826,7 @@ def main():
                     idx = idx + 1
                     continue
 
-            src_data, tgt_data, src_sizes, tgt_sizes = make_asr_data(src_file, tgt_file,
+            src_data, tgt_data, src_sizes, tgt_sizes, aux_tgt_data, aux_tgt_sizes = make_asr_data(src_file, tgt_file,
                                                                      dicts['tgt'], tokenizer,
                                                                      max_src_length=max(1024, opt.src_seq_length),
                                                                      max_tgt_length=max(1024, opt.tgt_seq_length),
@@ -813,7 +838,8 @@ def main():
                                                                      asr_format=opt.asr_format,
                                                                      output_format=opt.format,
                                                                      external_tokenizer=opt.external_tokenizer,
-                                                                     tgt_lang=tgt_lang, verbose=opt.verbose)
+                                                                     tgt_lang=tgt_lang, verbose=opt.verbose,
+                                                                     aux_tgt_file=aux_tgt_input_files[i] if len(aux_tgt_input_files) > 0 else None)
 
             n_samples = len(src_data)
             if n_input_files == 1 or opt.multi_dataset:
@@ -836,29 +862,33 @@ def main():
                     tgt_atb_data = [torch.Tensor([dicts['atbs'][tgt_atb]]) for _ in range(n_samples)]
 
             # validation past file
-            if opt.past_train_src and len(past_src_files) == len(src_input_files):
-                past_src_file = past_src_files[i]
-
-                past_src_data, _, past_src_sizes, _ = make_asr_data(past_src_file, None, None, None,
-                                                                    input_type=opt.input_type,
-                                                                    stride=opt.stride, concat=opt.concat,
-                                                                    prev_context=opt.previous_context,
-                                                                    fp16=opt.fp16,
-                                                                    add_bos=not opt.no_bos,
-                                                                    asr_format=opt.asr_format,
-                                                                    output_format=opt.format,
-                                                                    num_workers=opt.num_threads,
-                                                                    external_tokenizer=opt.external_tokenizer,
-                                                                    tgt_lang=tgt_lang, verbose=opt.verbose)
-
-                valid['past_src'] += past_src_data
-                valid['past_src_sizes'] += past_src_sizes
+            # if opt.past_train_src and len(past_src_files) == len(src_input_files):
+            #     past_src_file = past_src_files[i]
+            #
+            #     past_src_data, _, past_src_sizes, _ = make_asr_data(past_src_file, None, None, None,
+            #                                                         input_type=opt.input_type,
+            #                                                         stride=opt.stride, concat=opt.concat,
+            #                                                         prev_context=opt.previous_context,
+            #                                                         fp16=opt.fp16,
+            #                                                         add_bos=not opt.no_bos,
+            #                                                         asr_format=opt.asr_format,
+            #                                                         output_format=opt.format,
+            #                                                         num_workers=opt.num_threads,
+            #                                                         external_tokenizer=opt.external_tokenizer,
+            #                                                         tgt_lang=tgt_lang, verbose=opt.verbose)
+            #
+            #     valid['past_src'] += past_src_data
+            #     valid['past_src_sizes'] += past_src_sizes
 
         # Finalizing Validation data ... #########################
 
             if opt.multi_dataset:
                 data['src'] = src_data
                 data['tgt'] = tgt_data
+
+                if len(aux_tgt_input_files) > 0:
+                    data['aux_tgt'] = aux_tgt_data
+                    data['aux_tgt_sizes'] = aux_tgt_sizes
 
                 data['src_sizes'] = src_sizes
                 data['tgt_sizes'] = tgt_sizes
@@ -887,6 +917,11 @@ def main():
                 valid['tgt_sizes'] += tgt_sizes
                 valid['src_lang'] += src_lang_data
                 valid['tgt_lang'] += tgt_lang_data
+
+                if len(aux_tgt_input_files) > 0:
+                    valid['aux_tgt'] += aux_tgt_data
+                    valid['aux_tgt_sizes'] += aux_tgt_sizes
+
                 if len(atbs) > 0:
                     valid['src_atb'] += src_atb_data
                     valid['tgt_atb'] += tgt_atb_data
