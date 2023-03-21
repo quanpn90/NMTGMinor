@@ -101,7 +101,12 @@ def expected_length(length, death_rate):
 
 
 from typing import Union, Iterable
-from torch._six import inf
+
+try:
+    from torch._six import inf
+except ModuleNotFoundError:
+    from torch import inf
+ 
 
 _tensor_or_tensors = Union[torch.Tensor, Iterable[torch.Tensor]]
 

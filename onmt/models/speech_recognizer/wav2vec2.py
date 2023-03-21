@@ -11,7 +11,7 @@ import math
 from .fairseq_wav2vec2.file_io import PathManager
 from omegaconf import DictConfig, open_dict, OmegaConf
 from .fairseq_wav2vec2.utils import overwrite_args_by_name
-
+from .fairseq_wav2vec2.wav2vec2 import TransformerSentenceEncoderLayer
 #
 # # maybe just need d / F.normalize(d, p=2, dim=2)
 #
@@ -530,7 +530,8 @@ class Wav2vecTransformer(Transformer):
 
     def __init__(self, encoder, decoder, generator=None,
                  mirror=False, ctc=False, **kwargs):
-        super().__init__(encoder, decoder, generator, None, None, ctc=ctc)
+
+        super().__init__(encoder, decoder, generator, None, None, ctc=False)
         self.model_size = self.decoder.model_size
         self.switchout = self.decoder.switchout
 
@@ -705,7 +706,7 @@ class Wav2vecBERT(Wav2vecTransformer):
                  mirror=False, ctc=False, encoder_type='wav2vec2',
                  decoder_type='bart',
                  sub_encoder=None, mutual_modality_training=False, **kwargs):
-        super().__init__(encoder, decoder, generator, mirror=mirror, ctc=ctc)
+        super().__init__(encoder, decoder, generator, mirror=mirror, ctc=False)
 
         self.src_vocab_size = 0
         self.encoder_type = encoder_type
@@ -732,8 +733,13 @@ class Wav2vecBERT(Wav2vecTransformer):
             self.mirror_generator = copy.deepcopy(self.generator)
             self.mirror_generator[0].linear.weight = self.decoder.word_lut.weight
 
+        # overriding ctc
+        self.ctc = ctc
         if self.ctc:
-            self.ctc_linear = nn.Linear(encoder.model_size, self.tgt_vocab_size)
+            self.ctc_linear = Linear(encoder.model_size, self.tgt_vocab_size)
+
+            # join weights with the generator embedding (I guess)
+            self.ctc_linear.weight = self.generator[0].linear.weight
 
     def forward(self, batch, zero_encoder=False, factorize=False, target_mask=None, mirror=False,
                 checkpointing_ffn=False, checkpointing_cross_attn=False, checkpointing_self_attn=False, **kwargs):
@@ -981,6 +987,10 @@ class Wav2vecBERT(Wav2vecTransformer):
     def decode(self, batch):
 
         raise NotImplementedError
+
+
+
+
         # """
         # :param batch: (onmt.Dataset.Batch) an object containing tensors needed for training
         # :return: gold_scores (torch.Tensor) log probs for each sentence

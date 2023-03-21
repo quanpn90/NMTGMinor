@@ -790,7 +790,7 @@ def main():
         tgt_langs = opt.valid_tgt_lang.split("|")
         src_atbs = opt.valid_src_atbs.split("|") if len(atbs) > 0 else [None] * len(src_input_files)
         tgt_atbs = opt.valid_tgt_atbs.split("|") if len(atbs) > 0 else [None] * len(tgt_input_files)
-        aux_tgt_input_files = opt.aux_train_tgt.split("|")
+        aux_tgt_input_files = opt.aux_valid_tgt.split("|")
 
         assert len(src_input_files) == len(src_langs)
         assert len(src_input_files) == len(tgt_input_files)
