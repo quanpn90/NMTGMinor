@@ -12,6 +12,7 @@ from .fairseq_wav2vec2.file_io import PathManager
 from omegaconf import DictConfig, open_dict, OmegaConf
 from .fairseq_wav2vec2.utils import overwrite_args_by_name
 from .fairseq_wav2vec2.wav2vec2 import TransformerSentenceEncoderLayer
+from torch.cuda.amp import autocast
 #
 # # maybe just need d / F.normalize(d, p=2, dim=2)
 #
@@ -517,6 +518,8 @@ class FairseqWav2Vec(nn.Module):
         #     context = stacked_encoder_output[0]
 
         # how to get the correct attention mask?
+
+        # note: 'wav2vec_padding_mask' is also the same with dec_attn_mask
         output_dict = defaultdict(lambda: None, {'source': input, 'context': context, 'src_mask': dec_attn_mask,
                                                  'src': dec_attn_mask, 'pos_emb': None,
                                                  'wav2vec_context': wav2vec_context,
@@ -742,6 +745,7 @@ class Wav2vecBERT(Wav2vecTransformer):
             self.ctc_linear.weight = self.generator[0].linear.weight
 
     def forward(self, batch, zero_encoder=False, factorize=False, target_mask=None, mirror=False,
+                ctc_loss_func=None, ctc_scaler=0.0, loss_scaler=None,
                 checkpointing_ffn=False, checkpointing_cross_attn=False, checkpointing_self_attn=False, **kwargs):
         """
         :param checkpointing_self_attn:
@@ -752,6 +756,9 @@ class Wav2vecBERT(Wav2vecTransformer):
         :param factorize:
         :param target_mask:
         :param mirror:
+        :param ctc_loss_func:
+        :param ctc_scaler:
+        :param loss_scaler:
         :param kwargs:
         :return:
         """
@@ -777,7 +784,7 @@ class Wav2vecBERT(Wav2vecTransformer):
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bart"]:
             batch_first_output = True
 
-        # print(src_lang, src_atb, tgt_lang, tgt_atb)
+        # First run the encoder (wav2vec / wavlm)
 
         # during training mixture is always None
         encoder_output = self.encoder(src, batch_first_output=batch_first_output,
@@ -790,6 +797,62 @@ class Wav2vecBERT(Wav2vecTransformer):
         context = encoder_output['context']
         src_attention_mask = encoder_output['src']
         contrastive_loss = 0
+
+        # collection of tensors to return
+        output_dict = defaultdict(lambda: None)
+
+        # compute the logits for each encoder step
+        if self.ctc:
+            encoder_hidden_states = context
+            ctc_input = encoder_hidden_states.detach()
+            ctc_input.requires_grad = True
+
+            # run the ctc output via the wav2vec context
+            ctc_logits = self.ctc_linear(ctc_input)
+
+            if ctc_loss_func is not None:
+                # backward from ctc_loss ....
+                tmp_outputs = dict()
+                tmp_outputs['encoder_logits'] = ctc_logits
+                tmp_outputs['wav2vec_padding_mask'] = encoder_output['wav2vec_padding_mask']
+                tmp_outputs['src_mask'] = src_attention_mask
+                with autocast(enabled=False):
+                    ctc_loss = ctc_loss_func(tmp_outputs, batch.get('target_output')) * ctc_scaler
+                ctc_loss_data = ctc_loss.item()
+
+                # but here we only backward until the encoder_hidden_states
+                # and nothing more !!!!
+                inputs_for_grads = [ctc_input]
+                if self.ctc_linear.weight.requires_grad:
+                    inputs_for_grads.append(self.ctc_linear.weight)
+                if self.ctc_linear.bias.requires_grad:
+                    inputs_for_grads.append(self.ctc_linear.bias)
+
+                # call torch.autograd.grad, not backward()
+                with autocast(enabled=False):
+                    if loss_scaler is not None:
+                        # ctc_grads = torch.autograd.grad(loss_scaler.scale(ctc_loss), inputs_for_grads)
+                        loss_scaler.scale(ctc_loss).backward(inputs=inputs_for_grads)
+                    else:
+                        ctc_loss.backward(inputs=inputs_for_grads)
+
+                ctc_grad = ctc_input.grad
+                assert(ctc_grad is not None)
+
+                output_dict['backward_inputs'] = [encoder_hidden_states]
+                output_dict['backward_grads'] = [ctc_grad]
+                output_dict['ctc_loss_data'] = ctc_loss_data
+
+                del ctc_loss
+                del ctc_logits
+                del tmp_outputs
+                del ctc_input
+            else:
+                output_dict['encoder_logits'] = ctc_logits
+
+
+
+        ## Decoder section ..........
 
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bert", "roberta"]:
             # src: [b, src_l]  context: [b, src_l, de_model]
@@ -805,7 +868,6 @@ class Wav2vecBERT(Wav2vecTransformer):
 
             decoder_output = decoder_output[0]
             output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
-            output_dict = defaultdict(lambda: None)
             context = context.transpose(0, 1)  # to [src_l, b, de_model]
         elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bart"]:
             tgt_token_type = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
@@ -821,7 +883,7 @@ class Wav2vecBERT(Wav2vecTransformer):
             decoder_output = decoder_output[0]
             output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
             context = context.transpose(0, 1)
-            output_dict = defaultdict(lambda: None)
+
         elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model \
                 in ["deltalm", "mbart", "mbart50"]:
             if self.sub_encoder is not None:
@@ -856,7 +918,6 @@ class Wav2vecBERT(Wav2vecTransformer):
             decoder_output = decoder_outputs[0]
             contrastive_loss = decoder_outputs[-1]
             output = decoder_output
-            output_dict = defaultdict(lambda: None)
 
         else:
             # pass the mask ('src') from the encoder output the decoder as the attention mask
@@ -912,10 +973,7 @@ class Wav2vecBERT(Wav2vecTransformer):
 
         output_dict['reconstruct'] = False
 
-        # compute the logits for each encoder step
-        if self.ctc:
-            # run the ctcoutput via the wav2vec context (not context)
-            output_dict['encoder_logits'] = self.ctc_linear(output_dict['wav2vec_context'])
+
 
         if self.sub_encoder is not None:
             # contrastive loss has size: t x b x h

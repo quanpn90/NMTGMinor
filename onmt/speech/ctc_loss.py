@@ -37,7 +37,7 @@ class CTC(torch.nn.Module):
 
         if self.ctc_type == "builtin":
             reduction_type = "sum" if reduce else "none"
-            self.ctc_loss = torch.nn.CTCLoss(blank=onmt.constants.TGT_PAD, reduction=reduction_type, zero_infinity=False)
+            self.ctc_loss = torch.nn.CTCLoss(blank=onmt.constants.TGT_PAD, reduction=reduction_type, zero_infinity=True)
 
         elif self.ctc_type == "warpctc":
             import warpctc_pytorch as warp_ctc
@@ -84,20 +84,22 @@ class CTC(torch.nn.Module):
         # targets: T x B
         logits = model_outputs['encoder_logits']
 
-        if 'wav2vec_padding_mask' in model_outputs:
-            source_mask = model_outputs['wav2vec_padding_mask'].long()
-        else:
-            source_mask = model_outputs['src_mask'].long()
+        with torch.no_grad():
+            if 'wav2vec_padding_mask' in model_outputs:
+                source_mask = model_outputs['wav2vec_padding_mask'].long()
+            else:
+                source_mask = model_outputs['src_mask'].long()
 
-        # target mask should be T x B
-        target_mask = targets.ne(self.padding_idx)
-        target_lengths = target_mask.long().sum(0)
+            # target mask should be T x B
 
-        # source mask should be B x 1 x T or B x T
-        if source_mask.dim() == 3:
-            input_lengths = (1 - source_mask).squeeze(1).sum(1)
-        else:
-            input_lengths = (1 - source_mask).sum(1)
+            target_mask = targets.ne(self.padding_idx)
+            target_lengths = target_mask.long().sum(0)
+
+            # source mask should be B x 1 x T or B x T
+            if source_mask.dim() == 3:
+                input_lengths = (1 - source_mask).squeeze(1).sum(1)
+            else:
+                input_lengths = (1 - source_mask).sum(1)
 
         # print("MAX SOURCE LENGTH", logits.size(0), logits.size())
         # print(input_lengths)
@@ -107,7 +109,8 @@ class CTC(torch.nn.Module):
 
         if self.ctc_type == 'builtin':
             # target is batch first
-            targets = targets.transpose(0, 1)
+            targets = targets.transpose(0, 1).contiguous()
+
         loss = self.compute_loss(logits, targets, input_lengths, target_lengths)
 
         return loss

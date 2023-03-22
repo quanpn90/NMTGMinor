@@ -159,13 +159,13 @@ class Trainer(object):
 
         self.model = None
 
-        if self.rank == 0:
-            self.train_data = train_data
-            self.valid_data = valid_data
-        else:
+        # if self.rank == 0:
+        self.train_data = train_data
+        self.valid_data = valid_data
+        # else:
             # Do we really need to deepcopy the data instances (which could cause memory leak easily)
-            self.train_data = copy.deepcopy(train_data)
-            self.valid_data = copy.deepcopy(valid_data)
+            # self.train_data = copy.deepcopy(train_data)
+            # self.valid_data = copy.deepcopy(valid_data)
 
         self.dicts = dicts
         self.opt = opt
@@ -190,6 +190,8 @@ class Trainer(object):
             from onmt.speech.ctc_loss import CTC
             self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True,
                                          padding_idx=tgt_pad, blank_idx=0)
+        else:
+            self.ctc_loss_function = None
 
         if opt.nce:
             from onmt.modules.nce.nce_loss import NCELoss
@@ -441,7 +443,9 @@ class Trainer(object):
                                  mirror=opt.mirror_loss, streaming_state=streaming_state,
                                  nce=opt.nce, checkpointing_ffn=opt.checkpointing_ffn,
                                  checkpointing_cross_attn=opt.checkpointing_cross_attn,
-                                 checkpointing_self_attn=opt.checkpointing_self_attn)
+                                 checkpointing_self_attn=opt.checkpointing_self_attn,
+                                 ctc_loss_func = self.ctc_loss_function, loss_scaler=self.grad_scaler,
+                                 ctc_scaler = opt.ctc_loss)
 
             outputs['tgt_mask'] = tgt_mask
 
@@ -451,9 +455,14 @@ class Trainer(object):
             full_loss = loss
 
             if opt.ctc_loss > 0.0:
-                ctc_loss = self.ctc_loss_function(outputs, targets)
-                ctc_loss_data = ctc_loss.item()
-                full_loss = full_loss + opt.ctc_loss * ctc_loss
+
+                if 'ctc_loss_data' in outputs:
+                    # ctc loss has been done during the encoder forward pass
+                    ctc_loss_data = outputs['ctc_loss_data']
+                else:
+                    ctc_loss = self.ctc_loss_function(outputs, targets)
+                    ctc_loss_data = ctc_loss.item()
+                    full_loss = full_loss + opt.ctc_loss * ctc_loss
 
             if opt.mirror_loss:
                 rev_loss = loss_dict['rev_loss']
@@ -479,14 +488,15 @@ class Trainer(object):
         parameter_list = [p for p in self.model.parameters() if p.requires_grad]
         # Later if we need to do Adversarial Perturbation:
 
-        self.grad_scaler.scale(full_loss).backward()
+        # self.grad_scaler.scale(full_loss).backward()
+        backward_inputs = [self.grad_scaler.scale(full_loss)]
+        backward_grads = [None]
 
-        loss = 0
+        if 'backward_inputs' in outputs:
+            backward_inputs + outputs['backward_inputs']
+            backward_grads + outputs['backward_grads']
 
-        for p in parameter_list:
-            loss += p.sum() * 0.0
-
-        loss.backward()
+        torch.autograd.backward(backward_inputs, backward_grads)
 
         for p in self.model.parameters():
             if p.grad is not None:
@@ -752,7 +762,9 @@ class Trainer(object):
                                              adv_ptb_grad=opt.virtual_adversarial_training_mode > 0,
                                              checkpointing_ffn=opt.checkpointing_ffn,
                                              checkpointing_cross_attn=opt.checkpointing_cross_attn,
-                                             checkpointing_self_attn=opt.checkpointing_self_attn
+                                             checkpointing_self_attn=opt.checkpointing_self_attn,
+                                             ctc_loss_func=self.ctc_loss_function, ctc_scaler=opt.ctc_loss,
+                                             loss_scaler=self.grad_scaler
                                              )
 
                         batch_size = batch.size
@@ -766,9 +778,15 @@ class Trainer(object):
                         full_loss = loss
 
                         if opt.ctc_loss > 0.0:
-                            ctc_loss = self.ctc_loss_function(outputs, targets)
-                            ctc_loss_data = ctc_loss.item()
-                            full_loss = full_loss + opt.ctc_loss * ctc_loss
+
+                            if 'ctc_loss_data' in outputs:
+                                # ctc loss has been done during the encoder forward pass
+                                ctc_loss_data = outputs['ctc_loss_data']
+                            else:
+
+                                ctc_loss = self.ctc_loss_function(outputs, targets)
+                                ctc_loss_data = ctc_loss.item()
+                                full_loss = full_loss + opt.ctc_loss * ctc_loss
 
                         if opt.mirror_loss:
                             rev_loss = loss_dict['rev_loss']
@@ -802,61 +820,71 @@ class Trainer(object):
                     #     full_loss += ewc_penalty * ewc_importance
 
                     # TODO for adversarial:
-                    grad_list = [p for p in self.model.parameters() if p.requires_grad]
-                    if opt.virtual_adversarial_training_mode > 0:
-                        # if we use virtual adversarial training: add the input to the list of gradient to take
-                        model_input = outputs['source']
-                        vanilla_logits = outputs['logprobs']
-                        grad_list += [model_input]
-                    else:
-                        model_input = None
-                        vanilla_logits = None
+                    # grad_list = [p for p in self.model.parameters() if p.requires_grad]
+                    # if opt.virtual_adversarial_training_mode > 0:
+                    #     # if we use virtual adversarial training: add the input to the list of gradient to take
+                    #     model_input = outputs['source']
+                    #     vanilla_logits = outputs['logprobs']
+                    #     grad_list += [model_input]
+                    # else:
+                    model_input = None
+                    vanilla_logits = None
+                    grad_list = None
 
                     # grad scaler has to be done outside of the autocast
-                    self.grad_scaler.scale(full_loss).backward()
+                    # self.grad_scaler.scale(full_loss).backward()
+
+                    backward_inputs = [self.grad_scaler.scale(full_loss)]
+                    backward_grads = [None]
+
+                    if 'backward_inputs' in outputs:
+                        backward_inputs + outputs['backward_inputs']
+                        backward_grads + outputs['backward_grads']
+
+                    torch.autograd.backward(backward_inputs, backward_grads)
 
                     # del outputs
-                    if opt.virtual_adversarial_training_mode > 0:
-                        # run forward pass one more time
-                        # the perturbation is the gradient of the model w.r.t the input
-                        perturb = model_input.grad.data.new(*model_input.size()).copy_(model_input.grad.data)
-
-                        with autocast(enabled=opt.fp16):
-                            assert model_input.grad is not None
-                            outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                                 pretrained_layer_states=layer_states,
-                                                 input_ptb=perturb)
-
-                            full_loss = None
-                            # compute loss for mode 2 3
-                            # In this mode, we add noise to the input and minimise the loss given the noisy inputs
-                            if opt.virtual_adversarial_training_mode in [2, 3]:
-                                loss_dict = self.loss_function(outputs, targets, model=self.model)
-                                full_loss = loss_dict['loss']
-
-                            # for mode 1, 3 compute kl divergence
-                            # In this mode, we minimise the kl divergence between the model output with and without noise
-                            if opt.virtual_adversarial_training_mode in [1, 3]:
-                                logits = outputs['logprobs']
-
-                                with torch.no_grad():
-                                    vanilla_probs = \
-                                        F.softmax(vanilla_logits.float().view(-1, vanilla_logits.size(-1)), dim=-1)
-                                    vanilla_probs.detach_()
-                                noisy_probs = F.softmax(logits.float().view(-1, logits.view(-1, logits.size(-1))),
-                                                        dim=-1)
-
-                                # Note: with the kl_div_loss we don't backward w.r.t the vanilla probs
-                                kl_div_loss = F.kl_div(noisy_probs, vanilla_probs, reduction='sum')
-                                if full_loss is None:
-                                    full_loss = kl_div_loss
-                                else:
-                                    full_loss += kl_div_loss
-
-                        # Now we only get the gradients for the weights of the network
-                        grad_list = [p for p in self.model.parameters() if p.requires_grad]
-                        self.grad_scaler.scale(full_loss).backward()
-                        del outputs
+                    # if opt.virtual_adversarial_training_mode > 0:
+                    #     # run forward pass one more time
+                    #     # the perturbation is the gradient of the model w.r.t the input
+                    #     perturb = model_input.grad.data.new(*model_input.size()).copy_(model_input.grad.data)
+                    #
+                    #     with autocast(enabled=opt.fp16):
+                    #         assert model_input.grad is not None
+                    #         outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
+                    #                              pretrained_layer_states=layer_states,
+                    #                              input_ptb=perturb)
+                    #
+                    #         full_loss = None
+                    #         # compute loss for mode 2 3
+                    #         # In this mode, we add noise to the input and minimise the loss given the noisy inputs
+                    #         if opt.virtual_adversarial_training_mode in [2, 3]:
+                    #             loss_dict = self.loss_function(outputs, targets, model=self.model)
+                    #             full_loss = loss_dict['loss']
+                    #
+                    #         # for mode 1, 3 compute kl divergence
+                    #         # In this mode, we minimise the kl divergence between the model output with and without noise
+                    #         if opt.virtual_adversarial_training_mode in [1, 3]:
+                    #             logits = outputs['logprobs']
+                    #
+                    #             with torch.no_grad():
+                    #                 vanilla_probs = \
+                    #                     F.softmax(vanilla_logits.float().view(-1, vanilla_logits.size(-1)), dim=-1)
+                    #                 vanilla_probs.detach_()
+                    #             noisy_probs = F.softmax(logits.float().view(-1, logits.view(-1, logits.size(-1))),
+                    #                                     dim=-1)
+                    #
+                    #             # Note: with the kl_div_loss we don't backward w.r.t the vanilla probs
+                    #             kl_div_loss = F.kl_div(noisy_probs, vanilla_probs, reduction='sum')
+                    #             if full_loss is None:
+                    #                 full_loss = kl_div_loss
+                    #             else:
+                    #                 full_loss += kl_div_loss
+                    #
+                    #     # Now we only get the gradients for the weights of the network
+                    #     grad_list = [p for p in self.model.parameters() if p.requires_grad]
+                    #     self.grad_scaler.scale(full_loss).backward()
+                    del outputs
 
                     # EWC training: no need for autograd here?
                     if self.optim._step % opt.ewc_decay_every == 0:

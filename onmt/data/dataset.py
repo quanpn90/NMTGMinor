@@ -19,7 +19,7 @@ Two basic classes:
 
 
 def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=False,
-               feature_size=40, dataname="source", src_pad=1, tgt_pad=1 ):
+               feature_size=40, dataname="source", src_pad=0, tgt_pad=0):
     """
             Assembling the individual sequences into one single tensor, included padding
             :param tgt_pad:
@@ -47,7 +47,7 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
         elif dataname == "target":
             tensor = data[0].new(len(data), max_length).fill_(tgt_pad)
         else:
-            print("Warning: check the dataname")
+            print("Warning: check the dataname: either source or target")
             raise NotImplementedError
         pos = None
 
