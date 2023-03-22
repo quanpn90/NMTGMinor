@@ -627,7 +627,7 @@ def main():
         assert len(src_input_files) == len(tgt_input_files)
         assert len(tgt_input_files) == len(tgt_langs)
         assert len(tgt_input_files) == len(tgt_atbs)
-        assert (len(aux_tgt_input_files) == 0 or len(aux_tgt_input_files) ==  len(tgt_input_files))
+        assert (len(opt.aux_train_tgt) == 0 or len(aux_tgt_input_files) ==  len(tgt_input_files))
 
         past_src_files = opt.past_train_src.split("|")
         idx = 0
@@ -678,7 +678,7 @@ def main():
                                                                      external_tokenizer=opt.external_tokenizer,
                                                                      tgt_lang=tgt_lang, verbose=opt.verbose,
                                                                      aux_tgt_file=aux_tgt_input_files[i]
-                                                                     if len(aux_tgt_input_files) > 0 else None)
+                                                                     if len(opt.aux_train_tgt) > 0 else None)
 
             n_samples = len(src_data)
             src_atb_data, tgt_atb_data = None, None
@@ -795,7 +795,7 @@ def main():
         assert len(src_input_files) == len(src_langs)
         assert len(src_input_files) == len(tgt_input_files)
         assert len(tgt_input_files) == len(tgt_langs)
-        assert (len(aux_tgt_input_files) == 0 or len(aux_tgt_input_files) == len(tgt_input_files))
+        assert (len(opt.aux_valid_tgt) == 0 or len(aux_tgt_input_files) == len(tgt_input_files))
 
         idx = 0
         n_input_files = len(src_input_files)
@@ -839,7 +839,7 @@ def main():
                                                                      output_format=opt.format,
                                                                      external_tokenizer=opt.external_tokenizer,
                                                                      tgt_lang=tgt_lang, verbose=opt.verbose,
-                                                                     aux_tgt_file=aux_tgt_input_files[i] if len(aux_tgt_input_files) > 0 else None)
+                                                                     aux_tgt_file=aux_tgt_input_files[i] if len(opt.aux_valid_tgt) > 0 else None)
 
             n_samples = len(src_data)
             if n_input_files == 1 or opt.multi_dataset:

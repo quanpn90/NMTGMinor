@@ -72,6 +72,7 @@ class SelfAttnFunc(torch.autograd.Function):
         input_weights = input_weights.contiguous()
         output_weights = output_weights.contiguous()
 
+        inputs = inputs.contiguous()
         bsz, len_q = inputs.size(1), inputs.size(0)
 
         # print(low_precision, incremental, inputs.type())
@@ -132,7 +133,7 @@ class SelfAttnFunc(torch.autograd.Function):
         # output:               [seql_q, seqs, embed_dim*3]
         # GEMM: ( (seql_q*seqs) x embed_dim ) x ( embed_dim x embed_dim*3 ) = (seql_q*seqs x embed_dim*3)
         input_lin_results = torch.addmm(input_biases,
-                                        inputs.view(inputs.size(0) * inputs.size(1), inputs.size(2)),
+                                        inputs.reshape(inputs.size(0) * inputs.size(1), inputs.size(2)),
                                         input_weights.transpose(0, 1),
                                         beta=1., alpha=1.)
 

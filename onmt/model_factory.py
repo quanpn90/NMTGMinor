@@ -191,7 +191,6 @@ def build_tm_model(opt, dicts, constants=None):
                                      discrete_encoder=discrete_encoder, stacked_encoder=stacked_encoder)
 
         sub_encoder = None
-        # second create the
 
 
         # if opt.model.startswith("quantize"):
@@ -268,18 +267,14 @@ def build_tm_model(opt, dicts, constants=None):
             print("[INFO] Created DeltaLM decoder from: %s ..." % opt.dec_config_file)
             from onmt.models.deltalm.deltalm import DeltaLMDecoder
             deltalm_config = json_to_namespace(opt.dec_config_file)
-            print(constants)
             embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                          deltalm_config.decoder_embed_dim,
                                          padding_idx=constants.TGT_PAD)
             decoder = DeltaLMDecoder(deltalm_config, embedding_tgt)
-            # from pretrain_module.configuration_deltalm import DeltaMConfig
-            # from pretrain_module.modeling_deltalm import DeltaLMDecoder
-            # print("[INFO] Created DeltaLM decoder from: %s ..." % opt.dec_config_file)
-            # dec_mbart_config = DeltaLMConfig.from_json_file(opt.dec_config_file)
-            # decoder = DeltaLMDecoder(dec_mbart_config, opt)
 
+            # share all embeddings
             generators[0].linear.weight = decoder.embed_tokens.weight
+
             if opt.freeze_embedding:
                 decoder.embed_tokens.weight.requires_grad = False
 
@@ -606,13 +601,7 @@ def build_tm_model(opt, dicts, constants=None):
                                          deltalm_config.decoder_embed_dim,
                                          padding_idx=constants.TGT_PAD)
             decoder = DeltaLMDecoder(deltalm_config, embedding_tgt)
-            # if opt.enc_pretrained_model not in ["deltalm"]:
-            #     from pretrain_module.configuration_deltalm import DeltaLMConfig
-            # from pretrain_module.modeling_deltalm import DeltaLMDecoder
-            #
-            # dec_config = DeltaLMConfig.from_json_file(opt.dec_config_file)
-            #
-            # decoder = DeltaLMDecoder(dec_config, opt)
+
             # share all embeddings
             decoder.embed_tokens.weight = encoder.embed_tokens.weight
             generators[0].linear.weight = encoder.embed_tokens.weight
