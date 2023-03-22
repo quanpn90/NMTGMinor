@@ -377,11 +377,9 @@ class MBartAttention(nn.Module):
                 attn_output = attn_output
 
             else:
-                """
-                normal multiheaded attention without 
-                """
+                """Flash Attention"""
                 assert self.fast_bert_mha is not None
-                assert hidden_states.dtype == torch.half
+                # assert hidden_states.dtype == torch.half
                 assert cu_seqlens is not None
                 assert max_len is not None
                 # assert self.is_decoder is False  # only encoder
@@ -391,9 +389,6 @@ class MBartAttention(nn.Module):
                 total_bsz = hidden_states.size(0)
                 qkv = linear_function(hidden_states, in_proj_weight, self.proj_bias)  # B x H
                 # B x 3 x H x d
-
-                # TODO: moving to CUDA to remove overhead?
-                # qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
 
                 # context, coverage = self.fast_bert_mha(qkv, cu_seqlens, self.dropout, max_len, self.training)
                 qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
@@ -672,9 +667,9 @@ class MBartCrossAttention(MBartAttention):
                                                               low_precision, True)
 
             elif hidden_states.ndim == 2 and key_value_states.ndim == 2:
-
+                "Flash Attention"
                 assert self.fast_bert_mha is not None
-                assert hidden_states.dtype == torch.half
+                assert torch.is_autocast_enabled()
                 assert cu_seqlens is not None
                 assert cu_seqlens_kv is not None
                 assert max_len is not None
@@ -684,12 +679,11 @@ class MBartCrossAttention(MBartAttention):
 
                 total_bsz_q = hidden_states.size(0)
                 total_bsz_kv = key_value_states.size(0)
-                q = linear_function(hidden_states, in_proj_weight_q, self.q_proj.bias)
 
+                q = linear_function(hidden_states, in_proj_weight_q, self.q_proj.bias)
                 kv = linear_function(key_value_states, in_proj_weight_kv, self.proj_bias_kv)
 
                 kv = kv.view(total_bsz_kv, self.num_heads, 2, self.head_dim).transpose(1, 2).contiguous()
-
                 q = q.view(total_bsz_q, self.num_heads, self.head_dim)
 
                 dropout_p = self.dropout if self.training else 0.0
@@ -1701,8 +1695,7 @@ class MBartEncoder(MBartPreTrainedModel):
         total_bsz = 0
 
         # only run this when seq_len <= 512 and sm = 80/86 and type = half
-        if self.fast_bert_mha and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] in [0]) \
-                and hidden_states.dtype == torch.half:
+        if self.fast_bert_mha:
             can_run_fast_bert_mha = True
             # print("Can run FAST BERT MHA")
 

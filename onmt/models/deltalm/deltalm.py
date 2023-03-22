@@ -14,6 +14,7 @@ from onmt.modules.layer_norm import LayerNorm
 from .modules.multihead_attention import MultiHeadAttention
 
 from onmt.modules.optimized.dropout_add import fused_dropout_add
+from pretrain_module.modeling_mbart import index_copy
 
 
 def dropout_residual_connection(x, residual, dropout_module, is_training):
@@ -228,6 +229,9 @@ class DeltaLMDecoderLayer(TransformerDecoderLayerBase):
                 self.fused_function = mlp_gelu_function
                 self.fused = True
 
+        from onmt.modules.optimized.flash_mha import flash_bert_mha
+        self.fast_bert_mha = flash_bert_mha
+
     # TODO: add incremental states
     def forward(
             self,
@@ -241,6 +245,8 @@ class DeltaLMDecoderLayer(TransformerDecoderLayerBase):
             checkpointing_ffn=False,
             checkpointing_self_attn=False,
             checkpointing_cross_attn=False,
+            max_len=None, cu_seqlens=None,
+            max_len_kv=None, cu_seqlens_kv=None,
             **kwargs
     ):
         """
@@ -258,11 +264,10 @@ class DeltaLMDecoderLayer(TransformerDecoderLayerBase):
             hidden_states=x,
             attention_mask=self_attn_mask,
             output_attentions=False,
-            checkpointing=checkpointing_self_attn
+            checkpointing=checkpointing_self_attn,
+            cu_seqlens = cu_seqlens, max_len=max_len
         )
 
-        # x = self.dropout_module(x)
-        # x = self.residual_connection(x, residual)
         x = dropout_residual_connection(x, residual, self.dropout_module, self.training)
 
         if not self.normalize_before:
@@ -286,15 +291,7 @@ class DeltaLMDecoderLayer(TransformerDecoderLayerBase):
             x = self.activation_fn(self.fc3(x))
             x = self.activation_dropout_module(x)
             x = self.fc4(x)
-        # if self.checkpoint_activations and self.training:
-        #     x = torch.utils.checkpoint.checkpoint(linear_act_linear, x, self.fc3, self.fc4,
-        #                                self.dropout_module.p, self.training, self.activation_fn)
-        # else:
-        #     x = linear_act_linear(x, self.fc3, self.fc4,
-        #                                self.dropout_module.p, self.training, self.activation_fn)
 
-        # x = self.dropout_module(x)
-        # x = self.residual_connection(x, residual)
         x = dropout_residual_connection(x, residual, self.dropout_module, self.training)
         if not self.normalize_before:
             x = self.ffn_layer_norm(x)
@@ -311,11 +308,11 @@ class DeltaLMDecoderLayer(TransformerDecoderLayerBase):
                 key_value_states=encoder_out,
                 attention_mask=encoder_padding_mask,
                 output_attentions=False,
-                checkpointing=checkpointing_cross_attn
+                checkpointing=checkpointing_cross_attn,
+                cu_seqlens=cu_seqlens, max_len=max_len,
+                cu_seqlens_kv=cu_seqlens_kv, max_len_kv=max_len_kv
             )
 
-            # x = self.dropout_module(x)
-            # x = self.residual_connection(x, residual)
             x = dropout_residual_connection(x, residual, self.dropout_module, self.training)
             if not self.normalize_before:
                 x = self.encoder_attn_layer_norm(x)
@@ -337,15 +334,7 @@ class DeltaLMDecoderLayer(TransformerDecoderLayerBase):
             x = self.activation_fn(self.fc1(x))
             x = self.activation_dropout_module(x)
             x = self.fc2(x)
-        # if self.checkpoint_activations and self.training:
-        #     x = torch.utils.checkpoint.checkpoint(linear_act_linear, x, self.fc1, self.fc2,
-        #                                self.dropout_module.p, self.training, self.activation_fn)
-        # else:
-        #     x = linear_act_linear(x, self.fc1, self.fc2,
-        #                           self.dropout_module.p, self.training, self.activation_fn)
 
-        # x = self.dropout_module(x)
-        # x = self.residual_connection(x, residual)
         x = dropout_residual_connection(x, residual, self.dropout_module, self.training)
         if not self.normalize_before:
             x = self.final_layer_norm(x)

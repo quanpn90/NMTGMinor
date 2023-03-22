@@ -18,6 +18,7 @@ from .utils import get_activation_fn
 from .multihead_attention import MultiHeadAttention
 
 
+
 def dropout_residual_connection(x, residual, dropout_module, is_training):
 
     return dropout_add_jit(x, residual, dropout_module.p, is_training)
@@ -138,6 +139,8 @@ class TransformerEncoderLayerBase(nn.Module):
         x,
         encoder_padding_mask: Optional[Tensor],
         attn_mask: Optional[Tensor] = None,
+        max_len=None, cu_seqlens=None,
+        **kwargs
     ):
         """
         Args:
@@ -169,11 +172,10 @@ class TransformerEncoderLayerBase(nn.Module):
         x, _, _ = self.self_attn(
             hidden_states=x,
             attention_mask=encoder_padding_mask,
-            output_attentions=False
+            output_attentions=False,
+            max_len=max_len, cu_seqlens=cu_seqlens
         )
 
-        # x = self.dropout_module(x)
-        # x = self.residual_connection(x, residual)
         x = dropout_residual_connection(x, residual, self.dropout_module, self.training)
 
         if not self.normalize_before:
@@ -195,15 +197,7 @@ class TransformerEncoderLayerBase(nn.Module):
             x = self.activation_fn(self.fc1(x))
             x = self.activation_dropout_module(x)
             x = self.fc2(x)
-        # if self.checkpoint_activations and self.training:
-        #     x = torch.utils.checkpoint.checkpoint(linear_act_linear, x, self.fc1, self.fc2,
-        #                                self.dropout_module.p, self.training, self.activation_fn)
-        # else:
-        #     x = linear_act_linear(x, self.fc1, self.fc2,
-        #                                self.dropout_module.p, self.training, self.activation_fn)
 
-        # x = self.dropout_module(x)
-        # x = self.residual_connection(x, residual)
         x = dropout_residual_connection(x, residual, self.dropout_module, self.training)
 
         if not self.normalize_before:
