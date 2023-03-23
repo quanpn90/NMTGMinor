@@ -485,8 +485,8 @@ struct Softmax : public Softmax_base<Cta_tile, Kernel_traits> {
                     tmp_10 = 0;
 
                 float tmp_11 = this->elt_[2 * mi + 1][4 * ki + 1];
-                if (std::isnan(tmp_10)==true)
-                    tmp_10 = 0;
+                if (std::isnan(tmp_11)==true)
+                    tmp_11 = 0;
 
                 float tmp_12 = this->elt_[2 * mi + 1][4 * ki + 2];
                 if (std::isnan(tmp_12)==true)
