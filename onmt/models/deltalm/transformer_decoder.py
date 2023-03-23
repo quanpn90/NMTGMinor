@@ -158,8 +158,11 @@ class TransformerDecoderBase(nn.Module):
             can_run_fast_bert_mha = True
 
             # unpadding x
-            # if attention_mask is None:
-            padding_mask = input_ids.new_zeros(bsz, qlen)
+            if attention_mask is None:
+                padding_mask = 1 - attention_mask.long().contiguous()
+            else:
+                padding_mask = input_ids.new_zeros(bsz, qlen)
+
             padding_mask = padding_mask.contiguous().long()
             lengths = (1 - padding_mask).sum(dim=1)
             lengths = lengths.cpu().tolist()  # list of lengths for B seqs
