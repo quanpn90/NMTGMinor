@@ -57,6 +57,13 @@ else:
 
 class Linear(torch.nn.Linear):
 
+    def __init__(self, *args, **kwargs):
+        super(Linear, self).__init__(*args, **kwargs)
+
+        torch.nn.init.xavier_uniform_(self.weight)
+        if self.bias is not None:
+            torch.nn.init.constant_(self.bias, 0.0)
+
     def forward(self, input: Tensor) -> Tensor:
 
         if input.is_cuda and linear_function is not None and self.bias is not None:

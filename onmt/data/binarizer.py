@@ -12,6 +12,7 @@ import torch
 import onmt
 import numpy as np
 from .audio_utils import ArkLoader
+import dill
 
 
 class SpeechBinarizer:
@@ -48,7 +49,8 @@ class SpeechBinarizer:
     @staticmethod
     def binarize_file_single_thread(filename, ark_loader, offset=0, end=-1, worker_id=0,
                                     input_format='scp', output_format='raw',
-                                    prev_context=0, concat=4, stride=1, fp16=False, sample_rate=16000, verbose=False):
+                                    prev_context=0, concat=4, stride=1, fp16=False, sample_rate=16000,
+                                    verbose=False):
         # if output_format is scp, we only read the length for sorting
         if output_format == 'scp':
             assert input_format in ['kaldi', 'scp']
@@ -255,10 +257,13 @@ class Binarizer:
     def binarize_file_single_thread(filename, tokenizer, vocab, worker_id=0, bos_word=None, eos_word=None,
                                     offset=0, end=-1, data_type='int64', verbose=False,
                                     external_tokenizer=[None, None], lang=None):
+
         """
         This function should read in the lines, convert sentences to tensors
         And then finalize into a dataset?
         """
+
+        # external_tokenizer = dill.loads(external_tokenizer) if external_tokenizer is not None else None
 
         result = dict()
         unk_word = onmt.constants.UNK_WORD
@@ -266,7 +271,10 @@ class Binarizer:
         sizes = list()
 
         count = 0
-        ext_tokenizer, external_tokenizer_name = external_tokenizer
+        if external_tokenizer is not None:
+            ext_tokenizer, external_tokenizer_name = external_tokenizer
+        else:
+            ext_tokenizer, external_tokenizer_name = None, None
 
         with open(filename, 'r', encoding='utf-8') as f:
             f.seek(offset)
@@ -312,6 +320,11 @@ class Binarizer:
                             "The first token must be language ID %s , got %d instead of %d" % (lang, tensor[0], vocab.convertToIdx([lang], None)[0])
                         pad_id = vocab.convertToIdx(["<pad>"], None)[0]
                         assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
+                    elif "deltalm" in external_tokenizer_name.lower():
+                        assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID" + " " + str(tensor) + " " + \
+                                                                                 str(vocab.convertToIdx([lang], None)[0])
+                        pad_id = vocab.convertToIdx(["<pad>"], None)[0]
+                        assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
                     if len(tensor) <= 2:
                         n_bad_sentences += 1
                         # print("[Warning] empty sentence with %d tokens including <bos> <eos>" % len(tensor))
@@ -339,7 +352,7 @@ class Binarizer:
     @staticmethod
     def binarize_file(filename, vocab, tokenizer, bos_word=None, eos_word=None,
                       data_type='int64', num_workers=1, verbose=False, external_tokenizer="",
-                      lang=None):
+                      lang=None, lang_list=[]):
 
         if "mbart-large-50" in external_tokenizer.lower():
 
@@ -389,12 +402,10 @@ class Binarizer:
         elif "deltalm" in external_tokenizer.lower():
 
             print("[INFO] Using the DeltaLM tokenizer...")
-            from pretrain_module.tokenization_deltalm import DeltaLMTokenizer
-            try:  # check if this tokenizer is saved locally or not
-                ext_tokenizer = torch.load("deltalm.tokenizer.pt")
-                ext_tokenizer.src_lang = lang
-            except FileNotFoundError:
-                ext_tokenizer = DeltaLMTokenizer.from_pretrained("facebook/mbart-large-50", src_lang=lang)
+            from pretrain_module.tokenization_deltalm import MultilingualDeltaLMTokenizer, DeltaLMTokenizer
+            ext_tokenizer = MultilingualDeltaLMTokenizer.from_pretrained("facebook/mbart-large-50", lang_list=lang_list,
+                                                                         src_lang=lang)
+
         elif "nllb" in external_tokenizer.lower():
 
             from transformers import NllbTokenizer
@@ -411,6 +422,7 @@ class Binarizer:
         else:
             raise NotImplementedError
 
+        # ext_tokenizer = dill.dumps([ext_tokenizer, external_tokenizer])
         ext_tokenizer = [ext_tokenizer, external_tokenizer]
 
         result = dict()

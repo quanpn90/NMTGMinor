@@ -101,6 +101,7 @@ class TransformerEncoderLayerBase(nn.Module):
         # Adapter config
         self.n_languages = -1
         self.has_adapter = False
+        self.adapters = None
 
     def build_fc1(self, input_dim, output_dim, *args):
         return nn.Linear(input_dim, output_dim)

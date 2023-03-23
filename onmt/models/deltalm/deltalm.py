@@ -101,8 +101,14 @@ def upgrade_state_dict_for_deltalm(
 
 
 class DeltaLMEncoder(TransformerEncoderBase):
-    def __init__(self, args, embed_tokens):
+    def __init__(self, args, embed_tokens, n_adapters=0):
         super().__init__(args, embed_tokens)
+        self.use_adapter = False
+
+        # only add adapters if there > 1 languages
+        if n_adapters > 1:
+            self.use_adapter = True
+            self.add_adapters(n_adapters)
 
         if getattr(args, "pretrained_deltalm_checkpoint", "") != "":
             self_state_dict = self.state_dict()
@@ -125,13 +131,20 @@ class DeltaLMEncoder(TransformerEncoderBase):
             print("Load DeltaLM's encoder from {0}".format(args.pretrained_deltalm_checkpoint))
 
 
+
 class DeltaLMDecoder(TransformerDecoderBase):
-    def __init__(self, args, embed_tokens, no_encoder_attn=False, opt=None):
+    def __init__(self, args, embed_tokens, no_encoder_attn=False, opt=None, n_adapters=0):
         if opt is not None:
             args.decoder_layerdrop = opt.death_rate_decoder
             args.activation_dropout = opt.ffn_dropout
 
         super().__init__(args, embed_tokens, no_encoder_attn)
+
+        # only add adapters if there > 1 languages
+        if n_adapters > 1:
+            self.use_adapter = True
+            self.add_adapters(n_adapters)
+
         if getattr(args, "pretrained_deltalm_checkpoint", "") != "":
             deltalm_loaded_state_dict = upgrade_state_dict_for_deltalm(
                 state_dict=self.state_dict(),
@@ -147,6 +160,7 @@ class DeltaLMDecoder(TransformerDecoderBase):
     def build_decoder_layer(self, args, no_encoder_attn=False):
         layer = DeltaLMDecoderLayer(args, no_encoder_attn)
         return layer
+
 
 
 class DeltaLMDecoderLayer(TransformerDecoderLayerBase):

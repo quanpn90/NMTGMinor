@@ -38,6 +38,9 @@ class TransformerDecoderBase(nn.Module):
             no_encoder_attn=False,
             output_projection=None
     ):
+        self.n_adapters = 0
+        self.adapters = None
+        self.has_adapter = False
         self.cfg = cfg
         super(TransformerDecoderBase, self).__init__()
 
@@ -112,6 +115,19 @@ class TransformerDecoderBase(nn.Module):
         # removed checkpoint and fsdp
         return layer
 
+    def add_adapters(self, n_adapters=2, bottleneck_size=256, activation_fn="relu", static_layernorm=False):
+
+        from .modules.efficient_adapters import EfficientAdapter
+        self.has_adapter = True
+        self.n_adapters = n_adapters
+        self.adapters = EfficientAdapter(
+            num_modules=n_adapters * len(self.layers),
+            input_size=self.layers[0].embed_dim,
+            bottleneck_size=bottleneck_size,
+            activation_fn=activation_fn,
+            static_layernorm=static_layernorm,
+        )
+
     def forward(
             self,
             input_ids=None,
@@ -121,6 +137,7 @@ class TransformerDecoderBase(nn.Module):
             checkpointing_ffn=False,
             checkpointing_self_attn=False,
             checkpointing_cross_attn=False,
+            lang=None,
             **kwargs,
     ):
         bsz, qlen = input_ids.size()
@@ -150,16 +167,16 @@ class TransformerDecoderBase(nn.Module):
         # B x T x C -> T x B x C
         can_run_fast_bert_mha = False
 
-        # if self.fast_bert_mha is not None and torch.is_autocast_enabled():
-        #     I have no idea why embedding and the previous ops are NOT casted to fp16?
-            # x = x.half()
-
+        # flashattn bugged with wavlm + deltalm for some reason :)
+        self.fast_bert_mha = None
         if self.fast_bert_mha is not None and torch.is_autocast_enabled():
             can_run_fast_bert_mha = True
 
             # unpadding x
-            # if attention_mask is None:
-            padding_mask = input_ids.new_zeros(bsz, qlen)
+            if attention_mask is None:
+                padding_mask = input_ids.new_zeros(bsz, qlen)
+            else:
+                padding_mask = attention_mask.long().contiguous()
             padding_mask = padding_mask.contiguous().long()
             lengths = (1 - padding_mask).sum(dim=1)
             lengths = lengths.cpu().tolist()  # list of lengths for B seqs
@@ -224,7 +241,11 @@ class TransformerDecoderBase(nn.Module):
                 max_len_kv=max_len_kv, cu_seqlens_kv=cu_seqlens_kv,
             )
             attns.append(layer_attn)
-            # print(x.sum())
+
+            # adapter forward
+            if self.has_adapter:
+                adapter_id = self.n_adapters * idx + lang
+                x = self.adapters(x, adapter_id)
 
         if self.layer_norm is not None:
             x = self.layer_norm(x)

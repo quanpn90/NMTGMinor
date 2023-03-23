@@ -324,3 +324,72 @@ class DeltaLMTokenizer(PreTrainedTokenizer):
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
         return super().prepare_seq2seq_batch(src_texts, tgt_texts, **kwargs)
+
+class MultilingualDeltaLMTokenizer(DeltaLMTokenizer):
+
+
+    vocab_files_names = VOCAB_FILES_NAMES
+    max_model_input_sizes = PRETRAINED_POSITIONAL_EMBEDDINGS_SIZES
+    pretrained_vocab_files_map = PRETRAINED_VOCAB_FILES_MAP
+    model_input_names = ["input_ids", "attention_mask"]
+
+    prefix_tokens: List[int] = []
+    suffix_tokens: List[int] = []
+
+    def __init__(
+            self,
+            vocab_file,
+            src_lang=None,
+            tgt_lang=None,
+            eos_token="</s>",
+            sep_token="</s>",
+            cls_token="<s>",
+            unk_token="<unk>",
+            pad_token="<pad>",
+            mask_token="<mask>",
+            sp_model_kwargs: Optional[Dict[str, Any]] = None,
+            **kwargs
+    ) -> None:
+        self.added_tokens_decoder = None
+        self.added_tokens_encoder = None
+        self.additional_special_tokens = None
+        super(MultilingualDeltaLMTokenizer, self).__init__(vocab_file, src_lang=src_lang, tgt_lang=tgt_lang,eos_token=eos_token,
+                                                           sep_token=sep_token,cls_token=cls_token,unk_token=unk_token,pad_token=pad_token,
+                                                           mask_token=mask_token, sp_model_kwargs=sp_model_kwargs)
+
+
+    @property
+    def vocab_size(self) -> int:
+        return len(self.sp_model) + self.fairseq_offset
+
+    @property
+    def src_lang(self) -> str:
+        return self._src_lang
+
+    @src_lang.setter
+    def src_lang(self, new_src_lang: str) -> None:
+        self._src_lang = new_src_lang
+
+    def override_lang_list(self, lang_list):
+        self.additional_special_tokens = lang_list
+        start = 250001
+        self.added_tokens_encoder.clear()
+        self.added_tokens_encoder["<mask>"] = start
+        for i, lang in enumerate(lang_list):
+            self.added_tokens_encoder[lang] = start + i + 1
+
+        self.added_tokens_decoder.clear()
+
+        for word in self.added_tokens_encoder:
+            self.added_tokens_decoder[self.added_tokens_encoder[word]] = word
+
+    def _tokenize(self, text: str) -> List[str]:
+        return [self.src_lang] + self.sp_model.encode(text, out_type=str)
+
+    @classmethod
+    def from_pretrained(cls, *args, lang_list=[], **kwargs, ):
+
+        tokenizer = super(MultilingualDeltaLMTokenizer, cls).from_pretrained(*args, **kwargs)
+        tokenizer.override_lang_list(lang_list)
+
+        return tokenizer

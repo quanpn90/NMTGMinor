@@ -40,6 +40,16 @@ def _get_block_size(device, head_dim, is_dropout):
     assert head_dim % 8 == 0 and head_dim <= 128
     return 256 if head_dim <= 64 else 128
 
+def mask_nan(x, value=0.0):
+
+    with torch.no_grad():
+        nan_mask = torch.isnan(x)
+
+        if nan_mask.any():
+            x.masked_fill_(nan_mask, value)
+
+        del nan_mask
+
 
 def _flash_attn_forward(q, k, v, out, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
                         dropout_p, softmax_scale, causal, return_softmax, num_splits=0,
@@ -55,6 +65,9 @@ def _flash_attn_forward(q, k, v, out, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, 
     )
     # if out.isnan().any() or softmax_lse.isnan().any():
     #     breakpoint()
+    mask_nan(out)
+    mask_nan(softmax_lse)
+
     S_dmask = rest[0] if return_softmax else None
     return out, softmax_lse, S_dmask
 
@@ -72,6 +85,11 @@ def _flash_attn_backward(dout, q, k, v, out, softmax_lse, dq, dk, dv, cu_seqlens
     _, _, _, softmax_d = flash_attn_cuda.bwd(
         dout, q, k, v, out, softmax_lse, dq, dk, dv, cu_seqlens_q, cu_seqlens_k,
         max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale, False, causal, num_splits, generator)
+
+    mask_nan(dk)
+    mask_nan(dv)
+    mask_nan(dq)
+    mask_nan(softmax_d)
     # if dk.isnan().any() or dk.isnan().any() or dv.isnan().any() or softmax_d.isnan().any():
     #     breakpoint()
     return dq, dk, dv, softmax_d

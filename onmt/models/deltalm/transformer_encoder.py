@@ -29,6 +29,9 @@ class TransformerEncoderBase(nn.Module):
     """
 
     def __init__(self, cfg, embed_tokens):
+        self.n_adapters = 0
+        self.adapters = None
+        self.has_adapter = False
         self.cfg = cfg
         super(TransformerEncoderBase, self).__init__()
 
@@ -94,6 +97,19 @@ class TransformerEncoderBase(nn.Module):
 
         return layer
 
+    def add_adapters(self, n_adapters=2, bottleneck_size=256, activation_fn="relu", static_layernorm=False):
+
+        from .modules.efficient_adapters import EfficientAdapter
+        self.has_adapter = True
+        self.n_adapters = n_adapters
+        self.adapters = EfficientAdapter(
+            num_modules=n_adapters * len(self.layers),
+            input_size=self.layers[0].embed_dim,
+            bottleneck_size=bottleneck_size,
+            activation_fn=activation_fn,
+            static_layernorm=static_layernorm,
+        )
+
     def forward_embedding(
         self, src_tokens, token_embedding: Optional[torch.Tensor] = None
     ):
@@ -115,10 +131,11 @@ class TransformerEncoderBase(nn.Module):
         src_mask: Optional[torch.Tensor] = None,
         return_all_hiddens: bool = False,
         token_embeddings: Optional[torch.Tensor] = None,
+        lang=None,
     ):
 
         return self.forward_scriptable(
-            src_tokens, src_mask, return_all_hiddens, token_embeddings
+            src_tokens, src_mask, return_all_hiddens, token_embeddings, lang=lang
         )
 
     # TorchScript doesn't support super() method so that the scriptable Subclass
@@ -131,6 +148,7 @@ class TransformerEncoderBase(nn.Module):
         src_mask: Optional[torch.Tensor] = None,
         return_all_hiddens: bool = False,
         token_embeddings: Optional[torch.Tensor] = None,
+        lang=None,
     ):
         """
 
@@ -154,6 +172,7 @@ class TransformerEncoderBase(nn.Module):
         seq_len = x.size(1)
         bsz = x.size(0)
 
+        # self.fast_bert_mha = None
         if self.fast_bert_mha and torch.is_autocast_enabled():
             can_run_fast_bert_mha = True
             # print("Can run FAST BERT MHA")
@@ -188,11 +207,17 @@ class TransformerEncoderBase(nn.Module):
             encoder_states.append(x)
 
         # encoder layers
-        for layer in self.layers:
+        for idx, layer in enumerate(self.layers):
             x = layer(
                 x, encoder_padding_mask=encoder_padding_mask if has_pads else None,
                 max_len=max_len, cu_seqlens=cu_seqlens
             )
+
+            # adapter forward
+            if self.has_adapter:
+                adapter_id = self.n_adapters * idx + lang
+                x = self.adapters(x, adapter_id)
+
             if return_all_hiddens:
                 assert encoder_states is not None
                 encoder_states.append(x)
