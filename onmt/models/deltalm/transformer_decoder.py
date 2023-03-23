@@ -168,7 +168,7 @@ class TransformerDecoderBase(nn.Module):
         can_run_fast_bert_mha = False
 
         # flashattn bugged with wavlm + deltalm for some reason :)
-        self.fast_bert_mha = None
+        # self.fast_bert_mha = None
         if self.fast_bert_mha is not None and torch.is_autocast_enabled():
             can_run_fast_bert_mha = True
 
@@ -311,6 +311,11 @@ class TransformerDecoderBase(nn.Module):
                 self_attn_padding_mask=None
             )
             attns.append(layer_attn)
+
+            # adapter forward
+            if self.has_adapter:
+                adapter_id = self.n_adapters * idx + lang
+                x = self.adapters(x, adapter_id)
 
         if self.layer_norm is not None:
             x = self.layer_norm(x)

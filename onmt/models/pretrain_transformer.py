@@ -96,7 +96,7 @@ class PretrainTransformer(NMTModel):
                 self.encoder.enc_pretrained_model in ["mbart", "mbart50", "m2m", "m2m100", "deltalm"]:
             # src_attention_mask = src.ne(onmt.constants.SRC_PAD).long()
             src_attention_mask = batch.get("src_selfattn_mask")
-            enc_outputs = self.encoder(src, src_attention_mask)  # the encoder is a pretrained model
+            enc_outputs = self.encoder(src, src_attention_mask, lang=src_lang)  # the encoder is a pretrained model
             context = enc_outputs[0]
             context = context  # .transpose(0, 1).contiguous()
             encoder_output = defaultdict(lambda: None)
@@ -125,6 +125,7 @@ class PretrainTransformer(NMTModel):
                                           token_type_ids=tgt_token_type,
                                           encoder_hidden_states=context,
                                           encoder_attention_mask=src_attention_mask,
+                                          lang=tgt_lang
                                           )
 
             decoder_output = decoder_output[0]
@@ -133,11 +134,8 @@ class PretrainTransformer(NMTModel):
             context = context.transpose(0, 1)  # to [src_l, b, de_model]
         elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in \
                 ["mbart", "mbart50", "m2m", "m2m100", "deltalm"]:
-            # print("HELLO DECODER")
-            # src: [b, src_l]  context: [b, src_l, de_model]
-            # src_attention_mask = src.eq(onmt.constants.SRC_PAD).long()
-            # src_attention_mask = (1 - src_attention_mask.long())
-            tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
+
+            tgt_attention_mask = tgt.eq(onmt.constants.TGT_PAD).long()  # [bsz, len]
             decoder_output = self.decoder(input_ids=tgt,
                                           attention_mask=tgt_attention_mask,
                                           encoder_hidden_states=context,

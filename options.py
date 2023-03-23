@@ -549,6 +549,8 @@ def make_parser(parser):
                         help='Virtual Adversarial Training. 0=disabled. 1=kl_loss. 2=ce. 3=kl_loss + ce.')
     parser.add_argument('-wav2vec_adapter', type=int, default=0,
                         help='Adapter for wav2vec model')
+    parser.add_argument('-encoder_adapter', type=int, default=0,
+                        help='Adapter for wav2vec model')
     parser.add_argument('-decoder_adapter', type=int, default=0,
                         help='Adapter for wav2vec model')
     parser.add_argument('-mutual_modality_training', type=float, default=0,

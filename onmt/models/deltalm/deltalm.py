@@ -101,14 +101,19 @@ def upgrade_state_dict_for_deltalm(
 
 
 class DeltaLMEncoder(TransformerEncoderBase):
-    def __init__(self, args, embed_tokens, n_adapters=0):
+    def __init__(self, args, embed_tokens, opt=None):
         super().__init__(args, embed_tokens)
         self.use_adapter = False
 
+        # # only add adapters if there > 1 languages
+        # if n_adapters > 1:
+        #     self.use_adapter = True
+        #     self.add_adapters(n_adapters)
+
         # only add adapters if there > 1 languages
-        if n_adapters > 1:
-            self.use_adapter = True
-            self.add_adapters(n_adapters)
+        if opt.encoder_adapter > 0:
+            print("[INFO] Adding Encoder DELTALM Adapters for %d languages" % opt.n_languages)
+            self.add_adapters(opt.n_languages)
 
         if getattr(args, "pretrained_deltalm_checkpoint", "") != "":
             self_state_dict = self.state_dict()
@@ -133,7 +138,7 @@ class DeltaLMEncoder(TransformerEncoderBase):
 
 
 class DeltaLMDecoder(TransformerDecoderBase):
-    def __init__(self, args, embed_tokens, no_encoder_attn=False, opt=None, n_adapters=0):
+    def __init__(self, args, embed_tokens, no_encoder_attn=False, opt=None):
         if opt is not None:
             args.decoder_layerdrop = opt.death_rate_decoder
             args.activation_dropout = opt.ffn_dropout
@@ -141,9 +146,9 @@ class DeltaLMDecoder(TransformerDecoderBase):
         super().__init__(args, embed_tokens, no_encoder_attn)
 
         # only add adapters if there > 1 languages
-        if n_adapters > 1:
-            self.use_adapter = True
-            self.add_adapters(n_adapters)
+        if opt.decoder_adapter > 0:
+            print("[INFO] Adding DELTALM Adapters for %d languages" % opt.n_languages)
+            self.add_adapters(opt.n_languages)
 
         if getattr(args, "pretrained_deltalm_checkpoint", "") != "":
             deltalm_loaded_state_dict = upgrade_state_dict_for_deltalm(

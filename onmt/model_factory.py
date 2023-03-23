@@ -270,7 +270,7 @@ def build_tm_model(opt, dicts, constants=None):
             embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                          deltalm_config.decoder_embed_dim,
                                          padding_idx=constants.TGT_PAD)
-            decoder = DeltaLMDecoder(deltalm_config, embedding_tgt)
+            decoder = DeltaLMDecoder(deltalm_config, embedding_tgt, opt=opt)
 
             # share all embeddings
             generators[0].linear.weight = decoder.embed_tokens.weight
@@ -518,7 +518,7 @@ def build_tm_model(opt, dicts, constants=None):
             embedding_src = nn.Embedding(dicts['src'].size(),
                                          deltalm_config.encoder_embed_dim,
                                          padding_idx=constants.SRC_PAD)
-            encoder = DeltaLMEncoder(deltalm_config, embedding_src)
+            encoder = DeltaLMEncoder(deltalm_config, embedding_src, opt=opt)
 
         elif not opt.enc_pretrained_model:
             print(" Encoder is not from pretrained model")
@@ -600,7 +600,7 @@ def build_tm_model(opt, dicts, constants=None):
             embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                          deltalm_config.decoder_embed_dim,
                                          padding_idx=constants.TGT_PAD)
-            decoder = DeltaLMDecoder(deltalm_config, embedding_tgt)
+            decoder = DeltaLMDecoder(deltalm_config, embedding_tgt, opt=opt)
 
             # share all embeddings
             decoder.embed_tokens.weight = encoder.embed_tokens.weight
