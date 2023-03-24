@@ -168,7 +168,7 @@ class TransformerDecoderBase(nn.Module):
         can_run_fast_bert_mha = False
 
         # flashattn bugged with wavlm + deltalm for some reason :)
-        # self.fast_bert_mha = None
+        self.fast_bert_mha = None
         if self.fast_bert_mha is not None and torch.is_autocast_enabled():
             can_run_fast_bert_mha = True
 
