@@ -131,6 +131,15 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
             cu_seqlens, cu_seqlens, max_seqlen, max_seqlen,
             dropout_p, softmax_scale, causal=causal, return_softmax=return_softmax
         )
+
+        nan_mask = torch.isnan(out)
+        if nan_mask.any():
+            out.masked_fill_(nan_mask, 0)
+
+        lse_nan_mask = torch.isnan(softmax_lse)
+        if lse_nan_mask.any():
+            softmax_lse.masked_fill_(lse_nan_mask, 0)
+
         ctx.save_for_backward(qkv, out, softmax_lse, cu_seqlens, rng_state)
         ctx.dropout_p = dropout_p
         ctx.max_seqlen = max_seqlen
@@ -169,6 +178,15 @@ class FlashAttnKVPackedFunc(torch.autograd.Function):
             cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
             dropout_p, softmax_scale, causal=causal, return_softmax=return_softmax
         )
+
+        nan_mask = torch.isnan(out)
+        if nan_mask.any():
+            out.masked_fill_(nan_mask, 0)
+
+        lse_nan_mask = torch.isnan(softmax_lse)
+        if lse_nan_mask.any():
+            softmax_lse.masked_fill_(lse_nan_mask, 0)
+
         ctx.save_for_backward(q, kv, out, softmax_lse, cu_seqlens_q, cu_seqlens_k, rng_state)
         ctx.dropout_p = dropout_p
         ctx.max_seqlen_q = max_seqlen_q

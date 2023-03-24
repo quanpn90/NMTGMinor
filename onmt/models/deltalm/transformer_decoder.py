@@ -174,9 +174,11 @@ class TransformerDecoderBase(nn.Module):
 
             # unpadding x
             if attention_mask is None:
+
                 padding_mask = input_ids.new_zeros(bsz, qlen)
             else:
                 padding_mask = attention_mask.long().contiguous()
+
             padding_mask = padding_mask.contiguous().long()
             lengths = (1 - padding_mask).sum(dim=1)
             lengths = lengths.cpu().tolist()  # list of lengths for B seqs
