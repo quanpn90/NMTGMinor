@@ -382,17 +382,21 @@ class MultilingualDeltaLMTokenizer(DeltaLMTokenizer):
         self.additional_special_tokens = lang_list
         start = 250001
         self.added_tokens_encoder.clear()
-        self.added_tokens_encoder["<mask>"] = start
         for i, lang in enumerate(lang_list):
-            self.added_tokens_encoder[lang] = start + i + 1
+            self.added_tokens_encoder[lang] = start + i
 
         self.added_tokens_decoder.clear()
 
         for word in self.added_tokens_encoder:
             self.added_tokens_decoder[self.added_tokens_encoder[word]] = word
 
+        print(self.added_tokens_encoder)
+
     def _tokenize(self, text: str) -> List[str]:
-        return [self.src_lang] + self.sp_model.encode(text, out_type=str)
+        if self.src_lang in ["</s>", "src", "tgt"]  :
+            return self.sp_model.encode(text, out_type=str)
+        else:
+            return [self.src_lang] + self.sp_model.encode(text, out_type=str)
 
     @classmethod
     def from_pretrained(cls, *args, lang_list=[], **kwargs, ):

@@ -782,7 +782,7 @@ def main():
                     train['src_atb'] += src_atb_data
                     train['tgt_atb'] += tgt_atb_data
 
-                if len(aux_tgt_input_files) > 0:
+                if len(opt.aux_train_tgt) > 0 > 0:
                     train['aux_tgt'] += aux_tgt_data
                     train['aux_tgt_sizes'] += aux_tgt_sizes
 
@@ -928,7 +928,7 @@ def main():
                 valid['src_lang'] += src_lang_data
                 valid['tgt_lang'] += tgt_lang_data
 
-                if len(aux_tgt_input_files) > 0:
+                if len(opt.aux_valid_tgt) > 0:
                     valid['aux_tgt'] += aux_tgt_data
                     valid['aux_tgt_sizes'] += aux_tgt_sizes
 

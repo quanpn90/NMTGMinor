@@ -323,6 +323,11 @@ class Binarizer:
                     elif "deltalm" in external_tokenizer_name.lower():
                         assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID" + " " + str(tensor) + " " + \
                                                                                  str(vocab.convertToIdx([lang], None)[0])
+                        # assert tensor[0] == vocab.convertToIdx(["</s>"], None)[
+                        #     0], "The second token must be language ID" + " " + str(tensor) + " " + \
+                        #         str(vocab.convertToIdx(["</s>"], None)[0])
+                        # if not target:
+                        #     tensor = tensor[1:]
                         pad_id = vocab.convertToIdx(["<pad>"], None)[0]
                         assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
                         if not target:
