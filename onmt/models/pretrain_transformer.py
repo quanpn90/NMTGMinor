@@ -143,10 +143,8 @@ class PretrainTransformer(NMTModel):
                                           )
 
             decoder_output = decoder_output[0]
-            # output = decoder_output
             output = decoder_output  # .transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
             output_dict = defaultdict(lambda: None)
-            # context = context.transpose(0, 1)  # to [src_l, b, de_model]
         else:
             context = context.transpose(0, 1)  # to  [src_l, b, de_model] src: [b, l]
             decoder_output = self.decoder(tgt, context, src,

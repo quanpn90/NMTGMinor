@@ -415,7 +415,7 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
                                             data_type=data_type,
                                             num_workers=num_workers, verbose=verbose,
                                             external_tokenizer=external_tokenizer,
-                                            lang=tgt_lang, lang_list=lang_list
+                                            lang=tgt_lang, lang_list=lang_list, target=True
                                             )
 
     src = binarized_src['data']
@@ -462,7 +462,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
                                                 data_type=data_type,
                                                 num_workers=num_workers, verbose=verbose,
                                                 external_tokenizer=external_tokenizer,
-                                                lang=tgt_lang, lang_list=lang_list)
+                                                lang=tgt_lang, lang_list=lang_list, target=True)
 
         tgt = binarized_tgt['data']
         tgt_sizes = binarized_tgt['sizes']

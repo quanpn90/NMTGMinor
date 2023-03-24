@@ -371,6 +371,14 @@ class MultilingualDeltaLMTokenizer(DeltaLMTokenizer):
         self._src_lang = new_src_lang
 
     def override_lang_list(self, lang_list):
+        _lang_list = []
+        for lang in lang_list:
+            if lang in self.fairseq_tokens_to_ids:
+                continue
+            else:
+                _lang_list.append(lang)
+        lang_list = _lang_list
+
         self.additional_special_tokens = lang_list
         start = 250001
         self.added_tokens_encoder.clear()
