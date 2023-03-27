@@ -390,7 +390,7 @@ class MultilingualDeltaLMTokenizer(DeltaLMTokenizer):
         for word in self.added_tokens_encoder:
             self.added_tokens_decoder[self.added_tokens_encoder[word]] = word
 
-        print(self.added_tokens_encoder)
+        # print(self.added_tokens_encoder)
 
     def _tokenize(self, text: str) -> List[str]:
         if self.src_lang in ["</s>", "src", "tgt"]  :

@@ -22,6 +22,16 @@ def safe_readline(f):
             f.seek(pos)  # search where this character begins
 
 
+def pad_tensor(x, min_length=2400):
+
+    if x.size(0) < min_length:
+        x_ = x.new_zeros((min_length, x.size(1)))
+        x_[:x.size(0), :] = x
+        x = x_
+
+    return x
+
+
 # this function reads wav file based on the timestamp in seconds
 def safe_readaudio(wav_path, start=0.0, end=0.0, sample_rate=16000):
 
@@ -32,6 +42,8 @@ def safe_readaudio(wav_path, start=0.0, end=0.0, sample_rate=16000):
     tensor, _ = torchaudio.load(wav_path, frame_offset=offset, num_frames=num_frames,
                                 normalize=True, channels_first=False)
     tensor = tensor[:, 0].unsqueeze(1)
+
+    tensor = pad_tensor(tensor)
 
     # tensor has size [length, num_channel] in which channel should be 1 for wav2vec
     return tensor

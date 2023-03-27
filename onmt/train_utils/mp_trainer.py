@@ -832,16 +832,16 @@ class Trainer(object):
                     grad_list = None
 
                     # grad scaler has to be done outside of the autocast
-                    # self.grad_scaler.scale(full_loss).backward()
+                    self.grad_scaler.scale(full_loss).backward()
 
-                    backward_inputs = [self.grad_scaler.scale(full_loss)]
-                    backward_grads = [None]
-
-                    if 'backward_inputs' in outputs:
-                        backward_inputs + outputs['backward_inputs']
-                        backward_grads + outputs['backward_grads']
-
-                    torch.autograd.backward(backward_inputs, backward_grads)
+                    # backward_inputs = [self.grad_scaler.scale(full_loss)]
+                    # backward_grads = [None]
+                    #
+                    # if 'backward_inputs' in outputs:
+                    #     backward_inputs + outputs['backward_inputs']
+                    #     backward_grads + outputs['backward_grads']
+                    #
+                    # torch.autograd.backward(backward_inputs, backward_grads)
 
                     # del outputs
                     # if opt.virtual_adversarial_training_mode > 0:

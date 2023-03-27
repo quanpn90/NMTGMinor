@@ -557,12 +557,16 @@ def make_parser(parser):
                         help='Coefficient for the Mutual Modality Training term')
     parser.add_argument('-contrastive_loss_coeff', type=float, default=0.0,
                         help='Coefficient for the Mutual Modality Training term')
+    parser.add_argument('-length_adapter', action='store_true',
+                        help='Downsampling Adapter for wav2vec model')
 
     return parser
 
 
 def backward_compatible(opt):
     # FOR BACKWARD COMPATIBILITY
+    if not hasattr(opt, 'length_adapter'):
+        opt.length_adapter = False
 
     if not hasattr(opt, 'model'):
         opt.model = 'recurrent'

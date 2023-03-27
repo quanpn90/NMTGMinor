@@ -96,6 +96,7 @@ class Wav2Vec2Model(torch.nn.Module):
                  favor=False, feature_redraw_interval=1000, auto_check_redraw=True,
                  weight_drop=0.0):
         super().__init__()
+        self.length_adapter = None
         self.rotary_attention = False
         self.relative_attention = False
         self.cfg = cfg
@@ -386,6 +387,10 @@ class Wav2Vec2Model(torch.nn.Module):
             )
 
         return input_lengths.to(torch.long)
+    
+    def create_length_adapter(self):
+        from .length_adapter import LengthAdapter
+        self.length_adapter = LengthAdapter(self.cfg.encoder_embed_dim, self.cfg.encoder_embed_dim)
 
     def forward(
             self,
@@ -518,6 +523,11 @@ class Wav2Vec2Model(torch.nn.Module):
                                         checkpointing_self_attn=checkpointing_self_attn)
 
         if features_only:
+            if self.length_adapter is not None:
+                x = self.length_adapter(x)
+                if padding_mask is not None:
+                    padding_mask = padding_mask[:, 2::2][:, 2::2][:, 2::2]
+
             output_dict = {
                 "x": x,
                 "padding_mask": padding_mask,

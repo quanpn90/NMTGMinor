@@ -265,6 +265,16 @@ class FairseqWav2Vec(nn.Module):
             print("[INFO] Adding adapters for Wav2vec model with %d languages" % opt.n_languages)
             self.wav2vec_encoder.encoder.add_adapters(opt.n_languages, adapter_location=opt.wav2vec_adapter)
 
+        # add length adapter
+        if opt.length_adapter == True:
+            print("[INFO] Adding length adapters for WavLM model")
+            self.wav2vec_encoder.create_length_adapter()
+        #     from .fairseq_wav2vec2.length_adapter import LengthAdapter
+        #     print("[INFO] Adding length adapters for Wav2vec model")
+        #     self.length_adapter = LengthAdapter(self.model_size, self.model_size)
+        # else:
+        #     self.length_adapter = None
+
         # can receive an mbart or deltalm encoder
         # self.stacked_encoder = stacked_encoder
         # TODO: length conversion layer
@@ -295,9 +305,9 @@ class FairseqWav2Vec(nn.Module):
         #
         #     self.conv_downsampler.append(conv)
 
-        else:
-            self.stacked_encoder = None
-            self.conv_downsampler = None
+        # else:
+        self.stacked_encoder = None
+        self.conv_downsampler = None
 
         # discrete encoder that works on top of the wav quantized output
         # self.discrete_encoder = None # discrete_encoder
@@ -520,8 +530,8 @@ class FairseqWav2Vec(nn.Module):
         # how to get the correct attention mask?
 
         # note: 'wav2vec_padding_mask' is also the same with dec_attn_mask
-        output_dict = defaultdict(lambda: None, {'source': input, 'context': context, 'src_mask': dec_attn_mask,
-                                                 'src': dec_attn_mask, 'pos_emb': None,
+        output_dict = defaultdict(lambda: None, {'source': input, 'context': context, 'src_mask': wav2vec_padding_mask,
+                                                 'src': wav2vec_padding_mask, 'pos_emb': None,
                                                  'wav2vec_context': wav2vec_context,
                                                  'wav2vec_padding_mask': wav2vec_padding_mask})
 

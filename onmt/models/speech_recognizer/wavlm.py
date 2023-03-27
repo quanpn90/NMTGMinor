@@ -115,6 +115,11 @@ class WavLMEncoder(nn.Module):
         if opt.freeze_encoder_ffn:
             self.freeze_ffn_params()
 
+        # add length adapter
+        if opt.length_adapter == True:
+            print("[INFO] Adding length adapters for WavLM model")
+            self.wav2vec_encoder.create_length_adapter()
+
     def freeze_ffn_params(self):
         for layer in self.wav2vec_encoder.encoder.layers:
             for p in layer.fc1.parameters():
@@ -194,8 +199,8 @@ class WavLMEncoder(nn.Module):
         wav2vec_context = context
         wav2vec_padding_mask = dec_attn_mask
 
-        output_dict = defaultdict(lambda: None, {'source': input, 'context': context, 'src_mask': dec_attn_mask,
-                                                 'src': dec_attn_mask, 'pos_emb': None,
+        output_dict = defaultdict(lambda: None, {'source': input, 'context': context, 'src_mask': wav2vec_padding_mask,
+                                                 'src': wav2vec_padding_mask, 'pos_emb': None,
                                                  'wav2vec_context': wav2vec_context,
                                                  'wav2vec_padding_mask': wav2vec_padding_mask})
 

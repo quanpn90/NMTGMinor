@@ -260,6 +260,12 @@ class WavLM(nn.Module):
 
         self.encoder = TransformerEncoder(cfg)
         self.layer_norm = LayerNorm(self.embed)
+        self.length_adapter = None
+
+
+    def create_length_adapter(self):
+        from .length_adapter import LengthAdapter
+        self.length_adapter = LengthAdapter(self.cfg.encoder_embed_dim, self.cfg.encoder_embed_dim)
 
     def apply_mask(self, x, padding_mask):
         B, T, C = x.shape
@@ -418,9 +424,10 @@ class WavLM(nn.Module):
             layer=layer
         )
 
-        # transpose from B x T x H to T x B x H
-        # TODO: write a T x B x H multihead attention?
-        x = x.transpose(0, 1).contiguous()
+        if self.length_adapter is not None:
+            x = self.length_adapter(x)
+            if padding_mask is not None:
+                padding_mask = padding_mask[:, 2::2][:, 2::2][:, 2::2]
 
         res = {"x": x, "padding_mask": padding_mask, "features": features, "layer_results": layer_results}
 
@@ -657,9 +664,6 @@ class TransformerEncoder(nn.Module):
 
         if r is not None:
             x = r
-
-        # T x B x C -> B x T x C
-        x = x.transpose(0, 1)
 
         return x, layer_results
 
