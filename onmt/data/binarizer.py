@@ -330,7 +330,7 @@ class Binarizer:
     @staticmethod
     def binarize_file(filename, vocab, tokenizer, bos_word=None, eos_word=None,
                       data_type='int64', num_workers=1, verbose=False, external_tokenizer="",
-                      lang=None):
+                      lang=None, lang_list=[]):
 
         if "mbart-large-50" in external_tokenizer.lower():
 
@@ -369,12 +369,18 @@ class Binarizer:
         elif "deltalm" in external_tokenizer.lower():
 
             print("[INFO] Using the DeltaLM tokenizer...")
-            from pretrain_module.tokenization_deltalm import DeltaLMTokenizer
-            try:  # check if this tokenizer is saved locally or not
-                ext_tokenizer = torch.load("deltalm.tokenizer.pt")
-                ext_tokenizer.src_lang = lang
-            except FileNotFoundError:
-                ext_tokenizer = DeltaLMTokenizer.from_pretrained("facebook/mbart-large-50", src_lang=lang)
+            from pretrain_module.tokenization_deltalm import MultilingualDeltaLMTokenizer
+            ext_tokenizer = MultilingualDeltaLMTokenizer.from_pretrained("facebook/mbart-large-50",
+                                                                         lang_list=lang_list, src_lang=lang)
+
+
+
+            # from pretrain_module.tokenization_deltalm import DeltaLMTokenizer
+            # try:  # check if this tokenizer is saved locally or not
+            #     ext_tokenizer = torch.load("deltalm.tokenizer.pt")
+            #     ext_tokenizer.src_lang = lang
+            # except FileNotFoundError:
+            #     ext_tokenizer = DeltaLMTokenizer.from_pretrained("facebook/mbart-large-50", src_lang=lang)
         elif "nllb" in external_tokenizer.lower():
 
             from transformers import NllbTokenizer

@@ -519,7 +519,7 @@ class FastTranslator(Translator):
                     sub_decoder_states[i]._reorder_incremental_state(reorder_state)
 
             decode_input = tokens[:, :step + 1]
-
+            # print(batches[0].get('source'))
             lprobs, avg_attn_scores = self._decode(decode_input, decoder_states,
                                                    sub_decoder_states=sub_decoder_states)
 

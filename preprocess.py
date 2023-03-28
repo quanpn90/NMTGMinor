@@ -382,10 +382,13 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
 
 def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, max_src_length=64, max_tgt_length=64,
                           add_bos=True, data_type='int64', num_workers=1, verbose=False,
-                          external_tokenizer=None, src_lang=None, tgt_lang=None):
+                          external_tokenizer=None, src_lang=None, tgt_lang=None, lang_list=[]):
     src, tgt = [], []
     src_sizes = []
     tgt_sizes = []
+
+    if type(lang_list) is dict:
+        lang_list = sorted(list(lang_list.keys()))
 
     print("[INFO] Binarizing file %s ..." % src_file)
     binarized_src = Binarizer.binarize_file(src_file, src_dicts, tokenizer,
@@ -393,7 +396,7 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
                                             data_type=data_type,
                                             num_workers=num_workers, verbose=verbose,
                                             external_tokenizer=external_tokenizer,
-                                            lang=src_lang
+                                            lang=src_lang, lang_list=lang_list
                                             )
 
     if add_bos:
@@ -407,7 +410,7 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
                                             data_type=data_type,
                                             num_workers=num_workers, verbose=verbose,
                                             external_tokenizer=external_tokenizer,
-                                            lang=tgt_lang
+                                            lang=tgt_lang, lang_list=lang_list
                                             )
 
     src = binarized_src['data']
@@ -430,7 +433,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
                   max_src_length=64, max_tgt_length=64, add_bos=True, data_type='int64', num_workers=1, verbose=False,
                   input_type='word', stride=1, concat=4, prev_context=0, fp16=False, reshape=True,
                   asr_format="scp", output_format="raw",
-                  external_tokenizer=None, src_lang=None, tgt_lang=None):
+                  external_tokenizer=None, src_lang=None, tgt_lang=None, lang_list=[]):
     src, tgt = [], []
     src_sizes = []
     tgt_sizes = []
@@ -450,7 +453,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
                                                 data_type=data_type,
                                                 num_workers=num_workers, verbose=verbose,
                                                 external_tokenizer=external_tokenizer,
-                                                lang=tgt_lang)
+                                                lang=tgt_lang, lang_list=lang_list)
 
         tgt = binarized_tgt['data']
         tgt_sizes = binarized_tgt['sizes']
@@ -645,7 +648,8 @@ def main():
                                                                      output_format=opt.format,
                                                                      num_workers=opt.num_threads,
                                                                      external_tokenizer=opt.external_tokenizer,
-                                                                     tgt_lang=tgt_lang, verbose=opt.verbose)
+                                                                     tgt_lang=tgt_lang, verbose=opt.verbose,
+                                                                     lang_list=dicts['langs'])
 
             n_samples = len(src_data)
             src_atb_data, tgt_atb_data = None, None
@@ -683,7 +687,8 @@ def main():
                                                                     output_format=opt.format,
                                                                     num_workers=opt.num_threads,
                                                                     external_tokenizer=opt.external_tokenizer,
-                                                                    tgt_lang=tgt_lang, verbose=opt.verbose)
+                                                                    tgt_lang=tgt_lang, verbose=opt.verbose,
+                                                                    lang_list=dicts['langs'])
 
                 if opt.multi_dataset:
                     data['prev_src'] = prev_src_data
@@ -784,7 +789,8 @@ def main():
                                                                      asr_format=opt.asr_format,
                                                                      output_format=opt.format,
                                                                      external_tokenizer=opt.external_tokenizer,
-                                                                     tgt_lang=tgt_lang, verbose=opt.verbose)
+                                                                     tgt_lang=tgt_lang, verbose=opt.verbose,
+                                                                     lang_list=dicts['langs'])
 
             n_samples = len(src_data)
             if n_input_files == 1 or opt.multi_dataset:
@@ -820,7 +826,8 @@ def main():
                                                                     output_format=opt.format,
                                                                     num_workers=opt.num_threads,
                                                                     external_tokenizer=opt.external_tokenizer,
-                                                                    tgt_lang=tgt_lang, verbose=opt.verbose)
+                                                                    tgt_lang=tgt_lang, verbose=opt.verbose,
+                                                                    lang_list=dicts['langs'])
 
                 valid['past_src'] += past_src_data
                 valid['past_src_sizes'] += past_src_sizes
@@ -913,7 +920,8 @@ def main():
                                                                              verbose=opt.verbose,
                                                                              external_tokenizer=opt.external_tokenizer,
                                                                              src_lang=src_lang,
-                                                                             tgt_lang=tgt_lang)
+                                                                             tgt_lang=tgt_lang,
+                                                                             lang_list=dicts['langs'])
 
             n_samples = len(src_data)
             #TODO: check
@@ -942,7 +950,8 @@ def main():
                                                                             verbose=opt.verbose,
                                                                             external_tokenizer=opt.external_tokenizer,
                                                                             src_lang=src_lang,
-                                                                            tgt_lang=tgt_lang)
+                                                                            tgt_lang=tgt_lang,
+                                                                            lang_list=dicts['langs'])
 
                 if opt.multi_dataset:
                     data['prev_src'] = prev_src_data
@@ -1021,7 +1030,8 @@ def main():
                                                                              verbose=opt.verbose,
                                                                              external_tokenizer=opt.external_tokenizer,
                                                                              src_lang=src_lang,
-                                                                             tgt_lang=tgt_lang)
+                                                                             tgt_lang=tgt_lang,
+                                                                             lang_list=dicts['langs'])
 
             n_samples = len(src_data)
             #TODO: this has to be changed
@@ -1052,7 +1062,8 @@ def main():
                                                                             verbose=opt.verbose,
                                                                             external_tokenizer=opt.external_tokenizer,
                                                                             src_lang=src_lang,
-                                                                            tgt_lang=tgt_lang)
+                                                                            tgt_lang=tgt_lang,
+                                                                            lang_list=dicts['langs'])
 
                 valid['past_src'] += past_src_data
                 valid['past_src_sizes'] += past_src_sizes

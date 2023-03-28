@@ -57,6 +57,9 @@ class SelfAttnFunc(torch.autograd.Function):
                 rotary_pos_enc, pos_emb,
                 incremental, incremental_cache,
                 low_precision, return_coverage, recompute):
+
+        inputs = inputs.contiguous()
+
         heads_t = torch.tensor([heads])
         dropout_prob_t = torch.tensor([dropout_prob])
         null_tensor = torch.tensor([])

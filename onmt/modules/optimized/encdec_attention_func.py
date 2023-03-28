@@ -42,6 +42,10 @@ class EncdecAttnFunc(torch.autograd.Function):
                 incremental, incremental_cache,
                 rotary_pos_enc, pos_emb_q, pos_emb_k,
                 double_precision, return_coverage):
+
+        inputs_q = inputs_q.contiguous()
+        inputs_kv = inputs_kv.contiguous()
+
         heads_t = torch.tensor([heads])
         dropout_prob_t = torch.tensor([dropout_prob])
         null_tensor = torch.tensor([]).to(inputs_q.device)
