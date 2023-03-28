@@ -206,20 +206,20 @@ ext_modules.append(
                                                '--use_fast_math'] + cc_flag + version_dependent_macros + generator_flag}))
 #
 #
-ext_modules.append(
-    CUDAExtension(name='fused_optim',
-                  sources=['fused_optim/frontend.cpp',
-                           'fused_optim/multi_tensor_scale_kernel.cu',
-                           'fused_optim/multi_tensor_axpby_kernel.cu',
-                           'fused_optim/multi_tensor_l2norm_kernel.cu',
-                           'fused_optim/multi_tensor_l2norm_scale_kernel.cu',
-                           'fused_optim/multi_tensor_adam.cu'],
-                  include_dirs=[os.path.join(this_dir, 'include')],
-                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                      'nvcc': ['-lineinfo',
-                                               '-O3',
-                                               '--resource-usage',
-                                               '--use_fast_math'] + version_dependent_macros}))
+# ext_modules.append(
+#     CUDAExtension(name='fused_optim',
+#                   sources=['fused_optim/frontend.cpp',
+#                            'fused_optim/multi_tensor_scale_kernel.cu',
+#                            'fused_optim/multi_tensor_axpby_kernel.cu',
+#                            'fused_optim/multi_tensor_l2norm_kernel.cu',
+#                            'fused_optim/multi_tensor_l2norm_scale_kernel.cu',
+#                            'fused_optim/multi_tensor_adam.cu'],
+#                   include_dirs=[os.path.join(this_dir, 'include')],
+#                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+#                                       'nvcc': ['-lineinfo',
+#                                                '-O3',
+#                                                '--resource-usage',
+#                                                '--use_fast_math'] + version_dependent_macros}))
 #
 # MLP functions
 
