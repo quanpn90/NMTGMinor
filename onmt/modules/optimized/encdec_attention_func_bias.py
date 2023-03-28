@@ -66,6 +66,9 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         ctx.recompute = recompute
         ctx.rotary_pos_enc = rotary_pos_enc
 
+        inputs_q = inputs_q.contiguous()
+        inputs_kv = inputs_kv.contiguous()
+
         if encdec_multihead_attn_bias_cuda is not None and not incremental and len_k <= 2048 \
                 and inputs_q.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc and low_precision:
 
