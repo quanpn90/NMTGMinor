@@ -22,6 +22,16 @@ def safe_readline(f):
             f.seek(pos)  # search where this character begins
 
 
+def pad_tensor(x, min_length=2400):
+
+    if x.size(0) < min_length:
+        x_ = x.new_zeros((min_length, x.size(1)))
+        x_[:x.size(0), :] = x
+        x = x_
+
+    return x
+
+
 # this function reads wav file based on the timestamp in seconds
 def safe_readaudio(wav_path, start=0.0, end=0.0, sample_rate=16000):
 
@@ -101,7 +111,12 @@ def expected_length(length, death_rate):
 
 
 from typing import Union, Iterable
-from torch._six import inf
+
+try:
+    from torch._six import inf
+except ModuleNotFoundError:
+    from torch import inf
+  
 
 _tensor_or_tensors = Union[torch.Tensor, Iterable[torch.Tensor]]
 

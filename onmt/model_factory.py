@@ -2,13 +2,10 @@ import torch
 import torch.nn as nn
 import onmt
 from onmt.models.transformers import TransformerEncoder, TransformerDecoder, Transformer, MixedEncoder
-from onmt.models.relative_transformer import RelativeTransformerEncoder, RelativeTransformerDecoder, \
-    RelativeTransformer
 from onmt.models.transformer_layers import PositionalEncoding
-from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, RelativeTransformer
+from onmt.models.relative_transformer import RelativeTransformer
 from onmt.modules.copy_generator import CopyGenerator
-from onmt.options import backward_compatible
-from onmt.constants import add_tokenidx
+from options import backward_compatible
 import math
 import json
 from types import SimpleNamespace
@@ -84,7 +81,7 @@ def build_classifier(opt, dicts):
 
     onmt.constants.init_value = opt.param_init
     from onmt.models.speech_recognizer.relative_transformer import \
-        SpeechTransformerEncoder, SpeechTransformerDecoder
+        SpeechTransformerEncoder
 
     from onmt.models.speech_recognizer.classifier import TransformerClassifier
 
@@ -349,7 +346,7 @@ def build_tm_model(opt, dicts, constants=None):
             SpeechTransformerEncoder, SpeechTransformerDecoder
 
         if opt.model == 'conformer':
-            from onmt.models.speech_recognizer.conformer import ConformerEncoder, Conformer
+            from onmt.models.speech_recognizer.conformer import ConformerEncoder
             from onmt.models.speech_recognizer.lstm import SpeechLSTMDecoder
             opt.cnn_downsampling = True  # force this bool to have masking at decoder to be corrected
             encoder = ConformerEncoder(opt, None, None, 'audio')
@@ -880,10 +877,6 @@ def optimize_model_test(model):
 
 
 def freeze_model_specialized_weights(model):
-    from onmt.modules.multilingual_factorized.linear import MFWPositionWiseFeedForward
-    from onmt.modules.multilingual_factorized.encdec_attention import MFWEncdecMultiheadAttn
-    from onmt.modules.multilingual_factorized.relative_attention import MFWRelativeSelfMultiheadAttn
-
     def freeze(m):
         classname = m.__class__.__name__
 

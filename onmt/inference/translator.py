@@ -1,14 +1,12 @@
 import onmt
 import onmt.modules
-import torch.nn as nn
 import torch
-import math
-from onmt.model_factory import build_model, build_language_model, optimize_model, optimize_model_test
+from onmt.model_factory import build_model, build_language_model, optimize_model
 from ae.Autoencoder import Autoencoder
 import torch.nn.functional as F
 import sys
 from onmt.constants import add_tokenidx
-from onmt.options import backward_compatible
+from options import backward_compatible
 
 model_list = ['transformer', 'stochastic_transformer', 'fusion_network']
 

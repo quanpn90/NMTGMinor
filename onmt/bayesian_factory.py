@@ -1,15 +1,11 @@
 import torch
 import torch.nn as nn
 import onmt
-from onmt.models.transformers import TransformerEncoder, TransformerDecoder, Transformer, MixedEncoder
-from onmt.models.relative_transformer import RelativeTransformer
 from onmt.models.bayes_by_backprop.relative_transformer import \
     RelativeTransformerEncoder, RelativeTransformerDecoder, BayesianTransformer
 from onmt.models.transformer_layers import PositionalEncoding
-from onmt.models.relative_transformer import SinusoidalPositionalEmbedding, RelativeTransformer
 from onmt.modules.copy_generator import CopyGenerator
-from onmt.options import backward_compatible
-import math
+from options import backward_compatible
 
 init = torch.nn.init
 

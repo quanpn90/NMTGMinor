@@ -1,15 +1,13 @@
 import sys
 import onmt
 import onmt.modules
-import torch.nn as nn
 import torch
 import math
 from onmt.model_factory import build_model, optimize_model
-import torch.nn.functional as F
-from onmt.inference.search import BeamSearch, DiverseBeamSearch, Sampling
+from onmt.inference.search import BeamSearch, Sampling
 from onmt.inference.translator import Translator
 from onmt.constants import add_tokenidx
-from onmt.options import backward_compatible
+from options import backward_compatible
 
 # buggy lines: 392, 442, 384
 model_list = ['transformer', 'stochastic_transformer', 'fusion_network']
@@ -874,7 +872,6 @@ class FastTranslator(Translator):
             past_src_data = past_sents
             data_type = 'audio'
         elif type == 'asr_wav':
-            from onmt.data.wav_dataset import WavDataset
             src_data = src_sents
             past_src_data = past_sents
             data_type = 'wav'
