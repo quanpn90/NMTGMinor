@@ -216,8 +216,15 @@ def build_tm_model(opt, dicts, constants=None):
                 print("[INFO] ... Done")
 
         discrete_encoder = None
-        encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model,
-                                 discrete_encoder=discrete_encoder, stacked_encoder=stacked_encoder)
+        if "wavlm" in opt.enc_pretrained_model:
+            from onmt.models.speech_recognizer.wavlm import WavLMEncoder
+            encoder = WavLMEncoder(opt, opt.wav2vec2_pretrained_model)
+
+        else:
+            from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec
+
+            encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model,
+                                     discrete_encoder=discrete_encoder, stacked_encoder=stacked_encoder)
 
         sub_encoder = None
 
