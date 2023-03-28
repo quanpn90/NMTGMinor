@@ -606,7 +606,7 @@ class TripletDataset(torch.utils.data.Dataset):
 
         for samples in sample_list:
 
-            src_data, tgt_data, aux_data = None, None = None
+            src_data, tgt_data, aux_data = None, None, None
             src_lang_data, tgt_lang_data = None, None
             src_atbs_data, tgt_atbs_data = None, None
             past_src_data = None
