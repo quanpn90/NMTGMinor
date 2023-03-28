@@ -43,8 +43,6 @@ def safe_readaudio(wav_path, start=0.0, end=0.0, sample_rate=16000):
                                 normalize=True, channels_first=False)
     tensor = tensor[:, 0].unsqueeze(1)
 
-    tensor = pad_tensor(tensor)
-
     # tensor has size [length, num_channel] in which channel should be 1 for wav2vec
     return tensor
 

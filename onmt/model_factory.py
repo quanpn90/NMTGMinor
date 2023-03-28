@@ -181,17 +181,8 @@ def build_tm_model(opt, dicts, constants=None):
         from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecBERT
 
         # first create the audio encoder
-        if "wavlm" in opt.enc_pretrained_model:
-            from onmt.models.speech_recognizer.wavlm import WavLMEncoder
-            encoder = WavLMEncoder(opt, opt.wav2vec2_pretrained_model)
-
-        else:
-            from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec
-            encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model,
-                                     discrete_encoder=discrete_encoder, stacked_encoder=stacked_encoder)
 
         sub_encoder = None
-
 
         # if opt.model.startswith("quantize"):
         #     from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder

@@ -395,7 +395,6 @@ def safe_readaudio_from_cache(file_, start=0.0, end=0.0, sample_rate=16000):
     tensor = torch.from_numpy(waveform)
     tensor = tensor[:, 0].unsqueeze(1)
 
-    tensor = pad_tensor(tensor)
     return tensor
 
 class WavLoader(object):
