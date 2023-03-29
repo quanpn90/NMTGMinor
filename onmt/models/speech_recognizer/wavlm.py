@@ -115,11 +115,6 @@ class WavLMEncoder(nn.Module):
         if opt.freeze_encoder_ffn:
             self.freeze_ffn_params()
 
-        # add length adapter
-        if opt.length_adapter == True:
-            print("[INFO] Adding length adapters for WavLM model")
-            self.wav2vec_encoder.create_length_adapter()
-
     def freeze_ffn_params(self):
         for layer in self.wav2vec_encoder.encoder.layers:
             for p in layer.fc1.parameters():

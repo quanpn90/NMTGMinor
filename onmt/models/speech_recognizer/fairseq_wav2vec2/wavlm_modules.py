@@ -16,7 +16,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 
 from onmt.modules.optimized.linear import Linear
-from onmt.modules.optimized.self_attention_func import self_attn_bias_func
+# from onmt.modules.optimized.self_attention_func import self_attn_bias_func
 
 
 class WavLMMultiheadAttention(nn.Module):
@@ -387,3 +387,70 @@ def gelu_accurate(x):
 
 def gelu(x: torch.Tensor) -> torch.Tensor:
     return torch.nn.functional.gelu(x.float()).type_as(x)
+
+
+class GLU_Linear(nn.Module):
+    def __init__(self, input_dim, output_dim, glu_type="sigmoid", bias_in_glu=True):
+        super(GLU_Linear, self).__init__()
+
+        self.glu_type = glu_type
+        self.output_dim = output_dim
+
+        if glu_type == "sigmoid":
+            self.glu_act = torch.nn.Sigmoid()
+        elif glu_type == "swish":
+            self.glu_act = torch.nn.SiLU()
+        elif glu_type == "relu":
+            self.glu_act = torch.nn.ReLU()
+        elif glu_type == "gelu":
+            self.glu_act = torch.nn.GELU()
+
+        if bias_in_glu:
+            self.linear = nn.Linear(input_dim, output_dim * 2, True)
+        else:
+            self.linear = nn.Linear(input_dim, output_dim * 2, False)
+
+    def forward(self, x):
+        # to be consistent with GLU_Linear, we assume the input always has the #channel (#dim) in the last dimension of the tensor, so need to switch the dimension first for 1D-Conv case
+        x = self.linear(x)
+
+        if self.glu_type == "bilinear":
+            x = (x[:, :, 0:self.output_dim] * x[:, :, self.output_dim:self.output_dim * 2])
+        else:
+            x = (x[:, :, 0:self.output_dim] * self.glu_act(x[:, :, self.output_dim:self.output_dim * 2]))
+
+        return x
+
+def init_bert_params(module):
+    """
+    Initialize the weights specific to the BERT Model.
+    This overrides the default initializations depending on the specified arguments.
+        1. If normal_init_linear_weights is set then weights of linear
+           layer will be initialized using the normal distribution and
+           bais will be set to the specified value.
+        2. If normal_init_embed_weights is set then weights of embedding
+           layer will be initialized using the normal distribution.
+        3. If normal_init_proj_weights is set then weights of
+           in_project_weight for MultiHeadAttention initialized using
+           the normal distribution (to be validated).
+    """
+
+    def normal_(data):
+        # with FSDP, module params will be on CUDA, so we cast them back to CPU
+        # so that the RNG is consistent with and without FSDP
+        data.copy_(
+            data.cpu().normal_(mean=0.0, std=0.02).to(data.device)
+        )
+
+    if isinstance(module, nn.Linear):
+        normal_(module.weight.data)
+        if module.bias is not None:
+            module.bias.data.zero_()
+    if isinstance(module, nn.Embedding):
+        normal_(module.weight.data)
+        if module.padding_idx is not None:
+            module.weight.data[module.padding_idx].zero_()
+    if isinstance(module, WavLMMultiheadAttention):
+        normal_(module.q_proj.weight.data)
+        normal_(module.k_proj.weight.data)
+        normal_(module.v_proj.weight.data)

@@ -15,14 +15,14 @@ from .fairseq_modules import (
     Fp32LayerNorm,
     GradMultiply,
     SamePad,
-    init_bert_params,
     TransposeLast,
-    GLU_Linear,
 )
 
 from .wavlm_modules import (
     WavLMMultiheadAttention,
-    get_activation_fn
+    get_activation_fn,
+    init_bert_params,
+    GLU_Linear
 )
 
 def compute_mask_indices(
@@ -262,10 +262,10 @@ class WavLM(nn.Module):
         self.layer_norm = LayerNorm(self.embed)
         self.length_adapter = None
 
-
-    def create_length_adapter(self):
-        from .length_adapter import LengthAdapter
-        self.length_adapter = LengthAdapter(self.cfg.encoder_embed_dim, self.cfg.encoder_embed_dim)
+    #
+    # def create_length_adapter(self):
+    #     from .length_adapter import LengthAdapter
+    #     self.length_adapter = LengthAdapter(self.cfg.encoder_embed_dim, self.cfg.encoder_embed_dim)
 
     def apply_mask(self, x, padding_mask):
         B, T, C = x.shape
@@ -423,11 +423,11 @@ class WavLM(nn.Module):
             padding_mask=padding_mask,
             layer=layer
         )
-
-        if self.length_adapter is not None:
-            x = self.length_adapter(x)
-            if padding_mask is not None:
-                padding_mask = padding_mask[:, 2::2][:, 2::2][:, 2::2]
+        #
+        # if self.length_adapter is not None:
+        #     x = self.length_adapter(x)
+        #     if padding_mask is not None:
+        #         padding_mask = padding_mask[:, 2::2][:, 2::2][:, 2::2]
 
         res = {"x": x, "padding_mask": padding_mask, "features": features, "layer_results": layer_results}
 
