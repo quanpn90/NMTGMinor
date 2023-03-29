@@ -208,7 +208,7 @@ class DeltaLMTokenizer(PreTrainedTokenizer):
 
     def save_vocabulary(self, save_directory: str, filename_prefix: Optional[str] = None) -> Tuple[str]:
         if not os.path.isdir(save_directory):
-            logger.error(f"Vocabulary path ({save_directory}) should be a directory")
+            print(f"Vocabulary path ({save_directory}) should be a directory")
             return
         out_vocab_file = os.path.join(
             save_directory, (filename_prefix + "-" if filename_prefix else "") + VOCAB_FILES_NAMES["vocab_file"]
@@ -391,8 +391,14 @@ class MultilingualDeltaLMTokenizer(DeltaLMTokenizer):
             self.added_tokens_decoder[self.added_tokens_encoder[word]] = word
 
         # print(self.added_tokens_encoder)
-
+        
+    def tokenize(self, text, **kwargs):
+        if text in self.added_tokens_encoder:
+            return [text]
+        return super(MultilingualDeltaLMTokenizer, self).tokenize(text, **kwargs)
+        
     def _tokenize(self, text: str) -> List[str]:
+
         if self.src_lang in ["</s>", "src", "tgt"]  :
             return self.sp_model.encode(text, out_type=str)
         else:

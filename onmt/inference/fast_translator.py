@@ -339,16 +339,26 @@ class FastTranslator(Translator):
         scores_buf = scores.clone()
         tokens = src.new(bsz * beam_size, max_len + 2).long().fill_(self.tgt_pad)
         tokens_buf = tokens.clone()
-        tokens[:, 0].fill_(self.tgt_bos)  # first token is bos
+        tokens[:, 0].fill_(self.tgt_bos)  # first token is
+        # tokens[:, 1].fill_(self.tgt_bos)  # first token is bos
         attn, attn_buf = None, None
         nonpad_idxs = None
         src_tokens = src.transpose(0, 1)  # batch x time
         src_lengths = (src_tokens.ne(self.src_eos) & src_tokens.ne(self.src_pad)).long().sum(dim=1)
         blacklist = src_tokens.new_zeros(bsz, beam_size).eq(-1)  # forward and backward-compatible False mask
+        batchable_prefix = False
         if prefix_tokens is not None:
             prefix_tokens = prefix_tokens.to(src.device)
 
             if bsz == 1:
+                batchable_prefix = True
+            else:
+                # check if padding is in prefix
+                pmask = prefix_tokens.eq(self.tgt_pad).long().sum()
+                if pmask.item() == 0:
+                    batchable_prefix = True
+
+            if batchable_prefix:
                 prefix_tokens = prefix_tokens.repeat(beam_size, 1)
 
                 for b in range(bsz  * beam_size):
@@ -495,9 +505,10 @@ class FastTranslator(Translator):
 
         # Start decoding
         if prefix_tokens is not None:
-            if bsz == 1:
-                # for this case we run the whole prefix as a preparation step, decoding starts from the last of the prefix
-                step  = prefix_tokens.size(1) - 1
+            if batchable_prefix:
+                # for this case we run the whole prefix as a preparation step,
+                # decoding starts from the last of the prefix
+                step = prefix_tokens.size(1) - 1
             else:
                 # in this case we run decoding as usual but filter the output words for prefix
                 step = 0
@@ -542,7 +553,7 @@ class FastTranslator(Translator):
 
             # handle prefix tokens (possibly with different lengths)
             # here prefix tokens is a list of word-ids
-            if prefix_tokens is not None and bsz > 1:
+            if prefix_tokens is not None and not batchable_prefix:
                 if step < prefix_tokens.size(1) and step < max_len:
                     prefix_toks = prefix_tokens[:, step].unsqueeze(-1).repeat(1, beam_size).view(-1)
                     prefix_lprobs = lprobs.gather(-1, prefix_toks.unsqueeze(-1))
@@ -666,7 +677,7 @@ class FastTranslator(Translator):
                 cand_bbsz_idx = cand_beams.add(bbsz_offsets)
                 cand_scores = cand_scores[batch_idxs]
                 cand_indices = cand_indices[batch_idxs]
-                if prefix_tokens is not None and bsz > 1:
+                if prefix_tokens is not None and not batchable_prefix:
                     prefix_tokens = prefix_tokens[batch_idxs]
                 src_lengths = src_lengths[batch_idxs]
                 blacklist = blacklist[batch_idxs]

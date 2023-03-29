@@ -94,7 +94,7 @@ class SpeechBinarizer:
                     if stride == 1:
                         feature_vector = torch.from_numpy(feature_vector)
                     else:
-                        feature_vector = torch.from_numpy(feature_vector[0::opt.stride])
+                        feature_vector = torch.from_numpy(feature_vector[0::stride])
 
                     if concat > 1:
                         add = (concat - feature_vector.size()[0] % concat) % concat
@@ -254,7 +254,7 @@ class Binarizer:
     @staticmethod
     def binarize_file_single_thread(filename, tokenizer, vocab, worker_id=0, bos_word=None, eos_word=None,
                                     offset=0, end=-1, data_type='int64', verbose=False,
-                                    external_tokenizer=[None, None], lang=None):
+                                    external_tokenizer=[None, None], lang=None, target=False):
         """
         This function should read in the lines, convert sentences to tensors
         And then finalize into a dataset?
@@ -330,7 +330,7 @@ class Binarizer:
     @staticmethod
     def binarize_file(filename, vocab, tokenizer, bos_word=None, eos_word=None,
                       data_type='int64', num_workers=1, verbose=False, external_tokenizer="",
-                      lang=None, lang_list=[]):
+                      lang=None, lang_list=[], target=False):
 
         if "mbart-large-50" in external_tokenizer.lower():
 
@@ -370,9 +370,7 @@ class Binarizer:
 
             print("[INFO] Using the DeltaLM tokenizer...")
             from pretrain_module.tokenization_deltalm import MultilingualDeltaLMTokenizer
-            ext_tokenizer = MultilingualDeltaLMTokenizer.from_pretrained("facebook/mbart-large-50",
-                                                                         lang_list=lang_list, src_lang=lang)
-
+            ext_tokenizer = MultilingualDeltaLMTokenizer.from_pretrained("facebook/mbart-large-50", lang_list=lang_list, src_lang=lang)
 
 
             # from pretrain_module.tokenization_deltalm import DeltaLMTokenizer
@@ -421,7 +419,7 @@ class Binarizer:
                 mp_results.append(pool.apply_async(
                     Binarizer.binarize_file_single_thread,
                     args=(filename, tokenizer, vocab, worker_id, bos_word, eos_word,
-                          offsets[worker_id], offsets[worker_id + 1], data_type, verbose, ext_tokenizer, lang),
+                          offsets[worker_id], offsets[worker_id + 1], data_type, verbose, ext_tokenizer, lang, target),
                 ))
 
             pool.close()
@@ -434,7 +432,7 @@ class Binarizer:
             sp_result = Binarizer.binarize_file_single_thread(filename, tokenizer, vocab, 0, bos_word, eos_word,
                                                               offsets[0], offsets[1], data_type,
                                                               external_tokenizer=ext_tokenizer,
-                                                              lang=lang)
+                                                              lang=lang, target=target)
             merge_result(sp_result)
 
         final_result['data'] = list()

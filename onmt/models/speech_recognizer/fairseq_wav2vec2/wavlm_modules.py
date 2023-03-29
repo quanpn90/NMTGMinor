@@ -173,7 +173,7 @@ class WavLMMultiheadAttention(nn.Module):
             value: Optional[Tensor],
             key_padding_mask: Optional[Tensor] = None,
             incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]] = None,
-            need_weights: bool = True,
+            need_weights: bool = False,
             static_kv: bool = False,
             attn_mask: Optional[Tensor] = None,
             before_softmax: bool = False,
