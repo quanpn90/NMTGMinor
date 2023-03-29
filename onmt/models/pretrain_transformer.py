@@ -133,11 +133,11 @@ class PretrainTransformer(NMTModel):
             context = context.transpose(0, 1)  # to [src_l, b, de_model]
         elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in \
                 ["mbart", "mbart50", "m2m", "m2m100", "deltalm"]:
-            # print("HELLO DECODER")
-            # src: [b, src_l]  context: [b, src_l, de_model]
-            # src_attention_mask = src.eq(onmt.constants.SRC_PAD).long()
-            # src_attention_mask = (1 - src_attention_mask.long())
-            tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
+
+            tgt_attention_mask = tgt.eq(onmt.constants.TGT_PAD).long()  # [bsz, len]
+            # This mask is often ignored due to using a simple time-mask would also covers the pad-mask
+            # However it should be carefully handled in the case of using flash-attn
+
             decoder_output = self.decoder(input_ids=tgt,
                                           attention_mask=tgt_attention_mask,
                                           encoder_hidden_states=context,

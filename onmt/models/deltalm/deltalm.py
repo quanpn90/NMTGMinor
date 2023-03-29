@@ -286,15 +286,7 @@ class DeltaLMDecoderLayer(TransformerDecoderLayerBase):
             x = self.activation_fn(self.fc3(x))
             x = self.activation_dropout_module(x)
             x = self.fc4(x)
-        # if self.checkpoint_activations and self.training:
-        #     x = torch.utils.checkpoint.checkpoint(linear_act_linear, x, self.fc3, self.fc4,
-        #                                self.dropout_module.p, self.training, self.activation_fn)
-        # else:
-        #     x = linear_act_linear(x, self.fc3, self.fc4,
-        #                                self.dropout_module.p, self.training, self.activation_fn)
 
-        # x = self.dropout_module(x)
-        # x = self.residual_connection(x, residual)
         x = dropout_residual_connection(x, residual, self.dropout_module, self.training)
         if not self.normalize_before:
             x = self.ffn_layer_norm(x)
