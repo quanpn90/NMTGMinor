@@ -90,6 +90,8 @@ class TranslatorParameter(object):
                 self.cuda = True
             elif w[0] == "detokenize":
                 self.detokenize = True
+            elif w[0] == "vocab_list":
+                self.vocab_list = w[1]
 
             line = f.readline()
 

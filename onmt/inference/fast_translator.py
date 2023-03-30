@@ -69,12 +69,15 @@ class FastTranslator(Translator):
             print('* Using fast beam search implementation')
 
         if opt.vocab_list:
+            print("[INFO] reading the list of words from %s" % opt.vocab_list)
             word_list = list()
             for line in open(opt.vocab_list).readlines():
                 word = line.strip()
                 word_list.append(word)
 
-                self.filter = torch.Tensor(self.tgt_dict.size()).zero_()
+            self.filter = torch.Tensor(self.tgt_dict.size()).zero_()
+
+            # the eos and unk have to be in here
             for word_idx in [self.tgt_eos, self.tgt_unk]:
                 self.filter[word_idx] = 1
 
@@ -82,6 +85,8 @@ class FastTranslator(Translator):
                 idx = self.tgt_dict.lookup(word)
                 if idx is not None:
                     self.filter[idx] = 1
+                else:
+                    print("WARNING: word %s does not exist in the dictionary" % word)
 
             self.filter = self.filter.bool()
             if opt.cuda:
