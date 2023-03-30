@@ -192,7 +192,7 @@ class ASROnlineTranslator(object):
                     with MosesTokenizer(self.tgt_lang) as tokenize:
                         __prefix = tokenize(_prefix)
                         __prefix = " ".join(__prefix)
-                        _prefix = __prefixs
+                        _prefix = __prefix
                 prefixes.append(_prefix)
             prefix = prefixes
 
@@ -239,7 +239,7 @@ class ASROnlineTranslator(object):
                 if _prefix is not None:
                     with MosesTokenizer(self.tgt_lang) as tokenize:
                         tokenized_sentence = tokenize(_prefix)
-                        tokenized_sentence = " ".join(output_sentence)
+                        tokenized_sentence = " ".join(tokenized_sentence)
                         _prefix = tokenized_sentence
                 new_prefixes.append(_prefix)
             prefixes = new_prefixes
