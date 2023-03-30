@@ -293,7 +293,7 @@ class Binarizer:
                 else:
                     tensor = ext_tokenizer(line.strip())['input_ids']
                     # assert that the mbart50 tokenizer uses the correct language ID
-                    if   "mbart-large-50" in external_tokenizer_name.lower():
+                    if "mbart-large-50" in external_tokenizer_name.lower():
                         assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID"
                         pad_id = vocab.convertToIdx(["<pad>"], None)[0]
                         assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
@@ -303,6 +303,15 @@ class Binarizer:
                             "The first token must be language ID"
                         pad_id = vocab.convertToIdx(["<pad>"], None)[0]
                         assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
+                    elif "deltalm" in external_tokenizer_name.lower():
+                        assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID"
+                        pad_id = vocab.convertToIdx(["<pad>"], None)[0]
+                        assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
+
+                        if target and tensor[0] != tensor[-1]:
+                            # for the target side and in the multilingual case it is <eos> <langid> X <eos>
+                            tensor = [tensor[0]] + tensor
+
                     if len(tensor) <= 2:
                         n_bad_sentences += 1
                         # print("[Warning] empty sentence with %d tokens including <bos> <eos>" % len(tensor))
