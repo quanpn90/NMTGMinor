@@ -378,10 +378,9 @@ class MBartAttention(nn.Module):
 
             else:
                 """
-                normal multiheaded attention without 
+                flash attention
                 """
                 assert self.fast_bert_mha is not None
-                assert hidden_states.dtype == torch.half
                 assert cu_seqlens is not None
                 assert max_len is not None
                 # assert self.is_decoder is False  # only encoder
@@ -674,7 +673,6 @@ class MBartCrossAttention(MBartAttention):
             elif hidden_states.ndim == 2 and key_value_states.ndim == 2:
 
                 assert self.fast_bert_mha is not None
-                assert hidden_states.dtype == torch.half
                 assert cu_seqlens is not None
                 assert cu_seqlens_kv is not None
                 assert max_len is not None
@@ -1700,11 +1698,8 @@ class MBartEncoder(MBartPreTrainedModel):
         sm = torch.cuda.get_device_capability()
         total_bsz = 0
 
-        # only run this when seq_len <= 512 and sm = 80/86 and type = half
-        if self.fast_bert_mha and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] in [0]) \
-                and hidden_states.dtype == torch.half:
+        if self.fast_bert_mha and torch.is_autocast_enabled():
             can_run_fast_bert_mha = True
-            # print("Can run FAST BERT MHA")
 
             x = hidden_states
             padding_mask = attention_mask  # [B x T]

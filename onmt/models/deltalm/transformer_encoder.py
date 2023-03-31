@@ -14,6 +14,8 @@ from .modules.positional_embeddings import PositionalEmbedding, SinusoidalPositi
 from .modules.layer_drop import LayerDropModuleList
 from onmt.modules.layer_norm import LayerNorm
 from .modules.transformer_layer import TransformerEncoderLayerBase
+from pretrain_module.modeling_mbart import index_copy
+import numpy as np
 
 
 class TransformerEncoderBase(nn.Module):
@@ -83,6 +85,9 @@ class TransformerEncoderBase(nn.Module):
         else:
             self.layer_norm = None
 
+        from onmt.modules.optimized.flash_mha import flash_bert_mha
+        self.fast_bert_mha = flash_bert_mha
+
     def build_encoder_layer(self, cfg):
         layer = TransformerEncoderLayerBase(cfg)
         # removed the checkpointing and fdsp part
@@ -143,8 +148,39 @@ class TransformerEncoderBase(nn.Module):
         if has_pads:
             x = x * (1 - encoder_padding_mask.unsqueeze(-1).type_as(x))
 
-        # B x T x C -> T x B x C
-        x = x.transpose(0, 1)
+        # TODO: use fast bert mha
+        can_run_fast_bert_mha = False
+        # check if fast bert mha can be run
+        seq_len = x.size(1)
+        bsz = x.size(0)
+
+        if self.fast_bert_mha and torch.is_autocast_enabled():
+            can_run_fast_bert_mha = True
+            # print("Can run FAST BERT MHA")
+
+            padding_mask = encoder_padding_mask  # [B x T]
+            # masked positions = 1 so to compute length we need the (1 -)
+            if padding_mask is None:
+                padding_mask = x.new_zeros(bsz, seq_len)
+            padding_mask = padding_mask.long()
+            lengths = (1 - padding_mask).sum(dim=1)
+            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
+
+            x = x.view(-1, x.size(-1))
+            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+            x = x.index_select(0, non_pad_indices)
+
+            max_len = max(lengths)
+            # cumulative sequence lengths (required input for fmha)
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
+        else:
+            max_len = -1
+            cu_seqlens = None
+            non_pad_indices = None
+
+            # B x T x C -> T x B x C
+            x = x.transpose(0, 1)
 
         encoder_states = []
 
@@ -154,7 +190,8 @@ class TransformerEncoderBase(nn.Module):
         # encoder layers
         for layer in self.layers:
             x = layer(
-                x, encoder_padding_mask=encoder_padding_mask if has_pads else None
+                x, encoder_padding_mask=encoder_padding_mask if has_pads else None,
+                max_len=max_len, cu_seqlens=cu_seqlens
             )
             if return_all_hiddens:
                 assert encoder_states is not None
@@ -176,4 +213,13 @@ class TransformerEncoderBase(nn.Module):
         #     "src_tokens": [],
         #     "src_lengths": [src_lengths],
         # }
+
+        if can_run_fast_bert_mha:
+            # remove the patch
+            # if x.size(0) > total_bsz:
+            #     x = x[:total_bsz, :]
+            x = index_copy(x, non_pad_indices, bsz * seq_len)
+            x = x.view(bsz, seq_len, -1)
+            x = x.transpose(0, 1).contiguous()
+
         return x, encoder_padding_mask, encoder_embedding, encoder_states

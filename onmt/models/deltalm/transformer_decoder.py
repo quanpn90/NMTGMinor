@@ -15,7 +15,8 @@ from .modules.layer_drop import LayerDropModuleList
 from onmt.modules.layer_norm import LayerNorm
 from .modules.transformer_layer import TransformerDecoderLayerBase
 from torch import Tensor
-
+from pretrain_module.modeling_mbart import index_copy
+import numpy as np
 
 class TransformerDecoderBase(nn.Module):
     """
@@ -101,6 +102,9 @@ class TransformerDecoderBase(nn.Module):
         else:
             self.layer_norm = None
 
+        from onmt.modules.optimized.flash_mha import flash_bert_mha
+        self.fast_bert_mha = flash_bert_mha
+
     def build_decoder_layer(self, cfg, no_encoder_attn=False):
         layer = transformer_layer.TransformerDecoderLayerBase(cfg, no_encoder_attn)
 
@@ -118,7 +122,8 @@ class TransformerDecoderBase(nn.Module):
             checkpointing_cross_attn=False,
             **kwargs,
     ):
-        bs, slen = input_ids.size()
+        bsz, qlen = input_ids.size()
+        klen = encoder_hidden_states.size(0)
 
         # embed positions
         positions = None
@@ -142,13 +147,61 @@ class TransformerDecoderBase(nn.Module):
         x = self.dropout_module(x)
 
         # B x T x C -> T x B x C
-        x = x.transpose(0, 1)
+        can_run_fast_bert_mha = False
+
+        if self.fast_bert_mha is not None and torch.is_autocast_enabled():
+            can_run_fast_bert_mha = True
+
+            # unpadding x
+            if attention_mask is None:
+                padding_mask = input_ids.new_zeros(bsz, qlen)
+            else:
+                padding_mask = attention_mask
+            padding_mask = padding_mask.contiguous().long()
+            lengths = (1 - padding_mask).sum(dim=1)
+            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
+
+            x = x.view(-1, x.size(-1))
+            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+            x = x.index_select(0, non_pad_indices)
+            max_len = max(lengths)
+            # cumulative sequence lengths (required input for fmha)
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
+
+            non_pad_indices_q = non_pad_indices
+
+            # unpadding context
+            # transposing from [T x B x H] to [B x T x H]
+            encoder_hidden_states = encoder_hidden_states.transpose(0, 1).contiguous()
+            padding_mask = encoder_attention_mask
+            if padding_mask is None:
+                context_len = encoder_hidden_states.size(1)
+                padding_mask = input_ids.new_zeros(bsz, context_len)
+            padding_mask = padding_mask.long()
+            lengths = (1 - padding_mask).sum(dim=1)
+            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
+            encoder_hidden_states = encoder_hidden_states.view(-1, encoder_hidden_states.size(-1))
+            non_pad_indices_kv = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+            encoder_hidden_states = encoder_hidden_states.index_select(0, non_pad_indices_kv)
+
+            max_len_kv = max(lengths)
+            # cumulative sequence lengths (required input for fmha)
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens_kv = torch.cumsum(a, 0).to(dtype=torch.int32, device=encoder_hidden_states.device)
+
+            self_attn_mask = None
+        else:
+            x = x.transpose(0, 1).contiguous()
+            max_len, cu_seqlens = None, None
+            max_len_kv, cu_seqlens_kv = None, None
+
+            # causal masking.
+            self_attn_mask = torch.triu(
+                x.new_ones(qlen, qlen), diagonal=1).bool()
+            non_pad_indices_q, non_pad_indices_kv = None, None
 
         self_attn_padding_mask: Optional[Tensor] = None
-
-        qlen = x.size(0)
-        self_attn_mask = torch.triu(
-            x.new_ones(qlen, qlen), diagonal=1).bool()
 
         # decoder layers
         attns = list()
@@ -163,11 +216,18 @@ class TransformerDecoderBase(nn.Module):
                 checkpointing_ffn=checkpointing_ffn,
                 checkpointing_self_attn=checkpointing_self_attn,
                 checkpointing_cross_attn=checkpointing_cross_attn,
+                max_len=max_len, cu_seqlens=cu_seqlens,
+                max_len_kv=max_len_kv, cu_seqlens_kv=cu_seqlens_kv,
             )
             attns.append(layer_attn)
 
         if self.layer_norm is not None:
             x = self.layer_norm(x)
+
+        if can_run_fast_bert_mha:
+            seq_len = qlen
+            x = index_copy(x, non_pad_indices_q, bsz * seq_len)
+            x = x.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
 
         return x, attns
 
@@ -204,30 +264,110 @@ class TransformerDecoderBase(nn.Module):
         if positions is not None:
             x += positions
 
+        bsz, qlen = x.size(0), x.size(1)
+
+        using_buffer = (x.size(1) > 1 and len(buffers) > 0)
+
+        if buffering:
+            # use the last value of input to continue decoding
+            if using_buffer:
+                # if buffers has not been initilized and we have > 1 input length data
+                # then its a prefix decoding step
+                x = x[:, -1:, :]
+
         if self.layernorm_embedding is not None:
             x = self.layernorm_embedding(x)
 
-        # B x T x C -> T x B x C
-        x = x.transpose(0, 1)
+        can_run_fast_bert_mha = False
 
-        qlen = x.size(0)
-        self_attn_mask = torch.triu(
-            x.new_ones(qlen, qlen), diagonal=1).bool()
+        if self.fast_bert_mha is not None and (torch.is_autocast_enabled() or x.dtype == torch.half) and not buffering:
+            can_run_fast_bert_mha = True
+
+            # unpadding x
+            padding_mask = input_ids.new_zeros(bsz, qlen)
+            padding_mask = padding_mask.contiguous().long()
+            lengths = (1 - padding_mask).sum(dim=1)
+            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
+
+            x = x.view(-1, x.size(-1))
+            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+            x = x.index_select(0, non_pad_indices)
+            max_len = max(lengths)
+            # cumulative sequence lengths (required input for fmha)
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
+
+            non_pad_indices_q = non_pad_indices
+
+            # unpadding context
+            # transposing from [T x B x H] to [B x T x H]
+            encoder_hidden_states = encoder_hidden_states.transpose(0, 1).contiguous()
+            padding_mask = encoder_attention_mask
+            if padding_mask is None:
+                context_len = encoder_hidden_states.size(1)
+                padding_mask = input_ids.new_zeros(bsz, context_len)
+            padding_mask = padding_mask.long()
+            lengths = (1 - padding_mask).sum(dim=1)
+            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
+            encoder_hidden_states = encoder_hidden_states.view(-1, encoder_hidden_states.size(-1))
+            non_pad_indices_kv = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+            encoder_hidden_states = encoder_hidden_states.index_select(0, non_pad_indices_kv)
+
+            max_len_kv = max(lengths)
+            # cumulative sequence lengths (required input for fmha)
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens_kv = torch.cumsum(a, 0).to(dtype=torch.int32, device=encoder_hidden_states.device)
+
+            self_attn_mask = None
+        else:
+
+            non_pad_indices_q, non_pad_indices_kv = None, None
+            # B x T x C -> T x B x C
+            x = x.transpose(0, 1).contiguous()
+            max_len = None
+            cu_seqlens = None
+            max_len_kv = None
+            cu_seqlens_kv = None
+
+            # causal masking.
+            self_attn_mask = torch.triu(
+                x.new_ones(qlen, qlen), diagonal=1).bool()
+
+            if buffering and using_buffer:
+                self_attn_mask = self_attn_mask[-1:, :]
 
         # decoder layers
         attns = list()
         for idx, layer in enumerate(self.layers):
-            x, layer_attn, _ = layer(
+
+            if buffering:
+                buffer = buffers[idx] if idx in buffers else None
+            else:
+                buffer = None
+
+            x, layer_attn, buffer = layer(
                 x,
                 encoder_hidden_states,
                 encoder_attention_mask,
                 self_attn_mask=self_attn_mask,
-                self_attn_padding_mask=None
+                self_attn_padding_mask=None,
+                max_len = max_len, cu_seqlens = cu_seqlens,
+                max_len_kv = max_len_kv, cu_seqlens_kv = cu_seqlens_kv,
+                incremental=buffering, incremental_cache=buffer,
             )
+
+            if buffering:
+                decoder_state.update_attention_buffer(buffer, idx)
+
             attns.append(layer_attn)
 
         if self.layer_norm is not None:
             x = self.layer_norm(x)
+
+        if can_run_fast_bert_mha:
+            seq_len = qlen
+            x = index_copy(x, non_pad_indices_q, bsz * seq_len)
+            x = x.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
 
         output = x[-1].unsqueeze(0)
         coverage = attns[-1]
