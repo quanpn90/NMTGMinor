@@ -304,7 +304,10 @@ class Binarizer:
                         pad_id = vocab.convertToIdx(["<pad>"], None)[0]
                         assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
                     elif "deltalm" in external_tokenizer_name.lower():
-                        assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID"
+                        if len(tensor) > 2:
+                            if tensor[0] not in [0, 1, 2, 3]:
+                                assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID"
+
                         pad_id = vocab.convertToIdx(["<pad>"], None)[0]
                         assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
 
@@ -380,7 +383,6 @@ class Binarizer:
             print("[INFO] Using the DeltaLM tokenizer...")
             from pretrain_module.tokenization_deltalm import MultilingualDeltaLMTokenizer
             ext_tokenizer = MultilingualDeltaLMTokenizer.from_pretrained("facebook/mbart-large-50", lang_list=lang_list, src_lang=lang)
-
 
             # from pretrain_module.tokenization_deltalm import DeltaLMTokenizer
             # try:  # check if this tokenizer is saved locally or not
