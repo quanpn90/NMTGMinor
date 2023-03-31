@@ -262,47 +262,47 @@ class WavLMMultiheadAttention(nn.Module):
             # if k_proj_bias is None:
             #     k_proj_bias = torch.zeros_like(self.q_proj.bias)
 
-            if self.fast_attention:
-                is_training = self.training
-                low_precision = True
-                in_proj_weight = self.proj_weight
-                out_proj_weight = self.out_proj.weight
-                recompute = False
-                rotary = False
-                positions = None
+            # if self.fast_attention:
+            #     is_training = self.training
+            #     low_precision = True
+            #     in_proj_weight = self.proj_weight
+            #     out_proj_weight = self.out_proj.weight
+            #     recompute = False
+            #     rotary = False
+            #     positions = None
+            #
+            #     x, attn = self_attn_bias_func(False, is_training, self.num_heads, query, attn_mask_rel_pos,
+            #                                        in_proj_weight, out_proj_weight,
+            #                                        self.proj_bias, self.out_proj.bias,
+            #                                        key_padding_mask, self.dropout_module.p,
+            #                                        rotary, positions,
+            #                                        False, None,       # incremental and state and double precision
+            #                                        low_precision, True, recompute)  # learnable_pos + return-coverage
+            # else:
 
-                x, attn = self_attn_bias_func(False, is_training, self.num_heads, query, attn_mask_rel_pos,
-                                                   in_proj_weight, out_proj_weight,
-                                                   self.proj_bias, self.out_proj.bias,
-                                                   key_padding_mask, self.dropout_module.p,
-                                                   rotary, positions,
-                                                   False, None,       # incremental and state and double precision
-                                                   low_precision, True, recompute)  # learnable_pos + return-coverage
-            else:
-
-                x, attn = F.multi_head_attention_forward(
-                    query,
-                    key,
-                    value,
-                    self.embed_dim,
-                    self.num_heads,
-                    torch.empty([0]),
-                    torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias)),
-                    self.bias_k,
-                    self.bias_v,
-                    self.add_zero_attn,
-                    self.dropout_module.p,
-                    self.out_proj.weight,
-                    self.out_proj.bias,
-                    self.training,
-                    # self.training or self.dropout_module.apply_during_inference,
-                    key_padding_mask,
-                    need_weights,
-                    attn_mask_rel_pos,
-                    use_separate_proj_weight=True,
-                    q_proj_weight=self.q_proj.weight,
-                    k_proj_weight=self.k_proj.weight,
-                    v_proj_weight=self.v_proj.weight,
+            x, attn = F.multi_head_attention_forward(
+                query,
+                key,
+                value,
+                self.embed_dim,
+                self.num_heads,
+                torch.empty([0]),
+                torch.cat((self.q_proj.bias, self.k_proj.bias, self.v_proj.bias)),
+                self.bias_k,
+                self.bias_v,
+                self.add_zero_attn,
+                self.dropout_module.p,
+                self.out_proj.weight,
+                self.out_proj.bias,
+                self.training,
+                # self.training or self.dropout_module.apply_during_inference,
+                key_padding_mask,
+                need_weights,
+                attn_mask_rel_pos,
+                use_separate_proj_weight=True,
+                q_proj_weight=self.q_proj.weight,
+                k_proj_weight=self.k_proj.weight,
+                v_proj_weight=self.v_proj.weight,
             )
 
             return x, attn, position_bias
