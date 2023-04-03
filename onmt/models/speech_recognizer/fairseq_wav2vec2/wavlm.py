@@ -626,6 +626,8 @@ class TransformerEncoder(nn.Module):
         if self.layer_norm_first and layer is None:
             x = self.layer_norm(x)
 
+        # Length adapter here? 
+
         return x, layer_results
 
     def extract_features(self, x, padding_mask=None, streaming_mask=None, tgt_layer=None):

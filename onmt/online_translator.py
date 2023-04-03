@@ -75,6 +75,7 @@ class TranslatorParameter(object):
                 self.model = w[1]
             elif w[0] == "beam_size":
                 self.beam_size = int(w[1])
+                self.n_best = self.beam_size
             elif w[0] == "src_lang":
                 self.src_lang = w[1]
             elif w[0] == "tgt_lang":
