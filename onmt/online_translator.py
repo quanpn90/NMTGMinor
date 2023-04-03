@@ -268,4 +268,15 @@ class ASROnlineTranslator(object):
         for pred, pred_id in zip(pred_batch, pred_ids):
             outputs.append(get_sentence_from_tokens(pred[0], pred_id[0], "word", external_tokenizer))
 
+        if self.detokenize and MosesDetokenizer is not None:
+            outputs_detok = []
+            for output_sentence in outputs:
+                # here if we want to use mosestokenizer, probably we need to split the sentence AFTER the sentencepiece/bpe
+                # model applies their de-tokenization
+                output_sentence_parts = output_sentence.split()
+                with MosesDetokenizer(self.tgt_lang) as detokenize:
+                    output_sentence = detokenize(output_sentence_parts)
+                outputs_detok.append(output_sentence)
+            return outputs_detok
+
         return outputs
