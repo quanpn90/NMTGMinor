@@ -10,9 +10,24 @@ import threading
 import queue
 import uuid
 import traceback
+import subprocess
 
 host = sys.argv[1]  # 192.168.0.72
 port = sys.argv[2]  # 5051
+if len(sys.argv)<=2:
+    filename = "model.conf"
+else:
+    filename = sys.argv[3]
+
+conf_data = open(filename,"r").read().split("\n")
+model = None
+for d in conf_data:
+    d = d.split()
+    if len(d)==2 and d[0]=="model":
+        model = d[1]
+        break
+conf_data.append("model_ls "+str(subprocess.run(("ls -l "+model).split(), capture_output=True).stdout))
+conf_data = "\n".join(conf_data)
 
 app = Flask(__name__)
 
@@ -21,8 +36,6 @@ def create_unique_list(my_list):
     return my_list
 
 def initialize_model():
-    filename = "model.conf"
-
     model = ASROnlineTranslator(filename)
     print("ASR initialized")
 
@@ -172,7 +185,7 @@ def inference(input_language, output_language):
 @app.route("/asr/version", methods=["POST"])
 def version():
     # return dict or string (as first argument)
-    return "ASR-7EU-2.0", 200
+    return conf_data, 200
 
 model, max_batch_size = initialize_model()
 
