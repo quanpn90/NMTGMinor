@@ -14,6 +14,9 @@ import numpy as np
 import warnings
 import os
 from os.path import dirname, abspath
+import gc
+
+
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -382,7 +385,8 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
 
 def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, max_src_length=64, max_tgt_length=64,
                           add_bos=True, data_type='int64', num_workers=1, verbose=False,
-                          external_tokenizer=None, src_lang=None, tgt_lang=None, lang_list=[]):
+                          external_tokenizer=None, src_lang=None, tgt_lang=None, lang_list=[],
+                          early_save=False, savedir=""):
     src, tgt = [], []
     src_sizes = []
     tgt_sizes = []
@@ -399,6 +403,35 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
                                             lang=src_lang, lang_list=lang_list, target=False
                                             )
 
+    if early_save:
+        os.makedirs(savedir, exist_ok=True)
+        src_len = len(binarized_src['data'])
+        print("Saving source data to %s .... with %d entries" % (savedir, src_len))
+        if data_type == 'int64':
+            dtype = np.int64
+        else:
+            dtype = np.int32
+
+
+
+        from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
+        indexed_data = MMapIndexedDatasetBuilder(os.path.join(savedir, "data.%s.bin" % "src"), dtype=dtype)
+
+        # add item from training data to the indexed data
+        for tensor in binarized_src['data']:
+            indexed_data.add_item(tensor)
+
+        indexed_data.finalize(os.path.join(savedir, "data.%s.idx" % "src"))
+
+        del binarized_src['data']
+        gc.collect()
+
+        np_array = np.asarray(binarized_src['sizes'])
+        np.save(os.path.join(savedir, "data.%s.npy" % "src_sizes"), np_array)
+
+        del binarized_src
+        gc.collect()
+
     if add_bos:
         tgt_bos_word = opt.tgt_bos_token
     else:
@@ -413,18 +446,52 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
                                             lang=tgt_lang, lang_list=lang_list, target=True
                                             )
 
-    src = binarized_src['data']
-    src_sizes = binarized_src['sizes']
+    if early_save:
 
-    tgt = binarized_tgt['data']
-    tgt_sizes = binarized_tgt['sizes']
+        tgt_len = len(binarized_tgt['data'])
+        assert tgt_len == src_len, "Number of samples doesn't match between source and target!!!"
 
-    # currently we don't ignore anything :D
-    ignored = 0
+        print("Saving target data to %s .... with %d samples" % (savedir, tgt_len))
 
-    print(('Prepared %d sentences ' +
-           '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
-          (len(src), ignored, max_src_length, max_tgt_length))
+        if data_type == 'int64':
+            dtype = np.int64
+        else:
+            dtype = np.int32
+
+        from onmt.data.mmap_indexed_dataset import MMapIndexedDatasetBuilder
+        indexed_data = MMapIndexedDatasetBuilder(os.path.join(savedir, "data.%s.bin" % "tgt"), dtype=dtype)
+
+        # add item from training data to the indexed data
+        for tensor in binarized_tgt['data']:
+            indexed_data.add_item(tensor)
+
+        indexed_data.finalize(os.path.join(savedir, "data.%s.idx" % "tgt"))
+
+        del binarized_tgt['data']
+        del indexed_data
+        gc.collect()
+
+        np_array = np.asarray(binarized_tgt['sizes'])
+        np.save(os.path.join(savedir, "data.%s.npy" % "tgt_sizes"), np_array)
+
+        del binarized_tgt
+        del np_array
+        gc.collect()
+
+        src, tgt, src_sizes, tgt_sizes = None, None, None, None
+    else:
+        src = binarized_src['data']
+        src_sizes = binarized_src['sizes']
+
+        tgt = binarized_tgt['data']
+        tgt_sizes = binarized_tgt['sizes']
+
+        # currently we don't ignore anything :D
+        ignored = 0
+
+        print(('Prepared %d sentences ' +
+               '(%d ignored due to length == 0 or src len > %d or tgt len > %d)') %
+              (len(src), ignored, max_src_length, max_tgt_length))
 
     return src, tgt, src_sizes, tgt_sizes
 
@@ -904,11 +971,13 @@ def main():
 
             data_name = "train.%i.%s-%s" % (idx, src_lang, tgt_lang)
             dataset_path = os.path.join(dirname(opt.save_data), data_name)
-            if opt.multi_dataset and opt.resume:
-                if os.path.exists(dataset_path):
+            if opt.multi_dataset:
+                if opt.resume and  os.path.exists(dataset_path):
                     print("[INFO] Found data %s in the savedir ... Ignoring" % data_name)
                     idx = idx + 1
                     continue
+            else:
+                os.makedirs(dataset_path, exist_ok=True)
 
             src_data, tgt_data, src_sizes, tgt_sizes = make_translation_data(src_file, tgt_file,
                                                                              dicts['src'], dicts['tgt'], tokenizer,
@@ -921,9 +990,11 @@ def main():
                                                                              external_tokenizer=opt.external_tokenizer,
                                                                              src_lang=src_lang,
                                                                              tgt_lang=tgt_lang,
-                                                                             lang_list=dicts['langs'])
+                                                                             lang_list=dicts['langs'],
+                                                                             early_save=opt.multi_dataset,
+                                                                             savedir=dataset_path)
 
-            n_samples = len(src_data)
+
             #TODO: check
             # if n_input_files == 1:
             if n_input_files == 1 or opt.multi_dataset:
@@ -932,6 +1003,9 @@ def main():
                 src_lang_data = [torch.Tensor([dicts['langs'][src_lang]])]
                 tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]])]
             else:
+                assert src_data is not None
+                n_samples = len(src_data)
+
                 # each sample will have a different language id
                 src_lang_data = [torch.Tensor([dicts['langs'][src_lang]]) for _ in range(n_samples)]
                 tgt_lang_data = [torch.Tensor([dicts['langs'][tgt_lang]]) for _ in range(n_samples)]
@@ -1031,7 +1105,8 @@ def main():
                                                                              external_tokenizer=opt.external_tokenizer,
                                                                              src_lang=src_lang,
                                                                              tgt_lang=tgt_lang,
-                                                                             lang_list=dicts['langs'])
+                                                                             lang_list=dicts['langs']
+                                                                             )
 
             n_samples = len(src_data)
             #TODO: this has to be changed
