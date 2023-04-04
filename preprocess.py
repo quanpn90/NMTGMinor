@@ -434,7 +434,9 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
         np.save(os.path.join(savedir, "data.%s.npy" % "src_sizes"), np_array)
 
         del binarized_src
-        gc.collect()
+        del indexed_data
+        del np_array
+        gc.collect() 
 
         if mirror:
             print("Saving mirrrored target data to %s .... with %d entries" % (mirror_savedir, src_len))
