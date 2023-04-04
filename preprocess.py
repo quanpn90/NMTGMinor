@@ -26,6 +26,8 @@ onmt.markdown.add_md_help_argument(parser)
 # **Preprocess Options**
 parser.add_argument('-multi_dataset', action='store_true',
                     help="Save each dataset separately instead of one joined dataset")
+parser.add_argument('-multi_mirror', action='store_true',
+                    help="Save each dataset separately instead of one joined dataset")
 parser.add_argument('-resume', action='store_true',
                     help="If the dataset is created, ignored and create the next one")
 parser.add_argument('-config', help="Read options from this file")
@@ -386,7 +388,7 @@ def make_lm_data(tgt_file, tgt_dicts, max_tgt_length=1000, input_type='word', da
 def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, max_src_length=64, max_tgt_length=64,
                           add_bos=True, data_type='int64', num_workers=1, verbose=False,
                           external_tokenizer=None, src_lang=None, tgt_lang=None, lang_list=[],
-                          early_save=False, savedir=""):
+                          early_save=False, savedir="", mirror=False, mirror_savedir=""):
     src, tgt = [], []
     src_sizes = []
     tgt_sizes = []
@@ -405,6 +407,8 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
 
     if early_save:
         os.makedirs(savedir, exist_ok=True)
+        if mirror:
+            os.makedirs(mirror_savedir, exist_ok=True)
         src_len = len(binarized_src['data'])
         print("Saving source data to %s .... with %d entries" % (savedir, src_len))
         if data_type == 'int64':
@@ -431,6 +435,21 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
 
         del binarized_src
         gc.collect()
+
+        if mirror:
+            print("Saving mirrrored target data to %s .... with %d entries" % (mirror_savedir, src_len))
+
+            source = os.path.join(savedir, "data.%s.bin" % "src")
+            target = os.path.join(mirror_savedir, "data.%s.bin" % "tgt")
+            os.symlink(os.path.abspath(source), target)
+
+            source = os.path.join(savedir, "data.%s.idx" % "src")
+            target = os.path.join(mirror_savedir, "data.%s.idx" % "tgt")
+            os.symlink(os.path.abspath(source), target)
+
+            source = os.path.join(savedir, "data.%s.npy" % "src_sizes")
+            target = os.path.join(mirror_savedir, "data.%s.npy" % "tgt_sizes")
+            os.symlink(os.path.abspath(source), target)
 
     if add_bos:
         tgt_bos_word = opt.tgt_bos_token
@@ -477,6 +496,21 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
         del binarized_tgt
         del np_array
         gc.collect()
+
+        if mirror:
+            print("Saving mirrrored source data to %s .... with %d entries" % (mirror_savedir, src_len))
+
+            source = os.path.join(savedir, "data.%s.bin" % "tgt")
+            target = os.path.join(mirror_savedir, "data.%s.bin" % "src")
+            os.symlink(os.path.abspath(source), target)
+
+            source = os.path.join(savedir, "data.%s.idx" % "tgt")
+            target = os.path.join(mirror_savedir, "data.%s.idx" % "src")
+            os.symlink(os.path.abspath(source), target)
+
+            source = os.path.join(savedir, "data.%s.npy" % "tgt_sizes")
+            target = os.path.join(mirror_savedir, "data.%s.npy" % "src_sizes")
+            os.symlink(os.path.abspath(source), target)
 
         src, tgt, src_sizes, tgt_sizes = None, None, None, None
     else:
@@ -969,8 +1003,11 @@ def main():
         for i, (src_file, tgt_file, src_lang, tgt_lang) in \
                 enumerate(zip(src_input_files, tgt_input_files, src_langs, tgt_langs)):
 
-            data_name = "train.%i.%s-%s" % (idx, src_lang, tgt_lang)
+            dataset_idx = idx if not opt.multi_mirror else 2 * idx
+            data_name = "train.%i.%s-%s" % (dataset_idx , src_lang, tgt_lang)
+            mirrored_data_name = "train.%i.%s-%s" % (dataset_idx + 1 , tgt_lang, src_lang)
             dataset_path = os.path.join(dirname(opt.save_data), data_name)
+            mirrored_dataset_path = os.path.join(dirname(opt.save_data), mirrored_data_name)
             if opt.multi_dataset:
                 if opt.resume and  os.path.exists(dataset_path):
                     print("[INFO] Found data %s in the savedir ... Ignoring" % data_name)
@@ -992,8 +1029,9 @@ def main():
                                                                              tgt_lang=tgt_lang,
                                                                              lang_list=dicts['langs'],
                                                                              early_save=opt.multi_dataset,
-                                                                             savedir=dataset_path)
-
+                                                                             savedir=dataset_path,
+                                                                             mirror=opt.multi_mirror,
+                                                                             mirror_savedir=mirrored_dataset_path)
 
             #TODO: check
             # if n_input_files == 1:
@@ -1042,7 +1080,7 @@ def main():
                 data['tgt_sizes'] = tgt_sizes
                 data['src_lang'] = src_lang_data
                 data['tgt_lang'] = tgt_lang_data
-                print("Saving training set %i %s-%s to disk ..." % (idx, src_lang, tgt_lang))
+                print("Saving training set %i %s-%s to disk ..." % (dataset_idx, src_lang, tgt_lang))
 
                 # take basedir from opt.save_data
                 path = dataset_path
@@ -1051,6 +1089,26 @@ def main():
                 # save data immediately
                 # TODO: save the prev src as well
                 save_dataset(path, data, opt.format, dicts, opt.src_type)
+
+                if opt.multi_mirror:
+                    mdata = dict()
+                    mdata['src'] = tgt_data
+                    mdata['tgt'] = src_data
+
+                    mdata['tgt_sizes'] = src_sizes
+                    mdata['src_sizes'] = tgt_sizes
+                    mdata['tgt_lang'] = src_lang_data
+                    mdata['src_lang'] = tgt_lang_data
+                    print("Saving training set %i %s-%s to disk ..." % (dataset_idx + 1, tgt_lang, src_lang))
+
+                    # take basedir from opt.save_data
+                    path = mirrored_dataset_path
+                    os.makedirs(path, exist_ok=True)
+
+                    # save data immediately
+                    # TODO: save the prev src as well
+                    save_dataset(path, mdata, opt.format, dicts, opt.src_type)
+
                 idx = idx + 1
 
                 del data

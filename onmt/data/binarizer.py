@@ -319,7 +319,14 @@ class Binarizer:
                         n_bad_sentences += 1
                         # print("[Warning] empty sentence with %d tokens including <bos> <eos>" % len(tensor))
                     sizes += [len(tensor)]
-                    data += [np.asarray(tensor)]
+
+                    _dtype = np.int32
+                    if data_type == "int64":
+                        _dtype = np.int64
+                    elif data_type == "int16":
+                        _dtype = np.int16
+
+                    data += [np.asarray(tensor, dtype=_dtype)]
 
                 line = f.readline()
 
