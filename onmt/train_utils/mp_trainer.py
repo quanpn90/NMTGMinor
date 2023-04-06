@@ -130,7 +130,8 @@ def all_reduce_and_rescale_tensors(tensors, rescale_denom=1,
 
 class Trainer(object):
 
-    def __init__(self, device, train_data, valid_data, dicts, opt, constants=None, setup_optimizer=True):
+    # def __init__(self, device, train_data, valid_data, dicts, opt, constants=None, setup_optimizer=True):
+    def __init__(self, device, dicts, opt, constants=None, setup_optimizer=True):
         """
         :param model:
         :param device: int (GPU id)
@@ -159,14 +160,6 @@ class Trainer(object):
 
         self.model = None
 
-        if self.rank == 0:
-            self.train_data = train_data
-            self.valid_data = valid_data
-        else:
-            # Do we really need to deepcopy the data instances (which could cause memory leak easily)
-            self.train_data = copy.deepcopy(train_data)
-            self.valid_data = copy.deepcopy(valid_data)
-
         self.dicts = dicts
         self.opt = opt
         self.cuda = (len(opt.gpus) >= 1 and opt.gpus[0] >= 0)
@@ -185,7 +178,8 @@ class Trainer(object):
         model = build_model(opt, dicts, False, self.constants)
 
         """ Building the loss function """
-        tgt_pad = self.train_data[0].tgt_pad if isinstance(self.train_data, list) else self.train_data.tgt_pad
+        tgt_pad = dicts['tgt_pad']
+
         if opt.ctc_loss > 0.0:
             from onmt.speech.ctc_loss import CTC
             self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True,
@@ -401,15 +395,15 @@ class Trainer(object):
 
         self.model.decoder.language_embeddings = untrained_lang_emb
 
-    def warm_up(self):
+    def warm_up(self, train_data):
         """
         Warmup the memory allocator, by attempting to fit the largest batch
         :return:
         """
 
-        batch = self.train_data[0].get_largest_batch(bsz=-1, src_size=-1, tgt_size=-1) \
-            if isinstance(self.train_data, list) \
-            else self.train_data.get_largest_batch(bsz=328, src_size=319520, tgt_size=18)
+        batch = train_data[0].get_largest_batch(bsz=-1, src_size=-1, tgt_size=-1) \
+            if isinstance(train_data, list) \
+            else train_data.get_largest_batch(bsz=328, src_size=319520, tgt_size=18)
         opt = self.opt
 
         if self.cuda:
@@ -640,10 +634,9 @@ class Trainer(object):
 
         return total_loss.item() / total_words.item(), total_correct.item() / total_words.item()
 
-    def train_epoch(self, epoch, resume=False, itr_progress=None):
+    def train_epoch(self, train_data, valid_data, epoch, resume=False, itr_progress=None):
 
         opt = self.opt
-        train_data = self.train_data
         streaming = opt.streaming
         grad_norm = -1
 
@@ -969,7 +962,7 @@ class Trainer(object):
                 num_updates = self.optim._step
                 if (opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every) \
                         or (num_updates >= opt.max_step):
-                    valid_loss, valid_accuracy = self.eval(self.valid_data)
+                    valid_loss, valid_accuracy = self.eval(valid_data)
                     valid_ppl = math.exp(min(valid_loss, 100))
 
                     if self.is_main():
@@ -1431,7 +1424,7 @@ class Trainer(object):
 
         return total_loss / total_words
 
-    def run(self, checkpoint=None):
+    def run(self, train_data=None, valid_data=None, checkpoint=None):
 
         opt = self.opt
 
@@ -1470,15 +1463,15 @@ class Trainer(object):
 
         # if we are on a GPU: warm up the memory allocator
         if self.cuda:
-            self.warm_up()
+            self.warm_up(train_data=train_data)
 
         if opt.estimate_fisher_information:
             self.start_time = time.time()
-            self.estimate_fisher(self.train_data)
+            self.estimate_fisher(train_data)
             return
 
         if opt.run_validation_before_training or opt.max_step <= 0:
-            valid_loss, valid_accuracy = self.eval(self.valid_data)
+            valid_loss, valid_accuracy = self.eval(valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
 
             if self.is_main():
@@ -1498,12 +1491,13 @@ class Trainer(object):
             self.print('')
 
             #  (1) train for one epoch on the training set
-            train_loss = self.train_epoch(epoch, resume=resume, itr_progress=itr_progress)
+            train_loss = self.train_epoch(train_data, valid_data, epoch,
+                                          resume=resume, itr_progress=itr_progress)
             train_ppl = math.exp(min(train_loss, 100))
             self.print('[INFO] Train perplexity: %g' % train_ppl)
 
             #  (2) evaluate on the validation set
-            valid_loss, valid_accuracy = self.eval(self.valid_data)
+            valid_loss, valid_accuracy = self.eval(valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
 
             if self.is_main():

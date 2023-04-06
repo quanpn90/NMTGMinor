@@ -313,7 +313,7 @@ class Binarizer:
 
                         if target and tensor[0] != tensor[-1]:
                             # for the target side and in the multilingual case it is <eos> <langid> X <eos>
-                            tensor = [tensor[0]] + tensor
+                            tensor = [tensor[-1]] + tensor
 
                     if len(tensor) <= 2:
                         n_bad_sentences += 1

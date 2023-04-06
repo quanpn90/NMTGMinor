@@ -395,6 +395,15 @@ class MultilingualDeltaLMTokenizer(DeltaLMTokenizer):
     def tokenize(self, text, **kwargs):
         if text in self.added_tokens_encoder:
             return [text]
+        repeated_ = True
+        tokens = text.strip().split()
+        for token in tokens:
+            if token not in self.added_tokens_encoder:
+                repeated_ = False
+
+        if repeated_:
+            return tokens
+
         return super(MultilingualDeltaLMTokenizer, self).tokenize(text, **kwargs)
         
     def _tokenize(self, text: str) -> List[str]:

@@ -823,9 +823,17 @@ class FastTranslator(Translator):
                             for sent in prefixes]
 
             prefix_data = _prefix_data
-
+            #
+            new_prefix_data = []
+            #
             for prefix_tensor in prefix_data:
-                prefix_tensor[0] = self.bos_id
+                if "MultilingualDeltaLM" in self.external_tokenizer.__class__.__name__:
+                    pass
+                else:
+                    prefix_tensor[0] = self.bos_id
+                new_prefix_data.append(prefix_tensor)
+            #
+            prefix_data = new_prefix_data
 
                 # _listed_tensor = prefix_tensor.tolist()
                 # if _listed_tensor[0] == self.tgt_bos:

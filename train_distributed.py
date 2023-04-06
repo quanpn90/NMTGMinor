@@ -17,6 +17,10 @@ import os
 import numpy as np
 import warnings
 import dill
+from multiprocessing import Process, Manager
+from multiprocessing.managers import BaseManager
+
+
 
 warnings.filterwarnings("ignore", message="The given NumPy array is not writeable ")
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -56,15 +60,19 @@ def numpy_to_torch(tensor_list):
 
 def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
     from onmt.train_utils.mp_trainer import Trainer
+    tgt_pad = train_data[0].tgt_pad if isinstance(train_data, list) else train_data.tgt_pad
+    dicts['tgt_pad'] = tgt_pad
 
-    trainer = Trainer(gpu, train_data, valid_data, dicts, opt, constants)
-    trainer.run(checkpoint=checkpoint)
+    trainer = Trainer(gpu, dicts, opt, constants)
+    trainer.run(checkpoint=checkpoint, train_data=train_data, valid_data=valid_data)
 
 
 def run_gem_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
     from onmt.train_utils.gem_trainer import GEMTrainer
 
     trainer = GEMTrainer(gpu, train_data, valid_data, dicts, opt, constants)
+
+
     trainer.run(checkpoint=checkpoint)
 
 def main():

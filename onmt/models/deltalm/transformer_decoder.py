@@ -372,6 +372,9 @@ class TransformerDecoderBase(nn.Module):
         output = x[-1].unsqueeze(0)
         coverage = attns[-1]
 
+        if coverage is None:
+            coverage = output.new_zeros(bsz, seq_len, seq_len)
+
         output_dict = defaultdict(lambda: None)
         output_dict['hidden'] = output
         output_dict['coverage'] = coverage
