@@ -819,8 +819,12 @@ class FastTranslator(Translator):
                             for sent in prefixes]
         else:
             # move the last element which is <eos>
-            _prefix_data = [torch.LongTensor(self.external_tokenizer(sent)['input_ids'][:-1])
-                            for sent in prefixes]
+            if self.opt.force_bos:
+                _prefix_data = [torch.LongTensor([self.bos_id] + self.external_tokenizer(sent)['input_ids'][:-1])
+                                for sent in prefixes]
+            else:
+                _prefix_data = [torch.LongTensor(self.external_tokenizer(sent)['input_ids'][:-1])
+                                for sent in prefixes]
 
             prefix_data = _prefix_data
             #

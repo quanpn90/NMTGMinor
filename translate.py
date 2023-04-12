@@ -78,6 +78,8 @@ parser.add_argument('-prefix_string', default='',
 parser.add_argument('-prefix_tgt', default='',
                     help="""Prefix file that contains prefix string for each of the translation
                     (must use either this or prefix_string, not both""")
+parser.add_argument('-force_bos', action="store_true",
+                    help="""Force the first token in the prefix to be bos""")
 parser.add_argument('-beam_size', type=int, default=5,
                     help='Beam size')
 parser.add_argument('-batch_size', type=int, default=30,
