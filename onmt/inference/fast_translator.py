@@ -311,6 +311,14 @@ class FastTranslator(Translator):
             self.bos_token = self.src_lang
             self.bos_id = self.tgt_dict.labelToIdx[self.bos_token]
             print("[INFO] New Bos Token: %s Bos_ID: %d" % (self.bos_token, self.bos_id))
+        else:
+            self.bos_token = self.tgt_lang
+            self.bos_id =  self.tgt_dict.labelToIdx[self.bos_token]
+            print("[INFO] New Bos Token: %s Bos_ID: %d" % (self.bos_token, self.bos_id))
+
+        self.tgt_bos = self.bos_id
+        self.external_tokenizer.src_lang = self.src_lang
+        self.tgt_external_tokenizer.src_lang = self.tgt_lang
 
     def translate_batch(self, batches, sub_batches=None, prefix_tokens=None):
 
@@ -536,6 +544,7 @@ class FastTranslator(Translator):
 
             decode_input = tokens[:, :step + 1]
             # print(batches[0].get('source'))
+            # print(decode_input)
             lprobs, avg_attn_scores = self._decode(decode_input, decoder_states,
                                                    sub_decoder_states=sub_decoder_states)
 

@@ -52,14 +52,16 @@ class TranslatorParameter(object):
         self.sub_model = ""
         self.sub_src = ""
         self.ensemble_weight = ""
-        self.external_tokenizer = ""
         self.fast_translate = True
         self.vocab_id_list = None  # to be added if necessary
 
         self.pretrained_classifier = None
         self.detokenize = False
+        self.external_tokenizer = "facebook/mbart-large-50"
+        self.force_bos = False
 
         self.read_file(filename)
+
 
     def read_file(self, filename):
 
@@ -93,6 +95,10 @@ class TranslatorParameter(object):
                 self.detokenize = True
             elif w[0] == "vocab_list":
                 self.vocab_list = w[1]
+            elif w[0] == "facebook/mbart-large-50":
+                self.external_tokenizer = w[1]
+            elif w[0] == "force_bos":
+                self.force_bos = True
 
             line = f.readline()
 
@@ -113,18 +119,148 @@ class RecognizerParameter(TranslatorParameter):
         self.encoder_type = "audio"
 
 
+
 class OnlineTranslator(object):
     def __init__(self, model):
         opt = TranslatorParameter(model)
         from onmt.inference.fast_translator import FastTranslator
         self.translator = FastTranslator(opt)
 
-    def translate(self, input):
-        predBatch, predScore, predLength, goldScore, numGoldWords, allGoldScores = \
-            self.translator.translate([input.split()], [])
+        self.src_lang = "en"
+        self.tgt_lang = "en"
+        self.detokenize = opt.detokenize
+        self.external_tokenizer = opt.external_tokenizer
 
-        return " ".join(predBatch[0][0])
+    # def translate(self, input):
+    #     predBatch, predScore, predLength, goldScore, numGoldWords, allGoldScores = \
+    #         self.translator.translate([input.split()], [])
+    #
+    #     return " ".join(predBatch[0][0])
 
+
+    def set_language(self, input_language, output_language, language_code_system="mbart50"):
+
+        if language_code_system == "mbart50":
+            language_map_dict = {"en": "en_XX", "de": "de_DE", "fr": "fr_XX", "es": "es_XX",
+                                 "pt": "pt_XX", "it": "it_IT", "nl": "nl_XX", "None": "<s>"}
+
+        else:
+            language_map_dict = defaultdict(lambda self, missing_key: missing_key)
+
+        input_lang = language_map_dict[input_language]
+        output_lang = language_map_dict[output_language]
+
+        self.translator.change_language(new_src_lang=input_lang, new_tgt_lang=output_lang, use_srclang_as_bos=False)
+
+        self.src_lang = input_language
+        self.tgt_lang = output_language
+
+    def translate(self, input, prefix):
+        """
+        Args:
+            prefix:
+            input: audio segment (torch.Tensor)
+
+        Returns:
+
+        """
+
+        if self.detokenize:
+            prefixes = []
+            for _prefix in prefix:
+                if _prefix is not None:
+                    with MosesTokenizer(self.tgt_lang) as tokenize:
+                        __prefix = tokenize(_prefix)
+                        __prefix = " ".join(__prefix)
+                        _prefix = __prefix
+                prefixes.append(_prefix)
+            prefix = prefixes
+
+        # 2 lists because the translator is designed to run with 1 audio and potentially 1 text
+        src_batches = [[input]]  # ... about the input
+
+        tgt_batch = []
+        sub_src_batch = []
+        past_src_batches = []
+
+        if all(v is None for v in prefix):
+            prefix = None
+
+        # perform beam search in the model
+        pred_batch, pred_ids, pred_score, pred_length, \
+        gold_score, num_gold_words, all_gold_scores = self.translator.translate(
+            src_batches, tgt_batch,
+            prefix=prefix)
+
+        # use the external sentencepiece model
+        external_tokenizer = self.translator.external_tokenizer
+
+        output_sentence = get_sentence_from_tokens(pred_batch[0][0], pred_ids[0][0], "word", external_tokenizer)
+
+        # here if we want to use mosestokenizer, probably we need to split the sentence AFTER the sentencepiece/bpe
+        # model applies their de-tokenization
+        if self.detokenize and MosesDetokenizer is not None:
+            output_sentence_parts = output_sentence.split()
+            with MosesDetokenizer(self.tgt_lang) as detokenize:
+                output_sentence = detokenize(output_sentence_parts)
+
+        return output_sentence
+
+    def translate_batch(self, inputs, prefixes):
+        """
+        Args:
+            inputs: list of audio tensors
+            prefixes: list of prefixes
+
+        Returns:
+
+        """
+
+        if self.detokenize:
+            new_prefixes = []
+            for _prefix in prefixes:
+                if _prefix is not None:
+                    with MosesTokenizer(self.tgt_lang) as tokenize:
+                        tokenized_sentence = tokenize(_prefix)
+                        tokenized_sentence = " ".join(tokenized_sentence)
+                        _prefix = tokenized_sentence
+                new_prefixes.append(_prefix)
+            prefixes = new_prefixes
+
+        # 2 list because the translator is designed to run with 1 audio and potentially 1 text
+        src_batches = [inputs]  # ... about the input
+
+        tgt_batch = []
+        sub_src_batch = []
+        past_src_batches = []
+
+        if all(v is None for v in prefixes):
+            prefixes = None
+
+        pred_batch, pred_ids, pred_score, pred_length, \
+        gold_score, num_gold_words, all_gold_scores = self.translator.translate(
+            src_batches, tgt_batch,
+            prefix=prefixes)
+
+        external_tokenizer = self.translator.external_tokenizer
+
+        outputs = list()
+
+        for pred, pred_id in zip(pred_batch, pred_ids):
+            outputs.append(get_sentence_from_tokens(pred[0], pred_id[0], "word", external_tokenizer))
+
+        if self.detokenize and MosesDetokenizer is not None:
+            outputs_detok = []
+            for output_sentence in outputs:
+                # here if we want to use mosestokenizer, probably we need to split the sentence AFTER the sentencepiece/bpe
+                # model applies their de-tokenization
+                output_sentence_parts = output_sentence.split()
+                with MosesDetokenizer(self.tgt_lang) as detokenize:
+                    output_sentence = detokenize(output_sentence_parts)
+                outputs_detok.append(output_sentence)
+            return outputs_detok
+
+        return outputs
 
 # Checklist to integrate:
 
@@ -198,6 +334,7 @@ class ASROnlineTranslator(object):
             prefix = prefixes
 
         # 2 lists because the translator is designed to run with 1 audio and potentially 1 text
+        input = input.strip().split()
         src_batches = [[input]]  # ... about the input
 
         tgt_batch = []
