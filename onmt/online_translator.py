@@ -164,6 +164,7 @@ class OnlineTranslator(object):
         Returns:
 
         """
+        input = input.strip().split()
 
         if self.detokenize:
             prefixes = []
@@ -215,6 +216,7 @@ class OnlineTranslator(object):
         Returns:
 
         """
+        inputs = [_input.strip().split() for _input in inputs]
 
         if self.detokenize:
             new_prefixes = []
@@ -334,7 +336,6 @@ class ASROnlineTranslator(object):
             prefix = prefixes
 
         # 2 lists because the translator is designed to run with 1 audio and potentially 1 text
-        input = input.strip().split()
         src_batches = [[input]]  # ... about the input
 
         tgt_batch = []
