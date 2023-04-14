@@ -101,8 +101,12 @@ def upgrade_state_dict_for_deltalm(
 
 
 class DeltaLMEncoder(TransformerEncoderBase):
-    def __init__(self, args, embed_tokens):
+    def __init__(self, args, embed_tokens, opt=None):
         super().__init__(args, embed_tokens)
+        if opt is not None:
+            print("Overriding dropout values for DeltaLM....")
+            args.decoder_layerdrop = opt.death_rate_decoder
+            args.activation_dropout = opt.ffn_dropout
 
         if getattr(args, "pretrained_deltalm_checkpoint", "") != "":
             self_state_dict = self.state_dict()
@@ -128,6 +132,7 @@ class DeltaLMEncoder(TransformerEncoderBase):
 class DeltaLMDecoder(TransformerDecoderBase):
     def __init__(self, args, embed_tokens, no_encoder_attn=False, opt=None):
         if opt is not None:
+            print("Overriding dropout values for DeltaLM....")
             args.decoder_layerdrop = opt.death_rate_decoder
             args.activation_dropout = opt.ffn_dropout
 

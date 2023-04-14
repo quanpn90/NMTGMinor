@@ -72,6 +72,7 @@ class WavLMEncoder(nn.Module):
         state = load_checkpoint_to_cpu(model_path)
         self.cfg = WavLMConfig(state['cfg'])
 
+        print("Overiding WavLM dropout ....")
         self.cfg.dropout = self.opt.enc_pretrain_emb_dropout
         self.cfg.activation_dropout = self.opt.ffn_dropout
         self.cfg.encoder_layerdrop = self.opt.death_rate
