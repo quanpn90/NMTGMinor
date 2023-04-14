@@ -998,6 +998,12 @@ class FastTranslator(Translator):
                 dataset = self.build_data(src_data_, tgt_data, type=type, past_sents=past_src_data_)
                 batch = dataset.get_batch(0)
                 batches.append(batch)
+        elif isinstance(src_data[0], list) and isinstance(src_data[0][0], list):
+            src_data = src_data[0]
+            dataset = self.build_data(src_data, tgt_data, type=type, past_sents=past_src_data)
+            batch = dataset.get_batch(0)  # this dataset has only one mini-batch
+            batches = [batch] * self.n_models
+            src_data = [src_data] * self.n_models
         else:
             dataset = self.build_data(src_data, tgt_data, type=type, past_sents=past_src_data)
             batch = dataset.get_batch(0)  # this dataset has only one mini-batch
