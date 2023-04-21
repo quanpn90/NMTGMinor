@@ -9,6 +9,7 @@ from onmt.speech.Augmenter import Augmenter
 from onmt.modules.dropout import switchout
 import numpy as np
 from .batch_utils import allocate_batch, allocate_batch_unbalanced
+import dill
 
 """
 Data management for sequence-to-sequence models
@@ -314,7 +315,22 @@ class LightBatch:
         return self
 
 
+
+
 class Dataset(torch.utils.data.Dataset):
+
+    def get_tgt_pad(self):
+        return self.tgt_pad
+
+    def get_batches(self):
+        return self.batches
+
+    def get_collater(self):
+        return self.collater
+
+    def get_size(self):
+        return self.num_batches
+
     def __init__(self, src_data, tgt_data,
                  src_sizes=None, tgt_sizes=None,
                  src_langs=None, tgt_langs=None,
@@ -356,13 +372,12 @@ class Dataset(torch.utils.data.Dataset):
         For models with relative positional encoding, src should be right and tgt should be left
         """
         if constants is not None:
+            constants = dill.loads(constants)
             self.tgt_pad = constants.TGT_PAD
             self.src_pad = constants.SRC_PAD
         else:
             self.tgt_pad = onmt.constants.TGT_PAD
             self.src_pad = onmt.constants.SRC_PAD
-
-        # print(self.src_pad, self.tgt_pad)
 
         self.src = src_data
         self.past_src = past_src_data
@@ -403,54 +418,57 @@ class Dataset(torch.utils.data.Dataset):
         else:
             self.tgt = None
 
-        self.order = np.arange(len(self.src))
-
         # Processing data sizes
         if self.src is not None:
             if src_sizes is not None:
                 if verbose:
                     print("Loading source size from binarized data ...")
-                self.src_sizes = np.asarray(src_sizes)
+                src_sizes = np.asarray(src_sizes)
             else:
                 if verbose:
                     print("Source size not available. Computing source size from data...")
-                self.src_sizes = np.asarray([data.size(0) for data in self.src])
+                src_sizes = np.asarray([data.size(0) for data in self.src])
         else:
-            self.src_sizes = None
+            src_sizes = None
 
         # add the past source size to source size (to balance out the encoder part during allocation)
         if self.use_past_src:
             if past_src_data_sizes is not None:
-                self.src_sizes += np.asarray(past_src_data_sizes)
+                src_sizes += np.asarray(past_src_data_sizes)
             else:
-                self.src_sizes += np.asarray([data.size(0) for data in self.past_src])
+                src_sizes += np.asarray([data.size(0) for data in self.past_src])
 
         if self.tgt is not None:
             if tgt_sizes is not None:
-                self.tgt_sizes = np.asarray(tgt_sizes)
+                print("Loading target size from binarized data ...")
+                tgt_sizes = np.asarray(tgt_sizes)
             else:
-                self.tgt_sizes = np.asarray([data.size(0) for data in self.tgt])
+                print("Target size not available. Computing target size from data...")
+                tgt_sizes = np.asarray([data.size(0) for data in self.tgt])
         else:
-            self.tgt_sizes = None
+            tgt_sizes = None
 
         # sort data to have efficient mini-batching during training
         if sorting:
 
             if self._type == 'text':
-                sorted_order = np.lexsort((self.src_sizes, self.tgt_sizes))
+                sorted_order = np.lexsort((src_sizes, tgt_sizes))
             elif self._type in ['audio', 'wav']:
-                sorted_order = np.lexsort((self.tgt_sizes, self.src_sizes))
+                sorted_order = np.lexsort((tgt_sizes, src_sizes))
 
-            self.order = sorted_order
+        else:
+            sorted_order = np.arange(len(self.src))
+
+        self.order = None
 
         # store data length in numpy for fast query
         if self.tgt is not None and self.src is not None:
-            stacked_sizes = np.stack((self.src_sizes, self.tgt_sizes - 1), axis=0)
-            self.data_lengths = np.amax(stacked_sizes, axis=0)
+            stacked_sizes = np.stack((src_sizes, tgt_sizes - 1), axis=0)
+            data_lengths = np.amax(stacked_sizes, axis=0)
         elif self.src is None:
-            self.data_lengths = self.tgt_sizes
+            data_lengths = tgt_sizes
         else:
-            self.data_lengths = self.src_sizes
+            data_lengths = src_sizes
 
         # Processing language ids
         self.src_langs = src_langs
@@ -472,7 +490,8 @@ class Dataset(torch.utils.data.Dataset):
         else:
             self.bilingual = False
 
-        self.full_size = len(self.src) if self.src is not None else len(self.tgt)
+        self.full_size = len(src_sizes)
+        # self.full_size = len(self.src) if self.src is not None else len(self.tgt)
 
         # maximum number of tokens in a mb
         self.batch_size_words = batch_size_words
@@ -491,16 +510,16 @@ class Dataset(torch.utils.data.Dataset):
         #     print("* Allocating mini-batches ...")
         if self._type in ['audio', 'wav']:
 
-            self.batches = allocate_batch_unbalanced(self.order, self.data_lengths,
-                                                     self.src_sizes, self.tgt_sizes,
+            self.batches = allocate_batch_unbalanced(sorted_order, data_lengths,
+                                                     src_sizes, tgt_sizes,
                                                      batch_size_frames, batch_size_words,
                                                      batch_size_sents, self.multiplier,
                                                      self.max_src_len, self.max_tgt_len,
                                                      self.min_src_len, self.min_tgt_len, self.cleaning,
                                                      cut_off_size, smallest_batch_size)
         else:
-            self.batches = allocate_batch(self.order, self.data_lengths,
-                                          self.src_sizes, self.tgt_sizes,
+            self.batches = allocate_batch(sorted_order, data_lengths,
+                                          src_sizes, tgt_sizes,
                                           batch_size_words, batch_size_sents, self.multiplier,
                                           self.max_src_len, self.max_tgt_len,
                                           self.min_src_len, self.min_tgt_len, self.cleaning)
@@ -512,16 +531,16 @@ class Dataset(torch.utils.data.Dataset):
         self.num_batches = len(self.batches)
         self.batch_sizes = [len(x) for x in self.batches]
 
-        if self.src_sizes is not None:
-            self.batch_src_sizes = [max([self.src_sizes[x] for x in b]) for b in self.batches]
-        else:
-            self.batch_src_sizes = [0 for b in self.batches]
-
-        if self.tgt_sizes is not None:
-            self.batch_tgt_sizes = [max([self.tgt_sizes[x] for x in b]) for b in self.batches]
-        else:
-            self.batch_tgt_sizes = [0 for b in self.batches]
-        print("Number of sentences before cleaning and sorting: %d" % len(self.src_sizes) )
+        # if self.src_sizes is not None:
+        #     self.batch_src_sizes = [max([self.src_sizes[x] for x in b]) for b in self.batches]
+        # else:
+        #     self.batch_src_sizes = [0 for b in self.batches]
+        #
+        # if self.tgt_sizes is not None:
+        #     self.batch_tgt_sizes = [max([self.tgt_sizes[x] for x in b]) for b in self.batches]
+        # else:
+        #     self.batch_tgt_sizes = [0 for b in self.batches]
+        print("Number of sentences before cleaning and sorting: %d" % len(src_sizes) )
         print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
         print("Number of batches after cleaning and sorting: %d" % self.num_batches)
 
@@ -556,29 +575,30 @@ class Dataset(torch.utils.data.Dataset):
         if bsz == -1 and src_size == -1 and tgt_size == -1:
             return self.get_batch(self.largest_batch_id)
         else:
-            batch = None
-            for i in range(self.num_batches):
-
-                src_size_ = self.batch_src_sizes[i]
-                tgt_size_ = self.batch_tgt_sizes[i]
-                bsz_size_ = self.batch_sizes[i]
-
-                get_batch = True
-                if bsz > 0:
-                    if bsz_size_ != bsz:
-                        get_batch = False
-
-                if src_size > 0:
-                    if src_size_ != src_size:
-                        get_batch = False
-
-                if tgt_size > 0:
-                    if tgt_size_ != tgt_size:
-                        get_batch = False
-
-                if get_batch:
-                    # print("Found batch satisfying the conditions bsz %d src_size %d tgt_size %d" % (bsz, src_size, tgt_size))
-                    return self.get_batch(i)
+            raise NotImplementedError
+            # batch = None
+            # for i in range(self.num_batches):
+            #
+            #     src_size_ = self.batch_src_sizes[i]
+            #     tgt_size_ = self.batch_tgt_sizes[i]
+            #     bsz_size_ = self.batch_sizes[i]
+            #
+            #     get_batch = True
+            #     if bsz > 0:
+            #         if bsz_size_ != bsz:
+            #             get_batch = False
+            #
+            #     if src_size > 0:
+            #         if src_size_ != src_size:
+            #             get_batch = False
+            #
+            #     if tgt_size > 0:
+            #         if tgt_size_ != tgt_size:
+            #             get_batch = False
+            #
+            #     if get_batch:
+            #         # print("Found batch satisfying the conditions bsz %d src_size %d tgt_size %d" % (bsz, src_size, tgt_size))
+            #         return self.get_batch(i)
 
             # print("Cannot find the batch satisfying those conditions")
             return self.get_batch(self.largest_batch_id)
@@ -773,33 +793,33 @@ class Dataset(torch.utils.data.Dataset):
 
         return self.batchOrder
 
-    # return the next batch according to the iterator
-    def next(self, curriculum=False, reset=True):
-
-        # reset iterator if reach data size limit
-        if self.cur_index >= self.num_batches:
-            if reset:
-                self.cur_index = 0
-            else:
-                return None
-
-        if curriculum or self.batchOrder is None:
-            batch_index = self.cur_index
-        else:
-            batch_index = self.batchOrder[self.cur_index]
-
-        batch = self[batch_index]
-
-        # move the iterator one step
-        self.cur_index += 1
-
-        return [batch]
-
-    def shuffle(self):
-        data = list(zip(self.src, self.tgt))
-        self.src, self.tgt = zip(*[data[i] for i in torch.randperm(len(data))])
-
-    def set_index(self, iteration):
-
-        assert (0 <= iteration < self.num_batches)
-        self.cur_index = iteration
+    # # return the next batch according to the iterator
+    # def next(self, curriculum=False, reset=True):
+    #
+    #     # reset iterator if reach data size limit
+    #     if self.cur_index >= self.num_batches:
+    #         if reset:
+    #             self.cur_index = 0
+    #         else:
+    #             return None
+    #
+    #     if curriculum or self.batchOrder is None:
+    #         batch_index = self.cur_index
+    #     else:
+    #         batch_index = self.batchOrder[self.cur_index]
+    #
+    #     batch = self[batch_index]
+    #
+    #     # move the iterator one step
+    #     self.cur_index += 1
+    #
+    #     return [batch]
+    #
+    # def shuffle(self):
+    #     data = list(zip(self.src, self.tgt))
+    #     self.src, self.tgt = zip(*[data[i] for i in torch.randperm(len(data))])
+    #
+    # def set_index(self, iteration):
+    #
+    #     assert (0 <= iteration < self.num_batches)
+    #     self.cur_index = iteration

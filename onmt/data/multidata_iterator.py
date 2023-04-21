@@ -158,7 +158,7 @@ class MultiDataIterator(EpochBatchIterating):
                 if i not in dataset_ids:
                     continue
 
-            self.data_iterators.append(DataIterator(dataset, dataset.collater, dataset.batches, seed=seed,
+            self.data_iterators.append(DataIterator(dataset, dataset.get_collater(), dataset.get_batches(), seed=seed,
                                                     num_workers=num_workers, epoch=epoch, buffer_size=buffer_size,
                                                     timeout=timeout, num_shards=num_shards,
                                                     shard_id=shard_id, split_even=split_even))
@@ -169,7 +169,7 @@ class MultiDataIterator(EpochBatchIterating):
         self._support_prefetch = False
         self.round_robin = round_robin
         self.epoch = max(epoch, 1)
-        self.n_samples = sum([len(dataset) for dataset in self.datasets])
+        self.n_samples = sum([dataset.get_size() for dataset in self.datasets])
 
     def __len__(self):
         return sum([len(data_iterator) for data_iterator in self.data_iterators])

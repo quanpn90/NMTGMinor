@@ -500,7 +500,7 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
         gc.collect()
 
         if mirror:
-            print("Saving mirrrored source data to %s .... with %d entries" % (mirror_savedir, src_len))
+            print("Saving mirrored source data to %s .... with %d entries" % (mirror_savedir, src_len))
 
             source = os.path.join(savedir, "data.%s.bin" % "tgt")
             target = os.path.join(mirror_savedir, "data.%s.bin" % "src")

@@ -29,6 +29,7 @@ from torch.cuda.amp import autocast
 import warnings
 from onmt.constants import add_tokenidx
 import dill
+from multiprocessing.managers import ListProxy as ListProxy
 
 # ignore the pytorch -> numpy conversion warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -48,19 +49,28 @@ def prepare_sample(batch, device=None):
 
     return batch
 
+def is_list(object):
+    if isinstance(object, list):
+        return True
+
+    elif isinstance(object, ListProxy):
+        return True
+
+    return False
+
 
 def generate_data_iterator(dataset, rank, world_size, seed,
                            num_workers=1, epoch=1., buffer_size=0, split_even=True,
                            dataset_ids=None):
     # check if dataset is a list:
-    if isinstance(dataset, list):
+    if is_list(dataset):
         # this is a multidataset
         data_iterator = MultiDataIterator(dataset, seed=seed, num_workers=num_workers,
                                           epoch=epoch, buffer_size=buffer_size,
                                           num_shards=world_size, shard_id=rank, split_even=split_even,
                                           dataset_ids=dataset_ids)
     else:
-        data_iterator = DataIterator(dataset, dataset.collater, dataset.batches, seed=seed,
+        data_iterator = DataIterator(dataset, dataset.get_collater(), dataset.get_batches(), seed=seed,
                                      num_workers=num_workers, epoch=epoch, buffer_size=buffer_size,
                                      num_shards=world_size, shard_id=rank, split_even=split_even)
 
@@ -402,7 +412,7 @@ class Trainer(object):
         """
 
         batch = train_data[0].get_largest_batch(bsz=-1, src_size=-1, tgt_size=-1) \
-            if isinstance(train_data, list) \
+            if is_list(train_data) \
             else train_data.get_largest_batch(bsz=328, src_size=319520, tgt_size=18)
         opt = self.opt
 
@@ -694,7 +704,7 @@ class Trainer(object):
                 if n in self.fisher_info['mean'] and p.requires_grad:
                     parameters[n] = p
 
-        i = data_iterator.iterations_in_epoch if not isinstance(train_data, list) else epoch_iterator.n_yielded
+        i = data_iterator.iterations_in_epoch if not is_list(train_data) else epoch_iterator.n_yielded
         i = i * self.world_size
 
         while not data_iterator.end_of_epoch():
@@ -1181,7 +1191,7 @@ class Trainer(object):
         else:
             streaming_state = None
 
-        i = data_iterator.iterations_in_epoch if not isinstance(dataset, list) else epoch_iterator.n_yielded
+        i = data_iterator.iterations_in_epoch if not is_list(dataset) else epoch_iterator.n_yielded
         i = i * self.world_size  # incorrect?
         self.model.train()  # eliminate dropout (is it necessary)?
 
@@ -1462,8 +1472,8 @@ class Trainer(object):
             self.load_decoder_weight(opt.load_decoder_from)
 
         # if we are on a GPU: warm up the memory allocator
-        if self.cuda:
-            self.warm_up(train_data=train_data)
+        # if self.cuda:
+        #     self.warm_up(train_data=train_data)
 
         if opt.estimate_fisher_information:
             self.start_time = time.time()

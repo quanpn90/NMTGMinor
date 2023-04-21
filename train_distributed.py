@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 from __future__ import division
+import pickle
+import types
 
 import onmt
 import onmt.markdown
@@ -18,32 +20,66 @@ import numpy as np
 import warnings
 import dill
 from multiprocessing import Process, Manager
-from multiprocessing.managers import BaseManager
+from multiprocessing.managers import BaseManager, NamespaceProxy
+from torch.multiprocessing import Pool, Process, set_start_method
+
+def pickle_trick(obj, max_depth=10):
+    output = {}
+
+    if max_depth <= 0:
+        return output
+
+    try:
+        pickle.dumps(obj)
+    except (pickle.PicklingError, TypeError) as e:
+        failing_children = []
+
+        if hasattr(obj, "__dict__"):
+            for k, v in obj.__dict__.items():
+                result = pickle_trick(v, max_depth=max_depth - 1)
+                if result:
+                    failing_children.append(result)
+
+        output = {
+            "fail": obj,
+            "err": e,
+            "depth": max_depth,
+            "failing_children": failing_children
+        }
+
+    return output
 
 
+Dataset = onmt.Dataset
+#
+# class MyManager(BaseManager):
+#     pass
+#
+#
+# class MMapIndexedDatasetProxy(NamespaceProxy):
+#     _exposed_ = tuple(dir(MMapIndexedDataset))
+#
+#     def __getattr__(self, name):
+#         result = super().__getattr__(name)
+#         if isinstance(result, types.MethodType):
+#             def wrapper(*args, **kwargs):
+#                 return self._callmethod(name, args, kwargs)  # Note the return here
+#             return wrapper
+#         return result
+#
+#     def __len__(self):
+#         callmethod = object.__getattribute__(self, '_callmethod')
+#         return callmethod('__len__')
+#
+#     def __getitem__(self, index):
+#         callmethod = object.__getattribute__(self, '_callmethod')
+#         return callmethod('__getitem__',(index,))
+#
+#
+# MyManager.register('MMapIndexedDataset', MMapIndexedDataset, MMapIndexedDatasetProxy)
+#
 
-warnings.filterwarnings("ignore", message="The given NumPy array is not writeable ")
-torch.multiprocessing.set_sharing_strategy('file_system')
 
-parser = argparse.ArgumentParser(description='train_distributed.py')
-onmt.markdown.add_md_help_argument(parser)
-
-# Please look at the options file to see the options regarding models and data
-parser = make_parser(parser)
-
-opt = parser.parse_args()
-
-# An ugly hack to have weight norm on / off
-onmt.constants.weight_norm = opt.weight_norm
-onmt.constants.checkpointing = opt.checkpointing
-onmt.constants.max_position_length = opt.max_position_length
-
-# Use static dropout if checkpointing > 0
-if opt.checkpointing > 0:
-    onmt.constants.static = True
-
-if torch.cuda.is_available() and not opt.gpus:
-    print("WARNING: You have a CUDA device, should run with -gpus 0")
 
 
 def numpy_to_torch(tensor_list):
@@ -59,36 +95,71 @@ def numpy_to_torch(tensor_list):
 
 
 def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
+    """
+    Launch training for normal sequence2sequence models
+
+    Args:
+        gpu:
+        train_data:
+        valid_data:
+        dicts:
+        opt:
+        checkpoint:
+        constants:
+
+    Returns:
+
+    """
+
     from onmt.train_utils.mp_trainer import Trainer
-    tgt_pad = train_data[0].tgt_pad if isinstance(train_data, list) else train_data.tgt_pad
-    dicts['tgt_pad'] = tgt_pad
 
     trainer = Trainer(gpu, dicts, opt, constants)
     trainer.run(checkpoint=checkpoint, train_data=train_data, valid_data=valid_data)
 
 
 def run_gem_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
+    """
+    Launch training for Gradient Episodic Memory
+
+    Args:
+        gpu:
+        train_data:
+        valid_data:
+        dicts:
+        opt:
+        checkpoint:
+        constants:
+
+    Returns:
+
+    """
     from onmt.train_utils.gem_trainer import GEMTrainer
 
     trainer = GEMTrainer(gpu, train_data, valid_data, dicts, opt, constants)
-
-
     trainer.run(checkpoint=checkpoint)
 
-def main():
+
+def main(gpu, opt):
+
+    def lprint(*args, **kwargs):
+        if gpu == 0:
+            print(*args, **kwargs, flush=True)
+    # manager = MyManager()
+    # manager.start()
+
     if not opt.multi_dataset:
         if opt.data_format in ['bin', 'raw']:
             start = time.time()
 
             if opt.data.endswith(".train.pt"):
-                print("Loading data from '%s'" % opt.data)
+                lprint("Loading data from '%s'" % opt.data)
                 dataset = torch.load(opt.data)
             else:
-                print("Loading data from %s" % opt.data + ".train.pt")
+                lprint("Loading data from %s" % opt.data + ".train.pt")
                 dataset = torch.load(opt.data + ".train.pt")
 
             elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
-            print("Done after %s" % elapse)
+            lprint("Done after %s" % elapse)
 
             dicts = dataset['dicts']
             onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
@@ -120,7 +191,7 @@ def main():
                 train_src_atbs = list()
                 train_tgt_atbs = list()
                 train_src_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
-                train_tgt_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
+                train_tgt_atbs.apMMapIndexedDatasetpend(torch.Tensor([dicts['atbs']['nothingness']]))
 
             if not opt.streaming:
                 train_data = onmt.Dataset(numpy_to_torch(train_dict['src']), numpy_to_torch(train_dict['tgt']),
@@ -148,6 +219,8 @@ def main():
                                                 multiplier=opt.batch_size_multiplier,
                                                 augment=opt.augment_speech,
                                                 upsampling=opt.upsampling)
+
+            dicts['tgt_pad'] = train_data.tgt_pad
 
             if valid_dict['src_lang'] is not None:
                 assert 'langs' in dicts
@@ -197,14 +270,14 @@ def main():
                                                 batch_size_sents=opt.batch_size_sents,
                                                 upsampling=opt.upsampling)
 
-            print(' * number of training sentences. %d' % len(dataset['train']['src']))
-            print(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
+            lprint(' * number of training sentences. %d' % len(dataset['train']['src']))
+            lprint(' * maximum batch size (words per batch). %d' % opt.batch_size_words)
 
         # Loading asr data structures
         elif opt.data_format in ['scp', 'scpmem', 'mmem', 'wav']:
-            print("Loading memory mapped data files ....")
+            lprint("Loading memory mapped data files ....")
             start = time.time()
-            from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
+
             from onmt.data.scp_dataset import SCPIndexDataset
 
             dicts = torch.load(opt.data + ".dict.pt")
@@ -224,7 +297,7 @@ def main():
             if 'langs' not in dicts:
                 dicts['langs'] = {'src': 0, 'tgt': 1}
             else:
-                print(dicts['langs'])
+                lprint(dicts['langs'])
 
             train_path = opt.data + '.train'
             if opt.data_format in ['scp', 'scpmem']:
@@ -315,6 +388,8 @@ def main():
                                                 multiplier=opt.batch_size_multiplier,
                                                 upsampling=opt.upsampling)
 
+            dicts['tgt_pad'] = train_data.tgt_pad
+
             valid_path = opt.data + '.valid'
             if opt.data_format in ['scp', 'scpmem']:
                 valid_src = SCPIndexDataset(audio_data['valid'], concat=opt.concat)
@@ -394,29 +469,29 @@ def main():
                                                 batch_size_sents=opt.batch_size_sents)
 
             elapse = str(datetime.timedelta(seconds=int(time.time() - start)))
-            print("Done after %s" % elapse)
+            lprint("Done after %s" % elapse)
 
         else:
             raise NotImplementedError
 
-        print(' * number of sentences in training data: %d' % train_data.size())
-        print(' * number of sentences in validation data: %d' % valid_data.size())
+        lprint(' * number of sentences in training data: %d' % train_data.size())
+        lprint(' * number of sentences in validation data: %d' % valid_data.size())
 
     # Multi-data set handling
     else:
-        print("[INFO] Reading multiple dataset ...")
+        lprint("[INFO] Reading multiple dataset ...")
 
         dicts = torch.load(opt.data + ".dict.pt")
-        print("Languages: ", dicts['langs'])
+        lprint("Languages: ", dicts['langs'])
         if 'atbs' not in dicts or len(dicts['atbs']) == 0:  # backward compatible
             dicts['atbs'] = {'nothingness': 0}
-        print("Atributes: ", dicts['atbs'])
+        lprint("Atributes: ", dicts['atbs'])
 
         onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
 
         root_dir = os.path.dirname(opt.data)
 
-        print("Loading training data ...")
+        lprint("Loading training data ...")
 
         train_dirs, valid_dirs = dict(), dict()
 
@@ -432,10 +507,11 @@ def main():
 
         train_sets, valid_sets = list(), list()
 
+        c = 0
         for (idx_, dir_) in sorted(train_dirs.items()):
-
+            c += 1
             data_dir = os.path.join(root_dir, dir_)
-            print("[INFO] Loading training data %i from %s" % (idx_, dir_))
+            lprint("[INFO] Loading training data %i from %s" % (idx_, dir_))
 
             if opt.data_format in ['bin', 'raw']:
                 raise NotImplementedError
@@ -481,6 +557,10 @@ def main():
                     data_type = 'text'
 
                 if not opt.streaming:
+
+
+                    constants = dill.dumps(onmt.constants)
+
                     train_data = onmt.Dataset(src_data,
                                               tgt_data,
                                               src_sizes, tgt_sizes,
@@ -497,19 +577,23 @@ def main():
                                               max_src_len=opt.max_src_length,
                                               max_tgt_len=opt.max_tgt_length,
                                               input_size=opt.input_size,
-                                              constants=onmt.constants)
+                                              constants=constants)
+
+                    if c == 1:
+                        dicts['tgt_pad'] = train_data.get_tgt_pad()
+                        del src_sizes, tgt_sizes, src_data, tgt_data, src_lang_data, tgt_lang_data
 
                     train_sets.append(train_data)
 
                 else:
-                    print("Multi-dataset not implemented for Streaming tasks.")
+                    lprint("Multi-dataset not implemented for Streaming tasks.")
                     raise NotImplementedError
 
         for (idx_, dir_) in sorted(valid_dirs.items()):
 
             data_dir = os.path.join(root_dir, dir_)
 
-            print("[INFO] Loading validation data %i from %s" % (idx_, dir_))
+            lprint("[INFO] Loading validation data %i from %s" % (idx_, dir_))
 
             if opt.data_format in ['bin', 'raw']:
                 raise NotImplementedError
@@ -555,6 +639,8 @@ def main():
                     data_type = 'text'
 
                 if not opt.streaming:
+                    constants = dill.dumps(onmt.constants)
+
                     valid_data = onmt.Dataset(src_data, tgt_data,
                                               src_sizes, tgt_sizes,
                                               src_lang_data, tgt_lang_data,
@@ -566,7 +652,8 @@ def main():
                                               batch_size_sents=opt.batch_size_sents,
                                               min_src_len=1, min_tgt_len=3,
                                               input_size=opt.input_size,
-                                              cleaning=True, verbose=True, constants=onmt.constants)
+                                              cleaning=True, verbose=True,
+                                              constants=constants)
 
                     valid_sets.append(valid_data)
 
@@ -578,7 +665,7 @@ def main():
 
     if opt.load_from and not opt.reset_optim:
         checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
-        print("* Loading dictionaries from the checkpoint")
+        lprint("* Loading dictionaries from the checkpoint")
         del checkpoint['model']
         del checkpoint['optim']
         dicts = checkpoint['dicts']
@@ -587,10 +674,10 @@ def main():
         checkpoint = None
 
     if "src" in dicts:
-        print(' * vocabulary size. source = %d; target = %d' %
+        lprint(' * vocabulary size. source = %d; target = %d' %
               (dicts['src'].size(), dicts['tgt'].size()))
     else:
-        print(' * vocabulary size. target = %d' %
+        lprint(' * vocabulary size. target = %d' %
               (dicts['tgt'].size()))
 
     os.environ['MASTER_ADDR'] = opt.master_addr  # default 'localhost'
@@ -601,18 +688,44 @@ def main():
     constants = dill.dumps(onmt.constants)
 
     if opt.gem_training:
-        if len(opt.gpus) > 1:
-            torch.multiprocessing.spawn(run_gem_process, nprocs=len(opt.gpus),
-                                        args=(train_data, valid_data, dicts, opt, checkpoint, constants))
-        else:
-            run_gem_process(0, train_data, valid_data, dicts, opt, checkpoint, constants)
+        # if len(opt.gpus) > 1:
+        #     # torch.multiprocessing.spawn(run_gem_process, nprocs=len(opt.gpus),
+        #     #                             args=(train_data, valid_data, dicts, opt, checkpoint, constants))
+        #
+        #     torch.multiprocessing.spawn(run_gem_process, nprocs=len(opt.gpus),
+        #                                 args=(train_data, valid_data, dicts, opt, checkpoint, constants))
+        # else:
+        run_gem_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants)
     else:
-        if len(opt.gpus) > 1:
-            torch.multiprocessing.spawn(run_process, nprocs=len(opt.gpus),
-                                        args=(train_data, valid_data, dicts, opt, checkpoint, constants))
-        else:
-            run_process(0, train_data, valid_data, dicts, opt, checkpoint, constants)
+        run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants)
+        # torch.multiprocessing.spawn(run_process, nprocs=len(opt.gpus),
+        #                             args=(train_data, valid_data, dicts, opt, checkpoint, constants),
+        #                             start_method='fork')
 
 
 if __name__ == "__main__":
-    main()
+    warnings.filterwarnings("ignore", message="The given NumPy array is not writeable ")
+    torch.multiprocessing.set_sharing_strategy('file_system')
+
+    parser = argparse.ArgumentParser(description='train_distributed.py')
+    onmt.markdown.add_md_help_argument(parser)
+
+    # Please look at the options file to see the options regarding models and data
+    parser = make_parser(parser)
+
+    opt = parser.parse_args()
+
+    # An ugly hack to have weight norm on / off
+    onmt.constants.weight_norm = opt.weight_norm
+    onmt.constants.checkpointing = opt.checkpointing
+    onmt.constants.max_position_length = opt.max_position_length
+
+    # Use static dropout if checkpointing > 0
+    if opt.checkpointing > 0:
+        onmt.constants.static = True
+
+    if torch.cuda.is_available() and not opt.gpus:
+        print("WARNING: You have a CUDA device, should run with -gpus 0")
+
+    torch.multiprocessing.spawn(main, args=(opt, ),
+                                nprocs=len(opt.gpus))

@@ -142,7 +142,8 @@ class DataIterator(EpochBatchIterating):
         :param shard_id: equivalent with rank
         :param num_shards: equivalent with world size
         """
-        assert isinstance(dataset, torch.utils.data.Dataset)
+        # it can be torch.utils.data.Dataset or a proxy class used to share between the processes in the node
+        # assert isinstance(dataset, torch.utils.data.Dataset)
 
         self.dataset = dataset
         self.collate_fn = collate_fn
