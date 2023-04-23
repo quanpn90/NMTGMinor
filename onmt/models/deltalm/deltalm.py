@@ -136,7 +136,7 @@ class DeltaLMDecoder(TransformerDecoderBase):
             args.decoder_layerdrop = opt.death_rate_decoder
             args.activation_dropout = opt.ffn_dropout
 
-        super().__init__(args, embed_tokens, no_encoder_attn)
+        super().__init__(args, embed_tokens, no_encoder_attn, opt)
         if getattr(args, "pretrained_deltalm_checkpoint", "") != "":
             deltalm_loaded_state_dict = upgrade_state_dict_for_deltalm(
                 state_dict=self.state_dict(),
@@ -148,6 +148,12 @@ class DeltaLMDecoder(TransformerDecoderBase):
 
         self.model_size = args.decoder_embed_dim
         self.switchout = 0.0
+
+        self.adapter = None
+
+        if opt is not None and opt.decoder_adapter > 0:
+            print("[INFO] Adding MBART Adapters for %d languages" % opt.n_languages)
+            self.add_adapters(opt.n_languages)
 
     def build_decoder_layer(self, args, no_encoder_attn=False):
         layer = DeltaLMDecoderLayer(args, no_encoder_attn)

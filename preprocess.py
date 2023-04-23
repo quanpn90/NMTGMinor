@@ -733,6 +733,7 @@ def main():
             data_name = "train.%i.%s-%s" % (idx, src_lang, tgt_lang)
             dataset_path = os.path.join(dirname(opt.save_data), data_name)
             if opt.multi_dataset and opt.resume:
+                print("Checking existing path %s ..." % dataset_path)
                 if os.path.exists(dataset_path):
                     print("[INFO] Found data %s in the savedir ... Ignoring" % data_name)
                     idx = idx + 1
@@ -972,7 +973,7 @@ def main():
                     valid['src_atb'] += src_atb_data
                     valid['tgt_atb'] += tgt_atb_data
 
-    else:
+    else:   # MACHINE TRANSLATION DATA
 
         src_input_files = opt.train_src.split("|")
         tgt_input_files = opt.train_tgt.split("|")
@@ -1010,8 +1011,9 @@ def main():
             mirrored_data_name = "train.%i.%s-%s" % (dataset_idx + 1 , tgt_lang, src_lang)
             dataset_path = os.path.join(dirname(opt.save_data), data_name)
             mirrored_dataset_path = os.path.join(dirname(opt.save_data), mirrored_data_name)
-            if opt.multi_dataset:
-                if opt.resume and  os.path.exists(dataset_path):
+            if opt.multi_dataset and opt.resume:
+                print("Checking existing path %s ..." % dataset_path)
+                if os.path.exists(dataset_path):
                     print("[INFO] Found data %s in the savedir ... Ignoring" % data_name)
                     idx = idx + 1
                     continue

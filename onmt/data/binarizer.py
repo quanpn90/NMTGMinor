@@ -315,6 +315,17 @@ class Binarizer:
                             # for the target side and in the multilingual case it is <eos> <langid> X <eos>
                             tensor = [tensor[-1]] + tensor
 
+                    elif "mbart50eu" in external_tokenizer_name.lower():
+                        if len(tensor) > 2:
+                            if tensor[0] not in [0, 1, 2, 3]:
+                                _lang = _lang if lang != "eu" else "en_XX"
+                                assert tensor[0] == vocab.convertToIdx([lang], None)[0], \
+                                    "The first token must be language ID, expecting %d get %d. Current language: %s" \
+                                    % (vocab.convertToIdx([lang], None)[0], tensor[0], ext_tokenizer.src_lang)
+
+                        # pad_id = vocab.convertToIdx(["<pad>"], None)[0]
+                        # assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
+
                     if len(tensor) <= 2:
                         n_bad_sentences += 1
                         # print("[Warning] empty sentence with %d tokens including <bos> <eos>" % len(tensor))
@@ -379,17 +390,27 @@ class Binarizer:
             if ext_tokenizer.src_lang != lang:
                 raise RuntimeError("The language %s does not exist in M2M100." % lang)
 
+        elif "mbart50eu" in external_tokenizer.lower():
+
+            print("[INFO] Using the MBART50EU tokenizer...")
+            from transformers import MBart50TokenizerFast
+            # from pretrain_module.tokenization_mbart50eu import MBART50TokenizerEU
+            src_lang = lang if lang != "eu" else "en_XX"
+            ext_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50", src_lang=src_lang)
+
         elif "bart" in external_tokenizer.lower():
 
             print("[INFO] Using the external BART tokenizer...")
 
             from transformers import BartTokenizer
             ext_tokenizer = BartTokenizer.from_pretrained(external_tokenizer)
+
         elif "deltalm" in external_tokenizer.lower():
 
             print("[INFO] Using the DeltaLM tokenizer...")
             from pretrain_module.tokenization_deltalm import MultilingualDeltaLMTokenizer
-            ext_tokenizer = MultilingualDeltaLMTokenizer.from_pretrained("facebook/mbart-large-50", lang_list=lang_list, src_lang=lang)
+            ext_tokenizer = MultilingualDeltaLMTokenizer.from_pretrained("facebook/mbart-large-50", lang_list=lang_list,
+                                                                         src_lang=lang)
 
             # from pretrain_module.tokenization_deltalm import DeltaLMTokenizer
             # try:  # check if this tokenizer is saved locally or not

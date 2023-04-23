@@ -108,6 +108,19 @@ class FP32LayerNorm(torch.nn.Module):
                'elementwise_affine={elementwise_affine}'.format(**self.__dict__)
 
 
+def layer_norm_func(input, weight, bias, normalized_shape,  eps=1e-05):
+
+    if input.size(-1) in [768, 1024, 2048, 3072, 4096] and weight is not None \
+        and input.is_cuda and fast_layer_norm_cuda is not None:
+
+        return fast_layer_norm_affine(input, weight, bias, normalized_shape, eps)
+
+    else:
+        return F.layer_norm(input, normalized_shape, weight, bias, eps)
+
+
+
+
 class LayerNorm(torch.nn.Module):
     """
     See LayerNorm for details.

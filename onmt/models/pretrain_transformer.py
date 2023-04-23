@@ -142,6 +142,7 @@ class PretrainTransformer(NMTModel):
                                           attention_mask=tgt_attention_mask,
                                           encoder_hidden_states=context,
                                           encoder_attention_mask=src_attention_mask,
+                                          lang=tgt_lang,
                                           )
 
             decoder_output = decoder_output[0]

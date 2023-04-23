@@ -35,8 +35,10 @@ class TransformerDecoderBase(nn.Module):
             cfg,
             embed_tokens,
             no_encoder_attn=False,
-            output_projection=None
+            output_projection=None,
+            opt=None
     ):
+        self.adapter = None
         self.cfg = cfg
         super(TransformerDecoderBase, self).__init__()
 
@@ -105,11 +107,23 @@ class TransformerDecoderBase(nn.Module):
         from onmt.modules.optimized.flash_mha import flash_bert_mha
         self.fast_bert_mha = flash_bert_mha
 
+        self.n_languages = 0
+
+            # for layer in self.layers:
+            #     layer.add_adapters(opt.n_languages, adapter_location=opt.decoder_adapter)
+
     def build_decoder_layer(self, cfg, no_encoder_attn=False):
         layer = transformer_layer.TransformerDecoderLayerBase(cfg, no_encoder_attn)
 
         # removed checkpoint and fsdp
         return layer
+
+    def add_adapters(self, n_languages):
+
+        from .modules.efficient_adapters import EfficientAdapter
+        self.adapter = EfficientAdapter(n_languages * self.num_layers,
+                                        self.embed_dim, self.embed_dim // 4)
+        self.n_languages = n_languages
 
     def forward(
             self,
@@ -120,6 +134,7 @@ class TransformerDecoderBase(nn.Module):
             checkpointing_ffn=False,
             checkpointing_self_attn=False,
             checkpointing_cross_attn=False,
+            lang=None,
             **kwargs,
     ):
         bsz, qlen = input_ids.size()
@@ -219,6 +234,13 @@ class TransformerDecoderBase(nn.Module):
                 max_len=max_len, cu_seqlens=cu_seqlens,
                 max_len_kv=max_len_kv, cu_seqlens_kv=cu_seqlens_kv,
             )
+
+            # run through the adapter
+            if self.adapter is not None:
+                assert lang is not None
+                adapter_id = self.adapter.num_modules // self.num_layers * idx + lang
+                x = self.adapter(x, adapter_id)
+
             attns.append(layer_attn)
 
         if self.layer_norm is not None:

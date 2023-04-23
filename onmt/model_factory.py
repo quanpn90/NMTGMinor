@@ -578,7 +578,7 @@ def build_tm_model(opt, dicts, constants=None):
             embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                          deltalm_config.decoder_embed_dim,
                                          padding_idx=constants.TGT_PAD)
-            decoder = DeltaLMDecoder(deltalm_config, embedding_tgt)
+            decoder = DeltaLMDecoder(deltalm_config, embedding_tgt, opt=opt)
 
             # share all embeddings
             decoder.embed_tokens.weight = encoder.embed_tokens.weight

@@ -57,6 +57,11 @@ else:
 
 class Linear(torch.nn.Linear):
 
+    def __init__(self, *args, **kwargs):
+
+        super(Linear, self).__init__(*args, **kwargs)
+
+
     def forward(self, input: Tensor) -> Tensor:
 
         if input.is_cuda and linear_function is not None and self.bias is not None:

@@ -88,6 +88,9 @@ class TransformerEncoderBase(nn.Module):
         from onmt.modules.optimized.flash_mha import flash_bert_mha
         self.fast_bert_mha = flash_bert_mha
 
+        self.n_languages = -1
+        self.has_adapter = False
+
     def build_encoder_layer(self, cfg):
         layer = TransformerEncoderLayerBase(cfg)
         # removed the checkpointing and fdsp part
