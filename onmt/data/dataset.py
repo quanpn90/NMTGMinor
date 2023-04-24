@@ -101,6 +101,7 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
             tensor[i].narrow(0, offset, data_length).narrow(1, 0, 1).fill_(1)
 
         return tensor, None, lengths
+
     elif type == 'wav':
         samples = data
         lengths = [x.size(0) for x in samples]

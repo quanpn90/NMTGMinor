@@ -376,6 +376,7 @@ class FairseqWav2Vec(nn.Module):
         :return:
         """
 
+        # The data has been constructed that the first dimension is padding mask
         # 0 for tokens that are not masked, 1 for tokens that are masked
         with torch.no_grad():
             long_mask = input.narrow(2, 0, 1).squeeze(2).eq(0).long()
