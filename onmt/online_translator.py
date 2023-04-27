@@ -59,6 +59,7 @@ class TranslatorParameter(object):
         self.detokenize = False
         self.external_tokenizer = "facebook/mbart-large-50"
         self.force_bos = False
+        self.use_tgt_lang_as_source = False
 
         self.read_file(filename)
 
@@ -99,6 +100,8 @@ class TranslatorParameter(object):
                 self.external_tokenizer = w[1]
             elif w[0] == "force_bos":
                 self.force_bos = True
+            elif w[0] == "use_tgt_lang_as_source":
+                self.use_tgt_lang_as_source = True
 
             line = f.readline()
 
@@ -137,12 +140,19 @@ class OnlineTranslator(object):
     #
     #     return " ".join(predBatch[0][0])
 
+        self.use_tgt_lang_as_source = opt.use_tgt_lang_as_source
+
 
     def set_language(self, input_language, output_language, language_code_system="mbart50"):
 
+        # override the input_language
+        if self.use_tgt_lang_as_source:
+            input_language = output_language
+
         if language_code_system == "mbart50":
             language_map_dict = {"en": "en_XX", "de": "de_DE", "fr": "fr_XX", "es": "es_XX",
-                                 "pt": "pt_XX", "it": "it_IT", "nl": "nl_XX", "None": "<s>"}
+                                 "pt": "pt_XX", "it": "it_IT", "nl": "nl_XX", "None": "<s>",
+                                 "ja": "ja_XX", "zh": "zh_CN", "vn": "vi_VN"}
 
         else:
             language_map_dict = defaultdict(lambda self, missing_key: missing_key)
