@@ -395,8 +395,10 @@ class Binarizer:
             print("[INFO] Using the MBART50EU tokenizer...")
             from transformers import MBart50TokenizerFast
             # from pretrain_module.tokenization_mbart50eu import MBART50TokenizerEU
-            src_lang = lang if lang != "eu" else "en_XX"
-            ext_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50", src_lang=src_lang)
+            # src_lang = lang if lang != "eu" else "en_XX"
+            src_lang = "<s>"
+            ext_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50")
+            ext_tokenizer.src_lang = src_lang
 
         elif "bart" in external_tokenizer.lower():
 

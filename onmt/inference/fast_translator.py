@@ -39,7 +39,8 @@ class FastTranslator(Translator):
             self.search = BeamSearch(self.tgt_dict)
 
         self.vocab_size = self.tgt_dict.size()
-        self.min_len = 1
+        self.min_len = opt.min_sent_length
+        print("min len:", self.min_len)
         self.normalize_scores = opt.normalize
         self.len_penalty = opt.alpha
         self.buffering = not opt.no_buffering
@@ -320,12 +321,13 @@ class FastTranslator(Translator):
         self.external_tokenizer.src_lang = self.src_lang
         self.tgt_external_tokenizer.src_lang = self.tgt_lang
 
-    def translate_batch(self, batches, sub_batches=None, prefix_tokens=None):
+    def translate_batch(self, batches, sub_batches=None, prefix_tokens=None, anti_prefix=None):
 
         with torch.no_grad():
-            return self._translate_batch(batches, sub_batches=sub_batches, prefix_tokens=prefix_tokens)
+            return self._translate_batch(batches, sub_batches=sub_batches, prefix_tokens=prefix_tokens,
+                                         anti_prefix=anti_prefix)
 
-    def _translate_batch(self, batches, sub_batches, prefix_tokens=None):
+    def _translate_batch(self, batches, sub_batches, prefix_tokens=None, anti_prefix=None):
         batch = batches[0]
         # Batch size is in different location depending on data.
 
@@ -604,6 +606,16 @@ class FastTranslator(Translator):
                         # force tgt_eos to not appear
                         lprobs[:, self.tgt_eos] = -math.inf
 
+            if anti_prefix is not None:
+                # check the step closest to the end of anti prefix
+                if step == len(anti_prefix) - 1:
+                    _anti_prefix = anti_prefix[step]
+
+                    for i in range(tokens.size(0)):
+                        decoded_ = tokens[i][1:step+1]
+                        if decoded_.tolist() == anti_prefix[:-1]:
+                            lprobs[i, _anti_prefix] = -math.inf
+
             if self.no_repeat_ngram_size > 0:
                 # for each beam and batch sentence, generate a list of previous ngrams
                 gen_ngrams = [{} for bbsz_idx in range(bsz * beam_size)]
@@ -872,6 +884,33 @@ class FastTranslator(Translator):
 
         return tensor
 
+    def build_anti_prefix(self, anti_prefix):
+        """
+        :param bsz:
+        :param prefixes: List of strings
+        :return:
+        """
+        if self.external_tokenizer is None:
+            anti_prefix = self.tgt_dict.convertToIdx(anti_prefix.split(),
+                                                      onmt.constants.UNK_WORD)
+        else:
+            # move the last element which is <eos>
+            # if self.opt.force_bos:
+            #     _prefix_data = [torch.LongTensor([self.bos_id] + self.external_tokenizer(sent)['input_ids'][:-1])
+            #                     for sent in prefixes]
+            # else:
+            #     _prefix_data = [torch.LongTensor(self.external_tokenizer(sent)['input_ids'][:-1])
+            #                     for sent in prefixes]
+
+            _anti_prefix_data = self.external_tokenizer(anti_prefix)['input_ids'][:-1]
+            _anti_prefix_data = _anti_prefix_data[1:]
+
+            anti_prefix = torch.LongTensor(_anti_prefix_data)
+
+        anti_prefix = anti_prefix.tolist()
+
+        return anti_prefix
+
     # override the "build_data" from parent Translator
     def build_data(self, src_sents, tgt_sents, type='mt', past_sents=None):
         # This needs to be the same as preprocess.py.
@@ -982,7 +1021,8 @@ class FastTranslator(Translator):
                             src_align_right=self.opt.src_align_right,
                             past_src_data=past_src_data)
 
-    def translate(self, src_data, tgt_data, past_src_data=None, sub_src_data=None, type='mt', prefix=None):
+    def translate(self, src_data, tgt_data, past_src_data=None, sub_src_data=None, type='mt',
+                  prefix=None, anti_prefix=None):
 
         if past_src_data is None or len(past_src_data) == 0:
             past_src_data = None
@@ -1032,10 +1072,15 @@ class FastTranslator(Translator):
         else:
             prefix_tensor = None
 
+        if anti_prefix is not None:
+            anti_prefix = self.build_anti_prefix(anti_prefix)
+            print("ANTI PREFIX:", anti_prefix)
+
         #  (2) translate
         #  each model in the ensemble uses one batch in batches
         finalized, gold_score, gold_words, allgold_words = self.translate_batch(batches, sub_batches=sub_batches,
-                                                                                prefix_tokens=prefix_tensor)
+                                                                                prefix_tokens=prefix_tensor,
+                                                                                anti_prefix=anti_prefix)
         pred_length = []
 
         #  (3) convert indexes to words

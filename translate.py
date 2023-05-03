@@ -75,6 +75,8 @@ parser.add_argument('-output', default='pred.txt',
                     be the decoded sequence""")
 parser.add_argument('-prefix_string', default='',
                     help="""Prefix string for all of the translation""")
+parser.add_argument('-anti_prefix_string', default='',
+                    help="""Prefix string for all of the translation""")
 parser.add_argument('-prefix_tgt', default='',
                     help="""Prefix file that contains prefix string for each of the translation
                     (must use either this or prefix_string, not both""")
@@ -85,6 +87,8 @@ parser.add_argument('-beam_size', type=int, default=5,
 parser.add_argument('-batch_size', type=int, default=30,
                     help='Batch size')
 parser.add_argument('-max_sent_length', type=int, default=256,
+                    help='Maximum sentence length.')
+parser.add_argument('-min_sent_length', type=int, default=0,
                     help='Maximum sentence length.')
 parser.add_argument('-replace_unk', action="store_true",
                     help="""Replace the generated UNK tokens with the source
@@ -108,6 +112,7 @@ parser.add_argument('-bos_token', type=str, default="<s>",
                     help='BOS Token (used in multilingual model). Default is <s>.')
 parser.add_argument('-no_bos_gold', action="store_true",
                     help='BOS Token (used in multilingual model). Default is <s>.')
+
 parser.add_argument('-n_best', type=int, default=1,
                     help="""If verbose is set, will output the n_best
                     decoded sentences""")
@@ -201,7 +206,7 @@ def get_sentence_from_tokens(tokens, ids, input_type, external_tokenizer=None):
             raise NotImplementedError
 
     else:
-        # print(ids)
+        print(ids)
         sent = external_tokenizer.decode(ids, True, True).strip()
 
     return sent
@@ -298,6 +303,10 @@ def main():
         prefix = list()
         prefix_reader = open(opt.prefix_tgt)
 
+    anti_prefix = None
+    if len(opt.anti_prefix_string) > 0:
+        anti_prefix = opt.anti_prefix_string
+
     # Audio processing for the source batch
     if opt.encoder_type == "audio" and opt.asr_format in ['scp', 'kaldi']:
 
@@ -368,7 +377,7 @@ def main():
                     src_batches, tgt_batch,
                     sub_src_data=sub_src_batch, past_src_data=past_src_batches,
                     type='asr',
-                    prefix=prefix)
+                    prefix=prefix, anti_prefix=anti_prefix)
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
                     translate_batch(opt, tgtF, count, outF, translator,
@@ -454,7 +463,7 @@ def main():
                 tgt_batch,
                 past_src_data=past_src_batches,
                 sub_src_data=sub_src_batch,
-                type='asr', prefix=prefix)
+                type='asr', prefix=prefix, anti_prefix=anti_prefix)
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
                 = translate_batch(opt, tgtF, count, outF, translator,
@@ -541,7 +550,7 @@ def main():
                 pred_batch, pred_ids, pred_score, pred_length, \
                 gold_score, num_gold_words, all_gold_scores = translator.translate(
                     src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr',
-                    prefix=prefix)
+                    prefix=prefix, anti_prefix=anti_prefix)
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
                     translate_batch(opt, tgtF, count, outF, translator,
@@ -611,7 +620,7 @@ def main():
                 src_batches,
                 tgt_batch,
                 past_src_data=past_src_batches,
-                sub_src_data=sub_src_batch, type='asr', prefix=prefix)
+                sub_src_data=sub_src_batch, type='asr', prefix=prefix, anti_prefix=anti_prefix)
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
                 = translate_batch(opt, tgtF, count, outF, translator,
@@ -685,7 +694,7 @@ def main():
                 src_batch,
                 tgt_batch,
                 past_src_batch,
-                prefix=prefix)
+                prefix=prefix, anti_prefix=anti_prefix)
 
             # convert output tensor to words
             count, pred_score, pred_words, gold_score, goldWords = translate_batch(opt, tgtF, count, outF, translator,

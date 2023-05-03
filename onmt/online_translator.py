@@ -19,7 +19,8 @@ class TranslatorParameter(object):
         self.output = "<stdout>"
         self.beam_size = 1
         self.batch_size = 1
-        self.max_sent_length = 100
+        self.max_sent_length = 512
+        self.min_sent_length = 1
         self.dump_beam = ""
         self.n_best = self.beam_size
         self.replace_unk = False
@@ -60,6 +61,7 @@ class TranslatorParameter(object):
         self.external_tokenizer = "facebook/mbart-large-50"
         self.force_bos = False
         self.use_tgt_lang_as_source = False
+        self.anti_prefix = ""
 
         self.read_file(filename)
 
@@ -102,6 +104,12 @@ class TranslatorParameter(object):
                 self.force_bos = True
             elif w[0] == "use_tgt_lang_as_source":
                 self.use_tgt_lang_as_source = True
+            elif w[0] == "max_sent_length":
+                self.max_sent_length = int(w[1])
+            elif w[0] == "min_sent_length":
+                self.min_sent_length = int(w[1])
+            elif w[0] == "anti_prefix":
+                self.anti_prefix = w[1]
 
             line = f.readline()
 
@@ -133,6 +141,7 @@ class OnlineTranslator(object):
         self.tgt_lang = "en"
         self.detokenize = opt.detokenize
         self.external_tokenizer = opt.external_tokenizer
+        self.anti_prefix = opt.anti_prefix
 
     # def translate(self, input):
     #     predBatch, predScore, predLength, goldScore, numGoldWords, allGoldScores = \
@@ -197,11 +206,13 @@ class OnlineTranslator(object):
         if all(v is None for v in prefix):
             prefix = None
 
+        anti_prefix = self.anti_prefix if len(self.anti_prefix) > 0 else None
+
         # perform beam search in the model
         pred_batch, pred_ids, pred_score, pred_length, \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch,
-            prefix=prefix)
+            prefix=prefix, anti_prefix=anti_prefix)
 
         # use the external sentencepiece model
         external_tokenizer = self.translator.external_tokenizer
@@ -249,10 +260,12 @@ class OnlineTranslator(object):
         if all(v is None for v in prefixes):
             prefixes = None
 
+        anti_prefix = self.anti_prefix if len(self.anti_prefix) > 0 else None
+
         pred_batch, pred_ids, pred_score, pred_length, \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch,
-            prefix=prefixes)
+            prefix=prefixes, anti_prefix=anti_prefix)
 
         external_tokenizer = self.translator.external_tokenizer
 
@@ -306,6 +319,7 @@ class ASROnlineTranslator(object):
         self.src_lang = "en"
         self.tgt_lang = "en"
         self.detokenize = opt.detokenize
+        self.anti_prefix = opt.anti_prefix
 
     def set_language(self, input_language, output_language, language_code_system="mbart50"):
 
@@ -352,11 +366,15 @@ class ASROnlineTranslator(object):
         sub_src_batch = []
         past_src_batches = []
 
+        anti_prefix = self.anti_prefix if len(self.anti_prefix) > 0 else None
+
+        print("anti prefix:", anti_prefix)
+
         # perform beam search in the model
         pred_batch, pred_ids, pred_score, pred_length, \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch, type='asr',
-            prefix=prefix)
+            prefix=prefix, anti_prefix=anti_prefix)
 
         # use the external sentencepiece model
         external_tokenizer = self.translator.external_tokenizer
@@ -369,6 +387,8 @@ class ASROnlineTranslator(object):
             output_sentence_parts = output_sentence.split()
             with MosesDetokenizer(self.tgt_lang) as detokenize:
                 output_sentence = detokenize(output_sentence_parts)
+
+        print(pred_ids[0][0], output_sentence)
 
         return output_sentence
 
@@ -405,10 +425,12 @@ class ASROnlineTranslator(object):
         #     type='asr',
         #     prefix=prefix)
 
+        anti_prefix = self.anti_prefix if len(self.anti_prefix) > 0 else None
+
         pred_batch, pred_ids, pred_score, pred_length, \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch, type='asr',
-            prefix=prefixes)
+            prefix=prefixes, anti_prefix=anti_prefix)
 
         external_tokenizer = self.translator.external_tokenizer
 
@@ -427,5 +449,7 @@ class ASROnlineTranslator(object):
                     output_sentence = detokenize(output_sentence_parts)
                 outputs_detok.append(output_sentence)
             return outputs_detok
+
+        print(pred, outputs)
 
         return outputs
