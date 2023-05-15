@@ -191,7 +191,7 @@ def main(gpu, opt):
                 train_src_atbs = list()
                 train_tgt_atbs = list()
                 train_src_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
-                train_tgt_atbs.apMMapIndexedDatasetpend(torch.Tensor([dicts['atbs']['nothingness']]))
+                train_tgt_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
 
             if not opt.streaming:
                 train_data = onmt.Dataset(numpy_to_torch(train_dict['src']), numpy_to_torch(train_dict['tgt']),
@@ -668,7 +668,8 @@ def main(gpu, opt):
         lprint("* Loading dictionaries from the checkpoint")
         del checkpoint['model']
         del checkpoint['optim']
-        dicts = checkpoint['dicts']
+        if opt.override_dict_from_checkpoint:
+            dicts = checkpoint['dicts']
     else:
         dicts['tgt'].patch(opt.patch_vocab_multiplier)
         checkpoint = None

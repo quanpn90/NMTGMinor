@@ -185,6 +185,7 @@ class Trainer(object):
 
         if self.is_main():
             print("[INFO] Building models .... ", flush=True)
+            print("Languages: ", dicts['langs'], flush=True)
         model = build_model(opt, dicts, False, self.constants)
 
         """ Building the loss function """

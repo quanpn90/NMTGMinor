@@ -12,6 +12,8 @@ def make_parser(parser):
 
     parser.add_argument('-multi_dataset', action='store_true',
                         help='Reading multiple datasets (sharing the same dictionary)')
+    parser.add_argument('-override_dict_from_checkpoint', action='store_true',
+                        help='The dictionary will be overidden from checkpoint instead of reading from data.')
     parser.add_argument('-gem_training', action='store_true',
                         help='Gradient Episodic Memory training')
     parser.add_argument('-train_sets', default=[], nargs='+', type=int,
