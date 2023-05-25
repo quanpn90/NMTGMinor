@@ -226,6 +226,11 @@ def build_tm_model(opt, dicts, constants=None):
             encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model,
                                      discrete_encoder=discrete_encoder, stacked_encoder=stacked_encoder)
 
+            if "s4" in opt.enc_pretrained_model:  # wav2vec_s4
+                s4_config = json_to_namespace(opt.s4_config_file)
+                print("[INFO] Replacing self attn in encoder with s4")
+                encoder.wav2vec_encoder.replace_attn_with_s4(s4_config)
+
         sub_encoder = None
 
         if "mbart" in opt.dec_pretrained_model:

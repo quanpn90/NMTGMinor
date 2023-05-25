@@ -394,6 +394,9 @@ class Wav2Vec2Model(torch.nn.Module):
         self.final_proj = nn.Linear(cfg.encoder_embed_dim, final_dim)
         self.favor = favor
 
+    def replace_attn_with_s4(self, cfg):
+        self.encoder.replace_attn_with_s4(cfg)
+
     def upgrade_state_dict_named(self, state_dict, name):
         super().upgrade_state_dict_named(state_dict, name)
         """Upgrade a (possibly old) state dict for new versions of fairseq."""
@@ -1073,6 +1076,13 @@ class TransformerEncoder(nn.Module):
         # self.fast_bert_mha = fast_bert_mha
         from onmt.modules.optimized.flash_mha import flash_bert_mha
         self.fast_bert_mha = flash_bert_mha
+        self.using_s4 = False
+
+    def replace_attn_with_s4(self, cfg):
+
+        self.using_s4 = True
+        for layer in self.layers:
+            layer.replace_attn_with_s4(cfg)
 
     # add stacked encoder
     def add_stacked_encoder(self, stacked_encoder):
@@ -1168,14 +1178,13 @@ class TransformerEncoder(nn.Module):
         sm = torch.cuda.get_device_capability()
         total_bsz = 0
 
-        if self.deepspeed:
+        if self.deepspeed or self.using_s4:
             fast_attention = False
         else:
             fast_attention = self.layers[0].self_attn.fast_attention
 
-        # only run this when seq_len <= 512 and sm = 80/86 and type = half
         if self.fast_bert_mha and not self.relative_attention and \
-                fast_attention and x.dtype == torch.half:
+                fast_attention and x.dtype == torch.half and not self.using_s4:
             can_run_fast_bert_mha = True
             from onmt.utils import unpad_input
 
@@ -1205,8 +1214,10 @@ class TransformerEncoder(nn.Module):
             cu_seqlens = None
             non_pad_indices = None
 
+        # print(can_run_fast_bert_mha, self.using_s4)
+
         if not self.favor and not can_run_fast_bert_mha:
-            # B x T x C -> T x B x C  (only for vanilla self-attention)
+            # B x T x C -> T x B x C  (only for vanilla self-attention and s4)
             x = x.transpose(0, 1)
         x = x.contiguous()
 
@@ -1221,6 +1232,7 @@ class TransformerEncoder(nn.Module):
                              lang=lang, atb=atb,
                              checkpointing_ffn=checkpointing_ffn,
                              checkpointing_self_attn=checkpointing_self_attn)
+
                 if tgt_layer is not None:
                     layer_results.append((x, z))
             if i == tgt_layer:
@@ -1241,6 +1253,8 @@ class TransformerEncoder(nn.Module):
             # x = pad_input(x, non_pad_indices, bsz, seq_len)
             x = index_copy(x, non_pad_indices, bsz * seq_len)
             x = x.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
+
+        # print("wav2vec output:", x.size(), x.sum())
 
         return x, layer_results
 
@@ -1360,6 +1374,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.fast_factorize = False
         self.multiplicative_factorize = False
         self.sub_factorized = False
+        self.using_s4 = False
 
         # Initialize blocks
         self.activation_fn = get_activation_fn(activation_fn)
@@ -1401,6 +1416,17 @@ class TransformerSentenceEncoderLayer(nn.Module):
             if mlp_gelu_function is not None:
                 self.fused_function = mlp_gelu_function
                 self.fused = True
+
+    def replace_attn_with_s4(self, s4_cfg):
+
+        from ..mssm.mhs4 import MHBiS4EncoderLayer
+
+        self.using_s4 = True
+        s4_layer = MHBiS4EncoderLayer(s4_cfg, s4_only=True)
+
+        del self.self_attn
+        self.self_attn = s4_layer
+
 
     def add_adapters(self, n_languages, downsampling_factor=4, adapter_location=1):
         """
@@ -1575,6 +1601,30 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
         return in_weight, out_weight, in_bias, out_bias
 
+    def call_self_attn(self, x, self_attn_padding_mask=None, positions=None, attn_mask=None,
+                       max_len=None, cu_seqlens=None, lang=None, atb=None, checkpointing=False):
+
+        if not self.using_s4:
+
+            x, attn = self.self_attn(
+                query=x,
+                key=x,
+                value=x,
+                key_padding_mask=self_attn_padding_mask,
+                positions=positions,
+                attn_mask=attn_mask, # this probably doesn't do anything
+                max_len=max_len, cu_seqlens=cu_seqlens,
+                lang=lang, atb=atb,
+                checkpointing=checkpointing
+            )
+
+            return x, attn
+
+        # In s4 case:
+        x = self.self_attn(x, self_attn_padding_mask)
+
+        return x, None
+
     def forward(
             self,
             x: torch.Tensor,
@@ -1622,14 +1672,13 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
             x.add_(residual)  # residual is before the big FFN
             residual = x
+
         if self.layer_norm_first:
             x = self.self_attn_layer_norm(x)
 
-            x, attn = self.self_attn(
-                query=x,
-                key=x,
-                value=x,
-                key_padding_mask=self_attn_padding_mask,
+            x, attn = self.call_self_attn(
+                x,
+                self_attn_padding_mask=self_attn_padding_mask,
                 positions=positions,
                 attn_mask=self_attn_mask,
                 max_len=max_len, cu_seqlens=cu_seqlens,
@@ -1637,30 +1686,28 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 checkpointing=checkpointing_self_attn
             )
 
-            # if is_fast:
-            #     x = fused_dropout_add(x, residual, self.residual_dropout, self.training)
-            # else:
-            #     x = self.dropout1(x) + residual
-            x = dropout_residual_connection(x, residual, self.dropout1, self.training)
+            x = self.dropout1(x) + residual
 
             residual = x
-
-            if self.has_adapter:
-                if self.adapter_location == 2:
-                    assert lang is not None
-                    x = self.mid_adapter(x, lang=lang)
-                    x.add_(residual)
-                    residual = x
+            #
+            # if self.has_adapter:
+            #     if self.adapter_location == 2:
+            #         assert lang is not None
+            #         x = self.mid_adapter(x, lang=lang)
+            #         x.add_(residual)
+            #         residual = x
 
             x = self.final_layer_norm(x)
 
             in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
+
             x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
                          self.dropout2.p, self.training,
                          self.fused, self.fused_function, checkpointing_ffn)
 
-            # x = self.dropout3(x).add_(residual)
-            x = dropout_residual_connection(x, residual, self.dropout3, self.training)
+            x = self.dropout3(x) + residual
+
+            return x, attn
 
         else:
             # THE BELOW CODE HAS NEVER BEEN RUN AND TESTED
@@ -1672,32 +1719,17 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 key_padding_mask=self_attn_padding_mask,
             )
 
-            x = self.dropout1(x)
+            # x = self.dropout1(x)
             x = residual + x
 
             x = self.self_attn_layer_norm(x)
 
             residual = x
 
-            if self.fused and x.is_cuda:
-                dropout = self.dropout2.p if self.training else 0.0
-                if self.fused_blaslt and dropout == 0.0:
-                    x = self.fused_function(x.view(seq_len * bsz, -1), self.fc1.weight, self.fc1.bias,
-                                            self.fc2.weight, self.fc2.bias)
-                else:
-                    weights = [self.fc1.weight, self.fc2.weight]
-                    biases = [self.fc1.bias, self.fc2.bias]
-
-                    seq_len, bsz, hidden_size = x.size(0), x.size(1), x.size(2)
-
-                    x = self.fused_function(dropout, False, x.view(seq_len * bsz, -1),
-                                            *weights, *biases)
-
-                x = x.view(seq_len, bsz, hidden_size)
-            else:
-                x = self.activation_fn(self.fc1(x))
-                x = self.dropout2(x)
-                x = self.fc2(x)
+            in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
+            x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
+                         self.dropout2.p, self.training,
+                         self.fused, self.fused_function, checkpointing_ffn)
 
             x = self.dropout3(x)
             x = residual + x

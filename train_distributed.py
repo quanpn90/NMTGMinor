@@ -728,5 +728,8 @@ if __name__ == "__main__":
     if torch.cuda.is_available() and not opt.gpus:
         print("WARNING: You have a CUDA device, should run with -gpus 0")
 
-    torch.multiprocessing.spawn(main, args=(opt, ),
-                                nprocs=len(opt.gpus))
+    if len(opt.gpus) == 1:
+        main(0, opt)
+    else:
+        torch.multiprocessing.spawn(main, args=(opt, ),
+                                    nprocs=len(opt.gpus))

@@ -423,6 +423,8 @@ def make_parser(parser):
     parser.add_argument('-enc_pretrain_hidden_size', type=int, default=768,
                         help='Size of bert hidden')
 
+    parser.add_argument('-s4_config_file', default="", type=str,
+                        help=""" the name of src pretrained model configuration.""")
     parser.add_argument('-enc_config_file', default="", type=str,
                         help=""" the name of src pretrained model configuration.""")
 

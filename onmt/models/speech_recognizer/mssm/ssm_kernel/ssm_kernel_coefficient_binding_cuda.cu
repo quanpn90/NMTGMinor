@@ -63,7 +63,7 @@ __global__ void kernel_coefficient_forward_kernel(
 
 template <typename T>
 torch::Tensor
-kernel_coefficient_forward(torch::Tensor a, torch::Tensor b, torch::Tensor c, torch::Tensor out, T* a_ptr) {
+kernel_coefficient_forward(torch::Tensor a, torch::Tensor b, torch::Tensor c, torch::Tensor out) {
   CHECK_DEVICE(a);
   CHECK_DEVICE(b);
   CHECK_DEVICE(c);
@@ -328,8 +328,7 @@ kernel_coefficient_backward(
     torch::Tensor dout,
     torch::Tensor da,
     torch::Tensor db,
-    torch::Tensor dc,
-    T* a_ptr) {
+    torch::Tensor dc) {
   CHECK_DEVICE(a);
   CHECK_DEVICE(b);
   CHECK_DEVICE(c);
@@ -377,10 +376,10 @@ kernel_coefficient_backward(
 
 // Instantiate for floating point types
 template torch::Tensor
-kernel_coefficient_forward<float>(torch::Tensor a, torch::Tensor b, torch::Tensor c, torch::Tensor out, float* a_ptr);
+kernel_coefficient_forward<float>(torch::Tensor a, torch::Tensor b, torch::Tensor c, torch::Tensor out);
 
 template torch::Tensor
-kernel_coefficient_forward<double>(torch::Tensor a, torch::Tensor b, torch::Tensor c, torch::Tensor out, double* a_ptr);
+kernel_coefficient_forward<double>(torch::Tensor a, torch::Tensor b, torch::Tensor c, torch::Tensor out);
 
 
 
@@ -392,8 +391,7 @@ kernel_coefficient_backward<float>(
     torch::Tensor dout,
     torch::Tensor da,
     torch::Tensor db,
-    torch::Tensor dc,
-    float* a_ptr);
+    torch::Tensor dc);
 
 
 template std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
@@ -404,8 +402,7 @@ kernel_coefficient_backward<double>(
     torch::Tensor dout,
     torch::Tensor da,
     torch::Tensor db,
-    torch::Tensor dc,
-    double* a_ptr);
+    torch::Tensor dc);
 
 
 // int mlp_fp<float>(

@@ -20,12 +20,12 @@ import ssm_kernel_coefficient_cuda
 # )
 
 # pyre-ignore
-from ssm_kernel_coefficient_binding import (
-    kernel_coefficient_backward_double,
-    kernel_coefficient_backward_float,
-    kernel_coefficient_forward_double,
-    kernel_coefficient_forward_float,
-)
+# from ssm_kernel_coefficient_binding import (
+#     kernel_coefficient_backward_double,
+#     kernel_coefficient_backward_float,
+#     kernel_coefficient_forward_double,
+#     kernel_coefficient_forward_float,
+# )
 
 
 def compute_kernel_coefficient(z, d, t, b, c, fast=False):
@@ -62,6 +62,8 @@ def compute_slow(z, d, t, b, c):
 def compute_fast(z, d, t, b, c):
     # z is forced to be fp32
     # the following prevents fp16 underflow, particularly on t
+    fp16 = (t.dtype == torch.float16)
+
     if t.dtype == torch.float16:
         t = t.to(z.dtype)
         b = b.to(z.dtype)
@@ -73,7 +75,13 @@ def compute_fast(z, d, t, b, c):
     L = zz.shape[1]
     d = d.to(zz.dtype) # (Q, N)
     coeff = KernelCoefficientFast.apply(bc, zz, d)  # (IC, Q, L, H)
-    return coeff.view(I, C, Q, L, H).permute(2, 0, 1, 3, 4)  # (Q, I, C, L, H)
+
+    coeff = coeff.view(I, C, Q, L, H).permute(2, 0, 1, 3, 4)
+    if fp16:
+        coeff = coeff.to(torch.float16)
+
+    return coeff
+    # return coeff.view(I, C, Q, L, H).permute(2, 0, 1, 3, 4)  # (Q, I, C, L, H)
 
 
 class KernelCoefficientFast(torch.autograd.Function):
@@ -83,18 +91,21 @@ class KernelCoefficientFast(torch.autograd.Function):
         if not a_n.is_cuda and b_l.is_cuda and c_n.is_cuda:
             raise NotImplementedError("Only support CUDA tensors")
         ctx.save_for_backward(a_n, b_l, c_n)
-        if b_l.dtype == torch.complex64:
-            return ssm_kernel_coefficient_cuda.kernel_coefficient_forward_float(a_n, b_l, c_n)
-        else:
-            return ssm_kernel_coefficient_cuda.kernel_coefficient_forward_double(a_n, b_l, c_n)
+        is_float = 1
+        if b_l.dtype == torch.complex128:
+            is_float = 0
+
+        return ssm_kernel_coefficient_cuda.forward(a_n, b_l, c_n, is_float)
+
 
     @staticmethod
     def backward(ctx, dout):
         a_n, b_l, c_n = ctx.saved_tensors
-        if b_l.dtype == torch.complex64:
-            da_n, db_l, dc_n = ssm_kernel_coefficient_cuda.kernel_coefficient_backward_float(a_n, b_l, c_n, dout)
-        else:
-            da_n, db_l, dc_n = ssm_kernel_coefficient_cuda.kernel_coefficient_backward_double(a_n, b_l, c_n, dout)
+        is_float = 1
+        if b_l.dtype == torch.complex128:
+            is_float = 0
+
+        da_n, db_l, dc_n = ssm_kernel_coefficient_cuda.backward(a_n, b_l, c_n, dout, is_float)
         return da_n, db_l, dc_n
 
 

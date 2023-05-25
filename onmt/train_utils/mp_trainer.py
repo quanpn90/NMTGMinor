@@ -174,6 +174,9 @@ class Trainer(object):
         self.opt = opt
         self.cuda = (len(opt.gpus) >= 1 and opt.gpus[0] >= 0)
 
+        if self.cuda:
+            torch.cuda.set_device(self.device)
+
         assert self.cuda, "[ERROR] Training is only available on GPUs."
 
         self.start_time = 0
@@ -239,8 +242,6 @@ class Trainer(object):
             #     self.grad_scaler.load_state_dict(checkpoint['scaler'])
 
         if self.cuda:
-            torch.cuda.set_device(self.device)
-
             self.loss_function = self.loss_function.cuda(device=self.device)
             self.model = self.model.cuda(device=self.device)
             if opt.ctc_loss > 0.0:
