@@ -1271,13 +1271,11 @@ class TransformerEncoder(nn.Module):
         for layer in self.layers:
             layer.add_adapters(n_languages, adapter_location=adapter_location)
 
-    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False,
-                      sub_factors=0, sub_factor_rank=-1):
+    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False, *kwargs):
 
         for layer in self.layers:
             layer.add_factorized(n_languages, rank=rank,
-                                 multiplicative=multiplicative, fast=fast,
-                                 sub_factors=sub_factors, sub_factor_rank=sub_factor_rank)
+                                 multiplicative=multiplicative, fast=fast)
 
     def freeze_ffn_params(self):
 
@@ -1373,7 +1371,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.is_factorized = False
         self.fast_factorize = False
         self.multiplicative_factorize = False
-        self.sub_factorized = False
         self.using_s4 = False
 
         # Initialize blocks
@@ -1446,8 +1443,8 @@ class TransformerSentenceEncoderLayer(nn.Module):
             self.mid_adapter = MultilingualAdapter(n_languages, self.embedding_dim,
                                                    downsample_factor=downsampling_factor)
 
-    def add_factorized(self, n_languages, rank=4, multiplicative=True, fast=False,
-                       sub_factors=0, sub_factor_rank=-1):
+    def add_factorized(self, n_languages, rank=4, multiplicative=True, fast=False, dyrank=False,
+                       **kwargs):
         """
         :param sub_factor_rank:
         :param sub_factors:
@@ -1460,14 +1457,12 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
         # first, tell the attention modules to add factorize
         self.self_attn.add_factorized_weights(n_languages, rank=rank,
-                                              multiplicative=multiplicative,
-                                              sub_factors=sub_factors, sub_factor_rank=sub_factor_rank)
+                                              multiplicative=multiplicative, dyrank=dyrank)
 
         # add factorized for the sub-factors
         self.multiplicative_factorize = multiplicative
         self.is_factorized = True
         self.fast_factorize = fast
-        self.sub_factorized = sub_factors > 0
 
         embed_dim = self.embedding_dim
         ffn_dim = self.ffn_embedding_dim
@@ -1494,31 +1489,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
             nn.init.constant_(self.rm_o, constant)
             nn.init.constant_(self.sm_o, constant)
 
-        if self.sub_factorized:
-
-            self.sub_r_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.ffn_embedding_dim))
-            self.sub_s_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.embedding_dim))
-            self.sub_r_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.embedding_dim))
-            self.sub_s_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.ffn_embedding_dim))
-
-            nn.init.normal_(self.sub_r_i, 0.0, 0.02)
-            nn.init.normal_(self.sub_s_i, 0.0, 0.02)
-            nn.init.normal_(self.sub_r_o, 0.0, 0.02)
-            nn.init.normal_(self.sub_s_o, 0.0, 0.02)
-
-            if multiplicative:
-                sub_factor_rank = sub_factor_rank if fast else 1
-                self.sub_rm_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.ffn_embedding_dim))
-                self.sub_sm_i = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.embedding_dim))
-                self.sub_rm_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.embedding_dim))
-                self.sub_sm_o = torch.nn.Parameter(torch.Tensor(sub_factors, sub_factor_rank, self.ffn_embedding_dim))
-
-                constant = math.sqrt(1.0 / rank) if fast else 1
-                nn.init.constant_(self.sub_rm_i, constant)
-                nn.init.constant_(self.sub_sm_i, constant)
-                nn.init.constant_(self.sub_rm_o, constant)
-                nn.init.constant_(self.sub_sm_o, constant)
-
     def get_mlp_weights(self, lang=None, atb=None):
 
         in_weight = self.fc1.weight
@@ -1543,25 +1513,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
                         mul_factor_in = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
                         mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
 
-                    # TODO: allow for multiple sub factorizers
-                    if self.sub_factorized and atb is not None:
-                        # print("Found atb at multiplication:", atb)
-                        rm_i = torch.index_select(self.sub_rm_i, 0, atb).squeeze(0)  # squeeze possible because only 1
-                        sm_i = torch.index_select(self.sub_sm_i, 0, atb).squeeze(0)
-                        rm_o = torch.index_select(self.sub_rm_o, 0, atb).squeeze(0)
-                        sm_o = torch.index_select(self.sub_sm_o, 0, atb).squeeze(0)
-
-                        if self.fast_factorize:
-                            sub_mul_factor_in = torch.mm(rm_i.t(), sm_i)
-                            sub_mul_factor_out = torch.mm(rm_o.t(), sm_o)
-                        else:
-                            sub_mul_factor_in = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
-                            sub_mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
-
-                        # has to be multiplicative here
-                        mul_factor_in.mul_(sub_mul_factor_in)
-                        mul_factor_out.mul_(sub_mul_factor_out)
-
                     in_weight = in_weight * mul_factor_in
                     out_weight = out_weight * mul_factor_out
 
@@ -1577,24 +1528,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 else:
                     add_factor_in = torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
                     add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
-
-                if self.sub_factorized and atb is not None:
-                    # print("Found atb at addition:", atb)
-                    r_i = torch.index_select(self.sub_r_i, 0, atb).squeeze(0)
-                    s_i = torch.index_select(self.sub_s_i, 0, atb).squeeze(0)
-                    r_o = torch.index_select(self.sub_r_o, 0, atb).squeeze(0)
-                    s_o = torch.index_select(self.sub_s_o, 0, atb).squeeze(0)
-
-                    if self.fast_factorize:
-                        sub_add_factor_in = torch.mm(r_i.t(), s_i)
-                        sub_add_factor_out = torch.mm(r_o.t(), s_o)
-                    else:
-                        sub_add_factor_in = torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
-                        sub_add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
-
-                    # has to be additive here
-                    add_factor_in.add(sub_add_factor_in)
-                    add_factor_out.add(sub_add_factor_out)
 
                 in_weight = in_weight + add_factor_in
                 out_weight = out_weight + add_factor_out
