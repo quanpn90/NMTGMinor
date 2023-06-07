@@ -21,13 +21,21 @@ std::vector<torch::Tensor> fwd_cuda(
                                float                dropout_prob,
                                torch::Tensor lt_workspace);
 
+std::vector<torch::Tensor> fwd_compact_cuda(
+                               bool                 is_training,
+                               int                  heads,
+                               torch::Tensor const& input_lin_q_results,
+                               torch::Tensor const& input_lin_kv_results,
+                               torch::Tensor const& pad_mask,
+                               float                dropout_prob,
+                               torch::Tensor lt_workspace);
+
 std::vector<torch::Tensor> bwd_cuda(
                                int                  heads,
                                torch::Tensor const& output_grads,
                                torch::Tensor const& matmul2_results,
                                torch::Tensor const& dropout_results,
                                torch::Tensor const& attn_scores,
-//                               const half* pad_mask,
                                torch::Tensor const& input_lin_q_results,
                                torch::Tensor const& input_lin_kv_results,
                                torch::Tensor const& inputs_q,
@@ -35,6 +43,18 @@ std::vector<torch::Tensor> bwd_cuda(
                                torch::Tensor const& input_weights_q,
                                torch::Tensor const& input_weights_kv,
                                torch::Tensor const& output_weights,
+                               torch::Tensor const& dropout_mask,
+                               float                dropout_prob,
+                               torch::Tensor lt_workspace
+                                                  );
+
+std::vector<torch::Tensor> bwd_compact_cuda(
+                               int                  heads,
+                               torch::Tensor const& output_lin_grads ,
+                               torch::Tensor const& dropout_results,
+                               torch::Tensor const& attn_scores,
+                               torch::Tensor const& input_lin_q_results,
+                               torch::Tensor const& input_lin_kv_results,
                                torch::Tensor const& dropout_mask,
                                float                dropout_prob,
                                torch::Tensor lt_workspace
@@ -152,6 +172,34 @@ std::vector<torch::Tensor> fwd(
                     );
 }
 
+std::vector<torch::Tensor> fwd_compact(
+                               bool                 is_training,
+                               int                  heads,
+                               torch::Tensor const& input_lin_q_results,
+                               torch::Tensor const& input_lin_kv_results,
+                               torch::Tensor const& pad_mask,
+                               float                dropout_prob
+                                                 )
+{
+  AT_ASSERTM(input_lin_q_results.dim()         == 3, "expected 3D tensor");
+  AT_ASSERTM(input_lin_kv_results.dim()        == 3, "expected 3D tensor");
+
+  AT_ASSERTM(input_lin_q_results.type().scalarType()         == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(input_lin_kv_results.type().scalarType()        == at::ScalarType::Half, "Only HALF is supported");
+
+  auto lt_workspace = torch::empty({1 << 22}, input_lin_q_results.type());
+
+  return fwd_compact_cuda(
+                     is_training,
+                     heads,
+                     input_lin_q_results,
+                     input_lin_kv_results,
+                     pad_mask,
+                     dropout_prob,
+                     lt_workspace
+                    );
+};
+
 std::vector<torch::Tensor> bwd(
                                int                  heads,
                                torch::Tensor const& output_grads,
@@ -211,6 +259,47 @@ std::vector<torch::Tensor> bwd(
                                  input_weights_q,
                                  input_weights_kv,
                                  output_weights,
+                                 dropout_mask,
+                                 dropout_prob,
+                                 lt_workspace
+                                );
+}
+
+
+std::vector<torch::Tensor> bwd_compact(
+                               int                  heads,
+                               torch::Tensor const& output_lin_grads,
+                               torch::Tensor const& dropout_results,
+                               torch::Tensor const& attn_scores,
+                               torch::Tensor const& input_lin_q_results,
+                               torch::Tensor const& input_lin_kv_results,
+                               torch::Tensor const& dropout_mask,
+                               float                dropout_prob
+                                                  )
+{
+  AT_ASSERTM(output_lin_grads.dim()         == 3, "expected 3D tensor");
+  AT_ASSERTM(dropout_results.dim()      == 3, "expected 3D tensor");
+  AT_ASSERTM(attn_scores.dim()      == 3, "expected 3D tensor");
+  AT_ASSERTM(input_lin_q_results.dim()  == 3, "expected 3D tensor");
+  AT_ASSERTM(input_lin_kv_results.dim() == 3, "expected 3D tensor");
+  AT_ASSERTM(dropout_mask.dim()         == 3, "expected 3D tensor");
+
+  AT_ASSERTM(output_lin_grads.type().scalarType()         == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(dropout_results.type().scalarType()      == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(attn_scores.type().scalarType()      == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(input_lin_q_results.type().scalarType()  == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(input_lin_kv_results.type().scalarType() == at::ScalarType::Half, "Only HALF is supported");
+  AT_ASSERTM(dropout_mask.type().scalarType()         == at::ScalarType::Byte, "Only BYTE is supported");
+
+  auto lt_workspace = torch::empty({1 << 22}, output_lin_grads.type());
+
+  return bwd_compact_cuda(
+                                 heads,
+                                 output_lin_grads,
+                                 dropout_results,
+                                 attn_scores,
+                                 input_lin_q_results,
+                                 input_lin_kv_results,
                                  dropout_mask,
                                  dropout_prob,
                                  lt_workspace
@@ -381,6 +470,8 @@ std::vector<torch::Tensor> bwd_recompute(
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("forward", &multihead_attn::encdec_bias::cublaslt::fwd, "Encdec Multihead Attention Bias Forward.");
   m.def("backward", &multihead_attn::encdec_bias::cublaslt::bwd, "Encdec Multihead Attention Bias Backward.");
+  m.def("forward_compact", &multihead_attn::encdec_bias::cublaslt::fwd_compact, "Encdec Multihead Attention Bias Forward.");
+  m.def("backward_compact", &multihead_attn::encdec_bias::cublaslt::bwd_compact, "Encdec Multihead Attention Bias Backward.");
   m.def("backward_recompute", &multihead_attn::encdec_bias::cublaslt::bwd_recompute, "Encdec Multihead Attention Bias Backward.");
 //  m.def("backward_input_only", &multihead_attn::encdec_bias::cublaslt::bwd_input_only, "Encdec Multihead Attention Bias Backward.");
 //  m.def("backward_recompute", &multihead_attn::encdec::cublas_gemmex::bwd_recompute, "Encdec Multihead Attention Backward Recompute.");

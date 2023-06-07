@@ -28,8 +28,9 @@ import numpy as np
 
 from torch.nn import CrossEntropyLoss, MSELoss
 from onmt.modules.layer_norm import LayerNorm
-from onmt.modules.optimized.self_attention_func import self_attn_func
-from onmt.modules.optimized.encdec_attention_func_bias import encdec_attn_bias_func
+from onmt.modules.optimized.self_attention_func import self_attn_func, self_attn_compact_func
+from onmt.modules.optimized.encdec_attention_func_bias import encdec_attn_bias_func, encdec_attn_bias_compact_func
+from onmt.modules.optimized.linear import factorize_linear
 from onmt.modules.dropout import embedded_dropout
 from onmt.modules.optimized.dropout_add import fused_dropout_add
 from onmt.modules.optimized.linear import linear_function
@@ -186,7 +187,7 @@ class MBartAttention(nn.Module):
             self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
             self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
 
-            constant = math.sqrt(1.0 / _rank) if fast else 1
+            constant = 1
             nn.init.constant_(self.rm_i, constant)
             nn.init.constant_(self.sm_i, constant)
             nn.init.constant_(self.rm_o, constant)
@@ -271,6 +272,67 @@ class MBartAttention(nn.Module):
             in_proj_weight = self.proj_weight
             out_proj_weight = self.out_proj.weight
 
+            if self.is_factorized and self.fast_factorize:
+
+                # TODO: mm instead of index select
+                rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)
+                sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
+                rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
+                sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+
+                if hidden_states.ndim == 3:
+                    use_time_mask = self.is_decoder
+                    bsz, qlen = hidden_states.size(1), hidden_states.size(0)
+                    mask = attention_mask
+                    low_precision = True  # Use CUDA impl
+
+
+                    input_lin_results = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
+
+                    attn_output, coverage = self_attn_compact_func(use_time_mask, self.training, self.num_heads,
+                                                                   input_lin_results,
+                                                                   mask, self.dropout,
+                                                                   False, None,
+                                                                   incremental, incremental_cache, low_precision,
+                                                                   True, checkpointing)
+
+
+
+                    attn_output = attn_output.view(qlen, bsz, -1).contiguous()
+
+                    output = factorize_linear(attn_output, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+
+                    return output, coverage, incremental_cache
+
+                else:
+                    """
+                    flash attention
+                    """
+                    assert self.fast_bert_mha is not None
+                    assert cu_seqlens is not None
+                    assert max_len is not None
+
+                    total_bsz = hidden_states.size(0)
+                    # qkv = linear_function(hidden_states, in_proj_weight, self.proj_bias)  # B x H
+                    qkv = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
+                    # B x 3 x H x d
+
+                    # TODO: moving to CUDA to remove overhead?
+                    qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
+
+                    dropout_p = self.dropout if self.training else 0.0
+                    causal = self.is_decoder
+                    softmax_scale = 1.0 / math.sqrt(64)
+                    context = self.fast_bert_mha(qkv, cu_seqlens, max_len, dropout_p, softmax_scale, causal, False)
+                    coverage = None
+
+                    context = context.view(-1, self.num_heads * self.head_dim).contiguous()
+                    output = factorize_linear(context, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+
+                    return output, coverage, incremental_cache
+
+            # Code is twice as long TODO: merging two sections
+
             if self.is_factorized:
                 if self.multiplicative_factorize:
                     rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
@@ -278,12 +340,12 @@ class MBartAttention(nn.Module):
                     rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
                     sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
 
-                    if self.fast_factorize:
-                        mul_factor_in = torch.mm(rm_i.t(), sm_i)
-                        mul_factor_out = torch.mm(rm_o.t(), sm_o)
-                    else:
+                    if not self.dyrank:
                         mul_factor_in = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
                         mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
+                    else:
+                        mul_factor_in = torch.mm(rm_i.t(), sm_i)
+                        mul_factor_out = torch.mm(rm_o.t(), sm_o)
 
                     # Has to be multiplicative here
                     in_proj_weight = in_proj_weight * mul_factor_in
@@ -294,7 +356,7 @@ class MBartAttention(nn.Module):
                 r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
                 s_o = torch.index_select(self.s_o, 0, lang).squeeze(0)
 
-                if self.fast_factorize or self.dyrank:
+                if self.dyrank:
                     add_factor_in = torch.mm(r_i.t(), s_i)
                     add_factor_out = torch.mm(r_o.t(), s_o)
                 else:
@@ -438,7 +500,7 @@ class MBartCrossAttention(MBartAttention):
             self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
             self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
 
-            constant = math.sqrt(1.0 / _rank) if fast else 1
+            constant = 1
             nn.init.constant_(self.rm_q, constant)
             nn.init.constant_(self.sm_q, constant)
             nn.init.constant_(self.rm_kv, constant)
@@ -492,6 +554,77 @@ class MBartCrossAttention(MBartAttention):
             in_proj_weight_kv = self.proj_weight_kv
             out_proj_weight = self.out_proj.weight
 
+            if self.is_factorized and self.fast_factorize:
+
+                # TODO: mm instead of index select
+                rm_q = torch.index_select(self.rm_q, 0, lang).squeeze(0)  # squeeze possible because only 1
+                sm_q = torch.index_select(self.sm_q, 0, lang).squeeze(0)
+                rm_kv = torch.index_select(self.rm_kv, 0, lang).squeeze(0)  # squeeze possible because only 1
+                sm_kv = torch.index_select(self.sm_kv, 0, lang).squeeze(0)
+                rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
+                sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+
+                if hidden_states.ndim == 3:
+                    use_time_mask = self.is_decoder
+                    bsz, qlen = hidden_states.size(1), hidden_states.size(0)
+                    mask = attention_mask
+                    low_precision = True  # Use CUDA impl
+
+                    input_lin_q_results = factorize_linear(hidden_states, in_proj_weight_q, self.q_proj.bias, rm_q, sm_q)
+                    input_lin_kv_results = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv, rm_kv, sm_kv)
+
+                    recompute = False
+                    attn_output, coverage = encdec_attn_bias_compact_func(recompute, self.training, self.num_heads,
+                                                                          input_lin_q_results , input_lin_kv_results ,
+                                                                          attention_mask, self.dropout,
+                                                                          incremental, incremental_cache,
+                                                                          False, None, None,  # no rotary encodings
+                                                                          low_precision, True)
+
+                    attn_output = attn_output.view(qlen, bsz, -1).contiguous()
+
+                    output = factorize_linear(attn_output, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+
+                    return output, coverage, incremental_cache
+
+                else:
+                    """
+                    flash attention
+                    """
+                    assert self.fast_bert_mha is not None
+                    assert cu_seqlens is not None
+                    assert cu_seqlens_kv is not None
+                    assert max_len is not None
+                    assert max_len_kv is not None
+                    assert incremental == False
+                    assert incremental_cache is None
+
+                    total_bsz_q = hidden_states.size(0)
+                    total_bsz_kv = key_value_states.size(0)
+                    q = factorize_linear(hidden_states, in_proj_weight_q, self.q_proj.bias, rm_q, sm_q)
+                    # linear_function(hidden_states, in_proj_weight_q, self.q_proj.bias)
+
+                    kv = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv, rm_kv, sm_kv) #
+                    # linear_function(key_value_states, in_proj_weight_kv, self.proj_bias_kv)
+
+                    kv = kv.view(total_bsz_kv, self.num_heads, 2, self.head_dim).transpose(1, 2).contiguous()
+
+                    q = q.view(total_bsz_q, self.num_heads, self.head_dim)
+
+                    dropout_p = self.dropout if self.training else 0.0
+                    causal = False
+                    softmax_scale = 1.0 / math.sqrt(64)
+                    context = self.fast_bert_mha(q, kv, cu_seqlens, cu_seqlens_kv,
+                                                 max_len, max_len_kv, dropout_p, softmax_scale, causal, False)
+
+                    context = context.view(-1, self.num_heads * self.head_dim).contiguous()
+                    # output = linear_function(context, out_proj_weight, self.out_proj.bias)
+                    output = factorize_linear(context, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+
+                    coverage = None
+
+                    return output, coverage, incremental_cache
+
             if self.is_factorized:
                 if self.multiplicative_factorize:
                     rm_q = torch.index_select(self.rm_q, 0, lang).squeeze(0)  # squeeze possible because only 1
@@ -501,7 +634,7 @@ class MBartCrossAttention(MBartAttention):
                     rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
                     sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
 
-                    if self.fast_factorize:
+                    if self.dyrank:
                         mul_factor_q = torch.mm(rm_q.t(), sm_q)
                         mul_factor_kv = torch.mm(rm_kv.t(), sm_kv)
                         mul_factor_out = torch.mm(rm_o.t(), sm_o)
@@ -521,7 +654,7 @@ class MBartCrossAttention(MBartAttention):
                 r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
                 s_o = torch.index_select(self.s_o, 0, lang).squeeze(0)
 
-                if self.fast_factorize or self.dyrank:
+                if self.dyrank:
                     add_factor_q = torch.mm(r_q.t(), s_q)
                     add_factor_kv = torch.mm(r_kv.t(), s_kv)
                     add_factor_out = torch.mm(r_o.t(), s_o)
@@ -991,7 +1124,7 @@ class MBartDecoderLayer(nn.Module):
             self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.embed_dim))
             self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.ffn_dim))
 
-            constant = math.sqrt(1.0 / _rank) if fast else 1
+            constant = 1
             nn.init.constant_(self.rm_i, constant)
             nn.init.constant_(self.sm_i, constant)
             nn.init.constant_(self.rm_o, constant)
@@ -1087,6 +1220,27 @@ class MBartDecoderLayer(nn.Module):
 
         return x
 
+    def call_factorize_mlp(self, x, lang, activation_fn, dropout_p, training_):
+
+        in_weight = self.fc1.weight
+        out_weight = self.fc2.weight
+        in_bias = self.fc1.bias
+        out_bias = self.fc2.bias
+
+        # TODO: mm instead of index select for multiple code
+        rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
+        sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
+        rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
+        sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+
+        x = factorize_linear(x, in_weight, in_bias, rm_i, sm_i)
+        x = activation_fn(x)
+        x = F.dropout(x, dropout_p, training=training_)
+
+        x = factorize_linear(x, out_weight, out_bias, rm_o, sm_o)
+
+        return x
+
     def forward(
             self,
             hidden_states: torch.Tensor,
@@ -1174,10 +1328,15 @@ class MBartDecoderLayer(nn.Module):
         residual = hidden_states
         hidden_states = self.final_layer_norm(hidden_states)
 
-        in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
-        hidden_states = self.call_mlp(hidden_states, in_weight, out_weight, in_bias, out_bias,
-                                      self.activation_fn, self.activation_dropout, self.training,
-                                      self.fused, self.fused_function, checkpointing_ffn)
+        if self.fast_factorize:
+            hidden_states = self.call_factorize_mlp(hidden_states, lang, self.activation_fn, self.activation_dropout,
+                                                    self.training)
+        else:
+
+            in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
+            hidden_states = self.call_mlp(hidden_states, in_weight, out_weight, in_bias, out_bias,
+                                          self.activation_fn, self.activation_dropout, self.training,
+                                          self.fused, self.fused_function, checkpointing_ffn)
 
         # hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
@@ -1743,7 +1902,7 @@ class MBartDecoder(MBartPreTrainedModel):
         # next_decoder_cache = () if use_cache else None
         contrastive_loss = 0
 
-        self.fast_bert_mha = None
+        # self.fast_bert_mha = None
         if self.fast_bert_mha is not None and hidden_states.dtype == torch.half:
             can_run_fast_bert_mha = True
 

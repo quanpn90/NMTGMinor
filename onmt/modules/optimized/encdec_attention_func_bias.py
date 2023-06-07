@@ -649,6 +649,336 @@ def encdec_attn_bias_func(*args):
         return EncdecAttnBiasFunc.apply(*args)
 
 
+class EncdecAttnBiasCompactFunc(torch.autograd.Function):
+    @staticmethod
+    @custom_fwd()
+    def forward(ctx, recompute, is_training, heads,
+                input_lin_q_results, input_lin_kv_results,
+                mask, dropout_prob,
+                incremental, incremental_cache,
+                rotary_pos_enc, pos_emb_q, pos_emb_k,
+                low_precision, return_coverage):
+        heads_t = torch.tensor([heads])
+        dropout_prob_t = torch.tensor([dropout_prob])
+        null_tensor = torch.tensor([]).to(input_lin_q_results.device)
+        head_dim = input_lin_q_results.size(2) // heads
+        scale_t = torch.tensor([head_dim ** -0.5])
+        use_mask = (mask is not None)
+
+        bsz, len_q, len_k = input_lin_q_results.size(1), input_lin_q_results.size(0), input_lin_kv_results.size(0)
+        ctx.incremental = incremental
+        ctx.fused_softmax_dropout = False
+        ctx.fused_all = False
+        ctx.len_q = len_q
+        ctx.len_k = len_k
+        ctx.low_precision = low_precision
+        ctx.return_coverage = return_coverage
+        ctx.recompute = recompute
+        ctx.rotary_pos_enc = rotary_pos_enc
+
+        if encdec_multihead_attn_bias_cuda is not None and not incremental and len_k <= 2048 \
+                and input_lin_q_results.type() == 'torch.cuda.HalfTensor' and not rotary_pos_enc and low_precision:
+
+            mask_ = mask
+
+            mask = mask.unsqueeze(1).unsqueeze(2).bool()
+
+            cuda_module = encdec_multihead_attn_bias_blaslt
+            ctx.recompute = False
+
+            attn_scores, dropout_results, dropout_mask, \
+                matmul2_results \
+                = cuda_module.forward_compact(is_training, heads, input_lin_q_results, input_lin_kv_results,
+                                      mask, dropout_prob)
+
+            sinq, cosq, = null_tensor, null_tensor
+            sink, cosk, = null_tensor, null_tensor
+
+            ctx.save_for_backward(heads_t,
+                                  scale_t,
+                                  dropout_results,
+                                  attn_scores,
+                                  input_lin_q_results,
+                                  input_lin_kv_results,
+                                  dropout_mask, mask,
+                                  dropout_prob_t,
+                                  sinq, cosq, sink, cosk)
+
+
+            ctx.fused_all = True
+
+            if return_coverage:
+                return matmul2_results, dropout_results
+            else:
+                return (matmul2_results,)
+
+        if mask is not None:
+            # Self Attention Pad Mask
+            mask = mask.to(torch.bool)
+
+            if len(mask.shape) == 3:
+                mask = mask.unsqueeze(1)  # for the head dimension
+            else:
+                mask = mask.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
+
+        queries = input_lin_q_results.view(input_lin_q_results.size(0), input_lin_q_results.size(1) * heads, head_dim)
+
+        # Input Linear GEMM KV
+        # input1: (activations) [seql_k, bsz, embed_dim(1024)]
+        # input2: (weights)     [embed_dim*2 (2048), embed_dim (1024)] (transpose [0,1])
+        # output:               [seql_k, bsz, embed_dim*2]
+        # GEMM: ( (seql_k*seqs) x embed_dim ) x ( embed_dim x embed_dim*2 ) = (seql_k*seqs x embed_dim*2)
+
+        # Slice out k,v from one big Input Linear outuput (should only impact meta data, no copies!)
+        # Sequences and heads are combined to make the batch of the Batched GEMM
+
+        if incremental and ('c_k' in incremental_cache and 'c_v' in incremental_cache):
+            keys = incremental_cache['c_k']
+            values = incremental_cache['c_v']
+            keys = keys.view(len_k, bsz * heads, head_dim)
+            values = values.view(len_k, bsz * heads, head_dim)
+            input_lin_kv_results = torch.stack([keys, values], dim=-2)
+        else:
+
+            input_lin_kv_results = input_lin_kv_results.view(input_lin_kv_results.size(0), input_lin_kv_results.size(1) * heads,
+                                                             2, head_dim)
+            keys = input_lin_kv_results[:, :, 0, :]
+            values = input_lin_kv_results[:, :, 1, :]
+
+            if incremental:
+                keys = keys.contiguous().view(len_k, bsz, heads * head_dim)
+                values = values.contiguous().view(len_k, bsz, heads * head_dim)
+
+                incremental_cache['c_k'] = keys
+                incremental_cache['c_v'] = values
+
+                keys = keys.view(len_k, bsz * heads, head_dim)
+                values = values.view(len_k, bsz * heads, head_dim)
+
+        # TODO: rotary pos encoding
+        if rotary_pos_enc:
+            assert pos_emb_q is not None and pos_emb_k is not None
+            cosq, sinq = pos_emb_q
+            queries = apply_rotary_pos_emb(queries, cosq, sinq)
+            cosk, sink = pos_emb_k
+            keys_ = apply_rotary_pos_emb(keys, cosk, sink)
+            keys.copy_(keys_)
+        else:
+            sinq, cosq = null_tensor, null_tensor
+            sink, cosk = null_tensor, null_tensor
+
+        # Matmul1 Batched GEMMs
+        # The output tensor is specified prior to the Batch GEMM because baddbmm requires its specification
+        # baddbmm is used to apply the scale parameter via the Batched GEMM's alpha parameter instead of
+        # a separate elementwise operation.
+        # Input1: (Queries) [seql_q, seqs*heads, head_dim] transpose(0,1)
+        # Input2: (Keys)    [seql_k, seqs*heads, head_dim] transpose(0,1)
+        # output:           [seqs*heads, seql_q, seql_k]
+        # GEMM: Per batch: ( seql_q x head_dim ) x ( head_dim x seql_k ) = ( seql_q x seql_k )
+        if queries.is_cuda:
+            matmul1_results = torch.empty((queries.size(1), queries.size(0), keys.size(0)), dtype=queries.dtype,
+                                          device=queries.device)
+            matmul1_results = torch.baddbmm(matmul1_results, queries.transpose(0, 1),
+                                            keys.transpose(0, 1).transpose(1, 2),
+                                            out=matmul1_results, beta=0.0, alpha=scale_t[0])
+        else:
+            matmul1_results = torch.matmul(queries.transpose(0, 1), keys.transpose(0, 1).transpose(1, 2))
+            matmul1_results.mul_(scale_t[0])
+
+        if mask is not None:
+            batches, seql_q, seql_k = matmul1_results.size()
+            bsz = int(batches / heads)
+            matmul1_results = matmul1_results.view(bsz, heads, seql_q, seql_k)
+            # after unsqueezing the mask should have size [bsz x 1 x 1 x seql_k]
+            matmul1_results = matmul1_results.masked_fill_(mask, float('-inf'))
+            matmul1_results = matmul1_results.view(bsz * heads, seql_q, seql_k)
+
+        softmax_results = F.softmax(matmul1_results, dim=-1)
+
+        nan_mask = torch.isnan(softmax_results)
+        if nan_mask.any():
+            softmax_results.masked_fill_(nan_mask, 0)
+
+        # Dropout - is not executed for inference
+        if is_training:
+            dropout_results, dropout_mask = torch._fused_dropout(softmax_results, p=(1. - dropout_prob_t[0]))
+        else:
+            dropout_results = softmax_results
+            dropout_mask = null_tensor
+
+        # Matmul2 Batched GEMMs
+        # The output tensor specification is needed here to specify the non-standard output.
+        # Given that pytorch cannot currently perform autograd with an output tensor specified,
+        # this requires a backward pass specified.
+        # Input1: from_softmax [seqs*heads, seql_q, seql_k]
+        # Input2: (values)     [seql_v, seqs*heads, head_dim] transpose(0,1)
+        # Output:              [seql_q, seqs*heads, head_dim] transpose(0,1)
+        # GEMM: Per batch: ( seql_q x seql_k ) x ( seql_k x head_dim ) = (seql_q x head_dim)
+
+        if queries.is_cuda:
+            matmul2_results = torch.empty((dropout_results.size(0), dropout_results.size(1), values.size(2)),
+                                          dtype=dropout_results.dtype, device=dropout_results.device)
+            torch.bmm(dropout_results, values.transpose(0, 1), out=matmul2_results)
+        else:
+            matmul2_results = torch.matmul(dropout_results, values.transpose(0, 1))
+
+        matmul2_results = matmul2_results.transpose(0, 1).contiguous()
+
+        # return [len_q, bsz*heads, head_dim]
+
+        ctx.save_for_backward(heads_t,
+                              scale_t,
+                              matmul2_results,
+                              dropout_results,
+                              softmax_results,
+                              input_lin_q_results,
+                              input_lin_kv_results,
+                              dropout_mask, mask,
+                              dropout_prob_t,
+                              sinq, cosq, sink, cosk)
+
+        if return_coverage:
+            return (matmul2_results, dropout_results)
+        else:
+            return (matmul2_results,)
+
+    @staticmethod
+    @custom_bwd
+    def backward(ctx, *output_grads):
+
+        incremental = ctx.incremental
+        len_q = ctx.len_q
+        len_key = ctx.len_k
+
+        if ctx.return_coverage:
+            output_lin_grads, coverage_grads = output_grads
+        else:
+            output_lin_grads = output_grads[0]
+
+        output_lin_grads = output_lin_grads.contiguous()
+
+        if ctx.fused_all:
+            assert encdec_multihead_attn_bias_cuda is not None and len_key <= 2048
+
+            heads_t, \
+                scale_t, \
+                dropout_results, \
+                attn_scores,\
+                input_lin_q_results, \
+                input_lin_kv_results, \
+                dropout_mask, mask,\
+                dropout_prob_t, \
+                sinq, cosq, sink, cosk = ctx.saved_tensors
+
+            cuda_module = encdec_multihead_attn_bias_blaslt
+
+            input_lin_q_results_grads, input_lin_kv_results_grads \
+                = cuda_module.backward_compact(heads_t[0], output_lin_grads,
+                                               dropout_results,
+                                               attn_scores,
+                                               input_lin_q_results,
+                                               input_lin_kv_results,
+                                               dropout_mask,
+                                               dropout_prob_t[0])
+
+
+
+            return None, None, None \
+                , input_lin_q_results_grads, input_lin_kv_results_grads \
+                , None, None, \
+                   None, None, \
+                   None, None, None,\
+                   None, None
+
+
+        heads_t, scale_t, dropout_results, softmax_results, \
+        input_lin_q_results, input_lin_kv_results, \
+        dropout_mask, pad_mask, dropout_prob_t, \
+        sinq, cosq, sink, cosk, \
+            = ctx.saved_tensors
+
+        embed_dim = input_lin_q_results.size(2)
+        head_dim = embed_dim.size(2) // heads_t.item()
+        bsz = input_lin_q_results.size(1)
+
+        # Slice out k,v from one big Input Linear output (should only impact meta data, no copies!)
+        # Batch sizes and heads are combined to make the batch of the Batched GEMM
+        # input_lin_kv_results: [seql_k, bsz, heads(16), 2, head_dim(64)]
+        # input_lin_kv_results: [seql_k, batches=bsz*heads, 2, head_dim]
+        queries = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1) * heads_t[0], head_dim)
+        input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1) * heads_t[0], 2, head_dim)
+        keys = input_lin_kv_results[:, :, 0, :]
+        values = input_lin_kv_results[:, :, 1, :]
+
+        # Slice out k,v from one big set of gradients entering the input linear's bprop
+        # (should only impact meta data, no copies!)
+        # The gradients are identical in size to the Input Linear outputs.
+        # The tensor is declared before hand to properly slice out query, key, and value grads.
+        input_lin_kv_results_grads = torch.empty_like(input_lin_kv_results)
+        queries_grads = torch.empty_like(queries)
+        keys_grads = input_lin_kv_results_grads[:, :, 0, :]
+        values_grads = input_lin_kv_results_grads[:, :, 1, :]
+
+        # [seql_q, seqs*heads, head_dim] -> [seqs*heads, seql_q, head_dim]
+        output_lin_grads = output_lin_grads.transpose(0, 1)
+
+        # Matmul2 - DGRAD1
+        # Input1: (data grads)  [seql_q, seqs*heads, head_dim] transpose(0,1)
+        # Input2: (activations) [seql_k, seqs*heads, head_dim] transpose(0,1).transpose(1,2)
+        # Output:               [seqs*heads, seql_q, seql_k]
+        # GEMM: Per batch: ( seql_q x head_dim ) x ( head_dim x seql_k ) = ( seql_q x seql_k )
+        matmul2_dgrad1 = torch.bmm(output_lin_grads, values.transpose(0, 1).transpose(1, 2))
+        # Matmul2 - DGRAD2
+        # Input1: (data grads)  [seql_q, seqs*heads, head_dim] transpose(0,1)
+        # Input2: (activations) [seql_k, seqs*heads, head_dim] transpose(0,1).transpose(1,2)
+        # Output:               [seqs*heads, seql_q, seql_k]
+        # GEMM: Per batch: ( seql_q x head_dim ) x ( head_dim x seql_k ) = ( seql_q x seql_k )
+        values_grads = torch.bmm(dropout_results.transpose(1, 2), output_lin_grads, out=values_grads.transpose(0, 1))
+
+        # Mask and Scaling for Dropout (not a publically documented op)
+        dropout_grads = torch._masked_scale(matmul2_dgrad1, dropout_mask, 1.0 / (1.0 - dropout_prob_t[0]))
+
+        # Softmax Grad (not a publically documented op)
+        try:
+            softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results.dtype)
+        except TypeError: # backward compatibility
+            softmax_grads = torch._softmax_backward_data(dropout_grads, softmax_results, -1, softmax_results)
+
+        # Matmul1 - DGRAD1
+        # Input1: (data grads)  [seqs*heads, seql_q, seql_k]
+        # Input2: (activations) [seql_k, seqs*heads, head_dim] transpose(0,1)
+        # Output:               [seqs*heads, seql_q, head_dim] transpose(0,1)
+        # GEMM: Per batch: ( seql_q x seql_k ) x ( seql_k x head_dim ) = ( seql_q x head_dim )
+        torch.baddbmm(queries_grads.transpose(0, 1), softmax_grads, keys.transpose(0, 1),
+                      out=queries_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
+        # Matmul1 - DGRAD2
+        # Input1: (data grads)  [seqs*heads, seql_q, seql_k] transpose(1,2)
+        # Input2: (activations) [seql_q, seqs*heads, head_dim] transpose(0,1)
+        # Output:               [seqs*heads, seql_k, head_dim] transpose(0,1)
+        # GEMM: Per batch: ( seql_k x seql_q ) x ( seql_q x head_dim ) = ( seql_k x head_dim )
+        torch.baddbmm(keys_grads.transpose(0, 1), softmax_grads.transpose(1, 2), queries.transpose(0, 1),
+                      out=keys_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
+
+        # TODO:
+        if ctx.rotary_pos_enc:
+            queries_grads = queries_grads * cosq + rotate_backward(sinq * queries_grads)
+            keys_grads_ = keys_grads * cosk + rotate_backward(sink * keys_grads)
+            keys_grads.copy_(keys_grads_)
+
+        return None, None, None \
+            , input_lin_q_results_grads, input_lin_kv_results_grads \
+            , None, None, \
+               None, None, \
+               None, None, None, \
+               None, None
+
+
+def encdec_attn_bias_compact_func(*args):
+    args = _cast_if_autocast_enabled(*args)
+    with torch.cuda.amp.autocast(enabled=False):
+        return EncdecAttnBiasCompactFunc.apply(*args)
+
+
 if __name__ == "__main__":
     import argparse
 

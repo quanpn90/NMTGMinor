@@ -7,9 +7,9 @@ from typing import Dict, Optional, Tuple
 import torch
 from torch.cuda.amp import custom_fwd, custom_bwd
 
-from onmt.modules.optimized.self_attention_func import self_attn_func
+from onmt.modules.optimized.self_attention_func import self_attn_func, self_attn_compact_func
 from onmt.modules.optimized.relative_self_attention_func import relative_self_attn_func
-from onmt.modules.optimized.linear import linear_function
+from onmt.modules.optimized.linear import linear_function, factorize_linear
 
 
 class Fp32GroupNorm(nn.GroupNorm):
@@ -420,7 +420,7 @@ class MultiheadAttention(nn.Module):
                 self.rm_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
                 self.sm_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
-            constant = math.sqrt(1.0 / _rank) if fast else 1
+            constant = 1
             nn.init.constant_(self.rm_i, constant)
             nn.init.constant_(self.sm_i, constant)
             nn.init.constant_(self.rm_o, constant)
@@ -612,6 +612,87 @@ class MultiheadAttention(nn.Module):
                 pos_proj_weight = F.dropout(self.pos_proj_weight, self.weight_drop, training=self.training) \
                                   if self.pos_proj_weight is not None else None
 
+                if self.is_factorized and self.fast_factorize:
+                    if self.relative:
+                        print("fast factorization is not implemented for relative attention yet")
+                        raise NotImplementedError
+
+                    hidden_states = query
+
+                    # TODO: mm instead of index select
+                    rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)
+                    sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
+                    rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
+                    sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+
+                    if hidden_states.ndim == 3:
+                        bsz, qlen = hidden_states.size(1), hidden_states.size(0)
+                        low_precision = True  # Use CUDA impl
+
+                        input_lin_results = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
+
+                        rotary = self.rotary_position
+                        attn_output, coverage = self_attn_compact_func(False, is_training, self.num_heads, input_lin_results,
+                                                                       key_padding_mask, self.dropout_p,
+                                                                       rotary, positions,
+                                                                       False, None,  # incremental and state
+                                                                       low_precision,
+                                                                       True, checkpointing)  # low-precision and return coverage
+
+                        # outputs, coverage = self_attn_func(False, is_training, self.num_heads, inputs,
+                        #                                    in_proj_weight, out_proj_weight,
+                        #                                    self.proj_bias, self.out_proj.bias,
+                        #                                    key_padding_mask, self.dropout_p,
+                        #                                    rotary, positions,
+                        #                                    False, None,  # incremental and state
+                        #                                    low_precision,
+                        #                                    True, checkpointing)  # low-precision and return coverage
+
+                        attn_output = attn_output.view(qlen, bsz, -1).contiguous()
+
+                        output = factorize_linear(attn_output, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+
+                        return output, coverage
+
+                    else:
+                        # this doesn't need checkpointing because fmha is doing checkpointing
+                        assert self.fast_bert_mha is not None
+                        assert query.dtype == torch.half
+                        assert cu_seqlens is not None
+                        assert max_len is not None  # and max_len <= 512
+                        assert self.relative == False
+
+                        total_bsz = query.size(0)
+                        # qkv = F.linear(query, in_proj_weight, self.proj_bias)  # B x H
+                        qkv = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
+                        # B x 3 x H x d
+
+                        # transpose 1 2 is necessary here because the weights are designed to be heads x 3 x d
+                        # (for the more simple version without transposing)
+
+                        if not self.rotary_position:
+                            qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
+                        else:
+                            assert positions is not None
+                            cos, sin = positions
+                            queries, keys, values = qkv.view(total_bsz, self.num_heads, 3, self.head_dim)
+                            queries, keys = apply_rotary_pos_emb(queries, keys, cos, sin)
+                            qkv = torch.stack([queries, keys, values], dim=2).transpose(1, 2).contiguous()
+
+                        dropout_p = self.dropout_p if self.training else 0.0
+                        causal = False
+                        softmax_scale = 1.0 / math.sqrt(64)
+
+                        # False = return softmax
+                        context = self.fast_bert_mha(qkv, cu_seqlens, max_len, dropout_p, softmax_scale, causal, False)
+                        coverage = None
+
+                        context = context.view(-1, self.num_heads * self.head_dim).contiguous()
+
+                        output = factorize_linear(context, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+
+                        return output, coverage
+
                 if self.is_factorized:
                     if self.multiplicative_factorize:
                         # squeeze possible because only 1
@@ -623,7 +704,7 @@ class MultiheadAttention(nn.Module):
                             rm_p = torch.index_select(self.rm_p, 0, lang).squeeze(0)
                             sm_p = torch.index_select(self.sm_p, 0, lang).squeeze(0)
 
-                        if self.fast_factorize:
+                        if self.dyrank:
                             mul_factor_in = torch.mm(rm_i.t(), sm_i)
                             mul_factor_out = torch.mm(rm_o.t(), sm_o)
                             if self.relative:
@@ -648,7 +729,7 @@ class MultiheadAttention(nn.Module):
                         r_p = torch.index_select(self.r_p, 0, lang).squeeze(0)
                         s_p = torch.index_select(self.s_p, 0, lang).squeeze(0)
 
-                    if self.fast_factorize or self.dyrank:
+                    if self.dyrank:
                         add_factor_in = torch.mm(r_i.t(), s_i)
                         add_factor_out = torch.mm(r_o.t(), s_o)
                         if self.relative: pos_factor = torch.mm(r_p.t(), s_p)

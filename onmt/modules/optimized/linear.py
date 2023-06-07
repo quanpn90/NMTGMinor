@@ -68,3 +68,68 @@ class Linear(torch.nn.Linear):
             return linear_function(input, self.weight, self.bias)
         else:
             return torch.nn.functional.linear(input, self.weight, self.bias)
+
+
+def factorize_linear(input, weight, bias, rm, sm):
+
+    # here we assume that rm and sm has size [rank x D]
+
+    if input.ndim == 3:
+
+        # assuming input size is [T x B x D]
+
+        bsz, qlen = input.size(1), input.size(0)
+        rank = rm.size(0)
+
+        rm = rm.unsqueeze(1).unsqueeze(2)
+        sm = sm.unsqueeze(1).unsqueeze(2)
+
+        h = input.unsqueeze(0) * sm
+
+        if rank == 1:
+            h = h.squeeze(0)
+        else:
+            h = h.sum(dim=0)
+
+        h = torch.mm(h.view(qlen * bsz, -1), weight.transpose(0, 1))
+        h = h.view(qlen, bsz, -1).unsqueeze(0) * rm
+
+        if rank == 1:
+            h = h.squeeze(0)
+        else:
+            h = h.sum(dim=0)
+
+        h = h + bias.unsqueeze(0).unsqueeze(1)
+
+        return h
+
+    elif input.ndim == 2:
+
+        total_bsz = input.size(0)
+        rank = rm.size(0)
+
+        rm = rm.unsqueeze(1)
+        sm = sm.unsqueeze(1)
+
+        h = input.unsqueeze(0) * sm
+
+        if rank == 1:
+            h = h.squeeze(0)
+        else:
+            h = h.sum(dim=0)
+
+        h = torch.mm(h, weight.transpose(0, 1))
+        h = h.unsqueeze(0) * rm
+
+        if rank == 1:
+            h = h.squeeze(0)
+        else:
+            h = h.sum(dim=0)
+
+        h = h + bias.unsqueeze(0)
+
+        return h
+
+    else:
+        raise NotImplementedError
+

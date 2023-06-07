@@ -29,6 +29,7 @@ from .fairseq_modules import (
 
 from onmt.modules.layer_norm import LayerNorm
 from onmt.modules.optimized.dropout_add import fused_dropout_add
+from onmt.modules.optimized.linear import factorize_linear
 
 from .utils import buffered_arange, index_put, is_xla_tensor
 
@@ -1568,6 +1569,27 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
         return x, None
 
+    def call_factorize_mlp(self, x, lang, activation_fn, dropout_p, training_):
+
+        in_weight = self.fc1.weight
+        out_weight = self.fc2.weight
+        in_bias = self.fc1.bias
+        out_bias = self.fc2.bias
+
+        # TODO: mm instead of index select for multiple code
+        rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
+        sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
+        rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
+        sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+
+        x = factorize_linear(x, in_weight, in_bias, rm_i, sm_i)
+        x = activation_fn(x)
+        x = F.dropout(x, dropout_p, training=training_)
+
+        x = factorize_linear(x, out_weight, out_bias, rm_o, sm_o)
+
+        return x
+
     def forward(
             self,
             x: torch.Tensor,
@@ -1619,6 +1641,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         if self.layer_norm_first:
             x = self.self_attn_layer_norm(x)
 
+            # SELF ATTENTION
             x, attn = self.call_self_attn(
                 x,
                 self_attn_padding_mask=self_attn_padding_mask,
@@ -1632,21 +1655,20 @@ class TransformerSentenceEncoderLayer(nn.Module):
             x = self.dropout1(x) + residual
 
             residual = x
-            #
-            # if self.has_adapter:
-            #     if self.adapter_location == 2:
-            #         assert lang is not None
-            #         x = self.mid_adapter(x, lang=lang)
-            #         x.add_(residual)
-            #         residual = x
 
+            # MLP
             x = self.final_layer_norm(x)
 
-            in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
+            if self.fast_factorize:
+                x = self.call_factorize_mlp(x, lang, self.activation_fn,
+                                            self.dropout2.p,
+                                            self.training)
+            else:
+                in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
 
-            x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
-                         self.dropout2.p, self.training,
-                         self.fused, self.fused_function, checkpointing_ffn)
+                x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
+                             self.dropout2.p, self.training,
+                             self.fused, self.fused_function, checkpointing_ffn)
 
             x = self.dropout3(x) + residual
 

@@ -20,7 +20,6 @@ std::vector<torch::Tensor> fwd_bias_cuda(
                                float                dropout_prob,
                                torch::Tensor lt_workspace);
 
-
 std::vector<torch::Tensor> bwd_bias_cuda(
                                bool use_time_mask,
                                int                  heads,
