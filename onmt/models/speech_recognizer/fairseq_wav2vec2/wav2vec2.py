@@ -1271,11 +1271,11 @@ class TransformerEncoder(nn.Module):
         for layer in self.layers:
             layer.add_adapters(n_languages, adapter_location=adapter_location)
 
-    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False, *kwargs):
+    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False, dyrank=False, *kwargs):
 
         for layer in self.layers:
             layer.add_factorized(n_languages, rank=rank,
-                                 multiplicative=multiplicative, fast=fast)
+                                 multiplicative=multiplicative, fast=fast, dyrank=dyrank)
 
     def freeze_ffn_params(self):
 
@@ -1452,6 +1452,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         :param rank: number of vectors
         :param multiplicative:
         :param fast:
+        :param dyrank
         :return:
         """
 
@@ -1463,31 +1464,40 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.multiplicative_factorize = multiplicative
         self.is_factorized = True
         self.fast_factorize = fast
+        self.dyrank = dyrank
 
         embed_dim = self.embedding_dim
         ffn_dim = self.ffn_embedding_dim
+
+        if multiplicative:
+            _rank = rank if fast else 1
+            self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.ffn_embedding_dim))
+            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.embedding_dim))
+            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.embedding_dim))
+            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.ffn_embedding_dim))
+
+            constant = math.sqrt(1.0 / _rank) if fast else 1
+            nn.init.constant_(self.rm_i, constant)
+            nn.init.constant_(self.sm_i, constant)
+            nn.init.constant_(self.rm_o, constant)
+            nn.init.constant_(self.sm_o, constant)
+
         self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
         self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
         self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
         self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
 
-        nn.init.normal_(self.r_i, 0.0, 0.02)
-        nn.init.normal_(self.s_i, 0.0, 0.02)
-        nn.init.normal_(self.r_o, 0.0, 0.02)
-        nn.init.normal_(self.s_o, 0.0, 0.02)
+        if self.dyrank:
+            nn.init.zeros_(self.r_i)
+            nn.init.normal_(self.s_i, 0.0, 0.02)
+            nn.init.zeros_(self.r_o)
+            nn.init.normal_(self.s_o, 0.0, 0.02)
 
-        if multiplicative:
-            rank = rank if fast else 1
-            self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
-            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
-            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
-            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
-
-            constant = math.sqrt(1.0 / rank) if fast else 1
-            nn.init.constant_(self.rm_i, constant)
-            nn.init.constant_(self.sm_i, constant)
-            nn.init.constant_(self.rm_o, constant)
-            nn.init.constant_(self.sm_o, constant)
+        else:
+            nn.init.normal_(self.r_i, 0.0, 0.02)
+            nn.init.normal_(self.s_i, 0.0, 0.02)
+            nn.init.normal_(self.r_o, 0.0, 0.02)
+            nn.init.normal_(self.s_o, 0.0, 0.02)
 
     def get_mlp_weights(self, lang=None, atb=None):
 
@@ -1522,7 +1532,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
                 s_o = torch.index_select(self.s_o, 0, lang).squeeze(0)
 
-                if self.fast_factorize:
+                if self.fast_factorize or self.dyrank:
                     add_factor_in = torch.mm(r_i.t(), s_i)
                     add_factor_out = torch.mm(r_o.t(), s_o)
                 else:

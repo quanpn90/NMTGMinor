@@ -285,10 +285,10 @@ class DeltaLMDecoderLayer(nn.Module):
         self.fc1.bias.requires_grad = False
         self.fc2.bias.requires_grad = False
 
-    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False):
+    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False, dyrank=False, **kwargs):
 
-        self.self_attn.add_factorized_weights(n_languages, rank=rank, multiplicative=multiplicative, fast=fast)
-        self.encoder_attn.add_factorized_weights(n_languages, rank=rank, multiplicative=multiplicative, fast=fast)
+        self.self_attn.add_factorized_weights(n_languages, rank=rank, multiplicative=multiplicative, fast=fast, dyrank=dyrank)
+        self.encoder_attn.add_factorized_weights(n_languages, rank=rank, multiplicative=multiplicative, fast=fast, dyrank=dyrank)
 
         self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_dim))
         self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embed_dim))

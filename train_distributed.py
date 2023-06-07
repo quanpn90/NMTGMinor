@@ -664,6 +664,7 @@ def main(gpu, opt):
         valid_data = valid_sets
 
     if opt.load_from and not opt.reset_optim:
+        lprint("Loading checkpoint: ", opt.load_from)
         checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
         lprint("* Loading dictionaries from the checkpoint")
         del checkpoint['model']

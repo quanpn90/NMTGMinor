@@ -400,41 +400,27 @@ class MultiheadAttention(nn.Module):
         if self.proj_updater:
             self.proj_updater.feature_redraw_interval = None
 
-    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False):
+    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False, dyrank=False, **kwargs):
         embed_dim = self.embed_dim
         self.is_factorized = True
         self.multiplicative_factorize = multiplicative
         self.fast_factorize = fast
+        self.dyrank = dyrank
 
-        self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
-        self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-        self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-        self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-        if self.relative:
-            self.r_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.s_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-
-        std = 0.01 if fast else 0.02
-        nn.init.normal_(self.r_i, 0.0, std)
-        nn.init.normal_(self.s_i, 0.0, std)
-        nn.init.normal_(self.r_o, 0.0, std)
-        nn.init.normal_(self.s_o, 0.0, std)
-
-        if self.relative:
-            nn.init.normal_(self.r_p, 0.0, std)
-            nn.init.normal_(self.s_p, 0.0, std)
+        if self.fast_factorize:
+            assert self.multiplicative_factorize is True
 
         if multiplicative:
-            rank = rank if fast else 1
-            self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
-            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            _rank = rank if fast else 1
+            self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, _rank, 3 * embed_dim))
+            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
             if self.relative:
                 self.rm_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
                 self.sm_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
-            constant = math.sqrt(1.0 / rank) if fast else 1
+            constant = math.sqrt(1.0 / _rank) if fast else 1
             nn.init.constant_(self.rm_i, constant)
             nn.init.constant_(self.sm_i, constant)
             nn.init.constant_(self.rm_o, constant)
@@ -442,6 +428,37 @@ class MultiheadAttention(nn.Module):
             if self.relative:
                 nn.init.constant_(self.rm_p, constant)
                 nn.init.constant_(self.sm_p, constant)
+
+        if not fast:
+            self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
+            self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            if self.relative:
+                self.r_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+                self.s_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+
+            if self.dyrank:
+                nn.init.zeros_(self.r_i)
+                nn.init.normal_(self.s_i, 0.0, 0.02)
+                nn.init.zeros_(self.r_o)
+                nn.init.normal_(self.s_o, 0.0, 0.02)
+
+                if self.relative:
+                    nn.init.zeros_(self.r_p)
+                    nn.init.normal_(self.s_p, 0.0, 0.02)
+            else:
+
+                std = 0.01 if fast else 0.02
+                nn.init.normal_(self.r_i, 0.0, std)
+                nn.init.normal_(self.s_i, 0.0, std)
+                nn.init.normal_(self.r_o, 0.0, std)
+                nn.init.normal_(self.s_o, 0.0, std)
+
+                if self.relative:
+                    nn.init.normal_(self.r_p, 0.0, std)
+                    nn.init.normal_(self.s_p, 0.0, std)
+
 
     def convert_fast_attention(self):
 
@@ -622,6 +639,7 @@ class MultiheadAttention(nn.Module):
                         if self.relative:
                             pos_proj_weight = pos_proj_weight * pos_factor
 
+                    # TODO: dyrank select rank
                     r_i = torch.index_select(self.r_i, 0, lang).squeeze(0)
                     s_i = torch.index_select(self.s_i, 0, lang).squeeze(0)
                     r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
@@ -630,7 +648,7 @@ class MultiheadAttention(nn.Module):
                         r_p = torch.index_select(self.r_p, 0, lang).squeeze(0)
                         s_p = torch.index_select(self.s_p, 0, lang).squeeze(0)
 
-                    if self.fast_factorize:
+                    if self.fast_factorize or self.dyrank:
                         add_factor_in = torch.mm(r_i.t(), s_i)
                         add_factor_out = torch.mm(r_o.t(), s_o)
                         if self.relative: pos_factor = torch.mm(r_p.t(), s_p)

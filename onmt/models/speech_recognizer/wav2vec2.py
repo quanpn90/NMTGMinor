@@ -257,10 +257,7 @@ class FairseqWav2Vec(nn.Module):
                   % (opt.n_languages, opt.n_attributes))
             self.wav2vec_encoder.encoder.add_factorize(opt.n_languages, rank=opt.mfw_rank,
                                                        multiplicative=opt.mfw_multiplicative,
-                                                       fast=opt.fast_factorize,
-                                                       sub_factors=opt.n_attributes,
-                                                       sub_factor_rank=math.floor(
-                                                           opt.mfw_rank * opt.mfw_atb_rank_scale))
+                                                       fast=opt.fast_factorize)
 
         # or adapter
         if opt.wav2vec_adapter > 0:

@@ -162,7 +162,7 @@ class MBartAttention(nn.Module):
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
-    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False):
+    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False, dyrank=False, **kwargs):
         """
         Add factorized weights for self-attention
 
@@ -170,36 +170,46 @@ class MBartAttention(nn.Module):
         :param rank:
         :param multiplicative:
         :param fast:
+        :param dyrank:
         :return:
         """
         embed_dim = self.embed_dim
         self.is_factorized = True
         self.multiplicative_factorize = multiplicative
         self.fast_factorize = fast
+        self.dyrank = dyrank
+
+        if multiplicative:
+            _rank = rank if fast else 1
+            self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, _rank, 3 * embed_dim))
+            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+
+            constant = math.sqrt(1.0 / _rank) if fast else 1
+            nn.init.constant_(self.rm_i, constant)
+            nn.init.constant_(self.sm_i, constant)
+            nn.init.constant_(self.rm_o, constant)
+            nn.init.constant_(self.sm_o, constant)
 
         self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
         self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
         self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
         self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
-        std = 0.01 if fast else 0.02
-        nn.init.normal_(self.r_i, 0.0, std)
-        nn.init.normal_(self.s_i, 0.0, std)
-        nn.init.normal_(self.r_o, 0.0, std)
-        nn.init.normal_(self.s_o, 0.0, std)
+        if self.dyrank:
+            nn.init.zeros_(self.r_i)
+            nn.init.normal_(self.s_i, 0.0, 0.02)
+            nn.init.zeros_(self.r_o)
+            nn.init.normal_(self.s_o, 0.0, 0.02)
 
-        if multiplicative:
-            rank = rank if fast else 1
-            self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
-            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        else:
+            std = 0.01 if fast else 0.02
+            nn.init.normal_(self.r_i, 0.0, std)
+            nn.init.normal_(self.s_i, 0.0, std)
+            nn.init.normal_(self.r_o, 0.0, std)
+            nn.init.normal_(self.s_o, 0.0, std)
 
-            constant = math.sqrt(1.0 / rank) if fast else 1
-            nn.init.constant_(self.rm_i, constant)
-            nn.init.constant_(self.sm_i, constant)
-            nn.init.constant_(self.rm_o, constant)
-            nn.init.constant_(self.sm_o, constant)
 
     def convert_fast_attention(self):
 
@@ -284,7 +294,7 @@ class MBartAttention(nn.Module):
                 r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
                 s_o = torch.index_select(self.s_o, 0, lang).squeeze(0)
 
-                if self.fast_factorize:
+                if self.fast_factorize or self.dyrank:
                     add_factor_in = torch.mm(r_i.t(), s_i)
                     add_factor_out = torch.mm(r_o.t(), s_o)
                 else:
@@ -404,44 +414,61 @@ class MBartCrossAttention(MBartAttention):
         del self.k_proj
         del self.v_proj
 
-    def add_factorized_weights(self, n_languages, rank=4, multiplicative=False, fast=False, **kwargs):
+    def add_factorized_weights(self, n_languages, rank=4,
+                               multiplicative=False, fast=False, dyrank=False, **kwargs):
 
         embed_dim = self.embed_dim
         self.is_factorized = True
         self.multiplicative_factorize = multiplicative
         self.fast_factorize = fast
+        self.dyrank = dyrank
 
-        self.r_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-        self.s_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-        self.r_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, 2 * embed_dim))
-        self.s_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-        self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-        self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-
-        std = 0.01 if fast else 0.02
-        nn.init.normal_(self.r_q, 0.0, std)
-        nn.init.normal_(self.s_q, 0.0, std)
-        nn.init.normal_(self.r_kv, 0.0, std)
-        nn.init.normal_(self.s_kv, 0.0, std)
-        nn.init.normal_(self.r_o, 0.0, std)
-        nn.init.normal_(self.s_o, 0.0, std)
+        # if not fast: the weights are calculated first
+        # W = W_S * (rm \dot sm) + (r \dot s)
+        # if fast: maybe using only W_S
+        # WX + b = W(rm \dot sm)X + b
+        #        = W(X \dot sm)rm + b
 
         if multiplicative:
-            rank = rank if fast else 1
-            self.rm_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.sm_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.rm_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, 2 * embed_dim))
-            self.sm_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            _rank = rank if fast else 1
+            self.rm_q = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+            self.sm_q = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+            self.rm_kv = torch.nn.Parameter(torch.Tensor(n_languages, _rank, 2 * embed_dim))
+            self.sm_kv = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
+            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, embed_dim))
 
-            constant = math.sqrt(1.0 / rank) if fast else 1
+            constant = math.sqrt(1.0 / _rank) if fast else 1
             nn.init.constant_(self.rm_q, constant)
             nn.init.constant_(self.sm_q, constant)
             nn.init.constant_(self.rm_kv, constant)
             nn.init.constant_(self.sm_kv, constant)
             nn.init.constant_(self.rm_o, constant)
             nn.init.constant_(self.sm_o, constant)
+
+        if not fast:
+            self.r_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.s_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.r_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, 2 * embed_dim))
+            self.s_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+
+            if self.dyrank:
+                nn.init.zeros_(self.r_q)
+                nn.init.normal_(self.s_q, 0.0, 0.02)
+                nn.init.zeros_(self.r_kv)
+                nn.init.normal_(self.s_kv, 0.0, 0.02)
+                nn.init.zeros_(self.r_o)
+                nn.init.normal_(self.s_o, 0.0, 0.02)
+            else:
+                std = 0.01 if fast else 0.02
+                nn.init.normal_(self.r_q, 0.0, std)
+                nn.init.normal_(self.s_q, 0.0, std)
+                nn.init.normal_(self.r_kv, 0.0, std)
+                nn.init.normal_(self.s_kv, 0.0, std)
+                nn.init.normal_(self.r_o, 0.0, std)
+                nn.init.normal_(self.s_o, 0.0, std)
 
     def forward(
             self,
@@ -494,7 +521,7 @@ class MBartCrossAttention(MBartAttention):
                 r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
                 s_o = torch.index_select(self.s_o, 0, lang).squeeze(0)
 
-                if self.fast_factorize:
+                if self.fast_factorize or self.dyrank:
                     add_factor_q = torch.mm(r_q.t(), s_q)
                     add_factor_kv = torch.mm(r_kv.t(), s_kv)
                     add_factor_out = torch.mm(r_o.t(), s_o)
@@ -927,37 +954,44 @@ class MBartDecoderLayer(nn.Module):
         self.fc1.bias.requires_grad = False
         self.fc2.bias.requires_grad = False
 
-    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False, **kwargs):
+    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False, dyrank=False, **kwargs):
 
         # add factorized weights for self-attention
         self.self_attn.add_factorized_weights(n_languages, rank=rank, multiplicative=multiplicative,
-                                              fast=fast)
+                                              fast=fast, dyrank=dyrank)
         self.encoder_attn.add_factorized_weights(n_languages, rank=rank, multiplicative=multiplicative,
-                                                 fast=fast)
+                                                 fast=fast, dyrank=dyrank)
 
         # add factorized_weights for ffn
         self.is_factorized = True
         self.multiplicative_factorize = multiplicative
         self.fast_factorize = fast
+        self.dyrank = dyrank
 
         self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_dim))
         self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embed_dim))
         self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embed_dim))
         self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_dim))
 
-        nn.init.normal_(self.r_i, 0.0, 0.02)
-        nn.init.normal_(self.s_i, 0.0, 0.02)
-        nn.init.normal_(self.r_o, 0.0, 0.02)
-        nn.init.normal_(self.s_o, 0.0, 0.02)
+        if self.dyrank:
+            nn.init.zeros_(self.r_i)
+            nn.init.normal_(self.s_i, 0.0, 0.02)
+            nn.init.zeros_(self.r_o)
+            nn.init.normal_(self.s_o, 0.0, 0.02)
+        else:
+            nn.init.normal_(self.r_i, 0.0, 0.02)
+            nn.init.normal_(self.s_i, 0.0, 0.02)
+            nn.init.normal_(self.r_o, 0.0, 0.02)
+            nn.init.normal_(self.s_o, 0.0, 0.02)
 
         if multiplicative:
-            rank = rank if fast else 1
-            self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_dim))
-            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embed_dim))
-            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embed_dim))
-            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_dim))
+            _rank = rank if fast else 1
+            self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.ffn_dim))
+            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.embed_dim))
+            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.embed_dim))
+            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.ffn_dim))
 
-            constant = math.sqrt(1.0 / rank) if fast else 1
+            constant = math.sqrt(1.0 / _rank) if fast else 1
             nn.init.constant_(self.rm_i, constant)
             nn.init.constant_(self.sm_i, constant)
             nn.init.constant_(self.rm_o, constant)
@@ -1007,7 +1041,7 @@ class MBartDecoderLayer(nn.Module):
                 r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
                 s_o = torch.index_select(self.s_o, 0, lang).squeeze(0)
 
-                if self.fast_factorize:
+                if self.fast_factorize or self.dyrank:
                     add_factor_in = torch.mm(r_i.t(), s_i)
                     add_factor_out = torch.mm(r_o.t(), s_o)
                 else:
@@ -1092,8 +1126,6 @@ class MBartDecoderLayer(nn.Module):
         if incremental and incremental_cache is None:
             incremental_cache = dict()
 
-        # bsz, seq_len = hidden_states.size(1), hidden_states.size(0)
-        # hidden_states = hidden_states.transpose(0, 1).contiguous()
         residual = hidden_states
         hidden_states = self.self_attn_layer_norm(hidden_states)
 
@@ -1111,10 +1143,8 @@ class MBartDecoderLayer(nn.Module):
             cu_seqlens=cu_seqlens, max_len=max_len
         )
 
-        # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        # hidden_states.add_(residual)
-        # hidden_states = hidden_states + residual
-        hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
+        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = hidden_states + residual
 
         # Cross-Attention Block
         cross_attn_weights = None
@@ -1123,8 +1153,6 @@ class MBartDecoderLayer(nn.Module):
             hidden_states = self.encoder_attn_layer_norm(hidden_states)
             attention_input = hidden_states
 
-            # cross_attn cached key/values tuple is at positions 3,4 of present_key_value tuple
-            # cross_attn_past_key_value = past_key_value[-2:] if past_key_value is not None else None
             hidden_states, cross_attn_weights, incremental_cache = self.encoder_attn(
                 hidden_states=attention_input,
                 key_value_states=encoder_hidden_states,
@@ -1137,54 +1165,23 @@ class MBartDecoderLayer(nn.Module):
                 cu_seqlens_kv=cu_seqlens_kv, max_len_kv=max_len_kv
             )
 
-            # perform cross-attention on the sub-hidden states
-            # if sub_encoder_hidden_states is not None:
-            #     sub_hidden_states, sub_cross_attn_weights, _ = self.encoder_attn(
-            #         hidden_states=attention_input,
-            #         key_value_states=sub_encoder_hidden_states,
-            #         attention_mask=sub_encoder_attention_mask,
-            #         output_attentions=output_attentions,
-            #         incremental=False, incremental_cache=None,
-            #         lang=lang, mixture=mixture
-            #     )
-            #
-            #     # t x b x h -> sum to 1
-            #     contrastive_loss = F.mse_loss(hidden_states.float(), sub_hidden_states.float(), reduction='none')
-            #
-            # else:
             contrastive_loss = None
 
-            # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-            # hidden_states = hidden_states + residual
-            hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
+            hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+            hidden_states = hidden_states + residual
 
         # Fully Connected
         residual = hidden_states
         hidden_states = self.final_layer_norm(hidden_states)
-
-        # if self.fused and hidden_states.is_cuda:
-        #     weights = [self.fc1.weight, self.fc2.weight]
-        #     biases = [self.fc1.bias, self.fc2.bias]
-        #
-        #     # seq_len, bsz, hidden_size = hidden_states.size(0), hidden_states.size(1), hidden_states.size(2)
-        #     dropout = self.activation_dropout if self.training else 0.0
-        #     hidden_states = self.fused_function(dropout, False, hidden_states, *weights, *biases).type_as(hidden_states)
-        #
-        #     # hidden_states = hidden_states.view(seq_len, bsz, hidden_size)
-        # else:
-        #     hidden_states = self.activation_fn(self.fc1(hidden_states))
-        #     hidden_states = nn.functional.dropout(hidden_states, p=self.activation_dropout, training=self.training)
-        #     hidden_states = self.fc2(hidden_states)
 
         in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
         hidden_states = self.call_mlp(hidden_states, in_weight, out_weight, in_bias, out_bias,
                                       self.activation_fn, self.activation_dropout, self.training,
                                       self.fused, self.fused_function, checkpointing_ffn)
 
-        hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
-        # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        # hidden_states = hidden_states + residual
-        # hidden_states.add_(residual)
+        # hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
+        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = hidden_states + residual
 
         if self.has_adapter:
             residual = hidden_states
@@ -1207,7 +1204,6 @@ class MBartDecoderLayer(nn.Module):
             outputs += (self_attn_weights, cross_attn_weights)
 
         if contrastive_loss is not None:
-            # print("Return contrastive loss here,", contrastive_loss.size())
             outputs += (contrastive_loss,)
 
         return outputs, incremental_cache
@@ -1623,6 +1619,7 @@ class MBartDecoder(MBartPreTrainedModel):
                 p.requires_grad = False
 
         if opt.multilingual_factorized_weights_decoder:
+            # TODO: dyrank
             print("[INFO] Factorizing MBART model into %d languages and %d factors"
                   % (opt.n_languages, opt.n_attributes))
             self.add_factorize(opt.n_languages, rank=opt.mfw_rank,
@@ -1657,11 +1654,11 @@ class MBartDecoder(MBartPreTrainedModel):
     def set_input_embeddings(self, value):
         self.embed_tokens = value
 
-    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False, **kwargs):
+    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False, dyrank=False, **kwargs):
 
         for layer in self.layers:
             layer.add_factorize(n_languages, rank=rank, multiplicative=multiplicative,
-                                fast=fast)
+                                fast=fast, dyrank=dyrank)
 
     def forward(
             self,

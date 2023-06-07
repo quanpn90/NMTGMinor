@@ -356,7 +356,7 @@ def make_parser(parser):
     parser.add_argument('-multilingual_factorized_weights_decoder', action='store_true',
                         help='Factorize the weights in the model decoder for multilingual')
     parser.add_argument('-fast_factorize', action='store_true',
-                        help='Fast Factorize the weights in the model for multilingual')
+                        help='Fast Factorize the weights in the model for multilingual (Batch Ensemble style)')
     parser.add_argument('-mfw_rank', type=int, default=1,
                         help="Rank of the mfw vectors.")
     parser.add_argument('-mfw_multiplicative', action='store_true',
