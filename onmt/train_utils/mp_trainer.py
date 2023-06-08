@@ -1310,7 +1310,8 @@ class Trainer(object):
                     print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
                     print('Input size at OOM position:', batch.get('source').size(),
                           batch.get('target').size())
-                    raise e
+                # always raise the error
+                raise e
 
             batch_size = batch.size
 
