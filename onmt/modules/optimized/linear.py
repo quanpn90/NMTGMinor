@@ -73,6 +73,14 @@ class Linear(torch.nn.Linear):
 def factorize_linear(input, weight, bias, rm, sm):
 
     # here we assume that rm and sm has size [rank x D]
+    # Todo: manually cast tensors to fp16 because autocast refuses to do it for multiplication?
+
+    if torch.is_autocast_enabled():
+        input = input.half()
+        rm = rm.half()
+        sm = sm.half()
+        weight = weight.half()
+        bias = bias.half()
 
     if input.ndim == 3:
 

@@ -878,8 +878,9 @@ class Trainer(object):
                     print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
                     print('Input size at OOM position:', batch.get('source').size(),
                           batch.get('target').size())
-                    raise e
-                    loss = 0
+
+                    # recovering mechanism doesn't work at the moment
+                    # loss = 0
                     # for p in self.model.parameters():
                     #     if p.grad is not None:
                     #         del p.grad  # free some memory
@@ -894,6 +895,8 @@ class Trainer(object):
                     # # backward to actually free the graph
                     # # self.grad_scaler.scale(loss).backward()
                     # oom.add_(1)
+
+                raise e
 
             # connecting the oom signal from different gpus
             # self.all_reduce(oom, op=dist.ReduceOp.SUM, group=self.group)
