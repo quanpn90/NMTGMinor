@@ -602,6 +602,7 @@ class Wav2Vec2Model(torch.nn.Module):
             atb=None,
             checkpointing_ffn=False,
             checkpointing_self_attn=False,
+            predict_language=False
             **kwargs
     ):
         # if the tdnn features are precomputed then skip them
@@ -711,9 +712,17 @@ class Wav2Vec2Model(torch.nn.Module):
             y = unmasked_features
             mask_indices = None
 
-        x, layer_results = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, atb=atb,
-                                        checkpointing_ffn=checkpointing_ffn,
-                                        checkpointing_self_attn=checkpointing_self_attn)
+        if predict_language:
+            # we predict the language for each time step so lang pred should have size [T x B x n_lang]
+
+            x, layer_results, lang_pred = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, atb=atb,
+                                            checkpointing_ffn=checkpointing_ffn,
+                                            checkpointing_self_attn=checkpointing_self_attn, predict_language=True)
+        else:
+            x, layer_results = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, atb=atb,
+                                            checkpointing_ffn=checkpointing_ffn,
+                                            checkpointing_self_attn=checkpointing_self_attn)
+            lang_pred = None
 
         if features_only:
             output_dict = {
@@ -721,6 +730,7 @@ class Wav2Vec2Model(torch.nn.Module):
                 "padding_mask": padding_mask,
                 "features": unmasked_features,
                 "layer_results": layer_results,
+                "lang_preidct": lang_pred
             }
 
             if quantize:
@@ -926,10 +936,6 @@ class Wav2Vec2Model(torch.nn.Module):
         for fast_attention in fast_attentions:
             fast_attention.convert_fast_attention()
 
-    # Convert the self-attn module to deep speed transformer
-    def convert_deepspeed(self, training=True, bsz=32):
-        self.encoder.convert_deepspeed(training=training, bsz=bsz)
-
 
 class ConvFeatureExtractionModel(nn.Module):
     def __init__(
@@ -1072,6 +1078,7 @@ class TransformerEncoder(nn.Module):
         self.args = args
 
         self.apply(init_bert_params)
+        self.linear_cls = None
 
         # from onmt.modules.optimized.fast_mha import fast_bert_mha
         # self.fast_bert_mha = fast_bert_mha
@@ -1079,13 +1086,18 @@ class TransformerEncoder(nn.Module):
         self.fast_bert_mha = flash_bert_mha
         self.using_s4 = False
 
+
+    def add_language_classifier(self, n_languages):
+
+        self.linear_cls = torch.nn.Linear(self.embedding_dim, n_languages)
+
     def replace_attn_with_s4(self, cfg):
 
         self.using_s4 = True
         for layer in self.layers:
             layer.replace_attn_with_s4(cfg)
 
-    # add stacked encoder
+    # add stacked encoder from mbart encoder (purely parameter increase)
     def add_stacked_encoder(self, stacked_encoder):
         stacked_layers = stacked_encoder.layers
         args = self.args
@@ -1136,18 +1148,22 @@ class TransformerEncoder(nn.Module):
         self.positional_encoder = SinusoidalEmbeddings(self.embedding_dim // self.num_heads)
 
     def forward(self, x, padding_mask=None, positions=None, layer=None, lang=None, atb=None, checkpointing_ffn=False,
-                checkpointing_self_attn=False, **kwargs):
-        x, layer_results = self.extract_features(x, padding_mask, positions, layer, lang=lang, atb=atb,
+                checkpointing_self_attn=False, predict_language=False, **kwargs):
+
+        x, layer_results, pred_lang = self.extract_features(x, padding_mask, positions, layer, lang=lang, atb=atb,
                                                  checkpointing_ffn=checkpointing_ffn,
-                                                 checkpointing_self_attn=checkpointing_self_attn)
+                                                 checkpointing_self_attn=checkpointing_self_attn, predict_language=True)
 
         if self.layer_norm_first and layer is None:
             x = self.layer_norm(x)
 
-        return x, layer_results
+        if predict_language:
+            return x, layer_results, pred_lang
+        else:
+            return x, layer_results
 
     def extract_features(self, x, padding_mask=None, positions=None, tgt_layer=None, lang=None, atb=None,
-                         checkpointing_ffn=False, checkpointing_self_attn=False):
+                         checkpointing_ffn=False, checkpointing_self_attn=False, predict_language=False):
         if padding_mask is not None:
             x = index_put(x, padding_mask, 0)
 
@@ -1172,14 +1188,21 @@ class TransformerEncoder(nn.Module):
 
         x = F.dropout(x, p=self.dropout, training=self.training)
 
+        # TODO: add classification layer here.
+        if predict_language:
+            # B x T x H ->
+            pred_lang = self.linear_cls(x)
+        else:
+            pred_lang = None
+
+        # check if flash attention can be run
         can_run_fast_bert_mha = False
-        # check if fast bert mha can be run
         seq_len = x.size(1)
         bsz = x.size(0)
-        sm = torch.cuda.get_device_capability()
         total_bsz = 0
 
-        if self.deepspeed or self.using_s4:
+        # fast attention refers to using fused QKV matrix multiplication and T-B-H matrix layout to reduce reshaping cost
+        if self.using_s4:
             fast_attention = False
         else:
             fast_attention = self.layers[0].self_attn.fast_attention
@@ -1197,10 +1220,9 @@ class TransformerEncoder(nn.Module):
             lengths = lengths.cpu().tolist()  # list of lengths for B seqs
 
             # remove paddings from x
-            x = x.view(-1, x.size(-1))
+            x = x.view(-1, x.size(-1)) # flatten [B x T]
             non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
             x = x.index_select(0, non_pad_indices)
-            # x = unpad_input(x, non_pad_indices)
 
             # maybe pad it so the first dim % 8 = 0?
             total_bsz = x.size(0)
@@ -1215,14 +1237,12 @@ class TransformerEncoder(nn.Module):
             cu_seqlens = None
             non_pad_indices = None
 
-        # print(can_run_fast_bert_mha, self.using_s4)
-
         if not self.favor and not can_run_fast_bert_mha:
             # B x T x C -> T x B x C  (only for vanilla self-attention and s4)
             x = x.transpose(0, 1)
         x = x.contiguous()
 
-        # If not using deepspeed: proceed like normal
+        # forward pass through layers
         layer_results = []
         r = None
         for i, layer in enumerate(self.layers):
@@ -1251,13 +1271,11 @@ class TransformerEncoder(nn.Module):
                 x = x[:total_bsz, :]
 
             from onmt.utils import pad_input
-            # x = pad_input(x, non_pad_indices, bsz, seq_len)
             x = index_copy(x, non_pad_indices, bsz * seq_len)
+            # transpose [B x T x H] to [T x B x H]
             x = x.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
 
-        # print("wav2vec output:", x.size(), x.sum())
-
-        return x, layer_results
+        return x, layer_results, pred_lang
 
     def max_positions(self):
         """Maximum output length supported by the encoder."""
@@ -1286,58 +1304,6 @@ class TransformerEncoder(nn.Module):
             for p in layer.fc2.parameters():
                 p.requires_grad = False
 
-    def convert_deepspeed(self, training=True, bsz=32):
-
-        from deepspeed import DeepSpeedTransformerConfig, DeepSpeedTransformerLayer
-        self.deepspeed = True
-
-        config = DeepSpeedTransformerConfig(batch_size=bsz,
-                                            hidden_size=self.embedding_dim,
-                                            heads=self.num_heads,
-                                            attn_dropout_ratio=self.attention_dropout,
-                                            hidden_dropout_ratio=self.activation_dropout,
-                                            num_hidden_layers=-1,
-                                            initializer_range=0.02,
-                                            local_rank=-1,
-                                            seed=1234,
-                                            fp16=True,
-                                            pre_layer_norm=True,
-                                            adjust_init_range=False,
-                                            attn_dropout_checkpoint=False,
-                                            normalize_invertible=False,
-                                            gelu_checkpoint=False,
-                                            return_tuple=False,
-                                            training=training)
-
-        old_layers = self.layers
-
-        self.layers = nn.ModuleList([
-            copy.deepcopy(DeepSpeedTransformerLayer(config))
-            for _ in range(self.num_layers)
-        ])
-
-        # self.layers = nn.ModuleList()
-        # for i in range(self.num_layers):
-        #
-        #     old_layer = old_layers[i]
-        #
-        # new_layer = DeepSpeedTransformerLayer(config)
-        #
-        #     with torch.no_grad():
-        #         new_layer.attn_qkvw.copy_(old_layer.self_attn.proj_weight)
-        #         new_layer.attn_qkvb.copy_(old_layer.self_attn.proj_bias)
-        #         new_layer.attn_ow.copy_(old_layer.self_attn.out_proj.weight)
-        #         new_layer.attn_ob.copy_(old_layer.self_attn.out_proj.bias)
-        #         new_layer.attn_nw.copy_(old_layer.self_attn_layer_norm.weight)
-        #         new_layer.attn_nb.copy_(old_layer.self_attn_layer_norm.bias)
-        #         new_layer.inter_w.copy_(old_layer.fc1.weight)
-        #         new_layer.inter_b.copy_(old_layer.fc1.bias)
-        #         new_layer.output_w.copy_(old_layer.fc2.weight)
-        #         new_layer.output_b.copy_(old_layer.fc2.bias)
-        #         new_layer.norm_w.copy_(old_layer.final_layer_norm.weight)
-        #         new_layer.norm_b.copy_(old_layer.final_layer_norm.bias)
-        #
-        # self.layers.append(new_layer)
 
 
 # noinspection PyAttributeOutsideInit
@@ -1477,12 +1443,13 @@ class TransformerSentenceEncoderLayer(nn.Module):
             self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.embedding_dim))
             self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.ffn_embedding_dim))
 
-            constant = math.sqrt(1.0 / _rank) if fast else 1
+            constant = 1
             nn.init.constant_(self.rm_i, constant)
             nn.init.constant_(self.sm_i, constant)
             nn.init.constant_(self.rm_o, constant)
             nn.init.constant_(self.sm_o, constant)
 
+        # These parameters are NOT USED with fast factorize
         self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
         self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
         self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
