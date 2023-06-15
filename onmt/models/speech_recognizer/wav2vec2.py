@@ -737,7 +737,11 @@ class Wav2vecBERT(Wav2vecTransformer):
             self.ctc_linear = nn.Linear(encoder.model_size, self.tgt_vocab_size)
 
     def forward(self, batch, zero_encoder=False, factorize=False, target_mask=None, mirror=False,
-                checkpointing_ffn=False, checkpointing_cross_attn=False, checkpointing_self_attn=False, **kwargs):
+                checkpointing_ffn=False,
+                checkpointing_cross_attn=False,
+                checkpointing_self_attn=False,
+                predict_language=False,
+                **kwargs):
         """
         :param checkpointing_self_attn:
         :param checkpointing_cross_attn:
@@ -778,7 +782,8 @@ class Wav2vecBERT(Wav2vecTransformer):
         encoder_output = self.encoder(src, batch_first_output=batch_first_output,
                                       lang=src_lang, atb=src_atb,
                                       checkpointing_ffn=checkpointing_ffn,
-                                      checkpointing_self_attn=checkpointing_self_attn)
+                                      checkpointing_self_attn=checkpointing_self_attn,
+                                      predict_language=predict_language)
 
         encoder_output = defaultdict(lambda: None, encoder_output)
 
@@ -911,6 +916,10 @@ class Wav2vecBERT(Wav2vecTransformer):
         if self.ctc:
             # run the ctcoutput via the wav2vec context (not context)
             output_dict['encoder_logits'] = self.ctc_linear(output_dict['wav2vec_context'])
+
+        if predict_language:
+            # we need to compute the language prediction loss
+            pass
 
         if self.sub_encoder is not None:
             # contrastive loss has size: t x b x h
