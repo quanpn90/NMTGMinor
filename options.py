@@ -559,12 +559,16 @@ def make_parser(parser):
                         help='Coefficient for the Mutual Modality Training term')
     parser.add_argument('-contrastive_loss_coeff', type=float, default=0.0,
                         help='Coefficient for the Mutual Modality Training term')
+    parser.add_argument('-predict_lang', action='store_true',
+                        help='Freeze the embedding.')
 
     return parser
 
 
 def backward_compatible(opt):
     # FOR BACKWARD COMPATIBILITY
+    if not hasattr(opt, 'predict_lang'):
+        opt.predict_lang = False
 
     if not hasattr(opt, 'model'):
         opt.model = 'recurrent'

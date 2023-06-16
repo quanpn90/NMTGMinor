@@ -41,7 +41,7 @@ class CrossEntropyLossBase(_Loss):
         super(CrossEntropyLossBase, self).__init__()
         self.output_size = output_size
         self.padding_idx = padding_idx
-        self.smoothing_value = label_smoothing / (output_size - 2)
+        self.smoothing_value = label_smoothing / (output_size - 2)  # pad and <s>
         self.confidence = 1.0 - label_smoothing
         self.label_smoothing = label_smoothing
 

@@ -209,6 +209,10 @@ class Trainer(object):
                                         mirror=opt.mirror_loss,
                                         padding_idx=tgt_pad)
 
+        if opt.predict_language:
+            # TODO
+            self.lang_cls_loss = None
+
         # This function replaces modules with the more optimized counterparts so that it can run faster
         # Currently exp with LayerNorm
 
@@ -465,6 +469,13 @@ class Trainer(object):
                 rev_loss = loss_dict['rev_loss']
                 mirror_loss = loss_dict['mirror_loss']
                 full_loss = full_loss + rev_loss + mirror_loss
+
+            if opt.predict_lang:
+                lid_loss = loss_dict['lid']
+                full_loss = full_loss + lid_loss
+                lid_loss_data = lid_loss.item()
+            else:
+                lid_loss_data = 0
 
             # reconstruction loss
             if opt.reconstruct:
