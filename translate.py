@@ -206,7 +206,6 @@ def get_sentence_from_tokens(tokens, ids, input_type, external_tokenizer=None):
             raise NotImplementedError
 
     else:
-        print(ids)
         sent = external_tokenizer.decode(ids, True, True).strip()
 
     return sent

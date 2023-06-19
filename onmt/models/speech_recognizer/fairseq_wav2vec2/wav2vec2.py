@@ -602,7 +602,7 @@ class Wav2Vec2Model(torch.nn.Module):
             atb=None,
             checkpointing_ffn=False,
             checkpointing_self_attn=False,
-            predict_language=False
+            predict_language=False,
             **kwargs
     ):
         # if the tdnn features are precomputed then skip them
@@ -730,7 +730,7 @@ class Wav2Vec2Model(torch.nn.Module):
                 "padding_mask": padding_mask,
                 "features": unmasked_features,
                 "layer_results": layer_results,
-                "lang_preidct": lang_pred
+                "lang_predict": lang_pred
             }
 
             if quantize:
@@ -1152,7 +1152,7 @@ class TransformerEncoder(nn.Module):
 
         x, layer_results, pred_lang = self.extract_features(x, padding_mask, positions, layer, lang=lang, atb=atb,
                                                  checkpointing_ffn=checkpointing_ffn,
-                                                 checkpointing_self_attn=checkpointing_self_attn, predict_language=True)
+                                                 checkpointing_self_attn=checkpointing_self_attn, predict_language=predict_language)
 
         if self.layer_norm_first and layer is None:
             x = self.layer_norm(x)
