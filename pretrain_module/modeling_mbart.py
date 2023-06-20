@@ -560,12 +560,16 @@ class MBartCrossAttention(MBartAttention):
             if self.is_factorized and self.fast_factorize:
 
                 # TODO: mm instead of index select
+
+                # if lang has only 1 element we can do this
                 rm_q = torch.index_select(self.rm_q, 0, lang).squeeze(0)  # squeeze possible because only 1
                 sm_q = torch.index_select(self.sm_q, 0, lang).squeeze(0)
                 rm_kv = torch.index_select(self.rm_kv, 0, lang).squeeze(0)  # squeeze possible because only 1
                 sm_kv = torch.index_select(self.sm_kv, 0, lang).squeeze(0)
                 rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
                 sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+
+                # if lang has size [T x B x L] we need to do a GEMM
 
                 if hidden_states.ndim == 3:
                     use_time_mask = self.is_decoder
@@ -2013,6 +2017,7 @@ class MBartDecoder(MBartPreTrainedModel):
 
                 pred_lang = self.linear_cls(cls_input)
 
+
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
 
@@ -2034,7 +2039,7 @@ class MBartDecoder(MBartPreTrainedModel):
             hidden_states = hidden_states.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
 
             if pred_lang is not None:
-                pred_lang = index_copy(hidden_states, non_pad_indices_q, bsz * seq_len)
+                pred_lang = index_copy(pred_lang, non_pad_indices_q, bsz * seq_len)
                 pred_lang = pred_lang.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
 
         # add hidden states from the last decoder layer

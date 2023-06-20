@@ -189,7 +189,9 @@ class FairseqWav2Vec(nn.Module):
         self.cfg.mask_prob = 0.0
 
         self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg, favor=opt.favor_attention,
-                                             weight_drop=opt.weight_drop, predict_language=opt.predict_language)
+                                             weight_drop=opt.weight_drop,
+                                             predict_language=opt.predict_language,
+                                             n_languages=opt.n_languages)
         self.favor = opt.favor_attention
         if self.favor:
             from onmt.modules.performer import ProjectionUpdater
@@ -522,7 +524,8 @@ class FairseqWav2Vec(nn.Module):
         output_dict = defaultdict(lambda: None, {'source': input, 'context': context, 'src_mask': dec_attn_mask,
                                                  'src': dec_attn_mask, 'pos_emb': None,
                                                  'wav2vec_context': wav2vec_context,
-                                                 'wav2vec_padding_mask': wav2vec_padding_mask})
+                                                 'wav2vec_padding_mask': wav2vec_padding_mask,
+                                                 'enc_pred_lang': wav2vec_output['pred_lang']})
 
         return output_dict
 
@@ -741,7 +744,6 @@ class Wav2vecBERT(Wav2vecTransformer):
                 checkpointing_ffn=False,
                 checkpointing_cross_attn=False,
                 checkpointing_self_attn=False,
-                predict_language=False,
                 **kwargs):
         """
         :param checkpointing_self_attn:
@@ -783,8 +785,7 @@ class Wav2vecBERT(Wav2vecTransformer):
         encoder_output = self.encoder(src, batch_first_output=batch_first_output,
                                       lang=src_lang, atb=src_atb,
                                       checkpointing_ffn=checkpointing_ffn,
-                                      checkpointing_self_attn=checkpointing_self_attn,
-                                      predict_language=predict_language)
+                                      checkpointing_self_attn=checkpointing_self_attn)
 
         encoder_output = defaultdict(lambda: None, encoder_output)
 
@@ -855,7 +856,8 @@ class Wav2vecBERT(Wav2vecTransformer):
                                            checkpointing_cross_attn=checkpointing_cross_attn,
                                            checkpointing_self_attn=checkpointing_self_attn)
             decoder_output = decoder_outputs[0]
-            contrastive_loss = decoder_outputs[-1]
+            # contrastive_loss = decoder_outputs[-1]
+
             output = decoder_output
             output_dict = defaultdict(lambda: None)
 
@@ -878,6 +880,10 @@ class Wav2vecBERT(Wav2vecTransformer):
 
         output_dict['wav2vec_context'] = encoder_output['wav2vec_context']
         output_dict['wav2vec_padding_mask'] = encoder_output['wav2vec_padding_mask']
+        output_dict['enc_pred_lang'] = encoder_output['enc_pred_lang']
+
+        if output_dict['enc_pred_lang'] is not None:
+            output_dict['dec_pred_lang'] = decoder_outputs[-1]
 
         # final layer: computing softmax
         logprobs = self.generator[0](output_dict)['logits']
@@ -917,10 +923,6 @@ class Wav2vecBERT(Wav2vecTransformer):
         if self.ctc:
             # run the ctcoutput via the wav2vec context (not context)
             output_dict['encoder_logits'] = self.ctc_linear(output_dict['wav2vec_context'])
-
-        if predict_language:
-            # we need to compute the language prediction loss
-            pass
 
         if self.sub_encoder is not None:
             # contrastive loss has size: t x b x h

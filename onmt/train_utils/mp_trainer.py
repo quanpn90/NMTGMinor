@@ -199,6 +199,10 @@ class Trainer(object):
             self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True,
                                          padding_idx=tgt_pad, blank_idx=0)
 
+        if opt.predict_language:
+            from onmt.models.speech_recognizer.lid_loss import CrossEntropyLIDLoss
+            self.lid_loss_function = CrossEntropyLIDLoss(opt.n_languages, label_smoothing=0.0)
+
         if opt.nce:
             from onmt.modules.nce.nce_loss import NCELoss
             loss_function = NCELoss(opt.model_size, dicts['tgt'].size(), noise_ratio=opt.nce_noise,
@@ -208,10 +212,6 @@ class Trainer(object):
                                         label_smoothing=opt.label_smoothing,
                                         mirror=opt.mirror_loss,
                                         padding_idx=tgt_pad)
-
-        if opt.predict_language:
-            # TODO
-            self.lang_cls_loss = None
 
         # This function replaces modules with the more optimized counterparts so that it can run faster
         # Currently exp with LayerNorm
@@ -795,6 +795,23 @@ class Trainer(object):
                         else:
                             rev_loss_data = None
                             mirror_loss_data = 0
+
+                        if opt.predict_language:
+                            enc_pred_lang = outputs['enc_pred_lang']
+                            enc_mask = outputs['src_mask']
+                            enc_lid_loss = self.lid_loss_function(enc_pred_lang, batch.get("source_lang"), enc_mask)
+
+                            dec_pred_lang = outputs['dec_pred_lang']
+                            dec_mask = outputs['target_mask']
+                            dec_lid_loss = self.lid_loss_function(dec_pred_lang, batch.get("target_lang"), dec_mask)
+
+                            full_loss = full_loss + 0.01 * (enc_lid_loss + dec_lid_loss)
+
+                        else:
+                            enc_lid_loss = None
+                            enc_lid_loss_data = None
+                            dec_lid_loss = None
+                            dec_lid_loss_data = None
 
                         # reconstruction loss
                         if opt.reconstruct:

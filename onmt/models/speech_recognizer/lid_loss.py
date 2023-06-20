@@ -20,7 +20,7 @@ class CrossEntropyLIDLoss(_Loss):
         output_size: number of words in vocabulary()
     """
 
-    def __init__(self, output_size, label_smoothing, fast_xentropy=False):
+    def __init__(self, output_size, label_smoothing):
         super().__init__()
         self.output_size = output_size
         self.padding_idx = -1
@@ -41,17 +41,16 @@ class CrossEntropyLIDLoss(_Loss):
             self.softmax_xentropy = None
             self.fast_xentropy = False
 
-    def forward(self, lid_logits, labels, pad_mask):
+    def forward(self, lid_logits, labels, mask):
         """
         :param lid_logits: list of [T x B x L] logits
-        :param labels: [B]
+        :param mask: [B x T]
         :return:
         """
 
         # here we should use logits instead of softmax/logsoftmax
         # prediction is done before the first Transformer layers
 
-        lid_logits = torch.stack(lid_logits)
         len_t, bsz = lid_logits.size(0), lid_logits.size(1)
 
         # labels = labels.unsqueeze(0).unsqueeze(0).repeat(n_layers, len_t, 1)
@@ -69,12 +68,15 @@ class CrossEntropyLIDLoss(_Loss):
         mask = mask.transpose(0, 1)
 
         # next we need to remove padding from labels and logits
+        # print(lid_logits.size(), labels.size(), mask.size())
 
         logits = lid_logits.view(-1, lid_logits.size(-1))
         gtruth = labels.view(-1)
 
         padding_mask = mask.contiguous().long()
         non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+
+        # print(logits.size(), gtruth.size(), non_pad_indices.size())
         logits = logits.index_select(0, non_pad_indices)
         gtruth = gtruth.index_select(0, non_pad_indices)
 
@@ -83,19 +85,21 @@ class CrossEntropyLIDLoss(_Loss):
 
         # print(logits.size(), gtruth.size())
 
-        if not self.fast_xentropy:
-            lprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
+        lprobs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
 
-            nll_loss = -lprobs.gather(1, gtruth.unsqueeze(1))
-            smooth_loss = -lprobs.sum(dim=-1, keepdim=True)
-            nll_loss = nll_loss.sum()
-            smooth_loss = smooth_loss.sum()
+        nll_loss = -lprobs.gather(1, gtruth.unsqueeze(1))
+        smooth_loss = -lprobs.sum(dim=-1, keepdim=True)
+        nll_loss = nll_loss.sum()
+        smooth_loss = smooth_loss.sum()
 
-            loss = (1. - label_smoothing) * nll_loss + eps_i * smooth_loss
-        else:
-            half_to_float = (logits.dtype == torch.half)
-            loss = self.softmax_xentropy(logits, gtruth, label_smoothing, self.padding_idx, half_to_float)
-            loss = loss.sum()
+        loss = (1. - label_smoothing) * nll_loss + eps_i * smooth_loss
+
+        # if not self.fast_xentropy:
+        #
+        # else:
+        #     half_to_float = (logits.dtype == torch.half)
+        #     loss = self.softmax_xentropy(logits, gtruth, label_smoothing, self.padding_idx, half_to_float)
+        #     loss = loss.sum()
 
         return loss
 

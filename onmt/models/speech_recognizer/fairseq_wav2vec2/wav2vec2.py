@@ -289,7 +289,7 @@ def init_bert_params(module):
 class Wav2Vec2Model(torch.nn.Module):
     def __init__(self, cfg: Wav2Vec2Config,
                  favor=False, feature_redraw_interval=1000, auto_check_redraw=True,
-                 weight_drop=0.0, predict_language=False):
+                 weight_drop=0.0, predict_language=False, n_languages=1):
         super().__init__()
         self.rotary_attention = False
         self.relative_attention = False
@@ -383,7 +383,8 @@ class Wav2Vec2Model(torch.nn.Module):
             torch.FloatTensor(cfg.encoder_embed_dim).uniform_()
         )
 
-        self.encoder = TransformerEncoder(cfg, favor=favor, weight_drop=weight_drop, predict_language=predict_language)
+        self.encoder = TransformerEncoder(cfg, favor=favor, weight_drop=weight_drop,
+                                          predict_language=predict_language, n_languages=n_languages)
         self.layer_norm = LayerNorm(self.embed)
 
         self.target_glu = None
@@ -711,7 +712,7 @@ class Wav2Vec2Model(torch.nn.Module):
             y = unmasked_features
             mask_indices = None
 
-        x, layer_results, lang_pred = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, atb=atb,
+        x, layer_results, pred_lang = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, atb=atb,
                                                    checkpointing_ffn=checkpointing_ffn,
                                                    checkpointing_self_attn=checkpointing_self_attn)
 
@@ -721,15 +722,13 @@ class Wav2Vec2Model(torch.nn.Module):
                 "padding_mask": padding_mask,
                 "features": unmasked_features,
                 "layer_results": layer_results,
-                "lang_predict": lang_pred
+                "pred_lang": pred_lang
             }
 
             if quantize:
                 quantized_x, quantized_target = quantizer_output
                 output_dict['quantized_x'] = quantized_x  # b x t x ?
                 output_dict['quantized_target'] = quantized_target  # b x t x num_groups
-                # print(quantized_x.size(), quantized_target.size())
-                # print(quantized_target)
 
             return output_dict
 
@@ -1010,7 +1009,7 @@ class ConvFeatureExtractionModel(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, args, favor=False, weight_drop=0.0, predict_language=False):
+    def __init__(self, args, favor=False, weight_drop=0.0, predict_language=False, n_languages=1):
         """
         :param args:
         :param favor: Performer Attention
