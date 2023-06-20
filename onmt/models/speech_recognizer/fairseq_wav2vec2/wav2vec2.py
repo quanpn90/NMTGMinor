@@ -289,7 +289,7 @@ def init_bert_params(module):
 class Wav2Vec2Model(torch.nn.Module):
     def __init__(self, cfg: Wav2Vec2Config,
                  favor=False, feature_redraw_interval=1000, auto_check_redraw=True,
-                 weight_drop=0.0):
+                 weight_drop=0.0, predict_language=False):
         super().__init__()
         self.rotary_attention = False
         self.relative_attention = False
@@ -383,7 +383,7 @@ class Wav2Vec2Model(torch.nn.Module):
             torch.FloatTensor(cfg.encoder_embed_dim).uniform_()
         )
 
-        self.encoder = TransformerEncoder(cfg, favor=favor, weight_drop=weight_drop)
+        self.encoder = TransformerEncoder(cfg, favor=favor, weight_drop=weight_drop, predict_language=predict_language)
         self.layer_norm = LayerNorm(self.embed)
 
         self.target_glu = None
@@ -602,7 +602,6 @@ class Wav2Vec2Model(torch.nn.Module):
             atb=None,
             checkpointing_ffn=False,
             checkpointing_self_attn=False,
-            predict_language=False,
             **kwargs
     ):
         # if the tdnn features are precomputed then skip them
@@ -712,17 +711,9 @@ class Wav2Vec2Model(torch.nn.Module):
             y = unmasked_features
             mask_indices = None
 
-        if predict_language:
-            # we predict the language for each time step so lang pred should have size [T x B x n_lang]
-
-            x, layer_results, lang_pred = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, atb=atb,
-                                            checkpointing_ffn=checkpointing_ffn,
-                                            checkpointing_self_attn=checkpointing_self_attn, predict_language=True)
-        else:
-            x, layer_results = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, atb=atb,
-                                            checkpointing_ffn=checkpointing_ffn,
-                                            checkpointing_self_attn=checkpointing_self_attn)
-            lang_pred = None
+        x, layer_results, lang_pred = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, atb=atb,
+                                                   checkpointing_ffn=checkpointing_ffn,
+                                                   checkpointing_self_attn=checkpointing_self_attn)
 
         if features_only:
             output_dict = {
@@ -1019,7 +1010,7 @@ class ConvFeatureExtractionModel(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, args, favor=False, weight_drop=0.0):
+    def __init__(self, args, favor=False, weight_drop=0.0, predict_language=False):
         """
         :param args:
         :param favor: Performer Attention
@@ -1078,18 +1069,20 @@ class TransformerEncoder(nn.Module):
         self.args = args
 
         self.apply(init_bert_params)
-        self.linear_cls = None
+        self.predict_language = predict_language
+
+        if self.predict_language:
+            self.layer_norm_cls = LayerNorm(self.embedding_dim)
+            self.linear_cls = torch.nn.Linear(self.embedding_dim, n_languages)
+        else:
+            self.linear_cls = None
+            self.layer_norm_cls = None
 
         # from onmt.modules.optimized.fast_mha import fast_bert_mha
         # self.fast_bert_mha = fast_bert_mha
         from onmt.modules.optimized.flash_mha import flash_bert_mha
         self.fast_bert_mha = flash_bert_mha
         self.using_s4 = False
-
-
-    def add_language_classifier(self, n_languages):
-
-        self.linear_cls = torch.nn.Linear(self.embedding_dim, n_languages)
 
     def replace_attn_with_s4(self, cfg):
 
@@ -1148,22 +1141,19 @@ class TransformerEncoder(nn.Module):
         self.positional_encoder = SinusoidalEmbeddings(self.embedding_dim // self.num_heads)
 
     def forward(self, x, padding_mask=None, positions=None, layer=None, lang=None, atb=None, checkpointing_ffn=False,
-                checkpointing_self_attn=False, predict_language=False, **kwargs):
+                checkpointing_self_attn=False, **kwargs):
 
         x, layer_results, pred_lang = self.extract_features(x, padding_mask, positions, layer, lang=lang, atb=atb,
                                                  checkpointing_ffn=checkpointing_ffn,
-                                                 checkpointing_self_attn=checkpointing_self_attn, predict_language=predict_language)
+                                                 checkpointing_self_attn=checkpointing_self_attn)
 
         if self.layer_norm_first and layer is None:
             x = self.layer_norm(x)
 
-        if predict_language:
-            return x, layer_results, pred_lang
-        else:
-            return x, layer_results
+        return x, layer_results, pred_lang
 
     def extract_features(self, x, padding_mask=None, positions=None, tgt_layer=None, lang=None, atb=None,
-                         checkpointing_ffn=False, checkpointing_self_attn=False, predict_language=False):
+                         checkpointing_ffn=False, checkpointing_self_attn=False):
         if padding_mask is not None:
             x = index_put(x, padding_mask, 0)
 
@@ -1189,9 +1179,9 @@ class TransformerEncoder(nn.Module):
         x = F.dropout(x, p=self.dropout, training=self.training)
 
         # TODO: add classification layer here.
-        if predict_language:
+        if self.predict_language:
             # B x T x H ->
-            pred_lang = self.linear_cls(x)
+            pred_lang = self.linear_cls(self.layer_norm_cls(x))
         else:
             pred_lang = None
 
@@ -1274,6 +1264,9 @@ class TransformerEncoder(nn.Module):
             x = index_copy(x, non_pad_indices, bsz * seq_len)
             # transpose [B x T x H] to [T x B x H]
             x = x.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
+
+        if pred_lang is not None:
+            pred_lang = pred_lang.transpose(0, 1).contiguous()
 
         return x, layer_results, pred_lang
 

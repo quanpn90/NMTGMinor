@@ -428,18 +428,22 @@ class MBartCrossAttention(MBartAttention):
             dropout: float = 0.0,
             is_decoder: bool = False,
             bias: bool = True,
+            convert_fast_attention = False,
+            **kwargs
     ):
         super().__init__(embed_dim, num_heads, dropout, is_decoder, bias)
 
         from onmt.modules.optimized.flash_mha import flash_encdec_mha
         self.fast_bert_mha = flash_encdec_mha
 
+        if convert_fast_attention:
+            self.convert_fast_attention()
+
     def convert_fast_attention(self):
 
         if self.fast_attention:
             return
 
-        # print("[INFO] Convert MBartCrossAttention from slow to fast")
         self.fast_attention = True
 
         # Merge weight KV into one
@@ -448,7 +452,6 @@ class MBartCrossAttention(MBartAttention):
         weights = [w_k, w_v]
         weight_ = torch.cat(weights, dim=0).contiguous()
 
-        # b_q = self.q_proj.bias.clone()
         b_k = self.k_proj.bias.clone()
         b_v = self.v_proj.bias.clone()
         biases = [b_k, b_v]
@@ -1732,6 +1735,7 @@ class MBartDecoder(MBartPreTrainedModel):
         self.padding_idx = config.pad_token_id
         self.max_target_positions = config.max_position_embeddings
         self.embed_scale = math.sqrt(config.d_model) if config.scale_embedding else 1.0
+        self.predict_language = opt.predict_language
 
         config.dropout = opt.residual_dropout if opt.residual_dropout > 0 else opt.dropout
         config.activation_dropout = opt.ffn_dropout if opt.ffn_dropout > 0 else opt.dropout
@@ -1791,8 +1795,21 @@ class MBartDecoder(MBartPreTrainedModel):
             for layer in self.layers:
                 layer.add_adapters(opt.n_languages, adapter_location=opt.decoder_adapter)
 
+        # flash attention
         from onmt.modules.optimized.flash_mha import flash_bert_mha
         self.fast_bert_mha = flash_bert_mha
+
+        # language prediction
+        if self.predict_language:
+            self.linear_cls = torch.nn.Linear(self.model_size, opt.n_languages)
+            self.cross_attention_cls = MBartCrossAttention(self.model_size, self.model_size // 64,
+                                                           dropout=0.0, is_decoder=True, bias=True)
+            self.layer_norm_cls = LayerNorm(self.model_size)
+        else:
+            self.linear_cls = None
+            self.cross_attention_cls = None
+            self.layer_norm_cls = None
+
 
     def freeze_self_attn_params(self):
         #
@@ -1815,7 +1832,15 @@ class MBartDecoder(MBartPreTrainedModel):
 
     def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False, dyrank=False, **kwargs):
 
+        idx = 0
+
         for layer in self.layers:
+            idx += 1
+
+            # the first layer cannot be factorized because it has to be used to predict the language
+            if self.predict_language and idx == 1:
+                continue
+
             layer.add_factorize(n_languages, rank=rank, multiplicative=multiplicative,
                                 fast=fast, dyrank=dyrank)
 
@@ -1832,9 +1857,7 @@ class MBartDecoder(MBartPreTrainedModel):
             lang=None, atb=None,
             output_attentions=None,
             output_hidden_states=None,
-            checkpointing_ffn=False,
-            checkpointing_cross_attn=False,
-            checkpointing_self_attn=False,
+            **kwargs
     ):
         """
         :param checkpointing_cross_attn:
@@ -1851,7 +1874,6 @@ class MBartDecoder(MBartPreTrainedModel):
         :param atb:
         :param output_attentions:
         :param output_hidden_states:
-        :param checkpointing_ffn:
         :return:
         """
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -1906,7 +1928,7 @@ class MBartDecoder(MBartPreTrainedModel):
         if self.fast_bert_mha is not None and hidden_states.dtype == torch.half:
             can_run_fast_bert_mha = True
 
-            # lets unpad both
+            # lets unpad both hidden_states and context states
             if padding_mask is None:
                 padding_mask = input_ids.new_zeros(bsz, qlen)
             padding_mask = padding_mask.contiguous().long()
@@ -1920,14 +1942,6 @@ class MBartDecoder(MBartPreTrainedModel):
             a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
             cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=hidden_states.device)
             non_pad_indices_q = non_pad_indices
-
-            # bsz, seq_len = hidden_states.size(0), hidden_states.size(1)
-            # lengths = [seq_len] * bsz
-            # a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
-            # cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=hidden_states.device)
-            # max_len = seq_len
-            # total_bsz = hidden_states.size(0)
-            # hidden_states = hidden_states.view(-1, hidden_states.size(-1))
 
             # unpad the context
             encoder_hidden_states = encoder_hidden_states.transpose(0, 1).contiguous()
@@ -1959,10 +1973,13 @@ class MBartDecoder(MBartPreTrainedModel):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            # Stochastic Layer
-            dropout_probability = random.uniform(0, 1)
-            if self.training and (dropout_probability < self.layerdrop):
-                continue
+            # Stochastic Layer (only applicable when not predicting language or idx > 0)
+            if not (self.predict_language and idx == 0):
+                dropout_probability = random.uniform(0, 1)
+                if self.training and (dropout_probability < self.layerdrop):
+                    continue
+
+            # TODO: use pred_lang instead of lang if we use predict_language
 
             layer_outputs, _ = decoder_layer(
                 hidden_states,
@@ -1974,13 +1991,27 @@ class MBartDecoder(MBartPreTrainedModel):
                 output_attentions=output_attentions,
                 lang=lang,
                 atb=atb,
-                checkpointing_ffn=checkpointing_ffn,
-                checkpointing_cross_attn=checkpointing_cross_attn,
-                checkpointing_self_attn=checkpointing_self_attn,
                 max_len=max_len, cu_seqlens=cu_seqlens,
                 max_len_kv=max_len_kv, cu_seqlens_kv=cu_seqlens_kv
             )
             hidden_states = layer_outputs[0]
+
+            if self.predict_language and idx == 0:
+                cross_attn_input = self.layer_norm_cls(hidden_states)
+                cross_attn_output, _, _ = self.cross_attention_cls(
+                    hidden_states=cross_attn_input,
+                    key_value_states=encoder_hidden_states,
+                    attention_mask=encoder_attention_mask,
+                    output_attentions=None,
+                    incremental=False, incremental_cache=None,
+                    cu_seqlens=cu_seqlens, max_len=max_len,
+                    cu_seqlens_kv=cu_seqlens_kv, max_len_kv=max_len_kv
+                )
+
+                # maybe we need a gated function here to combin
+                cls_input = cross_attn_output + hidden_states
+
+                pred_lang = self.linear_cls(cls_input)
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
@@ -1996,18 +2027,26 @@ class MBartDecoder(MBartPreTrainedModel):
 
         hidden_states = self.layer_norm(hidden_states)
 
+        # re-padding if we use flash attention
         if can_run_fast_bert_mha:
             seq_len = qlen
             hidden_states = index_copy(hidden_states, non_pad_indices_q, bsz * seq_len)
             hidden_states = hidden_states.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
 
+            if pred_lang is not None:
+                pred_lang = index_copy(hidden_states, non_pad_indices_q, bsz * seq_len)
+                pred_lang = pred_lang.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
+
         # add hidden states from the last decoder layer
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
+        if not self.predict_language:
+            pred_lang = None
+
         return tuple(
             v
-            for v in [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions, contrastive_loss]
+            for v in [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions, contrastive_loss, pred_lang]
             if v is not None
         )
 
@@ -2072,6 +2111,8 @@ class MBartDecoder(MBartPreTrainedModel):
                 buffer = buffers[idx] if idx in buffers else None
             else:
                 buffer = None
+
+            # TODO: handle self.predict_language
 
             layer_outputs, buffer = decoder_layer(
                 hidden_states,

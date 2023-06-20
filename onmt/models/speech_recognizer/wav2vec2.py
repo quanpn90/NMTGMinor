@@ -188,7 +188,8 @@ class FairseqWav2Vec(nn.Module):
         self.cfg.mask_channel_length = 64
         self.cfg.mask_prob = 0.0
 
-        self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg, favor=opt.favor_attention, weight_drop=opt.weight_drop)
+        self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg, favor=opt.favor_attention,
+                                             weight_drop=opt.weight_drop, predict_language=opt.predict_language)
         self.favor = opt.favor_attention
         if self.favor:
             from onmt.modules.performer import ProjectionUpdater

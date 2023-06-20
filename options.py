@@ -567,7 +567,7 @@ def make_parser(parser):
 
 def backward_compatible(opt):
     # FOR BACKWARD COMPATIBILITY
-    if not hasattr(opt, 'predict_lang'):
+    if not hasattr(opt, 'predict_language'):
         opt.predict_language = False
 
     if not hasattr(opt, 'model'):

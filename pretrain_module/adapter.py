@@ -4,6 +4,9 @@ import torch.nn as nn
 from onmt.modules.layer_norm import LayerNorm
 
 
+c
+
+
 class Adapter(torch.nn.Module):
 
     def __init__(self, input_dim, downsample_factor=2):
