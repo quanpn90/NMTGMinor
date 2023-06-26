@@ -689,6 +689,10 @@ class Trainer(object):
         report_src_words = zero_tensor()
         report_sents = zero_tensor()
         report_rec_loss, report_rev_loss, report_mirror_loss = zero_tensor(), zero_tensor(), zero_tensor()
+
+        report_enc_lid_loss = zero_tensor()
+        report_enc_lid_count = 0
+
         start = time.time()
         n_samples = len(data_iterator)
 
@@ -806,6 +810,9 @@ class Trainer(object):
                             dec_lid_loss = self.lid_loss_function(dec_pred_lang, batch.get("target_lang"), dec_mask)
 
                             full_loss = full_loss + 0.01 * (enc_lid_loss + dec_lid_loss)
+
+                            report_enc_lid_loss.add_(enc_lid_loss.item())
+                            report_enc_lid_count += enc_mask.ne(1).int().sum().item()
 
                         else:
                             enc_lid_loss = None
@@ -1085,6 +1092,13 @@ class Trainer(object):
                         except ZeroDivisionError:
                             _ewc_loss =  float('nan')
                         log_string += (" ewcloss: %8.8f ; " % _ewc_loss)
+
+                    if opt.predict_language:
+                        try:
+                            _enc_lid_loss = report_enc_lid_loss.item() / report_enc_lid_count
+                        except ZeroDivisionError:
+                            _enc_lid_loss =  float('nan')
+                        log_string += (" enc_lidloss: %8.8f ; " % _enc_lid_loss)
 
                     log_string += ("lr: %.7f ; updates: %7d; " %
                                    (self.optim.get_learning_rate(),

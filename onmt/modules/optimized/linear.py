@@ -87,26 +87,50 @@ def factorize_linear(input, weight, bias, rm, sm):
         # assuming input size is [T x B x D]
 
         bsz, qlen = input.size(1), input.size(0)
-        rank = rm.size(0)
 
-        rm = rm.unsqueeze(1).unsqueeze(2)
-        sm = sm.unsqueeze(1).unsqueeze(2)
+        if rm.ndim == 2:
+            rank = rm.size(0)
 
-        h = input.unsqueeze(0) * sm
+            rm = rm.unsqueeze(1).unsqueeze(2)
+            sm = sm.unsqueeze(1).unsqueeze(2)
 
-        if rank == 1:
-            h = h.squeeze(0)
-        else:
-            h = h.sum(dim=0)
+            h = input.unsqueeze(0) * sm
 
-        h = torch.mm(h.view(qlen * bsz, -1), weight.transpose(0, 1))
-        h = h.view(qlen, bsz, -1).unsqueeze(0) * rm
+            if rank == 1:
+                h = h.squeeze(0)
+            else:
+                h = h.sum(dim=0)
 
-        if rank == 1:
-            h = h.squeeze(0)
-        else:
-            h = h.sum(dim=0)
+            h = torch.mm(h.view(qlen * bsz, -1), weight.transpose(0, 1))
+            h = h.view(qlen, bsz, -1).unsqueeze(0) * rm
 
+            if rank == 1:
+                h = h.squeeze(0)
+            else:
+                h = h.sum(dim=0)
+
+        elif rm.ndim == 4:
+            rank = rm.size(2)  # [T x B x R x D]
+
+            # W(sm * x)
+            h = input.unsqueeze(2) * sm
+            if rank == 1:
+                h = h.squeeze(2)
+            else:
+                h = h.sum(dim=2)
+
+            # W(sm * x)
+            h = torch.mm(h.view(qlen * bsz, -1), weight.transpose(0, 1))
+
+            # W(sm * x) * rm
+            h = h.view(qlen, bsz, -1).unsqueeze(2) * rm
+
+            if rank == 1:
+                h = h.squeeze(2)
+            else:
+                h = h.sum(dim=2)
+
+        # adding final bias (from normal linear)
         h = h + bias.unsqueeze(0).unsqueeze(1)
 
         return h
@@ -114,25 +138,49 @@ def factorize_linear(input, weight, bias, rm, sm):
     elif input.ndim == 2:
 
         total_bsz = input.size(0)
-        rank = rm.size(0)
 
-        rm = rm.unsqueeze(1)
-        sm = sm.unsqueeze(1)
+        if rm.ndim == 2:
+            rank = rm.size(0)
 
-        h = input.unsqueeze(0) * sm
+            rm = rm.unsqueeze(1)
+            sm = sm.unsqueeze(1)
 
-        if rank == 1:
-            h = h.squeeze(0)
+            h = input.unsqueeze(0) * sm
+
+            if rank == 1:
+                h = h.squeeze(0)
+            else:
+                h = h.sum(dim=0)
+
+            h = torch.mm(h, weight.transpose(0, 1))
+            h = h.unsqueeze(0) * rm
+
+            if rank == 1:
+                h = h.squeeze(0)
+            else:
+                h = h.sum(dim=0)
+
+        elif rm.ndim == 4:
+            rank = rm.size(2)
+
+            h = input.unsqueeze(2) * sm
+
+            if rank == 1:
+                h = h.squeeze(2)
+            else:
+                h = h.sum(dim=2)
+
+            h = torch.mm(h, weight.transpose(0, 1))
+            h = h.unsqueeze(2) * rm
+
+            if rank == 1:
+                h = h.squeeze(2)
+            else:
+                h = h.sum(dim=2)
+
         else:
-            h = h.sum(dim=0)
-
-        h = torch.mm(h, weight.transpose(0, 1))
-        h = h.unsqueeze(0) * rm
-
-        if rank == 1:
-            h = h.squeeze(0)
-        else:
-            h = h.sum(dim=0)
+            print("factorized matrix dimension has to be either 2 or 4, get", rm.ndim)
+            raise NotImplementedError
 
         h = h + bias.unsqueeze(0)
 
