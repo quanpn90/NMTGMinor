@@ -824,6 +824,7 @@ class Wav2vecBERT(Wav2vecTransformer):
             output = decoder_output.transpose(0, 1)  # [bsz, tgt_len, d] => [tgt_len, bsz, d]
             context = context.transpose(0, 1)
             output_dict = defaultdict(lambda: None)
+
         elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model \
                 in ["deltalm", "mbart", "mbart50"]:
             if self.sub_encoder is not None:
@@ -845,6 +846,11 @@ class Wav2vecBERT(Wav2vecTransformer):
             # tgt_attention_mask = tgt.new(*tgt.size()).fill_(1)
             tgt_attention_mask = batch.get('target_input_selfattn_mask')
 
+            if encoder_output['enc_pred_lang'] is not None:
+                _src_lang = torch.nn.functional.softmax(encoder_output['enc_pred_lang'], dim=-1, dtype=torch.float32)
+            else:
+                _src_lang = src_lang
+
             decoder_outputs = self.decoder(input_ids=tgt,
                                            attention_mask=tgt_attention_mask,
                                            encoder_hidden_states=context,
@@ -852,6 +858,7 @@ class Wav2vecBERT(Wav2vecTransformer):
                                            sub_encoder_hidden_states=sub_context,
                                            sub_encoder_attention_mask=sub_context_mask,
                                            lang=tgt_lang, atb=tgt_atb,
+                                           src_lang=_src_lang,
                                            checkpointing_ffn=checkpointing_ffn,
                                            checkpointing_cross_attn=checkpointing_cross_attn,
                                            checkpointing_self_attn=checkpointing_self_attn)

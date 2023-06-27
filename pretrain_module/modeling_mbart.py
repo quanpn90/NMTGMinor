@@ -576,7 +576,8 @@ class MBartCrossAttention(MBartAttention):
             key_value_states: Optional[torch.Tensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
             output_attentions: bool = False,
-            lang=None, atb=None, checkpointing=False,
+            lang=None, checkpointing=False,
+            src_lang=None,
             incremental=False, incremental_cache=None,
             cu_seqlens=None, max_len=None,
             cu_seqlens_kv=None, max_len_kv=None, stacked_kv=None, **kwargs
@@ -604,13 +605,13 @@ class MBartCrossAttention(MBartAttention):
                     sm_q = torch.index_select(self.sm_q, 0, lang).squeeze(0)
                     rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
                     sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
-                    rm_kv = torch.index_select(self.rm_kv, 0, lang).squeeze(0)  # squeeze possible because only 1
-                    sm_kv = torch.index_select(self.sm_kv, 0, lang).squeeze(0)
+
 
                 elif lang.ndim == 2:  # for flash attention
+
                     rm_q = torch.mm(lang, self.rm_q.view(n_languages, _rank * self.rm_q.size(-1))).view(
                         lang.size(0), _rank,
-                        self.rm_i.size(-1))
+                        self.rm_q.size(-1))
                     sm_q = torch.mm(lang, self.sm_q.view(n_languages, _rank * self.sm_q.size(-1))).view(
                         lang.size(0), _rank,
                         self.sm_q.size(-1))
@@ -620,10 +621,13 @@ class MBartCrossAttention(MBartAttention):
                     sm_o = torch.mm(lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
                         lang.size(0), _rank,
                         self.sm_o.size(-1))
+
                 elif lang.ndim == 3:
 
                     _len, _bsz = lang.size(0), lang.size(1)
                     _lang = lang.view(_len * _bsz, lang.size(-1))
+
+
                     rm_q = torch.mm(_lang, self.rm_q.view(n_languages, _rank * self.rm_q.size(-1))).view(
                         _len, _bsz, _rank, self.rm_q.size(-1))
                     sm_q = torch.mm(_lang, self.sm_q.view(n_languages, _rank * self.sm_q.size(-1))).view(
@@ -632,10 +636,26 @@ class MBartCrossAttention(MBartAttention):
                         _len, _bsz, _rank, self.rm_o.size(-1))
                     sm_o = torch.mm(_lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
                         _len, _bsz, _rank, self.sm_o.size(-1))
-                    rm_kv = torch.mm(_lang, self.rm_kv.view(n_languages, _rank * self.rm_kv.size(-1))).view(
-                        _len, _bsz, _rank, self.rm_kv.size(-1))
-                    sm_kv = torch.mm(_lang, self.sm_kv.view(n_languages, _rank * self.sm_kv.size(-1))).view(
-                        _len, _bsz, _rank, self.sm_kv.size(-1))
+                else:
+                    raise NotImplementedError("Unknown dimension for language IDs")
+
+                if src_lang.ndim == 1:
+                    rm_kv = torch.index_select(self.rm_kv, 0, src_lang).squeeze(0)  # squeeze possible because only 1
+                    sm_kv = torch.index_select(self.sm_kv, 0, src_lang).squeeze(0)
+                elif src_lang.ndim == 2:
+                    rm_kv = torch.mm(src_lang, self.rm_kv.view(n_languages, _rank * self.rm_kv.size(-1))).view(
+                        src_lang.size(0), _rank,
+                        self.rm_kv.size(-1))
+                    sm_kv = torch.mm(src_lang, self.sm_kv.view(n_languages, _rank * self.sm_kv.size(-1))).view(
+                        src_lang.size(0), _rank,
+                        self.sm_kv.size(-1))
+                elif src_lang.ndim == 3:
+                    _len_src = src_lang.size(0)
+                    _src_lang = src_lang.view(_len_src * _bsz, src_lang.size(-1))
+                    rm_kv = torch.mm(_src_lang, self.rm_kv.view(n_languages, _rank * self.rm_kv.size(-1))).view(
+                        _len_src, _bsz, _rank, self.rm_kv.size(-1))
+                    sm_kv = torch.mm(_src_lang, self.sm_kv.view(n_languages, _rank * self.sm_kv.size(-1))).view(
+                        _len_src, _bsz, _rank, self.sm_kv.size(-1))
 
                 # if lang has size [T x B x L] we need to do a GEMM
 
@@ -646,6 +666,7 @@ class MBartCrossAttention(MBartAttention):
                     low_precision = True  # Use CUDA impl
 
                     input_lin_q_results = factorize_linear(hidden_states, in_proj_weight_q, self.q_proj.bias, rm_q, sm_q)
+
                     input_lin_kv_results = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv, rm_kv, sm_kv)
 
                     recompute = False
@@ -679,6 +700,7 @@ class MBartCrossAttention(MBartAttention):
                     q = factorize_linear(hidden_states, in_proj_weight_q, self.q_proj.bias, rm_q, sm_q)
                     # linear_function(hidden_states, in_proj_weight_q, self.q_proj.bias)
 
+                    # print(key_value_states.size(), rm_kv.size(), sm_kv.size())
                     kv = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv, rm_kv, sm_kv) #
                     # linear_function(key_value_states, in_proj_weight_kv, self.proj_bias_kv)
 
@@ -1357,7 +1379,7 @@ class MBartDecoderLayer(nn.Module):
             checkpointing_ffn=False,
             checkpointing_cross_attn=False,
             checkpointing_self_attn=False,
-            lang=None, atb=None,
+            lang=None, src_lang=None,
             max_len=None, cu_seqlens=None,
             max_len_kv=None, cu_seqlens_kv=None, **kwargs
     ):
@@ -1395,7 +1417,7 @@ class MBartDecoderLayer(nn.Module):
             attention_mask=attention_mask,
             output_attentions=output_attentions,
             incremental=incremental, incremental_cache=incremental_cache,
-            lang=lang, atb=atb, checkpointing=checkpointing_self_attn,
+            lang=lang, checkpointing=checkpointing_self_attn,
             cu_seqlens=cu_seqlens, max_len=max_len
         )
 
@@ -1416,7 +1438,7 @@ class MBartDecoderLayer(nn.Module):
                 output_attentions=output_attentions,
                 incremental=incremental, incremental_cache=incremental_cache,
                 checkpointing=checkpointing_cross_attn,
-                lang=lang, atb=atb,
+                lang=lang, src_lang=src_lang,
                 cu_seqlens=cu_seqlens, max_len=max_len,
                 cu_seqlens_kv=cu_seqlens_kv, max_len_kv=max_len_kv
             )
@@ -1435,7 +1457,7 @@ class MBartDecoderLayer(nn.Module):
                                                     self.training)
         else:
 
-            in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
+            in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang)
             hidden_states = self.call_mlp(hidden_states, in_weight, out_weight, in_bias, out_bias,
                                           self.activation_fn, self.activation_dropout, self.training,
                                           self.fused, self.fused_function, checkpointing_ffn)
@@ -1953,7 +1975,7 @@ class MBartDecoder(MBartPreTrainedModel):
             sub_encoder_attention_mask=None,
             inputs_embeds=None,
             incremental=False, incremental_cache=None,
-            lang=None, atb=None,
+            lang=None, src_lang=None,
             output_attentions=None,
             output_hidden_states=None,
             **kwargs
@@ -2060,6 +2082,10 @@ class MBartDecoder(MBartPreTrainedModel):
             a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
             cu_seqlens_kv = torch.cumsum(a, 0).to(dtype=torch.int32, device=encoder_hidden_states.device)
 
+            if src_lang is not None and src_lang.ndim == 3:
+                src_lang = src_lang.view(-1, src_lang.size(-1))
+                src_lang = src_lang.index_select(0, non_pad_indices)
+
         else:
             max_len, cu_seqlens = None, None
             max_len_kv, cu_seqlens_kv = None, None
@@ -2067,6 +2093,11 @@ class MBartDecoder(MBartPreTrainedModel):
             can_run_fast_bert_mha = False
 
             hidden_states = hidden_states.transpose(0, 1).contiguous()
+
+            if src_lang is not None and src_lang.ndim == 3:
+                src_lang = src_lang.transpose(0, 1)
+
+        _lang = lang
 
         for idx, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
@@ -2079,6 +2110,12 @@ class MBartDecoder(MBartPreTrainedModel):
                     continue
 
             # TODO: use pred_lang instead of lang if we use predict_language
+            if self.predict_language and idx == 0:
+                __lang = None
+                _src_lang = None
+            else:
+                __lang = _lang
+                _src_lang = src_lang
 
             layer_outputs, _ = decoder_layer(
                 hidden_states,
@@ -2088,8 +2125,8 @@ class MBartDecoder(MBartPreTrainedModel):
                 sub_encoder_hidden_states=sub_encoder_hidden_states,
                 sub_encoder_attention_mask=sub_encoder_attention_mask,
                 output_attentions=output_attentions,
-                lang=lang,
-                atb=atb,
+                lang=__lang,
+                src_lang=_src_lang,
                 max_len=max_len, cu_seqlens=cu_seqlens,
                 max_len_kv=max_len_kv, cu_seqlens_kv=cu_seqlens_kv
             )
@@ -2111,7 +2148,7 @@ class MBartDecoder(MBartPreTrainedModel):
                 cls_input = cross_attn_output + hidden_states
 
                 pred_lang = self.linear_cls(cls_input)
-
+                _lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
@@ -2157,7 +2194,7 @@ class MBartDecoder(MBartPreTrainedModel):
 
         buffers = decoder_state.attention_buffers
         lang = decoder_state.tgt_lang
-        atb = decoder_state.tgt_atb
+        # atb = decoder_state.tgt_atb
         src_lang = decoder_state.src_lang
         buffering = decoder_state.buffering
 
@@ -2221,7 +2258,7 @@ class MBartDecoder(MBartPreTrainedModel):
                 encoder_attention_mask=encoder_attention_mask,
                 output_attentions=None,
                 incremental=buffering, incremental_cache=buffer,
-                lang=lang, atb=atb,
+                lang=lang,
                 max_len=max_len, cu_seqlens=cu_seqlens
             )
 

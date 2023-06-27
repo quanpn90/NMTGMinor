@@ -1224,8 +1224,10 @@ class TransformerEncoder(nn.Module):
         if self.predict_language:
             # B x T x H ->
             pred_lang = self.linear_cls(self.layer_norm_cls(x))
+            _lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
         else:
             pred_lang = None
+            _lang = lang
 
         if not self.favor and not can_run_fast_bert_mha:
             # B x T x C -> T x B x C  (only for vanilla self-attention and s4)
@@ -1238,14 +1240,6 @@ class TransformerEncoder(nn.Module):
         for i, layer in enumerate(self.layers):
             dropout_probability = np.random.random()
             if not self.training or (dropout_probability > self.layerdrop):
-
-                if lang is not None:
-                    if self.predict_language:
-                        _lang = pred_lang
-                    else:
-                        _lang = lang
-                else:
-                    _lang = None
 
                 x, z = layer(x, self_attn_padding_mask=padding_mask, positions=positions,
                              max_len=max_len, cu_seqlens=cu_seqlens,
