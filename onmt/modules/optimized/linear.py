@@ -160,26 +160,26 @@ def factorize_linear(input, weight, bias, rm, sm):
             else:
                 h = h.sum(dim=0)
 
-        elif rm.ndim == 4:
-            rank = rm.size(2)
+        elif rm.ndim == 3: # B x R x D
+            rank = rm.size(1)
 
-            h = input.unsqueeze(2) * sm
+            h = input.unsqueeze(1) * sm
 
             if rank == 1:
-                h = h.squeeze(2)
+                h = h.squeeze(1)
             else:
                 h = h.sum(dim=2)
 
             h = torch.mm(h, weight.transpose(0, 1))
-            h = h.unsqueeze(2) * rm
+            h = h.unsqueeze(1) * rm
 
             if rank == 1:
-                h = h.squeeze(2)
+                h = h.squeeze(1)
             else:
-                h = h.sum(dim=2)
+                h = h.sum(dim=1)
 
         else:
-            print("factorized matrix dimension has to be either 2 or 4, get", rm.ndim)
+            print("factorized matrix dimension has to be either 2 or 3, get", rm.ndim)
             raise NotImplementedError
 
         h = h + bias.unsqueeze(0)

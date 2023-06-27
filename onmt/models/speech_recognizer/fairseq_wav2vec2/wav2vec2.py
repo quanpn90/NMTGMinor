@@ -1177,13 +1177,6 @@ class TransformerEncoder(nn.Module):
 
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # TODO: add classification layer here.
-        if self.predict_language:
-            # B x T x H ->
-            pred_lang = self.linear_cls(self.layer_norm_cls(x))
-        else:
-            pred_lang = None
-
         # check if flash attention can be run
         can_run_fast_bert_mha = False
         seq_len = x.size(1)
@@ -1220,11 +1213,19 @@ class TransformerEncoder(nn.Module):
             # cumulative sequence lengths (required input for fmha)
             a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
             cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
+
         else:
             # print("[INFO] CanNOT run FAST MHA with seq_len", seq_len)
             max_len = -1
             cu_seqlens = None
             non_pad_indices = None
+
+        # TODO: add classification layer here.
+        if self.predict_language:
+            # B x T x H ->
+            pred_lang = self.linear_cls(self.layer_norm_cls(x))
+        else:
+            pred_lang = None
 
         if not self.favor and not can_run_fast_bert_mha:
             # B x T x C -> T x B x C  (only for vanilla self-attention and s4)
@@ -1237,9 +1238,18 @@ class TransformerEncoder(nn.Module):
         for i, layer in enumerate(self.layers):
             dropout_probability = np.random.random()
             if not self.training or (dropout_probability > self.layerdrop):
+
+                if lang is not None:
+                    if self.predict_language:
+                        _lang = pred_lang
+                    else:
+                        _lang = lang
+                else:
+                    _lang = None
+
                 x, z = layer(x, self_attn_padding_mask=padding_mask, positions=positions,
                              max_len=max_len, cu_seqlens=cu_seqlens,
-                             lang=lang, atb=atb,
+                             lang=_lang, atb=atb,
                              checkpointing_ffn=checkpointing_ffn,
                              checkpointing_self_attn=checkpointing_self_attn)
 
@@ -1263,6 +1273,10 @@ class TransformerEncoder(nn.Module):
             x = index_copy(x, non_pad_indices, bsz * seq_len)
             # transpose [B x T x H] to [T x B x H]
             x = x.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
+
+            if self.predict_language and pred_lang is not None:
+                pred_lang = index_copy(pred_lang, non_pad_indices, bsz * seq_len)
+                pred_lang = pred_lang.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
 
         if pred_lang is not None:
             pred_lang = pred_lang.transpose(0, 1).contiguous()
@@ -1417,7 +1431,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
         # first, tell the attention modules to add factorize
         self.self_attn.add_factorized_weights(n_languages, rank=rank,
-                                              multiplicative=multiplicative, dyrank=dyrank)
+                                              multiplicative=multiplicative, dyrank=dyrank, fast=fast)
 
         # add factorized for the sub-factors
         self.multiplicative_factorize = multiplicative
@@ -1535,11 +1549,35 @@ class TransformerSentenceEncoderLayer(nn.Module):
         in_bias = self.fc1.bias
         out_bias = self.fc2.bias
 
+        n_languages, _rank = self.rm_i.size(0), self.rm_i.size(1)
+
         # TODO: mm instead of index select for multiple code
-        rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
-        sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
-        rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
-        sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+        if lang.ndim == 1:
+            rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
+            sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
+            rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
+            sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+        elif lang.ndim == 2:  # for flash attention
+            rm_i = torch.mm(lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(lang.size(0), _rank,
+                                                                                                self.rm_i.size(-1))
+            sm_i = torch.mm(lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(lang.size(0), _rank,
+                                                                                                self.sm_i.size(-1))
+            rm_o = torch.mm(lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(lang.size(0), _rank,
+                                                                                                self.rm_o.size(-1))
+            sm_o = torch.mm(lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(lang.size(0), _rank,
+                                                                                                self.sm_o.size(-1))
+        elif lang.ndim == 3:
+            _len, _bsz = lang.size(0), lang.size(1)
+            _lang = lang.view(_len * _bsz, lang.size(-1))
+            rm_i = torch.mm(_lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
+                _len, _bsz, _rank, self.rm_i.size(-1))
+            sm_i = torch.mm(_lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
+                _len, _bsz, _rank, self.sm_i.size(-1))
+            rm_o = torch.mm(_lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
+                _len, _bsz, _rank, self.rm_o.size(-1))
+            sm_o = torch.mm(_lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
+                _len, _bsz, _rank, self.sm_o.size(-1))
+
 
         x = factorize_linear(x, in_weight, in_bias, rm_i, sm_i)
         x = activation_fn(x)

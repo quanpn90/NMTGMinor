@@ -619,11 +619,43 @@ class MultiheadAttention(nn.Module):
 
                     hidden_states = query
 
+                    n_languages, _rank = self.rm_i.size(0), self.rm_i.size(1)
+
                     # TODO: mm instead of index select
-                    rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)
-                    sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
-                    rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
-                    sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+                    if lang.ndim == 1:
+
+                        rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
+                        sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
+                        rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
+                        sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+
+                    elif lang.ndim == 2:  # for flash attention
+
+                        rm_i = torch.mm(lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
+                            lang.size(0), _rank,
+                            self.rm_i.size(-1))
+                        sm_i = torch.mm(lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
+                            lang.size(0), _rank,
+                            self.sm_i.size(-1))
+                        rm_o = torch.mm(lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
+                            lang.size(0), _rank,
+                            self.rm_o.size(-1))
+                        sm_o = torch.mm(lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
+                            lang.size(0), _rank,
+                            self.sm_o.size(-1))
+
+                    elif lang.ndim == 3:
+
+                        _len, _bsz = lang.size(0), lang.size(1)
+                        _lang = lang.view(_len * _bsz, lang.size(-1))
+                        rm_i = torch.mm(_lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
+                            _len, _bsz, _rank, self.rm_i.size(-1))
+                        sm_i = torch.mm(_lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
+                            _len, _bsz, _rank, self.sm_i.size(-1))
+                        rm_o = torch.mm(_lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
+                            _len, _bsz, _rank, self.rm_o.size(-1))
+                        sm_o = torch.mm(_lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
+                            _len, _bsz, _rank, self.sm_o.size(-1))
 
                     if hidden_states.ndim == 3:
                         bsz, qlen = hidden_states.size(1), hidden_states.size(0)

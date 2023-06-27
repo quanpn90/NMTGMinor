@@ -692,6 +692,8 @@ class Trainer(object):
 
         report_enc_lid_loss = zero_tensor()
         report_enc_lid_count = 0
+        report_dec_lid_loss = zero_tensor()
+        report_dec_lid_count = 0
 
         start = time.time()
         n_samples = len(data_iterator)
@@ -806,13 +808,20 @@ class Trainer(object):
                             enc_lid_loss = self.lid_loss_function(enc_pred_lang, batch.get("source_lang"), enc_mask)
 
                             dec_pred_lang = outputs['dec_pred_lang']
-                            dec_mask = outputs['target_mask']
+                            # dec_mask = outputs['target_mask']
+                            # dec_mask = targets.eq(onmt.constants.PAD)
+                            dec_mask = batch.get('target_input_selfattn_mask')
                             dec_lid_loss = self.lid_loss_function(dec_pred_lang, batch.get("target_lang"), dec_mask)
 
                             full_loss = full_loss + 0.01 * (enc_lid_loss + dec_lid_loss)
 
                             report_enc_lid_loss.add_(enc_lid_loss.item())
                             report_enc_lid_count += enc_mask.ne(1).int().sum().item()
+
+                            # print(dec_mask)
+                            # print(dec_mask.ne(1).int().sum().item())
+                            report_dec_lid_loss.add_(dec_lid_loss.item())
+                            report_dec_lid_count += dec_mask.ne(1).int().sum().item()
 
                         else:
                             enc_lid_loss = None
@@ -1096,9 +1105,12 @@ class Trainer(object):
                     if opt.predict_language:
                         try:
                             _enc_lid_loss = report_enc_lid_loss.item() / report_enc_lid_count
+                            _dec_lid_loss = report_dec_lid_loss.item() / report_dec_lid_count
                         except ZeroDivisionError:
                             _enc_lid_loss =  float('nan')
+                            _dec_lid_loss = float('nan')
                         log_string += (" enc_lidloss: %8.8f ; " % _enc_lid_loss)
+                        log_string += (" dec_lidloss: %8.8f ; " % _dec_lid_loss)
 
                     log_string += ("lr: %.7f ; updates: %7d; " %
                                    (self.optim.get_learning_rate(),
