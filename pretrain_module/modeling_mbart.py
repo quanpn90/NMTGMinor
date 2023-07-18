@@ -1921,7 +1921,7 @@ class MBartDecoder(MBartPreTrainedModel):
         self.fast_bert_mha = flash_bert_mha
 
         # language prediction
-        if self.predict_language:
+        if self.predict_language > 0:
             self.linear_cls = torch.nn.Linear(self.model_size, opt.n_languages)
             self.cross_attention_cls = MBartCrossAttention(self.model_size, self.model_size // 64,
                                                            dropout=0.0, is_decoder=True, bias=True)
@@ -1959,7 +1959,7 @@ class MBartDecoder(MBartPreTrainedModel):
             idx += 1
 
             # the first layer cannot be factorized because it has to be used to predict the language
-            if self.predict_language and idx == 1:
+            if self.predict_language > 0 and idx == 1:
                 continue
 
             layer.add_factorize(n_languages, rank=rank, multiplicative=multiplicative,
@@ -2098,19 +2098,20 @@ class MBartDecoder(MBartPreTrainedModel):
                 src_lang = src_lang.transpose(0, 1)
 
         _lang = lang
+        pred_lang = None
 
         for idx, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
             # Stochastic Layer (only applicable when not predicting language or idx > 0)
-            if not (self.predict_language and idx == 0):
+            if not (self.predict_language > 0 and idx == 0):
                 dropout_probability = random.uniform(0, 1)
                 if self.training and (dropout_probability < self.layerdrop):
                     continue
 
             # TODO: use pred_lang instead of lang if we use predict_language
-            if self.predict_language and idx == 0:
+            if self.predict_language > 0 and idx == 0:
                 __lang = None
                 _src_lang = None
             else:
@@ -2132,7 +2133,7 @@ class MBartDecoder(MBartPreTrainedModel):
             )
             hidden_states = layer_outputs[0]
 
-            if self.predict_language and idx == 0:
+            if self.predict_language > 0 and idx == 0:
                 cross_attn_input = self.layer_norm_cls(hidden_states)
                 cross_attn_output, _, _ = self.cross_attention_cls(
                     hidden_states=cross_attn_input,
@@ -2148,7 +2149,10 @@ class MBartDecoder(MBartPreTrainedModel):
                 cls_input = cross_attn_output + hidden_states
 
                 pred_lang = self.linear_cls(cls_input)
-                _lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
+                if self.predict_language == 1:
+                    _lang = lang
+                else:
+                    _lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
@@ -2177,9 +2181,6 @@ class MBartDecoder(MBartPreTrainedModel):
         # add hidden states from the last decoder layer
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
-
-        if not self.predict_language:
-            pred_lang = None
 
         return tuple(
             v
@@ -2276,4 +2277,5 @@ class MBartDecoder(MBartPreTrainedModel):
         output_dict['hidden'] = output
         output_dict['coverage'] = coverage
         output_dict['context'] = encoder_hidden_states
+
         return output_dict

@@ -289,7 +289,7 @@ def init_bert_params(module):
 class Wav2Vec2Model(torch.nn.Module):
     def __init__(self, cfg: Wav2Vec2Config,
                  favor=False, feature_redraw_interval=1000, auto_check_redraw=True,
-                 weight_drop=0.0, predict_language=False, n_languages=1):
+                 weight_drop=0.0, predict_language=0, n_languages=1):
         super().__init__()
         self.rotary_attention = False
         self.relative_attention = False
@@ -1009,7 +1009,7 @@ class ConvFeatureExtractionModel(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, args, favor=False, weight_drop=0.0, predict_language=False, n_languages=1):
+    def __init__(self, args, favor=False, weight_drop=0.0, predict_language=0, n_languages=1):
         """
         :param args:
         :param favor: Performer Attention
@@ -1070,7 +1070,7 @@ class TransformerEncoder(nn.Module):
         self.apply(init_bert_params)
         self.predict_language = predict_language
 
-        if self.predict_language:
+        if self.predict_language > 0:
             self.layer_norm_cls = LayerNorm(self.embedding_dim)
             self.linear_cls = torch.nn.Linear(self.embedding_dim, n_languages)
         else:
@@ -1221,10 +1221,15 @@ class TransformerEncoder(nn.Module):
             non_pad_indices = None
 
         # TODO: add classification layer here.
-        if self.predict_language:
+        if self.predict_language > 0:
             # B x T x H ->
             pred_lang = self.linear_cls(self.layer_norm_cls(x))
-            _lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
+
+            if self.predict_language == 1:
+                # use the
+                _lang = lang
+            else:
+                _lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
         else:
             pred_lang = None
             _lang = lang
@@ -1268,7 +1273,7 @@ class TransformerEncoder(nn.Module):
             # transpose [B x T x H] to [T x B x H]
             x = x.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
 
-            if self.predict_language and pred_lang is not None:
+            if self.predict_language > 0 and pred_lang is not None:
                 pred_lang = index_copy(pred_lang, non_pad_indices, bsz * seq_len)
                 pred_lang = pred_lang.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
 

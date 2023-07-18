@@ -199,7 +199,7 @@ class Trainer(object):
             self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True,
                                          padding_idx=tgt_pad, blank_idx=0)
 
-        if opt.predict_language:
+        if opt.predict_language > 0:
             from onmt.models.speech_recognizer.lid_loss import CrossEntropyLIDLoss
             self.lid_loss_function = CrossEntropyLIDLoss(opt.n_languages, label_smoothing=0.0)
 
@@ -802,7 +802,7 @@ class Trainer(object):
                             rev_loss_data = None
                             mirror_loss_data = 0
 
-                        if opt.predict_language:
+                        if opt.predict_language > 0:
                             enc_pred_lang = outputs['enc_pred_lang']
                             enc_mask = outputs['src_mask']
                             enc_lid_loss = self.lid_loss_function(enc_pred_lang, batch.get("source_lang"), enc_mask)
@@ -1102,7 +1102,7 @@ class Trainer(object):
                             _ewc_loss =  float('nan')
                         log_string += (" ewcloss: %8.8f ; " % _ewc_loss)
 
-                    if opt.predict_language:
+                    if opt.predict_language > 0:
                         try:
                             _enc_lid_loss = report_enc_lid_loss.item() / report_enc_lid_count
                             _dec_lid_loss = report_dec_lid_loss.item() / report_dec_lid_count

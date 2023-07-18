@@ -507,8 +507,6 @@ class Dataset(torch.utils.data.Dataset):
         self.pad_count = True
 
         # group samples into mini-batches
-        # if verbose:
-        #     print("* Allocating mini-batches ...")
         if self._type in ['audio', 'wav']:
 
             self.batches = allocate_batch_unbalanced(sorted_order, data_lengths,
@@ -532,15 +530,6 @@ class Dataset(torch.utils.data.Dataset):
         self.num_batches = len(self.batches)
         self.batch_sizes = [len(x) for x in self.batches]
 
-        # if self.src_sizes is not None:
-        #     self.batch_src_sizes = [max([self.src_sizes[x] for x in b]) for b in self.batches]
-        # else:
-        #     self.batch_src_sizes = [0 for b in self.batches]
-        #
-        # if self.tgt_sizes is not None:
-        #     self.batch_tgt_sizes = [max([self.tgt_sizes[x] for x in b]) for b in self.batches]
-        # else:
-        #     self.batch_tgt_sizes = [0 for b in self.batches]
         print("Number of sentences before cleaning and sorting: %d" % len(src_sizes) )
         print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
         print("Number of batches after cleaning and sorting: %d" % self.num_batches)
@@ -553,6 +542,8 @@ class Dataset(torch.utils.data.Dataset):
             self.augmenter = Augmenter(F=sa_f, T=sa_t, input_size=input_size)
         else:
             self.augmenter = None
+
+        # if
 
     def flush_cache(self):
         if hasattr(self.src, 'flush_cache'):
