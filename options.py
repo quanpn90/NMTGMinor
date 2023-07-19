@@ -569,6 +569,10 @@ def backward_compatible(opt):
     # FOR BACKWARD COMPATIBILITY
     if not hasattr(opt, 'predict_language'):
         opt.predict_language = 0
+    elif opt.predict_language == True:
+        opt.predict_language = 1
+    elif opt.predict_language == False:
+        opt.predict_language = 0
 
     if not hasattr(opt, 'model'):
         opt.model = 'recurrent'

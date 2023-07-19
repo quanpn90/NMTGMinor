@@ -123,7 +123,7 @@ def factorize_linear(input, weight, bias, rm, sm):
             h = torch.mm(h.view(qlen * bsz, -1), weight.transpose(0, 1))
 
             # W(sm * x) * rm
-            h = h.view(qlen, bsz, -1).unsqueeze(2).mul()
+            h = h.view(qlen, bsz, -1).unsqueeze(2).mul(rm)
 
             if rank == 1:
                 h = h.squeeze(2)

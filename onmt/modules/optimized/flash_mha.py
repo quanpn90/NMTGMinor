@@ -87,7 +87,7 @@ def _flash_attn_backward(dout, q, k, v, out, softmax_lse, dq, dk, dv, cu_seqlens
     #     breakpoint()
     mask_nan(dq)
     mask_nan(dk)
-    mask_nan(dv)
+    mask_nan(dv) 
 
     return dq, dk, dv, softmax_d
 

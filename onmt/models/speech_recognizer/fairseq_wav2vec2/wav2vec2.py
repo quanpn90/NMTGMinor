@@ -383,6 +383,7 @@ class Wav2Vec2Model(torch.nn.Module):
             torch.FloatTensor(cfg.encoder_embed_dim).uniform_()
         )
 
+        self.predict_language = predict_language
         self.encoder = TransformerEncoder(cfg, favor=favor, weight_drop=weight_drop,
                                           predict_language=predict_language, n_languages=n_languages)
         self.layer_norm = LayerNorm(self.embed)
@@ -1229,7 +1230,7 @@ class TransformerEncoder(nn.Module):
                 # use the
                 _lang = lang
             else:
-                _lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
+                _lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32).type_as(pred_lang)
         else:
             pred_lang = None
             _lang = lang

@@ -601,10 +601,10 @@ class MBartCrossAttention(MBartAttention):
                 # if lang has only 1 element we can do this
                 if lang.ndim == 1:
 
-                    rm_q = torch.index_select(self.rm_q, 0, lang).squeeze(0)  # squeeze possible because only 1
-                    sm_q = torch.index_select(self.sm_q, 0, lang).squeeze(0)
-                    rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
-                    sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+                    rm_q = torch.index_select(self.rm_q, 0, lang.long()).squeeze(0)  # squeeze possible because only 1
+                    sm_q = torch.index_select(self.sm_q, 0, lang.long()).squeeze(0)
+                    rm_o = torch.index_select(self.rm_o, 0, lang.long()).squeeze(0)
+                    sm_o = torch.index_select(self.sm_o, 0, lang.long()).squeeze(0)
 
 
                 elif lang.ndim == 2:  # for flash attention
@@ -640,8 +640,8 @@ class MBartCrossAttention(MBartAttention):
                     raise NotImplementedError("Unknown dimension for language IDs")
 
                 if src_lang.ndim == 1:
-                    rm_kv = torch.index_select(self.rm_kv, 0, src_lang).squeeze(0)  # squeeze possible because only 1
-                    sm_kv = torch.index_select(self.sm_kv, 0, src_lang).squeeze(0)
+                    rm_kv = torch.index_select(self.rm_kv, 0, src_lang.long()).squeeze(0)  # squeeze possible because only 1
+                    sm_kv = torch.index_select(self.sm_kv, 0, src_lang.long()).squeeze(0)
                 elif src_lang.ndim == 2:
                     rm_kv = torch.mm(src_lang, self.rm_kv.view(n_languages, _rank * self.rm_kv.size(-1))).view(
                         src_lang.size(0), _rank,
@@ -2250,7 +2250,18 @@ class MBartDecoder(MBartPreTrainedModel):
             else:
                 buffer = None
 
-            # TODO: handle self.predict_language
+            # if predict_language, then for the first layer the network is not factorized
+
+            if self.predict_language > 0 and idx == 0:
+                _lang = None
+                _src_lang = None
+            else:
+                _lang = lang
+                _src_lang = src_lang
+                if src_lang is None:
+                    _src_lang = lang
+                else:
+                    _src_lang = src_lang.type_as(hidden_states)
 
             layer_outputs, buffer = decoder_layer(
                 hidden_states,
@@ -2259,13 +2270,40 @@ class MBartDecoder(MBartPreTrainedModel):
                 encoder_attention_mask=encoder_attention_mask,
                 output_attentions=None,
                 incremental=buffering, incremental_cache=buffer,
-                lang=lang,
-                max_len=max_len, cu_seqlens=cu_seqlens
+                lang=_lang,
+                src_lang=_src_lang
             )
+
+            hidden_states = layer_outputs[0]
+
+            if self.predict_language > 0 and idx == 0:
+
+                cross_attn_input = self.layer_norm_cls(hidden_states)
+                cross_attn_output, _, _ = self.cross_attention_cls(
+                    hidden_states=cross_attn_input,
+                    key_value_states=encoder_hidden_states,
+                    attention_mask=encoder_attention_mask,
+                    output_attentions=None,
+                    incremental=False, incremental_cache=None
+                )
+
+                # maybe we need a gated function here to combine
+                cls_input = cross_attn_output + hidden_states
+
+                pred_lang = self.linear_cls(cls_input)
+
+                # for prediction lang is always the predicted one
+                lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
+                lang = lang.type_as(pred_lang)
+
+                # we probably need to ensure that lang and hidden states have the same size
+                assert lang.size(1) == hidden_states.size(1)
+                assert lang.size(0) == hidden_states.size(0)
 
             if buffering:
                 decoder_state.update_attention_buffer(buffer, idx)
-            hidden_states = layer_outputs[0]
+
+
 
         hidden_states = self.layer_norm(hidden_states)
         output = hidden_states[-1].unsqueeze(0)

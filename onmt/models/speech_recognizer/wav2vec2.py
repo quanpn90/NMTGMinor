@@ -964,6 +964,11 @@ class Wav2vecBERT(Wav2vecTransformer):
 
         encoder_output = self.encoder(src.transpose(0, 1), batch_first_output=False,
                                       lang=src_lang, atb=src_atb)
+
+        if hasattr(self.encoder, 'predict_language') and self.encoder.predict_language > 0:
+            pred_lang = encoder_output['pred_lang']
+            src_lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
+
         src_attention_mask = encoder_output['src']
 
         dec_pretrained_model = self.decoder.dec_pretrained_model

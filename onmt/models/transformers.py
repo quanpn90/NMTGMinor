@@ -851,61 +851,31 @@ class TransformerDecodingState(DecoderState):
         self.dec_pretrained_model = dec_pretrained_model
         self.tgt_atb = tgt_atb
 
-        if type == 1:
-            # if audio only take one dimension since only used for mask
-            raise NotImplementedError
-            # self.original_src = src  # TxBxC
-            # self.concat_input_seq = True
-            #
-            # if src is not None:
-            #     if src.dim() == 3:
-            #         # print(self.src.size())
-            #         self.src = src.narrow(2, 0, 1).squeeze(2).repeat(1, beam_size)
-            #         # self.src = src.repeat(1, beam_size, 1)
-            #         # print(self.src.size())
-            #         # self.src = src.repeat(1, beam_size, 1) # T x Bb x c
-            #     else:
-            #         self.src = src.repeat(1, beam_size)
-            # else:
-            #     self.src = None
-            #
-            # if context is not None:
-            #     self.context = context.repeat(1, beam_size, 1)
-            # else:
-            #     self.context = None
-            #
-            # self.input_seq = None
-            # self.src_lang = src_lang
-            # self.tgt_lang = tgt_lang
 
-        elif type == 2:
-            bsz = src.size(1)  # src is T x B
-            new_order = torch.arange(bsz).view(-1, 1).repeat(1, self.beam_size).view(-1)
-            new_order = new_order.to(src.device)
+        bsz = src.size(1)  # src is T x B
+        new_order = torch.arange(bsz).view(-1, 1).repeat(1, self.beam_size).view(-1)
+        new_order = new_order.to(src.device)
 
-            if cloning:
-                self.src = src.index_select(1, new_order)  # because src is time first
+        if cloning:
+            self.src = src.index_select(1, new_order)  # because src is time first
 
-                if context is not None:
-                    self.context = context.index_select(1, new_order)
-                else:
-                    self.context = None
-
-                if src_mask is not None:
-                    self.src_mask = src_mask.index_select(0, new_order)
-                else:
-                    self.src_mask = None
+            if context is not None:
+                self.context = context.index_select(1, new_order)
             else:
-                self.context = context
-                self.src = src
-                # self.src_mask = src_mask
+                self.context = None
 
-            self.concat_input_seq = False
-            self.tgt_lang = tgt_lang
-            self.src_lang = src_lang
-
+            if src_mask is not None:
+                self.src_mask = src_mask.index_select(0, new_order)
+            else:
+                self.src_mask = None
         else:
-            raise NotImplementedError
+            self.context = context
+            self.src = src
+
+        self.concat_input_seq = False  # deprecated
+        self.tgt_lang = tgt_lang
+        self.src_lang = src_lang
+
 
     def update_attention_buffer(self, buffer, layer):
 
