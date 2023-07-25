@@ -104,7 +104,7 @@ def allocate_batch_unbalanced_slow(indices, lengths,
                                    batch_size_sents, batch_size_multiplier,
                                    max_src_len, max_tgt_len,
                                    min_src_len, min_tgt_len, cleaning=1,
-                                   cut_off_size=240000, smallest_batch_size=4):
+                                   cut_off_size=256000, smallest_batch_size=4):
     batches = list()
     batch = list()
     cur_batch_size_words = []
@@ -197,7 +197,7 @@ def allocate_batch_unbalanced(indices, lengths,
                                batch_size_sents, batch_size_multiplier,
                                max_src_len, max_tgt_len,
                                min_src_len, min_tgt_len, cleaning=1,
-                               cut_off_size=180000, smallest_batch_size=4):
+                               cut_off_size=256000, smallest_batch_size=4):
 
     try:
         import pyximport
@@ -230,3 +230,58 @@ def allocate_batch_unbalanced(indices, lengths,
                                          max_src_len, max_tgt_len,
                                          min_src_len, min_tgt_len, cleaning,
                                          cut_off_size, smallest_batch_size)
+
+
+
+
+def allocate_batch_simple(indices,
+                          src_sizes, tgt_sizes,
+                          batch_size_sents,
+                          max_src_len, max_tgt_len,
+                          min_src_len, min_tgt_len):
+    batches = list()
+    batch = list()
+    cur_batch_size = 0
+    cur_batch_sizes = []
+
+    idx = 0
+    full_size = len(indices)
+
+    # step 1: randomize the indices
+
+
+    while idx < full_size:
+        i = indices[idx]
+
+        sent_length = lengths[i]
+        src_size = src_sizes[i] if src_sizes is not None else 0
+        tgt_size = tgt_sizes[i] if tgt_sizes is not None else 0
+
+        if not (min_src_len <= src_size < max_src_len and min_tgt_len <= tgt_size < max_tgt_len):
+            idx = idx + 1
+            continue
+
+        oversized = _is_oversized(batch, sent_length, cur_batch_sizes, batch_size_words, batch_size_sents)
+
+        if oversized:
+            current_size = len(batch)
+            scaled_size = max(
+                batch_size_multiplier * (current_size // batch_size_multiplier),
+                current_size % batch_size_multiplier)
+
+            batch_ = batch[:scaled_size]
+            batches.append(batch_)  # add this batch into the batch list
+            batch = batch[scaled_size:]  # reset the current batch
+            cur_batch_sizes = cur_batch_sizes[scaled_size:]
+            cur_batch_size = sum(cur_batch_sizes)
+
+        batch.append(i)
+        cur_batch_size += sent_length
+        cur_batch_sizes.append(sent_length)
+
+        idx = idx + 1
+
+    if len(batch) > 0:
+        batches.append(batch)
+
+    return batches
