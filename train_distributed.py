@@ -19,8 +19,6 @@ import os
 import numpy as np
 import warnings
 import dill
-from multiprocessing import Process, Manager
-from multiprocessing.managers import BaseManager, NamespaceProxy
 from torch.multiprocessing import Pool, Process, set_start_method
 
 def pickle_trick(obj, max_depth=10):
@@ -194,6 +192,8 @@ def main(gpu, opt):
                 train_tgt_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
 
             if not opt.streaming:
+                constants = dill.dumps(onmt.constants)
+
                 train_data = onmt.Dataset(numpy_to_torch(train_dict['src']), numpy_to_torch(train_dict['tgt']),
                                           train_dict['src_sizes'], train_dict['tgt_sizes'],
                                           train_src_langs, train_tgt_langs,
@@ -209,7 +209,7 @@ def main(gpu, opt):
                                           input_size=opt.input_size,
                                           upsampling=opt.upsampling,
                                           num_split=1,
-                                          constants=onmt.constants)
+                                          constants=constants)
             else:
                 train_data = onmt.StreamDataset(train_dict['src'], train_dict['tgt'],
                                                 train_src_langs, train_tgt_langs,
@@ -248,6 +248,8 @@ def main(gpu, opt):
                 valid_tgt_atbs.append(torch.Tensor([dicts['atbs']['nothingness']]))
 
             if not opt.streaming:
+                constants = dill.dumps(onmt.constants)
+
                 valid_data = onmt.Dataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
                                           valid_dict['src_sizes'], valid_dict['tgt_sizes'],
                                           valid_src_langs, valid_tgt_langs,
@@ -261,7 +263,7 @@ def main(gpu, opt):
                                           multiplier=opt.batch_size_multiplier,
                                           upsampling=opt.upsampling,
                                           input_size=opt.input_size,
-                                          constants=onmt.constants)
+                                          constants=constants)
             else:
                 valid_data = onmt.StreamDataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
                                                 valid_src_langs, valid_tgt_langs,
@@ -275,6 +277,9 @@ def main(gpu, opt):
 
         # Loading asr data structures
         elif opt.data_format in ['scp', 'scpmem', 'mmem', 'wav']:
+
+            from onmt.data.mmap_indexed_dataset import MMapIndexedDataset
+
             lprint("Loading memory mapped data files ....")
             start = time.time()
 
@@ -360,6 +365,8 @@ def main(gpu, opt):
                 data_type = 'text'
 
             if not opt.streaming:
+                constants = dill.dumps(onmt.constants)
+
                 train_data = onmt.Dataset(train_src,
                                           train_tgt,
                                           train_src_sizes, train_tgt_sizes,
@@ -377,7 +384,8 @@ def main(gpu, opt):
                                           past_src_data_sizes=past_train_src_sizes,
                                           max_src_len=opt.max_src_length,
                                           max_tgt_len=opt.max_tgt_length,
-                                          constants=onmt.constants)
+                                          constants=constants,
+                                          concat=opt.concat_dataset)
             else:
                 train_data = onmt.StreamDataset(train_src,
                                                 train_tgt,
@@ -443,6 +451,8 @@ def main(gpu, opt):
                 past_valid_src_sizes = None
 
             if not opt.streaming:
+                constants = dill.dumps(onmt.constants)
+
                 valid_data = onmt.Dataset(valid_src, valid_tgt,
                                           valid_src_sizes, valid_tgt_sizes,
                                           valid_src_langs, valid_tgt_langs,
@@ -459,7 +469,7 @@ def main(gpu, opt):
                                           max_src_len=opt.max_src_length,
                                           max_tgt_len=opt.max_tgt_length,
                                           min_src_len=1, min_tgt_len=3,
-                                          constants=onmt.constants)
+                                          constants=constants)
             else:
                 # for validation data, we have to go through sentences (very slow but to ensure correctness)
                 valid_data = onmt.StreamDataset(valid_src, valid_tgt,

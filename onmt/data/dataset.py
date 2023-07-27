@@ -8,7 +8,7 @@ import onmt
 from onmt.speech.Augmenter import Augmenter
 from onmt.modules.dropout import switchout
 import numpy as np
-from .batch_utils import allocate_batch, allocate_batch_unbalanced
+from .batch_utils import allocate_batch, allocate_batch_unbalanced, allocate_batch_simple
 import dill
 import random
 
@@ -19,8 +19,8 @@ Two basic classes:
 - Dataset stores all of the data and 
 """
 
-def merge_concat_data(data, type="text", src_pad=0, tgt_pad=0, dataname="source",
-                      max_len=640000):
+def merge_concat_data(data, type="text", src_pad=0, tgt_pad=0,
+                      max_len=640000, feature_size=40, bilingual=False):
 
     """
     Args:
@@ -34,41 +34,86 @@ def merge_concat_data(data, type="text", src_pad=0, tgt_pad=0, dataname="source"
 
     """
 
-    _sample = data[0][0]
-    has_src = _sample.src is not None
-    has_tgt = _sample.tgt is not None
+    _sample = data[0][0]  # take the first sample tensor
+    has_src = _sample["src"] is not None
+    has_tgt = _sample["tgt"] is not None
+    assert (has_src and has_tgt)
 
-    _data = _sample.src if _sample.src is not None else _sample.tgt
+    _src_data = _sample["src"]
+    _tgt_data = _sample["tgt"]
+    _src_lang_data = _sample["src_lang"]
+    _tgt_lang_data = _sample["tgt_lang"]
     batch_size = len(data)
 
-    # check max_length of source
-    max_src_len = 0
-    if has_src:
-        for _data in data:
-            cur_max_len = sum(_data[i].src.numel() for i in _data)
-            if cur_max_len > max_src_len:
-                max_src_len = cur_max_len
 
-    # check max length of target
-    max_tgt_len = 0
-    if has_tgt:
-        for _data in data:
-            cur_max_len = sum(_data[i].tgt.numel() for i in _data)
-            if cur_max_len > max_tgt_len:
-                max_tgt_len = cur_max_len
+    #
+    src_lengths = [sum(__data["src"].size(0) for __data in _data) for _data in data]
+    max_src_len = max(src_lengths)
 
-    if max_src_len > max_tgt_len:
-        src_bias = True
-        max_src_len = max_len
-    else:
-        src_bias = False
-        max_tgt_len = max_len
+    tgt_lengths = [sum(__data["tgt"].size(0) for __data in _data) for _data in data]
+    max_tgt_len = max(tgt_lengths)
+
 
     # allocate tensor
-    src_tensor = _data.new(len(data), max_src_len).fill_(src_pad)
-    tgt_tensor = _data.new(len(data), max_tgt_len).fill_(tgt_pad)
+    src_tensor = _src_data.float().new(batch_size, max_src_len, feature_size + 1).fill_(0)
 
+    # tensor = data[0].float().new(batch_size, max_length, feature_size + 1).fill_(0)
+    #
+    # for i in range(len(samples)):
+    #     sample = samples[i]
+    #
+    #     # normalize
+    #     data_length = sample.size(0)
+    #     offset = max_length - data_length if align_right else 0
+    #
+    #     channels = 1
+    #     tensor[i].narrow(0, offset, data_length).narrow(1, 1, channels).copy_(sample)
+    #     # in padding dimension: 1 is not padded, 0 is padded
+    #     tensor[i].narrow(0, offset, data_length).narrow(1, 0, 1).fill_(1)
 
+    tgt_tensor = _src_data.new(batch_size, max_tgt_len).long().fill_(tgt_pad)
+
+    src_lang_tensor = _src_lang_data.new(batch_size, max_src_len).long().fill_(0)
+    tgt_lang_tensor = _tgt_lang_data.new(batch_size, max_tgt_len).long().fill_(0)
+
+    for i, _data in enumerate(data):
+        # each element in the minibatch is a list of samples
+
+        src_offset = 0  # align left so we start from 0
+        tgt_offset = 0  # align left
+        assert type == "wav"
+
+        for _sample in _data:
+
+            # fill in the source
+            src_sample = _sample["src"]
+            # normalize
+            data_length = src_sample.size(0)
+            channels = 1
+            src_tensor[i].narrow(0, src_offset, data_length).narrow(1, 1, channels).copy_(src_sample)
+
+            src_lang_sample = _sample["src_lang"]
+            if src_lang_sample.numel() == 1:
+                src_lang_sample = src_lang_sample.repeat(data_length)
+            src_lang_tensor[i].narrow(0, src_offset, data_length).copy_(src_lang_sample)
+
+            # update offset for source
+            src_offset = src_offset + data_length
+
+            # fill in the target
+            tgt_sample = _sample["tgt"]
+            data_length = tgt_sample.size(0)
+            tgt_tensor[i].narrow(0, tgt_offset, data_length).copy_(tgt_sample)
+
+            tgt_lang_sample = _sample["tgt_lang"]
+            if tgt_lang_sample.numel() == 1:
+                tgt_lang_sample = tgt_lang_sample.repeat(data_length)
+            tgt_lang_tensor[i].narrow(0, tgt_offset, data_length).copy_(tgt_lang_sample)
+
+            # update offset for target
+            tgt_offset = tgt_offset + data_length
+
+    return src_tensor, tgt_tensor, src_lang_tensor, tgt_lang_tensor, src_lengths, tgt_lengths
 
 
 def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=False,
@@ -261,75 +306,50 @@ def collate_fn(src_data, tgt_data,
 
 # default = align left
 # applicable for text?
-def collate_concat_fn(src_samples, tgt_samples,
-               src_type='text',
-               augmenter=None, upsampling=False,
-               bilingual=False, vocab_mask=None,
-               src_pad="<blank>", tgt_pad="<blank>", feature_size=40,
-               max_len = 640000, batch_size=4):
-    # tensors = dict()
-    # if src_data is not None:
-    #     tensors['source'], tensors['source_pos'], src_lengths = merge_data(src_data, align_right=src_align_right,
-    #                                                                        type=src_type, augmenter=augmenter,
-    #                                                                        upsampling=upsampling, feature_size=feature_size,
-    #                                                                        dataname="source", src_pad=src_pad)
-    #     tensors['src_type'] = src_type
-    #     tensors['src_selfattn_mask'] = tensors['source'].eq(src_pad)
-    #     tensors['source'] = tensors['source'].transpose(0, 1).contiguous()
-    #     if tensors['source_pos'] is not None:
-    #         tensors['source_pos'] = tensors['source_pos'].transpose(0, 1)
-    #     tensors['src_lengths'] = torch.LongTensor(src_lengths)
-    #     tensors['src_size'] = sum(src_lengths)
-    #
-    # if tgt_data is not None:
-    #     target_full, target_pos, tgt_lengths = merge_data(tgt_data, align_right=tgt_align_right,
-    #                                                       dataname="target", tgt_pad=tgt_pad)
-    #     tensors['tgt_selfattn_mask'] = target_full.eq(tgt_pad)
-    #     target_full = target_full.t().contiguous()  # transpose BxT to TxB
-    #     tensors['target'] = target_full
-    #     tensors['target_input'] = target_full[:-1]
-    #     tensors['target_input_selfattn_mask'] = tensors['target_input'].transpose(0, 1).eq(tgt_pad)
-    #     tensors['target_output'] = target_full[1:]
-    #     if target_pos is not None:
-    #         tensors['target_pos'] = target_pos.t().contiguous()[:-1]
-    #     tgt_size = sum([len(x) - 1 for x in tgt_data])
-    #     tensors['tgt_lengths'] = tgt_lengths
-    #
-    # else:
-    #     tgt_size = 0
-    #     tensors['tgt_lengths'] = None
+def collate_concat_fn(samples, src_type='text', bilingual=False,
+                      src_pad=0, tgt_pad=0,
+                      feature_size=40):
 
-    # # merge data for the previous source
-    # if past_src_data is not None:
-    #     tensors['past_source'], tensors['past_source_pos'], past_src_lengths = merge_data(past_src_data,
-    #                                                                                       align_right=src_align_right,
-    #                                                                                       type=src_type,
-    #                                                                                       augmenter=augmenter,
-    #                                                                                       upsampling=upsampling,
-    #                                                                                       feature_size=feature_size,
-    #                                                                                       dataname="source",
-    #                                                                                       src_pad=src_pad)
-    #
-    #     tensors['past_source'] = tensors['past_source'].transpose(0, 1).contiguous()
-    #     if tensors['past_source_pos'] is not None:
-    #         tensors['past_source_pos'] = tensors['past_source_pos'].transpose(0, 1)
-    #     tensors['past_src_lengths'] = torch.LongTensor(past_src_lengths)
-    #     tensors['past_src_size'] = sum(past_src_lengths)
-    #
-    # tensors['tgt_size'] = tgt_size
-    # tensors['size'] = len(src_data) if src_data is not None else len(tgt_data)
-    #
-    # if src_lang_data is not None:
-    #     tensors['source_lang'] = torch.cat(src_lang_data).long()
-    # if tgt_lang_data is not None:
-    #     tensors['target_lang'] = torch.cat(tgt_lang_data).long()
-    #
-    # if src_atbs_data is not None:
-    #     tensors['source_atbs'] = torch.cat(src_atbs_data).long()
-    # if tgt_atbs_data is not None:
-    #     tensors['target_atbs'] = torch.cat(tgt_atbs_data).long()
-    #
-    # tensors['vocab_mask'] = vocab_mask
+    """
+    Args:
+        samples: a list of list of samples (dictionary containing tensors for src, tgt, src_lang, tgt_lang)
+        src_type:
+        bilingual: True/False. If Bilingual: the lang tensor will be
+        src_pad:
+        tgt_pad:
+
+    Returns:
+
+    """
+
+    tensors = dict()
+    tensors['source'], target_full, tensors['source_lang'], target_lang_full, src_lengths, tgt_lengths = \
+        merge_concat_data(samples, type=src_type,
+        src_pad=src_pad, tgt_pad=tgt_pad,
+        bilingual=bilingual, feature_size=feature_size)
+
+    tensors['src_type'] = src_type
+    tensors['src_selfattn_mask'] = tensors['source'].eq(src_pad)
+    tensors['source'] = tensors['source'].transpose(0, 1).contiguous()
+    tensors['source_lang'] = tensors['source'].transpose(0, 1).contiguous()
+
+    tensors['src_lengths'] = torch.LongTensor(src_lengths)
+    tensors['src_size'] = sum(src_lengths)
+
+    tensors['tgt_selfattn_mask'] = target_full.eq(tgt_pad)
+    target_full = target_full.t().contiguous()  # transpose BxT to TxB
+    tensors['target'] = target_full
+    tensors['target_input'] = target_full[:-1]
+    tensors['target_input_selfattn_mask'] = tensors['target_input'].transpose(0, 1).eq(tgt_pad)
+    tensors['target_output'] = target_full[1:]
+    tensors['tgt_size'] = sum(tgt_lengths)
+    tensors['tgt_lengths'] = torch.LongTensor(tgt_lengths)
+    tensors['target_lang'] = target_lang_full.transpose(0, 1).contiguous()[1:]
+
+    tensors['vocab_mask'] = None
+    tensors['source_atbs'] = None
+    tensors['target_atbs'] = None
+    tensors['size'] = len(src_lengths)
 
     return LightBatch(tensors)
 
@@ -475,6 +495,10 @@ class Dataset(torch.utils.data.Dataset):
         return self.batches
 
     def get_collater(self):
+
+        if self.concat:
+            return self.collater_concat
+
         return self.collater
 
     def get_size(self):
@@ -663,12 +687,20 @@ class Dataset(torch.utils.data.Dataset):
 
         # group samples into mini-batches
         if self.concat:
-            self.batches = allocate_batch_simple(sorted_order, data_lengths,
+            _batch_size = math.floor(batch_size_frames / self.max_src_len)
+
+            self.batches = allocate_batch_simple(sorted_order,
                                                  src_sizes, tgt_sizes,
-                                                 batch_size_frames, batch_size_words,
-                                                 batch_size_sents,
+                                                 _batch_size,
                                                  self.max_src_len, self.max_tgt_len,
                                                  self.min_src_len, self.min_tgt_len)
+
+            # allocate_batch_simple(indices,
+            #                       src_sizes, tgt_sizes,
+            #                       batch_size_sents,
+            #                       max_src_len, max_tgt_len,
+            #                       min_src_len, min_tgt_len):
+
             self.src_sizes = src_sizes
             self.tgt_sizes = tgt_sizes
 
@@ -702,10 +734,14 @@ class Dataset(torch.utils.data.Dataset):
         self.num_batches = len(self.batches)
         self.batch_sizes = [len(x) for x in self.batches]
         self.filtered_samples = []
-        map(self.filtered_samples.extend, self.batches)
+        # map(self.filtered_samples.extend, self.batches)
+        for x in self.batches:
+            for _sample in x:
+                self.filtered_samples.append(_sample)
 
         print("Number of sentences before cleaning and sorting: %d" % len(src_sizes) )
         print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
+        print("Number of sentences after cleaning and sorting: %d" % len(self.filtered_samples) )
         print("Number of batches after cleaning and sorting: %d" % self.num_batches)
 
         self.cur_index = 0
@@ -806,7 +842,7 @@ class Dataset(torch.utils.data.Dataset):
         else:
             past_src = None
 
-        sample = {
+        sampledata = {
             'src': self.src[index] if self.src is not None else None,
             'tgt': self.tgt[index] if self.tgt is not None else None,
             'src_lang': src_lang,
@@ -816,7 +852,7 @@ class Dataset(torch.utils.data.Dataset):
             'past_src': past_src
         }
 
-        return sample
+        return sampledata
 
     def get_batch(self, index):
         """
@@ -965,24 +1001,29 @@ class Dataset(torch.utils.data.Dataset):
         assert self.src is not None
         assert self.tgt is not None
 
-        max_retry = 100
+        max_retry = 20
         max_len = self.max_src_len
 
         sampled_ids = collected_samples
 
         for sample in  collected_samples:
+
+            if not (type(sample) is dict):
+                continue
+
             cur_sample = [sample]
 
             cur_src_len = sample['src'].size(0)
 
             # random samples from the data (fast)
-            random_sample_ids = random.choice(self.filtered_samples, k=max_retry)
+            random_sample_ids = random.choices(self.filtered_samples, k=max_retry)
 
+            lengths = [self.src_sizes[_id] for _id in random_sample_ids]
 
-            # TODO: sort them by lengths
+            random_sample_ids = list(zip(random_sample_ids, lengths))
+            random_sample_ids.sort(key = lambda a: a[1])  # sort in ascending order or descending order?
 
-            for random_sample_id in random_sample_ids:
-                src_len = self.src_sizes[random_sample_id]
+            for random_sample_id, src_len in random_sample_ids:
 
                 if cur_src_len + src_len <= max_len and random_sample_id not in sampled_ids:
 
@@ -994,69 +1035,16 @@ class Dataset(torch.utils.data.Dataset):
                     cur_src_len = cur_src_len + src_len
                     sampled_ids.append(random_sample_id)
 
+                if max_len - cur_src_len < min(lengths):
+                    break
+
             batch.append(cur_sample)
 
-            # if self.tgt:
-            #     tgt_data = [sample['tgt'] for sample in samples]
-            # TODO:
-            # for each element in mini batch
-            # randomly sample more samples from the dataset until reaching max_length
-            # retry n times for each unfit / overlapping
+        print(len(batch), cur_src_len)
+        print([len(data) for data in batch])
 
-            # src_data, tgt_data = None, None
-            # src_lang_data, tgt_lang_data = None, None
-            # src_atbs_data, tgt_atbs_data = None, None
-            # past_src_data = None
-            #
-            #
-            # if self.src:
-            #     src_data = [sample['src'] for sample in samples]
-            #
-            # if self.tgt:
-            #     tgt_data = [sample['tgt'] for sample in samples]
-            #
-            # if self.bilingual:
-            #     if self.src_langs is not None:
-            #         src_lang_data = [self.src_langs[0]]  # should be a tensor [0]
-            #     if self.tgt_langs is not None:
-            #         tgt_lang_data = [self.tgt_langs[0]]  # should be a tensor [1]
-            #     # if self.src_atbs is not None:
-            #     #     src_atbs_data = [self.src_atbs[0]]
-            #     # if self.tgt_atbs is not None:
-            #     #     tgt_atbs_data = [self.tgt_atbs[0]]
-            #     src_atbs_data = None
-            #     tgt_atbs_data = None
-            # else:
-            #     if self.src_langs is not None:
-            #         src_lang_data = [sample['src_lang'] for sample in samples]  # should be a tensor [0]
-            #     if self.tgt_langs is not None:
-            #         tgt_lang_data = [sample['tgt_lang'] for sample in samples]  # should be a tensor [1]
-            #     # if self.src_atbs is not None:
-            #     #     src_atbs_data = [self.src_atbs[i] for i in batch_ids]
-            #     # if self.tgt_atbs is not None:
-            #     #     tgt_atbs_data = [self.tgt_atbs[i] for i in batch_ids]
-            #     src_atbs_data = None
-            #     tgt_atbs_data = None
-            #
-            # if self.use_past_src:
-            #     past_src_data = [sample['past_src'] for sample in samples]
-            #
-            # # TODO:
-            # # src_data is now a [list of [list of Samples]]
-            # # tgt_data is either None or a [list of [list of Samples]]
-            #
-            # batch = collate_fn(src_data, tgt_data=tgt_data,
-            #                    src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
-            #                    src_atbs_data=src_atbs_data, tgt_atbs_data=tgt_atbs_data,
-            #                    src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
-            #                    src_type=self._type,
-            #                    augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask,
-            #                    past_src_data=past_src_data, src_pad=self.src_pad, tgt_pad=self.tgt_pad,
-            #                    feature_size=self.input_size)
-
-        # TODO: convert ids to sample
-
-        batch = collate_concat_fn()
+        batch = collate_concat_fn(batch, src_type=self._type, bilingual=self.bilingual,
+                                  src_pad=self.src_pad, tgt_pad=self.tgt_pad, feature_size=self.input_size)
 
         return [batch]
 
@@ -1075,33 +1063,3 @@ class Dataset(torch.utils.data.Dataset):
 
         return self.batchOrder
 
-    # # return the next batch according to the iterator
-    # def next(self, curriculum=False, reset=True):
-    #
-    #     # reset iterator if reach data size limit
-    #     if self.cur_index >= self.num_batches:
-    #         if reset:
-    #             self.cur_index = 0
-    #         else:
-    #             return None
-    #
-    #     if curriculum or self.batchOrder is None:
-    #         batch_index = self.cur_index
-    #     else:
-    #         batch_index = self.batchOrder[self.cur_index]
-    #
-    #     batch = self[batch_index]
-    #
-    #     # move the iterator one step
-    #     self.cur_index += 1
-    #
-    #     return [batch]
-    #
-    # def shuffle(self):
-    #     data = list(zip(self.src, self.tgt))
-    #     self.src, self.tgt = zip(*[data[i] for i in torch.randperm(len(data))])
-    #
-    # def set_index(self, iteration):
-    #
-    #     assert (0 <= iteration < self.num_batches)
-    #     self.cur_index = iteration

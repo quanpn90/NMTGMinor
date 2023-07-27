@@ -50,8 +50,8 @@ def _warmup_mmap_file(path):
             pass
 
 
-# class MMapIndexedDataset(torch.utils.data.Dataset):
-class MMapIndexedDataset(object):
+class MMapIndexedDataset(torch.utils.data.Dataset):
+# class MMapIndexedDataset(object):
     class Index(object):
         _HDR_MAGIC = b'MMIDIDX\x00\x00'
 
