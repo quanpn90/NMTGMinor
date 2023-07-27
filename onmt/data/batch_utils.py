@@ -117,8 +117,9 @@ def allocate_batch_unbalanced_slow(indices, lengths,
         i = indices[idx]
 
         sent_length = lengths[i]
-        src_size = src_sizes[i] if src_sizes is not None else 0
-        tgt_size = tgt_sizes[i] if tgt_sizes is not None else 0
+        # they have to be min_src_len and min_tgt_len to avoid ignoring stuffs
+        src_size = src_sizes[i] if src_sizes is not None else min_src_len
+        tgt_size = tgt_sizes[i] if tgt_sizes is not None else min_tgt_len
 
         if cleaning == 1:
             if not (min_src_len <= src_size < max_src_len and min_tgt_len <= tgt_size < max_tgt_len):
@@ -249,35 +250,34 @@ def allocate_batch_simple(indices,
 
     # step 1: randomize the indices
 
-
     while idx < full_size:
         i = indices[idx]
 
-        sent_length = lengths[i]
-        src_size = src_sizes[i] if src_sizes is not None else 0
-        tgt_size = tgt_sizes[i] if tgt_sizes is not None else 0
+        src_size = src_sizes[i] if src_sizes is not None else min_src_len
+        tgt_size = tgt_sizes[i] if tgt_sizes is not None else min_tgt_len
 
         if not (min_src_len <= src_size < max_src_len and min_tgt_len <= tgt_size < max_tgt_len):
             idx = idx + 1
             continue
 
-        oversized = _is_oversized(batch, sent_length, cur_batch_sizes, batch_size_words, batch_size_sents)
+        oversized = len(batch) >= batch_size_sents
 
         if oversized:
-            current_size = len(batch)
-            scaled_size = max(
-                batch_size_multiplier * (current_size // batch_size_multiplier),
-                current_size % batch_size_multiplier)
-
-            batch_ = batch[:scaled_size]
-            batches.append(batch_)  # add this batch into the batch list
-            batch = batch[scaled_size:]  # reset the current batch
-            cur_batch_sizes = cur_batch_sizes[scaled_size:]
-            cur_batch_size = sum(cur_batch_sizes)
+            # current_size = len(batch)
+            # # scaled_size = max(
+            # #     batch_size_multiplier * (current_size // batch_size_multiplier),
+            # #     current_size % batch_size_multiplier)
+            #
+            #
+            # batch_ = batch[:scaled_size]
+            # batches.append(batch_)  # add this batch into the batch list
+            # batch = batch[scaled_size:]  # reset the current batch
+            # cur_batch_sizes = cur_batch_sizes[scaled_size:]
+            # cur_batch_size = sum(cur_batch_sizes)
+            batches.append(batch)
+            batch = []
 
         batch.append(i)
-        cur_batch_size += sent_length
-        cur_batch_sizes.append(sent_length)
 
         idx = idx + 1
 

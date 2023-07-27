@@ -10,6 +10,7 @@ from onmt.modules.dropout import switchout
 import numpy as np
 from .batch_utils import allocate_batch, allocate_batch_unbalanced
 import dill
+import random
 
 """
 Data management for sequence-to-sequence models
@@ -266,69 +267,69 @@ def collate_concat_fn(src_samples, tgt_samples,
                bilingual=False, vocab_mask=None,
                src_pad="<blank>", tgt_pad="<blank>", feature_size=40,
                max_len = 640000, batch_size=4):
-    tensors = dict()
-    if src_data is not None:
-        tensors['source'], tensors['source_pos'], src_lengths = merge_data(src_data, align_right=src_align_right,
-                                                                           type=src_type, augmenter=augmenter,
-                                                                           upsampling=upsampling, feature_size=feature_size,
-                                                                           dataname="source", src_pad=src_pad)
-        tensors['src_type'] = src_type
-        tensors['src_selfattn_mask'] = tensors['source'].eq(src_pad)
-        tensors['source'] = tensors['source'].transpose(0, 1).contiguous()
-        if tensors['source_pos'] is not None:
-            tensors['source_pos'] = tensors['source_pos'].transpose(0, 1)
-        tensors['src_lengths'] = torch.LongTensor(src_lengths)
-        tensors['src_size'] = sum(src_lengths)
+    # tensors = dict()
+    # if src_data is not None:
+    #     tensors['source'], tensors['source_pos'], src_lengths = merge_data(src_data, align_right=src_align_right,
+    #                                                                        type=src_type, augmenter=augmenter,
+    #                                                                        upsampling=upsampling, feature_size=feature_size,
+    #                                                                        dataname="source", src_pad=src_pad)
+    #     tensors['src_type'] = src_type
+    #     tensors['src_selfattn_mask'] = tensors['source'].eq(src_pad)
+    #     tensors['source'] = tensors['source'].transpose(0, 1).contiguous()
+    #     if tensors['source_pos'] is not None:
+    #         tensors['source_pos'] = tensors['source_pos'].transpose(0, 1)
+    #     tensors['src_lengths'] = torch.LongTensor(src_lengths)
+    #     tensors['src_size'] = sum(src_lengths)
+    #
+    # if tgt_data is not None:
+    #     target_full, target_pos, tgt_lengths = merge_data(tgt_data, align_right=tgt_align_right,
+    #                                                       dataname="target", tgt_pad=tgt_pad)
+    #     tensors['tgt_selfattn_mask'] = target_full.eq(tgt_pad)
+    #     target_full = target_full.t().contiguous()  # transpose BxT to TxB
+    #     tensors['target'] = target_full
+    #     tensors['target_input'] = target_full[:-1]
+    #     tensors['target_input_selfattn_mask'] = tensors['target_input'].transpose(0, 1).eq(tgt_pad)
+    #     tensors['target_output'] = target_full[1:]
+    #     if target_pos is not None:
+    #         tensors['target_pos'] = target_pos.t().contiguous()[:-1]
+    #     tgt_size = sum([len(x) - 1 for x in tgt_data])
+    #     tensors['tgt_lengths'] = tgt_lengths
+    #
+    # else:
+    #     tgt_size = 0
+    #     tensors['tgt_lengths'] = None
 
-    if tgt_data is not None:
-        target_full, target_pos, tgt_lengths = merge_data(tgt_data, align_right=tgt_align_right,
-                                                          dataname="target", tgt_pad=tgt_pad)
-        tensors['tgt_selfattn_mask'] = target_full.eq(tgt_pad)
-        target_full = target_full.t().contiguous()  # transpose BxT to TxB
-        tensors['target'] = target_full
-        tensors['target_input'] = target_full[:-1]
-        tensors['target_input_selfattn_mask'] = tensors['target_input'].transpose(0, 1).eq(tgt_pad)
-        tensors['target_output'] = target_full[1:]
-        if target_pos is not None:
-            tensors['target_pos'] = target_pos.t().contiguous()[:-1]
-        tgt_size = sum([len(x) - 1 for x in tgt_data])
-        tensors['tgt_lengths'] = tgt_lengths
-
-    else:
-        tgt_size = 0
-        tensors['tgt_lengths'] = None
-
-    # merge data for the previous source
-    if past_src_data is not None:
-        tensors['past_source'], tensors['past_source_pos'], past_src_lengths = merge_data(past_src_data,
-                                                                                          align_right=src_align_right,
-                                                                                          type=src_type,
-                                                                                          augmenter=augmenter,
-                                                                                          upsampling=upsampling,
-                                                                                          feature_size=feature_size,
-                                                                                          dataname="source",
-                                                                                          src_pad=src_pad)
-
-        tensors['past_source'] = tensors['past_source'].transpose(0, 1).contiguous()
-        if tensors['past_source_pos'] is not None:
-            tensors['past_source_pos'] = tensors['past_source_pos'].transpose(0, 1)
-        tensors['past_src_lengths'] = torch.LongTensor(past_src_lengths)
-        tensors['past_src_size'] = sum(past_src_lengths)
-
-    tensors['tgt_size'] = tgt_size
-    tensors['size'] = len(src_data) if src_data is not None else len(tgt_data)
-
-    if src_lang_data is not None:
-        tensors['source_lang'] = torch.cat(src_lang_data).long()
-    if tgt_lang_data is not None:
-        tensors['target_lang'] = torch.cat(tgt_lang_data).long()
-
-    if src_atbs_data is not None:
-        tensors['source_atbs'] = torch.cat(src_atbs_data).long()
-    if tgt_atbs_data is not None:
-        tensors['target_atbs'] = torch.cat(tgt_atbs_data).long()
-
-    tensors['vocab_mask'] = vocab_mask
+    # # merge data for the previous source
+    # if past_src_data is not None:
+    #     tensors['past_source'], tensors['past_source_pos'], past_src_lengths = merge_data(past_src_data,
+    #                                                                                       align_right=src_align_right,
+    #                                                                                       type=src_type,
+    #                                                                                       augmenter=augmenter,
+    #                                                                                       upsampling=upsampling,
+    #                                                                                       feature_size=feature_size,
+    #                                                                                       dataname="source",
+    #                                                                                       src_pad=src_pad)
+    #
+    #     tensors['past_source'] = tensors['past_source'].transpose(0, 1).contiguous()
+    #     if tensors['past_source_pos'] is not None:
+    #         tensors['past_source_pos'] = tensors['past_source_pos'].transpose(0, 1)
+    #     tensors['past_src_lengths'] = torch.LongTensor(past_src_lengths)
+    #     tensors['past_src_size'] = sum(past_src_lengths)
+    #
+    # tensors['tgt_size'] = tgt_size
+    # tensors['size'] = len(src_data) if src_data is not None else len(tgt_data)
+    #
+    # if src_lang_data is not None:
+    #     tensors['source_lang'] = torch.cat(src_lang_data).long()
+    # if tgt_lang_data is not None:
+    #     tensors['target_lang'] = torch.cat(tgt_lang_data).long()
+    #
+    # if src_atbs_data is not None:
+    #     tensors['source_atbs'] = torch.cat(src_atbs_data).long()
+    # if tgt_atbs_data is not None:
+    #     tensors['target_atbs'] = torch.cat(tgt_atbs_data).long()
+    #
+    # tensors['vocab_mask'] = vocab_mask
 
     return LightBatch(tensors)
 
@@ -668,7 +669,13 @@ class Dataset(torch.utils.data.Dataset):
                                                  batch_size_sents,
                                                  self.max_src_len, self.max_tgt_len,
                                                  self.min_src_len, self.min_tgt_len)
+            self.src_sizes = src_sizes
+            self.tgt_sizes = tgt_sizes
+
         else:
+            self.src_sizes = None
+            self.tgt_sizes = None
+
             if self._type in ['audio', 'wav']:
 
                 self.batches = allocate_batch_unbalanced(sorted_order, data_lengths,
@@ -694,6 +701,8 @@ class Dataset(torch.utils.data.Dataset):
 
         self.num_batches = len(self.batches)
         self.batch_sizes = [len(x) for x in self.batches]
+        self.filtered_samples = []
+        map(self.filtered_samples.extend, self.batches)
 
         print("Number of sentences before cleaning and sorting: %d" % len(src_sizes) )
         print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
@@ -708,7 +717,8 @@ class Dataset(torch.utils.data.Dataset):
         else:
             self.augmenter = None
 
-        # if
+
+
 
     def flush_cache(self):
         if hasattr(self.src, 'flush_cache'):
@@ -801,8 +811,8 @@ class Dataset(torch.utils.data.Dataset):
             'tgt': self.tgt[index] if self.tgt is not None else None,
             'src_lang': src_lang,
             'tgt_lang': tgt_lang,
-            'src_atb': src_atb,
-            'tgt_atb': tgt_atb,
+            'src_atb': src_atb,  # depricated
+            'tgt_atb': tgt_atb,  # depricated
             'past_src': past_src
         }
 
@@ -948,14 +958,46 @@ class Dataset(torch.utils.data.Dataset):
         :param collected_samples: list of dicts (the output of the __getitem__)
         :return: batch
         """
-        assert self.num_split == 1
-        split_size = math.ceil(len(collected_samples) / self.num_split)
-        sample_list = [collected_samples[i:i + split_size]
-                       for i in range(0, len(collected_samples), split_size)]
 
-        batches = list()
-        for samples in sample_list:
+        batch = list()
 
+        # this feature only works with src and tgt in present
+        assert self.src is not None
+        assert self.tgt is not None
+
+        max_retry = 100
+        max_len = self.max_src_len
+
+        sampled_ids = collected_samples
+
+        for sample in  collected_samples:
+            cur_sample = [sample]
+
+            cur_src_len = sample['src'].size(0)
+
+            # random samples from the data (fast)
+            random_sample_ids = random.choice(self.filtered_samples, k=max_retry)
+
+
+            # TODO: sort them by lengths
+
+            for random_sample_id in random_sample_ids:
+                src_len = self.src_sizes[random_sample_id]
+
+                if cur_src_len + src_len <= max_len and random_sample_id not in sampled_ids:
+
+                    # if the randomly next sample can be concatenated
+                    random_sample = self.__getitem__(random_sample_id)
+                    cur_sample.append(random_sample)
+
+                    # then update the current length and update the sampled ids
+                    cur_src_len = cur_src_len + src_len
+                    sampled_ids.append(random_sample_id)
+
+            batch.append(cur_sample)
+
+            # if self.tgt:
+            #     tgt_data = [sample['tgt'] for sample in samples]
             # TODO:
             # for each element in mini batch
             # randomly sample more samples from the dataset until reaching max_length
@@ -1012,9 +1054,11 @@ class Dataset(torch.utils.data.Dataset):
             #                    past_src_data=past_src_data, src_pad=self.src_pad, tgt_pad=self.tgt_pad,
             #                    feature_size=self.input_size)
 
-            batches.append(batch)
+        # TODO: convert ids to sample
 
-        return batches
+        batch = collate_concat_fn()
+
+        return [batch]
 
     def full_size(self):
         return self.full_size
