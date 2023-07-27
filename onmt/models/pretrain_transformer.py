@@ -389,4 +389,3 @@ class PretrainTransformer(NMTModel):
             self.generator[0].linear.weight = self.decoder.embed_tokens.weight
         else:
             self.generator[0].linear.weight = self.decoder.word_lut.weight
-

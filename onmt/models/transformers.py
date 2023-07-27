@@ -981,3 +981,11 @@ class TransformerDecodingState(DecoderState):
                     # else:
                     #     print("Warning: check dec_pretrained_model type")
                     #     raise NotImplementedError
+
+class TransformerDecodingStateMemory(TransformerDecodingState):
+    def __init__(self, *args, encoder_output_memory=None, memory_text_enc=None, memory_text_mask=None, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.encoder_output_memory = encoder_output_memory
+        self.memory_text_enc = memory_text_enc
+        self.memory_text_mask = memory_text_mask

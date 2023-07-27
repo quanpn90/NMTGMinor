@@ -2,7 +2,7 @@ import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from onmt.models.transformers import Transformer, TransformerDecodingState
+from onmt.models.transformers import Transformer, TransformerDecodingState, TransformerDecodingStateMemory
 from typing import List, Optional, Union
 from collections import defaultdict
 import onmt
@@ -11,6 +11,11 @@ import math
 from .fairseq_wav2vec2.file_io import PathManager
 from omegaconf import DictConfig, open_dict, OmegaConf
 from .fairseq_wav2vec2.utils import overwrite_args_by_name
+
+import copy
+import numpy as np
+from onmt.modules.loss import CrossEntropyLossBase
+from onmt.modules.layer_norm import LayerNorm
 
 #
 # # maybe just need d / F.normalize(d, p=2, dim=2)
@@ -200,16 +205,22 @@ class FairseqWav2Vec(nn.Module):
             self.auto_check_redraw = True
 
         # load wav2vec weights
-        wav2vec_weights = state['model']
-        existed_weights = self.wav2vec_encoder.state_dict()
+        load = True
 
-        # if we add new weights/buffers to new model then put them into the state_dict
-        keys = existed_weights.keys()
-        for key in keys:
-            if key not in wav2vec_weights:
-                wav2vec_weights[key] = existed_weights[key]
+        if load:
+            wav2vec_weights = state['model']
+            existed_weights = self.wav2vec_encoder.state_dict()
 
-        self.wav2vec_encoder.load_state_dict(state['model'])
+            # if we add new weights/buffers to new model then put them into the state_dict
+            keys = existed_weights.keys()
+            for key in keys:
+                if key not in wav2vec_weights:
+                    wav2vec_weights[key] = existed_weights[key]
+
+            self.wav2vec_encoder.load_state_dict(state['model'])
+        else:
+            print("Not loading pretrained wav2vec weights")
+
         removing_quantizer = not opt.wav2vec2_quantize
         # remove the quantization modules
         # print("removing quantization modules", removing_quantizer)
@@ -1066,3 +1077,474 @@ class Wav2vecBERT(Wav2vecTransformer):
         #     allgold_scores.append(scores.squeeze(1).type_as(gold_scores))
         #
         # return gold_words, gold_scores, allgold_scores
+
+def my_loss(lprobs, label, mask_no_mem, mask_mem):
+    loss = -lprobs.gather(2,label.unsqueeze(-1))[:,:,0]
+    loss1 = loss[mask_no_mem].sum()
+    loss2 = loss[mask_mem].sum()
+    correct = lprobs.argmax(-1).eq(label)
+    correct1 = correct[mask_no_mem].sum().item()
+    correct2 = correct[mask_mem].sum().item()
+    anz1 = mask_no_mem.sum().item()
+    anz2 = mask_mem.sum().item()
+    return loss1, correct1, anz1, loss2, correct2, anz2
+
+class Wav2vecBERTMemory(Wav2vecBERT):
+    def __init__(self, *args, opt=None, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self._no_entry_found = nn.Parameter(torch.randn(1,1024))
+
+        from pretrain_module.configuration_mbart import MBartConfig
+        from pretrain_module.modeling_mbart import MBartEncoder
+
+        enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
+        self.memory_encoder = MBartEncoder(enc_mbart_config, opt)
+
+        del self.memory_encoder.embed_tokens
+
+        if opt.enc_state_dict:
+            enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+            self.memory_encoder.load_state_dict(enc_model_state_dict, strict=False)
+        else:
+            print("Not loading pretrained mbart encoder weights for memory decoder")
+
+        layers = []
+        for layer_id in np.linspace(0, len(self.memory_encoder.layers) - 1, num=opt.encoder_layers_memory, dtype=np.int64):
+            layers.append(copy.deepcopy(self.memory_encoder.layers[layer_id]))
+        self.memory_encoder.layers = nn.ModuleList(layers)
+
+        print("Using", len(self.memory_encoder.layers), "memory encoder layers")
+
+        self.memory_cache = [] # distractors to memory from last batch(es)
+        self.memory_cache_length = 0
+        self.memory_size_max = opt.memory_size_max
+        self.memory_cache_device = "cpu"
+
+        self.memory_stats = torch.zeros(len(self.decoder.memory_decoder.layers)+1,6,device="cuda")
+        self.counter_print = -1
+
+        self.is_main = False
+        self.memory_tokens_weighted_equally = True
+        self.memory_loss_coeff = opt.memory_loss_coeff
+
+    def train(self, mode=True):
+        super().train(mode)
+        if mode: # after evaluation and before next training
+            s = self.memory_stats
+            loss_no_mem = s[-1,0].sum()
+            loss_mem = s[-1,3].sum()
+            anz_no_mem = s[-1,2].sum()
+            anz_mem = s[-1,5].sum()
+            if not self.memory_tokens_weighted_equally:
+                ppl = math.exp((loss_no_mem + loss_mem) / (anz_no_mem + anz_mem))
+            else:
+                ppl_no_mem = math.exp(loss_no_mem / anz_no_mem)
+                ppl_mem = math.exp(loss_mem / anz_mem)
+                ppl = (ppl_no_mem+ppl_mem)/2
+            self.choose_best_epoch_by = ppl
+
+            self.print()
+            self.memory_cache = []
+
+    def eval(self):
+        self.memory_cache = []
+        self.memory_stats.zero_()
+        self.counter_print = -1
+        super().eval()
+
+    def print(self):
+        if self.is_main:
+            # loss_no_mem,correct_no_mem,anz_no_mem,loss_mem,correct_mem,anz_mem
+            for i in range(self.memory_stats.shape[0]):
+                s = self.memory_stats[i]
+                ppl_no_mem = math.exp(s[0] / s[2])
+                ppl_mem = math.exp(s[3] / s[5])
+                if not self.memory_tokens_weighted_equally:
+                    ppl_all = math.exp((s[0]+s[3]) / (s[2]+s[5]))
+                else:
+                    ppl_all = (ppl_no_mem + ppl_mem) / 2
+                acc_no_mem = 100*s[1]/s[2]
+                acc_mem = 100*s[4]/s[5]
+                if not self.memory_tokens_weighted_equally:
+                    acc_all = 100*(s[1]+s[4])/(s[2]+s[5])
+                else:
+                    acc_all = (acc_no_mem + acc_mem) / 2
+                if i < self.memory_stats.shape[0] - 1:
+                    print("    Layer %2d: ppl no_mem,mem,all: %6.2f,%6.2f,%6.2f, acc no_mem,mem,all: %6.2f,%6.2f,%6.2f"%(i,
+                          ppl_no_mem,ppl_mem,ppl_all,acc_no_mem,acc_mem,acc_all))
+                else:
+                    print("    Ntp:      ppl no_mem,mem,all: %6.2f,%6.2f,%6.2f, acc no_mem,mem,all: %6.2f,%6.2f,%6.2f"%
+                          (ppl_no_mem,ppl_mem,ppl_all,acc_no_mem,acc_mem,acc_all))
+
+        self.memory_stats.zero_()
+
+    def add_memory_stats(self, i, stats):
+        for j,s in enumerate(stats):
+            self.memory_stats[i,j] += s
+        if self.training and i == self.memory_stats.shape[0] - 1:
+            self.counter_print += 1
+            if self.counter_print % 500 == 0:
+                self.print()
+
+    @property
+    def no_entry_found(self):
+        nef = self._no_entry_found.to(torch.float32)
+        m, s = nef.mean(), nef.std()
+        return (nef - m) / s
+
+    def encode_memory(self, memory_text_embeds, memory_text_mask):
+        if memory_text_embeds is None:
+            return None, None
+
+        lengths = memory_text_mask.eq(0).sum(1).unsqueeze(1) # n_mem x 1
+
+        memory_text_enc = self.memory_encoder(inputs_embeds=memory_text_embeds, attention_mask=memory_text_mask)[0]
+        if memory_text_enc is not None:
+            memory_text_enc[memory_text_mask.transpose(1,0)] = 0
+
+        encoder_output_memory_wonef = memory_text_enc.sum(0) / lengths # n_mem x d_model
+
+        while len(self.memory_cache) > 0 and self.memory_cache_length + encoder_output_memory_wonef.shape[0] + 1 > self.memory_size_max > 0:
+            self.memory_cache_length -= self.memory_cache[0].shape[0]
+            self.memory_cache = self.memory_cache[1:]
+
+        encoder_output_memory = torch.cat([self.no_entry_found, encoder_output_memory_wonef]
+                                         +[c.cuda() for c in self.memory_cache], 0) # (n_mem+1) x d_model
+
+        if self.training and self.memory_size_max > 0:
+            self.memory_cache.append(encoder_output_memory_wonef.detach().to(self.memory_cache_device))
+            self.memory_cache_length += self.memory_cache[-1].shape[0]
+
+        return encoder_output_memory, memory_text_enc
+
+    def run_encoder(self, src, batch_first_output=False, # src: l_src1 x b x d_model
+                    src_lang=None, src_atb=None,
+                    checkpointing_ffn=False,
+                    checkpointing_self_attn=False):
+        # dict with keys context: l_src2 x b x d_model, src_mask: b x l_src2
+        return self.encoder(src.transpose(0, 1), batch_first_output=batch_first_output,
+                            lang=src_lang, atb=src_atb,
+                            checkpointing_ffn=checkpointing_ffn,
+                            checkpointing_self_attn=checkpointing_self_attn)
+
+    def forward(self, batch, zero_encoder=False, factorize=False, target_mask=None, mirror=False,
+                checkpointing_ffn=False,
+                checkpointing_cross_attn=False,
+                checkpointing_self_attn=False,
+                **kwargs):
+        """
+        :param checkpointing_self_attn:
+        :param checkpointing_cross_attn:
+        :param checkpointing_ffn:
+        :param batch:
+        :param zero_encoder:
+        :param factorize:
+        :param target_mask:
+        :param mirror:
+        :param kwargs:
+        :return:
+        """
+        if self.switchout > 0 and self.training:
+            batch.switchout(self.switchout, self.src_vocab_size, self.tgt_vocab_size)
+
+        src = batch.get('source')
+        tgt = batch.get('target_input')
+        tgt_pos = batch.get('target_pos')
+        src_lang = batch.get('source_lang')
+        tgt_lang = batch.get('target_lang')
+        src_atb = batch.get('source_atbs')
+        tgt_atb = batch.get('target_atbs')
+        src_lengths = batch.src_lengths
+        tgt_lengths = batch.tgt_lengths
+
+        org_src = src
+        org_tgt = tgt
+        tgt = tgt.transpose(0, 1) # transpose to have batch first
+
+        batch_first_output = False
+        if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bart"]:
+            batch_first_output = True
+
+        # print(src_lang, src_atb, tgt_lang, tgt_atb)
+
+        if src is not None:
+            encoder_output = self.run_encoder(src, batch_first_output, src_lang, src_atb,
+                                              checkpointing_ffn, checkpointing_self_attn)
+            context, src_attention_mask = encoder_output['context'], encoder_output['src_mask']
+        else:
+            context, src_attention_mask = batch.get("src_features"), batch.get("src_features_mask")
+            encoder_output = {"context":context, "src":src_attention_mask}
+        encoder_output = defaultdict(lambda: None, encoder_output)
+
+        contrastive_loss = 0
+
+        memory_text_ids = batch.get('memory_text_ids')
+        memory_text_embeds, memory_text_mask = self.decoder.calc_token_embedding(memory_text_ids)
+
+        encoder_output_memory, memory_text_enc = self.encode_memory(memory_text_embeds, memory_text_mask)
+
+        if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bert", "roberta"]:
+            raise NotImplementedError
+        elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bart"]:
+            raise NotImplementedError
+        elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model \
+                in ["deltalm", "mbart", "mbart50"]:
+            if self.sub_encoder is not None:
+                src_text_input = batch.get('target')
+                sub_context_mask = batch.get('tgt_selfattn_mask')
+
+                with torch.no_grad():
+                    sub_encoder_output = self.sub_encoder(input_ids=src_text_input,
+                                                          attention_mask=sub_context_mask)
+                    sub_context = sub_encoder_output[0]
+                    # print(torch.isnan(sub_context).float().sum())
+
+            else:
+                sub_context = None
+                sub_context_mask = None
+
+            src_attention_mask = src_attention_mask  # new version
+            # tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
+            # tgt_attention_mask = tgt.new(*tgt.size()).fill_(1)
+            tgt_attention_mask = batch.get('target_input_selfattn_mask')
+
+            if encoder_output['enc_pred_lang'] is not None:
+                _src_lang = torch.nn.functional.softmax(encoder_output['enc_pred_lang'], dim=-1, dtype=torch.float32)
+            else:
+                _src_lang = src_lang
+
+            decoder_outputs = self.decoder(input_ids=tgt,
+                                           attention_mask=tgt_attention_mask,
+                                           encoder_hidden_states=context,
+                                           encoder_attention_mask=src_attention_mask,
+                                           sub_encoder_hidden_states=sub_context,
+                                           sub_encoder_attention_mask=sub_context_mask,
+                                           lang=tgt_lang, atb=tgt_atb,
+                                           src_lang=_src_lang,
+                                           checkpointing_ffn=checkpointing_ffn,
+                                           checkpointing_cross_attn=checkpointing_cross_attn,
+                                           checkpointing_self_attn=checkpointing_self_attn,
+                                           memory_text_enc=memory_text_enc,
+                                           memory_text_mask=memory_text_mask,
+                                           encoder_output_memory=encoder_output_memory)
+            decoder_output = decoder_outputs[0]
+            decoder_output_memory = decoder_outputs[1]
+            all_cross_attn_weights = decoder_outputs[2]
+
+            # contrastive_loss = decoder_outputs[-1]
+
+            output = decoder_output
+            output_dict = defaultdict(lambda: None)
+
+        else:
+            raise NotImplementedError
+
+        output_dict['hidden'] = output
+        output_dict['context'] = context
+        output_dict['src_mask'] = encoder_output['src']
+        output_dict['src'] = src
+        output_dict['target_mask'] = target_mask
+        output_dict['target'] = batch.get('target_output')
+
+        output_dict['wav2vec_context'] = encoder_output['wav2vec_context']
+        output_dict['wav2vec_padding_mask'] = encoder_output['wav2vec_padding_mask']
+        output_dict['enc_pred_lang'] = encoder_output['enc_pred_lang']
+
+        if output_dict['enc_pred_lang'] is not None:
+            output_dict['dec_pred_lang'] = decoder_outputs[-1]
+
+        # final layer: computing softmax
+        logits = self.generator[0](output_dict)['logits']
+
+        if decoder_output_memory is not None:
+            output_dict2 = {'hidden': decoder_output_memory, 'target_mask':target_mask}
+            logits_memory = self.generator[0](output_dict2)['logits']
+
+            all_weights = [F.softmax(cross_attn_weights.detach(),-1)[:,:,0:1] for cross_attn_weights in all_cross_attn_weights]
+            weights = torch.cat(all_weights, -1).mean(-1, keepdim=True) # L x B x 1
+
+            probs = F.softmax(logits,-1)
+            probs_memory = F.softmax(logits_memory,-1)
+
+            probs = weights * probs + (1-weights) * probs_memory # L x B x n_vocab
+            logits = torch.log(probs)
+
+            label_ntp = batch.get("target_output")
+            label_mem = batch.get("label_mem")
+
+            if label_ntp is not None and label_mem is not None:
+                mask_no_mem = label_mem.eq(0)
+                mask_mem = label_mem.gt(0)
+                label_mem.clamp_(min=0)
+
+                loss_memory = 0
+                for i,cross_attn_weights in enumerate(all_cross_attn_weights):
+                    ca_lprobs = F.log_softmax(cross_attn_weights, -1)
+
+                    loss_no_mem, correct_no_mem, anz_no_mem, loss_mem, correct_mem, anz_mem = my_loss(ca_lprobs, label_mem, mask_no_mem, mask_mem)
+
+                    if not self.memory_tokens_weighted_equally:
+                        loss = loss_no_mem + loss_mem
+                    else:
+                        loss = (loss_no_mem/anz_no_mem + loss_mem/anz_mem)*(anz_no_mem+anz_mem)
+
+                    self.add_memory_stats(i,[loss_no_mem.item(),correct_no_mem,anz_no_mem,loss_mem.item(),correct_mem,anz_mem])
+
+                    loss_memory += loss
+
+                loss_no_mem, correct_no_mem, anz_no_mem, loss_mem, correct_mem, anz_mem = my_loss(logits, label_ntp,
+                                                                                                  mask_no_mem, mask_mem)
+                self.add_memory_stats(len(all_cross_attn_weights),
+                                      [loss_no_mem.item(),correct_no_mem,anz_no_mem,loss_mem.item(),correct_mem,anz_mem])
+
+                if not self.memory_tokens_weighted_equally:
+                    loss_ntp = loss_no_mem + loss_mem
+                else:
+                    loss_ntp = (loss_no_mem/anz_no_mem + loss_mem/anz_mem)*(anz_no_mem+anz_mem)
+
+                #print(self.memory_loss_coeff * loss_memory, loss_ntp)
+                loss_memory = self.memory_loss_coeff * loss_memory + loss_ntp
+
+                output_dict['loss_memory'] = loss_memory
+
+        output_dict['logprobs'] = logits
+
+        # Mirror network: reverse the target sequence and perform backward language model
+        if mirror:
+            # tgt_reverse = torch.flip(batch.get('target_input'), (0, ))
+            tgt_pos = torch.flip(batch.get('target_pos'), (0,))
+            tgt_reverse = torch.flip(batch.get('target'), (0,))
+            tgt_reverse_input = tgt_reverse[:-1]
+            tgt_reverse_output = tgt_reverse[1:]
+
+            tgt_reverse_input = tgt_reverse_input.transpose(0, 1)
+            # perform an additional backward pass
+            reverse_decoder_output = self.mirror_decoder(tgt_reverse_input, context, src, src_lang=src_lang,
+                                                         tgt_lang=tgt_lang, input_pos=tgt_pos)
+
+            reverse_decoder_output['src'] = src
+            reverse_decoder_output['context'] = context
+            reverse_decoder_output['target_mask'] = target_mask
+
+            reverse_logprobs = self.mirror_generator[0](reverse_decoder_output)['logits']
+
+            output_dict['reverse_target'] = tgt_reverse_output
+            output_dict['reverse_hidden'] = reverse_decoder_output['hidden']
+            output_dict['reverse_logprobs'] = reverse_logprobs
+            output_dict['target_input'] = batch.get('target_input')
+            output_dict['target_lengths'] = batch.tgt_lengths
+
+            # learn weights for mapping (g in the paper)
+            output_dict['hidden'] = self.mirror_g(output_dict['hidden'])
+
+        output_dict['reconstruct'] = False
+
+        # compute the logits for each encoder step
+        if self.ctc:
+            # run the ctcoutput via the wav2vec context (not context)
+            output_dict['encoder_logits'] = self.ctc_linear(output_dict['wav2vec_context'])
+
+        if self.sub_encoder is not None:
+            # contrastive loss has size: t x b x h
+            # stacked sum from multiple layers
+            contrastive_loss = contrastive_loss.transpose(0, 1).contiguous()
+
+            # the input is the target full without the final token so
+            # remove the last time step from the mask
+            mask = sub_context_mask[:, :-1].unsqueeze(-1)  # b x t x 1
+            contrastive_loss.masked_fill_(mask, 0)  # masked values = zero
+
+            output_dict['contrastive_loss'] = contrastive_loss.sum()
+
+        return output_dict
+
+    def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True, **kwargs):
+        """
+        Generate a new decoder state based on the batch input
+        :param buffering:
+        :param streaming:
+        :param type:
+        :param batch: Batch object (may not contain target during decoding)
+        :param beam_size: Size of beam used in beam search
+        :return:
+        """
+        src = batch.get('source')
+        src_pos = batch.get('source_pos')
+        src_lang = batch.get('source_lang')
+        tgt_lang = batch.get('target_lang')
+        src_atb = batch.get('source_atbs')
+        tgt_atb = batch.get('target_atbs')
+
+        encoder_output = self.encoder(src.transpose(0, 1), batch_first_output=False,
+                                      lang=src_lang, atb=src_atb)
+
+        if hasattr(self.encoder, 'predict_language') and self.encoder.predict_language > 0:
+            pred_lang = encoder_output['pred_lang']
+            src_lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
+
+        src_attention_mask = encoder_output['src']
+
+        memory_text_ids = batch.get('memory_text_ids')
+        memory_text_embeds, memory_text_mask = self.decoder.calc_token_embedding(memory_text_ids)
+
+        encoder_output_memory, memory_text_enc = self.encode_memory(memory_text_embeds, memory_text_mask)
+
+        dec_pretrained_model = self.decoder.dec_pretrained_model
+        if not dec_pretrained_model:
+            mask_src = None
+        elif dec_pretrained_model in ["bert", "roberta"]:
+            mask_src = src_attention_mask.unsqueeze(1)  # batch_size  x 1 x len_src for broadcasting
+
+        elif dec_pretrained_model in ["bart"]:
+            mask_src = 1 - (src_attention_mask.long())
+        elif dec_pretrained_model in ["deltalm", "mbart", "mbart50"]:
+            mask_src = src_attention_mask
+        else:
+            print("Warning: unknown dec_pretrained_model")
+            raise NotImplementedError
+
+        decoder_state = TransformerDecodingStateMemory(src, tgt_lang, encoder_output['context'], src_lang,
+                                                 beam_size=beam_size, model_size=self.model_size,
+                                                 type=type, buffering=False, src_mask=mask_src,
+                                                 dec_pretrained_model=self.decoder.dec_pretrained_model,
+                                                 tgt_atb=tgt_atb,
+                                                 encoder_output_memory=encoder_output_memory,
+                                                 memory_text_enc=memory_text_enc,
+                                                 memory_text_mask=memory_text_mask)
+
+        return decoder_state
+
+    def step(self, input_t, decoder_state, streaming=False):
+        """
+        Decoding function:
+        generate new decoder output based on the current input and current decoder state
+        the decoder state is updated in the process
+        :param streaming:
+        :param input_t: the input word index at time t
+        :param decoder_state: object DecoderState containing the buffers required for decoding
+        :return: a dictionary containing: log-prob output and the attention coverage
+        """
+
+        output_dict, output_dict_memory, all_cross_attn_weights = self.decoder.step(input_t, decoder_state, streaming=streaming)
+        output_dict['src'] = decoder_state.src.transpose(0, 1)
+
+        logits = self.generator[0](output_dict)['logits'] # 1 x B x n_vocab
+        logits_memory = self.generator[0](output_dict_memory)['logits'] # 1 x B x n_vocab
+
+        all_weights = [F.softmax(cross_attn_weights.detach(), -1)[-1:, :, 0:1] for cross_attn_weights in all_cross_attn_weights]
+        weights = torch.cat(all_weights, -1).mean(-1, keepdim=True) # 1 x B x 1
+
+        probs = F.softmax(logits, -1) # 1 x B x n_vocab
+        probs_memory = F.softmax(logits_memory, -1) # 1 x B x n_vocab
+
+        probs = weights * probs + (1 - weights) * probs_memory # 1 x B x n_vocab
+        log_prob = torch.log(probs).squeeze(0) # B x n_vocab
+
+        coverage = output_dict['coverage']
+        last_coverage = coverage[:, -1, :].squeeze(1)
+
+        output_dict['log_prob'] = log_prob
+        output_dict['coverage'] = last_coverage
+
+        return output_dict

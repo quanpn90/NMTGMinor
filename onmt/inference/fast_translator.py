@@ -321,15 +321,19 @@ class FastTranslator(Translator):
         self.external_tokenizer.src_lang = self.src_lang
         self.tgt_external_tokenizer.src_lang = self.tgt_lang
 
-    def translate_batch(self, batches, sub_batches=None, prefix_tokens=None, anti_prefix=None):
+    def translate_batch(self, batches, sub_batches=None, prefix_tokens=None, anti_prefix=None, memory=None):
 
         with torch.no_grad():
             return self._translate_batch(batches, sub_batches=sub_batches, prefix_tokens=prefix_tokens,
-                                         anti_prefix=anti_prefix)
+                                         anti_prefix=anti_prefix, memory=memory)
 
-    def _translate_batch(self, batches, sub_batches, prefix_tokens=None, anti_prefix=None):
+    def _translate_batch(self, batches, sub_batches, prefix_tokens=None, anti_prefix=None, memory=None):
         batch = batches[0]
         # Batch size is in different location depending on data.
+
+        if memory is not None:
+            for b in batches:
+                b.tensors["memory_text_ids"] = memory.to(b.tensors["source"].device)
 
         beam_size = self.opt.beam_size
         bsz = batch_size = batch.size
@@ -1022,7 +1026,7 @@ class FastTranslator(Translator):
                             past_src_data=past_src_data)
 
     def translate(self, src_data, tgt_data, past_src_data=None, sub_src_data=None, type='mt',
-                  prefix=None, anti_prefix=None):
+                  prefix=None, anti_prefix=None, memory=None):
 
         if past_src_data is None or len(past_src_data) == 0:
             past_src_data = None
@@ -1067,8 +1071,9 @@ class FastTranslator(Translator):
                 for i, _ in enumerate(sub_batches):
                     sub_batches[i].cuda(fp16=self.fp16)
 
-        if prefix is not None:
+        if prefix is not None and len(prefix)>0 and prefix[0] is not None:
             prefix_tensor = self.build_prefix(prefix, bsz=batch_size)
+            print("PREFIX:", prefix_tensor)
         else:
             prefix_tensor = None
 
@@ -1080,7 +1085,8 @@ class FastTranslator(Translator):
         #  each model in the ensemble uses one batch in batches
         finalized, gold_score, gold_words, allgold_words = self.translate_batch(batches, sub_batches=sub_batches,
                                                                                 prefix_tokens=prefix_tensor,
-                                                                                anti_prefix=anti_prefix)
+                                                                                anti_prefix=anti_prefix,
+                                                                                memory=memory)
         pred_length = []
 
         #  (3) convert indexes to words

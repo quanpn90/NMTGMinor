@@ -1491,6 +1491,139 @@ class MBartDecoderLayer(nn.Module):
 
         return outputs, incremental_cache
 
+class AttentionMemory(nn.Module):
+    def __init__(self, d_model):
+        super().__init__()
+
+        self.q = nn.Linear(d_model, d_model)
+        self.k = nn.Linear(d_model, d_model)
+        self.temperature = np.power(d_model, -0.25)
+
+    def forward(self, hidden_states, memory):
+        q = self.temperature * self.q(hidden_states) # l_tgt x b x d_model
+        k = self.temperature * self.k(memory) # (n_mem+1) x d_model
+
+        attn = torch.einsum("t b d, n d -> t b n", q, k) # l_tar x b x (n_mem+1)
+        return attn
+
+class MBartDecoderLayerMemory(MBartDecoderLayer):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.memory_attn = AttentionMemory(self.embed_dim)
+        self.norm_memory_attn = LayerNorm(self.embed_dim)
+
+        config = args[0]
+        self.memory_entry_attn = MBartCrossAttention(
+            self.embed_dim,
+            config.decoder_attention_heads,
+            dropout=config.attention_dropout
+        )
+
+    def calc_memory_entry_attn(self, dec_output, mem_attn_out, enc_out_mem, tgt_mask_mem,
+                               output_attentions, incremental, incremental_cache, checkpointing_cross_attn, lang, atb):
+        l_tar, b, _ = mem_attn_out.shape
+
+        if enc_out_mem is None:
+            return None
+
+        mem_attn_out = mem_attn_out[:, :, :enc_out_mem.shape[1] + 1].argmax(-1).view(-1) - 1 # l_tar*b
+
+        # filter -1´s
+        mask = mem_attn_out.ne(-1)
+        if mask.any():
+            indices = torch.arange(mask.shape[0], device=mask.device)[mask]
+            mem_attn_out = mem_attn_out[mask]
+
+            dec_output = dec_output.view(l_tar*b, -1) # l_tar*b x d_model
+            hidden_states = dec_output[indices].unsqueeze(0) # 1 x mask.sum() x d_model
+
+            key_value_states = enc_out_mem[:, mem_attn_out] # l_mem x mask.sum() x d_model
+            attention_mask = tgt_mask_mem[mem_attn_out] # mask.sum() x l_mem
+
+            # print(3, hidden_states.shape, key_value_states.shape, attention_mask[0])
+            st_attn, _, incremental_cache = self.memory_entry_attn(
+                hidden_states=hidden_states,
+                key_value_states=key_value_states,
+                attention_mask=attention_mask,
+                output_attentions=output_attentions,
+                incremental=incremental, incremental_cache=incremental_cache,
+                checkpointing=checkpointing_cross_attn,
+                lang=lang, atb=atb
+            ) # st_attn: 1 x mask.sum() x d_model
+
+            output = torch.zeros_like(dec_output, dtype=st_attn.dtype) # l_tar*b x d_model
+            output[indices] = st_attn[0]
+
+            return output.view(l_tar, b, -1) # l_tar x b x d_model
+        else:
+            return None
+
+    def forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: Optional[torch.Tensor] = None,
+            encoder_hidden_states: Optional[torch.Tensor] = None,
+            encoder_attention_mask: Optional[torch.Tensor] = None,
+            sub_encoder_hidden_states: Optional[torch.Tensor] = None,
+            sub_encoder_attention_mask: Optional[torch.Tensor] = None,
+            output_attentions: Optional[bool] = False,
+            incremental: Optional[bool] = False,
+            incremental_cache=None,
+            checkpointing_ffn=False,
+            checkpointing_cross_attn=False,
+            checkpointing_self_attn=False,
+            lang=None, atb=None,
+            max_len=None, cu_seqlens=None,
+            encoder_output_memory=None,
+            memory_text_enc=None,
+            memory_text_mask=None,
+            **kwargs
+    ):
+        outputs, incremental_cache = super().forward(hidden_states, attention_mask=attention_mask,
+                                                     encoder_hidden_states=encoder_hidden_states,
+                                                     encoder_attention_mask=encoder_attention_mask,
+                                                     sub_encoder_hidden_states=sub_encoder_hidden_states,
+                                                     sub_encoder_attention_mask=sub_encoder_attention_mask,
+                                                     output_attentions=output_attentions, incremental=incremental,
+                                                     incremental_cache=incremental_cache,
+                                                     checkpointing_ffn=checkpointing_ffn,
+                                                     checkpointing_cross_attn=checkpointing_cross_attn, lang=lang,
+                                                     atb=atb,
+                                                     max_len=max_len, cu_seqlens=cu_seqlens, **kwargs)
+        hidden_states = outputs[0]
+
+        residual = hidden_states
+
+        hidden_states = self.norm_memory_attn(hidden_states) # l_tgt x b x d_model
+
+        #residual = hidden_states
+
+        cross_attn_weights = self.memory_attn(hidden_states, encoder_output_memory) # l_tgt x b x (n_mem+1)
+        #print(cross_attn_weights[:,0].argmax(-1), cross_attn_weights.shape)
+
+        hidden_states = self.calc_memory_entry_attn(dec_output=hidden_states,
+                                                    mem_attn_out=cross_attn_weights,
+                                                    enc_out_mem=memory_text_enc,
+                                                    tgt_mask_mem=memory_text_mask,
+                                                    output_attentions=output_attentions,
+                                                    incremental=incremental,
+                                                    incremental_cache=incremental_cache,
+                                                    checkpointing_cross_attn=checkpointing_cross_attn,
+                                                    lang=lang,
+                                                    atb=atb)
+
+        if hidden_states is not None:
+            #print(residual.std(),hidden_states.std(),cross_attn_weights.std())
+            hidden_states = fused_dropout_add(hidden_states, residual.clone(), self.dropout,
+                                              self.training)
+        else:
+            hidden_states = residual
+
+        outputs = (hidden_states, cross_attn_weights)
+
+        return outputs, incremental_cache
 
 class MBartPreTrainedModel(PreTrainedModel):
     config_class = MBartConfig
@@ -1850,7 +1983,7 @@ class MBartDecoder(MBartPreTrainedModel):
         embed_tokens (nn.Embedding): output embedding
     """
 
-    def __init__(self, config: MBartConfig, opt, embed_tokens: Optional[nn.Embedding] = None):
+    def __init__(self, config: MBartConfig, opt, embed_tokens: Optional[nn.Embedding] = None, decoder_layer_class=MBartDecoderLayer):
         super().__init__(config)
         self.layerdrop = config.decoder_layerdrop
         self.padding_idx = config.pad_token_id
@@ -1872,7 +2005,7 @@ class MBartDecoder(MBartPreTrainedModel):
             config.max_position_embeddings,
             config.d_model,
         )
-        self.layers = nn.ModuleList([MBartDecoderLayer(config) for _ in range(config.decoder_layers)])
+        self.layers = nn.ModuleList([decoder_layer_class(config) for _ in range(config.decoder_layers)])
         self.layernorm_embedding = LayerNorm(config.d_model)
         self.layer_norm = LayerNorm(config.d_model)
 
@@ -2129,7 +2262,7 @@ class MBartDecoder(MBartPreTrainedModel):
                 lang=__lang,
                 src_lang=_src_lang,
                 max_len=max_len, cu_seqlens=cu_seqlens,
-                max_len_kv=max_len_kv, cu_seqlens_kv=cu_seqlens_kv
+                max_len_kv=max_len_kv, cu_seqlens_kv=cu_seqlens_kv,
             )
             hidden_states = layer_outputs[0]
 
@@ -2317,3 +2450,431 @@ class MBartDecoder(MBartPreTrainedModel):
         output_dict['context'] = encoder_hidden_states
 
         return output_dict
+
+class MBartDecoderMemory(MBartDecoder):
+    def __init__(self, config: MBartConfig, opt, embed_tokens: Optional[nn.Embedding] = None):
+        super().__init__(config, opt, embed_tokens)
+
+        if opt.freeze_baseline_decoder:
+            print("Freezing baseline decoder weights")
+            for p in self.parameters():
+                p.requires_grad = False
+
+        dec_mbart_config = MBartConfig.from_json_file(opt.dec_config_file)
+        self.memory_decoder = MBartDecoder(dec_mbart_config, opt, decoder_layer_class=MBartDecoderLayerMemory)
+
+        if opt.load_from and opt.use_memory:
+            checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
+            if not "decoder.memory_decoder.embed_tokens.weight" in checkpoint['model'].keys():
+                print("Initializing memory decoder with trained baseline decoder weights")
+                dec_model_state_dict = {k[len("decoder."):]: v for k, v in checkpoint['model'].items() if k.startswith("decoder.")}
+                self.memory_decoder.load_state_dict(dec_model_state_dict, strict=False)
+        elif opt.dec_state_dict:
+            dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
+            self.memory_decoder.load_state_dict(dec_model_state_dict, strict=False)
+        else:
+            print("Not loading pretrained mbart decoder weights for memory decoder")
+
+        layers = []
+        for layer_id in np.linspace(0, len(self.memory_decoder.layers) - 1, num=opt.decoder_layers_memory, dtype=np.int64):
+            layers.append(copy.deepcopy(self.memory_decoder.layers[layer_id]))
+        self.memory_decoder.layers = nn.ModuleList(layers)
+
+        print("Using", len(self.memory_decoder.layers), "memory decoder layers")
+
+        self.memory_decoder.embed_tokens = self.embed_tokens
+
+    def calc_token_embedding(self, memory_text_ids, past_key_values_length=0):
+        if memory_text_ids is None:
+            return None, None
+
+        memory_text_embeds = embedded_dropout(self.embed_tokens, memory_text_ids,
+                                              dropout=self.word_dropout if self.training else 0)
+        memory_text_embeds = memory_text_embeds * self.embed_scale
+
+        positions = self.embed_positions(memory_text_embeds.shape, past_key_values_length)
+
+        memory_text_embeds = memory_text_embeds + positions
+        memory_text_embeds = self.layernorm_embedding(memory_text_embeds)
+        memory_text_embeds = nn.functional.dropout(memory_text_embeds, p=self.dropout, training=self.training)
+
+        memory_text_mask = memory_text_ids.eq(1) #.to(torch.uint8)
+
+        return memory_text_embeds, memory_text_mask
+
+    def forward_memory(
+            self,
+            input_ids=None,
+            attention_mask=None,
+            encoder_hidden_states=None,
+            encoder_attention_mask=None,
+            sub_encoder_hidden_states=None,
+            sub_encoder_attention_mask=None,
+            inputs_embeds=None,
+            incremental=False, incremental_cache=None,
+            lang=None, src_lang=None,
+            output_attentions=None,
+            output_hidden_states=None,
+            **kwargs
+    ):
+        """
+        :param checkpointing_cross_attn:
+        :param input_ids: [batch_size x seq_len]
+        :param attention_mask:
+        :param encoder_hidden_states:
+        :param encoder_attention_mask:
+        :param sub_encoder_hidden_states:
+        :param sub_encoder_attention_mask:
+        :param inputs_embeds:
+        :param incremental:
+        :param incremental_cache:
+        :param lang:
+        :param atb:
+        :param output_attentions:
+        :param output_hidden_states:
+        :return:
+        """
+        output_attentions = output_attentions if output_attentions is not None else self.memory_decoder.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.memory_decoder.config.output_hidden_states
+        )
+
+        # retrieve input_ids and inputs_embeds
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time")
+        elif input_ids is not None:
+            input_shape = input_ids.size()
+            input_ids = input_ids.view(-1, input_shape[-1])
+        elif inputs_embeds is not None:
+            input_shape = inputs_embeds.size()[:-1]
+        else:
+            raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
+
+        past_key_values_length = 0
+
+        if inputs_embeds is None:
+            inputs_embeds = embedded_dropout(self.memory_decoder.embed_tokens, input_ids,
+                                             dropout=self.memory_decoder.word_dropout if self.memory_decoder.training else 0)
+            inputs_embeds = inputs_embeds * self.memory_decoder.embed_scale
+
+        bsz = input_ids.size(0)
+        qlen = input_ids.size(1)
+        klen = qlen
+
+        # if attention_mask is None:
+        padding_mask = attention_mask
+        attention_mask = torch.triu(
+            inputs_embeds.new_ones(qlen, klen), diagonal=1).bool()
+
+        # embed positions
+        positions = self.memory_decoder.embed_positions(input_shape, past_key_values_length)
+
+        hidden_states = inputs_embeds + positions
+        # hidden_states = hidden_states
+        hidden_states = self.memory_decoder.layernorm_embedding(hidden_states)
+
+        hidden_states = nn.functional.dropout(hidden_states, p=self.memory_decoder.dropout, training=self.memory_decoder.training)
+
+        # decoder layers
+        all_hidden_states = () if output_hidden_states else None
+        all_self_attns = () if output_attentions else None
+        all_cross_attentions = () if (output_attentions and encoder_hidden_states is not None) else None
+        # next_decoder_cache = () if use_cache else None
+        contrastive_loss = 0
+        all_cross_attn_weights = ()
+
+        # self.fast_bert_mha = None
+        if self.memory_decoder.fast_bert_mha is not None and hidden_states.dtype == torch.half:
+            can_run_fast_bert_mha = True
+
+            # lets unpad both hidden_states and context states
+            if padding_mask is None:
+                padding_mask = input_ids.new_zeros(bsz, qlen)
+            padding_mask = padding_mask.contiguous().long()
+            lengths = (1 - padding_mask).sum(dim=1)
+            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
+            hidden_states = hidden_states.view(-1, hidden_states.size(-1))
+            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+            hidden_states = hidden_states.index_select(0, non_pad_indices)
+            max_len = max(lengths)
+            # cumulative sequence lengths (required input for fmha)
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=hidden_states.device)
+            non_pad_indices_q = non_pad_indices
+
+            # unpad the context
+            encoder_hidden_states = encoder_hidden_states.transpose(0, 1).contiguous()
+            padding_mask = encoder_attention_mask
+            if padding_mask is None:
+                context_len = encoder_hidden_states.size(1)
+                padding_mask = input_ids.new_zeros(bsz, context_len)
+            padding_mask = padding_mask.long()
+            lengths = (1 - padding_mask).sum(dim=1)
+            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
+            encoder_hidden_states = encoder_hidden_states.view(-1, encoder_hidden_states.size(-1))
+            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+            encoder_hidden_states = encoder_hidden_states.index_select(0, non_pad_indices)
+
+            max_len_kv = max(lengths)
+            # cumulative sequence lengths (required input for fmha)
+            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
+            cu_seqlens_kv = torch.cumsum(a, 0).to(dtype=torch.int32, device=encoder_hidden_states.device)
+
+            if src_lang is not None and src_lang.ndim == 3:
+                src_lang = src_lang.view(-1, src_lang.size(-1))
+                src_lang = src_lang.index_select(0, non_pad_indices)
+
+        else:
+            max_len, cu_seqlens = None, None
+            max_len_kv, cu_seqlens_kv = None, None
+            non_pad_indices_q = None
+            can_run_fast_bert_mha = False
+
+            hidden_states = hidden_states.transpose(0, 1).contiguous()
+
+            if src_lang is not None and src_lang.ndim == 3:
+                src_lang = src_lang.transpose(0, 1)
+
+        _lang = lang
+        pred_lang = None
+
+        for idx, decoder_layer in enumerate(self.memory_decoder.layers):
+            if output_hidden_states:
+                all_hidden_states += (hidden_states,)
+
+            # Stochastic Layer (only applicable when not predicting language or idx > 0)
+            if not (self.memory_decoder.predict_language > 0 and idx == 0):
+                dropout_probability = random.uniform(0, 1)
+                if self.memory_decoder.training and (dropout_probability < self.memory_decoder.layerdrop):
+                    continue
+
+            # TODO: use pred_lang instead of lang if we use predict_language
+            if self.memory_decoder.predict_language > 0 and idx == 0:
+                __lang = None
+                _src_lang = None
+            else:
+                __lang = _lang
+                _src_lang = src_lang
+
+            layer_outputs, _ = decoder_layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+                sub_encoder_hidden_states=sub_encoder_hidden_states,
+                sub_encoder_attention_mask=sub_encoder_attention_mask,
+                output_attentions=output_attentions,
+                lang=__lang,
+                src_lang=_src_lang,
+                max_len=max_len, cu_seqlens=cu_seqlens,
+                max_len_kv=max_len_kv, cu_seqlens_kv=cu_seqlens_kv,
+                **kwargs
+            )
+            hidden_states = layer_outputs[0]
+
+            cross_attn_weights = layer_outputs[1]
+            all_cross_attn_weights += (cross_attn_weights,)
+
+            if self.memory_decoder.predict_language > 0 and idx == 0:
+                cross_attn_input = self.memory_decoder.layer_norm_cls(hidden_states)
+                cross_attn_output, _, _ = self.memory_decoder.cross_attention_cls(
+                    hidden_states=cross_attn_input,
+                    key_value_states=encoder_hidden_states,
+                    attention_mask=encoder_attention_mask,
+                    output_attentions=None,
+                    incremental=False, incremental_cache=None,
+                    cu_seqlens=cu_seqlens, max_len=max_len,
+                    cu_seqlens_kv=cu_seqlens_kv, max_len_kv=max_len_kv
+                )
+
+                # maybe we need a gated function here to combin
+                cls_input = cross_attn_output + hidden_states
+
+                pred_lang = self.memory_decoder.linear_cls(cls_input)
+                if self.memory_decoder.predict_language == 1:
+                    _lang = lang
+                else:
+                    _lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
+
+            if output_attentions:
+                all_self_attns += (layer_outputs[1],)
+
+                if encoder_hidden_states is not None:
+                    all_cross_attentions += (layer_outputs[2],)
+
+            # add up the contrastive_loss per layer
+            if sub_encoder_hidden_states is not None:
+                contrastive_loss_ = layer_outputs[-1]
+                # print("Receive contrastive loss after layer", contrastive_loss_.size())
+                contrastive_loss = contrastive_loss + contrastive_loss_
+
+        hidden_states = self.memory_decoder.layer_norm(hidden_states)
+
+        # re-padding if we use flash attention
+        if can_run_fast_bert_mha:
+            seq_len = qlen
+            hidden_states = index_copy(hidden_states, non_pad_indices_q, bsz * seq_len)
+            hidden_states = hidden_states.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
+
+            if pred_lang is not None:
+                pred_lang = index_copy(pred_lang, non_pad_indices_q, bsz * seq_len)
+                pred_lang = pred_lang.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
+
+        # add hidden states from the last decoder layer
+        if output_hidden_states:
+            all_hidden_states += (hidden_states,)
+
+        return tuple(
+            v
+            for v in [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions, contrastive_loss, pred_lang, all_cross_attn_weights]
+            if v is not None
+        )
+
+    def forward(self, *args, **kwargs):
+        output = super().forward(*args, **kwargs)[0]
+        if kwargs["encoder_output_memory"] is not None:
+            output_memory, _, all_cross_attn_weights = self.forward_memory(*args, **kwargs)
+        else:
+            output_memory, all_cross_attn_weights = None, None
+
+        return output, output_memory, all_cross_attn_weights
+
+    def step_memory(self, input, decoder_state, **kwargs):
+
+        # context is stored in the decoder state in [T B H] format
+        encoder_hidden_states = decoder_state.context
+
+        buffers = decoder_state.attention_buffers
+        lang = decoder_state.tgt_lang
+        # atb = decoder_state.tgt_atb
+        src_lang = decoder_state.src_lang
+        buffering = decoder_state.buffering
+        encoder_output_memory = decoder_state.encoder_output_memory
+        memory_text_enc = decoder_state.memory_text_enc
+        memory_text_mask = decoder_state.memory_text_mask
+
+        input_ids = input
+
+        input_ = input
+        if buffering:
+            # use the last value of input to continue decoding
+            if input.size(1) > 1 and len(buffers) > 0:
+                # if buffers has not been initilized and we have > 1 input length data
+                # then its a prefix decoding step
+                input_ = input[:, -1:]
+                past_key_values_length = input.size(1) - 1
+            else:
+                past_key_values_length = 0
+        else:
+            past_key_values_length = 0
+
+        inputs_embeds = self.embed_tokens(input_) * self.embed_scale
+
+        qlen = input_ids.size(1)
+        klen = qlen
+        attention_mask = torch.triu(
+            inputs_embeds.new_ones(qlen, klen), diagonal=1).bool()
+
+        if input.size(1) > 1 and len(buffers) > 0:
+            attention_mask = attention_mask[-1:, :]
+
+        encoder_attention_mask = decoder_state.src_mask
+        if not self.layers[0].encoder_attn.fast_attention:
+            raise NotImplementedError
+        else:
+            encoder_attention_mask = encoder_attention_mask.bool()
+
+        # embed positions
+        positions = self.embed_positions(input_.size(), past_key_values_length)
+
+        hidden_states = inputs_embeds + positions
+        hidden_states = hidden_states.transpose(0, 1)
+
+        hidden_states = self.layernorm_embedding(hidden_states)
+
+        all_cross_attn_weights = ()
+
+        for idx, decoder_layer in enumerate(self.memory_decoder.layers):
+
+            if buffering:
+                buffer = buffers[idx] if idx in buffers else None
+            else:
+                buffer = None
+
+            # if predict_language, then for the first layer the network is not factorized
+
+            if self.predict_language > 0 and idx == 0:
+                _lang = None
+                _src_lang = None
+            else:
+                _lang = lang
+                _src_lang = src_lang
+                if src_lang is None:
+                    _src_lang = lang
+                else:
+                    _src_lang = src_lang.type_as(hidden_states)
+
+            layer_outputs, buffer = decoder_layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+                output_attentions=None,
+                incremental=buffering, incremental_cache=buffer,
+                lang=_lang,
+                src_lang=_src_lang,
+                encoder_output_memory=encoder_output_memory,
+                memory_text_enc=memory_text_enc,
+                memory_text_mask=memory_text_mask
+            )
+
+            hidden_states = layer_outputs[0]
+
+            cross_attn_weights = layer_outputs[1]
+            all_cross_attn_weights += (cross_attn_weights,)
+
+            if self.predict_language > 0 and idx == 0:
+
+                cross_attn_input = self.layer_norm_cls(hidden_states)
+                cross_attn_output, _, _ = self.cross_attention_cls(
+                    hidden_states=cross_attn_input,
+                    key_value_states=encoder_hidden_states,
+                    attention_mask=encoder_attention_mask,
+                    output_attentions=None,
+                    incremental=False, incremental_cache=None
+                )
+
+                # maybe we need a gated function here to combine
+                cls_input = cross_attn_output + hidden_states
+
+                pred_lang = self.linear_cls(cls_input)
+
+                # for prediction lang is always the predicted one
+                lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
+                lang = lang.type_as(pred_lang)
+
+                # we probably need to ensure that lang and hidden states have the same size
+                assert lang.size(1) == hidden_states.size(1)
+                assert lang.size(0) == hidden_states.size(0)
+
+            if buffering:
+                decoder_state.update_attention_buffer(buffer, idx)
+
+        hidden_states = self.layer_norm(hidden_states)
+        output = hidden_states[-1].unsqueeze(0)
+
+        # just a fake coverage, at the moment coverage is not returned during step
+        coverage = hidden_states.new(hidden_states.size(1), 1, encoder_hidden_states.size(0)).zero_()
+
+        output_dict = defaultdict(lambda: None)
+        output_dict['hidden'] = output
+        output_dict['coverage'] = coverage
+        output_dict['context'] = encoder_hidden_states
+
+        return output_dict, all_cross_attn_weights
+
+    def step(self, *args, **kwargs):
+        output = super().step(*args, **kwargs)
+        output_memory, all_cross_attn_weights = self.step_memory(*args, **kwargs)
+
+        return output, output_memory, all_cross_attn_weights

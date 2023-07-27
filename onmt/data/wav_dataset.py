@@ -33,7 +33,7 @@ def safe_readaudio_from_cache(file_, wav_path, start=0.0, end=0.0, sample_rate=1
 
 
 class WavDataset(torch.utils.data.Dataset):
-    def __init__(self, wav_path_list, cache_size=0):
+    def __init__(self, wav_path_list, cache_size=0, wav_path_replace=None):
         """
         :param scp_path_list: list of path to the ark matrices
         """
@@ -46,6 +46,18 @@ class WavDataset(torch.utils.data.Dataset):
         else:
             self.cache = None
         self.cache_size = cache_size
+
+        if wav_path_replace is not None and wav_path_replace[0]!="None":
+            found = False
+            for old, new in zip(wav_path_replace[::2],wav_path_replace[1::2]):
+                if old in self.wav_path_list[0][0]:
+                    found = True
+
+                self.wav_path_list = [(x[0].replace(old,new),*x[1:]) for x in self.wav_path_list]
+
+            if not found:
+                print(wav_path_replace, self.wav_path_list[0][0])
+                print("WARNING: Could not replace wav path")
 
     def flush_cache(self):
 
