@@ -320,28 +320,59 @@ def collate_fn(src_data, tgt_data,
             random.seed(42)
 
         tokenizer = use_memory
+        n_max = 3
 
-        # TODO: ngrams instead of words?
-        words_to_indices = {} # maps all words in the batch to the indices of the sample in the batch containing it
-        for i,tokens in enumerate(tgt_data):
-            for word in tokenizer.decode(tokens[1:-1]).split():
-                if not word in words_to_indices:
-                    words_to_indices[word] = set([i])
-                else:
-                    words_to_indices[word].add(i)
+        remove_chars = [".",",","!","?",";",":"]
+        def remove_last_punctuation(s):
+            if len(s) > 0 and s[-1] in remove_chars:
+                return s[:-1]
+            else:
+                return s
 
-        num_words = max(1,len(words_to_indices)//5)
-        chosen_words = random.sample(list(words_to_indices.items()),num_words) # choose words for memory
+        sentences = [tokenizer.decode(tokens[1:-1]).split() for tokens in tgt_data]
 
-        chosen_words_tokens = [(torch.as_tensor(tokenizer.encode(w[0])),w[1]) for w in chosen_words]
+        ngrams_to_indices = {} # maps all ngrams in the batch to the indices of the sample in the batch containing it
+        for n in range(1,n_max+1):
+            for i,s in enumerate(sentences):
+                for j in range(len(s)-n+1):
+                    ngram = remove_last_punctuation(" ".join(s[j:j+n]))
+                    if any(r in ngram for r in remove_chars): # have no e.g. comma in memory
+                        continue
+                    ngram = tuple(ngram.split())
+                    if not ngram in ngrams_to_indices:
+                        ngrams_to_indices[ngram] = set([i])
+                    else:
+                        ngrams_to_indices[ngram].add(i)
 
-        memory_text_ids = merge_data([x[0] for x in chosen_words_tokens], align_right=tgt_align_right,
+        num_ngrams = max(1, len(ngrams_to_indices) // 5 // n_max) # take every 5th ngram
+
+        chosen_ngrams = [] # choose ngrams for memory
+        while len(chosen_ngrams) < num_ngrams and len(ngrams_to_indices)  > 0:
+            index = random.randint(0,len(ngrams_to_indices)-1)
+            for j,ngram in enumerate(ngrams_to_indices):
+                if j==index:
+                    i = ngrams_to_indices.pop(ngram)
+                    break
+
+            chosen_ngrams.append((" ".join(ngram),i))
+
+            key_del = []
+            for ngram_ in ngrams_to_indices:
+                if any(word in ngram for word in ngram_):
+                    key_del.append(ngram_)
+
+            for k in key_del:
+                del ngrams_to_indices[k]
+
+        chosen_ngrams_tokens = [(torch.as_tensor(tokenizer.encode(w[0])), w[1]) for w in chosen_ngrams]
+
+        memory_text_ids = merge_data([x[0] for x in chosen_ngrams_tokens], align_right=tgt_align_right,
                                      dataname="target", tgt_pad=tgt_pad)[0]
         tensors["memory_text_ids"] = memory_text_ids
 
         target_output = tensors["target_output"]
         label_mem = -target_output.transpose(1,0).lt(2).to(tensors["target"].dtype)
-        for i,(tokens, indices) in enumerate(chosen_words_tokens):
+        for i,(tokens, indices) in enumerate(chosen_ngrams_tokens):
             tokens = tokens[1:-1]
             for index in indices:
                 for j in range(target_output.shape[0] - len(tokens)):

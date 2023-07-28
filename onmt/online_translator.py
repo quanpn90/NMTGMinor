@@ -375,7 +375,7 @@ class ASROnlineTranslator(object):
         # use the external sentencepiece model
         external_tokenizer = self.translator.external_tokenizer
 
-        if memory is not None:
+        if memory is not None and len(memory) > 0:
             memory_text_ids = [torch.as_tensor(external_tokenizer.encode(m)) for m in memory]
             memory = torch.ones(len(memory_text_ids), max(len(x) for x in memory_text_ids), dtype=torch.int64)
             for i, m in enumerate(memory_text_ids):
