@@ -237,7 +237,8 @@ def collate_fn(src_data, tgt_data,
                src_type='text',
                augmenter=None, upsampling=False,
                bilingual=False, vocab_mask=None,
-               past_src_data=None, src_pad="<blank>", tgt_pad="<blank>", feature_size=40, use_memory=None,
+               past_src_data=None, src_pad="<blank>", tgt_pad="<blank>",
+               feature_size=40, use_memory=None,
                src_features=None, deterministic=False):
     tensors = dict()
     if src_data is not None:
@@ -315,6 +316,7 @@ def collate_fn(src_data, tgt_data,
         tensors["src_features_mask"] = mask
         tensors["src_size"] = src_size
 
+    # ONE-SHOT LEARNING MEMORY IMPLEMENTATION
     if use_memory:
         if deterministic:
             random.seed(42)
@@ -490,10 +492,6 @@ class Batch(object):
 
         if self.has_target:
             self.tensors['target'] = switchout(self.tensors['target'], tgt_vocab_size, swrate, transpose=True, offset=1)
-            # target_full = self.tensors['target']
-            # self.tensors['target_input'] = target_full[:-1]
-            # self.tensors['target_output'] = target_full[1:]
-            # self.tensors['tgt_mask'] = self.tensors['target_output'].ne(onmt.constants.PAD)
 
     # Masked Predictive Coding mask
     # Randomly choose positions and set features to Zero
@@ -544,6 +542,8 @@ class LightBatch:
 
 class Sample(object):
 
+    # Placeholder to use for rewriting the sample as an object if necessary
+
     def __init__(self, src_data, tgt_data,
                  src_lang_data, tgt_lang_data,
                  past_src_data=None):
@@ -554,15 +554,6 @@ class Sample(object):
         self.tgt_lang = tgt_lang_data
         self.past_src_data = past_src_data
 
-        #
-        # batch = collate_fn(src_data, tgt_data=tgt_data,
-        #                    src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
-        #                    src_atbs_data=src_atbs_data, tgt_atbs_data=tgt_atbs_data,
-        #                    src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
-        #                    src_type=self._type,
-        #                    augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask,
-        #                    past_src_data=past_src_data, src_pad=self.src_pad, tgt_pad=self.tgt_pad,
-        #                    feature_size=self.input_size)
 
 
 class Dataset(torch.utils.data.Dataset):
@@ -777,12 +768,6 @@ class Dataset(torch.utils.data.Dataset):
                                                  self.max_src_len, self.max_tgt_len,
                                                  self.min_src_len, self.min_tgt_len)
 
-            # allocate_batch_simple(indices,
-            #                       src_sizes, tgt_sizes,
-            #                       batch_size_sents,
-            #                       max_src_len, max_tgt_len,
-            #                       min_src_len, min_tgt_len):
-
             self.src_sizes = src_sizes
             self.tgt_sizes = tgt_sizes
 
@@ -819,7 +804,7 @@ class Dataset(torch.utils.data.Dataset):
         self.num_batches = len(self.batches)
         self.batch_sizes = [len(x) for x in self.batches]
         self.filtered_samples = []
-        # map(self.filtered_samples.extend, self.batches)
+
         for x in self.batches:
             for _sample in x:
                 self.filtered_samples.append(_sample)
@@ -918,12 +903,8 @@ class Dataset(torch.utils.data.Dataset):
                 src_lang = self.src_langs[index]
             if self.tgt_langs is not None:
                 tgt_lang = self.tgt_langs[index]
-            # if self.src_atbs is not None:
-            #     src_atb = self.src_atbs[index]
-            # if self.tgt_atbs is not None:
-            #     tgt_atb = self.tgt_atbs[index]
-            src_atb = None
-            tgt_atb = None
+            src_atb = None # DEPRICATED
+            tgt_atb = None # DEPRICATED
 
         # move augmenter here?
 
@@ -999,11 +980,7 @@ class Dataset(torch.utils.data.Dataset):
                 src_lang_data = [self.src_langs[i] for i in batch_ids]
             if self.tgt_langs is not None:
                 tgt_lang_data = [self.tgt_langs[i] for i in batch_ids]
-            # if self.src_atbs is not None:
-            #     src_atbs_data = [self.src_atbs[i] for i in batch_ids]
-            # if self.tgt_atbs is not None:
-            #     tgt_atbs_data = [self.tgt_atbs[i] for i in batch_ids]
-            src_atbs_data = None
+            src_atbs_data = None # DEPRICATED
             tgt_atbs_data = None
 
         if self.use_past_src:
@@ -1056,30 +1033,22 @@ class Dataset(torch.utils.data.Dataset):
                     src_lang_data = [self.src_langs[0]]  # should be a tensor [0]
                 if self.tgt_langs is not None:
                     tgt_lang_data = [self.tgt_langs[0]]  # should be a tensor [1]
-                # if self.src_atbs is not None:
-                #     src_atbs_data = [self.src_atbs[0]]
-                # if self.tgt_atbs is not None:
-                #     tgt_atbs_data = [self.tgt_atbs[0]]
-                src_atbs_data = None
+
+                src_atbs_data = None # DEPRICATED
                 tgt_atbs_data = None
             else:
                 if self.src_langs is not None:
                     src_lang_data = [sample['src_lang'] for sample in samples]  # should be a tensor [0]
                 if self.tgt_langs is not None:
                     tgt_lang_data = [sample['tgt_lang'] for sample in samples]  # should be a tensor [1]
-                # if self.src_atbs is not None:
-                #     src_atbs_data = [self.src_atbs[i] for i in batch_ids]
-                # if self.tgt_atbs is not None:
-                #     tgt_atbs_data = [self.tgt_atbs[i] for i in batch_ids]
                 src_atbs_data = None
                 tgt_atbs_data = None
 
             if self.use_past_src:
                 past_src_data = [sample['past_src'] for sample in samples]
 
-            # TODO:
             # src_data is now a [list of [list of Samples]]
-            # tgt_data is either None or a [list of [list of Samples]]
+            # tgt_data is either None or a [list of [list of Samples]] # maybe only used during training
 
             if len(samples) > 0 and "src_features" in samples[0] and samples[0]["src_features"] is not None:
                 src_features = [sample["src_features"] for sample in samples]

@@ -416,119 +416,6 @@ class Trainer(object):
 
         self.model.decoder.language_embeddings = untrained_lang_emb
 
-    def warm_up(self, train_data):
-        """
-        Warmup the memory allocator, by attempting to fit the largest batch
-        :return:
-        """
-
-        batch = train_data[0].get_largest_batch(bsz=-1, src_size=-1, tgt_size=-1) \
-            if is_list(train_data) \
-            else train_data.get_largest_batch(bsz=328, src_size=319520, tgt_size=18)
-        opt = self.opt
-
-        if self.cuda:
-            batch.cuda(fp16=False)
-
-        self.model.train()
-        self.loss_function.train()
-
-        loss = 0
-        for p in self.model.parameters():
-            loss = loss + p.sum() * 0
-
-        # this will create zero grads
-        loss.backward()
-        # self.model.zero_grad()
-        oom = False
-
-        if opt.streaming:
-            streaming_state = self.model.init_stream()
-        else:
-            streaming_state = None
-
-        # try:
-        with autocast(enabled=opt.fp16):
-            targets = batch.get('target_output')
-            tgt_mask = None
-            outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                 zero_encoder=opt.zero_encoder,
-                                 mirror=opt.mirror_loss, streaming_state=streaming_state,
-                                 nce=opt.nce, checkpointing_ffn=opt.checkpointing_ffn,
-                                 checkpointing_cross_attn=opt.checkpointing_cross_attn,
-                                 checkpointing_self_attn=opt.checkpointing_self_attn)
-
-            outputs['tgt_mask'] = tgt_mask
-
-            loss_dict = self.loss_function(outputs, targets, model=self.model)
-            loss_data = loss_dict['data']
-            loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-            full_loss = loss
-
-            if opt.ctc_loss > 0.0:
-                ctc_loss = self.ctc_loss_function(outputs, targets)
-                ctc_loss_data = ctc_loss.item()
-                full_loss = full_loss + opt.ctc_loss * ctc_loss
-
-            if opt.mirror_loss:
-                rev_loss = loss_dict['rev_loss']
-                mirror_loss = loss_dict['mirror_loss']
-                full_loss = full_loss + rev_loss + mirror_loss
-
-            if opt.predict_lang:
-                lid_loss = loss_dict['lid']
-                full_loss = full_loss + lid_loss
-                lid_loss_data = lid_loss.item()
-            else:
-                lid_loss_data = 0
-
-            # reconstruction loss
-            if opt.reconstruct:
-                rec_loss = loss_dict['rec_loss']
-                rec_loss = rec_loss
-                full_loss = full_loss + rec_loss
-
-            if opt.lfv_multilingual:
-                lid_logits = outputs['lid_logits']
-                lid_labels = batch.get('target_lang')
-                lid_loss_function = self.loss_function.get_loss_function('lid_loss')
-                lid_loss = lid_loss_function(lid_logits, lid_labels)
-                full_loss = full_loss + lid_loss
-
-            optimizer = self.optim.optimizer
-
-        # Warning: self-defined parameter list
-        parameter_list = [p for p in self.model.parameters() if p.requires_grad]
-        # Later if we need to do Adversarial Perturbation:
-
-        self.grad_scaler.scale(full_loss).backward()
-
-        loss = 0
-
-        for p in parameter_list:
-            loss += p.sum() * 0.0
-
-        loss.backward()
-
-        for p in self.model.parameters():
-            if p.grad is not None:
-                p.grad.data.zero_()
-        # self.model.zero_grad()
-        # self.optim.zero_grad()
-        # self.optim.step()
-        # self.optim.reset()
-
-        # except RuntimeError as e:
-        #     if 'out of memory' in str(e):
-        #         oom = True
-        #     # else:
-        #         print("[INFO] Warning: out-of-memory in warming up. "
-        #               "This is due to the largest batch is too big for the GPU.",
-        #               flush=True)
-        #         raise e
-        # else:
-        self.print("[INFO] Warming up successfully.", flush=True)
-
     def save(self, epoch, valid_ppl, itr=None):
 
         opt = self.opt
@@ -1646,10 +1533,6 @@ class Trainer(object):
         #
         if opt.load_decoder_from:
             self.load_decoder_weight(opt.load_decoder_from)
-
-        # if we are on a GPU: warm up the memory allocator
-        # if self.cuda:
-        #     self.warm_up(train_data=train_data)
 
         if opt.estimate_fisher_information:
             self.start_time = time.time()
