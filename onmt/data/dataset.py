@@ -230,6 +230,7 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
     else:
         raise NotImplementedError
 
+
 def collate_fn(src_data, tgt_data,
                src_lang_data, tgt_lang_data,
                src_atbs_data, tgt_atbs_data,
@@ -385,6 +386,16 @@ def collate_fn(src_data, tgt_data,
     return LightBatch(tensors)
 
 
+def rewrap(light_batch):
+    """
+    Currently this light batch is used in data collection to avoid pickling error
+    After that it is converted to Batch
+    :param light_batch:
+    :return:
+    """
+    return Batch(light_batch.tensors)
+
+
 # default = align left
 # applicable for text?
 def collate_concat_fn(samples, src_type='text', bilingual=False,
@@ -433,17 +444,6 @@ def collate_concat_fn(samples, src_type='text', bilingual=False,
     tensors['size'] = len(src_lengths)
 
     return LightBatch(tensors)
-
-
-def rewrap(light_batch):
-    """
-    Currently this light batch is used in data collection to avoid pickling error
-    After that it is converted to Batch
-    :param light_batch:
-    :return:
-    """
-    return Batch(light_batch.tensors)
-
 
 class Batch(object):
     # An object to manage the data within a minibatch
@@ -540,20 +540,6 @@ class LightBatch:
         return self
 
 
-class Sample(object):
-
-    # Placeholder to use for rewriting the sample as an object if necessary
-
-    def __init__(self, src_data, tgt_data,
-                 src_lang_data, tgt_lang_data,
-                 past_src_data=None):
-
-        self.src = src_data
-        self.tgt = tgt_data
-        self.src_lang = src_lang_data
-        self.tgt_lang = tgt_lang_data
-        self.past_src_data = past_src_data
-
 
 
 class Dataset(torch.utils.data.Dataset):
@@ -589,8 +575,8 @@ class Dataset(torch.utils.data.Dataset):
                  sa_f=8, sa_t=64, input_size=40,
                  past_src_data=None,
                  past_src_data_sizes=None,
-                 concat=False,
                  constants=None,
+                 concat=False,
                  dataset_factor=None,
                  use_memory=False,
                  validation=True,
@@ -645,14 +631,10 @@ class Dataset(torch.utils.data.Dataset):
         self.min_tgt_len = kwargs.get('min_tgt_len', 3)
         self.min_src_len = kwargs.get('min_src_len', 2)
         self.batch_size_frames = batch_size_frames
-
-        cut_off_size = kwargs.get('cut_off_size', 256000)
-        smallest_batch_size = kwargs.get('smallest_batch_size', 4)
-
         self.concat = concat
-        if self.concat:
-            # if we use concat dataset, then how do we do minibatch?
-            pass
+
+        cut_off_size = kwargs.get('cut_off_size', 200000)
+        smallest_batch_size = kwargs.get('smallest_batch_size', 4)
 
         if self.max_src_len is None:
             if self._type == 'text':
@@ -701,19 +683,22 @@ class Dataset(torch.utils.data.Dataset):
             tgt_sizes = None
 
         # sort data to have efficient mini-batching during training
-        if sorting and not self.concat:
-
-            if self._type == 'text':
-                sorted_order = np.lexsort((src_sizes, tgt_sizes))
-            elif self._type in ['audio', 'wav']:
-                sorted_order = np.lexsort((tgt_sizes, src_sizes))
+        if self.concat:
+            sorted_order = np.random.permutation(np.arange(len(self.src)))
 
         else:
-            sorted_order = np.random.permutation(np.arange(len(self.src)))
+            if sorting:
+
+                if self._type == 'text':
+                    sorted_order = np.lexsort((src_sizes, tgt_sizes))
+                elif self._type in ['audio', 'wav']:
+                    sorted_order = np.lexsort((tgt_sizes, src_sizes))
+
+            else:
+                sorted_order = np.arange(len(self.src))
 
         self.order = None
 
-        # if concat then don't have to sort :)
         # store data length in numpy for fast query
         if self.tgt is not None and self.src is not None:
             stacked_sizes = np.stack((src_sizes, tgt_sizes - 1), axis=0)
@@ -753,7 +738,6 @@ class Dataset(torch.utils.data.Dataset):
         self.batch_size_sents = batch_size_sents
 
         # the actual batch size must divide by this multiplier (for fp16 it has to be 4 or 8)
-        self.multiplier = multiplier
 
         # by default: count the amount of padding when we group mini-batches
         self.pad_count = True
@@ -770,13 +754,9 @@ class Dataset(torch.utils.data.Dataset):
 
             self.src_sizes = src_sizes
             self.tgt_sizes = tgt_sizes
-
         else:
-            self.src_sizes = None
-            self.tgt_sizes = None
 
             if self._type in ['audio', 'wav']:
-
                 self.batches = allocate_batch_unbalanced(sorted_order, data_lengths,
                                                          src_sizes, tgt_sizes,
                                                          batch_size_frames, batch_size_words,
@@ -791,27 +771,15 @@ class Dataset(torch.utils.data.Dataset):
                                               self.max_src_len, self.max_tgt_len,
                                               self.min_src_len, self.min_tgt_len, self.cleaning)
 
-        # if using a concat dataset, we want to find a batch contains fixed N segments with length M < max_src_len
-        # and then in the collate function we randomly sample from the same dataset to fill max_src_len
-
         # the second to last mini-batch is likely the largest
         # (the last one can be the remnant after grouping samples which has less than max size)
         self.largest_batch_id = len(self.batches) - 3
 
-        if dataset_factor is not None:
-            self.batches = [b for b in self.batches for _ in range(dataset_factor)]
-
         self.num_batches = len(self.batches)
         self.batch_sizes = [len(x) for x in self.batches]
-        self.filtered_samples = []
-
-        for x in self.batches:
-            for _sample in x:
-                self.filtered_samples.append(_sample)
 
         print("Number of sentences before cleaning and sorting: %d" % len(src_sizes) )
         print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
-        print("Number of sentences after cleaning and sorting: %d" % len(self.filtered_samples) )
         print("Number of batches after cleaning and sorting: %d" % self.num_batches)
 
         self.cur_index = 0
@@ -826,10 +794,13 @@ class Dataset(torch.utils.data.Dataset):
 
         if use_memory:
             from transformers import MBart50TokenizerFast
-            self.use_memory = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50") # to split transcripts by word boundaries
+            self.use_memory = MBart50TokenizerFast.from_pretrained(
+                "facebook/mbart-large-50")  # to split transcripts by word boundaries
         else:
             self.use_memory = False
         self.validation = validation
+
+        # if
 
     def flush_cache(self):
         if hasattr(self.src, 'flush_cache'):
@@ -884,7 +855,7 @@ class Dataset(torch.utils.data.Dataset):
     def __len__(self):
         return self.num_batches
 
-    def __getitem__(self, index, load_src=True):
+    def __getitem__(self, index):
 
         src_lang, tgt_lang = None, None
         src_atb, tgt_atb  = None, None
@@ -903,8 +874,8 @@ class Dataset(torch.utils.data.Dataset):
                 src_lang = self.src_langs[index]
             if self.tgt_langs is not None:
                 tgt_lang = self.tgt_langs[index]
-            src_atb = None # DEPRICATED
-            tgt_atb = None # DEPRICATED
+            src_atb = None
+            tgt_atb = None
 
         # move augmenter here?
 
@@ -913,33 +884,17 @@ class Dataset(torch.utils.data.Dataset):
         else:
             past_src = None
 
-        if not hasattr(self, "encoder_feature_files"):
-            sampledata = {
-                'src': self.src[index] if self.src is not None and load_src else None,
-                'tgt': self.tgt[index] if self.tgt is not None else None,
-                'src_lang': src_lang,
-                'tgt_lang': tgt_lang,
-                'src_atb': src_atb,  # depricated
-                'tgt_atb': tgt_atb,  # depricated
-                'past_src': past_src,
-            }
-        else:
-            if load_src:
-                with open(self.encoder_feature_files[0], "rb") as f:
-                    src_features = read_data(f, self.encoder_feature_files[1], index)
-            else:
-                src_features = None
-            sampledata = {
-                'src_features': src_features,
-                'tgt': self.tgt[index] if self.tgt is not None else None,
-                'src_lang': src_lang,
-                'tgt_lang': tgt_lang,
-                'src_atb': src_atb,  # depricated
-                'tgt_atb': tgt_atb,  # depricated
-                'past_src': past_src,
-            }
+        sample = {
+            'src': self.src[index] if self.src is not None else None,
+            'tgt': self.tgt[index] if self.tgt is not None else None,
+            'src_lang': src_lang,
+            'tgt_lang': tgt_lang,
+            'src_atb': src_atb,
+            'tgt_atb': tgt_atb,
+            'past_src': past_src
+        }
 
-        return sampledata
+        return sample
 
     def get_batch(self, index):
         """
@@ -980,7 +935,7 @@ class Dataset(torch.utils.data.Dataset):
                 src_lang_data = [self.src_langs[i] for i in batch_ids]
             if self.tgt_langs is not None:
                 tgt_lang_data = [self.tgt_langs[i] for i in batch_ids]
-            src_atbs_data = None # DEPRICATED
+            src_atbs_data = None
             tgt_atbs_data = None
 
         if self.use_past_src:
@@ -997,8 +952,7 @@ class Dataset(torch.utils.data.Dataset):
                                   past_src_data=past_src,
                                   src_pad=self.src_pad,
                                   tgt_pad=self.tgt_pad,
-                                  feature_size=self.input_size,
-                                  use_memory=self.use_memory)
+                                  feature_size=self.input_size),
                        )
         return batch
 
@@ -1022,7 +976,7 @@ class Dataset(torch.utils.data.Dataset):
             src_atbs_data, tgt_atbs_data = None, None
             past_src_data = None
 
-            if self.src and len(samples)>0 and "src" in samples[0] and samples[0]['src'] is not None:
+            if self.src:
                 src_data = [sample['src'] for sample in samples]
 
             if self.tgt:
@@ -1033,27 +987,24 @@ class Dataset(torch.utils.data.Dataset):
                     src_lang_data = [self.src_langs[0]]  # should be a tensor [0]
                 if self.tgt_langs is not None:
                     tgt_lang_data = [self.tgt_langs[0]]  # should be a tensor [1]
-
-                src_atbs_data = None # DEPRICATED
-                tgt_atbs_data = None
+                if self.src_atbs is not None:
+                    src_atbs_data = [self.src_atbs[0]]
+                if self.tgt_atbs is not None:
+                    tgt_atbs_data = [self.tgt_atbs[0]]
             else:
                 if self.src_langs is not None:
                     src_lang_data = [sample['src_lang'] for sample in samples]  # should be a tensor [0]
                 if self.tgt_langs is not None:
                     tgt_lang_data = [sample['tgt_lang'] for sample in samples]  # should be a tensor [1]
+                # if self.src_atbs is not None:
+                #     src_atbs_data = [self.src_atbs[i] for i in batch_ids]
+                # if self.tgt_atbs is not None:
+                #     tgt_atbs_data = [self.tgt_atbs[i] for i in batch_ids]
                 src_atbs_data = None
                 tgt_atbs_data = None
 
             if self.use_past_src:
                 past_src_data = [sample['past_src'] for sample in samples]
-
-            # src_data is now a [list of [list of Samples]]
-            # tgt_data is either None or a [list of [list of Samples]] # maybe only used during training
-
-            if len(samples) > 0 and "src_features" in samples[0] and samples[0]["src_features"] is not None:
-                src_features = [sample["src_features"] for sample in samples]
-            else:
-                src_features = None
 
             batch = collate_fn(src_data, tgt_data=tgt_data,
                                src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
@@ -1062,12 +1013,14 @@ class Dataset(torch.utils.data.Dataset):
                                src_type=self._type,
                                augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask,
                                past_src_data=past_src_data, src_pad=self.src_pad, tgt_pad=self.tgt_pad,
-                               feature_size=self.input_size, use_memory=self.use_memory, src_features=src_features, deterministic=self.validation)
+                               feature_size=self.input_size)
 
             batches.append(batch)
 
         return batches
 
+    def full_size(self):
+        return self.full_size
 
     def collater_concat(self, collected_samples):
         """
@@ -1087,7 +1040,7 @@ class Dataset(torch.utils.data.Dataset):
 
         sampled_ids = collected_samples
 
-        for sample in  collected_samples:
+        for sample in collected_samples:
 
             if not (type(sample) is dict):
                 continue
@@ -1102,12 +1055,11 @@ class Dataset(torch.utils.data.Dataset):
             lengths = [self.src_sizes[_id] for _id in random_sample_ids]
 
             random_sample_ids = list(zip(random_sample_ids, lengths))
-            random_sample_ids.sort(key = lambda a: a[1])  # sort in ascending order or descending order?
+            random_sample_ids.sort(key=lambda a: a[1])  # sort in ascending order or descending order?
 
             for random_sample_id, src_len in random_sample_ids:
 
                 if cur_src_len + src_len <= max_len and random_sample_id not in sampled_ids:
-
                     # if the randomly next sample can be concatenated
                     random_sample = self.__getitem__(random_sample_id)
                     cur_sample.append(random_sample)
@@ -1128,19 +1080,3 @@ class Dataset(torch.utils.data.Dataset):
                                   src_pad=self.src_pad, tgt_pad=self.tgt_pad, feature_size=self.input_size)
 
         return [batch]
-
-    def full_size(self):
-        return self.full_size
-
-    # genereate a new batch - order (static)
-    def create_order(self, random=True):
-
-        if random:
-            self.batchOrder = torch.randperm(self.num_batches)
-        else:
-            self.batchOrder = torch.arange(self.num_batches).long()
-
-        self.cur_index = 0
-
-        return self.batchOrder
-
