@@ -564,6 +564,30 @@ def make_parser(parser):
     parser.add_argument('-predict_language', type=int, default=0,
                         help='Freeze the embedding.')
 
+    # arguments added by Christian
+
+    parser.add_argument('-wav_path_replace', default=None, nargs="+", type=str,
+                        help="Replace prefix in wav path to with other prefix (useful when moving data)")
+    parser.add_argument('-dataset_factors', default=None, type=str,
+                        help="Option to upsample certain datasets")
+    parser.add_argument('-cache_encoder_output', action="store_true",
+                        help="Whether to cache encoder output features (to speed up training)")
+    parser.add_argument('-cache_dir', default="/export/data1/chuber/ASR/cache/", type=str,
+                        help="Where to cache the encoder output features")
+
+    parser.add_argument('-use_memory', action="store_true",
+                        help="Whether to use an additional memory decoder")
+    parser.add_argument('-freeze_baseline_decoder', action="store_true",
+                        help="Whether to freeze the baseline decoder weights")
+    parser.add_argument('-memory_size_max', type=int, default=0,
+                        help="Maximum memory size during training")
+    parser.add_argument('-memory_loss_coeff', type=float, default=0.01,
+                        help='Coefficient for the memory loss term')
+    parser.add_argument('-encoder_layers_memory', type=int, default=6,
+                        help="Number of memory encoder layers")
+    parser.add_argument('-decoder_layers_memory', type=int, default=6,
+                        help="Number of memory encoder layers")
+
     return parser
 
 

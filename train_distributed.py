@@ -209,7 +209,8 @@ def main(gpu, opt):
                                           input_size=opt.input_size,
                                           upsampling=opt.upsampling,
                                           num_split=1,
-                                          constants=constants)
+                                          constants=constants,
+                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False)
             else:
                 train_data = onmt.StreamDataset(train_dict['src'], train_dict['tgt'],
                                                 train_src_langs, train_tgt_langs,
@@ -263,7 +264,8 @@ def main(gpu, opt):
                                           multiplier=opt.batch_size_multiplier,
                                           upsampling=opt.upsampling,
                                           input_size=opt.input_size,
-                                          constants=constants)
+                                          constants=constants,
+                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory)
             else:
                 valid_data = onmt.StreamDataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
                                                 valid_src_langs, valid_tgt_langs,
@@ -313,7 +315,7 @@ def main(gpu, opt):
                 else:
                     past_train_src = None
             elif opt.data_format in ['wav']:
-                train_src = WavDataset(audio_data['train'], cache_size=opt.data_cache_size)
+                train_src = WavDataset(audio_data['train'], cache_size=opt.data_cache_size, wav_path_replace=opt.wav_path_replace)
                 past_train_src = None
             else:
                 train_src = MMapIndexedDataset(train_path + '.src')
@@ -385,7 +387,7 @@ def main(gpu, opt):
                                           max_src_len=opt.max_src_length,
                                           max_tgt_len=opt.max_tgt_length,
                                           constants=constants,
-                                          concat=opt.concat_dataset)
+                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False)
             else:
                 train_data = onmt.StreamDataset(train_src,
                                                 train_tgt,
@@ -407,7 +409,7 @@ def main(gpu, opt):
                 else:
                     past_valid_src = None
             elif opt.data_format in ['wav']:
-                valid_src = WavDataset(audio_data['valid'], cache_size=opt.data_cache_size)
+                valid_src = WavDataset(audio_data['valid'], cache_size=opt.data_cache_size, wav_path_replace=opt.wav_path_replace)
                 past_valid_src = None
             else:
                 valid_src = MMapIndexedDataset(valid_path + '.src')
@@ -469,7 +471,8 @@ def main(gpu, opt):
                                           max_src_len=opt.max_src_length,
                                           max_tgt_len=opt.max_tgt_length,
                                           min_src_len=1, min_tgt_len=3,
-                                          constants=constants)
+                                          constants=constants,
+                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory)
             else:
                 # for validation data, we have to go through sentences (very slow but to ensure correctness)
                 valid_data = onmt.StreamDataset(valid_src, valid_tgt,
@@ -489,6 +492,12 @@ def main(gpu, opt):
 
     # Multi-data set handling
     else:
+        if opt.dataset_factors is not None:
+            dataset_factors = {int(df.split(":")[0]): int(df.split(":")[1]) for df in opt.dataset_factors.split(",")}
+            print("Dataset factors:", dataset_factors)
+        else:
+            dataset_factors = {}
+
         lprint("[INFO] Reading multiple dataset ...")
 
         dicts = torch.load(opt.data + ".dict.pt")
@@ -535,7 +544,7 @@ def main(gpu, opt):
                     src_data = SCPIndexDataset(audio_data, concat=opt.concat)
                 elif opt.data_format in ['wav']:
                     audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
-                    src_data = WavDataset(audio_data, cache_size=opt.data_cache_size)
+                    src_data = WavDataset(audio_data, cache_size=opt.data_cache_size, wav_path_replace=opt.wav_path_replace)
                 else:
                     src_data = MMapIndexedDataset(os.path.join(data_dir, "data.src"))
 
@@ -587,7 +596,9 @@ def main(gpu, opt):
                                               max_src_len=opt.max_src_length,
                                               max_tgt_len=opt.max_tgt_length,
                                               input_size=opt.input_size,
-                                              constants=constants)
+                                              constants=constants,
+                                              dataset_factor=dataset_factors.get(idx_),
+                                              use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False)
 
                     if c == 1:
                         dicts['tgt_pad'] = train_data.get_tgt_pad()
@@ -615,7 +626,7 @@ def main(gpu, opt):
                     src_data = SCPIndexDataset(audio_data, concat=opt.concat)
                 elif opt.data_format in ['wav']:
                     audio_data = torch.load(os.path.join(data_dir, "data.scp_path.pt"))
-                    src_data = WavDataset(audio_data, cache_size=opt.data_cache_size)
+                    src_data = WavDataset(audio_data, cache_size=opt.data_cache_size, wav_path_replace=opt.wav_path_replace)
                 else:
                     src_data = MMapIndexedDataset(os.path.join(data_dir, "data.src"))
 
@@ -663,7 +674,8 @@ def main(gpu, opt):
                                               min_src_len=1, min_tgt_len=3,
                                               input_size=opt.input_size,
                                               cleaning=True, verbose=True,
-                                              constants=constants)
+                                              constants=constants,
+                                              use_memory=hasattr(opt, "use_memory") and opt.use_memory)
 
                     valid_sets.append(valid_data)
 

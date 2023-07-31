@@ -7,6 +7,7 @@ except ImportError:
     # print("[WARNING] Moses tokenizer is not installed. Models with 'detokenize' option won't have Moses-detokenized outputs")
     MosesDetokenizer = None
     MosesTokenizer = None
+import torch
 
 class TranslatorParameter(object):
 
@@ -338,7 +339,7 @@ class ASROnlineTranslator(object):
         self.src_lang = input_language
         self.tgt_lang = output_language
 
-    def translate(self, input, prefix):
+    def translate(self, input, prefix, memory):
         """
         Args:
             prefix:
@@ -368,16 +369,23 @@ class ASROnlineTranslator(object):
 
         anti_prefix = self.anti_prefix if len(self.anti_prefix) > 0 else None
 
+        print("prefix", prefix)
         print("anti prefix:", anti_prefix)
+
+        # use the external sentencepiece model
+        external_tokenizer = self.translator.external_tokenizer
+
+        if memory is not None and len(memory) > 0:
+            memory_text_ids = [torch.as_tensor(external_tokenizer.encode(m)) for m in memory]
+            memory = torch.ones(len(memory_text_ids), max(len(x) for x in memory_text_ids), dtype=torch.int64)
+            for i, m in enumerate(memory_text_ids):
+                memory[i, :len(m)] = m
 
         # perform beam search in the model
         pred_batch, pred_ids, pred_score, pred_length, \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch, type='asr',
-            prefix=prefix, anti_prefix=anti_prefix)
-
-        # use the external sentencepiece model
-        external_tokenizer = self.translator.external_tokenizer
+            prefix=prefix, anti_prefix=anti_prefix, memory=memory)
 
         output_sentence = get_sentence_from_tokens(pred_batch[0][0], pred_ids[0][0], "word", external_tokenizer)
 

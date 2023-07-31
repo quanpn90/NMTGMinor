@@ -14,7 +14,7 @@ import subprocess
 
 host = sys.argv[1]  # 192.168.0.72
 port = sys.argv[2]  # 5051
-if len(sys.argv)<=2:
+if len(sys.argv)<=3:
     filename = "model.conf"
 else:
     filename = sys.argv[3]
@@ -47,9 +47,9 @@ def use_model(reqs):
 
     if len(reqs) == 1:
         req = reqs[0]
-        audio_tensor, prefix, input_language, output_language = req.get_data()
+        audio_tensor, prefix, input_language, output_language, memory = req.get_data()
         model.set_language(input_language, output_language)
-        hypo = model.translate(audio_tensor, [prefix])
+        hypo = model.translate(audio_tensor, [prefix], memory)
         result = {"hypo": hypo}
         req.publish(result)
 
@@ -58,38 +58,41 @@ def use_model(reqs):
         prefixes = list()
         input_languages = list()
         output_languages = list()
+        memories = list()
 
         batch_runnable = False
 
         for req in reqs:
-            audio_tensor, prefix, input_language, output_language = req.get_data()
+            audio_tensor, prefix, input_language, output_language, memory = req.get_data()
             model.set_language(input_language, output_language)
             audio_tensors.append(audio_tensor)
             prefixes.append(prefix)
 
             input_languages.append(input_language)
             output_languages.append(output_language)
+            memories.append(memory)
 
         unique_prefix_list = create_unique_list(prefixes)
         unique_input_languages = create_unique_list(input_languages)
         unique_output_languages = create_unique_list(output_languages)
+        memories = create_unique_list(memories)
 
-        if len(unique_prefix_list) == 1 and len(unique_input_languages) == 1 and len(unique_output_languages) == 1:
+        if len(unique_prefix_list) == 1 and len(unique_input_languages) == 1 and len(unique_output_languages) == 1 and len(memories) == 1:
             batch_runnable = True
 
         if batch_runnable:
             model.set_language(input_languages[0], output_languages[0])
-            hypos = model.translate_batch(audio_tensors, prefixes)
+            hypos = model.translate_batch(audio_tensors, prefixes, memories[0])
 
             for req, hypo in zip(reqs, hypos):
                 result = {"hypo": hypo}
                 req.publish(result)
         else:
-            for req, audio_tensor, prefix, input_language, output_language \
-                    in zip(reqs, audio_tensors, prefixes, input_languages, output_languages):
+            for req, audio_tensor, prefix, input_language, output_language, memory \
+                    in zip(reqs, audio_tensors, prefixes, input_languages, output_languages, memories):
                 model.set_language(input_language, output_language)
 
-                hypo = model.translate(audio_tensor, [prefix])
+                hypo = model.translate(audio_tensor, [prefix], memory)
                 result = {"hypo": hypo}
                 req.publish(result)
 
@@ -154,6 +157,9 @@ def inference(input_language, output_language):
     prefix = request.files.get("prefix") # can be None
     if prefix is not None:
         prefix: str = prefix.read().decode("utf-8")
+    memory = request.files.get("memory") # can be None
+    if memory is not None:
+        memory: list = json.loads(memory.read())
 
     # calculate features corresponding to a torchaudio.load(filepath) call
     audio_tensor = pcm_s16le_to_tensor(pcm_s16le)
@@ -167,7 +173,7 @@ def inference(input_language, output_language):
     condition = threading.Condition()
     with condition:
         id = str(uuid.uuid4())
-        data = (audio_tensor,prefix,input_language,output_language)
+        data = (audio_tensor,prefix,input_language,output_language,memory)
 
         queue_in.put(Priority(priority,id,condition,data))
 

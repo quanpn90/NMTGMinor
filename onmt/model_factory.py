@@ -170,7 +170,7 @@ def build_tm_model(opt, dicts, constants=None):
         language_embeddings = None
 
     if opt.model in ['wav2vec2_bert', 'quantize_wav2vec2_bert', 'quantize_wav2vec2_mbart50']:
-        from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecBERT
+        from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecBERT, Wav2vecBERTMemory
 
         # if opt.model.startswith("quantize"):
         #     from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder
@@ -235,11 +235,12 @@ def build_tm_model(opt, dicts, constants=None):
 
         if "mbart" in opt.dec_pretrained_model:
             from pretrain_module.configuration_mbart import MBartConfig
-            from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder
+            from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder, MBartDecoderMemory
             print("[INFO] Created MBART decoder from: %s ..." % opt.dec_config_file)
             dec_mbart_config = MBartConfig.from_json_file(opt.dec_config_file)
 
-            decoder = MBartDecoder(dec_mbart_config, opt)
+            decoder_class = MBartDecoder if not hasattr(opt, "use_memory") or not opt.use_memory else MBartDecoderMemory
+            decoder = decoder_class(dec_mbart_config, opt)
 
             if opt.freeze_embedding:
                 decoder.embed_tokens.weight.requires_grad = False
@@ -288,6 +289,8 @@ def build_tm_model(opt, dicts, constants=None):
 
             decoder.load_state_dict(dec_model_state_dict)
             print("[INFO] ... Done")
+        else:
+            print("Not loading pretrained mbart decoder weights")
 
         # if len(opt.enc_state_dict) > 1:
         #     print("[INFO] Loading weights for mBART encoder from: %s ..." % opt.enc_state_dict)
@@ -301,8 +304,10 @@ def build_tm_model(opt, dicts, constants=None):
         if opt.freeze_embedding:
             generators[0].linear.bias.requires_grad = False
 
-        model = Wav2vecBERT(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0,
-                            sub_encoder=sub_encoder)
+        model_class = Wav2vecBERT if not hasattr(opt, "use_memory") or not opt.use_memory else Wav2vecBERTMemory
+
+        model = model_class(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0,
+                            sub_encoder=sub_encoder, opt=opt)
 
         # TODO: share the ctc_loss weight with the decoder weights
 

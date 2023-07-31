@@ -144,6 +144,7 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
             else:
                 mask = mask.unsqueeze(1).unsqueeze(2)  # for the head and query dimension
 
+        #print("inputs_q",inputs_q.shape, "len_q x b x d_model")
         # Input Linear GEMM Q
         # input1: (activations) [seql_q, bsz, embed_dim] -> [len_q * bsz, embed_dim]
         # input2: (weights)     [embed_dim, embed_dim]. transpose(0, 1)
@@ -156,6 +157,7 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         input_lin_q_results = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1), input_weights_q.size(0))
 
         queries = input_lin_q_results.view(inputs_q.size(0), inputs_q.size(1) * heads, head_dim)
+        #print("queries", queries.shape, "len_q x b*heads x head_dim")
 
         # Input Linear GEMM KV
         # input1: (activations) [seql_k, bsz, embed_dim(1024)]
@@ -173,6 +175,7 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
             values = values.view(len_k, bsz * heads, head_dim)
             input_lin_kv_results = torch.stack([keys, values], dim=-2)
         else:
+            #print("inputs_kv",inputs_kv.shape, "len_kv x b x d_model")
             input_lin_kv_results = torch.addmm(input_bias_kv,
                                                inputs_kv.view(inputs_kv.size(0) * inputs_kv.size(1), inputs_kv.size(2)),
                                                input_weights_kv.transpose(0, 1),
@@ -183,6 +186,7 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
             input_lin_kv_results = input_lin_kv_results.view(inputs_kv.size(0), inputs_kv.size(1) * heads, 2, head_dim)
             keys = input_lin_kv_results[:, :, 0, :]
             values = input_lin_kv_results[:, :, 1, :]
+            #print("keys", keys.shape, "values", values.shape, "len_kv x b*heads x head_dim")
             if incremental:
                 keys = keys.contiguous().view(len_k, bsz, heads * head_dim)
                 values = values.contiguous().view(len_k, bsz, heads * head_dim)
@@ -222,6 +226,7 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         else:
             matmul1_results = torch.matmul(queries.transpose(0, 1), keys.transpose(0, 1).transpose(1, 2))
             matmul1_results.mul_(scale_t[0])
+        #print("matmul1_results", matmul1_results.shape, "b*heads x len_q x len_kv")
 
         if mask is not None:
             batches, seql_q, seql_k = matmul1_results.size()
@@ -239,6 +244,8 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
         nan_mask = torch.isnan(softmax_results)
         if nan_mask.any():
             softmax_results.masked_fill_(nan_mask, 0)
+
+        #print(softmax_results[:, 0])
 
         # Dropout - is not executed for inference
         if is_training:
@@ -262,6 +269,7 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
             torch.bmm(dropout_results, values.transpose(0, 1), out=matmul2_results.transpose(1, 0))
         else:
             matmul2_results = torch.matmul(dropout_results, values.transpose(0, 1)).transpose(0, 1)
+        #print("matmul2_results", matmul2_results.shape, "len_q x b*heads x head_dim")
 
         # view from [len_q, bsz*heads, head_dim] to [len_q, bsz, embed]
         matmul2_results = matmul2_results.contiguous().view(inputs_q.size(0), inputs_q.size(1), inputs_q.size(2))
@@ -276,6 +284,7 @@ class EncdecAttnBiasFunc(torch.autograd.Function):
                               output_weights.transpose(0, 1),
                               beta=1., alpha=1.)
         outputs = outputs.view(inputs_q.size(0), inputs_q.size(1), output_weights.size(0))
+        #print("outputs", outputs.shape, "len_q x b x d_model")
 
         if not ctx.recompute:
             ctx.save_for_backward(heads_t,

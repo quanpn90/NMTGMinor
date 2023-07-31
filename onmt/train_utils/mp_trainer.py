@@ -301,6 +301,11 @@ class Trainer(object):
             nparams = sum(p.numel() for p in model.parameters())
             print("[INFO] Total number of paramaters: %d" % nparams)
 
+            if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                self.model.module.is_main = True
+            else:
+                self.model.is_main = True
+
         if opt.load_fisher:
             if self.is_main():
                 print("[INFO] Loading fisher information from: %s" % opt.load_fisher)
@@ -410,119 +415,6 @@ class Trainer(object):
                     untrained_lang_emb.weight.data[untrained_id].copy_(pretrained_lang_emb.weight.data[pretrained_id])
 
         self.model.decoder.language_embeddings = untrained_lang_emb
-
-    def warm_up(self, train_data):
-        """
-        Warmup the memory allocator, by attempting to fit the largest batch
-        :return:
-        """
-
-        batch = train_data[0].get_largest_batch(bsz=-1, src_size=-1, tgt_size=-1) \
-            if is_list(train_data) \
-            else train_data.get_largest_batch(bsz=328, src_size=319520, tgt_size=18)
-        opt = self.opt
-
-        if self.cuda:
-            batch.cuda(fp16=False)
-
-        self.model.train()
-        self.loss_function.train()
-
-        loss = 0
-        for p in self.model.parameters():
-            loss = loss + p.sum() * 0
-
-        # this will create zero grads
-        loss.backward()
-        # self.model.zero_grad()
-        oom = False
-
-        if opt.streaming:
-            streaming_state = self.model.init_stream()
-        else:
-            streaming_state = None
-
-        # try:
-        with autocast(enabled=opt.fp16):
-            targets = batch.get('target_output')
-            tgt_mask = None
-            outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                 zero_encoder=opt.zero_encoder,
-                                 mirror=opt.mirror_loss, streaming_state=streaming_state,
-                                 nce=opt.nce, checkpointing_ffn=opt.checkpointing_ffn,
-                                 checkpointing_cross_attn=opt.checkpointing_cross_attn,
-                                 checkpointing_self_attn=opt.checkpointing_self_attn)
-
-            outputs['tgt_mask'] = tgt_mask
-
-            loss_dict = self.loss_function(outputs, targets, model=self.model)
-            loss_data = loss_dict['data']
-            loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-            full_loss = loss
-
-            if opt.ctc_loss > 0.0:
-                ctc_loss = self.ctc_loss_function(outputs, targets)
-                ctc_loss_data = ctc_loss.item()
-                full_loss = full_loss + opt.ctc_loss * ctc_loss
-
-            if opt.mirror_loss:
-                rev_loss = loss_dict['rev_loss']
-                mirror_loss = loss_dict['mirror_loss']
-                full_loss = full_loss + rev_loss + mirror_loss
-
-            if opt.predict_lang:
-                lid_loss = loss_dict['lid']
-                full_loss = full_loss + lid_loss
-                lid_loss_data = lid_loss.item()
-            else:
-                lid_loss_data = 0
-
-            # reconstruction loss
-            if opt.reconstruct:
-                rec_loss = loss_dict['rec_loss']
-                rec_loss = rec_loss
-                full_loss = full_loss + rec_loss
-
-            if opt.lfv_multilingual:
-                lid_logits = outputs['lid_logits']
-                lid_labels = batch.get('target_lang')
-                lid_loss_function = self.loss_function.get_loss_function('lid_loss')
-                lid_loss = lid_loss_function(lid_logits, lid_labels)
-                full_loss = full_loss + lid_loss
-
-            optimizer = self.optim.optimizer
-
-        # Warning: self-defined parameter list
-        parameter_list = [p for p in self.model.parameters() if p.requires_grad]
-        # Later if we need to do Adversarial Perturbation:
-
-        self.grad_scaler.scale(full_loss).backward()
-
-        loss = 0
-
-        for p in parameter_list:
-            loss += p.sum() * 0.0
-
-        loss.backward()
-
-        for p in self.model.parameters():
-            if p.grad is not None:
-                p.grad.data.zero_()
-        # self.model.zero_grad()
-        # self.optim.zero_grad()
-        # self.optim.step()
-        # self.optim.reset()
-
-        # except RuntimeError as e:
-        #     if 'out of memory' in str(e):
-        #         oom = True
-        #     # else:
-        #         print("[INFO] Warning: out-of-memory in warming up. "
-        #               "This is due to the largest batch is too big for the GPU.",
-        #               flush=True)
-        #         raise e
-        # else:
-        self.print("[INFO] Warming up successfully.", flush=True)
 
     def save(self, epoch, valid_ppl, itr=None):
 
@@ -649,6 +541,16 @@ class Trainer(object):
         self.all_reduce(total_loss, op=dist.ReduceOp.SUM, group=self.group)
         self.all_reduce(total_words, op=dist.ReduceOp.SUM, group=self.group)
         self.all_reduce(total_correct, op=dist.ReduceOp.SUM, group=self.group)
+
+        if opt.use_memory:
+            if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                model = self.model.module
+            else:
+                model = self.model
+            if hasattr(model, "memory_stats"):
+                self.all_reduce(model.memory_stats, op=dist.ReduceOp.SUM, group=self.group)
+            else:
+                print("WARNING: Could not all_reduce in mp_trainer")
 
         self.model.train()
         self.loss_function.train()
@@ -838,6 +740,11 @@ class Trainer(object):
                         else:
                             rec_loss_data = None
 
+                        if hasattr(opt, "use_memory") and opt.use_memory and "loss_memory" in outputs:
+                            loss_memory = outputs['loss_memory']
+                            #full_loss = full_loss + loss_memory
+                            full_loss = loss_memory
+
                         if opt.contrastive_loss_coeff > 0 and 'contrastive_loss' in outputs:
                             contrastive_loss = outputs['contrastive_loss']
                             full_loss = full_loss + opt.contrastive_loss_coeff * contrastive_loss
@@ -920,9 +827,10 @@ class Trainer(object):
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
-                    print('Input size at OOM position:', batch.get('source').size(),
-                          batch.get('target').size())
+                    print('Input size at OOM position:', batch.get('source').size() if batch.get('source') is not None else None,
+                          batch.get('target').size() if batch.get('target') is not None else None)
 
+                    continue
                     # recovering mechanism doesn't work at the moment
                     # loss = 0
                     # for p in self.model.parameters():
@@ -1028,7 +936,16 @@ class Trainer(object):
                         print('Validation perplexity: %g' % valid_ppl)
                         print('Validation accuracy: %g percent' % (100 * valid_accuracy))
                         ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
-                        self.save(ep, valid_ppl if opt.save_metrics in ['ppl', 'perplexity'] else 1 - valid_accuracy,
+                        if opt.save_metrics in ['ppl', 'perplexity']:
+                            value = valid_ppl
+                        elif opt.save_metrics == "memory":
+                            if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                                value = self.model.module.choose_best_epoch_by
+                            else:
+                                value = self.model.choose_best_epoch_by
+                        else:
+                            value = 1-valid_accuracy
+                        self.save(ep, value,
                                   itr=data_iterator)
 
                     if num_updates >= opt.max_step:
@@ -1495,8 +1412,94 @@ class Trainer(object):
         return total_loss / total_words
 
     def run(self, train_data=None, valid_data=None, checkpoint=None):
-
         opt = self.opt
+
+        if opt.cache_encoder_output:
+            import onmt.data.indexed_file as indexed_file
+            import hashlib
+
+            worked = False
+            for datasets in [valid_data, train_data]:
+                for i, dataset in enumerate(datasets):
+                    # cache decoder output
+                    id = hashlib.sha256(dataset.src_sizes.tobytes()).hexdigest()
+
+                    basename_e = opt.cache_dir + "encoder_features_" + id
+                    name1_e = basename_e + ".data"
+                    name2_e = basename_e + ".index"
+
+                    # basename_d = opt.cache_dir + "decoder_output_" + id
+
+                    # name1_d = basename_d + ".data"
+                    # name2_d = basename_d + ".index"
+                    # name3_d = basename_d + ".label"
+
+                    if os.path.isfile(name1_e) and os.path.isfile(
+                            name2_e):  # and os.path.isfile(name1_d) and os.path.isfile(name2_d) and os.path.isfile(name3_d):
+                        dataset.encoder_feature_files = (name1_e, torch.load(name2_e))
+                        # dataset.decoder_feature_files = (name1_d,torch.load(name2_d),name3_d)
+                        print("Using cached features:", id, "for dataset", i)
+                        continue
+
+                    print("Caching features:", id)
+                    # continue
+                    breakpoint()
+
+                    dataset.index = 0  # when caching features, use indices only within one dataset
+                    dataset.anz_sets = 1
+                    worked = True
+
+                    self.model.eval()
+
+                    with open(name2_e, "w") as f:
+                        f.write("In progress")
+
+                    file_data_e = open(name1_e, "wb")
+                    file_index_e = {}
+
+                    # file_data_d = open(name1_d, "wb")
+                    # file_index_d = {}
+                    # label_d = {}
+
+                    iterator = generate_data_iterator(dataset, 0, 1, self.opt.seed, num_workers=8)
+                    iterator = iterator.next_epoch_itr(shuffle=False)
+
+                    for samples in tqdm(iterator):
+                        batch = prepare_sample(samples, device=self.device)
+
+                        with torch.no_grad():
+                            with autocast(enabled=self.opt.fp16):
+                                output = self.model(batch)
+
+                        context = output["context"].transpose(1, 0)
+                        mask = output["src_mask"].eq(0).sum(-1)
+                        indices = batch.tensors["indices"]
+
+                        for index, con, frames in zip(indices, context, mask):
+                            data = con[:frames]
+                            indexed_file.add_data(file_data_e, file_index_e, index, data)
+
+                        """context = output["hidden"].transpose(1,0)
+                        labels = batch.tensors["target_output"].transpose(1,0)
+                        mask = labels.ge(2).sum(-1)
+
+                        for index, con, tokens, label in zip(indices,context,mask,labels):
+                            data = con[:tokens]
+                            indexed_file.add_data(file_data_d, file_index_d, index, data)
+                            label_d[index] = label[:tokens]"""
+
+                    file_data_e.close()
+                    torch.save(file_index_e, name2_e)
+
+                    """file_data_d.close()
+                    torch.save(file_index_d, name2_d)
+                    torch.save(label_d, name3_d)"""
+
+                    print("Finished caching features:", id)
+
+                if worked:
+                    print("Caching finished, exiting.")
+                    sys.exit()
 
         if checkpoint is not None:
 
@@ -1530,10 +1533,6 @@ class Trainer(object):
         #
         if opt.load_decoder_from:
             self.load_decoder_weight(opt.load_decoder_from)
-
-        # if we are on a GPU: warm up the memory allocator
-        # if self.cuda:
-        #     self.warm_up(train_data=train_data)
 
         if opt.estimate_fisher_information:
             self.start_time = time.time()
@@ -1573,7 +1572,17 @@ class Trainer(object):
             if self.is_main():
                 print('[INFO] Validation perplexity: %g' % valid_ppl)
                 print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
-                self.save(epoch, valid_ppl if opt.save_metrics in ['ppl', 'perplexity'] else 1 - valid_accuracy)
+
+                if opt.save_metrics in ['ppl', 'perplexity']:
+                    value = valid_ppl
+                elif opt.save_metrics == "memory":
+                    if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                        value = self.model.module.choose_best_epoch_by
+                    else:
+                        value = self.model.choose_best_epoch_by
+                else:
+                    value = 1 - valid_accuracy
+                self.save(epoch, value)
 
             itr_progress = None
             resume = False
