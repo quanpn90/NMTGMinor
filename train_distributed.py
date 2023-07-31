@@ -471,7 +471,7 @@ def main(gpu, opt):
                                           max_src_len=opt.max_src_length,
                                           max_tgt_len=opt.max_tgt_length,
                                           min_src_len=1, min_tgt_len=3,
-                                          constants=constants
+                                          constants=constants,
                                           use_memory=hasattr(opt, "use_memory") and opt.use_memory)
             else:
                 # for validation data, we have to go through sentences (very slow but to ensure correctness)

@@ -347,7 +347,7 @@ def collate_fn(src_data, tgt_data,
         num_ngrams = max(1, len(ngrams_to_indices) // 5 // n_max) # take every 5th ngram
 
         chosen_ngrams = [] # choose ngrams for memory
-        while len(chosen_ngrams) < num_ngrams and len(ngrams_to_indices)  > 0:
+        while len(chosen_ngrams) < num_ngrams and len(ngrams_to_indices) > 0:
             index = random.randint(0,len(ngrams_to_indices)-1)
             for j,ngram in enumerate(ngrams_to_indices):
                 if j==index:
@@ -948,7 +948,7 @@ class Dataset(torch.utils.data.Dataset):
                     src_features = read_data(f, self.encoder_feature_files[1], index)
             else:
                 src_features = None
-            sample = {
+            sampledata = {
                 'src_features': src_features,
                 'tgt': self.tgt[index] if self.tgt is not None else None,
                 'src_lang': src_lang,

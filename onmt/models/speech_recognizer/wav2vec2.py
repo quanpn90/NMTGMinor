@@ -1195,7 +1195,7 @@ class Wav2vecBERTMemory(Wav2vecBERT):
 
     def encode_memory(self, memory_text_embeds, memory_text_mask):
         if memory_text_embeds is None:
-            return None, None
+            return self.no_entry_found, None
 
         lengths = memory_text_mask.eq(0).sum(1).unsqueeze(1) # n_mem x 1
 

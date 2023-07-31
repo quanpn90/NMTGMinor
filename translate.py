@@ -9,6 +9,7 @@ import argparse
 import math
 import numpy
 import sys
+import os
 import numpy as np
 from onmt.inference.fast_translator import FastTranslator
 from onmt.inference.stream_translator import StreamTranslator
@@ -151,6 +152,11 @@ parser.add_argument('-dynamic_min_len_scale', type=float, default=0.0,
 parser.add_argument('-external_tokenizer', default="",
                     help="External tokenizer from Huggingface. Currently supports barts.")
 
+# arguments added by Christian
+
+parser.add_argument('-new_words_file', type=str, default="new_words.txt",
+                    help="New words for memory, each line should contain one word/phrase for the memory")
+
 
 def _is_oversized(batch, new_sent_size, batch_size):
     """
@@ -292,6 +298,19 @@ def main():
     #     external_tokenizer = None
     # else:
     #     raise NotImplementedError
+
+    if os.path.isfile(opt.new_words_file):
+        words = [line.strip() for line in open(opt.new_words_file)]
+        if len(words) != 0:
+            print("Loaded words for memory:",words)
+            memory_text_ids = [torch.as_tensor(external_tokenizer.encode(m)) for m in words]
+            memory = torch.ones(len(memory_text_ids), max(len(x) for x in memory_text_ids), dtype=torch.int64)
+            for i, m in enumerate(memory_text_ids):
+                memory[i,:len(m)] = m
+        else:
+            memory = None
+    else:
+        memory = None
 
     prefix = None
     prefix_reader = None
@@ -549,7 +568,7 @@ def main():
                 pred_batch, pred_ids, pred_score, pred_length, \
                 gold_score, num_gold_words, all_gold_scores = translator.translate(
                     src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr',
-                    prefix=prefix, anti_prefix=anti_prefix)
+                    prefix=prefix, anti_prefix=anti_prefix, memory=memory)
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
                     translate_batch(opt, tgtF, count, outF, translator,
@@ -619,7 +638,7 @@ def main():
                 src_batches,
                 tgt_batch,
                 past_src_data=past_src_batches,
-                sub_src_data=sub_src_batch, type='asr', prefix=prefix, anti_prefix=anti_prefix)
+                sub_src_data=sub_src_batch, type='asr', prefix=prefix, anti_prefix=anti_prefix, memory=memory)
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
                 = translate_batch(opt, tgtF, count, outF, translator,

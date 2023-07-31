@@ -1501,7 +1501,7 @@ class AttentionMemory(nn.Module):
 
     def forward(self, hidden_states, memory):
         q = self.temperature * self.q(hidden_states) # l_tgt x b x d_model
-        k = self.temperature * self.k(memory) # (n_mem+1) x d_model
+        k = self.temperature * self.k(memory.to(hidden_states.dtype)) # (n_mem+1) x d_model
 
         attn = torch.einsum("t b d, n d -> t b n", q, k) # l_tar x b x (n_mem+1)
         return attn
