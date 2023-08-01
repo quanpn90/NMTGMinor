@@ -210,7 +210,8 @@ def main(gpu, opt):
                                           upsampling=opt.upsampling,
                                           num_split=1,
                                           constants=constants,
-                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False)
+                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False,
+                                          concat=opt.concat_dataset)
             else:
                 train_data = onmt.StreamDataset(train_dict['src'], train_dict['tgt'],
                                                 train_src_langs, train_tgt_langs,
@@ -387,7 +388,8 @@ def main(gpu, opt):
                                           max_src_len=opt.max_src_length,
                                           max_tgt_len=opt.max_tgt_length,
                                           constants=constants,
-                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False)
+                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False,
+                                          concat=opt.concat_dataset)
             else:
                 train_data = onmt.StreamDataset(train_src,
                                                 train_tgt,
@@ -598,7 +600,8 @@ def main(gpu, opt):
                                               input_size=opt.input_size,
                                               constants=constants,
                                               dataset_factor=dataset_factors.get(idx_),
-                                              use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False)
+                                              use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False,
+                                              concat=opt.concat_dataset)
 
                     if c == 1:
                         dicts['tgt_pad'] = train_data.get_tgt_pad()

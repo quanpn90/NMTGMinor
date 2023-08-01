@@ -632,6 +632,7 @@ class Dataset(torch.utils.data.Dataset):
         self.min_src_len = kwargs.get('min_src_len', 2)
         self.batch_size_frames = batch_size_frames
         self.concat = concat
+        self.multiplier = multiplier
 
         cut_off_size = kwargs.get('cut_off_size', 200000)
         smallest_batch_size = kwargs.get('smallest_batch_size', 4)
@@ -777,6 +778,11 @@ class Dataset(torch.utils.data.Dataset):
 
         self.num_batches = len(self.batches)
         self.batch_sizes = [len(x) for x in self.batches]
+
+        self.filtered_samples = []
+        for batch in self.batches:
+            for _sample_id in batch:
+                self.filtered_samples.append(_sample_id)
 
         print("Number of sentences before cleaning and sorting: %d" % len(src_sizes) )
         print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
@@ -1073,8 +1079,8 @@ class Dataset(torch.utils.data.Dataset):
 
             batch.append(cur_sample)
 
-        print(len(batch), cur_src_len)
-        print([len(data) for data in batch])
+        # print(len(batch), cur_src_len)
+        # print([len(data) for data in batch])
 
         batch = collate_concat_fn(batch, src_type=self._type, bilingual=self.bilingual,
                                   src_pad=self.src_pad, tgt_pad=self.tgt_pad, feature_size=self.input_size)
