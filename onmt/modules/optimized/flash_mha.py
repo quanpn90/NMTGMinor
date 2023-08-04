@@ -30,7 +30,7 @@ import torch
 import torch.nn.functional as F
 
 try:
-    import flash_attn_2_cuda as flash_attn_cuda
+    import flash_attn_cuda
 
 except (ModuleNotFoundError, ImportError) as e:
     flash_attn_cuda = None
@@ -39,12 +39,6 @@ except (ModuleNotFoundError, ImportError) as e:
 def _get_block_size(device, head_dim, is_dropout):
     assert head_dim % 8 == 0 and head_dim <= 128
     return 256 if head_dim <= 64 else 128
-
-def mask_nan(tensor):
-
-    nan_mask = tensor.isnan()
-    if nan_mask.any():
-        tensor.masked_fill_(nan_mask, 0)
 
 
 def _flash_attn_forward(q, k, v, out, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
@@ -55,16 +49,13 @@ def _flash_attn_forward(q, k, v, out, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, 
     it will be set by an internal heuristic. We're exposing num_splits mostly for benchmarking.
     Don't change it unless you know what you're doing.
     """
-    _, q_padded, k_padded, v_padded, out_padded, softmax_lse, p = flash_attn_cuda.varlen_fwd(
+    softmax_lse, *rest = flash_attn_cuda.fwd(
         q, k, v, out, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, dropout_p,
-        softmax_scale, False, causal, return_softmax, generator
+        softmax_scale, False, causal, return_softmax, num_splits, generator
     )
-
-    mask_nan(out)
-    mask_nan(softmax_lse)
-
+    # if out.isnan().any() or softmax_lse.isnan().any():
     #     breakpoint()
-    S_dmask = p if return_softmax else None
+    S_dmask = rest[0] if return_softmax else None
     return out, softmax_lse, S_dmask
 
 def _flash_attn_backward(dout, q, k, v, out, softmax_lse, dq, dk, dv, cu_seqlens_q, cu_seqlens_k,
@@ -78,17 +69,11 @@ def _flash_attn_backward(dout, q, k, v, out, softmax_lse, dq, dk, dv, cu_seqlens
     This hyperparameter can be tuned for performance, but default value (heuristic) should work fine.
     """
     dout = dout.contiguous()  # CUDA code assumes that dout is contiguous
-    _, _, _, softmax_d = flash_attn_cuda.varlen_bwd(
+    _, _, _, softmax_d = flash_attn_cuda.bwd(
         dout, q, k, v, out, softmax_lse, dq, dk, dv, cu_seqlens_q, cu_seqlens_k,
-        max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale, False, causal, generator)
-
-
+        max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale, False, causal, num_splits, generator)
     # if dk.isnan().any() or dk.isnan().any() or dv.isnan().any() or softmax_d.isnan().any():
     #     breakpoint()
-    mask_nan(dq)
-    mask_nan(dk)
-    mask_nan(dv) 
-
     return dq, dk, dv, softmax_d
 
 
