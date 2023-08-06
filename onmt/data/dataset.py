@@ -21,6 +21,7 @@ Two basic classes:
 - Dataset stores all of the data and 
 """
 
+@torch.no_grad()
 def merge_concat_data(data, type="text", src_pad=0, tgt_pad=0,
                       max_len=640000, feature_size=40, bilingual=False):
 
@@ -47,14 +48,12 @@ def merge_concat_data(data, type="text", src_pad=0, tgt_pad=0,
     _tgt_lang_data = _sample["tgt_lang"]
     batch_size = len(data)
 
-
-    #
     src_lengths = [sum(__data["src"].size(0) for __data in _data) for _data in data]
     max_src_len = max(src_lengths)
 
-    tgt_lengths = [sum(__data["tgt"].size(0) for __data in _data) for _data in data]
+    # rearrange tgt lengths to remove the first eos, all of the next bos/eos, and the final bos
+    tgt_lengths = [sum(__data["tgt"].size(0) -2  for __data in _data) + 2 for _data in data]
     max_tgt_len = max(tgt_lengths)
-
 
     # allocate tensor
     src_tensor = _src_data.float().new(batch_size, max_src_len, feature_size + 1).fill_(0)
@@ -85,7 +84,9 @@ def merge_concat_data(data, type="text", src_pad=0, tgt_pad=0,
         tgt_offset = 0  # align left
         assert type == "wav"
 
-        for _sample in _data:
+        for data_idx, _sample in enumerate(_data):
+
+            local_tgt_offset = 0 if data_idx == 0 else 1
 
             # fill in the source
             src_sample = _sample["src"]
@@ -104,12 +105,19 @@ def merge_concat_data(data, type="text", src_pad=0, tgt_pad=0,
 
             # fill in the target
             tgt_sample = _sample["tgt"]
-            data_length = tgt_sample.size(0)
-            tgt_tensor[i].narrow(0, tgt_offset, data_length).copy_(tgt_sample)
+            if data_idx == 0 or data_idx == len(_data) - 1:
+                data_length = tgt_sample.size(0) - 1
+            else:
+                data_length = tgt_sample.size(0) - 2
+
+            tgt_sample_data = tgt_sample.narrow(0, local_tgt_offset, data_length)
+            tgt_tensor[i].narrow(0, tgt_offset, data_length).copy_(tgt_sample_data)
 
             tgt_lang_sample = _sample["tgt_lang"]
             if tgt_lang_sample.numel() == 1:
                 tgt_lang_sample = tgt_lang_sample.repeat(data_length)
+            else:
+                tgt_lang_sample = tgt_lang_sample.narrow(0, local_tgt_offset, data_length)
             tgt_lang_tensor[i].narrow(0, tgt_offset, data_length).copy_(tgt_lang_sample)
 
             # update offset for target
@@ -118,6 +126,7 @@ def merge_concat_data(data, type="text", src_pad=0, tgt_pad=0,
     return src_tensor, tgt_tensor, src_lang_tensor, tgt_lang_tensor, src_lengths, tgt_lengths
 
 
+@torch.no_grad()
 def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=False,
                feature_size=40, dataname="source", src_pad=1, tgt_pad=1 ):
     """
@@ -231,6 +240,7 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
         raise NotImplementedError
 
 
+@torch.no_grad()
 def collate_fn(src_data, tgt_data,
                src_lang_data, tgt_lang_data,
                src_atbs_data, tgt_atbs_data,
@@ -398,6 +408,7 @@ def rewrap(light_batch):
 
 # default = align left
 # applicable for text?
+@torch.no_grad()
 def collate_concat_fn(samples, src_type='text', bilingual=False,
                       src_pad=0, tgt_pad=0,
                       feature_size=40):
@@ -484,6 +495,7 @@ class Batch(object):
             else:
                 continue
 
+    @torch.no_grad()
     def switchout(self, swrate, src_vocab_size, tgt_vocab_size):
         # Switch out function ... currently works with only source text data
         # if self.src_type == 'text':
@@ -496,6 +508,7 @@ class Batch(object):
     # Masked Predictive Coding mask
     # Randomly choose positions and set features to Zero
     # For later reconstruction
+    @torch.no_grad()
     def mask_mpc(self, p=0.5):
 
         # the audio has size [T x B x (F+1)] the FIRST dimension is padding
