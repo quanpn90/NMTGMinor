@@ -830,7 +830,7 @@ class TransformerDecodingState(DecoderState):
 
     def __init__(self, src, tgt_lang, context, src_lang, beam_size=1, model_size=512, type=2,
                  cloning=True, buffering=False, src_mask=None, tgt_atb=None,
-                 dec_pretrained_model="", ):
+                 dec_pretrained_model="", predictive_source_lang=False):
 
         """
         :param src:
@@ -868,6 +868,9 @@ class TransformerDecodingState(DecoderState):
                 self.src_mask = src_mask.index_select(0, new_order)
             else:
                 self.src_mask = None
+
+            if src_lang.numel() > 1:
+                src_lang = src_lang.index_select(1, new_order)
         else:
             self.context = context
             self.src = src
@@ -972,6 +975,10 @@ class TransformerDecodingState(DecoderState):
                 for k in buffer_.keys():
                     t_, br_, d_ = buffer_[k].size()
                     buffer_[k] = buffer_[k].index_select(1, reorder_state)
+
+        if self.src_lang.numel() > 1:
+            self.src_lang = self.src_lang.index_select(1, reorder_state)
+
                     # if not self.dec_pretrained_model:
                     #     buffer_[k] = buffer_[k].index_select(1, reorder_state)  # beam/batch is the 2nd dim
                     # elif self.dec_pretrained_model in ["bert", "roberta", "bart"]:

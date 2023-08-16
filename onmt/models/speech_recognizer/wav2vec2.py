@@ -273,6 +273,8 @@ class FairseqWav2Vec(nn.Module):
                                                        multiplicative=opt.mfw_multiplicative,
                                                        fast=opt.fast_factorize)
 
+        self.predict_language = self.wav2vec_encoder.predict_language
+
         # or adapter
         if opt.wav2vec_adapter > 0:
             print("[INFO] Adding adapters for Wav2vec model with %d languages" % opt.n_languages)
@@ -966,6 +968,9 @@ class Wav2vecBERT(Wav2vecTransformer):
         :param beam_size: Size of beam used in beam search
         :return:
         """
+
+        print("CREATING DECODER STATE ...")
+
         src = batch.get('source')
         src_pos = batch.get('source_pos')
         src_lang = batch.get('source_lang')
@@ -977,8 +982,12 @@ class Wav2vecBERT(Wav2vecTransformer):
                                       lang=src_lang, atb=src_atb)
 
         if hasattr(self.encoder, 'predict_language') and self.encoder.predict_language > 0:
-            pred_lang = encoder_output['pred_lang']
-            src_lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
+            print("CREATING DECODER STATE with predictive source language...")
+            pred_lang = encoder_output['enc_pred_lang']  # needs to indicate that this is only logits
+            src_lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32).transpose(0, 1).contiguous()
+            src_lang = torch.argmax(src_lang, dim=-1)
+            src_lang = torch.zeros_like(pred_lang).transpose(0, 1).contiguous().scatter_(2, src_lang.unsqueeze(2), 1.)
+            # print(src_lang.size())
 
         src_attention_mask = encoder_output['src']
 
@@ -1480,6 +1489,7 @@ class Wav2vecBERTMemory(Wav2vecBERT):
                                       lang=src_lang, atb=src_atb)
 
         if hasattr(self.encoder, 'predict_language') and self.encoder.predict_language > 0:
+            print("predicting language for the source ...")
             pred_lang = encoder_output['pred_lang']
             src_lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
 

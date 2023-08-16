@@ -819,8 +819,6 @@ class Dataset(torch.utils.data.Dataset):
             self.use_memory = False
         self.validation = validation
 
-        # if
-
     def flush_cache(self):
         if hasattr(self.src, 'flush_cache'):
             self.src.flush_cache()

@@ -696,7 +696,6 @@ class MBartCrossAttention(MBartAttention):
                     q = factorize_linear(hidden_states, in_proj_weight_q, self.q_proj.bias, rm_q, sm_q)
                     # linear_function(hidden_states, in_proj_weight_q, self.q_proj.bias)
 
-                    # print(key_value_states.size(), rm_kv.size(), sm_kv.size())
                     kv = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv, rm_kv, sm_kv) #
                     # linear_function(key_value_states, in_proj_weight_kv, self.proj_bias_kv)
 
@@ -2183,6 +2182,11 @@ class MBartDecoder(MBartPreTrainedModel):
                 else:
                     _src_lang = src_lang.type_as(hidden_states)
 
+            # if _lang is not None:
+            #     print("target lang", _lang.size())
+            # if _src_lang is not None:
+            #     print("source lang", _src_lang.size())
+
             layer_outputs, buffer = decoder_layer(
                 hidden_states,
                 attention_mask=attention_mask,
@@ -2213,8 +2217,10 @@ class MBartDecoder(MBartPreTrainedModel):
                 pred_lang = self.linear_cls(cls_input)
 
                 # for prediction lang is always the predicted one
-                lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32)
-                lang = lang.type_as(pred_lang)
+                lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32).type_as(pred_lang)
+                # lang = torch.argmax(lang, dim=-1)
+                # lang = torch.zeros_like(pred_lang).scatter_(2, lang.unsqueeze(2), 1.)
+                # lang = lang.type_as(pred_lang)
 
                 # we probably need to ensure that lang and hidden states have the same size
                 assert lang.size(1) == hidden_states.size(1)

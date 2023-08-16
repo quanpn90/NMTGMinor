@@ -99,7 +99,7 @@ def factorize_linear(input, weight, bias, rm, sm):
             if rank == 1:
                 h = h.squeeze(0)
             else:
-                h = h.sum(dim=0)
+                h = h.mean(dim=0)
 
             h = torch.mm(h.view(qlen * bsz, -1), weight.transpose(0, 1))
             h = h.view(qlen, bsz, -1).unsqueeze(0).mul(rm)
@@ -107,7 +107,7 @@ def factorize_linear(input, weight, bias, rm, sm):
             if rank == 1:
                 h = h.squeeze(0)
             else:
-                h = h.sum(dim=0)
+                h = h.mean(dim=0)
 
         elif rm.ndim == 4:
             rank = rm.size(2)  # [T x B x R x D]
@@ -117,7 +117,7 @@ def factorize_linear(input, weight, bias, rm, sm):
             if rank == 1:
                 h = h.squeeze(2)
             else:
-                h = h.sum(dim=2)
+                h = h.mean(dim=2)
 
             # W(sm * x)
             h = torch.mm(h.view(qlen * bsz, -1), weight.transpose(0, 1))
@@ -128,7 +128,7 @@ def factorize_linear(input, weight, bias, rm, sm):
             if rank == 1:
                 h = h.squeeze(2)
             else:
-                h = h.sum(dim=2)
+                h = h.mean(dim=2)
 
         # adding final bias (from normal linear)
         h = h + bias.unsqueeze(0).unsqueeze(1)
@@ -150,7 +150,7 @@ def factorize_linear(input, weight, bias, rm, sm):
             if rank == 1:
                 h = h.squeeze(0)
             else:
-                h = h.sum(dim=0)
+                h = h.mean(dim=0)
 
             h = torch.mm(h, weight.transpose(0, 1))
             h = h.unsqueeze(0).mul(rm)
@@ -158,7 +158,7 @@ def factorize_linear(input, weight, bias, rm, sm):
             if rank == 1:
                 h = h.squeeze(0)
             else:
-                h = h.sum(dim=0)
+                h = h.mean(dim=0)
 
         elif rm.ndim == 3: # B x R x D
             rank = rm.size(1)
@@ -168,7 +168,7 @@ def factorize_linear(input, weight, bias, rm, sm):
             if rank == 1:
                 h = h.squeeze(1)
             else:
-                h = h.sum(dim=2)
+                h = h.mean(dim=1)
 
             h = torch.mm(h, weight.transpose(0, 1))
             h = h.unsqueeze(1).mul(rm)
@@ -176,7 +176,7 @@ def factorize_linear(input, weight, bias, rm, sm):
             if rank == 1:
                 h = h.squeeze(1)
             else:
-                h = h.sum(dim=1)
+                h = h.mean(dim=1)
 
         else:
             print("factorized matrix dimension has to be either 2 or 3, get", rm.ndim)
