@@ -210,7 +210,7 @@ class OnlineTranslator(object):
         anti_prefix = self.anti_prefix if len(self.anti_prefix) > 0 else None
 
         # perform beam search in the model
-        pred_batch, pred_ids, pred_score, pred_length, \
+        pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length, \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch,
             prefix=prefix, anti_prefix=anti_prefix)
@@ -382,7 +382,7 @@ class ASROnlineTranslator(object):
                 memory[i, :len(m)] = m
 
         # perform beam search in the model
-        pred_batch, pred_ids, pred_score, pred_length, \
+        pred_batch, pred_ids, pred_score, pred_pos_scores,  pred_length, \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch, type='asr',
             prefix=prefix, anti_prefix=anti_prefix, memory=memory)
@@ -396,9 +396,12 @@ class ASROnlineTranslator(object):
             with MosesDetokenizer(self.tgt_lang) as detokenize:
                 output_sentence = detokenize(output_sentence_parts)
 
-        print(pred_ids[0][0], output_sentence)
+        # print(pred_ids[0][0], output_sentence)
 
-        return output_sentence
+        bpe_output = pred_batch[0][0]
+        scores = pred_pos_scores[0][0]
+
+        return output_sentence, bpe_output, scores
 
     def translate_batch(self, inputs, prefixes):
         """
@@ -435,7 +438,7 @@ class ASROnlineTranslator(object):
 
         anti_prefix = self.anti_prefix if len(self.anti_prefix) > 0 else None
 
-        pred_batch, pred_ids, pred_score, pred_length, \
+        pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length,  \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch, type='asr',
             prefix=prefixes, anti_prefix=anti_prefix)
@@ -458,6 +461,16 @@ class ASROnlineTranslator(object):
                 outputs_detok.append(output_sentence)
             return outputs_detok
 
-        print(pred, outputs)
+        bpe_outputs = list()
 
-        return outputs
+        for pred in pred_batch:
+            bpe_outputs.append(pred[0])
+
+        score_outputs = list()
+
+        for pred_scores in pred_pos_scores:
+            score_outputs.append(pred_scores[0])
+
+        # print(pred, outputs)
+
+        return outputs, bpe_outputs, score_outputs

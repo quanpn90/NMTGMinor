@@ -1092,6 +1092,8 @@ class FastTranslator(Translator):
         #  (3) convert indexes to words
         pred_batch = []
         pred_ids = []
+        pred_pos_scores = []
+
         src_data = src_data[0]
         for b in range(batch_size):
 
@@ -1122,4 +1124,16 @@ class FastTranslator(Translator):
                      for n in range(self.opt.n_best)]
                 )
 
-        return pred_batch, pred_ids, pred_score, pred_length, gold_score, gold_words, allgold_words
+        for b in range(batch_size):
+            if len(finalized[b]) == 0:
+                pred_pos_scores.append(
+                    [torch.FloatTensor([0])
+                     for n in range(self.opt.n_best)]
+                )
+            else:
+                pred_pos_scores.append(
+                    [finalized[b][n]['positional_scores'].tolist()
+                     for n in range(self.opt.n_best)]
+                )
+
+        return pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length, gold_score, gold_words, allgold_words

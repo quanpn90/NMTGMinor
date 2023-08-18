@@ -49,8 +49,8 @@ def use_model(reqs):
         req = reqs[0]
         audio_tensor, prefix, input_language, output_language, memory = req.get_data()
         model.set_language(input_language, output_language)
-        hypo = model.translate(audio_tensor, [prefix], memory)
-        result = {"hypo": hypo}
+        hypo, bpe_output, scores = model.translate(audio_tensor, [prefix], memory)
+        result = {"hypo": hypo, "bpe_hypo": bpe_output, "log_probs": scores}
         req.publish(result)
 
     else:
@@ -82,18 +82,18 @@ def use_model(reqs):
 
         if batch_runnable:
             model.set_language(input_languages[0], output_languages[0])
-            hypos = model.translate_batch(audio_tensors, prefixes, memories[0])
+            hypos, bpe_outputs, all_scores = model.translate_batch(audio_tensors, prefixes, memories[0])
 
-            for req, hypo in zip(reqs, hypos):
-                result = {"hypo": hypo}
+            for req, hypo, bpe_output, scores in zip(reqs, hypos, bpe_outputs, all_scores):
+                result = {"hypo": hypo, "bpe_hypo": bpe_output, "log_probs": scores}
                 req.publish(result)
         else:
             for req, audio_tensor, prefix, input_language, output_language, memory \
                     in zip(reqs, audio_tensors, prefixes, input_languages, output_languages, memories):
                 model.set_language(input_language, output_language)
 
-                hypo = model.translate(audio_tensor, [prefix], memory)
-                result = {"hypo": hypo}
+                hypo, bpe_output, scores = model.translate(audio_tensor, [prefix], memory)
+                result = {"hypo": hypo, "bpe_hypo": bpe_output, "log_probs": scores}
                 req.publish(result)
 
 def run_decoding():
