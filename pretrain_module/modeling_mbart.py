@@ -275,92 +275,92 @@ class MBartAttention(nn.Module):
             out_proj_weight = self.out_proj.weight
             rm_i, sm_i, rm_o, sm_o = None, None, None, None
 
-            if self.is_factorized and self.fast_factorize:
-
-                n_languages, _rank = self.rm_o.size(0), self.rm_o.size(1)
-
-                if lang.ndim == 1:
-
-                    rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
-                    sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
-                    rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
-                    sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
-
-                elif lang.ndim == 2:  # for flash attention with nested tensor
-                    rm_i = torch.mm(lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
-                        lang.size(0), _rank,
-                        self.rm_i.size(-1))
-                    sm_i = torch.mm(lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
-                        lang.size(0), _rank,
-                        self.sm_i.size(-1))
-                    rm_o = torch.mm(lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
-                        lang.size(0), _rank,
-                        self.rm_o.size(-1))
-                    sm_o = torch.mm(lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
-                        lang.size(0), _rank,
-                        self.sm_o.size(-1))
-
-                elif lang.ndim == 3:
-                    _len, _bsz = lang.size(0), lang.size(1)
-                    _lang = lang.view(_len * _bsz, lang.size(-1))
-                    rm_i = torch.mm(_lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
-                        _len, _bsz, _rank, self.rm_i.size(-1))
-                    sm_i = torch.mm(_lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
-                        _len, _bsz, _rank, self.sm_i.size(-1))
-                    rm_o = torch.mm(_lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
-                        _len, _bsz, _rank, self.rm_o.size(-1))
-                    sm_o = torch.mm(_lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
-                        _len, _bsz, _rank, self.sm_o.size(-1))
-
-                if hidden_states.ndim == 3:
-                    use_time_mask = self.is_decoder
-                    bsz, qlen = hidden_states.size(1), hidden_states.size(0)
-                    mask = attention_mask
-                    low_precision = True  # Use CUDA impl
-
-                    input_lin_results = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
-
-                    attn_output, coverage = self_attn_compact_func(use_time_mask, self.training, self.num_heads,
-                                                                   input_lin_results,
-                                                                   mask, self.dropout,
-                                                                   False, None,
-                                                                   incremental, incremental_cache, low_precision,
-                                                                   True, checkpointing)
-
-
-
-                    attn_output = attn_output.view(qlen, bsz, -1).contiguous()
-
-                    output = factorize_linear(attn_output, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
-
-                    return output, coverage, incremental_cache
-
-                else:
-                    """
-                    flash attention
-                    """
-                    assert self.fast_bert_mha is not None
-                    assert cu_seqlens is not None
-                    assert max_len is not None
-
-                    total_bsz = hidden_states.size(0)
-                    # qkv = linear_function(hidden_states, in_proj_weight, self.proj_bias)  # B x H
-                    qkv = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
-                    # B x 3 x H x d
-
-                    # TODO: moving to CUDA to remove overhead?
-                    qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
-
-                    dropout_p = self.dropout if self.training else 0.0
-                    causal = self.is_decoder
-                    softmax_scale = 1.0 / math.sqrt(64)
-                    context = self.fast_bert_mha(qkv, cu_seqlens, max_len, dropout_p, softmax_scale, causal, False)
-                    coverage = None
-
-                    context = context.view(-1, self.num_heads * self.head_dim).contiguous()
-                    output = factorize_linear(context, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
-
-                    return output, coverage, incremental_cache
+            # if self.is_factorized and self.fast_factorize:
+            #
+            #     n_languages, _rank = self.rm_o.size(0), self.rm_o.size(1)
+            #
+            #     if lang.ndim == 1:
+            #
+            #         rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
+            #         sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
+            #         rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
+            #         sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+            #
+            #     elif lang.ndim == 2:  # for flash attention with nested tensor
+            #         rm_i = torch.mm(lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
+            #             lang.size(0), _rank,
+            #             self.rm_i.size(-1))
+            #         sm_i = torch.mm(lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
+            #             lang.size(0), _rank,
+            #             self.sm_i.size(-1))
+            #         rm_o = torch.mm(lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
+            #             lang.size(0), _rank,
+            #             self.rm_o.size(-1))
+            #         sm_o = torch.mm(lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
+            #             lang.size(0), _rank,
+            #             self.sm_o.size(-1))
+            #
+            #     elif lang.ndim == 3:
+            #         _len, _bsz = lang.size(0), lang.size(1)
+            #         _lang = lang.view(_len * _bsz, lang.size(-1))
+            #         rm_i = torch.mm(_lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
+            #             _len, _bsz, _rank, self.rm_i.size(-1))
+            #         sm_i = torch.mm(_lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
+            #             _len, _bsz, _rank, self.sm_i.size(-1))
+            #         rm_o = torch.mm(_lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
+            #             _len, _bsz, _rank, self.rm_o.size(-1))
+            #         sm_o = torch.mm(_lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
+            #             _len, _bsz, _rank, self.sm_o.size(-1))
+            #
+            #     if hidden_states.ndim == 3:
+            #         use_time_mask = self.is_decoder
+            #         bsz, qlen = hidden_states.size(1), hidden_states.size(0)
+            #         mask = attention_mask
+            #         low_precision = True  # Use CUDA impl
+            #
+            #         input_lin_results = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
+            #
+            #         attn_output, coverage = self_attn_compact_func(use_time_mask, self.training, self.num_heads,
+            #                                                        input_lin_results,
+            #                                                        mask, self.dropout,
+            #                                                        False, None,
+            #                                                        incremental, incremental_cache, low_precision,
+            #                                                        True, checkpointing)
+            #
+            #
+            #
+            #         attn_output = attn_output.view(qlen, bsz, -1).contiguous()
+            #
+            #         output = factorize_linear(attn_output, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+            #
+            #         return output, coverage, incremental_cache
+            #
+            #     else:
+            #         """
+            #         flash attention
+            #         """
+            #         assert self.fast_bert_mha is not None
+            #         assert cu_seqlens is not None
+            #         assert max_len is not None
+            #
+            #         total_bsz = hidden_states.size(0)
+            #         # qkv = linear_function(hidden_states, in_proj_weight, self.proj_bias)  # B x H
+            #         qkv = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
+            #         # B x 3 x H x d
+            #
+            #         # TODO: moving to CUDA to remove overhead?
+            #         qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
+            #
+            #         dropout_p = self.dropout if self.training else 0.0
+            #         causal = self.is_decoder
+            #         softmax_scale = 1.0 / math.sqrt(64)
+            #         context = self.fast_bert_mha(qkv, cu_seqlens, max_len, dropout_p, softmax_scale, causal, False)
+            #         coverage = None
+            #
+            #         context = context.view(-1, self.num_heads * self.head_dim).contiguous()
+            #         output = factorize_linear(context, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+            #
+            #         return output, coverage, incremental_cache
 
             # Code is twice as long TODO: merging two sections
 
@@ -542,29 +542,29 @@ class MBartCrossAttention(MBartAttention):
             nn.init.constant_(self.rm_o, constant)
             nn.init.constant_(self.sm_o, constant)
 
-        if not fast:
-            self.r_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.s_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.r_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, 2 * embed_dim))
-            self.s_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        # if not fast:
+        self.r_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        self.s_q = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        self.r_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, 2 * embed_dim))
+        self.s_kv = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
 
-            if self.dyrank:
-                nn.init.zeros_(self.r_q)
-                nn.init.normal_(self.s_q, 0.0, 0.02)
-                nn.init.zeros_(self.r_kv)
-                nn.init.normal_(self.s_kv, 0.0, 0.02)
-                nn.init.zeros_(self.r_o)
-                nn.init.normal_(self.s_o, 0.0, 0.02)
-            else:
-                std = 0.01 if fast else 0.02
-                nn.init.normal_(self.r_q, 0.0, std)
-                nn.init.normal_(self.s_q, 0.0, std)
-                nn.init.normal_(self.r_kv, 0.0, std)
-                nn.init.normal_(self.s_kv, 0.0, std)
-                nn.init.normal_(self.r_o, 0.0, std)
-                nn.init.normal_(self.s_o, 0.0, std)
+        if self.dyrank:
+            nn.init.zeros_(self.r_q)
+            nn.init.normal_(self.s_q, 0.0, 0.02)
+            nn.init.zeros_(self.r_kv)
+            nn.init.normal_(self.s_kv, 0.0, 0.02)
+            nn.init.zeros_(self.r_o)
+            nn.init.normal_(self.s_o, 0.0, 0.02)
+        else:
+            std = 0.01 if fast else 0.02
+            nn.init.normal_(self.r_q, 0.0, std)
+            nn.init.normal_(self.s_q, 0.0, std)
+            nn.init.normal_(self.r_kv, 0.0, std)
+            nn.init.normal_(self.s_kv, 0.0, std)
+            nn.init.normal_(self.r_o, 0.0, std)
+            nn.init.normal_(self.s_o, 0.0, std)
 
     def forward(
             self,
@@ -589,133 +589,133 @@ class MBartCrossAttention(MBartAttention):
             in_proj_weight_kv = self.proj_weight_kv
             out_proj_weight = self.out_proj.weight
 
-            if self.is_factorized and self.fast_factorize:
-
-                # TODO: mm instead of index select
-                n_languages, _rank = self.rm_o.size(0), self.rm_o.size(1)
-
-                # if lang has only 1 element we can do this
-                if lang.ndim == 1:
-
-                    rm_q = torch.index_select(self.rm_q, 0, lang.long()).squeeze(0)  # squeeze possible because only 1
-                    sm_q = torch.index_select(self.sm_q, 0, lang.long()).squeeze(0)
-                    rm_o = torch.index_select(self.rm_o, 0, lang.long()).squeeze(0)
-                    sm_o = torch.index_select(self.sm_o, 0, lang.long()).squeeze(0)
-
-
-                elif lang.ndim == 2:  # for flash attention
-
-                    rm_q = torch.mm(lang, self.rm_q.view(n_languages, _rank * self.rm_q.size(-1))).view(
-                        lang.size(0), _rank,
-                        self.rm_q.size(-1))
-                    sm_q = torch.mm(lang, self.sm_q.view(n_languages, _rank * self.sm_q.size(-1))).view(
-                        lang.size(0), _rank,
-                        self.sm_q.size(-1))
-                    rm_o = torch.mm(lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
-                        lang.size(0), _rank,
-                        self.rm_o.size(-1))
-                    sm_o = torch.mm(lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
-                        lang.size(0), _rank,
-                        self.sm_o.size(-1))
-
-                elif lang.ndim == 3:
-
-                    _len, _bsz = lang.size(0), lang.size(1)
-                    _lang = lang.view(_len * _bsz, lang.size(-1))
-
-
-                    rm_q = torch.mm(_lang, self.rm_q.view(n_languages, _rank * self.rm_q.size(-1))).view(
-                        _len, _bsz, _rank, self.rm_q.size(-1))
-                    sm_q = torch.mm(_lang, self.sm_q.view(n_languages, _rank * self.sm_q.size(-1))).view(
-                        _len, _bsz, _rank, self.sm_q.size(-1))
-                    rm_o = torch.mm(_lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
-                        _len, _bsz, _rank, self.rm_o.size(-1))
-                    sm_o = torch.mm(_lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
-                        _len, _bsz, _rank, self.sm_o.size(-1))
-                else:
-                    raise NotImplementedError("Unknown dimension for language IDs")
-
-                if src_lang.ndim == 1:
-                    rm_kv = torch.index_select(self.rm_kv, 0, src_lang.long()).squeeze(0)  # squeeze possible because only 1
-                    sm_kv = torch.index_select(self.sm_kv, 0, src_lang.long()).squeeze(0)
-                elif src_lang.ndim == 2:
-                    rm_kv = torch.mm(src_lang, self.rm_kv.view(n_languages, _rank * self.rm_kv.size(-1))).view(
-                        src_lang.size(0), _rank,
-                        self.rm_kv.size(-1))
-                    sm_kv = torch.mm(src_lang, self.sm_kv.view(n_languages, _rank * self.sm_kv.size(-1))).view(
-                        src_lang.size(0), _rank,
-                        self.sm_kv.size(-1))
-                elif src_lang.ndim == 3:
-                    _len_src = src_lang.size(0)
-                    _src_lang = src_lang.view(_len_src * _bsz, src_lang.size(-1))
-                    rm_kv = torch.mm(_src_lang, self.rm_kv.view(n_languages, _rank * self.rm_kv.size(-1))).view(
-                        _len_src, _bsz, _rank, self.rm_kv.size(-1))
-                    sm_kv = torch.mm(_src_lang, self.sm_kv.view(n_languages, _rank * self.sm_kv.size(-1))).view(
-                        _len_src, _bsz, _rank, self.sm_kv.size(-1))
-
-                # if lang has size [T x B x L] we need to do a GEMM
-
-                if hidden_states.ndim == 3:
-                    use_time_mask = self.is_decoder
-                    bsz, qlen = hidden_states.size(1), hidden_states.size(0)
-                    mask = attention_mask
-                    low_precision = True  # Use CUDA impl
-
-                    input_lin_q_results = factorize_linear(hidden_states, in_proj_weight_q, self.q_proj.bias, rm_q, sm_q)
-
-                    input_lin_kv_results = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv, rm_kv, sm_kv)
-
-                    recompute = False
-                    attn_output, coverage = encdec_attn_bias_compact_func(recompute, self.training, self.num_heads,
-                                                                          input_lin_q_results , input_lin_kv_results ,
-                                                                          attention_mask, self.dropout,
-                                                                          incremental, incremental_cache,
-                                                                          False, None, None,  # no rotary encodings
-                                                                          low_precision, True)
-
-                    attn_output = attn_output.view(qlen, bsz, -1).contiguous()
-
-                    output = factorize_linear(attn_output, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
-
-                    return output, coverage, incremental_cache
-
-                else:
-                    """
-                    flash attention
-                    """
-                    assert self.fast_bert_mha is not None
-                    assert cu_seqlens is not None
-                    assert cu_seqlens_kv is not None
-                    assert max_len is not None
-                    assert max_len_kv is not None
-                    assert incremental == False
-                    assert incremental_cache is None
-
-                    total_bsz_q = hidden_states.size(0)
-                    total_bsz_kv = key_value_states.size(0)
-                    q = factorize_linear(hidden_states, in_proj_weight_q, self.q_proj.bias, rm_q, sm_q)
-                    # linear_function(hidden_states, in_proj_weight_q, self.q_proj.bias)
-
-                    kv = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv, rm_kv, sm_kv) #
-                    # linear_function(key_value_states, in_proj_weight_kv, self.proj_bias_kv)
-
-                    kv = kv.view(total_bsz_kv, self.num_heads, 2, self.head_dim).transpose(1, 2).contiguous()
-
-                    q = q.view(total_bsz_q, self.num_heads, self.head_dim)
-
-                    dropout_p = self.dropout if self.training else 0.0
-                    causal = False
-                    softmax_scale = 1.0 / math.sqrt(64)
-                    context = self.fast_bert_mha(q, kv, cu_seqlens, cu_seqlens_kv,
-                                                 max_len, max_len_kv, dropout_p, softmax_scale, causal, False)
-
-                    context = context.view(-1, self.num_heads * self.head_dim).contiguous()
-                    # output = linear_function(context, out_proj_weight, self.out_proj.bias)
-                    output = factorize_linear(context, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
-
-                    coverage = None
-
-                    return output, coverage, incremental_cache
+            # if self.is_factorized and self.fast_factorize:
+            #
+            #     # TODO: mm instead of index select
+            #     n_languages, _rank = self.rm_o.size(0), self.rm_o.size(1)
+            #
+            #     # if lang has only 1 element we can do this
+            #     if lang.ndim == 1:
+            #
+            #         rm_q = torch.index_select(self.rm_q, 0, lang.long()).squeeze(0)  # squeeze possible because only 1
+            #         sm_q = torch.index_select(self.sm_q, 0, lang.long()).squeeze(0)
+            #         rm_o = torch.index_select(self.rm_o, 0, lang.long()).squeeze(0)
+            #         sm_o = torch.index_select(self.sm_o, 0, lang.long()).squeeze(0)
+            #
+            #
+            #     elif lang.ndim == 2:  # for flash attention
+            #
+            #         rm_q = torch.mm(lang, self.rm_q.view(n_languages, _rank * self.rm_q.size(-1))).view(
+            #             lang.size(0), _rank,
+            #             self.rm_q.size(-1))
+            #         sm_q = torch.mm(lang, self.sm_q.view(n_languages, _rank * self.sm_q.size(-1))).view(
+            #             lang.size(0), _rank,
+            #             self.sm_q.size(-1))
+            #         rm_o = torch.mm(lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
+            #             lang.size(0), _rank,
+            #             self.rm_o.size(-1))
+            #         sm_o = torch.mm(lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
+            #             lang.size(0), _rank,
+            #             self.sm_o.size(-1))
+            #
+            #     elif lang.ndim == 3:
+            #
+            #         _len, _bsz = lang.size(0), lang.size(1)
+            #         _lang = lang.view(_len * _bsz, lang.size(-1))
+            #
+            #
+            #         rm_q = torch.mm(_lang, self.rm_q.view(n_languages, _rank * self.rm_q.size(-1))).view(
+            #             _len, _bsz, _rank, self.rm_q.size(-1))
+            #         sm_q = torch.mm(_lang, self.sm_q.view(n_languages, _rank * self.sm_q.size(-1))).view(
+            #             _len, _bsz, _rank, self.sm_q.size(-1))
+            #         rm_o = torch.mm(_lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
+            #             _len, _bsz, _rank, self.rm_o.size(-1))
+            #         sm_o = torch.mm(_lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
+            #             _len, _bsz, _rank, self.sm_o.size(-1))
+            #     else:
+            #         raise NotImplementedError("Unknown dimension for language IDs")
+            #
+            #     if src_lang.ndim == 1:
+            #         rm_kv = torch.index_select(self.rm_kv, 0, src_lang.long()).squeeze(0)  # squeeze possible because only 1
+            #         sm_kv = torch.index_select(self.sm_kv, 0, src_lang.long()).squeeze(0)
+            #     elif src_lang.ndim == 2:
+            #         rm_kv = torch.mm(src_lang, self.rm_kv.view(n_languages, _rank * self.rm_kv.size(-1))).view(
+            #             src_lang.size(0), _rank,
+            #             self.rm_kv.size(-1))
+            #         sm_kv = torch.mm(src_lang, self.sm_kv.view(n_languages, _rank * self.sm_kv.size(-1))).view(
+            #             src_lang.size(0), _rank,
+            #             self.sm_kv.size(-1))
+            #     elif src_lang.ndim == 3:
+            #         _len_src = src_lang.size(0)
+            #         _src_lang = src_lang.view(_len_src * _bsz, src_lang.size(-1))
+            #         rm_kv = torch.mm(_src_lang, self.rm_kv.view(n_languages, _rank * self.rm_kv.size(-1))).view(
+            #             _len_src, _bsz, _rank, self.rm_kv.size(-1))
+            #         sm_kv = torch.mm(_src_lang, self.sm_kv.view(n_languages, _rank * self.sm_kv.size(-1))).view(
+            #             _len_src, _bsz, _rank, self.sm_kv.size(-1))
+            #
+            #     # if lang has size [T x B x L] we need to do a GEMM
+            #
+            #     if hidden_states.ndim == 3:
+            #         use_time_mask = self.is_decoder
+            #         bsz, qlen = hidden_states.size(1), hidden_states.size(0)
+            #         mask = attention_mask
+            #         low_precision = True  # Use CUDA impl
+            #
+            #         input_lin_q_results = factorize_linear(hidden_states, in_proj_weight_q, self.q_proj.bias, rm_q, sm_q)
+            #
+            #         input_lin_kv_results = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv, rm_kv, sm_kv)
+            #
+            #         recompute = False
+            #         attn_output, coverage = encdec_attn_bias_compact_func(recompute, self.training, self.num_heads,
+            #                                                               input_lin_q_results , input_lin_kv_results ,
+            #                                                               attention_mask, self.dropout,
+            #                                                               incremental, incremental_cache,
+            #                                                               False, None, None,  # no rotary encodings
+            #                                                               low_precision, True)
+            #
+            #         attn_output = attn_output.view(qlen, bsz, -1).contiguous()
+            #
+            #         output = factorize_linear(attn_output, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+            #
+            #         return output, coverage, incremental_cache
+            #
+            #     else:
+            #         """
+            #         flash attention
+            #         """
+            #         assert self.fast_bert_mha is not None
+            #         assert cu_seqlens is not None
+            #         assert cu_seqlens_kv is not None
+            #         assert max_len is not None
+            #         assert max_len_kv is not None
+            #         assert incremental == False
+            #         assert incremental_cache is None
+            #
+            #         total_bsz_q = hidden_states.size(0)
+            #         total_bsz_kv = key_value_states.size(0)
+            #         q = factorize_linear(hidden_states, in_proj_weight_q, self.q_proj.bias, rm_q, sm_q)
+            #         # linear_function(hidden_states, in_proj_weight_q, self.q_proj.bias)
+            #
+            #         kv = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv, rm_kv, sm_kv) #
+            #         # linear_function(key_value_states, in_proj_weight_kv, self.proj_bias_kv)
+            #
+            #         kv = kv.view(total_bsz_kv, self.num_heads, 2, self.head_dim).transpose(1, 2).contiguous()
+            #
+            #         q = q.view(total_bsz_q, self.num_heads, self.head_dim)
+            #
+            #         dropout_p = self.dropout if self.training else 0.0
+            #         causal = False
+            #         softmax_scale = 1.0 / math.sqrt(64)
+            #         context = self.fast_bert_mha(q, kv, cu_seqlens, cu_seqlens_kv,
+            #                                      max_len, max_len_kv, dropout_p, softmax_scale, causal, False)
+            #
+            #         context = context.view(-1, self.num_heads * self.head_dim).contiguous()
+            #         # output = linear_function(context, out_proj_weight, self.out_proj.bias)
+            #         output = factorize_linear(context, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+            #
+            #         coverage = None
+            #
+            #         return output, coverage, incremental_cache
 
             if self.is_factorized:
                 if self.multiplicative_factorize:
@@ -1250,15 +1250,15 @@ class MBartDecoderLayer(nn.Module):
         residual = hidden_states
         hidden_states = self.final_layer_norm(hidden_states)
 
-        if self.fast_factorize:
-            hidden_states = self.call_factorize_mlp(hidden_states, lang, self.activation_fn, self.activation_dropout,
-                                                    self.training)
-        else:
+        # if self.fast_factorize:
+        #     hidden_states = self.call_factorize_mlp(hidden_states, lang, self.activation_fn, self.activation_dropout,
+        #                                             self.training)
+        # else:
 
-            in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang)
-            hidden_states = self.call_mlp(hidden_states, in_weight, out_weight, in_bias, out_bias,
-                                          self.activation_fn, self.activation_dropout, self.training,
-                                          self.fused, self.fused_function, checkpointing_ffn)
+        in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang)
+        hidden_states = self.call_mlp(hidden_states, in_weight, out_weight, in_bias, out_bias,
+                                      self.activation_fn, self.activation_dropout, self.training,
+                                      self.fused, self.fused_function, checkpointing_ffn)
 
         # hidden_states = fused_dropout_add(hidden_states, residual, self.dropout, self.training)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)

@@ -429,35 +429,34 @@ class MultiheadAttention(nn.Module):
                 nn.init.constant_(self.rm_p, constant)
                 nn.init.constant_(self.sm_p, constant)
 
-        if not fast:
-            self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
-            self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-            self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, 3 * embed_dim))
+        self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+        if self.relative:
+            self.r_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+            self.s_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+
+        if self.dyrank:
+            nn.init.zeros_(self.r_i)
+            nn.init.normal_(self.s_i, 0.0, 0.02)
+            nn.init.zeros_(self.r_o)
+            nn.init.normal_(self.s_o, 0.0, 0.02)
+
             if self.relative:
-                self.r_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
-                self.s_p = torch.nn.Parameter(torch.Tensor(n_languages, rank, embed_dim))
+                nn.init.zeros_(self.r_p)
+                nn.init.normal_(self.s_p, 0.0, 0.02)
+        else:
 
-            if self.dyrank:
-                nn.init.zeros_(self.r_i)
-                nn.init.normal_(self.s_i, 0.0, 0.02)
-                nn.init.zeros_(self.r_o)
-                nn.init.normal_(self.s_o, 0.0, 0.02)
+            std = 0.01 if fast else 0.02
+            nn.init.normal_(self.r_i, 0.0, std)
+            nn.init.normal_(self.s_i, 0.0, std)
+            nn.init.normal_(self.r_o, 0.0, std)
+            nn.init.normal_(self.s_o, 0.0, std)
 
-                if self.relative:
-                    nn.init.zeros_(self.r_p)
-                    nn.init.normal_(self.s_p, 0.0, 0.02)
-            else:
-
-                std = 0.01 if fast else 0.02
-                nn.init.normal_(self.r_i, 0.0, std)
-                nn.init.normal_(self.s_i, 0.0, std)
-                nn.init.normal_(self.r_o, 0.0, std)
-                nn.init.normal_(self.s_o, 0.0, std)
-
-                if self.relative:
-                    nn.init.normal_(self.r_p, 0.0, std)
-                    nn.init.normal_(self.s_p, 0.0, std)
+            if self.relative:
+                nn.init.normal_(self.r_p, 0.0, std)
+                nn.init.normal_(self.s_p, 0.0, std)
 
 
     def convert_fast_attention(self):
@@ -612,118 +611,120 @@ class MultiheadAttention(nn.Module):
                 pos_proj_weight = F.dropout(self.pos_proj_weight, self.weight_drop, training=self.training) \
                                   if self.pos_proj_weight is not None else None
 
-                if self.is_factorized and self.fast_factorize:
-                    if self.relative:
-                        print("fast factorization is not implemented for relative attention yet")
-                        raise NotImplementedError
+                testing = False
 
-                    hidden_states = query
-
-                    n_languages, _rank = self.rm_i.size(0), self.rm_i.size(1)
-
-                    # TODO: mm instead of index select
-                    if lang.ndim == 1:
-
-                        rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
-                        sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
-                        rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
-                        sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
-
-                    elif lang.ndim == 2:  # for flash attention
-
-                        rm_i = torch.mm(lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
-                            lang.size(0), _rank,
-                            self.rm_i.size(-1))
-                        sm_i = torch.mm(lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
-                            lang.size(0), _rank,
-                            self.sm_i.size(-1))
-                        rm_o = torch.mm(lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
-                            lang.size(0), _rank,
-                            self.rm_o.size(-1))
-                        sm_o = torch.mm(lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
-                            lang.size(0), _rank,
-                            self.sm_o.size(-1))
-
-                    elif lang.ndim == 3:
-
-                        _len, _bsz = lang.size(0), lang.size(1)
-                        _lang = lang.view(_len * _bsz, lang.size(-1))
-                        rm_i = torch.mm(_lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
-                            _len, _bsz, _rank, self.rm_i.size(-1))
-                        sm_i = torch.mm(_lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
-                            _len, _bsz, _rank, self.sm_i.size(-1))
-                        rm_o = torch.mm(_lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
-                            _len, _bsz, _rank, self.rm_o.size(-1))
-                        sm_o = torch.mm(_lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
-                            _len, _bsz, _rank, self.sm_o.size(-1))
-
-                    if hidden_states.ndim == 3:
-                        bsz, qlen = hidden_states.size(1), hidden_states.size(0)
-                        low_precision = True  # Use CUDA impl
-
-                        input_lin_results = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
-
-                        rotary = self.rotary_position
-                        attn_output, coverage = self_attn_compact_func(False, is_training, self.num_heads, input_lin_results,
-                                                                       key_padding_mask, self.dropout_p,
-                                                                       rotary, positions,
-                                                                       False, None,  # incremental and state
-                                                                       low_precision,
-                                                                       True, checkpointing)  # low-precision and return coverage
-
-                        # outputs, coverage = self_attn_func(False, is_training, self.num_heads, inputs,
-                        #                                    in_proj_weight, out_proj_weight,
-                        #                                    self.proj_bias, self.out_proj.bias,
-                        #                                    key_padding_mask, self.dropout_p,
-                        #                                    rotary, positions,
-                        #                                    False, None,  # incremental and state
-                        #                                    low_precision,
-                        #                                    True, checkpointing)  # low-precision and return coverage
-
-                        attn_output = attn_output.view(qlen, bsz, -1).contiguous()
-
-                        output = factorize_linear(attn_output, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
-
-                        return output, coverage
-
-                    else:
-                        # this doesn't need checkpointing because fmha is doing checkpointing
-                        assert self.fast_bert_mha is not None
-                        assert query.dtype == torch.half
-                        assert cu_seqlens is not None
-                        assert max_len is not None  # and max_len <= 512
-                        assert self.relative == False
-
-                        total_bsz = query.size(0)
-                        # qkv = F.linear(query, in_proj_weight, self.proj_bias)  # B x H
-                        qkv = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
-                        # B x 3 x H x d
-
-                        # transpose 1 2 is necessary here because the weights are designed to be heads x 3 x d
-                        # (for the more simple version without transposing)
-
-                        if not self.rotary_position:
-                            qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
-                        else:
-                            assert positions is not None
-                            cos, sin = positions
-                            queries, keys, values = qkv.view(total_bsz, self.num_heads, 3, self.head_dim)
-                            queries, keys = apply_rotary_pos_emb(queries, keys, cos, sin)
-                            qkv = torch.stack([queries, keys, values], dim=2).transpose(1, 2).contiguous()
-
-                        dropout_p = self.dropout_p if self.training else 0.0
-                        causal = False
-                        softmax_scale = 1.0 / math.sqrt(64)
-
-                        # False = return softmax
-                        context = self.fast_bert_mha(qkv, cu_seqlens, max_len, dropout_p, softmax_scale, causal, False)
-                        coverage = None
-
-                        context = context.view(-1, self.num_heads * self.head_dim).contiguous()
-
-                        output = factorize_linear(context, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
-
-                        return output, coverage
+                # if self.is_factorized and self.fast_factorize:
+                #     if self.relative:
+                #         print("fast factorization is not implemented for relative attention yet")
+                #         raise NotImplementedError
+                #
+                #     hidden_states = query
+                #
+                #     n_languages, _rank = self.rm_i.size(0), self.rm_i.size(1)
+                #
+                #     # TODO: mm instead of index select
+                #     if lang.ndim == 1:
+                #
+                #         rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
+                #         sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
+                #         rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
+                #         sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
+                #
+                #     elif lang.ndim == 2:  # for flash attention
+                #
+                #         rm_i = torch.mm(lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
+                #             lang.size(0), _rank,
+                #             self.rm_i.size(-1))
+                #         sm_i = torch.mm(lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
+                #             lang.size(0), _rank,
+                #             self.sm_i.size(-1))
+                #         rm_o = torch.mm(lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
+                #             lang.size(0), _rank,
+                #             self.rm_o.size(-1))
+                #         sm_o = torch.mm(lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
+                #             lang.size(0), _rank,
+                #             self.sm_o.size(-1))
+                #
+                #     elif lang.ndim == 3:
+                #
+                #         _len, _bsz = lang.size(0), lang.size(1)
+                #         _lang = lang.view(_len * _bsz, lang.size(-1))
+                #         rm_i = torch.mm(_lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
+                #             _len, _bsz, _rank, self.rm_i.size(-1))
+                #         sm_i = torch.mm(_lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
+                #             _len, _bsz, _rank, self.sm_i.size(-1))
+                #         rm_o = torch.mm(_lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
+                #             _len, _bsz, _rank, self.rm_o.size(-1))
+                #         sm_o = torch.mm(_lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
+                #             _len, _bsz, _rank, self.sm_o.size(-1))
+                #
+                #     if hidden_states.ndim == 3:
+                #         bsz, qlen = hidden_states.size(1), hidden_states.size(0)
+                #         low_precision = True  # Use CUDA impl
+                #
+                #         input_lin_results = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
+                #
+                #         rotary = self.rotary_position
+                #         attn_output, coverage = self_attn_compact_func(False, self.training, self.num_heads, input_lin_results,
+                #                                                        key_padding_mask, self.dropout_p,
+                #                                                        rotary, positions,
+                #                                                        False, None,  # incremental and state
+                #                                                        low_precision,
+                #                                                        True, checkpointing)  # low-precision and return coverage
+                #
+                #         # outputs, coverage = self_attn_func(False, is_training, self.num_heads, inputs,
+                #         #                                    in_proj_weight, out_proj_weight,
+                #         #                                    self.proj_bias, self.out_proj.bias,
+                #         #                                    key_padding_mask, self.dropout_p,
+                #         #                                    rotary, positions,
+                #         #                                    False, None,  # incremental and state
+                #         #                                    low_precision,
+                #         #                                    True, checkpointing)  # low-precision and return coverage
+                #
+                #         attn_output = attn_output.view(qlen, bsz, -1).contiguous()
+                #
+                #         output = factorize_linear(attn_output, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+                #
+                #         return output, coverage
+                #
+                #     else:
+                #         # this doesn't need checkpointing because fmha is doing checkpointing
+                #         assert self.fast_bert_mha is not None
+                #         assert query.dtype == torch.half
+                #         assert cu_seqlens is not None
+                #         assert max_len is not None  # and max_len <= 512
+                #         assert self.relative == False
+                #
+                #         total_bsz = query.size(0)
+                #         # qkv = F.linear(query, in_proj_weight, self.proj_bias)  # B x H
+                #         qkv = factorize_linear(hidden_states, in_proj_weight, self.proj_bias, rm_i, sm_i)
+                #         # B x 3 x H x d
+                #
+                #         # transpose 1 2 is necessary here because the weights are designed to be heads x 3 x d
+                #         # (for the more simple version without transposing)
+                #
+                #         if not self.rotary_position:
+                #             qkv = qkv.view(total_bsz, self.num_heads, 3, self.head_dim).transpose(1, 2).contiguous()
+                #         else:
+                #             assert positions is not None
+                #             cos, sin = positions
+                #             queries, keys, values = qkv.view(total_bsz, self.num_heads, 3, self.head_dim)
+                #             queries, keys = apply_rotary_pos_emb(queries, keys, cos, sin)
+                #             qkv = torch.stack([queries, keys, values], dim=2).transpose(1, 2).contiguous()
+                #
+                #         dropout_p = self.dropout_p if self.training else 0.0
+                #         causal = False
+                #         softmax_scale = 1.0 / math.sqrt(64)
+                #
+                #         # False = return softmax
+                #         context = self.fast_bert_mha(qkv, cu_seqlens, max_len, dropout_p, softmax_scale, causal, False)
+                #         coverage = None
+                #
+                #         context = context.view(-1, self.num_heads * self.head_dim).contiguous()
+                #
+                #         output = factorize_linear(context, out_proj_weight, self.out_proj.bias, rm_o, sm_o)
+                #
+                #         return output, coverage
 
                 if self.is_factorized:
                     if self.multiplicative_factorize:

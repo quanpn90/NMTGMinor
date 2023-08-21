@@ -1656,16 +1656,16 @@ class TransformerSentenceEncoderLayer(nn.Module):
             # MLP
             x = self.final_layer_norm(x)
 
-            if self.fast_factorize:
-                x = self.call_factorize_mlp(x, lang, self.activation_fn,
-                                            self.dropout2.p,
-                                            self.training)
-            else:
-                in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
+            # if self.fast_factorize:
+            #     x = self.call_factorize_mlp(x, lang, self.activation_fn,
+            #                                 self.dropout2.p,
+            #                                 self.training)
+            # else:
+            in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
 
-                x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
-                             self.dropout2.p, self.training,
-                             self.fused, self.fused_function, checkpointing_ffn)
+            x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
+                         self.dropout2.p, self.training,
+                         self.fused, self.fused_function, checkpointing_ffn)
 
             x = self.dropout3(x) + residual
 

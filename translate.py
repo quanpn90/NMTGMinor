@@ -805,11 +805,11 @@ def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch,
             print('PRED %d: %s' % (
                 count, get_sentence_from_tokens(pred_batch[b][0], pred_ids[b][0], input_type, external_tokenizer)))
 
-            print('PRED BPE %d (%d): %s' % (
-                count, len(pred_batch[b][0]), pred_batch[b][0] ))
-
-            print('PRED SCORES %d (%d): %s' % (
-                count, len(pred_pos_scores[b][0]), pred_pos_scores[b][0]))
+            # print('PRED BPE %d (%d): %s' % (
+            #     count, len(pred_batch[b][0]), pred_batch[b][0] ))
+            #
+            # print('PRED SCORES %d (%d): %s' % (
+            #     count, len(pred_pos_scores[b][0]), pred_pos_scores[b][0]))
 
             print("PRED TOTAL SCORE: %.4f" % pred_score[b][0])
 
