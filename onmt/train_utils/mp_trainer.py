@@ -199,6 +199,9 @@ class Trainer(object):
             self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True,
                                          padding_idx=tgt_pad, blank_idx=0)
 
+        else:
+            self.ctc_loss_function = None 
+
         if opt.predict_language > 0:
             from onmt.models.speech_recognizer.lid_loss import CrossEntropyLIDLoss
             self.lid_loss_function = CrossEntropyLIDLoss(opt.n_languages, label_smoothing=0.0)
@@ -510,7 +513,12 @@ class Trainer(object):
 
                             outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
                                                  mirror=opt.mirror_loss, streaming_state=streaming_state, nce=opt.nce,
-                                                 pretrained_layer_states=layer_states)
+                                                 pretrained_layer_states=layer_states,
+                                                 ctc_loss_function=self.ctc_loss_function,
+                                                 ctc_labels=targets,
+                                                 grad_scaler=self.grad_scaler,
+                                                 ctc_coeff=opt.ctc_loss
+                                                 )
 
                             outputs['tgt_mask'] = tgt_mask
                             loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True)
@@ -676,7 +684,11 @@ class Trainer(object):
                                              adv_ptb_grad=opt.virtual_adversarial_training_mode > 0,
                                              checkpointing_ffn=opt.checkpointing_ffn,
                                              checkpointing_cross_attn=opt.checkpointing_cross_attn,
-                                             checkpointing_self_attn=opt.checkpointing_self_attn
+                                             checkpointing_self_attn=opt.checkpointing_self_attn,
+                                             ctc_loss_function = self.ctc_loss_function,
+                                             ctc_labels = targets,
+                                             grad_scaler = self.grad_scaler,
+                                             ctc_coeff = opt.ctc_loss
                                              )
 
                         batch_size = batch.size
@@ -690,9 +702,9 @@ class Trainer(object):
                         full_loss = loss
 
                         if opt.ctc_loss > 0.0:
-                            ctc_loss = self.ctc_loss_function(outputs, targets)
-                            ctc_loss_data = ctc_loss.item()
-                            full_loss = full_loss + opt.ctc_loss * ctc_loss
+                            ctc_loss_data = outputs['ctc_loss']
+                            # ctc_loss_data = ctc_loss.item()
+                            # full_loss = full_loss + opt.ctc_loss * ctc_loss
 
                         if opt.mirror_loss:
                             rev_loss = loss_dict['rev_loss']
@@ -770,6 +782,10 @@ class Trainer(object):
 
                     # grad scaler has to be done outside of the autocast
                     self.grad_scaler.scale(full_loss).backward()
+                    if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                        self.model.module.post_backward(output_dict=outputs)
+                    else:
+                        self.model.post_backward(output_dict=outputs)
 
                     # del outputs
                     if opt.virtual_adversarial_training_mode > 0:
@@ -830,7 +846,8 @@ class Trainer(object):
                     print('Input size at OOM position:', batch.get('source').size() if batch.get('source') is not None else None,
                           batch.get('target').size() if batch.get('target') is not None else None)
 
-                    continue
+                    # continue
+                    raise e
                     # recovering mechanism doesn't work at the moment
                     # loss = 0
                     # for p in self.model.parameters():
@@ -1218,7 +1235,10 @@ class Trainer(object):
                                              adv_ptb_grad=opt.virtual_adversarial_training_mode > 0,
                                              checkpointing_ffn=opt.checkpointing_ffn,
                                              checkpointing_cross_attn=opt.checkpointing_cross_attn,
-                                             checkpointing_self_attn=opt.checkpointing_self_attn
+                                             checkpointing_self_attn=opt.checkpointing_self_attn,
+                                             ctc_loss_function = self.ctc_loss_function,
+                                             ctc_labels = targets,
+                                             grad_scaler = self.grad_scaler
                                              )
 
                         batch_size = batch.size
@@ -1232,9 +1252,8 @@ class Trainer(object):
                         full_loss = loss
 
                         if opt.ctc_loss > 0.0:
-                            ctc_loss = self.ctc_loss_function(outputs, targets)
-                            ctc_loss_data = ctc_loss.item()
-                            full_loss = full_loss + opt.ctc_loss * ctc_loss
+                            ctc_loss_data = outputs['ctc_loss']
+                            # full_loss = full_loss + opt.ctc_loss * ctc_loss
 
                         if opt.mirror_loss:
                             rev_loss = loss_dict['rev_loss']
@@ -1278,6 +1297,8 @@ class Trainer(object):
                         vanilla_logits = None
 
                     self.grad_scaler.scale(full_loss).backward()
+                    # handles the 2nd backward at the encoder before ctc (because gradient is cut-off)
+                    self.model.post_backward(output_dict=outputs)
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):

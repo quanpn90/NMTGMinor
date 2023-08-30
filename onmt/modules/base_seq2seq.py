@@ -68,6 +68,9 @@ class NMTModel(nn.Module):
         assert self.generator is not None, "The generator needs to be created before sharing weights"
         self.generator[0].linear.weight = self.decoder.word_lut.weight
 
+    def post_backward(self, *args, **kwargs):
+
+        pass
 
     def share_enc_dec_embedding(self):
         self.encoder.word_lut.weight = self.decoder.word_lut.weight

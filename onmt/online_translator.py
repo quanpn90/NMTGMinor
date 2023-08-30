@@ -175,7 +175,7 @@ class OnlineTranslator(object):
         self.src_lang = input_language
         self.tgt_lang = output_language
 
-    def translate(self, input, prefix):
+    def translate(self, input, prefix, memory=None):
         """
         Args:
             prefix:
@@ -229,11 +229,12 @@ class OnlineTranslator(object):
 
         return output_sentence
 
-    def translate_batch(self, inputs, prefixes):
+    def translate_batch(self, inputs, prefixes, memory=None):
         """
         Args:
             inputs: list of audio tensors
             prefixes: list of prefixes
+            memory:
 
         Returns:
 
@@ -339,11 +340,12 @@ class ASROnlineTranslator(object):
         self.src_lang = input_language
         self.tgt_lang = output_language
 
-    def translate(self, input, prefix, memory):
+    def translate(self, input, prefix, memory=None):
         """
         Args:
             prefix:
             input: audio segment (torch.Tensor)
+            memory: for incrementally learning new tokens
 
         Returns:
 
@@ -403,11 +405,12 @@ class ASROnlineTranslator(object):
 
         return output_sentence, bpe_output, scores
 
-    def translate_batch(self, inputs, prefixes):
+    def translate_batch(self, inputs, prefixes, memory=None):
         """
         Args:
             inputs: list of audio tensors
             prefixes: list of prefixes
+            memory
 
         Returns:
 
