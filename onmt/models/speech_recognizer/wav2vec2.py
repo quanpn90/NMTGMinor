@@ -196,7 +196,8 @@ class FairseqWav2Vec(nn.Module):
         self.wav2vec_encoder = Wav2Vec2Model(cfg=self.cfg, favor=opt.favor_attention,
                                              weight_drop=opt.weight_drop,
                                              predict_language=opt.predict_language,
-                                             n_languages=opt.n_languages)
+                                             n_languages=opt.n_languages,
+                                             branchformer=opt.branchformer)
         self.favor = opt.favor_attention
         if self.favor:
             from onmt.modules.performer import ProjectionUpdater
@@ -752,11 +753,11 @@ class Wav2vecBERT(Wav2vecTransformer):
 
         # overriding
         self.ctc = ctc
-        if self.ctc:
-            # TODO: we can actually use src vocab size
+        # if self.ctc:
+        #     TODO: we can actually use src vocab size
             # self.ctc_linear = nn.Linear(encoder.model_size, self.tgt_vocab_size)
             # self.ctc_linear.weight = self.generator[0].linear.weight
-            self.ctc_linear_weight = self.generator[0].linear.weight
+            # self.ctc_linear_weight = self.generator[0].linear.weight
 
     def forward(self, batch, zero_encoder=False, factorize=False, target_mask=None, mirror=False,
                 checkpointing_ffn=False,
@@ -817,6 +818,7 @@ class Wav2vecBERT(Wav2vecTransformer):
 
         if self.ctc:
             # we have to perform CTC first
+            torch.cuda.synchronize()
 
             context = context_org.detach()
             context.requires_grad_()
@@ -827,7 +829,9 @@ class Wav2vecBERT(Wav2vecTransformer):
             # encoder_hidden = output_dict['wav2vec_context'].
             # output_dict['encoder_logits'] = self.ctc_linear(output_dict['wav2vec_context'])
             # how should we proceed from this?
-            encoder_logits = torch.nn.functional.linear(context, self.ctc_linear_weight)# self.ctc_linear(context)
+            ctc_linear_weight = self.generator[0].linear.weight
+
+            encoder_logits = torch.nn.functional.linear(context, ctc_linear_weight)# self.ctc_linear(context)
             ctc_loss_inputs = dict()
             ctc_loss_inputs['encoder_logits'] = encoder_logits
             ctc_loss_inputs['wav2vec_padding_mask'] = encoder_output['wav2vec_padding_mask'].detach()
@@ -844,6 +848,8 @@ class Wav2vecBERT(Wav2vecTransformer):
             ctc_loss_data = ctc_loss.item()
 
             del ctc_loss
+
+            torch.cuda.synchronize()
 
         else:
             ctc_loss_data = None

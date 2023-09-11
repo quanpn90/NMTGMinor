@@ -588,11 +588,17 @@ def make_parser(parser):
     parser.add_argument('-decoder_layers_memory', type=int, default=6,
                         help="Number of memory encoder layers")
 
+    parser.add_argument('-branchformer', action="store_true",
+                        help="Whether to use an additional memory decoder")
+
     return parser
 
 
 def backward_compatible(opt):
     # FOR BACKWARD COMPATIBILITY
+    if not hasattr(opt, 'branchformer'):
+        opt.branchformer = False
+
     if not hasattr(opt, 'predict_language'):
         opt.predict_language = 0
     elif opt.predict_language == True:
