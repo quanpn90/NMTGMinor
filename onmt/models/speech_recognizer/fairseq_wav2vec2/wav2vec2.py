@@ -1261,7 +1261,7 @@ class TransformerEncoder(nn.Module):
                 #     x = x.view(bsz, seq_len, -1)
 
             # TODO: add classification layer here.
-            if self.predict_language > 0:
+            if self.predict_language > 0 and (i == len(self.layers) // 2):
                 # B x T x H ->
                 pred_lang = self.linear_cls(self.layer_norm_cls(x))
 

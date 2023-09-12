@@ -321,6 +321,33 @@ class FastTranslator(Translator):
         self.external_tokenizer.src_lang = self.src_lang
         self.tgt_external_tokenizer.src_lang = self.tgt_lang
 
+    def predict_language(self, batches):
+
+        model = self.models[0]
+
+        src = batch.get('source')
+        src_transposed = src.transpose(0, 1)  # transpose -> batch first
+
+        encoder_output = self.model.encoder(src_transposed)
+
+        src_mask = encoder_output['src']  # B x T
+
+        lengths = (1 - src_mask.long()).sum(dim=1)
+
+        pred_lang = torch.nn.functional.softmax(encoder_output['enc_pred_lang'], dim=-1, dtype=torch.float32)
+
+        pred_lang = pred_lang.transpose(0, 1).contiguous()
+
+        output = list()
+
+        for i in range(src_mask.size(0)):
+            _pred = pred_lang[i][:lengths[i], :]
+            _pred = _pred.cpu()
+            output.append(_pred)
+
+        return output
+
+
     def translate_batch(self, batches, sub_batches=None, prefix_tokens=None, anti_prefix=None, memory=None):
 
         with torch.no_grad():
@@ -1136,4 +1163,96 @@ class FastTranslator(Translator):
                      for n in range(self.opt.n_best)]
                 )
 
-        return pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length, gold_score, gold_words, allgold_words
+        return pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length, gold_score, gold_words,
+
+
+    def predict_language(self, src_data):
+
+        past_src_data = None
+
+        #  (1) convert words to indexes
+        if isinstance(src_data[0], list):
+            batches = list()
+            for i, src_data_ in enumerate(src_data):
+                if past_src_data is not None:
+                    past_src_data_ = past_src_data[i]
+                else:
+                    past_src_data_ = None
+                dataset = self.build_data(src_data_, tgt_data, type=type, past_sents=past_src_data_)
+                batch = dataset.get_batch(0)
+                batches.append(batch)
+
+        elif isinstance(src_data[0], list) and isinstance(src_data[0][0], list):
+            src_data = src_data[0]
+            dataset = self.build_data(src_data, tgt_data, type=type, past_sents=past_src_data)
+            batch = dataset.get_batch(0)  # this dataset has only one mini-batch
+            batches = [batch] * self.n_models
+            src_data = [src_data] * self.n_models
+        else:
+            dataset = self.build_data(src_data, tgt_data, type=type, past_sents=past_src_data)
+            batch = dataset.get_batch(0)  # this dataset has only one mini-batch
+            batches = [batch] * self.n_models
+            src_data = [src_data] * self.n_models
+
+        batch_size = batches[0].size
+        if self.cuda:
+            for i, _ in enumerate(batches):
+                batches[i].cuda(fp16=self.fp16)
+
+        #  (2) predict the language. The output should have the form a list of "T_n x n_languages"
+        #  (for every element in the batch we have to use the mask to select the sequences) (maybe just mask them to 0 after softmax?)
+
+        pred_lang = self.predict_language(batches)
+
+        return pred_lang
+
+        # pred_length = []
+        #
+        # #  (3) convert indexes to words
+        # pred_batch = []
+        # pred_ids = []
+        # pred_pos_scores = []
+        #
+        # src_data = src_data[0]
+        # for b in range(batch_size):
+        #
+        #     # probably when the src is empty so beam search stops immediately
+        #     if len(finalized[b]) == 0:
+        #         # assert len(src_data[b]) == 0, "The target search result is empty, assuming that the source is empty."
+        #         pred_batch.append(
+        #             [self.build_target_tokens([], src_data[b], None)
+        #              for n in range(self.opt.n_best)]
+        #         )
+        #         pred_ids.append([[] for n in range(self.opt.n_best)])
+        #     else:
+        #         pred_batch.append(
+        #             [self.build_target_tokens(finalized[b][n]['tokens'], src_data[b], None)
+        #              for n in range(self.opt.n_best)]
+        #         )
+        #         pred_ids.append([finalized[b][n]['tokens'] for n in range(self.opt.n_best)])
+        # pred_score = []
+        # for b in range(batch_size):
+        #     if len(finalized[b]) == 0:
+        #         pred_score.append(
+        #             [torch.FloatTensor([0])
+        #              for n in range(self.opt.n_best)]
+        #         )
+        #     else:
+        #         pred_score.append(
+        #             [torch.FloatTensor([finalized[b][n]['score']])
+        #              for n in range(self.opt.n_best)]
+        #         )
+        #
+        # for b in range(batch_size):
+        #     if len(finalized[b]) == 0:
+        #         pred_pos_scores.append(
+        #             [torch.FloatTensor([0])
+        #              for n in range(self.opt.n_best)]
+        #         )
+        #     else:
+        #         pred_pos_scores.append(
+        #             [finalized[b][n]['positional_scores'].tolist()
+        #              for n in range(self.opt.n_best)]
+        #         )
+
+        # return pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length, gold_score, gold_words, allgold_words
