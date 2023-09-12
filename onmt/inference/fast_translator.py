@@ -1163,7 +1163,7 @@ class FastTranslator(Translator):
                      for n in range(self.opt.n_best)]
                 )
 
-        return pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length, gold_score, gold_words,
+        return pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length, gold_score, gold_words, allgold_words
 
 
     def predict_language(self, src_data):
