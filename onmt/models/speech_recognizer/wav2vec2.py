@@ -272,6 +272,7 @@ class FairseqWav2Vec(nn.Module):
                   % (opt.n_languages, opt.n_attributes))
             self.wav2vec_encoder.encoder.add_factorize(opt.n_languages, rank=opt.mfw_rank,
                                                        multiplicative=opt.mfw_multiplicative,
+                                                       flexible=opt.flex_factorize,
                                                        fast=opt.fast_factorize)
 
         self.predict_language = self.wav2vec_encoder.predict_language
@@ -844,12 +845,39 @@ class Wav2vecBERT(Wav2vecTransformer):
             if self.training:
                 grad_scaler.scale(ctc_loss).backward()
             del encoder_logits
+            # if ctc_compress:
+            #     # TODO: Ctc compression
+            #     with torch.no_grad():
+            #         x_ctc = encoder_logits
+            #         batch_predicted = []
+            #         prob_ctc = F.softmax(x_ctc, dim=-1).transpose(0, 1)  # from T x B x D to B x T x D
+            #         for b in range(prob_ctc.shape[0]):
+            #             predicted = prob_ctc[b][: src_lengths[b]].argmax(-1).tolist()
+            #             batch_predicted.append([(p[0], len(list(p[1]))) for p in groupby(predicted)])
+            #
+            #         new_lengths = [len(p) for p in batch_predicted]
+            #
+            #         # TODO: compress_method
+            #         weights_matrix = self.ctc_compress_method(prob_ctc, batch_predicted, new_lengths, x.dtype,
+            #                                                   x.device)
+
+                    # context = context.permute(1, 2, 0).bmm(weights_matrix).permute(2, 0, 1)
+            # else:
+            #
+            #     del encoder_logits
+
+
+            #
+            # TODO: make new src mask
 
             ctc_loss_data = ctc_loss.item()
 
             del ctc_loss
 
             torch.cuda.synchronize()
+
+            # todo: ctc compression
+
 
         else:
             ctc_loss_data = None

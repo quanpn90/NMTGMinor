@@ -1240,11 +1240,6 @@ class TransformerEncoder(nn.Module):
             dropout_probability = np.random.random()
             if not self.training or (dropout_probability > self.layerdrop):
 
-                # print(can_run_fast_bert_mha)
-                # testing the bottleneck speed for unpacking and pack every layer
-                # if x.ndim == 3 and can_run_fast_bert_mha:
-                #     x = x.contiguous().view(-1, x.size(-1))  # flatten [B x T]
-                #     x = x.index_select(0, non_pad_indices)
 
                 x, z = layer(x, self_attn_padding_mask=padding_mask, positions=positions,
                              max_len=max_len, cu_seqlens=cu_seqlens,
@@ -1255,10 +1250,6 @@ class TransformerEncoder(nn.Module):
 
                 if tgt_layer is not None:
                     layer_results.append((x, z))
-
-                # if can_run_fast_bert_mha:
-                #     x = index_copy(x, non_pad_indices, bsz * seq_len)
-                #     x = x.view(bsz, seq_len, -1)
 
             # TODO: add classification layer here.
             if self.predict_language > 0 and (i == len(self.layers) // 2):
@@ -1315,11 +1306,22 @@ class TransformerEncoder(nn.Module):
         for layer in self.layers:
             layer.add_adapters(n_languages, adapter_location=adapter_location)
 
-    def add_factorize(self, n_languages, rank=4, multiplicative=False, fast=False, dyrank=False, *kwargs):
+    def add_factorize(self, n_languages, rank=4, multiplicative=False,
+                      flexible=False, fast=False, dyrank=False, *kwargs):
 
-        for layer in self.layers:
-            layer.add_factorized(n_languages, rank=rank,
-                                 multiplicative=multiplicative, fast=fast, dyrank=dyrank)
+        # use only N/2 layers for factorization when predict_language is used
+        if self.predict_language > 0:
+
+            for i, layer in enumerate(self.layers):
+                if (i > len(self.layers) // 2):
+
+                    layer.add_factorized(n_languages, rank=rank, flexible=flexible,
+                                         multiplicative=multiplicative, fast=fast, dyrank=dyrank)
+
+        else:
+            for i, layer in enumerate(self.layers):
+                layer.add_factorized(n_languages, rank=rank, flexible=flexible,
+                                     multiplicative=multiplicative, fast=fast, dyrank=dyrank)
 
     def freeze_ffn_params(self):
 
@@ -1367,6 +1369,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.has_adapter = False
         self.is_factorized = False
         self.fast_factorize = False
+        self.flex_factorize = False
         self.multiplicative_factorize = False
         self.using_s4 = False
         self.branchformer = branchformer
@@ -1466,7 +1469,8 @@ class TransformerSentenceEncoderLayer(nn.Module):
             self.mid_adapter = MultilingualAdapter(n_languages, self.embedding_dim,
                                                    downsample_factor=downsampling_factor)
 
-    def add_factorized(self, n_languages, rank=4, multiplicative=True, fast=False, dyrank=False,
+    def add_factorized(self, n_languages, rank=4, multiplicative=True, fast=False,
+                       flexible=False, dyrank=False,
                        **kwargs):
         """
         :param sub_factor_rank:
@@ -1481,19 +1485,20 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
         # first, tell the attention modules to add factorize
         self.self_attn.add_factorized_weights(n_languages, rank=rank,
-                                              multiplicative=multiplicative, dyrank=dyrank, fast=fast)
+                                              multiplicative=multiplicative, dyrank=dyrank, fast=fast, flexible=flexible)
 
         # add factorized for the sub-factors
         self.multiplicative_factorize = multiplicative
         self.is_factorized = True
         self.fast_factorize = fast
+        self.flex_factorize = flexible
         self.dyrank = dyrank
 
         embed_dim = self.embedding_dim
         ffn_dim = self.ffn_embedding_dim
 
-        if multiplicative:
-            _rank = rank if fast else 1
+        if multiplicative or flexible:
+            _rank = rank if fast or flexible else 1
             self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.ffn_embedding_dim))
             self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.embedding_dim))
             self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.embedding_dim))
@@ -1505,23 +1510,24 @@ class TransformerSentenceEncoderLayer(nn.Module):
             nn.init.constant_(self.rm_o, constant)
             nn.init.constant_(self.sm_o, constant)
 
-        # These parameters are NOT USED with fast factorize
-        self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
-        self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
-        self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
-        self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
+        if not flexible:
 
-        if self.dyrank:
-            nn.init.zeros_(self.r_i)
-            nn.init.normal_(self.s_i, 0.0, 0.02)
-            nn.init.zeros_(self.r_o)
-            nn.init.normal_(self.s_o, 0.0, 0.02)
+            self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
+            self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
+            self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
+            self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
 
-        else:
-            nn.init.normal_(self.r_i, 0.0, 0.02)
-            nn.init.normal_(self.s_i, 0.0, 0.02)
-            nn.init.normal_(self.r_o, 0.0, 0.02)
-            nn.init.normal_(self.s_o, 0.0, 0.02)
+            if self.dyrank:
+                nn.init.zeros_(self.r_i)
+                nn.init.normal_(self.s_i, 0.0, 0.02)
+                nn.init.zeros_(self.r_o)
+                nn.init.normal_(self.s_o, 0.0, 0.02)
+
+            else:
+                nn.init.normal_(self.r_i, 0.0, 0.02)
+                nn.init.normal_(self.s_i, 0.0, 0.02)
+                nn.init.normal_(self.r_o, 0.0, 0.02)
+                nn.init.normal_(self.s_o, 0.0, 0.02)
 
     def get_mlp_weights(self, lang=None, atb=None):
 
@@ -1788,16 +1794,16 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 # MLP
                 x = self.final_layer_norm(x)
 
-                # if self.fast_factorize:
-                #     x = self.call_factorize_mlp(x, lang, self.activation_fn,
-                #                                 self.dropout2.p,
-                #                                 self.training)
-                # else:
-                in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
+                if self.flex_factorize:
+                    x = self.call_factorize_mlp(x, lang, self.activation_fn,
+                                                self.dropout2.p,
+                                                self.training)
+                else:
+                    in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
 
-                x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
-                             self.dropout2.p, self.training,
-                             self.fused, self.fused_function)
+                    x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
+                                 self.dropout2.p, self.training,
+                                 self.fused, self.fused_function)
 
                 x = self.dropout3(x) + residual
 

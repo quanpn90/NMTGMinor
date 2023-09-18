@@ -358,7 +358,9 @@ def make_parser(parser):
     parser.add_argument('-multilingual_factorized_weights_decoder', action='store_true',
                         help='Factorize the weights in the model decoder for multilingual')
     parser.add_argument('-fast_factorize', action='store_true',
-                        help='Fast Factorize the weights in the model for multilingual (Batch Ensemble style)')
+                        help='Fast Factorize the weights in the model for multilingual')
+    parser.add_argument('-flex_factorize', action='store_true',
+                        help='Flexible Factorize: the r and s are multiplicative to the input and output')
     parser.add_argument('-mfw_rank', type=int, default=1,
                         help="Rank of the mfw vectors.")
     parser.add_argument('-mfw_multiplicative', action='store_true',
@@ -596,6 +598,9 @@ def make_parser(parser):
 
 def backward_compatible(opt):
     # FOR BACKWARD COMPATIBILITY
+    if not hasattr(opt, 'flex_factorize'):
+        opt.flex_factorize = False
+
     if not hasattr(opt, 'branchformer'):
         opt.branchformer = False
 
