@@ -592,6 +592,8 @@ def make_parser(parser):
 
     parser.add_argument('-branchformer', action="store_true",
                         help="Whether to use an additional memory decoder")
+    parser.add_argument('-char_ctc', action="store_true",
+                        help="Whether to use an additional ctc on character level")
 
     return parser
 

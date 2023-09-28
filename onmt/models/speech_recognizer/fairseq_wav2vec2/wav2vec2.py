@@ -1219,6 +1219,11 @@ class TransformerEncoder(nn.Module):
             a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
             cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
 
+            if lang is not None:
+                if lang.ndim == 1 and lang.size(0) == bsz and lang.size(0) > 1:
+                    lang = lang.unsqueeze(1).repeat(1, seq_len).view(-1)
+                    lang = lang.index_select(0, non_pad_indices)
+
         else:
             # print("[INFO] CanNOT run FAST MHA with seq_len", seq_len)
             max_len = -1

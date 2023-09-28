@@ -216,7 +216,6 @@ class MBartAttention(nn.Module):
                 nn.init.normal_(self.r_o, 0.0, std)
                 nn.init.normal_(self.s_o, 0.0, std)
 
-
     def convert_fast_attention(self):
 
         # HuggingFace's MBart Attention uses a unoptimized memory layout that requires reshaping
@@ -331,8 +330,6 @@ class MBartAttention(nn.Module):
                                                                    False, None,
                                                                    incremental, incremental_cache, low_precision,
                                                                    True, checkpointing)
-
-
 
                     attn_output = attn_output.view(qlen, bsz, -1).contiguous()
 
@@ -464,7 +461,7 @@ class MBartCrossAttention(MBartAttention):
             dropout: float = 0.0,
             is_decoder: bool = False,
             bias: bool = True,
-            convert_fast_attention = False,
+            convert_fast_attention=False,
             **kwargs
     ):
         super().__init__(embed_dim, num_heads, dropout, is_decoder, bias)
@@ -630,7 +627,6 @@ class MBartCrossAttention(MBartAttention):
                     _len, _bsz = lang.size(0), lang.size(1)
                     _lang = lang.view(_len * _bsz, lang.size(-1))
 
-
                     rm_q = torch.mm(_lang, self.rm_q.view(n_languages, _rank * self.rm_q.size(-1))).view(
                         _len, _bsz, _rank, self.rm_q.size(-1))
                     sm_q = torch.mm(_lang, self.sm_q.view(n_languages, _rank * self.sm_q.size(-1))).view(
@@ -643,7 +639,8 @@ class MBartCrossAttention(MBartAttention):
                     raise NotImplementedError("Unknown dimension for language IDs")
 
                 if src_lang.ndim == 1:
-                    rm_kv = torch.index_select(self.rm_kv, 0, src_lang.long()).squeeze(0)  # squeeze possible because only 1
+                    rm_kv = torch.index_select(self.rm_kv, 0, src_lang.long()).squeeze(
+                        0)  # squeeze possible because only 1
                     sm_kv = torch.index_select(self.sm_kv, 0, src_lang.long()).squeeze(0)
                 elif src_lang.ndim == 2:
                     rm_kv = torch.mm(src_lang, self.rm_kv.view(n_languages, _rank * self.rm_kv.size(-1))).view(
@@ -668,13 +665,15 @@ class MBartCrossAttention(MBartAttention):
                     mask = attention_mask
                     low_precision = True  # Use CUDA impl
 
-                    input_lin_q_results = factorize_linear(hidden_states, in_proj_weight_q, self.q_proj.bias, rm_q, sm_q)
+                    input_lin_q_results = factorize_linear(hidden_states, in_proj_weight_q, self.q_proj.bias, rm_q,
+                                                           sm_q)
 
-                    input_lin_kv_results = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv, rm_kv, sm_kv)
+                    input_lin_kv_results = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv,
+                                                            rm_kv, sm_kv)
 
                     recompute = False
                     attn_output, coverage = encdec_attn_bias_compact_func(recompute, self.training, self.num_heads,
-                                                                          input_lin_q_results , input_lin_kv_results ,
+                                                                          input_lin_q_results, input_lin_kv_results,
                                                                           attention_mask, self.dropout,
                                                                           incremental, incremental_cache,
                                                                           False, None, None,  # no rotary encodings
@@ -703,7 +702,7 @@ class MBartCrossAttention(MBartAttention):
                     q = factorize_linear(hidden_states, in_proj_weight_q, self.q_proj.bias, rm_q, sm_q)
                     # linear_function(hidden_states, in_proj_weight_q, self.q_proj.bias)
 
-                    kv = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv, rm_kv, sm_kv) #
+                    kv = factorize_linear(key_value_states, in_proj_weight_kv, self.proj_bias_kv, rm_kv, sm_kv)  #
                     # linear_function(key_value_states, in_proj_weight_kv, self.proj_bias_kv)
 
                     kv = kv.view(total_bsz_kv, self.num_heads, 2, self.head_dim).transpose(1, 2).contiguous()
@@ -1037,7 +1036,6 @@ class MBartDecoderLayer(nn.Module):
                 nn.init.normal_(self.r_o, 0.0, 0.02)
                 nn.init.normal_(self.s_o, 0.0, 0.02)
 
-
     def add_adapters(self, n_languages, downsampling_factor=4, adapter_location=1):
         """
         :param n_languages: one adapter per language
@@ -1301,6 +1299,7 @@ class MBartDecoderLayer(nn.Module):
 
         return outputs, incremental_cache
 
+
 class AttentionMemory(nn.Module):
     def __init__(self, d_model):
         super().__init__()
@@ -1310,11 +1309,12 @@ class AttentionMemory(nn.Module):
         self.temperature = np.power(d_model, -0.25)
 
     def forward(self, hidden_states, memory):
-        q = self.temperature * self.q(hidden_states) # l_tgt x b x d_model
-        k = self.temperature * self.k(memory.to(hidden_states.dtype)) # (n_mem+1) x d_model
+        q = self.temperature * self.q(hidden_states)  # l_tgt x b x d_model
+        k = self.temperature * self.k(memory.to(hidden_states.dtype))  # (n_mem+1) x d_model
 
-        attn = torch.einsum("t b d, n d -> t b n", q, k) # l_tar x b x (n_mem+1)
+        attn = torch.einsum("t b d, n d -> t b n", q, k)  # l_tar x b x (n_mem+1)
         return attn
+
 
 class MBartDecoderLayerMemory(MBartDecoderLayer):
 
@@ -1338,7 +1338,7 @@ class MBartDecoderLayerMemory(MBartDecoderLayer):
         if enc_out_mem is None:
             return None
 
-        mem_attn_out = mem_attn_out[:, :, :enc_out_mem.shape[1] + 1].argmax(-1).view(-1) - 1 # l_tar*b
+        mem_attn_out = mem_attn_out[:, :, :enc_out_mem.shape[1] + 1].argmax(-1).view(-1) - 1  # l_tar*b
 
         # filter -1´s
         mask = mem_attn_out.ne(-1)
@@ -1346,11 +1346,11 @@ class MBartDecoderLayerMemory(MBartDecoderLayer):
             indices = torch.arange(mask.shape[0], device=mask.device)[mask]
             mem_attn_out = mem_attn_out[mask]
 
-            dec_output = dec_output.view(l_tar*b, -1) # l_tar*b x d_model
-            hidden_states = dec_output[indices].unsqueeze(0) # 1 x mask.sum() x d_model
+            dec_output = dec_output.view(l_tar * b, -1)  # l_tar*b x d_model
+            hidden_states = dec_output[indices].unsqueeze(0)  # 1 x mask.sum() x d_model
 
-            key_value_states = enc_out_mem[:, mem_attn_out] # l_mem x mask.sum() x d_model
-            attention_mask = tgt_mask_mem[mem_attn_out] # mask.sum() x l_mem
+            key_value_states = enc_out_mem[:, mem_attn_out]  # l_mem x mask.sum() x d_model
+            attention_mask = tgt_mask_mem[mem_attn_out]  # mask.sum() x l_mem
 
             # print(3, hidden_states.shape, key_value_states.shape, attention_mask[0])
             st_attn, _, incremental_cache = self.memory_entry_attn(
@@ -1361,12 +1361,12 @@ class MBartDecoderLayerMemory(MBartDecoderLayer):
                 incremental=incremental, incremental_cache=incremental_cache,
                 checkpointing=checkpointing_cross_attn,
                 lang=lang, atb=atb
-            ) # st_attn: 1 x mask.sum() x d_model
+            )  # st_attn: 1 x mask.sum() x d_model
 
-            output = torch.zeros_like(dec_output, dtype=st_attn.dtype) # l_tar*b x d_model
+            output = torch.zeros_like(dec_output, dtype=st_attn.dtype)  # l_tar*b x d_model
             output[indices] = st_attn[0]
 
-            return output.view(l_tar, b, -1) # l_tar x b x d_model
+            return output.view(l_tar, b, -1)  # l_tar x b x d_model
         else:
             return None
 
@@ -1406,12 +1406,12 @@ class MBartDecoderLayerMemory(MBartDecoderLayer):
 
         residual = hidden_states
 
-        hidden_states = self.norm_memory_attn(hidden_states) # l_tgt x b x d_model
+        hidden_states = self.norm_memory_attn(hidden_states)  # l_tgt x b x d_model
 
-        #residual = hidden_states
+        # residual = hidden_states
 
-        cross_attn_weights = self.memory_attn(hidden_states, encoder_output_memory) # l_tgt x b x (n_mem+1)
-        #print(cross_attn_weights[:,0].argmax(-1), cross_attn_weights.shape)
+        cross_attn_weights = self.memory_attn(hidden_states, encoder_output_memory)  # l_tgt x b x (n_mem+1)
+        # print(cross_attn_weights[:,0].argmax(-1), cross_attn_weights.shape)
 
         hidden_states = self.calc_memory_entry_attn(dec_output=hidden_states,
                                                     mem_attn_out=cross_attn_weights,
@@ -1425,7 +1425,7 @@ class MBartDecoderLayerMemory(MBartDecoderLayer):
                                                     atb=atb)
 
         if hidden_states is not None:
-            #print(residual.std(),hidden_states.std(),cross_attn_weights.std())
+            # print(residual.std(),hidden_states.std(),cross_attn_weights.std())
             hidden_states = fused_dropout_add(hidden_states, residual.clone(), self.dropout,
                                               self.training)
         else:
@@ -1434,6 +1434,7 @@ class MBartDecoderLayerMemory(MBartDecoderLayer):
         outputs = (hidden_states, cross_attn_weights)
 
         return outputs, incremental_cache
+
 
 class MBartPreTrainedModel(PreTrainedModel):
     config_class = MBartConfig
@@ -1781,7 +1782,8 @@ class MBartDecoder(MBartPreTrainedModel):
         embed_tokens (nn.Embedding): output embedding
     """
 
-    def __init__(self, config: MBartConfig, opt, embed_tokens: Optional[nn.Embedding] = None, decoder_layer_class=MBartDecoderLayer):
+    def __init__(self, config: MBartConfig, opt, embed_tokens: Optional[nn.Embedding] = None,
+                 decoder_layer_class=MBartDecoderLayer):
         super().__init__(config)
         self.layerdrop = config.decoder_layerdrop
         self.padding_idx = config.pad_token_id
@@ -1863,7 +1865,6 @@ class MBartDecoder(MBartPreTrainedModel):
             self.cross_attention_cls = None
             self.layer_norm_cls = None
 
-
     def freeze_self_attn_params(self):
         #
         # self.layer_norm.weight.requires_grad = False
@@ -1903,12 +1904,11 @@ class MBartDecoder(MBartPreTrainedModel):
                 if idx == 1:
                     continue
                 layer.add_factorize(n_languages, rank=rank, multiplicative=multiplicative,
-                                        flexible=flexible, fast=fast, dyrank=dyrank)
+                                    flexible=flexible, fast=fast, dyrank=dyrank)
         else:
             for i, layer in enumerate(self.layers):
                 layer.add_factorize(n_languages, rank=rank, multiplicative=multiplicative,
-                                        flexible=flexible, fast=fast, dyrank=dyrank)
-
+                                    flexible=flexible, fast=fast, dyrank=dyrank)
 
     def forward(
             self,
@@ -2012,8 +2012,8 @@ class MBartDecoder(MBartPreTrainedModel):
             # unpad the context
             encoder_hidden_states = encoder_hidden_states.transpose(0, 1).contiguous()
             padding_mask = encoder_attention_mask
+            context_len = encoder_hidden_states.size(1)
             if padding_mask is None:
-                context_len = encoder_hidden_states.size(1)
                 padding_mask = input_ids.new_zeros(bsz, context_len)
             padding_mask = padding_mask.long()
             lengths = (1 - padding_mask).sum(dim=1)
@@ -2030,6 +2030,14 @@ class MBartDecoder(MBartPreTrainedModel):
             if src_lang is not None and src_lang.ndim == 3:
                 src_lang = src_lang.view(-1, src_lang.size(-1))
                 src_lang = src_lang.index_select(0, non_pad_indices)
+            elif src_lang is not None and src_lang.ndim == 1 and src_lang.size(0) == bsz and bsz > 1:
+                src_lang = src_lang.unsqueeze(1).repeat(1, context_len).view(-1)
+                src_lang = src_lang.index_select(0, non_pad_indices)
+
+            if lang is not None:
+                if lang.ndim == 1 and lang.size(0) == bsz and bsz > 1:
+                    lang = lang.unsqueeze(1).repeat(1, qlen).view(-1)
+                    lang = lang.index_select(0, non_pad_indices_q)
 
         else:
             max_len, cu_seqlens = None, None
@@ -2129,7 +2137,8 @@ class MBartDecoder(MBartPreTrainedModel):
 
         return tuple(
             v
-            for v in [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions, contrastive_loss, pred_lang]
+            for v in
+            [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions, contrastive_loss, pred_lang]
             if v is not None
         )
 
@@ -2227,7 +2236,6 @@ class MBartDecoder(MBartPreTrainedModel):
             hidden_states = layer_outputs[0]
 
             if self.predict_language > 0 and idx == 0:
-
                 cross_attn_input = self.layer_norm_cls(hidden_states)
                 cross_attn_output, _, _ = self.cross_attention_cls(
                     hidden_states=cross_attn_input,
@@ -2255,8 +2263,6 @@ class MBartDecoder(MBartPreTrainedModel):
             if buffering:
                 decoder_state.update_attention_buffer(buffer, idx)
 
-
-
         hidden_states = self.layer_norm(hidden_states)
         output = hidden_states[-1].unsqueeze(0)
 
@@ -2269,6 +2275,7 @@ class MBartDecoder(MBartPreTrainedModel):
         output_dict['context'] = encoder_hidden_states
 
         return output_dict
+
 
 class MBartDecoderMemory(MBartDecoder):
     def __init__(self, config: MBartConfig, opt, embed_tokens: Optional[nn.Embedding] = None):
@@ -2286,7 +2293,8 @@ class MBartDecoderMemory(MBartDecoder):
             checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
             if not "decoder.memory_decoder.embed_tokens.weight" in checkpoint['model'].keys():
                 print("Initializing memory decoder with trained baseline decoder weights")
-                dec_model_state_dict = {k[len("decoder."):]: v for k, v in checkpoint['model'].items() if k.startswith("decoder.")}
+                dec_model_state_dict = {k[len("decoder."):]: v for k, v in checkpoint['model'].items() if
+                                        k.startswith("decoder.")}
                 self.memory_decoder.load_state_dict(dec_model_state_dict, strict=False)
         elif opt.dec_state_dict:
             dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
@@ -2295,7 +2303,8 @@ class MBartDecoderMemory(MBartDecoder):
             print("Not loading pretrained mbart decoder weights for memory decoder")
 
         layers = []
-        for layer_id in np.linspace(0, len(self.memory_decoder.layers) - 1, num=opt.decoder_layers_memory, dtype=np.int64):
+        for layer_id in np.linspace(0, len(self.memory_decoder.layers) - 1, num=opt.decoder_layers_memory,
+                                    dtype=np.int64):
             layers.append(copy.deepcopy(self.memory_decoder.layers[layer_id]))
         self.memory_decoder.layers = nn.ModuleList(layers)
 
@@ -2317,7 +2326,7 @@ class MBartDecoderMemory(MBartDecoder):
         memory_text_embeds = self.layernorm_embedding(memory_text_embeds)
         memory_text_embeds = nn.functional.dropout(memory_text_embeds, p=self.dropout, training=self.training)
 
-        memory_text_mask = memory_text_ids.eq(1) #.to(torch.uint8)
+        memory_text_mask = memory_text_ids.eq(1)  # .to(torch.uint8)
 
         return memory_text_embeds, memory_text_mask
 
@@ -2392,7 +2401,8 @@ class MBartDecoderMemory(MBartDecoder):
         # hidden_states = hidden_states
         hidden_states = self.memory_decoder.layernorm_embedding(hidden_states)
 
-        hidden_states = nn.functional.dropout(hidden_states, p=self.memory_decoder.dropout, training=self.memory_decoder.training)
+        hidden_states = nn.functional.dropout(hidden_states, p=self.memory_decoder.dropout,
+                                              training=self.memory_decoder.training)
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
@@ -2424,8 +2434,8 @@ class MBartDecoderMemory(MBartDecoder):
             # unpad the context
             encoder_hidden_states = encoder_hidden_states.transpose(0, 1).contiguous()
             padding_mask = encoder_attention_mask
+            context_len = encoder_hidden_states.size(1)
             if padding_mask is None:
-                context_len = encoder_hidden_states.size(1)
                 padding_mask = input_ids.new_zeros(bsz, context_len)
             padding_mask = padding_mask.long()
             lengths = (1 - padding_mask).sum(dim=1)
@@ -2442,7 +2452,6 @@ class MBartDecoderMemory(MBartDecoder):
             if src_lang is not None and src_lang.ndim == 3:
                 src_lang = src_lang.view(-1, src_lang.size(-1))
                 src_lang = src_lang.index_select(0, non_pad_indices)
-
         else:
             max_len, cu_seqlens = None, None
             max_len_kv, cu_seqlens_kv = None, None
@@ -2455,6 +2464,7 @@ class MBartDecoderMemory(MBartDecoder):
                 src_lang = src_lang.transpose(0, 1)
 
         _lang = lang
+
         pred_lang = None
 
         for idx, decoder_layer in enumerate(self.memory_decoder.layers):
@@ -2545,7 +2555,9 @@ class MBartDecoderMemory(MBartDecoder):
 
         return tuple(
             v
-            for v in [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions, contrastive_loss, pred_lang, all_cross_attn_weights]
+            for v in
+            [hidden_states, all_hidden_states, all_self_attns, all_cross_attentions, contrastive_loss, pred_lang,
+             all_cross_attn_weights]
             if v is not None
         )
 
@@ -2653,7 +2665,6 @@ class MBartDecoderMemory(MBartDecoder):
             all_cross_attn_weights += (cross_attn_weights,)
 
             if self.predict_language > 0 and idx == 0:
-
                 cross_attn_input = self.layer_norm_cls(hidden_states)
                 cross_attn_output, _, _ = self.cross_attention_cls(
                     hidden_states=cross_attn_input,

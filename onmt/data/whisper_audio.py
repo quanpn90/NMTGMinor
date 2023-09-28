@@ -23,7 +23,7 @@ FRAMES_PER_SECOND = exact_div(SAMPLE_RATE, HOP_LENGTH)  # 10ms per audio frame
 TOKENS_PER_SECOND = exact_div(SAMPLE_RATE, N_SAMPLES_PER_TOKEN)  # 20ms per audio token
 
 
-def load_audio(file: str, sr: int = SAMPLE_RATE):
+def load_audio(file: str, sr: int = SAMPLE_RATE, start_time=-1, end_time=-1):
     """
     Open an audio file and read as mono waveform, resampling as necessary
 
@@ -42,11 +42,28 @@ def load_audio(file: str, sr: int = SAMPLE_RATE):
     try:
         # This launches a subprocess to decode audio while down-mixing and resampling as necessary.
         # Requires the ffmpeg CLI and `ffmpeg-python` package to be installed.
-        out, _ = (
-            ffmpeg.input(file, threads=0)
-            .output("-", format="s16le", acodec="pcm_s16le", ac=1, ar=sr)
-            .run(cmd=["ffmpeg", "-nostdin"], capture_stdout=True, capture_stderr=True)
-        )
+
+        if start_time == 0 and end_time == -1:
+
+            out, _ = (
+                ffmpeg.input(file, threads=0, )
+                .output("-", format="s16le", acodec="pcm_s16le", ac=1, ar=sr)
+                .run(cmd=["ffmpeg", "-nostdin"], capture_stdout=True, capture_stderr=True)
+            )
+
+        elif end_time == -1:
+
+            stream = ffmpeg.input(file, threads=0, )
+            audio = stream.audio.filter("atrim", start=start_time, end=end_time)
+            stream = ffmpeg.output(audio, "-", format="s16le", acodec="pcm_s16le", ac=1, ar=sr)
+            out, _ = ffmpeg.run(stream, cmd=["ffmpeg", "-nostdin"], capture_stdout=True, capture_stderr=True)
+
+        else:
+            stream = ffmpeg.input(file, threads=0, )
+            audio = stream.audio.filter("atrim", start=start_time)
+            stream = ffmpeg.output(audio, "-", format="s16le", acodec="pcm_s16le", ac=1, ar=sr)
+            out, _ = ffmpeg.run(stream, cmd=["ffmpeg", "-nostdin"], capture_stdout=True, capture_stderr=True)
+
     except ffmpeg.Error as e:
         raise RuntimeError(f"Failed to load audio: {e.stderr.decode()}") from e
 
@@ -102,6 +119,7 @@ def log_mel_spectrogram(
     n_mels: int = N_MELS,
     padding: int = 0,
     device: Optional[Union[str, torch.device]] = None,
+    start_time = 0, end_time=-1
 ):
     """
     Compute the log-Mel spectrogram of
@@ -120,6 +138,12 @@ def log_mel_spectrogram(
     device: Optional[Union[str, torch.device]]
         If given, the audio tensor is moved to this device before STFT
 
+    start_time: float
+        Number of zero samples to pad to the right
+
+    end_time: float
+        If given, the audio tensor is moved to this device before STFT
+
     Returns
     -------
     torch.Tensor, shape = (80, n_frames)
@@ -127,7 +151,7 @@ def log_mel_spectrogram(
     """
     if not torch.is_tensor(audio):
         if isinstance(audio, str):
-            audio = load_audio(audio)
+            audio = load_audio(audio, start_time=start_time, end_time=end_time)
         audio = torch.from_numpy(audio)
 
     if device is not None:

@@ -12,6 +12,7 @@ import torch
 import onmt
 import numpy as np
 from .audio_utils import ArkLoader
+from .whisper_audio import log_mel_spectrogram
 
 
 class SpeechBinarizer:
@@ -54,6 +55,8 @@ class SpeechBinarizer:
             assert input_format in ['kaldi', 'scp']
         if output_format == 'wav':
             input_format = 'wav'
+        if input_format == "whisper":
+            pass
 
         # audio_data = iter(ReadHelper('scp:' + filename))
         # data_file = open(filename)
@@ -133,6 +136,17 @@ class SpeechBinarizer:
                     feature_vector = ark_loader.load_wav(wavpath, start_time, end_time, sample_rate=sample_rate)
                     # store a tuple of data and information to load the wav again during training
                     data.append((wavpath, start_time, end_time, sample_rate))
+
+                elif input_format == "whisper":
+                    # an wav input file should have format uttid wav_file start end
+                    # in which the start and end (by second) can be 0 0
+
+                    if len(parts) >= 4:
+                        wavpath, start_time, end_time = parts[1], float(parts[2]), float(parts[3])
+                    else:
+                        wavpath = parts[1]
+                        start_time = 0
+                        end_time = -1
 
                 length = feature_vector.size(0)
                 lengths.append(length)

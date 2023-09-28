@@ -145,6 +145,14 @@ def main(gpu, opt):
     # manager = MyManager()
     # manager.start()
 
+    if opt.char_ctc:
+        lprint("Loading char data ...")
+        char_data = dict()
+        char_data["bpe2char"] = torch.load("bpe2char.pt")
+        char_data["bpeid2charid"] = torch.load("bpeid2charid.pt")
+    else:
+        char_data = None
+
     if not opt.multi_dataset:
         if opt.data_format in ['bin', 'raw']:
             start = time.time()
@@ -211,7 +219,9 @@ def main(gpu, opt):
                                           num_split=1,
                                           constants=constants,
                                           use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False,
-                                          concat=opt.concat_dataset)
+                                          concat=opt.concat_dataset,
+                                          char_data=char_data,
+                                          use_char_level=opt.char_ctc)
             else:
                 train_data = onmt.StreamDataset(train_dict['src'], train_dict['tgt'],
                                                 train_src_langs, train_tgt_langs,
@@ -266,7 +276,9 @@ def main(gpu, opt):
                                           upsampling=opt.upsampling,
                                           input_size=opt.input_size,
                                           constants=constants,
-                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory)
+                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory,
+                                          char_data=char_data,
+                                          use_char_level=opt.char_ctc)
             else:
                 valid_data = onmt.StreamDataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
                                                 valid_src_langs, valid_tgt_langs,
@@ -389,7 +401,9 @@ def main(gpu, opt):
                                           max_tgt_len=opt.max_tgt_length,
                                           constants=constants,
                                           use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False,
-                                          concat=opt.concat_dataset)
+                                          concat=opt.concat_dataset,
+                                          char_data=char_data,
+                                          use_char_level=opt.char_ctc)
             else:
                 train_data = onmt.StreamDataset(train_src,
                                                 train_tgt,
@@ -474,7 +488,9 @@ def main(gpu, opt):
                                           max_tgt_len=opt.max_tgt_length,
                                           min_src_len=1, min_tgt_len=3,
                                           constants=constants,
-                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory)
+                                          use_memory=hasattr(opt, "use_memory") and opt.use_memory,
+                                          char_data=char_data,
+                                          use_char_level=opt.char_ctc)
             else:
                 # for validation data, we have to go through sentences (very slow but to ensure correctness)
                 valid_data = onmt.StreamDataset(valid_src, valid_tgt,
@@ -601,7 +617,9 @@ def main(gpu, opt):
                                               constants=constants,
                                               dataset_factor=dataset_factors.get(idx_),
                                               use_memory=hasattr(opt, "use_memory") and opt.use_memory, validation=False,
-                                              concat=opt.concat_dataset)
+                                              concat=opt.concat_dataset,
+                                              char_data=char_data,
+                                              use_char_level=opt.char_ctc)
 
                     if c == 1:
                         dicts['tgt_pad'] = train_data.get_tgt_pad()
@@ -678,7 +696,9 @@ def main(gpu, opt):
                                               input_size=opt.input_size,
                                               cleaning=True, verbose=True,
                                               constants=constants,
-                                              use_memory=hasattr(opt, "use_memory") and opt.use_memory)
+                                              use_memory=hasattr(opt, "use_memory") and opt.use_memory,
+                                              char_data=char_data,
+                                              use_char_level=opt.char_ctc)
 
                     valid_sets.append(valid_data)
 

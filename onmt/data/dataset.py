@@ -241,6 +241,57 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
 
 
 @torch.no_grad()
+def merge_char_data(data, align_right=False, type='text',
+                    dataname="target_text", src_pad=1, tgt_pad=1, char_data=None ):
+    """
+    Assembling the individual sequences into one single tensor, included padding
+    :param tgt_pad:
+    :param src_pad:
+    :param dataname:
+    :param data: the list of sequences
+    :param align_right: aligning the sequences w.r.t padding
+    :param type: text or audio
+    :return:
+    """
+    # initialize with batch_size * length
+    assert char_data is not None
+    bpeid2charid = char_data["bpeid2charid"]
+
+    # char_data should have structure:
+    converted_data = list()
+
+    for sample in data:
+        char_sample = list()
+        for _element in sample.tolist():
+            char_sample = char_sample + bpeid2charid[_element]
+
+        converted_data.append(char_sample)
+
+    # convert the data from bpe to cha
+
+    tgt_pad = bpeid2charid[tgt_pad][0]
+
+    if type == "text":
+        lengths = [x.size(0) for x in converted_data]
+        # positions = [torch.arange(length_) for length_ in lengths]
+        max_length = max(lengths)
+        # if max_length > 8:
+        #     max_length = math.ceil(max_length / 8) * 8
+
+        tensor = data[0].new(len(data), max_length).fill_(tgt_pad)
+        pos = None
+
+        for i in range(len(data)):
+            data_length = data[i].size(0)
+            offset = max_length - data_length if align_right else 0
+            tensor[i].narrow(0, offset, data_length).copy_(data[i])
+
+        return tensor, pos, lengths
+
+
+
+
+@torch.no_grad()
 def collate_fn(src_data, tgt_data,
                src_lang_data, tgt_lang_data,
                src_atbs_data, tgt_atbs_data,
@@ -250,7 +301,8 @@ def collate_fn(src_data, tgt_data,
                bilingual=False, vocab_mask=None,
                past_src_data=None, src_pad="<blank>", tgt_pad="<blank>",
                feature_size=40, use_memory=None,
-               src_features=None, deterministic=False):
+               src_features=None, deterministic=False,
+               use_char_level=False, char_data=None):
     tensors = dict()
     if src_data is not None:
         tensors['source'], tensors['source_pos'], src_lengths = merge_data(src_data, align_right=src_align_right,
@@ -326,6 +378,11 @@ def collate_fn(src_data, tgt_data,
         tensors["src_features"] = features
         tensors["src_features_mask"] = mask
         tensors["src_size"] = src_size
+
+    # BPE -> CHAR level conversion
+    if use_char_level:
+        target_char, _, tgt_char_lengths = merge_char_data(tgt_data, align_right=tgt_align_right,
+                                                           tgt_pad=tgt_pad, char_data=char_data)
 
     # ONE-SHOT LEARNING MEMORY IMPLEMENTATION
     if use_memory:
@@ -593,6 +650,8 @@ class Dataset(torch.utils.data.Dataset):
                  dataset_factor=None,
                  use_memory=False,
                  validation=True,
+                 use_char_level=False,
+                 char_data=None,
                  **kwargs):
         """
         :param src_data: List of tensors for the source side (1D for text, 2 or 3Ds for other modalities)
@@ -646,6 +705,8 @@ class Dataset(torch.utils.data.Dataset):
         self.batch_size_frames = batch_size_frames
         self.concat = concat
         self.multiplier = multiplier
+        self.use_char_level = use_char_level
+        self.char_data = char_data
 
         cut_off_size = kwargs.get('cut_off_size', 200000)
         smallest_batch_size = kwargs.get('smallest_batch_size', 4)
