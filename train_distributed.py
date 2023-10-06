@@ -147,9 +147,8 @@ def main(gpu, opt):
 
     if opt.char_ctc:
         lprint("Loading char data ...")
-        char_data = dict()
-        char_data["bpe2char"] = torch.load("bpe2char.pt")
-        char_data["bpeid2charid"] = torch.load("bpeid2charid.pt")
+
+        char_data = torch.load("char_data.pt")
     else:
         char_data = None
 
@@ -719,6 +718,9 @@ def main(gpu, opt):
     else:
         dicts['tgt'].patch(opt.patch_vocab_multiplier)
         checkpoint = None
+
+    if opt.char_ctc:
+        dicts['char_data'] = char_data
 
     if "src" in dicts:
         lprint(' * vocabulary size. source = %d; target = %d' %

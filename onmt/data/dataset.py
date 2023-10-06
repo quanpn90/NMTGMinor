@@ -239,15 +239,14 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
     else:
         raise NotImplementedError
 
-
+# trimming? (removing x[0] and x[-1])
 @torch.no_grad()
 def merge_char_data(data, align_right=False, type='text',
-                    dataname="target_text", src_pad=1, tgt_pad=1, char_data=None ):
+                    tgt_pad=1, char_data=None):
     """
     Assembling the individual sequences into one single tensor, included padding
     :param tgt_pad:
-    :param src_pad:
-    :param dataname:
+    :param char_data:
     :param data: the list of sequences
     :param align_right: aligning the sequences w.r.t padding
     :param type: text or audio
@@ -256,6 +255,7 @@ def merge_char_data(data, align_right=False, type='text',
     # initialize with batch_size * length
     assert char_data is not None
     bpeid2charid = char_data["bpeid2charid"]
+    trimming = char_data["trimming"] if "trimming" in char_data else False
 
     # char_data should have structure:
     converted_data = list()
@@ -271,20 +271,29 @@ def merge_char_data(data, align_right=False, type='text',
 
     tgt_pad = bpeid2charid[tgt_pad][0]
 
+    # todo: remove x[0] and x[-1]?
     if type == "text":
-        lengths = [x.size(0) for x in converted_data]
-        # positions = [torch.arange(length_) for length_ in lengths]
+        if trimming:
+            lengths = [x.size(0) - 2 for x in converted_data]
+        else:
+            lengths = [x.size(0) for x in converted_data]
         max_length = max(lengths)
-        # if max_length > 8:
-        #     max_length = math.ceil(max_length / 8) * 8
 
         tensor = data[0].new(len(data), max_length).fill_(tgt_pad)
         pos = None
 
         for i in range(len(data)):
-            data_length = data[i].size(0)
-            offset = max_length - data_length if align_right else 0
-            tensor[i].narrow(0, offset, data_length).copy_(data[i])
+
+            if trimming:
+                data_length = data[i].size(0) - 2
+                offset = max_length - data_length if align_right else 0
+
+                # if trimming we need to remove the characters
+                tensor[i].narrow(0, offset, data_length).copy_(data[i][1:-1])
+            else:
+                data_length = data[i].size(0)
+                offset = max_length - data_length if align_right else 0
+                tensor[i].narrow(0, offset, data_length).copy_(data[i])
 
         return tensor, pos, lengths
 
@@ -383,6 +392,10 @@ def collate_fn(src_data, tgt_data,
     if use_char_level:
         target_char, _, tgt_char_lengths = merge_char_data(tgt_data, align_right=tgt_align_right,
                                                            tgt_pad=tgt_pad, char_data=char_data)
+
+    # the target characters contain the
+    tensors['char_target'] = target_char
+    # do we also need the mask?
 
     # ONE-SHOT LEARNING MEMORY IMPLEMENTATION
     if use_memory:

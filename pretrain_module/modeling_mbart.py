@@ -1411,7 +1411,6 @@ class MBartDecoderLayerMemory(MBartDecoderLayer):
         # residual = hidden_states
 
         cross_attn_weights = self.memory_attn(hidden_states, encoder_output_memory)  # l_tgt x b x (n_mem+1)
-        # print(cross_attn_weights[:,0].argmax(-1), cross_attn_weights.shape)
 
         hidden_states = self.calc_memory_entry_attn(dec_output=hidden_states,
                                                     mem_attn_out=cross_attn_weights,
@@ -1425,7 +1424,6 @@ class MBartDecoderLayerMemory(MBartDecoderLayer):
                                                     atb=atb)
 
         if hidden_states is not None:
-            # print(residual.std(),hidden_states.std(),cross_attn_weights.std())
             hidden_states = fused_dropout_add(hidden_states, residual.clone(), self.dropout,
                                               self.training)
         else:

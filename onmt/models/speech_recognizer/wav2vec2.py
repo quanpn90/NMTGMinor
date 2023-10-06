@@ -731,6 +731,7 @@ class Wav2vecBERT(Wav2vecTransformer):
         self.encoder_type = encoder_type
         self.decoder_type = decoder_type
         self.sub_encoder = sub_encoder
+        self.model_size = encoder.model_size
 
         if hasattr(decoder, 'dec_pretrained_model') and decoder.dec_pretrained_model:
             try:
@@ -759,6 +760,12 @@ class Wav2vecBERT(Wav2vecTransformer):
             # self.ctc_linear = nn.Linear(encoder.model_size, self.tgt_vocab_size)
             # self.ctc_linear.weight = self.generator[0].linear.weight
             # self.ctc_linear_weight = self.generator[0].linear.weight
+
+    def create_ctc_char(self, char_data):
+
+        id2char = char_data['id2char']
+        char_vocab_size = len(id2char)
+        self.char_ctc_linear = nn.Linear(self.model_size, self.char_vocab_size)
 
     def forward(self, batch, zero_encoder=False, factorize=False, target_mask=None, mirror=False,
                 checkpointing_ffn=False,
