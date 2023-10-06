@@ -340,6 +340,8 @@ def make_parser(parser):
                         help='Zero-out encoders during training')
     parser.add_argument('-ctc_loss', type=float, default=0.0,
                         help='CTC Loss as additional loss function with this weight')
+    parser.add_argument('-ctc_loss_delay', type=int, default=-1,
+                        help="Ctc loss delay - only start ctc after this step.")
     # parser.add_argument('-lfv_multilingual', action='store_true',
     #                     help='Use multilingual language identifier to get LFV for each language')
     parser.add_argument('-bottleneck_size', type=int, default=64,

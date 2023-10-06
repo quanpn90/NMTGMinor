@@ -688,7 +688,7 @@ class Trainer(object):
                                              ctc_loss_function = self.ctc_loss_function,
                                              ctc_labels = targets,
                                              grad_scaler = self.grad_scaler,
-                                             ctc_coeff = opt.ctc_loss
+                                             ctc_coeff = opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0
                                              )
 
                         batch_size = batch.size
@@ -702,9 +702,9 @@ class Trainer(object):
                         full_loss = loss
 
                         if opt.ctc_loss > 0.0:
-                            ctc_loss_data = outputs['ctc_loss']
-                            # ctc_loss_data = ctc_loss.item()
-                            # full_loss = full_loss + opt.ctc_loss * ctc_loss
+                            ctc_loss = outputs['ctc_loss']
+                            ctc_loss_data = ctc_loss.item()
+                            full_loss = full_loss + ctc_loss
 
                         if opt.mirror_loss:
                             rev_loss = loss_dict['rev_loss']
@@ -1252,8 +1252,8 @@ class Trainer(object):
                         full_loss = loss
 
                         if opt.ctc_loss > 0.0:
-                            ctc_loss_data = outputs['ctc_loss']
-                            # full_loss = full_loss + opt.ctc_loss * ctc_loss
+                            ctc_loss = outputs['ctc_loss']
+                            full_loss = full_loss + ctc_loss
 
                         if opt.mirror_loss:
                             rev_loss = loss_dict['rev_loss']

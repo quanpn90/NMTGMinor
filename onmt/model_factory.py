@@ -306,8 +306,12 @@ def build_tm_model(opt, dicts, constants=None):
 
         model_class = Wav2vecBERT if not hasattr(opt, "use_memory") or not opt.use_memory else Wav2vecBERTMemory
 
-        model = model_class(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0,
+        model = model_class(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss,
+                            ctc=opt.ctc_loss > 0.0,
                             sub_encoder=sub_encoder, opt=opt)
+
+        if opt.char_ctc and opt.ctc_loss > 0.0:
+            model.create_ctc_char(dicts['char_data'])
 
         # TODO: share the ctc_loss weight with the decoder weights
 

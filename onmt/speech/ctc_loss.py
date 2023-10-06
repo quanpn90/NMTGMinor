@@ -13,8 +13,8 @@ class CTC(torch.nn.Module):
                  padding_idx=-1, blank_idx=0):
         super().__init__()
 
-        self.vocab_size = vocab_size
-        self.hidden_size = hidden_size
+        # self.vocab_size = vocab_size
+        # self.hidden_size = hidden_size
         if padding_idx == -1:
             self.padding_idx = onmt.constants.PAD
         else:
@@ -104,7 +104,7 @@ class CTC(torch.nn.Module):
 
         # print("MAX SOURCE LENGTH", logits.size(0), logits.size())
         # print(input_lengths)
-
+        # #
         # print("MAX LENGTH", targets.size(0), targets.size())
         # print(target_lengths)
 

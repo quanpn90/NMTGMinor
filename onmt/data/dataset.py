@@ -256,6 +256,8 @@ def merge_char_data(data, align_right=False, type='text',
     assert char_data is not None
     bpeid2charid = char_data["bpeid2charid"]
     trimming = char_data["trimming"] if "trimming" in char_data else False
+    id2char = char_data["id2char"]
+    vocab_size = len(id2char)
 
     # char_data should have structure:
     converted_data = list()
@@ -265,35 +267,36 @@ def merge_char_data(data, align_right=False, type='text',
         for _element in sample.tolist():
             char_sample = char_sample + bpeid2charid[_element]
 
-        converted_data.append(char_sample)
+        for _charid in char_sample:
+            assert 0 <= _charid < vocab_size
+
+        converted_data.append(torch.LongTensor(char_sample))
 
     # convert the data from bpe to cha
 
     tgt_pad = bpeid2charid[tgt_pad][0]
-
     # todo: remove x[0] and x[-1]?
-    if type == "text":
+    if trimming:
+        lengths = [x.size(0) - 2 for x in converted_data]
+    else:
+        lengths = [x.size(0) for x in converted_data]
+    max_length = max(lengths)
+
+    tensor = converted_data[0].new(len(converted_data), max_length).fill_(tgt_pad)
+    pos = None
+
+    for i in range(len(converted_data)):
+
         if trimming:
-            lengths = [x.size(0) - 2 for x in converted_data]
+            data_length = converted_data[i].size(0) - 2
+            offset = max_length - data_length if align_right else 0
+
+            # if trimming we need to remove the characters
+            tensor[i].narrow(0, offset, data_length).copy_(converted_data[i][1:-1])
         else:
-            lengths = [x.size(0) for x in converted_data]
-        max_length = max(lengths)
-
-        tensor = data[0].new(len(data), max_length).fill_(tgt_pad)
-        pos = None
-
-        for i in range(len(data)):
-
-            if trimming:
-                data_length = data[i].size(0) - 2
-                offset = max_length - data_length if align_right else 0
-
-                # if trimming we need to remove the characters
-                tensor[i].narrow(0, offset, data_length).copy_(data[i][1:-1])
-            else:
-                data_length = data[i].size(0)
-                offset = max_length - data_length if align_right else 0
-                tensor[i].narrow(0, offset, data_length).copy_(data[i])
+            data_length = converted_data[i].size(0)
+            offset = max_length - data_length if align_right else 0
+            tensor[i].narrow(0, offset, data_length).copy_(converted_data[i])
 
         return tensor, pos, lengths
 
@@ -393,9 +396,12 @@ def collate_fn(src_data, tgt_data,
         target_char, _, tgt_char_lengths = merge_char_data(tgt_data, align_right=tgt_align_right,
                                                            tgt_pad=tgt_pad, char_data=char_data)
 
-    # the target characters contain the
-    tensors['char_target'] = target_char
-    # do we also need the mask?
+        # the target characters contain the
+        tensors['char_target'] = target_char
+        # do we also need the mask?
+    else:
+        target_char = None
+        tensors['char_target'] = None
 
     # ONE-SHOT LEARNING MEMORY IMPLEMENTATION
     if use_memory:
@@ -1043,7 +1049,10 @@ class Dataset(torch.utils.data.Dataset):
                                   past_src_data=past_src,
                                   src_pad=self.src_pad,
                                   tgt_pad=self.tgt_pad,
-                                  feature_size=self.input_size),
+                                  feature_size=self.input_size,
+                                  use_char_level=self.use_char_level,
+                                  char_data=self.char_data
+                                  ),
                        )
         return batch
 
@@ -1104,7 +1113,10 @@ class Dataset(torch.utils.data.Dataset):
                                src_type=self._type,
                                augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask,
                                past_src_data=past_src_data, src_pad=self.src_pad, tgt_pad=self.tgt_pad,
-                               feature_size=self.input_size)
+                               feature_size=self.input_size,
+                               use_char_level=self.use_char_level,
+                               char_data=self.char_data
+                               )
 
             batches.append(batch)
 
