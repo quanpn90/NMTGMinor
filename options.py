@@ -602,6 +602,9 @@ def make_parser(parser):
 
 def backward_compatible(opt):
     # FOR BACKWARD COMPATIBILITY
+    if not hasattr(opt, 'char_ctc'):
+        opt.char_ctc = False
+
     if not hasattr(opt, 'flex_factorize'):
         opt.flex_factorize = False
 

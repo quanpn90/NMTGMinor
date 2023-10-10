@@ -1063,7 +1063,8 @@ class Wav2vecBERT(Wav2vecTransformer):
         return
 
 
-    def create_decoder_state(self, batch, beam_size=1, type=1, buffering=True, **kwargs):
+    def create_decoder_state(self, batch, beam_size=1, type=1,
+                             buffering=True, dicts=None, **kwargs):
         """
         Generate a new decoder state based on the batch input
         :param buffering:
@@ -1085,6 +1086,25 @@ class Wav2vecBERT(Wav2vecTransformer):
 
         encoder_output = self.encoder(src.transpose(0, 1), batch_first_output=False,
                                       lang=src_lang, atb=src_atb)
+
+        encoder_context = encoder_output['context']
+        print(encoder_context.size())
+
+        if self.ctc_char:
+            ctc_logits = self.char_ctc_linear(encoder_context)
+            ctc_outputs = torch.nn.functional.log_softmax(ctc_logits, dim=-1)
+
+            prob_ctc = ctc_outputs.transpose(0, 1).contiguous()
+            bsz = prob_ctc.size(0)
+
+            src_mask = encoder_output['src']
+            src_lengths = (1 - src_mask.long()).sum(dim=1)
+            print("Input Lengths", src_lengths)
+
+            for b in range(bsz):
+                predicted = prob_ctc[b][: src_lengths[b]].argmax(-1).tolist()
+                print(predicted)
+
 
         if hasattr(self.encoder, 'predict_language') and self.encoder.predict_language > 0:
             print("CREATING DECODER STATE with predictive source language...")

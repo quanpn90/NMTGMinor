@@ -285,6 +285,8 @@ def merge_char_data(data, align_right=False, type='text',
     tensor = converted_data[0].new(len(converted_data), max_length).fill_(tgt_pad)
     pos = None
 
+    # print(converted_data)
+
     for i in range(len(converted_data)):
 
         if trimming:
@@ -298,7 +300,9 @@ def merge_char_data(data, align_right=False, type='text',
             offset = max_length - data_length if align_right else 0
             tensor[i].narrow(0, offset, data_length).copy_(converted_data[i])
 
-        return tensor, pos, lengths
+    # print(tensor)
+
+    return tensor, pos, lengths
 
 
 

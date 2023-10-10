@@ -35,17 +35,10 @@ class CTC(torch.nn.Module):
             else "builtin"
         )
 
-        if ctc_type != self.ctc_type:
-            logging.warning(f"CTC was set to {self.ctc_type} due to PyTorch version.")
 
         if self.ctc_type == "builtin":
             reduction_type = "sum" if reduce else "none"
             self.ctc_loss = torch.nn.CTCLoss(blank=onmt.constants.TGT_PAD, reduction=reduction_type, zero_infinity=True)
-
-        elif self.ctc_type == "warpctc":
-            import warpctc_pytorch as warp_ctc
-
-            self.ctc_loss = warp_ctc.CTCLoss(size_average=False, length_average=False)
 
         else:
             raise ValueError(
@@ -65,6 +58,7 @@ class CTC(torch.nn.Module):
         """
 
         if self.ctc_type == "builtin":
+
             log_probs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
 
             # Use the deterministic CuDNN implementation of CTC loss to avoid
@@ -95,6 +89,7 @@ class CTC(torch.nn.Module):
         # target mask should be T x B
         target_mask = targets.ne(self.padding_idx)
         target_lengths = target_mask.long().sum(0)
+        # print(target_lengths)
 
         # source mask should be B x 1 x T or B x T
         if source_mask.dim() == 3:
@@ -102,15 +97,15 @@ class CTC(torch.nn.Module):
         else:
             input_lengths = (1 - source_mask).sum(1)
 
-        # print("MAX SOURCE LENGTH", logits.size(0), logits.size())
-        # print(input_lengths)
-        # #
-        # print("MAX LENGTH", targets.size(0), targets.size())
-        # print(target_lengths)
-
         if self.ctc_type == 'builtin':
             # target is batch first
-            targets = targets.transpose(0, 1)
+            targets = targets.transpose(0, 1).contiguous()
+            padding_mask = targets.eq(self.padding_idx)
+            targets = targets.view(-1)  # flatten [B x T]
+
+            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+            targets = targets.index_select(0, non_pad_indices)
+
         loss = self.compute_loss(logits, targets, input_lengths, target_lengths)
 
         return loss
