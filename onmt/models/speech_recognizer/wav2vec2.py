@@ -1103,7 +1103,13 @@ class Wav2vecBERT(Wav2vecTransformer):
 
             for b in range(bsz):
                 predicted = prob_ctc[b][: src_lengths[b]].argmax(-1).tolist()
-                print(predicted)
+
+                if dicts is not None:
+                    id2char = dicts['char_data']['id2char']
+                    char_predicted = [id2char[_id] for _id in predicted]
+                    # print(char_predicted)
+                # else:
+                #     print(predicted)
 
 
         if hasattr(self.encoder, 'predict_language') and self.encoder.predict_language > 0:

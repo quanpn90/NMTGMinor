@@ -57,6 +57,8 @@ class Translator(object):
             # self.bos_token = model_opt.tgt_bos_word
 
             if i == 0:
+                self.dicts = dicts
+
                 if "src" in checkpoint['dicts']:
                     self.src_dict = checkpoint['dicts']['src']
                 else:

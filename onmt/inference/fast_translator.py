@@ -539,7 +539,8 @@ class FastTranslator(Translator):
             pretrained_clf = self.pretrained_clfs[i] if self.opt.pretrained_classifier else None
             decoder_states[i] = self.models[i].create_decoder_state(batches[i], beam_size, type=2,
                                                                     buffering=self.buffering,
-                                                                    pretrained_classifier=pretrained_clf)
+                                                                    pretrained_classifier=pretrained_clf,
+                                                                    dicts=self.dicts)
         if self.opt.sub_model:
             for i in range(self.n_sub_models):
                 sub_decoder_states[i] = self.sub_models[i].create_decoder_state(sub_batches[i], beam_size, type=2,

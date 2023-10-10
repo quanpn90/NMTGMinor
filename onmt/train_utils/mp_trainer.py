@@ -1169,6 +1169,7 @@ class Trainer(object):
         total_non_pads = zero_tensor()
         report_loss, report_tgt_words = zero_tensor(), zero_tensor()
         report_ctc_loss = zero_tensor()
+        report_ctc_targets = zero_tensor()
         report_src_words = zero_tensor()
         report_rec_loss, report_rev_loss, report_mirror_loss = zero_tensor(), zero_tensor(), zero_tensor()
         start = time.time()
