@@ -312,7 +312,7 @@ def build_tm_model(opt, dicts, constants=None):
 
         if opt.char_ctc and opt.ctc_loss > 0.0:
             print("creating CTC output layer")
-            model.create_ctc_char(dicts['char_data'])
+            model.create_ctc_char(dicts['char_data'], ctc_compress=opt.ctc_compress)
 
         # TODO: share the ctc_loss weight with the decoder weights
 

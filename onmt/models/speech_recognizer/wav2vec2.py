@@ -17,6 +17,8 @@ import numpy as np
 from onmt.modules.loss import CrossEntropyLossBase
 from onmt.modules.layer_norm import LayerNorm
 
+from itertools import groupby
+
 
 #
 # # maybe just need d / F.normalize(d, p=2, dim=2)
@@ -757,14 +759,23 @@ class Wav2vecBERT(Wav2vecTransformer):
         # this model cannot use CTC
         self.ctc = False
         self.ctc_char = False
+        self.ctc_compress = False
 
-    def create_ctc_char(self, char_data):
+
+
+    def create_ctc_char(self, char_data, ctc_compress="None"):
 
         id2char = char_data['id2char']
         char_vocab_size = len(id2char)
         self.char_vocab_size = char_vocab_size
         self.char_ctc_linear = nn.Linear(self.model_size, char_vocab_size)
         print(self.char_vocab_size)
+
+        if ctc_compress != "None":
+            from .ctc_compressor import CTCCompressStrategy
+            self.ctc_compress = getattr(CTCCompressStrategy, ctc_compress)
+        else:
+            self.ctc_compress = None
 
         self.ctc_char = True
 
@@ -846,59 +857,52 @@ class Wav2vecBERT(Wav2vecTransformer):
             # encoder_hidden = output_dict['wav2vec_context'].
             # output_dict['encoder_logits'] = self.ctc_linear(output_dict['wav2vec_context'])
             # how should we proceed from this?
-            # ctc_linear_weight = self.generator[0].linear.weight
-            #
-            # encoder_logits = torch.nn.functional.linear(context, ctc_linear_weight)# self.ctc_linear(context)
+
             encoder_logits = self.char_ctc_linear(context)
 
             ctc_loss_inputs = dict()
             ctc_loss_inputs['encoder_logits'] = encoder_logits
-            ctc_loss_inputs['wav2vec_padding_mask'] = encoder_output['wav2vec_padding_mask'].detach()
-            ctc_loss_inputs['src_mask'] = encoder_output['src'].detach()
+            ctc_loss_inputs['wav2vec_padding_mask'] = encoder_output['wav2vec_padding_mask']
+            ctc_loss_inputs['src_mask'] = encoder_output['src']
 
-            ctc_loss = ctc_loss_function(ctc_loss_inputs, ctc_labels) * ctc_coeff
+            ctc_loss, n_ctc_targets = ctc_loss_function(ctc_loss_inputs, ctc_labels)
+            ctc_loss = ctc_loss * ctc_coeff
 
             # backward immediately and accumulate gradients into the context.grad
             #
             # if self.training:
             #     grad_scaler.scale(ctc_loss).backward()
             # del encoder_logits
-            # if ctc_compress:
+            if self.ctc_compress is not None:
             #     # TODO: Ctc compression
-            #     with torch.no_grad():
-            #         x_ctc = encoder_logits
-            #         batch_predicted = []
-            #         prob_ctc = F.softmax(x_ctc, dim=-1).transpose(0, 1)  # from T x B x D to B x T x D
-            #         for b in range(prob_ctc.shape[0]):
-            #             predicted = prob_ctc[b][: src_lengths[b]].argmax(-1).tolist()
-            #             batch_predicted.append([(p[0], len(list(p[1]))) for p in groupby(predicted)])
-            #
-            #         new_lengths = [len(p) for p in batch_predicted]
-            #
-            #         # TODO: compress_method
-            #         weights_matrix = self.ctc_compress_method(prob_ctc, batch_predicted, new_lengths, x.dtype,
-            #                                                   x.device)
+                with torch.no_grad():
+                    x_ctc = encoder_logits
+                    batch_predicted = []
+                    prob_ctc = F.softmax(x_ctc, dim=-1).transpose(0, 1)  # from T x B x D to B x T x D
+                    for b in range(prob_ctc.shape[0]):
+                        predicted = prob_ctc[b][: src_lengths[b]].argmax(-1).tolist()
+                        batch_predicted.append([(p[0], len(list(p[1]))) for p in groupby(predicted)])
 
-                    # context = context.permute(1, 2, 0).bmm(weights_matrix).permute(2, 0, 1)
-            # else:
-            #
-            #     del encoder_logits
+                    new_lengths = [len(p) for p in batch_predicted]
 
+                    # TODO: compress_method
+                    weights_matrix = self.ctc_compress(prob_ctc, batch_predicted, new_lengths, x_ctc.dtype,
+                                                          x_ctc.device)
 
-            #
-            # TODO: make new src mask
+                context = context.permute(1, 2, 0).bmm(weights_matrix).permute(2, 0, 1)
 
-            ctc_loss_data = ctc_loss.item()
-            #
-            # del ctc_loss
+                # creating a new padding mask
+                max_len = max(new_lengths)
+                _src_mask = context.new_zeros(len(new_lengths), max_len).bool()
+                for i, l in enumerate(new_lengths):
+                    _src_mask[i, l:] = 1
 
-            # torch.cuda.synchronize()
-
-            # todo: ctc compression
+                src_attention_mask = _src_mask
 
         else:
             ctc_loss = None
             ctc_loss_data = None
+            n_ctc_targets = 0
 
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bert", "roberta"]:
             # src: [b, src_l]  context: [b, src_l, de_model]
@@ -988,11 +992,12 @@ class Wav2vecBERT(Wav2vecTransformer):
         output_dict['hidden'] = output
         output_dict['context'] = context
         # output_dict['context_origin'] = encoder_output['context']
-        output_dict['src_mask'] = encoder_output['src']
+        output_dict['src_mask'] = src_attention_mask
         output_dict['src'] = src
         output_dict['target_mask'] = target_mask
         output_dict['target'] = batch.get('target_output')
         output_dict['ctc_loss'] = ctc_loss
+        output_dict['n_ctc_targets'] = n_ctc_targets
 
         output_dict['wav2vec_context'] = encoder_output['wav2vec_context']
         output_dict['wav2vec_padding_mask'] = encoder_output['wav2vec_padding_mask']
@@ -1107,9 +1112,9 @@ class Wav2vecBERT(Wav2vecTransformer):
                 if dicts is not None:
                     id2char = dicts['char_data']['id2char']
                     char_predicted = [id2char[_id] for _id in predicted]
-                    # print(char_predicted)
-                # else:
-                #     print(predicted)
+                    print(char_predicted)
+                else:
+                    print(predicted)
 
 
         if hasattr(self.encoder, 'predict_language') and self.encoder.predict_language > 0:

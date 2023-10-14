@@ -595,6 +595,7 @@ class Trainer(object):
         report_loss, report_tgt_words = zero_tensor(), zero_tensor()
         report_ctc_loss = zero_tensor()
         report_ewc_loss = zero_tensor()
+        report_ctc_targets = zero_tensor()
         report_ewc_count = 0
         report_src_words = zero_tensor()
         report_sents = zero_tensor()
@@ -703,8 +704,12 @@ class Trainer(object):
 
                         if opt.ctc_loss > 0.0:
                             ctc_loss = outputs['ctc_loss']
+                            n_ctc_targets = outputs['n_ctc_targets']
                             ctc_loss_data = ctc_loss.item()
                             full_loss = full_loss + ctc_loss
+                        else:
+                            n_ctc_targets = 0
+                            ctc_loss_data = 0
 
                         if opt.mirror_loss:
                             rev_loss = loss_dict['rev_loss']
@@ -902,10 +907,6 @@ class Trainer(object):
                 else:
                     grad_denom = 1
 
-                # the gradient is scaled by world size, so in order to match the model without multiGPU
-                # we rescale the model parameters w.r.t the world size
-                # grad_denom = grad_denom / self.world_size
-
                 # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
                 if grad_denom != 1:
                     normalize_gradients(self.model.parameters(), grad_denom)
@@ -989,6 +990,7 @@ class Trainer(object):
 
             if opt.ctc_loss > 0.0:
                 report_ctc_loss.add_(ctc_loss_data)
+                report_ctc_targets.add_(n_ctc_targets)
 
             # control the index a little bit to ensure the log is always printed
             if i == 0 or ((i + 1) % opt.log_interval < self.world_size):
@@ -1021,7 +1023,7 @@ class Trainer(object):
                         # if torch.isinf(report_ctc_loss):
                         #     report_ctc_loss.zero_()
                         # self.all_reduce(report_ctc_loss, op=dist.ReduceOp.SUM, group=self.group)
-                        ctc_loss = report_ctc_loss.item() / report_tgt_words.item()
+                        ctc_loss = report_ctc_loss.item() / report_ctc_targets.item()
                         log_string += (" ctcloss: %8.2f ; " % ctc_loss)
 
                     if opt.contrastive_loss_coeff > 0.0:
@@ -1066,6 +1068,7 @@ class Trainer(object):
                 report_rev_loss.zero_()
                 report_mirror_loss.zero_()
                 report_ctc_loss.zero_()
+                report_ctc_targets.zero_()
                 report_ewc_loss.zero_()
                 report_ewc_count = 0
                 # report_sents.zero_()

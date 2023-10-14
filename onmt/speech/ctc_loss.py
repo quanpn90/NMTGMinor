@@ -108,4 +108,6 @@ class CTC(torch.nn.Module):
 
         loss = self.compute_loss(logits, targets, input_lengths, target_lengths)
 
-        return loss
+        target_size = targets.numel()
+
+        return loss, target_size

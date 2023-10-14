@@ -596,12 +596,18 @@ def make_parser(parser):
                         help="Whether to use an additional memory decoder")
     parser.add_argument('-char_ctc', action="store_true",
                         help="Whether to use an additional ctc on character level")
+    parser.add_argument('-ctc_compress', type=str, default="None",
+                        help='Strategy to compress the ctc. Default is None.')
+
 
     return parser
 
 
 def backward_compatible(opt):
     # FOR BACKWARD COMPATIBILITY
+    if not hasattr(opt, 'ctc_compress'):
+        opt.ctc_compress = "None"
+
     if not hasattr(opt, 'char_ctc'):
         opt.char_ctc = False
 
