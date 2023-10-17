@@ -851,8 +851,8 @@ class MBartEncoderLayer(nn.Module):
                 self.fused_function = mlp_gelu_function
                 self.fused = True
 
-        from onmt.modules.optimized.fast_mha import fast_bert_mha
-        self.fast_bert_mha = fast_bert_mha
+        from onmt.modules.optimized.flash_mha import flash_bert_mha
+        self.fast_bert_mha = flash_bert_mha
 
     def forward(
             self,
@@ -1638,8 +1638,8 @@ class MBartEncoder(MBartPreTrainedModel):
 
         self.init_weights()
         self.gradient_checkpointing = False
-        from onmt.modules.optimized.fast_mha import fast_bert_mha
-        self.fast_bert_mha = fast_bert_mha
+        from onmt.modules.optimized.flash_mha import flash_bert_mha
+        self.fast_bert_mha = flash_bert_mha
 
     def forward(
             self,

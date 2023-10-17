@@ -245,9 +245,17 @@ def build_tm_model(opt, dicts, constants=None):
             if opt.freeze_embedding:
                 decoder.embed_tokens.weight.requires_grad = False
 
-            # if opt.enc_config_file:
-            #     enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
-            #     sub_encoder = MBartEncoder(enc_mbart_config, opt)
+            if len(opt.enc_state_dict) > 1:
+                enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
+                sub_encoder = MBartEncoder(enc_mbart_config, opt)
+
+                print("[INFO] Loading weights for (sub) mBART encoder from: %s ..." % opt.enc_state_dict)
+                enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+                sub_encoder.load_state_dict(enc_model_state_dict)
+                for parameter in sub_encoder.parameters():
+                    parameter.requires_grad = False  # don't update these guys
+                    sub_encoder.embed_tokens = decoder.embed_tokens  # and reduce memory usage
+
         elif opt.dec_pretrained_model in ['deltalm']:
             print("[INFO] Created DeltaLM decoder from: %s ..." % opt.dec_config_file)
             from onmt.models.deltalm.deltalm import DeltaLMDecoder
@@ -292,13 +300,7 @@ def build_tm_model(opt, dicts, constants=None):
         else:
             print("Not loading pretrained mbart decoder weights")
 
-        # if len(opt.enc_state_dict) > 1:
-        #     print("[INFO] Loading weights for mBART encoder from: %s ..." % opt.enc_state_dict)
-        #     enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
-        #     sub_encoder.load_state_dict(enc_model_state_dict)
-        #     for parameter in sub_encoder.parameters():
-        #         parameter.requires_grad = False # don't update these guys
-        #         sub_encoder.embed_tokens = decoder.embed_tokens # and reduce memory usage
+
 
         decoder.dec_pretrained_model = opt.dec_pretrained_model
         if opt.freeze_embedding:
