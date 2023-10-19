@@ -253,7 +253,7 @@ def build_tm_model(opt, dicts, constants=None):
                 enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
                 sub_encoder.load_state_dict(enc_model_state_dict)
                 for parameter in sub_encoder.parameters():
-                    parameter.requires_grad = False  # don't update these guys
+                    # parameter.requires_grad = False  # don't update these guys
                     sub_encoder.embed_tokens = decoder.embed_tokens  # and reduce memory usage
 
         elif opt.dec_pretrained_model in ['deltalm']:

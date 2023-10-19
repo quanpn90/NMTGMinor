@@ -1687,10 +1687,10 @@ class MBartEncoder(MBartPreTrainedModel):
             # use the input embeds from another stack
             # maybe don't use layernorm_embedding
             hidden_states = inputs_embeds
-            hidden_states = self.layernorm_embedding(hidden_states)
+            # hidden_states = self.layernorm_embedding(hidden_states)
 
         # should we use layernorm embedding here?
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
         encoder_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
@@ -1700,8 +1700,6 @@ class MBartEncoder(MBartPreTrainedModel):
         # check if fast bert mha can be run
         seq_len = hidden_states.size(1)
         bsz = hidden_states.size(0)
-        sm = torch.cuda.get_device_capability()
-        total_bsz = 0
 
         if self.fast_bert_mha and torch.is_autocast_enabled():
             can_run_fast_bert_mha = True
