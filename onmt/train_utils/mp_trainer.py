@@ -703,10 +703,10 @@ class Trainer(object):
                         full_loss = loss
 
                         if opt.ctc_loss > 0.0:
-                            ctc_loss = outputs['ctc_loss']
+                            ctc_loss_data = outputs['ctc_loss']
                             n_ctc_targets = outputs['n_ctc_targets']
-                            ctc_loss_data = ctc_loss.item()
-                            full_loss = full_loss + ctc_loss
+                            # ctc_loss_data = ctc_loss.item()
+                            # full_loss = full_loss + ctc_loss
                         else:
                             n_ctc_targets = 0
                             ctc_loss_data = 0
