@@ -1139,14 +1139,19 @@ class Wav2vecBERT(Wav2vecTransformer):
 
                 src_attention_mask = _src_mask
 
+        if self.sub_encoder is not None:
+
+            sub_encoder_outputs = self.sub_encoder(inputs_embeds=context.transpose(0, 1).contiguous(),
+                                       attention_mask=src_attention_mask)
+
+            context = sub_encoder_outputs[0]
+
         if hasattr(self.encoder, 'predict_language') and self.encoder.predict_language > 0:
             print("CREATING DECODER STATE with predictive source language...")
             pred_lang = encoder_output['enc_pred_lang']  # needs to indicate that this is only logits
             src_lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32).transpose(0, 1).contiguous()
             src_lang = torch.argmax(src_lang, dim=-1)
             src_lang = torch.zeros_like(pred_lang).transpose(0, 1).contiguous().scatter_(2, src_lang.unsqueeze(2), 1.)
-
-
 
         dec_pretrained_model = self.decoder.dec_pretrained_model
         if not dec_pretrained_model:

@@ -245,13 +245,18 @@ def build_tm_model(opt, dicts, constants=None):
             if opt.freeze_embedding:
                 decoder.embed_tokens.weight.requires_grad = False
 
-            if len(opt.enc_state_dict) > 1:
+            # print(opt.enc_config_file, opt.enc_state_dict)
+            # if opt.enc_config
+
+            if opt.enc_config_file is not None and len(opt.enc_config_file) > 1:
+                print("creating MBART sub-encoders")
                 enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
                 sub_encoder = MBartEncoder(enc_mbart_config, opt)
 
-                print("[INFO] Loading weights for (sub) mBART encoder from: %s ..." % opt.enc_state_dict)
-                enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
-                sub_encoder.load_state_dict(enc_model_state_dict)
+                if opt.enc_state_dict is not None and len(opt.enc_state_dict) > 1:
+                    print("[INFO] Loading weights for (sub) mBART encoder from: %s ..." % opt.enc_state_dict)
+                    enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+                    sub_encoder.load_state_dict(enc_model_state_dict)
                 for parameter in sub_encoder.parameters():
                     # parameter.requires_grad = False  # don't update these guys
                     sub_encoder.embed_tokens = decoder.embed_tokens  # and reduce memory usage
