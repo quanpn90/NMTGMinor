@@ -110,9 +110,14 @@ def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
     """
 
     from onmt.train_utils.mp_trainer import Trainer
+    from onmt.train_utils.clip_trainer import ClipTrainer
 
-    trainer = Trainer(gpu, dicts, opt, constants)
-    trainer.run(checkpoint=checkpoint, train_data=train_data, valid_data=valid_data)
+    if opt.clip_learning:
+        trainer = ClipTrainer(gpu, dicts, opt, constants)
+        trainer.run(checkpoint=checkpoint, train_data=train_data, valid_data=valid_data)
+    else:
+        trainer = Trainer(gpu, dicts, opt, constants)
+        trainer.run(checkpoint=checkpoint, train_data=train_data, valid_data=valid_data)
 
 
 def run_gem_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):

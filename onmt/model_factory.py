@@ -56,6 +56,11 @@ def build_model(opt, dicts, remove_pretrain=False, constants=None):
     if 'atbs' in dicts and 'nothingness' in dicts['atbs'] and len(dicts['atbs']) == 1:
         opt.n_attributes = 0
 
+    if opt.clip_learning:
+        from onmt.clip_model_factory import build_clip_model
+        model = build_clip_model(opt, dicts, constants=constants)
+        return model
+
     if opt.bayes_by_backprop:
         from onmt.bayesian_factory import build_model as build_bayesian_model
         model = build_bayesian_model(opt, dicts)
@@ -257,9 +262,10 @@ def build_tm_model(opt, dicts, constants=None):
                     print("[INFO] Loading weights for (sub) mBART encoder from: %s ..." % opt.enc_state_dict)
                     enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
                     sub_encoder.load_state_dict(enc_model_state_dict)
-                for parameter in sub_encoder.parameters():
+                # for parameter in sub_encoder.parameters():
                     # parameter.requires_grad = False  # don't update these guys
-                    sub_encoder.embed_tokens = decoder.embed_tokens  # and reduce memory usage
+
+                sub_encoder.embed_tokens = decoder.embed_tokens  # and reduce memory usage
 
         elif opt.dec_pretrained_model in ['deltalm']:
             print("[INFO] Created DeltaLM decoder from: %s ..." % opt.dec_config_file)

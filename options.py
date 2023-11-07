@@ -599,12 +599,19 @@ def make_parser(parser):
     parser.add_argument('-ctc_compress', type=str, default="None",
                         help='Strategy to compress the ctc. Default is None.')
 
+    parser.add_argument('-extra_layers', type=int, default=0,
+                        help='Extra layers to learn the mapping function')
+    parser.add_argument('-clip_learning', action="store_true",
+                        help="Learn to get the representations of acoustic and text to be close to each other")
 
     return parser
 
 
 def backward_compatible(opt):
     # FOR BACKWARD COMPATIBILITY
+    if not hasattr(opt, 'extra_layers'):
+        opt.extra_layers = 0
+
     if not hasattr(opt, 'ctc_compress'):
         opt.ctc_compress = "None"
 

@@ -1648,7 +1648,7 @@ class MBartEncoder(MBartPreTrainedModel):
             inputs_embeds=None,
             output_attentions=None,
             output_hidden_states=None,
-            checkpointing_ffn=False
+            **kwargs
     ):
         """
         :param input_ids: [T x B] discrete input tokens
@@ -1742,8 +1742,7 @@ class MBartEncoder(MBartPreTrainedModel):
                     hidden_states,
                     attention_mask,
                     output_attentions=output_attentions,
-                    max_len=max_len, cu_seqlens=cu_seqlens,
-                    checkpointing_ffn=checkpointing_ffn
+                    max_len=max_len, cu_seqlens=cu_seqlens
                 )
 
                 hidden_states = layer_outputs[0]

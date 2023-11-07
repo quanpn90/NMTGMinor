@@ -577,8 +577,6 @@ class FastTranslator(Translator):
                     sub_decoder_states[i]._reorder_incremental_state(reorder_state)
 
             decode_input = tokens[:, :step + 1]
-            # print(batches[0].get('source'))
-            # print(decode_input)
             lprobs, avg_attn_scores = self._decode(decode_input, decoder_states,
                                                    sub_decoder_states=sub_decoder_states)
 
@@ -858,6 +856,11 @@ class FastTranslator(Translator):
         # attn = attn[:, -1, :] # I dont know what this line does
         attn = None  # attn is never used in decoding probably
 
+
+        # TODO: add p_ctc to out
+        
+        
+
         return out, attn
 
     def build_prefix(self, prefixes, bsz=None):
@@ -892,12 +895,12 @@ class FastTranslator(Translator):
             #
             prefix_data = new_prefix_data
 
-                # _listed_tensor = prefix_tensor.tolist()
-                # if _listed_tensor[0] == self.tgt_bos:
-                #     _listed_tensor = _listed_tensor[1:]
-                # if _listed_tensor[0] == self.tgt_eos:
-                #     _listed_tensor = _listed_tensor[:-1]
-                # prefix_data.append(torch.LongTensor(_listed_tensor))
+            # _listed_tensor = prefix_tensor.tolist()
+            # if _listed_tensor[0] == self.tgt_bos:
+            #     _listed_tensor = _listed_tensor[1:]
+            # if _listed_tensor[0] == self.tgt_eos:
+            #     _listed_tensor = _listed_tensor[:-1]
+            # prefix_data.append(torch.LongTensor(_listed_tensor))
 
         # clone the same prefix for multiple sentences
         if len(prefix_data) == 1 and bsz > 1:

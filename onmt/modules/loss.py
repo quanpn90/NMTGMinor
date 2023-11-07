@@ -27,6 +27,39 @@ def tiny_value_of_dtype(dtype: torch.dtype):
         raise TypeError("Does not support dtype " + str(dtype))
 
 
+class CLIPCrossEntropyLoss(_Loss):
+
+    def __init__(self, temperature=1.0):
+        
+        super(CLIPCrossEntropyLoss, self).__init__()
+
+        self.loss_function = torch.nn.CrossEntropyLoss(reduction='sum')
+        self.temperature = temperature
+
+    def __call__(self, acoustic_embeddings, word_embeddings):
+        """
+        Args:
+            acoustic_embeddings: [B x H] averaged emebddings
+            word_embeddings: [B x H]
+
+        Returns:
+
+        """
+
+        logits = torch.mm(acoustic_embeddings, word_embeddings.transpose(0, 1).contiguous())
+        acoustic_similarity = torch.mm(acoustic_embeddings, acoustic_embeddings.transpose(0, 1).contiguous())
+        text_similarity = torch.mm(word_embeddings, word_embeddings.transpose(0, 1).contiguous())
+
+        targets = F.softmax((acoustic_similarity + text_similarity) / 2 * self.temperature, dim=-1)
+
+        text_loss = self.loss_function(logits, targets)
+        image_loss = self.loss_function(logits.transpose(0, 1).contiguous(), targets.transpose(0, 1).contiguous())
+
+        loss = text_loss + image_loss
+
+        return loss
+
+
 class CrossEntropyLossBase(_Loss):
     """
     Class for managing  efficient loss computation.
