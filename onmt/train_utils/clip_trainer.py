@@ -90,6 +90,15 @@ class ClipTrainer(Trainer):
         model = build_model(opt, dicts, False, self.constants)
 
         """ Building the loss function """
+        tgt_pad = dicts['tgt_pad']
+
+        if opt.ctc_loss > 0.0:
+            from onmt.speech.ctc_loss import CTC
+            self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True,
+                                         padding_idx=tgt_pad, blank_idx=0)
+
+        else:
+            self.ctc_loss_function = None
 
         from onmt.modules.loss import CLIPCrossEntropyLoss
         loss_function = CLIPCrossEntropyLoss(temperature=1.0)
@@ -237,7 +246,8 @@ class ClipTrainer(Trainer):
                             targets = batch.get('target_output')
                             tgt_mask = targets.ne(onmt.constants.PAD)
 
-                            output_dict = self.model(batch)
+                            output_dict = self.model(batch, ctc_loss_function=self.ctc_loss_function,
+                                                     ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0)
                             batch_size = batch.size
 
                             acoustic_features = output_dict['acoustic_features']
@@ -285,6 +295,9 @@ class ClipTrainer(Trainer):
         report_src_words = zero_tensor()
         report_sents = zero_tensor()
 
+        report_ctc_loss = zero_tensor()
+        report_ctc_targets = zero_tensor()
+
         start = time.time()
         n_samples = len(data_iterator)
 
@@ -321,7 +334,8 @@ class ClipTrainer(Trainer):
 
                 with maybe_no_sync():
                     with autocast(enabled=opt.fp16):
-                        output_dict = self.model(batch)
+                        output_dict = self.model(batch, ctc_loss_function=self.ctc_loss_function,
+                                                 ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0)
                         acoustic_features = output_dict['acoustic_features']
                         text_features = output_dict['text_features']
 
@@ -332,6 +346,15 @@ class ClipTrainer(Trainer):
                         loss = self.loss_function(acoustic_features, text_features)
                         loss_data = loss.item()
                         full_loss = loss
+
+                        if opt.ctc_loss > 0.0:
+                            ctc_loss = output_dict['ctc_loss']
+                            n_ctc_targets = output_dict['n_ctc_targets']
+                            ctc_loss_data = output_dict['ctc_loss_data']
+                            full_loss = full_loss + ctc_loss
+                        else:
+                            n_ctc_targets = 0
+                            ctc_loss_data = 0
 
                         optimizer = self.optim.optimizer
 
@@ -451,6 +474,10 @@ class ClipTrainer(Trainer):
             # total_non_pads += batch.get('target_output').ne(onmt.constants.PAD).sum().item()
             # batch_efficiency = total_non_pads / total_tokens
 
+            if opt.ctc_loss > 0.0:
+                report_ctc_loss.add_(ctc_loss_data)
+                report_ctc_targets.add_(n_ctc_targets)
+
             # control the index a little bit to ensure the log is always printed
             if i == 0 or ((i + 1) % opt.log_interval < self.world_size):
 
@@ -458,11 +485,19 @@ class ClipTrainer(Trainer):
                 self.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
                 self.all_reduce(report_src_words, op=dist.ReduceOp.SUM, group=self.group)
 
+                if opt.ctc_loss > 0.0:
+                    self.all_reduce(report_ctc_loss, op=dist.ReduceOp.SUM, group=self.group)
+                    self.all_reduce(report_ctc_targets, op=dist.ReduceOp.SUM, group=self.group)
+
                 if self.is_main():
                     log_string = ("Epoch %2d, %5d/%5d; ; ppl: %6.2f ; grad_norm: %6.4f " %
                                   (epoch, i + 1, len(data_iterator),
                                    math.exp(report_loss.item() / report_tgt_words.item()),
                                    grad_norm))
+
+                    if opt.ctc_loss > 0.0:
+                        ctc_loss = report_ctc_loss.item() / report_ctc_targets.item()
+                        log_string += (" ctcloss: %8.2f ; " % ctc_loss)
 
                     log_string += ("lr: %.7f ; updates: %7d; " %
                                    (self.optim.get_learning_rate(),
@@ -480,8 +515,12 @@ class ClipTrainer(Trainer):
                 report_loss.zero_()
                 report_tgt_words.zero_()
                 report_src_words.zero_()
-                # report_sents.zero_()
+                report_sents.zero_()
+
                 start = time.time()
+
+                report_ctc_loss.zero_()
+                report_ctc_targets.zero_()
 
             # increase i by world size
             i = i + self.world_size

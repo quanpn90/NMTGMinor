@@ -35,7 +35,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 from .model_factory import json_to_namespace
 
 
-def build_clip_model(opt, dict, constants=None):
+def build_clip_model(opt, dicts, constants=None):
 
     print("Building CLIP Wav2vec + MBART50 model ...")
 
@@ -76,5 +76,10 @@ def build_clip_model(opt, dict, constants=None):
     from onmt.models.speech_recognizer.wav2vec_clip import Wav2VecCLIP
 
     model = Wav2VecCLIP(acoustic_encoder, sub_encoder)
+
+    # add ctc output layer
+    if opt.char_ctc and opt.ctc_loss > 0.0:
+        print("creating CTC output layer")
+        model.create_ctc_char(dicts['char_data'], ctc_compress=opt.ctc_compress)
 
     return model

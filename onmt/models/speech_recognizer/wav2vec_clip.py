@@ -56,9 +56,33 @@ class Wav2VecCLIP(nn.Module):
         self.acoustic_encoder = acoustic_encoder
         self.text_encoder = text_encoder
 
-        # TODO: freezing the weights in the acoustic encoder
+        self.model_size = acoustic_encoder.model_size
 
-    def forward(self, batch):
+        # this model cannot use CTC
+        self.ctc = False
+        self.ctc_char = False
+        self.ctc_compress = False
+
+        # TODO: freezing the weights in the acoustic
+
+    def create_ctc_char(self, char_data, ctc_compress="None"):
+
+        id2char = char_data['id2char']
+        char_vocab_size = len(id2char)
+        self.char_vocab_size = char_vocab_size
+        self.char_ctc_linear = nn.Linear(self.model_size, char_vocab_size)
+        print(self.char_vocab_size)
+
+        if ctc_compress != "None":
+            from .ctc_compressor import CTCCompressStrategy
+            self.ctc_compress = getattr(CTCCompressStrategy, ctc_compress)
+        else:
+            self.ctc_compress = None
+
+        self.ctc_char = True
+
+    def forward(self, batch, ctc_loss_function=None,
+                ctc_coeff=None, **kwargs):
         src = batch.get('source')
         tgt = batch.get('target')
 
@@ -80,6 +104,62 @@ class Wav2VecCLIP(nn.Module):
         acoustic_features = encoder_output['context']
         acoustic_pad_mask = encoder_output['src']
 
+        if self.ctc_char:
+            # what is the ctc_labels here?
+            ctc_labels = batch.get("char_target").transpose(0, 1)
+            assert (ctc_loss_function.padding_idx == onmt.constants.TGT_PAD)
+
+            # compute the logits for each encoder step
+            # run the ctcoutput via the wav2vec context (not context)
+            # ctc output should have the mbart vocabulary
+            # encoder_hidden = output_dict['wav2vec_context'].
+            # output_dict['encoder_logits'] = self.ctc_linear(output_dict['wav2vec_context'])
+            # how should we proceed from this?
+
+            encoder_logits = self.char_ctc_linear(acoustic_features)
+
+            ctc_loss_inputs = dict()
+            ctc_loss_inputs['encoder_logits'] = encoder_logits
+            ctc_loss_inputs['wav2vec_padding_mask'] = encoder_output['wav2vec_padding_mask']
+            ctc_loss_inputs['src_mask'] = acoustic_pad_mask
+
+            ctc_loss, n_ctc_targets = ctc_loss_function(ctc_loss_inputs, ctc_labels)
+            ctc_loss_data = ctc_loss.item()
+            ctc_loss = ctc_loss * ctc_coeff
+
+            if self.ctc_compress is not None:
+                # TODO: Ctc compression
+                with torch.no_grad():
+                    x_ctc = encoder_logits
+                    batch_predicted = []
+                    prob_ctc = F.softmax(x_ctc, dim=-1).transpose(0, 1)  # from T x B x D to B x T x D
+                    for b in range(prob_ctc.shape[0]):
+                        predicted = prob_ctc[b][: src_lengths[b]].argmax(-1).tolist()
+                        batch_predicted.append([(p[0], len(list(p[1]))) for p in groupby(predicted)])
+
+                    new_lengths = [len(p) for p in batch_predicted]
+
+                    # TODO: compress_method
+                    weights_matrix = self.ctc_compress(prob_ctc, batch_predicted, new_lengths, x_ctc.dtype,
+                                                       x_ctc.device)
+
+                context = context_detached.permute(1, 2, 0).bmm(weights_matrix).permute(2, 0, 1)
+
+                # creating a new padding mask
+                max_len = max(new_lengths)
+                _src_mask = context.new_zeros(len(new_lengths), max_len).bool()
+                for i, l in enumerate(new_lengths):
+                    _src_mask[i, l:] = 1
+
+                acoustic_features = context
+                acoustic_pad_mask = _src_mask
+                del encoder_logits
+
+        else:
+            ctc_loss = None
+            ctc_loss_data = None
+            n_ctc_targets = 0
+
         # averaged features from the acoustic encoder [B x H]
         acoustic_features = average_features(acoustic_features, acoustic_pad_mask)
 
@@ -96,5 +176,9 @@ class Wav2VecCLIP(nn.Module):
         output_dict = defaultdict(lambda: None)
         output_dict['acoustic_features'] = acoustic_features
         output_dict['text_features'] = text_features
+
+        output_dict['ctc_loss'] = ctc_loss
+        output_dict['ctc_loss_data'] = ctc_loss_data
+        output_dict['n_ctc_targets'] = n_ctc_targets
 
         return output_dict
