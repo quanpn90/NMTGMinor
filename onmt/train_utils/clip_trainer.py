@@ -237,7 +237,7 @@ class ClipTrainer(Trainer):
                             targets = batch.get('target_output')
                             tgt_mask = targets.ne(onmt.constants.PAD)
 
-                            output_dict = model(batch)
+                            output_dict = self.model(batch)
                             batch_size = batch.size
 
                             acoustic_features = output_dict['acoustic_features']
@@ -254,7 +254,6 @@ class ClipTrainer(Trainer):
         # allreduce the total loss and total words from other processes
         self.all_reduce(total_loss, op=dist.ReduceOp.SUM, group=self.group)
         self.all_reduce(total_words, op=dist.ReduceOp.SUM, group=self.group)
-        self.all_reduce(total_correct, op=dist.ReduceOp.SUM, group=self.group)
 
         self.model.train()
         self.loss_function.train()
