@@ -530,13 +530,11 @@ class ClipTrainer(Trainer):
             return
 
         if opt.run_validation_before_training or opt.max_step <= 0:
-            valid_loss, valid_accuracy = self.eval(valid_data)
+            valid_loss = self.eval(valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
 
             if self.is_main():
                 print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
-                # percent is never used in plural :)
-                print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
 
             if opt.max_step <= 0:
                 if self.is_main():
@@ -561,7 +559,6 @@ class ClipTrainer(Trainer):
 
             if self.is_main():
                 print('[INFO] Validation perplexity: %g' % valid_ppl)
-                print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
 
                 value = valid_ppl
                 self.save(epoch, value)
