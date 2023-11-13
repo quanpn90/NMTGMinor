@@ -53,9 +53,9 @@ def build_clip_model(opt, dicts, constants=None):
         print("[INFO] Replacing self attn in encoder with s4")
         acoustic_encoder.wav2vec_encoder.replace_attn_with_s4(s4_config)
 
-    # TODO: add extra layers for the wav2vec model
+    # add extra layers for the wav2vec model
     if opt.extra_layers > 0:
-        print("[INFO] Adding extra layers on top of wav2vec" )
+        print("[INFO] Adding extra layers on top of wav2vec")
         acoustic_encoder.wav2vec_encoder.add_extra_layers(opt.extra_layers)
 
     if opt.enc_config_file is not None and len(opt.enc_config_file) > 1:

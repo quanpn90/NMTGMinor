@@ -204,6 +204,8 @@ def build_tm_model(opt, dicts, constants=None):
             if opt.enc_state_dict is not None and len(opt.enc_state_dict) > 1:
                 print("[INFO] Loading weights for stacked encoder from: %s ..." % opt.enc_state_dict)
                 enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+                stacked_encoder.load_state_dict(enc_model_state_dict)
+                print("[INFO] ... Done")
 
                 # load parameters from state dict to model (using huggingface's approach)
                 # decoder.from_pretrained(state_dict=dec_model_state_dict,
@@ -217,8 +219,7 @@ def build_tm_model(opt, dicts, constants=None):
                 #     if key not in dec_model_state_dict:
                 #         dec_model_state_dict[key] = current_dict[key]
 
-                stacked_encoder.load_state_dict(enc_model_state_dict)
-                print("[INFO] ... Done")
+
 
         discrete_encoder = None
         if "wavlm" in opt.enc_pretrained_model:
@@ -235,6 +236,11 @@ def build_tm_model(opt, dicts, constants=None):
                 s4_config = json_to_namespace(opt.s4_config_file)
                 print("[INFO] Replacing self attn in encoder with s4")
                 encoder.wav2vec_encoder.replace_attn_with_s4(s4_config)
+
+            # add extra layers for the wav2vec model
+            if opt.extra_layers > 0:
+                print("[INFO] Adding extra layers on top of wav2vec")
+                encoder.wav2vec_encoder.add_extra_layers(opt.extra_layers)
 
         sub_encoder = None
 

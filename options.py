@@ -68,6 +68,10 @@ def make_parser(parser):
     parser.add_argument('-load_from', default='', type=str,
                         help="""If training from a checkpoint then this is the
                         path to the pretrained model.""")
+    parser.add_argument('-load_clip', default='', type=str,
+                        help="""If training from a checkpoint then this is the
+                            path to the pretrained model.""")
+
     parser.add_argument('-load_encoder_from', default='', type=str,
                         help="""Load encoder weight from a pretrained model.""")
     parser.add_argument('-load_decoder_from', default='', type=str,

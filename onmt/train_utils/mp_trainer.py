@@ -17,7 +17,6 @@ import onmt.modules
 from onmt.data.data_iterator import DataIterator
 from onmt.data.multidata_iterator import MultiDataIterator
 from onmt.data.dataset import rewrap
-from onmt.model_factory import build_model, build_language_model, optimize_model
 from onmt.model_factory import init_model_parameters
 from onmt.modules.loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.train_utils.stats import Logger
@@ -237,6 +236,8 @@ class Trainer(object):
         self.loss_function = loss_function
         self.grad_scaler = torch.cuda.amp.GradScaler()
 
+
+
         if opt.load_from:
             checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
 
@@ -290,6 +291,31 @@ class Trainer(object):
             if opt.starting_step > 0:
                 print("[INFO] Optimizer starting from state %d " % opt.starting_step)
                 self.optim.set_starting_step(opt.starting_step)
+
+        if len(opt.load_clip) > 0:
+            clip_checkpoint = torch.load(opt.load_clip, map_location=lambda storage, loc: storage)
+            if 'optim' in clip_checkpoint:
+                del clip_checkpoint['optim']
+            clip_opt = clip_checkpoint['opt']
+
+            clip_dicts = clip_checkpoint['dicts']
+            clip_constants = add_tokenidx(clip_opt, onmt.constants, clip_dicts)
+            clip_opt.enc_state_dict = None
+            clip_opt.dec_state_dict = None
+
+            clip_model = build_model(clip_opt, clip_dicts, False, clip_constants)
+            # this is important :P
+            optimize_model(clip_model)
+            clip_model.load_state_dict(clip_checkpoint['model'])
+
+            # load encoder weights
+            clip_encoder = clip_model.acoustic_encoder
+            clip_encoder_state_dict = clip_encoder.state_dict()
+
+            print("Loading CLIP encoder weights from", opt.load_clip)
+            self.model.encoder.load_state_dict(clip_encoder_state_dict)
+            if self.model.char_ctc_linear is not None:
+                self.model.char_ctc_linear.load_state_dict(clip_model.char_ctc_linear.state_dict())
 
         if self.world_size > 1:
             find_unused_parameters = opt.find_unused_parameters
@@ -550,6 +576,10 @@ class Trainer(object):
         self.all_reduce(total_words, op=dist.ReduceOp.SUM, group=self.group)
         self.all_reduce(total_correct, op=dist.ReduceOp.SUM, group=self.group)
 
+        if opt.ctc_loss > 0.0:
+            self.all_reduce(report_ctc_loss, op=dist.ReduceOp.SUM, group=self.group)
+            self.all_reduce(report_ctc_targets, op=dist.ReduceOp.SUM, group=self.group)
+
         if opt.use_memory:
             if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
                 model = self.model.module
@@ -703,10 +733,11 @@ class Trainer(object):
                         full_loss = loss
 
                         if opt.ctc_loss > 0.0:
-                            ctc_loss_data = outputs['ctc_loss']
+                            ctc_loss = outputs['ctc_loss']
+                            ctc_loss_data = outputs['ctc_loss_data']
                             n_ctc_targets = outputs['n_ctc_targets']
                             # ctc_loss_data = ctc_loss.item()
-                            # full_loss = full_loss + ctc_loss
+                            full_loss = full_loss + ctc_loss
                         else:
                             n_ctc_targets = 0
                             ctc_loss_data = 0
