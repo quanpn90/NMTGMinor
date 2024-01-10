@@ -1073,7 +1073,7 @@ class Wav2vecBERT(Wav2vecTransformer):
 
             src_mask = encoder_output['src']
             src_lengths = (1 - src_mask.long()).sum(dim=1)
-            print("Input Lengths", src_lengths)
+            # print("Input Lengths", src_lengths)
 
             for b in range(bsz):
                 predicted = prob_ctc[b][: src_lengths[b]].argmax(-1).tolist()

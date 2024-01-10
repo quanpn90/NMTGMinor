@@ -16,6 +16,7 @@ import copy
 import numpy as np
 from onmt.modules.loss import CrossEntropyLossBase
 from onmt.modules.layer_norm import LayerNorm
+from itertools import groupby
 
 
 def average_features(features, pad_mask):
@@ -128,6 +129,8 @@ class Wav2VecCLIP(nn.Module):
             ctc_loss = ctc_loss * ctc_coeff
 
             if self.ctc_compress is not None:
+                src_lengths = (1 - acoustic_pad_mask.long()).sum(dim=1)
+
                 # TODO: Ctc compression
                 with torch.no_grad():
                     x_ctc = encoder_logits
@@ -143,7 +146,7 @@ class Wav2VecCLIP(nn.Module):
                     weights_matrix = self.ctc_compress(prob_ctc, batch_predicted, new_lengths, x_ctc.dtype,
                                                        x_ctc.device)
 
-                context = context_detached.permute(1, 2, 0).bmm(weights_matrix).permute(2, 0, 1)
+                context = acoustic_features.permute(1, 2, 0).bmm(weights_matrix).permute(2, 0, 1)
 
                 # creating a new padding mask
                 max_len = max(new_lengths)
