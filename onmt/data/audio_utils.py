@@ -30,14 +30,14 @@ from .kaldiio.wavio import write_wav
 
 PY3 = sys.version_info[0] == 3
 
-
-
 if PY3:
     from collections.abc import Mapping
+
     binary_type = bytes
     string_types = str,
 else:
     from collections import Mapping
+
     binary_type = str
     string_types = basestring,  # noqa: F821
 
@@ -374,7 +374,6 @@ class ArkLoader(object):
 
 
 def safe_readaudio_from_cache(file_, start=0.0, end=0.0, sample_rate=16000):
-
     offset = math.floor(sample_rate * start)
     num_frames = -1 if end <= start else math.ceil(sample_rate * (end - start))
 
@@ -385,6 +384,7 @@ def safe_readaudio_from_cache(file_, start=0.0, end=0.0, sample_rate=16000):
     tensor = torch.from_numpy(waveform)
     tensor = tensor[:, 0].unsqueeze(1)
     return tensor
+
 
 class WavLoader(object):
 

@@ -1236,8 +1236,6 @@ class TransformerEncoder(nn.Module):
                 lengths = (1 - padding_mask).sum(dim=1)
                 lengths = lengths.cpu().tolist()  # list of lengths for B seqs
 
-                # packed_x = torch.nn.utils.rnn.pack_padded_sequence(org_x, lengths, enforce_sorted=False)
-
                 # remove paddings from x
                 x = x.view(-1, x.size(-1))  # flatten [B x T]
                 non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)

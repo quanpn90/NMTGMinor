@@ -128,7 +128,8 @@ class LayerNorm(torch.nn.Module):
     Note, however, that unlike LayerNorm this norm includes a batch component.
     """
 
-    def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True):
+    def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True,
+                 bias: bool = True, device=None, dtype=None):
         super().__init__()
 
         if isinstance(normalized_shape, numbers.Integral):
@@ -138,7 +139,10 @@ class LayerNorm(torch.nn.Module):
         self.elementwise_affine = elementwise_affine
         if self.elementwise_affine:
             self.weight = Parameter(torch.Tensor(*normalized_shape))
-            self.bias = Parameter(torch.Tensor(*normalized_shape))
+            if bias:
+                self.bias = Parameter(torch.Tensor(*normalized_shape))
+            else:
+                self.register_parameter('bias', None)
         else:
             self.register_parameter('weight', None)
             self.register_parameter('bias', None)
@@ -147,13 +151,15 @@ class LayerNorm(torch.nn.Module):
     def reset_parameters(self):
         if self.elementwise_affine:
             init.ones_(self.weight)
-            init.zeros_(self.bias)
+            if self.bias is not None:
+                init.zeros_(self.bias)
 
     def forward(self, input, fast=True):
 
         eps = self.eps
 
-        if input.is_cuda and fast and fast_layer_norm_cuda is not None and input.size(-1) in [768, 1024, 2048, 3072, 4096]:
+        if input.is_cuda and fast and fast_layer_norm_cuda is not None \
+                and input.size(-1) in [768, 1024, 2048, 3072, 4096] and self.bias is not None:
             return fast_layer_norm_affine(input, self.weight, self.bias, self.normalized_shape, eps)
 
         return F.layer_norm(

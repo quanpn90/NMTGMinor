@@ -6,6 +6,46 @@ import onmt
 import torch.nn.functional as F
 # from onmt.modules.swish import Swish
 from onmt.modules.dropout import VariationalDropout
+from torch.nn import Module
+from torch import Tensor
+
+from abc import ABC, abstractmethod
+import math
+
+
+class Projection(Module, ABC):
+    """Applies a linear transformation to incoming data."""
+
+    input_dim: int
+    output_dim: int
+
+    def __init__(self, input_dim: int, output_dim: int) -> None:
+        """
+        :param input_dim:
+            The dimensionality of inputs.
+        :param output_dim:
+            The dimensionality of projected outputs.
+        """
+        super().__init__()
+
+        self.input_dim, self.output_dim = input_dim, output_dim
+
+    @abstractmethod
+    def forward(self, x: Tensor) -> Tensor:
+        """
+        :param x:
+            The input to project. *Shape:* :math:`(*,H_{inp})`, where
+            :math:`H_{inp}` is the input dimensionality.
+
+        :returns:
+            The projected output. *Shape:* :math:`(*,H_{out})`, where all but
+            the last dimension are the same shape as the input and
+            :math:`H_{out}` is the output dimensionality.
+        """
+
+    def extra_repr(self) -> str:
+        """:meta private:"""
+        return f"input_dim={self.input_dim}, output_dim={self.output_dim}"
 
 
 # different linears for the same input
@@ -23,25 +63,44 @@ def group_linear(linears, input, bias=False):
     return F.linear(input, weight, bias_)
 
 
-class XavierLinear(nn.Module):
+class XavierLinear(Projection):
     ''' Simple Linear layer with xavier init '''
 
-    def __init__(self, d_in, d_out, bias=True, nonlinearity='linear'):
-        super(XavierLinear, self).__init__()
-        linear = nn.Linear(d_in, d_out, bias=bias)
+    def __init__(self, input_dim: int, output_dim: int, bias=True, init_fn=None, weight_norm=False,
+                 device=None, dtype=None):
+        super(XavierLinear, self).__init__(input_dim, output_dim)
+        linear = nn.Linear(input_dim, output_dim, bias=bias, device=device, dtype=dtype)
 
-        weight_norm = onmt.constants.weight_norm
         self.weight_norm = weight_norm
+        self.init_fn = init_fn
 
         if weight_norm:
             self.linear = WeightNorm(linear, name='weight')
         else:
             self.linear = linear
 
-        # init.xavier_uniform_(self.linear.weight)
-        #
-        # if bias:
-        #     self.linear.bias.data.zero_()
+        # hack
+        self.weight = self.linear.weight
+        self.bias = self.linear.bias
+
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        """Reset the parameters and buffers of the module."""
+        if self.init_fn is not None:
+            self.init_fn(self.linear)
+
+            return
+
+        torch.nn.init.kaiming_uniform_(self.linear.weight, a=math.sqrt(5))
+
+        if self.linear.bias is not None:
+            # We do not calculate the true standard deviation of the uniform
+            # distribution (i.e. multiply with sqrt(3)). See
+            # https://github.com/pytorch/pytorch/issues/57109#issuecomment-828847575.
+            bound = 1 / math.sqrt(self.input_dim) if self.input_dim > 0 else 0
+
+            torch.nn.init.uniform_(self.linear.bias, -bound, bound)
 
     def forward(self, x):
         return self.linear(x)
