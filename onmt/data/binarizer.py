@@ -51,7 +51,7 @@ class SpeechBinarizer:
     def binarize_file_single_thread(filename, ark_loader, offset=0, end=-1, worker_id=0,
                                     input_format='scp', output_format='raw',
                                     prev_context=0, concat=4, stride=1, fp16=False, sample_rate=16000,
-                                    verbose=False, fbank=0):
+                                    verbose=False, num_mel_bin=0):
         # if output_format is scp, we only read the length for sorting
         if output_format == 'scp':
             assert input_format in ['kaldi', 'scp']
@@ -134,15 +134,15 @@ class SpeechBinarizer:
 
                     if verbose:
                         print("processing wav file ...", wavpath, start_time, end_time)
-                        if wavpath.endswith("wav"):
-                            # if using wav we can use a cache loader to avoid loading big wavfiles too many times
-                            feature_vector = ark_loader.load_wav(wavpath, start_time, end_time, sample_rate=sample_rate)
-                        else:
-                            feature_vector = safe_readaudio(wavpath, start_time, end_time, sample_rate=sample_rate)
+                    if wavpath.endswith("wav"):
+                        # if using wav we can use a cache loader to avoid loading big wavfiles too many times
+                        feature_vector = ark_loader.load_wav(wavpath, start_time, end_time, sample_rate=sample_rate)
+                    else:
+                        feature_vector = safe_readaudio(wavpath, start_time, end_time, sample_rate=sample_rate)
 
                     # if we also extract the fmel then we can also do it here
-                    if fbank > 0:
-                        feature_vector = wav_to_fmel(feature_vector, num_mel_bin=fbank)
+                    if num_mel_bin > 0:
+                        feature_vector = wav_to_fmel(feature_vector, num_mel_bin=num_mel_bin)
 
                     # store a tuple of data and information to load the wav again during training
                     data.append((wavpath, start_time, end_time, sample_rate))
@@ -178,7 +178,7 @@ class SpeechBinarizer:
         return result
 
     @staticmethod
-    def binarize_file(filename, input_format='scp', output_format='raw',
+    def binarize_file(filename, input_format='scp', output_format='raw', num_mel_bin=0,
                       prev_context=0, concat=4, stride=1, fp16=False, num_workers=1, verbose=False):
 
         result = dict()
@@ -213,7 +213,7 @@ class SpeechBinarizer:
                 mp_results.append(pool.apply_async(
                     SpeechBinarizer.binarize_file_single_thread,
                     args=(filename, ark_loaders[worker_id], offsets[worker_id], offsets[worker_id + 1], worker_id,
-                          input_format, output_format, prev_context, concat, stride, fp16, 16000, verbose),
+                          input_format, output_format, prev_context, concat, stride, fp16, 16000, verbose, num_mel_bin),
                 ))
 
             pool.close()
@@ -226,7 +226,7 @@ class SpeechBinarizer:
             sp_result = SpeechBinarizer.binarize_file_single_thread(filename, ark_loaders[0], offsets[0], offsets[1], 0,
                                                                     input_format='scp', output_format=output_format,
                                                                     prev_context=prev_context, concat=concat,
-                                                                    stride=stride, fp16=fp16, verbose=verbose)
+                                                                    stride=stride, fp16=fp16, verbose=verbose, num_mel_bin=num_mel_bin)
             merge_result(sp_result)
 
         final_result['data'] = list()

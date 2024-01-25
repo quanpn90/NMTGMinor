@@ -16,6 +16,7 @@ import warnings
 import soundfile
 import math
 import torch
+import torchaudio
 
 from .kaldiio.compression_header import GlobalHeader
 from .kaldiio.compression_header import PerColHeader
@@ -458,7 +459,11 @@ def wav_to_fmel(wav: torch.Tensor, num_mel_bin=80, waveform_scale=2**15, standar
 
     """
     # extract log mel filterbank features
-    feature_vector = torchaudio.kaldi.fbank(wav.squeeze(1) * waveform_scale,
+    # wav = wav.squeeze(1)
+    # print(wav.size())
+    # assert(wav.ndim == 1)
+    wav = wav.squeeze(1).unsqueeze(0)
+    feature_vector = torchaudio.compliance.kaldi.fbank(wav * waveform_scale,
                                             num_mel_bins=num_mel_bin)
     # normalize
     if standardized:
