@@ -1,7 +1,7 @@
 import torch
 import torchaudio as taudio
 from functools import lru_cache
-from onmt.utils import safe_readaudio
+from .audio_utils import safe_readaudio, wav_to_fmel, safe_readaudio_from_cache
 import numpy as np
 import soundfile
 import math
@@ -9,33 +9,13 @@ import torchaudio
 import os
 
 
-# this function reads wav file based on the timestamp in seconds
-def safe_readaudio_from_cache(file_, wav_path, start=0.0, end=0.0, sample_rate=16000):
-
-    offset = math.floor(sample_rate * start)
-    num_frames = -1 if end <= start else math.ceil(sample_rate * (end - start))
-
-    if file_ is not None:
-        dtype = "float32"
-        frames = file_._prepare_read(offset, None, num_frames)
-        waveform = file_.read(frames, dtype, always_2d=True)
-        sample_rate_ = file_.samplerate
-        tensor = torch.from_numpy(waveform)
-        tensor = tensor[:, 0].unsqueeze(1)
-    else:
-
-        tensor = tensor[:, 0].unsqueeze(1)
-
-     # select the first channel?
-    # tensor has size [length, num_channel] in which channel should be 1 for wav2vec
-
-    return tensor
-
-
 class WavDataset(torch.utils.data.Dataset):
-    def __init__(self, wav_path_list, cache_size=0, wav_path_replace=None):
+    def __init__(self, wav_path_list, cache_size=0, wav_path_replace=None, num_mel_bin=0):
         """
-        :param scp_path_list: list of path to the ark matrices
+        param wav_path_list: list of path to the audio
+        param cache_size: size of the cache to load wav files (in case multiple wavefiles are used)
+        param wav_path_replace:
+        param num_mel_bin: if larger than zero, convert the audio to logmel features
         """
         self.wav_path_list = wav_path_list
         self._sizes = len(self.wav_path_list)
@@ -46,14 +26,15 @@ class WavDataset(torch.utils.data.Dataset):
         else:
             self.cache = None
         self.cache_size = cache_size
+        self.num_mel_min = num_mel_bin
 
-        if wav_path_replace is not None and wav_path_replace[0]!="None":
+        if wav_path_replace is not None and wav_path_replace[0] != "None":
             found = False
-            for old, new in zip(wav_path_replace[::2],wav_path_replace[1::2]):
+            for old, new in zip(wav_path_replace[::2], wav_path_replace[1::2]):
                 if old in self.wav_path_list[0][0]:
                     found = True
 
-                self.wav_path_list = [(x[0].replace(old,new),*x[1:]) for x in self.wav_path_list]
+                self.wav_path_list = [(x[0].replace(old, new), *x[1:]) for x in self.wav_path_list]
 
             if not found:
                 print(wav_path_replace, self.wav_path_list[0][0])
@@ -88,7 +69,7 @@ class WavDataset(torch.utils.data.Dataset):
         wav_path, start, end, sample_rate = wav_info
 
         # there are many utterances sharing the save wavfiles -> we can keep the same object in memory
-        if self.cache is not None:
+        if self.cache is not None and wav_path.endswith("wav"):
 
             # take the object in cache if exists
             if wav_path in self.cache:
@@ -120,5 +101,9 @@ class WavDataset(torch.utils.data.Dataset):
         else:
             file_ = None
             data = safe_readaudio(wav_path, start, end, sample_rate)
+
+        if self.num_mel_min > 0:
+            feature_vector = wav_to_fmel(feature_vector, num_mel_bin=fbank)
+            data = feature_vector
 
         return data

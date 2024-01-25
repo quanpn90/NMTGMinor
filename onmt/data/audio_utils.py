@@ -429,3 +429,63 @@ class WavLoader(object):
 
         for wav_path in self.cache:
             self.cache[wav_path].close()
+
+
+# this function reads wav file based on the timestamp in seconds
+def safe_readaudio(wav_path, start=0.0, end=0.0, sample_rate=16000):
+
+    offset = math.floor(sample_rate * start)
+    num_frames = -1 if end <= start else math.ceil(sample_rate * (end - start))
+
+    # by default torchaudio normalizes the read tensor
+    tensor, _ = torchaudio.load(wav_path, frame_offset=offset, num_frames=num_frames,
+                                normalize=True, channels_first=False)
+    tensor = tensor[:, 0].unsqueeze(1)
+
+    # tensor has size [length, num_channel] in which channel should be 1 for wav2vec
+    return tensor
+
+
+def wav_to_fmel(wav: torch.Tensor, num_mel_bin=80, waveform_scale=2**15, standardized=True):
+    """
+    Args:
+        wav:
+        num_mel_bin:
+        waveform_scale: in fairseq 2.0 it is used as 2**15
+        standardized:
+
+    Returns:
+
+    """
+    # extract log mel filterbank features
+    feature_vector = torchaudio.kaldi.fbank(wav.squeeze(1) * waveform_scale,
+                                            num_mel_bins=num_mel_bin)
+    # normalize
+    if standardized:
+        std, mean = torch.std_mean(feature_vector, 0)
+
+        feature_vector = feature_vector.subtract(mean).divide(std)
+
+    return feature_vector
+
+# this function reads wav file based on the timestamp in seconds
+def safe_readaudio_from_cache(file_, wav_path, start=0.0, end=0.0, sample_rate=16000):
+    offset = math.floor(sample_rate * start)
+    num_frames = -1 if end <= start else math.ceil(sample_rate * (end - start))
+
+    if file_ is not None:
+        dtype = "float32"
+        frames = file_._prepare_read(offset, None, num_frames)
+        waveform = file_.read(frames, dtype, always_2d=True)
+        sample_rate_ = file_.samplerate
+        tensor = torch.from_numpy(waveform)
+        tensor = tensor[:, 0].unsqueeze(1)
+    else:
+
+        tensor = tensor[:, 0].unsqueeze(1)
+
+    # select the first channel?
+    # tensor has size [length, num_channel] in which channel should be 1 for wav2vec
+
+    return tensor
+

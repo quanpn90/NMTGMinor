@@ -576,9 +576,9 @@ class Trainer(object):
         self.all_reduce(total_words, op=dist.ReduceOp.SUM, group=self.group)
         self.all_reduce(total_correct, op=dist.ReduceOp.SUM, group=self.group)
 
-        if opt.ctc_loss > 0.0:
-            self.all_reduce(report_ctc_loss, op=dist.ReduceOp.SUM, group=self.group)
-            self.all_reduce(report_ctc_targets, op=dist.ReduceOp.SUM, group=self.group)
+        #if opt.ctc_loss > 0.0:
+        #    self.all_reduce(report_ctc_loss, op=dist.ReduceOp.SUM, group=self.group)
+        #    self.all_reduce(report_ctc_targets, op=dist.ReduceOp.SUM, group=self.group)
 
         if opt.use_memory:
             if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):

@@ -7,7 +7,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from .utils import exact_div
+def exact_div(x, y):
+    assert x % y == 0
+    return x // y
 
 # hard-coded audio hyperparameters
 SAMPLE_RATE = 16000
@@ -23,17 +25,24 @@ FRAMES_PER_SECOND = exact_div(SAMPLE_RATE, HOP_LENGTH)  # 10ms per audio frame
 TOKENS_PER_SECOND = exact_div(SAMPLE_RATE, N_SAMPLES_PER_TOKEN)  # 20ms per audio token
 
 
-def load_audio(file: str, sr: int = SAMPLE_RATE, start_time=-1, end_time=-1):
+def load_audio(file: str, stream=None, sr: int = SAMPLE_RATE,
+               start_time=-1, end_time=-1):
     """
     Open an audio file and read as mono waveform, resampling as necessary
 
     Parameters
     ----------
+    stream: opened stream from before (by a cache loader, for example)
+
     file: str
         The audio file to open
 
     sr: int
         The sample rate to resample the audio if necessary
+
+    start_time: float
+
+    end_time: float
 
     Returns
     -------
@@ -45,21 +54,26 @@ def load_audio(file: str, sr: int = SAMPLE_RATE, start_time=-1, end_time=-1):
 
         if start_time == 0 and end_time == -1:
 
+            if stream is None:
+
+                stream = ffmpeg.input(file, threads=0, )
+
             out, _ = (
-                ffmpeg.input(file, threads=0, )
-                .output("-", format="s16le", acodec="pcm_s16le", ac=1, ar=sr)
+                stream.output("-", format="s16le", acodec="pcm_s16le", ac=1, ar=sr)
                 .run(cmd=["ffmpeg", "-nostdin"], capture_stdout=True, capture_stderr=True)
             )
 
         elif end_time == -1:
 
-            stream = ffmpeg.input(file, threads=0, )
+            if stream is None:
+                stream = ffmpeg.input(file, threads=0, )
             audio = stream.audio.filter("atrim", start=start_time, end=end_time)
             stream = ffmpeg.output(audio, "-", format="s16le", acodec="pcm_s16le", ac=1, ar=sr)
             out, _ = ffmpeg.run(stream, cmd=["ffmpeg", "-nostdin"], capture_stdout=True, capture_stderr=True)
 
         else:
-            stream = ffmpeg.input(file, threads=0, )
+            if stream is None:
+                stream = ffmpeg.input(file, threads=0, )
             audio = stream.audio.filter("atrim", start=start_time)
             stream = ffmpeg.output(audio, "-", format="s16le", acodec="pcm_s16le", ac=1, ar=sr)
             out, _ = ffmpeg.run(stream, cmd=["ffmpeg", "-nostdin"], capture_stdout=True, capture_stderr=True)
@@ -116,6 +130,7 @@ def mel_filters(device, n_mels: int = N_MELS) -> torch.Tensor:
 
 def log_mel_spectrogram(
     audio: Union[str, np.ndarray, torch.Tensor],
+    stream = None,
     n_mels: int = N_MELS,
     padding: int = 0,
     device: Optional[Union[str, torch.device]] = None,
@@ -128,6 +143,8 @@ def log_mel_spectrogram(
     ----------
     audio: Union[str, np.ndarray, torch.Tensor], shape = (*)
         The path to audio or either a NumPy array or Tensor containing the audio waveform in 16 kHz
+
+    stream: ffmpeg stream opened by a cache loader before
 
     n_mels: int
         The number of Mel-frequency filters, only 80 is supported
@@ -149,9 +166,10 @@ def log_mel_spectrogram(
     torch.Tensor, shape = (80, n_frames)
         A Tensor that contains the Mel spectrogram
     """
+
     if not torch.is_tensor(audio):
         if isinstance(audio, str):
-            audio = load_audio(audio, start_time=start_time, end_time=end_time)
+            audio = load_audio(audio, None, start_time=start_time, end_time=end_time)
         audio = torch.from_numpy(audio)
 
     if device is not None:
@@ -168,4 +186,55 @@ def log_mel_spectrogram(
     log_spec = torch.clamp(mel_spec, min=1e-10).log10()
     log_spec = torch.maximum(log_spec, log_spec.max() - 8.0)
     log_spec = (log_spec + 4.0) / 4.0
+
+    # from [n_feat x T] to [T x n_feat]
+    log_spec = log_spec.transpose(0, 1).contiguous()
+
     return log_spec
+
+
+class WhisperWavLoader(object):
+
+    def __init__(self, cache_size=1024):
+        """
+        :param cache_size: the number of concurrent audio files being opened
+        """
+        if cache_size > 0:
+            self.cache = dict()
+            self.usage = dict()
+        else:
+            self.cache = None
+
+        self.cache_size = cache_size
+
+    def load_wav(self, wav_path, start, end, sample_rate=16000):
+
+        # take the object in cache if exists
+        if wav_path in self.cache:
+            stream = self.cache[wav_path]
+            self.usage[wav_path] = self.usage[wav_path] + 1
+        else:
+            # read the audio file
+            # print(os.path.exists(wav_path), wav_path)
+            # file_ = soundfile.SoundFile(wav_path, 'r')
+            stream = ffmpeg.input(wav_path, threads=0, )
+            if len(self.cache) > self.cache_size:
+                # remove 1 file from cache based on lowest usage, maybe?
+                min_key = min(self.usage, key=self.usage.get)
+                if min_key != wav_path:  # don't close the current file
+                    self.cache.pop(min_key, None)
+                    self.usage.pop(min_key, None)
+
+            # add the object to the cache
+            self.cache[wav_path] = file_
+            self.usage[wav_path] = 1
+
+        # data = safe_readaudio_from_cache(file_, start, end, sample_rate)
+        data = log_mel_spectrogram(wav_path, stream, start_time=start, end_time=end)
+
+        return data
+
+    def close(self):
+
+        for wav_path in self.cache:
+            self.cache[wav_path].close()

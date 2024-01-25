@@ -246,10 +246,11 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
 
             attn_score = matmul_ac + matmul_bd  # both AC and BD are scaled with scale_t before in baddbmm
         else:
+            # Shaw attention here, fused this with one op
+
             # matmul2 batched GEMMs
             # queries+bias: [len_q, bsz*heads, head_dim]
             # rel_positions: [len_q, len_k, head_dim] transpose(1, 2)
-            # add directly into matmul_ac so we don't need to
             # torch.baddbmm(matmul_ac.transpose(0, 1), rr_head_q, pos.transpose(1, 2),
             # out=matmul_ac.transpose(0, 1), beta=1.0, alpha=scale_t[0])
             matmul_ac.transpose(0, 1).baddbmm_(rr_head_q, pos.transpose(1, 2), beta=1.0, alpha=scale_t[0])
