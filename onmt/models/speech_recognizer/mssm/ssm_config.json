@@ -1,0 +1,12 @@
+{
+    "encoder_embed_dim": 512,
+    "encoder_mssm_num_stacks": 2,
+    "encoder_mssm_hidden_dim": 512,
+    "encoder_mssm_num_heads": 8,
+    "encoder_mssm_activation": "gelu",
+    "encoder_mssm_scale": "gelu",
+    "encoder_mssm_maxlen": "gelu",
+    "encoder_mssm_timestep_min": "gelu",
+    "encoder_mssm_timestep_max": "gelu",
+    "encoder_mssm_dropout": "gelu"
+}

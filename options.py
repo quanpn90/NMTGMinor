@@ -608,6 +608,9 @@ def make_parser(parser):
     parser.add_argument('-clip_learning', action="store_true",
                         help="Learn to get the representations of acoustic and text to be close to each other")
 
+    parser.add_argument('-num_mel_bin', type=int, default=0,
+                        help='Number of log mel bins for feature extraction. 0 = use waveforms ')
+
     return parser
 
 

@@ -10,7 +10,8 @@ import os
 
 
 class WavDataset(torch.utils.data.Dataset):
-    def __init__(self, wav_path_list, cache_size=0, wav_path_replace=None, num_mel_bin=0):
+    def __init__(self, wav_path_list, cache_size=0,
+                 wav_path_replace=None, num_mel_bin=0):
         """
         param wav_path_list: list of path to the audio
         param cache_size: size of the cache to load wav files (in case multiple wavefiles are used)
@@ -26,7 +27,7 @@ class WavDataset(torch.utils.data.Dataset):
         else:
             self.cache = None
         self.cache_size = cache_size
-        self.num_mel_min = num_mel_bin
+        self.num_mel_bin = num_mel_bin
 
         if wav_path_replace is not None and wav_path_replace[0] != "None":
             found = False
@@ -102,8 +103,7 @@ class WavDataset(torch.utils.data.Dataset):
             file_ = None
             data = safe_readaudio(wav_path, start, end, sample_rate)
 
-        if self.num_mel_min > 0:
-            feature_vector = wav_to_fmel(feature_vector, num_mel_bin=fbank)
-            data = feature_vector
+        if self.num_mel_bin > 0:
+            data = wav_to_fmel(data, num_mel_bin=self.num_mel_bin)
 
         return data

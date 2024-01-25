@@ -177,17 +177,6 @@ def build_tm_model(opt, dicts, constants=None):
     if opt.model in ['wav2vec2_bert', 'quantize_wav2vec2_bert', 'quantize_wav2vec2_mbart50']:
         from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecBERT, Wav2vecBERTMemory
 
-        # if opt.model.startswith("quantize"):
-        #     from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder
-        #     from pretrain_module.configuration_mbart import MBartConfig
-        #     enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
-        #     discrete_encoder = MBartEncoder(enc_mbart_config, opt)
-        #     # print("[INFO] Loading weights for mBART encoder from: %s ..." % opt.enc_state_dict)
-        #     # enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
-        #     # discrete_encoder.load_state_dict(enc_model_state_dict)
-        # else:
-        #     discrete_encoder = None
-
         # TODO: create a stacked encoder here
         # if len(opt.dec_pretrained_model)
         stacked_encoder = None
@@ -220,11 +209,14 @@ def build_tm_model(opt, dicts, constants=None):
                 #         dec_model_state_dict[key] = current_dict[key]
 
 
-
         discrete_encoder = None
         if "wavlm" in opt.enc_pretrained_model:
             from onmt.models.speech_recognizer.wavlm import WavLMEncoder
             encoder = WavLMEncoder(opt, opt.wav2vec2_pretrained_model)
+
+        elif "w2vbert" in opt.enc_pretrained_model or "w2v-bert" in opt.enc_pretrained_model :
+            from onmt.models.speech_recognizer.w2vbert import W2VBert
+            encoder = W2VBert(opt, opt.wav2vec2_pretrained_model)
 
         else:
             from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec

@@ -96,6 +96,17 @@ class MultiheadAttention(Module, ABC):
         """:meta private:"""
         return f"num_heads={self.num_heads}, model_dim={self.model_dim}"
 
+    @abstractmethod
+    def convert_fast_attention(
+            self,
+    ) -> None:
+        """
+
+        Args:
+
+        Returns:
+
+        """
 
 class AttentionWeightHook(Protocol):
     """Represents a hook to pass to
@@ -352,6 +363,11 @@ class StandardMultiheadAttention(MultiheadAttention):
         if self.head_scale_weight is not None:
             nn.init.ones_(self.head_scale_weight)
 
+    def convert_fast_attention(
+            self,
+    ) -> None:
+        pass
+
     @finaloverride
     def forward(
             self,
@@ -368,56 +384,9 @@ class StandardMultiheadAttention(MultiheadAttention):
 
         # (N, S, M) -> (N, H, S, K_h)
         q = self._project_q(seqs, padding_mask, state_bag)
-
-        if self.training:
-            # k: (N, S_kv, M) -> (N, H_kv, S_kv, K_h)
-            # v: (N, S_kv, M) -> (N, H_kv, S_kv, V_h)
-            k, v = self._project_kv(keys, key_padding_mask, values)
-        else:
-            raise NotImplementedError  # encoder only
-            # if seqs is keys:  # Self attention
-            #     if key_padding_mask is not None:
-            #         raise ValueError(
-            #             "`key_padding_mask` must be `None` during incremental decoding."
-            #         )
-            #
-            #     # k: (N, S_step, M) -> (N, H_kv, S_step, K_h)
-            #     # v: (N, S_step, M) -> (N, H_kv, S_step, V_h)
-            #     k, v = self._project_kv(keys, key_padding_mask, values, state_bag)
-            #
-            #     state = state_bag.get_state(self, AttentionState)
-            #     if state is None:
-            #         state_factory = self.state_factory or FullAttentionState
-            #
-            #         state = state_factory(
-            #             k, v, state_bag.max_num_steps, state_bag.capacity_increment
-            #         )
-            #
-            #         state_bag.set_state(self, state)
-            #     else:
-            #         state.append(k, v)
-            #
-            #         # k: (N, H_kv, S_kv, K_h)
-            #         # v: (N, H_kv, S_kv, V_h)
-            #         k, v = state.get()
-            # else:
-            #     state = state_bag.get_state(self, AttentionState)
-            #     if state is None:
-            #         # k: (N, S_kv, M) -> (N, H_kv, S_kv, K_h)
-            #         # v: (N, S_kv, M) -> (N, H_kv, S_kv, V_h)
-            #         k, v = self._project_kv(keys, key_padding_mask, values)
-            #
-            #         state_factory = self.state_factory or StaticAttentionState
-            #
-            #         state = state_factory(
-            #             k, v, max_seq_len=k.size(2), capacity_increment=None
-            #         )
-            #
-            #         state_bag.set_state(self, state)
-            #     else:
-            #         # k: (N, H_kv, S_kv, K_h)
-            #         # v: (N, H_kv, S_kv, V_h)
-            #         k, v = state.get()
+        # k: (N, S_kv, M) -> (N, H_kv, S_kv, K_h)
+        # v: (N, S_kv, M) -> (N, H_kv, S_kv, V_h)
+        k, v = self._project_kv(keys, key_padding_mask, values)
 
         # With Grouped Query Attention, each key/value head is repeated.
         if (num_query_groups := self.num_heads // self.num_key_value_heads) > 1:
