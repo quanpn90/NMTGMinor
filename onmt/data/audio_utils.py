@@ -463,6 +463,14 @@ def wav_to_fmel(wav: torch.Tensor, num_mel_bin=80, waveform_scale=2**15, standar
     # print(wav.size())
     # assert(wav.ndim == 1)
     wav = wav.squeeze(1).unsqueeze(0)
+g
+    wav_len = wav.size(1)
+
+    # min len for window size
+    if wav_len < 400:
+        padding = wav.new_zeros(1, 400 - wav_len)
+        wav = torch.cat([wav, padding], dim=1).contiguous()
+
     feature_vector = torchaudio.compliance.kaldi.fbank(wav * waveform_scale,
                                             num_mel_bins=num_mel_bin)
     # normalize

@@ -90,8 +90,11 @@ class W2VBert(nn.Module):
         else:
             dec_attn_mask = dec_attn_mask.byte()
 
+        # wav2vec_context = wav2vec_context.transpose(0, 1).contiguous()
+        context = context.transpose(0, 1).contiguous()
         wav2vec_context = context
         wav2vec_padding_mask = dec_attn_mask
+
 
         output_dict = defaultdict(lambda: None, {'source': input, 'context': context, 'src_mask': dec_attn_mask,
                                                  'src': dec_attn_mask, 'pos_emb': None,
