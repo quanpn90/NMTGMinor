@@ -169,6 +169,7 @@ def build_tm_model(opt, dicts, constants=None):
     else:
         language_embeddings = None
 
+
     if opt.model in ['wav2vec2_bert', 'quantize_wav2vec2_bert', 'quantize_wav2vec2_mbart50']:
         from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecBERT, Wav2vecBERTMemory
 
@@ -219,6 +220,10 @@ def build_tm_model(opt, dicts, constants=None):
         if "wavlm" in opt.enc_pretrained_model:
             from onmt.models.speech_recognizer.wavlm import WavLMEncoder
             encoder = WavLMEncoder(opt, opt.wav2vec2_pretrained_model)
+
+        elif "w2vbert" in opt.enc_pretrained_model or "w2v-bert" in opt.enc_pretrained_model:
+            from onmt.models.speech_recognizer.w2vbert import W2VBert
+            encoder = W2VBert(opt, opt.wav2vec2_pretrained_model)
 
         else:
             from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec

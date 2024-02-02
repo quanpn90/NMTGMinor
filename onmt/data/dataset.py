@@ -142,6 +142,7 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
     :param augmenter: for augmentation in audio models
     :return:
     """
+
     # initialize with batch_size * length
     # TODO: rewrite this function in Cython
     if type == "text":
@@ -215,8 +216,8 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
         lengths = [x.size(0) for x in samples]
         max_length = max(lengths)
         # allocate data for the batch speech
-        feature_size = 1  # samples[0].size(1)  # most likely 1
-        assert feature_size == 1, "expecting feature size = 1 but get %2.f" % feature_size
+        # feature_size = 1  # samples[0].size(1)  # most likely 1
+        # assert feature_size == 1, "expecting feature size = 1 but get %2.f" % feature_size
         batch_size = len(data)
 
         # feature size + 1 because the last dimension is created for padding
@@ -229,7 +230,7 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
             data_length = sample.size(0)
             offset = max_length - data_length if align_right else 0
 
-            channels = 1
+            channels = sample.size(1)
             tensor[i].narrow(0, offset, data_length).narrow(1, 1, channels).copy_(sample)
             # in padding dimension: 1 is not padded, 0 is padded
             tensor[i].narrow(0, offset, data_length).narrow(1, 0, 1).fill_(1)

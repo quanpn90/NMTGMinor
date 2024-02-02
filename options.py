@@ -599,12 +599,16 @@ def make_parser(parser):
     parser.add_argument('-ctc_compress', type=str, default="None",
                         help='Strategy to compress the ctc. Default is None.')
 
-
+    parser.add_argument('-num_mel_bin', type=int, default=0,
+                        help='Number of log mel bins for feature extraction. 0 = use waveforms ')
     return parser
 
 
 def backward_compatible(opt):
     # FOR BACKWARD COMPATIBILITY
+    if not hasattr(opt, 'num_mel_bin'):
+        opt.num_mel_bin = 0
+
     if not hasattr(opt, 'ctc_compress'):
         opt.ctc_compress = "None"
 

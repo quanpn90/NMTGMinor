@@ -16,6 +16,7 @@ import warnings
 import soundfile
 import math
 import torch
+import torchaudio
 
 from .kaldiio.compression_header import GlobalHeader
 from .kaldiio.compression_header import PerColHeader
@@ -30,14 +31,14 @@ from .kaldiio.wavio import write_wav
 
 PY3 = sys.version_info[0] == 3
 
-
-
 if PY3:
     from collections.abc import Mapping
+
     binary_type = bytes
     string_types = str,
 else:
     from collections import Mapping
+
     binary_type = str
     string_types = basestring,  # noqa: F821
 
@@ -373,19 +374,6 @@ class ArkLoader(object):
             self.readers[k].close()
 
 
-def safe_readaudio_from_cache(file_, start=0.0, end=0.0, sample_rate=16000):
-
-    offset = math.floor(sample_rate * start)
-    num_frames = -1 if end <= start else math.ceil(sample_rate * (end - start))
-
-    dtype = "float32"
-    frames = file_._prepare_read(offset, None, num_frames)
-    waveform = file_.read(frames, dtype, always_2d=True)
-    sample_rate_ = file_.samplerate
-    tensor = torch.from_numpy(waveform)
-    tensor = tensor[:, 0].unsqueeze(1)
-    return tensor
-
 class WavLoader(object):
 
     def __init__(self, cache_size=512):
@@ -429,3 +417,74 @@ class WavLoader(object):
 
         for wav_path in self.cache:
             self.cache[wav_path].close()
+
+
+# this function reads wav file based on the timestamp in seconds
+def safe_readaudio(wav_path, start=0.0, end=0.0, sample_rate=16000):
+
+    offset = math.floor(sample_rate * start)
+    num_frames = -1 if end <= start else math.ceil(sample_rate * (end - start))
+
+    # by default torchaudio normalizes the read tensor
+    tensor, _ = torchaudio.load(wav_path, frame_offset=offset, num_frames=num_frames,
+                                normalize=True, channels_first=False)
+    tensor = tensor[:, 0].unsqueeze(1)
+
+    # tensor has size [length, num_channel] in which channel should be 1 for wav2vec
+    return tensor
+
+
+def wav_to_fmel(wav: torch.Tensor, num_mel_bin=80, waveform_scale=2**15, standardized=True):
+    """
+    Args:
+        wav:
+        num_mel_bin:
+        waveform_scale: in fairseq 2.0 it is used as 2**15
+        standardized:
+
+    Returns:
+
+    """
+    # extract log mel filterbank features
+    # wav = wav.squeeze(1)
+    # print(wav.size())
+    # assert(wav.ndim == 1)
+    wav = wav.squeeze(1).unsqueeze(0)
+
+    wav_len = wav.size(1)
+
+    # min len for window size
+    if wav_len < 400:
+        padding = wav.new_zeros(1, 400 - wav_len)
+        wav = torch.cat([wav, padding], dim=1).contiguous()
+
+    feature_vector = torchaudio.compliance.kaldi.fbank(wav * waveform_scale,
+                                            num_mel_bins=num_mel_bin)
+    # normalize
+    if standardized:
+        std, mean = torch.std_mean(feature_vector, 0)
+
+        feature_vector = feature_vector.subtract(mean).divide(std)
+
+    return feature_vector
+
+# this function reads wav file based on the timestamp in seconds
+def safe_readaudio_from_cache(file_, wav_path, start=0.0, end=0.0, sample_rate=16000):
+    offset = math.floor(sample_rate * start)
+    num_frames = -1 if end <= start else math.ceil(sample_rate * (end - start))
+
+    if file_ is not None:
+        dtype = "float32"
+        frames = file_._prepare_read(offset, None, num_frames)
+        waveform = file_.read(frames, dtype, always_2d=True)
+        sample_rate_ = file_.samplerate
+        tensor = torch.from_numpy(waveform)
+        tensor = tensor[:, 0].unsqueeze(1)
+    else:
+
+        tensor = tensor[:, 0].unsqueeze(1)
+
+    # select the first channel?
+    # tensor has size [length, num_channel] in which channel should be 1 for wav2vec
+
+    return tensor

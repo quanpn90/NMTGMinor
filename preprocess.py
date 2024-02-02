@@ -150,9 +150,9 @@ parser.add_argument('-seed', type=int, default=3435,
                     help="Random seed")
 
 parser.add_argument('-lower', action='store_true', help='lowercase data')
-parser.add_argument('-load_bpe_voc', action='store_true', help='lowercase data')
+parser.add_argument('-load_bpe_voc', action='store_true', help='')
 parser.add_argument('-no_bos', action='store_true', help='not adding bos word (this is done manually in the data)')
-parser.add_argument('-sort_by_target', action='store_true', help='lowercase data')
+parser.add_argument('-sort_by_target', action='store_true', help='')
 parser.add_argument('-join_vocab', action='store_true', help='Using one dictionary for both source and target')
 
 parser.add_argument('-report_every', type=int, default=100000,
@@ -163,6 +163,9 @@ parser.add_argument('-num_threads', type=int, default=1,
                     help="Number of threads for multiprocessing")
 parser.add_argument('-verbose', action='store_true',
                     help="Print out information during preprocessing")
+parser.add_argument('-num_mel_bin', type=int, default=0,
+                    help="Number of Log Mel bin, if > 0 the waveforms will be converted to LogMel features")
+
 
 opt = parser.parse_args()
 torch.manual_seed(opt.seed)
@@ -436,7 +439,7 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
         del binarized_src
         del indexed_data
         del np_array
-        gc.collect() 
+        gc.collect()
 
         if mirror:
             print("Saving mirrrored target data to %s .... with %d entries" % (mirror_savedir, src_len))
@@ -533,7 +536,8 @@ def make_translation_data(src_file, tgt_file, src_dicts, tgt_dicts, tokenizer, m
 
 
 def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
-                  max_src_length=64, max_tgt_length=64, add_bos=True, data_type='int64', num_workers=1, verbose=False,
+                  max_src_length=64, max_tgt_length=64, add_bos=True, data_type='int64', num_mel_bin=0,
+                  num_workers=1, verbose=False,
                   input_type='word', stride=1, concat=4, prev_context=0, fp16=False, reshape=True,
                   asr_format="scp", output_format="raw",
                   external_tokenizer=None, src_lang=None, tgt_lang=None, lang_list=[]):
@@ -575,7 +579,7 @@ def make_asr_data(src_file, tgt_file, tgt_dicts, tokenizer,
     binarized_src = SpeechBinarizer.binarize_file(src_file, input_format=asr_format,
                                                   output_format=output_format, concat=concat,
                                                   stride=stride, fp16=fp16, prev_context=prev_context,
-                                                  num_workers=num_workers, verbose=verbose)
+                                                  num_workers=num_workers, verbose=verbose, num_mel_bin=num_mel_bin)
 
     src = binarized_src['data']
     src_sizes = binarized_src['sizes']
@@ -749,11 +753,12 @@ def main():
                                                                      fp16=opt.fp16,
                                                                      add_bos=not opt.no_bos,
                                                                      asr_format=opt.asr_format,
+                                                                     num_mel_bin=opt.num_mel_bin,
                                                                      output_format=opt.format,
                                                                      num_workers=opt.num_threads,
                                                                      external_tokenizer=opt.external_tokenizer,
                                                                      tgt_lang=tgt_lang, verbose=opt.verbose,
-                                                                     lang_list=dicts['langs'])
+                                                                     lang_list=dicts['langs'],)
 
             n_samples = len(src_data)
             src_atb_data, tgt_atb_data = None, None
@@ -787,6 +792,7 @@ def main():
                                                                     prev_context=opt.previous_context,
                                                                     add_bos=not opt.no_bos,
                                                                     fp16=opt.fp16,
+                                                                    num_mel_bin=opt.num_mel_bin,
                                                                     asr_format=opt.asr_format,
                                                                     output_format=opt.format,
                                                                     num_workers=opt.num_threads,
@@ -889,6 +895,7 @@ def main():
                                                                      stride=opt.stride, concat=opt.concat,
                                                                      prev_context=opt.previous_context,
                                                                      fp16=opt.fp16,
+                                                                     num_mel_bin=opt.num_mel_bin,
                                                                      add_bos=not opt.no_bos,
                                                                      asr_format=opt.asr_format,
                                                                      output_format=opt.format,
@@ -926,6 +933,7 @@ def main():
                                                                     prev_context=opt.previous_context,
                                                                     fp16=opt.fp16,
                                                                     add_bos=not opt.no_bos,
+                                                                    num_mel_bin=opt.num_mel_bin,
                                                                     asr_format=opt.asr_format,
                                                                     output_format=opt.format,
                                                                     num_workers=opt.num_threads,
@@ -936,7 +944,7 @@ def main():
                 valid['past_src'] += past_src_data
                 valid['past_src_sizes'] += past_src_sizes
 
-        # Finalizing Validation data ... #########################
+            # Finalizing Validation data ... #########################
 
             if opt.multi_dataset:
                 data['src'] = src_data
