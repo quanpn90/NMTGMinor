@@ -33,7 +33,6 @@ from itertools import groupby
 #     return d_sent_norm
 
 
-
 def load_checkpoint_to_cpu(path, arg_overrides=None, load_on_all_ranks=False):
     """Loads a checkpoint to CPU (with upgrading for backward compatibility).
 
@@ -89,8 +88,6 @@ def load_checkpoint_to_cpu(path, arg_overrides=None, load_on_all_ranks=False):
 
     # state = _upgrade_state_dict(state)
     return state
-
-
 
 
 # defining a Wav2vec2 encoder wrapping the HuggingFace model here
@@ -436,28 +433,6 @@ class FairseqWav2Vec(nn.Module):
                                               lang=lang, atb=atb,
                                               checkpointing_ffn=checkpointing_ffn,
                                               checkpointing_self_attn=checkpointing_self_attn)
-
-        # if self.quantize:
-        #     quantized_codebooks = wav2vec_output['quantized_target']
-        #     encoder_input = quantized_codebooks.prod(dim=-1, keepdim=False)  # .transpose(0, 1)  # -> t x b x groups
-        #     dec_attn_mask = wav2vec_output['padding_mask'] # b x t
-        #
-        #     # 44204 = magic number
-        #     additional_mask = encoder_input.eq(44204)
-        #
-        #     if dec_attn_mask is not None:
-        #         dec_attn_mask = torch.logical_or(dec_attn_mask.bool(), additional_mask)
-        #     else:
-        #         dec_attn_mask = additional_mask
-        #
-        #     discrete_encoder_output = self.discrete_encoder(input_ids=encoder_input, attention_mask=dec_attn_mask)
-        #     discrete_output = discrete_encoder_output[0]
-        #     batch_size, time = discrete_output.size(1), discrete_output.size(0)
-        #     if batch_first_output:
-        #         discrete_output = discrete_output.transpose(0, 1).contiguous()
-        #         batch_size, time = discrete_output.size(0), discrete_output.size(1)
-        # else:
-        #     discrete_output = None
 
         # output size is always T x B x C
         continuous_output = wav2vec_output['x']
@@ -824,8 +799,6 @@ class Wav2vecBERT(Wav2vecTransformer):
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bart"]:
             batch_first_output = True
 
-        # print(src_lang, src_atb, tgt_lang, tgt_atb)
-
         # during training mixture is always None
         encoder_output = self.encoder(src, batch_first_output=batch_first_output,
                                       lang=src_lang, atb=src_atb,
@@ -841,7 +814,7 @@ class Wav2vecBERT(Wav2vecTransformer):
         if self.ctc_char:
             # what is the ctc_labels here?
             ctc_labels = batch.get("char_target").transpose(0, 1)
-            assert(ctc_loss_function.padding_idx == onmt.constants.TGT_PAD)
+            assert (ctc_loss_function.padding_idx == onmt.constants.TGT_PAD)
 
             # we have to perform CTC first
             torch.cuda.synchronize()
@@ -876,7 +849,7 @@ class Wav2vecBERT(Wav2vecTransformer):
             del ctc_loss
 
             if self.ctc_compress is not None:
-            #     # TODO: Ctc compression
+                #     # TODO: Ctc compression
                 with torch.no_grad():
                     x_ctc = encoder_logits
                     batch_predicted = []
@@ -889,7 +862,7 @@ class Wav2vecBERT(Wav2vecTransformer):
 
                     # TODO: compress_method
                     weights_matrix = self.ctc_compress(prob_ctc, batch_predicted, new_lengths, x_ctc.dtype,
-                                                          x_ctc.device)
+                                                       x_ctc.device)
 
                 context = context_detached.permute(1, 2, 0).bmm(weights_matrix).permute(2, 0, 1)
 
@@ -913,11 +886,10 @@ class Wav2vecBERT(Wav2vecTransformer):
             context = context_org
             context_detached = context_org
 
-        #TODO2: sub_encoder (MBART Encoder)
+        # TODO2: sub_encoder (MBART Encoder)
         if self.sub_encoder is not None:
-
             sub_encoder_outputs = self.sub_encoder(inputs_embeds=context.transpose(0, 1).contiguous(),
-                                       attention_mask=src_attention_mask)
+                                                   attention_mask=src_attention_mask)
 
             context = sub_encoder_outputs[0]
 
@@ -954,7 +926,7 @@ class Wav2vecBERT(Wav2vecTransformer):
             output_dict = defaultdict(lambda: None)
 
         elif hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model \
-                in ["deltalm", "mbart", "mbart50"]:
+                in ["deltalm", "mbart", "mbart50"]:  # TODO: NLLB
 
             src_attention_mask = src_attention_mask  # new version
             # tgt_attention_mask = tgt.ne(onmt.constants.TGT_PAD).long()  # [bsz, len]
@@ -1049,16 +1021,14 @@ class Wav2vecBERT(Wav2vecTransformer):
     def post_backward(self, output_dict=None, grad_scaler=None, *args, **kwargs):
 
         if self.ctc_char:
-
             org_context = output_dict['context_origin']
             context_grad = output_dict['context'].grad
 
-            org_context.backward(gradient = context_grad)
+            org_context.backward(gradient=context_grad)
             del output_dict['context']
             del output_dict
 
         return
-
 
     def create_decoder_state(self, batch, beam_size=1, type=1,
                              buffering=True, dicts=None, **kwargs):
@@ -1127,7 +1097,7 @@ class Wav2vecBERT(Wav2vecTransformer):
 
                     # TODO: compress_method
                     weights_matrix = self.ctc_compress(prob_ctc, batch_predicted, new_lengths, x_ctc.dtype,
-                                                          x_ctc.device)
+                                                       x_ctc.device)
 
                 context = context.permute(1, 2, 0).bmm(weights_matrix).permute(2, 0, 1)
 
@@ -1140,9 +1110,8 @@ class Wav2vecBERT(Wav2vecTransformer):
                 src_attention_mask = _src_mask
 
         if self.sub_encoder is not None:
-
             sub_encoder_outputs = self.sub_encoder(inputs_embeds=context.transpose(0, 1).contiguous(),
-                                       attention_mask=src_attention_mask)
+                                                   attention_mask=src_attention_mask)
 
             context = sub_encoder_outputs[0]
 
@@ -1249,8 +1218,9 @@ class Wav2vecBERT(Wav2vecTransformer):
         #
         # return gold_words, gold_scores, allgold_scores
 
+
 def my_loss(lprobs, label, mask_no_mem, mask_mem):
-    loss = -lprobs.gather(2,label.unsqueeze(-1))[:,:,0]
+    loss = -lprobs.gather(2, label.unsqueeze(-1))[:, :, 0]
     loss1 = loss[mask_no_mem].sum()
     loss2 = loss[mask_mem].sum()
     correct = lprobs.argmax(-1).eq(label)
@@ -1260,11 +1230,12 @@ def my_loss(lprobs, label, mask_no_mem, mask_mem):
     anz2 = mask_mem.sum().item()
     return loss1, correct1, anz1, loss2, correct2, anz2
 
+
 class Wav2vecBERTMemory(Wav2vecBERT):
     def __init__(self, *args, opt=None, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self._no_entry_found = nn.Parameter(torch.randn(1,1024))
+        self._no_entry_found = nn.Parameter(torch.randn(1, 1024))
 
         from pretrain_module.configuration_mbart import MBartConfig
         from pretrain_module.modeling_mbart import MBartEncoder
@@ -1281,18 +1252,19 @@ class Wav2vecBERTMemory(Wav2vecBERT):
             print("Not loading pretrained mbart encoder weights for memory decoder")
 
         layers = []
-        for layer_id in np.linspace(0, len(self.memory_encoder.layers) - 1, num=opt.encoder_layers_memory, dtype=np.int64):
+        for layer_id in np.linspace(0, len(self.memory_encoder.layers) - 1, num=opt.encoder_layers_memory,
+                                    dtype=np.int64):
             layers.append(copy.deepcopy(self.memory_encoder.layers[layer_id]))
         self.memory_encoder.layers = nn.ModuleList(layers)
 
         print("Using", len(self.memory_encoder.layers), "memory encoder layers")
 
-        self.memory_cache = [] # distractors to memory from last batch(es)
+        self.memory_cache = []  # distractors to memory from last batch(es)
         self.memory_cache_length = 0
         self.memory_size_max = opt.memory_size_max
         self.memory_cache_device = "cpu"
 
-        self.memory_stats = torch.zeros(len(self.decoder.memory_decoder.layers)+1,6,device="cuda")
+        self.memory_stats = torch.zeros(len(self.decoder.memory_decoder.layers) + 1, 6, device="cuda")
         self.counter_print = -1
 
         self.is_main = False
@@ -1301,18 +1273,18 @@ class Wav2vecBERTMemory(Wav2vecBERT):
 
     def train(self, mode=True):
         super().train(mode)
-        if mode: # after evaluation and before next training
+        if mode:  # after evaluation and before next training
             s = self.memory_stats
-            loss_no_mem = s[-1,0].sum()
-            loss_mem = s[-1,3].sum()
-            anz_no_mem = s[-1,2].sum()
-            anz_mem = s[-1,5].sum()
+            loss_no_mem = s[-1, 0].sum()
+            loss_mem = s[-1, 3].sum()
+            anz_no_mem = s[-1, 2].sum()
+            anz_mem = s[-1, 5].sum()
             if not self.memory_tokens_weighted_equally:
                 ppl = math.exp((loss_no_mem + loss_mem) / (anz_no_mem + anz_mem))
             else:
                 ppl_no_mem = math.exp(loss_no_mem / anz_no_mem)
                 ppl_mem = math.exp(loss_mem / anz_mem)
-                ppl = (ppl_no_mem+ppl_mem)/2
+                ppl = (ppl_no_mem + ppl_mem) / 2
             self.choose_best_epoch_by = ppl
 
             self.print()
@@ -1332,27 +1304,29 @@ class Wav2vecBERTMemory(Wav2vecBERT):
                 ppl_no_mem = math.exp(s[0] / s[2])
                 ppl_mem = math.exp(s[3] / s[5])
                 if not self.memory_tokens_weighted_equally:
-                    ppl_all = math.exp((s[0]+s[3]) / (s[2]+s[5]))
+                    ppl_all = math.exp((s[0] + s[3]) / (s[2] + s[5]))
                 else:
                     ppl_all = (ppl_no_mem + ppl_mem) / 2
-                acc_no_mem = 100*s[1]/s[2]
-                acc_mem = 100*s[4]/s[5]
+                acc_no_mem = 100 * s[1] / s[2]
+                acc_mem = 100 * s[4] / s[5]
                 if not self.memory_tokens_weighted_equally:
-                    acc_all = 100*(s[1]+s[4])/(s[2]+s[5])
+                    acc_all = 100 * (s[1] + s[4]) / (s[2] + s[5])
                 else:
                     acc_all = (acc_no_mem + acc_mem) / 2
                 if i < self.memory_stats.shape[0] - 1:
-                    print("    Layer %2d: ppl no_mem,mem,all: %6.2f,%6.2f,%6.2f, acc no_mem,mem,all: %6.2f,%6.2f,%6.2f"%(i,
-                          ppl_no_mem,ppl_mem,ppl_all,acc_no_mem,acc_mem,acc_all))
+                    print(
+                        "    Layer %2d: ppl no_mem,mem,all: %6.2f,%6.2f,%6.2f, acc no_mem,mem,all: %6.2f,%6.2f,%6.2f" % (
+                        i,
+                        ppl_no_mem, ppl_mem, ppl_all, acc_no_mem, acc_mem, acc_all))
                 else:
-                    print("    Ntp:      ppl no_mem,mem,all: %6.2f,%6.2f,%6.2f, acc no_mem,mem,all: %6.2f,%6.2f,%6.2f"%
-                          (ppl_no_mem,ppl_mem,ppl_all,acc_no_mem,acc_mem,acc_all))
+                    print("    Ntp:      ppl no_mem,mem,all: %6.2f,%6.2f,%6.2f, acc no_mem,mem,all: %6.2f,%6.2f,%6.2f" %
+                          (ppl_no_mem, ppl_mem, ppl_all, acc_no_mem, acc_mem, acc_all))
 
         self.memory_stats.zero_()
 
     def add_memory_stats(self, i, stats):
-        for j,s in enumerate(stats):
-            self.memory_stats[i,j] += s
+        for j, s in enumerate(stats):
+            self.memory_stats[i, j] += s
         if self.training and i == self.memory_stats.shape[0] - 1:
             self.counter_print += 1
             if self.counter_print % 500 == 0:
@@ -1368,20 +1342,21 @@ class Wav2vecBERTMemory(Wav2vecBERT):
         if memory_text_embeds is None:
             return self.no_entry_found, None
 
-        lengths = memory_text_mask.eq(0).sum(1).unsqueeze(1) # n_mem x 1
+        lengths = memory_text_mask.eq(0).sum(1).unsqueeze(1)  # n_mem x 1
 
         memory_text_enc = self.memory_encoder(inputs_embeds=memory_text_embeds, attention_mask=memory_text_mask)[0]
         if memory_text_enc is not None:
-            memory_text_enc[memory_text_mask.transpose(1,0)] = 0
+            memory_text_enc[memory_text_mask.transpose(1, 0)] = 0
 
-        encoder_output_memory_wonef = memory_text_enc.sum(0) / lengths # n_mem x d_model
+        encoder_output_memory_wonef = memory_text_enc.sum(0) / lengths  # n_mem x d_model
 
-        while len(self.memory_cache) > 0 and self.memory_cache_length + encoder_output_memory_wonef.shape[0] + 1 > self.memory_size_max > 0:
+        while len(self.memory_cache) > 0 and self.memory_cache_length + encoder_output_memory_wonef.shape[
+            0] + 1 > self.memory_size_max > 0:
             self.memory_cache_length -= self.memory_cache[0].shape[0]
             self.memory_cache = self.memory_cache[1:]
 
         encoder_output_memory = torch.cat([self.no_entry_found, encoder_output_memory_wonef]
-                                         +[c.cuda() for c in self.memory_cache], 0) # (n_mem+1) x d_model
+                                          + [c.cuda() for c in self.memory_cache], 0)  # (n_mem+1) x d_model
 
         if self.training and self.memory_size_max > 0:
             self.memory_cache.append(encoder_output_memory_wonef.detach().to(self.memory_cache_device))
@@ -1389,7 +1364,7 @@ class Wav2vecBERTMemory(Wav2vecBERT):
 
         return encoder_output_memory, memory_text_enc
 
-    def run_encoder(self, src, batch_first_output=False, # src: l_src1 x b x d_model
+    def run_encoder(self, src, batch_first_output=False,  # src: l_src1 x b x d_model
                     src_lang=None, src_atb=None,
                     checkpointing_ffn=False,
                     checkpointing_self_attn=False):
@@ -1431,7 +1406,7 @@ class Wav2vecBERTMemory(Wav2vecBERT):
 
         org_src = src
         org_tgt = tgt
-        tgt = tgt.transpose(0, 1) # transpose to have batch first
+        tgt = tgt.transpose(0, 1)  # transpose to have batch first
 
         batch_first_output = False
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bart"]:
@@ -1445,7 +1420,7 @@ class Wav2vecBERTMemory(Wav2vecBERT):
             context, src_attention_mask = encoder_output['context'], encoder_output['src_mask']
         else:
             context, src_attention_mask = batch.get("src_features"), batch.get("src_features_mask")
-            encoder_output = {"context":context, "src":src_attention_mask}
+            encoder_output = {"context": context, "src": src_attention_mask}
         encoder_output = defaultdict(lambda: None, encoder_output)
 
         contrastive_loss = 0
@@ -1519,16 +1494,17 @@ class Wav2vecBERTMemory(Wav2vecBERT):
         logits = self.generator[0](output_dict)['logits']
 
         if decoder_output_memory is not None:
-            output_dict2 = {'hidden': decoder_output_memory, 'target_mask':target_mask}
+            output_dict2 = {'hidden': decoder_output_memory, 'target_mask': target_mask}
             logits_memory = self.generator[0](output_dict2)['logits']
 
-            all_weights = [F.softmax(cross_attn_weights.detach(),-1)[:,:,0:1] for cross_attn_weights in all_cross_attn_weights]
-            weights = torch.cat(all_weights, -1).mean(-1, keepdim=True) # L x B x 1
+            all_weights = [F.softmax(cross_attn_weights.detach(), -1)[:, :, 0:1] for cross_attn_weights in
+                           all_cross_attn_weights]
+            weights = torch.cat(all_weights, -1).mean(-1, keepdim=True)  # L x B x 1
 
-            probs = F.softmax(logits,-1)
-            probs_memory = F.softmax(logits_memory,-1)
+            probs = F.softmax(logits, -1)
+            probs_memory = F.softmax(logits_memory, -1)
 
-            probs = weights * probs + (1-weights) * probs_memory # L x B x n_vocab
+            probs = weights * probs + (1 - weights) * probs_memory  # L x B x n_vocab
             logits = torch.log(probs)
 
             label_ntp = batch.get("target_output")
@@ -1540,31 +1516,37 @@ class Wav2vecBERTMemory(Wav2vecBERT):
                 label_mem.clamp_(min=0)
 
                 loss_memory = 0
-                for i,cross_attn_weights in enumerate(all_cross_attn_weights):
+                for i, cross_attn_weights in enumerate(all_cross_attn_weights):
                     ca_lprobs = F.log_softmax(cross_attn_weights, -1)
 
-                    loss_no_mem, correct_no_mem, anz_no_mem, loss_mem, correct_mem, anz_mem = my_loss(ca_lprobs, label_mem, mask_no_mem, mask_mem)
+                    loss_no_mem, correct_no_mem, anz_no_mem, loss_mem, correct_mem, anz_mem = my_loss(ca_lprobs,
+                                                                                                      label_mem,
+                                                                                                      mask_no_mem,
+                                                                                                      mask_mem)
 
                     if not self.memory_tokens_weighted_equally:
                         loss = loss_no_mem + loss_mem
                     else:
-                        loss = (loss_no_mem/anz_no_mem + loss_mem/anz_mem)*(anz_no_mem+anz_mem)
+                        loss = (loss_no_mem / anz_no_mem + loss_mem / anz_mem) * (anz_no_mem + anz_mem)
 
-                    self.add_memory_stats(i,[loss_no_mem.item(),correct_no_mem,anz_no_mem,loss_mem.item(),correct_mem,anz_mem])
+                    self.add_memory_stats(i,
+                                          [loss_no_mem.item(), correct_no_mem, anz_no_mem, loss_mem.item(), correct_mem,
+                                           anz_mem])
 
                     loss_memory += loss
 
                 loss_no_mem, correct_no_mem, anz_no_mem, loss_mem, correct_mem, anz_mem = my_loss(logits, label_ntp,
                                                                                                   mask_no_mem, mask_mem)
                 self.add_memory_stats(len(all_cross_attn_weights),
-                                      [loss_no_mem.item(),correct_no_mem,anz_no_mem,loss_mem.item(),correct_mem,anz_mem])
+                                      [loss_no_mem.item(), correct_no_mem, anz_no_mem, loss_mem.item(), correct_mem,
+                                       anz_mem])
 
                 if not self.memory_tokens_weighted_equally:
                     loss_ntp = loss_no_mem + loss_mem
                 else:
-                    loss_ntp = (loss_no_mem/anz_no_mem + loss_mem/anz_mem)*(anz_no_mem+anz_mem)
+                    loss_ntp = (loss_no_mem / anz_no_mem + loss_mem / anz_mem) * (anz_no_mem + anz_mem)
 
-                #print(self.memory_loss_coeff * loss_memory, loss_ntp)
+                # print(self.memory_loss_coeff * loss_memory, loss_ntp)
                 loss_memory = self.memory_loss_coeff * loss_memory + loss_ntp
 
                 output_dict['loss_memory'] = loss_memory
@@ -1655,13 +1637,13 @@ class Wav2vecBERTMemory(Wav2vecBERT):
             raise NotImplementedError
 
         decoder_state = TransformerDecodingStateMemory(src, tgt_lang, encoder_output['context'], src_lang,
-                                                 beam_size=beam_size, model_size=self.model_size,
-                                                 type=type, buffering=False, src_mask=mask_src,
-                                                 dec_pretrained_model=self.decoder.dec_pretrained_model,
-                                                 tgt_atb=tgt_atb,
-                                                 encoder_output_memory=encoder_output_memory,
-                                                 memory_text_enc=memory_text_enc,
-                                                 memory_text_mask=memory_text_mask)
+                                                       beam_size=beam_size, model_size=self.model_size,
+                                                       type=type, buffering=False, src_mask=mask_src,
+                                                       dec_pretrained_model=self.decoder.dec_pretrained_model,
+                                                       tgt_atb=tgt_atb,
+                                                       encoder_output_memory=encoder_output_memory,
+                                                       memory_text_enc=memory_text_enc,
+                                                       memory_text_mask=memory_text_mask)
 
         return decoder_state
 
@@ -1676,20 +1658,22 @@ class Wav2vecBERTMemory(Wav2vecBERT):
         :return: a dictionary containing: log-prob output and the attention coverage
         """
 
-        output_dict, output_dict_memory, all_cross_attn_weights = self.decoder.step(input_t, decoder_state, streaming=streaming)
+        output_dict, output_dict_memory, all_cross_attn_weights = self.decoder.step(input_t, decoder_state,
+                                                                                    streaming=streaming)
         output_dict['src'] = decoder_state.src.transpose(0, 1)
 
-        logits = self.generator[0](output_dict)['logits'] # 1 x B x n_vocab
-        logits_memory = self.generator[0](output_dict_memory)['logits'] # 1 x B x n_vocab
+        logits = self.generator[0](output_dict)['logits']  # 1 x B x n_vocab
+        logits_memory = self.generator[0](output_dict_memory)['logits']  # 1 x B x n_vocab
 
-        all_weights = [F.softmax(cross_attn_weights.detach(), -1)[-1:, :, 0:1] for cross_attn_weights in all_cross_attn_weights]
-        weights = torch.cat(all_weights, -1).mean(-1, keepdim=True) # 1 x B x 1
+        all_weights = [F.softmax(cross_attn_weights.detach(), -1)[-1:, :, 0:1] for cross_attn_weights in
+                       all_cross_attn_weights]
+        weights = torch.cat(all_weights, -1).mean(-1, keepdim=True)  # 1 x B x 1
 
-        probs = F.softmax(logits, -1) # 1 x B x n_vocab
-        probs_memory = F.softmax(logits_memory, -1) # 1 x B x n_vocab
+        probs = F.softmax(logits, -1)  # 1 x B x n_vocab
+        probs_memory = F.softmax(logits_memory, -1)  # 1 x B x n_vocab
 
-        probs = weights * probs + (1 - weights) * probs_memory # 1 x B x n_vocab
-        log_prob = torch.log(probs).squeeze(0) # B x n_vocab
+        probs = weights * probs + (1 - weights) * probs_memory  # 1 x B x n_vocab
+        log_prob = torch.log(probs).squeeze(0)  # B x n_vocab
 
         coverage = output_dict['coverage']
         last_coverage = coverage[:, -1, :].squeeze(1)

@@ -369,6 +369,7 @@ class StandardTransformerEncoder(TransformerEncoder):
             self,
             layers: Iterable[TransformerEncoderLayer],
             *,
+            frontend = None,
             # self_attn_mask_factory: Optional[AttentionMaskFactory] = None,
             layer_drop_p: float = 0.0,
             norm_order: TransformerNormOrder = TransformerNormOrder.POST,
@@ -379,6 +380,8 @@ class StandardTransformerEncoder(TransformerEncoder):
         """
         :param layers:
             The encoder layers.
+        :param frontend:
+            The FrontEnd (for example positional embedding layers)
         :param self_attn_mask_factory:
             The self attention mask factory.
         :param layer_drop_p:
@@ -409,6 +412,8 @@ class StandardTransformerEncoder(TransformerEncoder):
 
         self.norm_order = norm_order
 
+        self.frontend = frontend
+
     @finaloverride
     def forward(
             self, seqs: Tensor, padding_mask=None, self_attn_mask=None,
@@ -417,6 +422,8 @@ class StandardTransformerEncoder(TransformerEncoder):
         #     raise RuntimeError(
         #         "The layer output hooks cannot be run when LayerDrop is enabled."
         #     )
+        if self.frontend is not None:
+            seqs, padding_mask = self.frontend(seqs, padding_mask)
 
         num_layers = len(self.layers)
 

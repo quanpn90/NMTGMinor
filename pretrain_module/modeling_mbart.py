@@ -1925,7 +1925,7 @@ class MBartDecoder(MBartPreTrainedModel):
         :param checkpointing_cross_attn:
         :param input_ids: [batch_size x seq_len]
         :param attention_mask:
-        :param encoder_hidden_states:
+        :param encoder_hidden_states: [seq_len x batch_size x hidden]
         :param encoder_attention_mask:
         :param sub_encoder_hidden_states:
         :param sub_encoder_attention_mask:
@@ -1985,6 +1985,9 @@ class MBartDecoder(MBartPreTrainedModel):
         all_cross_attentions = () if (output_attentions and encoder_hidden_states is not None) else None
         # next_decoder_cache = () if use_cache else None
         contrastive_loss = 0
+
+        assert encoder_hidden_states.size(1) == hidden_states.size(0), "batch size has to match between Enc and Dec states"
+        # assert encoder_hidden_states.size(0) == hidden_states.size(1)
 
         # self.fast_bert_mha = None
         if self.fast_bert_mha is not None and hidden_states.dtype == torch.half:
