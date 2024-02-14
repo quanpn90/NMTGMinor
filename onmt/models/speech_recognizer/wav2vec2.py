@@ -1042,8 +1042,6 @@ class Wav2vecBERT(Wav2vecTransformer):
         :return:
         """
 
-        print("CREATING DECODER STATE ...")
-
         src = batch.get('source')
         src_pos = batch.get('source_pos')
         src_lang = batch.get('source_lang')
@@ -1056,7 +1054,6 @@ class Wav2vecBERT(Wav2vecTransformer):
 
         encoder_context = encoder_output['context']
         src_attention_mask = encoder_output['src']
-        print(encoder_context.size())
 
         context = encoder_output['context']
 

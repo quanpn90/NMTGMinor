@@ -944,7 +944,7 @@ class FastTranslator(Translator):
         return anti_prefix
 
     # override the "build_data" from parent Translator
-    def build_data(self, src_sents, tgt_sents, type='mt', past_sents=None):
+    def build_data(self, src_sents, tgt_sents, type='mt', past_sents=None, input_size=1):
         # This needs to be the same as preprocess.py.
         data_type = 'text'
 
@@ -1039,7 +1039,6 @@ class FastTranslator(Translator):
         except AttributeError:
             tgt_atb_data = None
 
-
         return onmt.Dataset(src_data, tgt_data,
                             src_langs=src_lang_data, tgt_langs=tgt_lang_data,
                             src_atbs=src_atb_data, tgt_atbs=tgt_atb_data,
@@ -1051,10 +1050,11 @@ class FastTranslator(Translator):
                             data_type=data_type,
                             batch_size_sents=sys.maxsize,
                             src_align_right=self.opt.src_align_right,
-                            past_src_data=past_src_data)
+                            past_src_data=past_src_data,
+                            input_size=input_size)
 
     def translate(self, src_data, tgt_data, past_src_data=None, sub_src_data=None, type='mt',
-                  prefix=None, anti_prefix=None, memory=None):
+                  prefix=None, anti_prefix=None, memory=None, input_size=1):
 
         if past_src_data is None or len(past_src_data) == 0:
             past_src_data = None
@@ -1067,18 +1067,19 @@ class FastTranslator(Translator):
                     past_src_data_ = past_src_data[i]
                 else:
                     past_src_data_ = None
-                dataset = self.build_data(src_data_, tgt_data, type=type, past_sents=past_src_data_)
+                dataset = self.build_data(src_data_, tgt_data, type=type, past_sents=past_src_data_, input_size=input_size)
                 batch = dataset.get_batch(0)
                 batches.append(batch)
 
+        # what is this?
         elif isinstance(src_data[0], list) and isinstance(src_data[0][0], list):
             src_data = src_data[0]
-            dataset = self.build_data(src_data, tgt_data, type=type, past_sents=past_src_data)
+            dataset = self.build_data(src_data, tgt_data, type=type, past_sents=past_src_data, input_size=input_size)
             batch = dataset.get_batch(0)  # this dataset has only one mini-batch
             batches = [batch] * self.n_models
             src_data = [src_data] * self.n_models
         else:
-            dataset = self.build_data(src_data, tgt_data, type=type, past_sents=past_src_data)
+            dataset = self.build_data(src_data, tgt_data, type=type, past_sents=past_src_data, input_size=input_size)
             batch = dataset.get_batch(0)  # this dataset has only one mini-batch
             batches = [batch] * self.n_models
             src_data = [src_data] * self.n_models

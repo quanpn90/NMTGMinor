@@ -152,6 +152,9 @@ parser.add_argument('-dynamic_min_len_scale', type=float, default=0.0,
 parser.add_argument('-external_tokenizer', default="",
                     help="External tokenizer from Huggingface. Currently supports barts.")
 
+parser.add_argument('-num_mel_bin', type=int, default=0,
+                    help="The number of log mel features if positive")
+
 # arguments added by Christian
 
 parser.add_argument('-new_words_file', type=str, default="new_words.txt",
@@ -277,27 +280,6 @@ def main():
         external_tokenizer = translator.tgt_external_tokenizer
     else:
         external_tokenizer = None
-    # if "mbart-large-50" in opt.external_tokenizer.lower():
-    #     print("[INFO] Using the external MBART50 tokenizer...")
-    #
-    #     from transformers import MBart50TokenizerFast
-    #     external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50", src_lang=opt.src_lang)
-    #
-    # elif "bart" in opt.external_tokenizer.lower():
-    #     print("[INFO] Using the external BART tokenizer...")
-    #
-    #     from transformers import BartTokenizer
-    #     external_tokenizer = BartTokenizer.from_pretrained(opt.external_tokenizer)
-    #
-    # elif "m2m100" in opt.external_tokenizer.lower():
-    #     print("[INFO] Using the external %s tokenizer..." % opt.external_tokenizer)
-    #     from transformers import M2M100Tokenizer
-    #     external_tokenizer = M2M100Tokenizer.from_pretrained(opt.external_tokenizer, src_lang=opt.src_lang)
-    #
-    # elif opt.external_tokenizer is None or len(opt.external_tokenizer) == 0:
-    #     external_tokenizer = None
-    # else:
-    #     raise NotImplementedError
 
     if os.path.isfile(opt.new_words_file):
         words = [line.strip() for line in open(opt.new_words_file)]
@@ -398,7 +380,7 @@ def main():
                     prefix=prefix, anti_prefix=anti_prefix)
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
-                    translate_batch(opt, tgtF, count, outF, translator,
+                    get_final_result(opt, tgtF, count, outF, translator,
                                     src_batches[0], tgt_batch, pred_batch, pred_ids,
                                     pred_score, pred_pos_scores,
                                     pred_length, gold_score,
@@ -484,7 +466,7 @@ def main():
                 type='asr', prefix=prefix, anti_prefix=anti_prefix)
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
-                = translate_batch(opt, tgtF, count, outF, translator,
+                = get_final_result(opt, tgtF, count, outF, translator,
                                   src_batches[0], tgt_batch, pred_batch, pred_ids,
                                   pred_score, pred_pos_scores,
                                   pred_length, gold_score,
@@ -504,7 +486,7 @@ def main():
 
     # Text processing for MT
     elif opt.asr_format == 'wav':
-        from onmt.utils import safe_readaudio
+        from onmt.data.audio_utils import safe_readaudio, wav_to_fmel
 
         past_audio_data = open(opt.past_src) if opt.past_src else None
         past_src_batches = list()
@@ -534,6 +516,8 @@ def main():
                 else:
                     wav_path, start, end = line[1], float(line[2]), float(line[3])
                 line = safe_readaudio(wav_path, start=start, end=end, sample_rate=16000)
+                if opt.num_mel_bin > 1:
+                    line = wav_to_fmel(line, num_mel_bin=opt.num_mel_bin)
 
                 if past_audio_data:
                     past_line = next(past_audio_data).strip().split()
@@ -544,6 +528,8 @@ def main():
                     else:
                         wav_path, start, end = past_line[1], float(past_line[2]), float(past_line[3])
                     past_line = safe_readaudio(wav_path, start=start, end=end, sample_rate=16000)
+                    if opt.num_mel_bin > 1:
+                        past_line = wav_to_fmel(past_line, num_mel_bin=opt.num_mel_bin)
                 else:
                     past_line = None
 
@@ -568,10 +554,10 @@ def main():
                 pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length, \
                 gold_score, num_gold_words, all_gold_scores = translator.translate(
                     src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr',
-                    prefix=prefix, anti_prefix=anti_prefix, memory=memory)
+                    prefix=prefix, anti_prefix=anti_prefix, memory=memory, input_size=max(1, opt.num_mel_bin))
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
-                    translate_batch(opt, tgtF, count, outF, translator,
+                    get_final_result(opt, tgtF, count, outF, translator,
                                     src_batches[0], tgt_batch, pred_batch, pred_ids,
                                     pred_score, pred_pos_scores,
                                     pred_length, gold_score,
@@ -638,10 +624,13 @@ def main():
                 src_batches,
                 tgt_batch,
                 past_src_data=past_src_batches,
-                sub_src_data=sub_src_batch, type='asr', prefix=prefix, anti_prefix=anti_prefix, memory=memory)
+                sub_src_data=sub_src_batch, type='asr',
+                prefix=prefix,
+                anti_prefix=anti_prefix, memory=memory,
+                input_size=max(1, opt.num_mel_bin))
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
-                = translate_batch(opt, tgtF, count, outF, translator,
+                = get_final_result(opt, tgtF, count, outF, translator,
                                   src_batches[0], tgt_batch, pred_batch, pred_ids,
                                   pred_score, pred_pos_scores,
                                   pred_length, gold_score,
@@ -715,7 +704,7 @@ def main():
                 prefix=prefix, anti_prefix=anti_prefix)
 
             # convert output tensor to words
-            count, pred_score, pred_words, gold_score, goldWords = translate_batch(opt, tgtF, count, outF, translator,
+            count, pred_score, pred_words, gold_score, goldWords = get_final_result(opt, tgtF, count, outF, translator,
                                                                                    src_batch, tgt_batch,
                                                                                    pred_batch, pred_ids,
                                                                                    pred_score, pred_length,
@@ -747,7 +736,7 @@ def main():
         sub_src.close()
 
 
-def translate_batch(opt, tgtF, count, outF, translator, src_batch, tgt_batch,
+def get_final_result(opt, tgtF, count, outF, translator, src_batch, tgt_batch,
                     pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length,
                     gold_score,
                     num_gold_words, all_gold_scores, input_type, external_tokenizer=None):

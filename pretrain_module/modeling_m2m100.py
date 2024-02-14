@@ -14,7 +14,6 @@
 # limitations under the License.
 """ PyTorch M2M100 model. """
 
-
 import math
 import random
 from typing import Optional, Tuple
@@ -41,16 +40,15 @@ from onmt.modules.optimized.dropout_add import fused_dropout_add
 from onmt.modules.optimized.linear import linear_function
 from torch.cuda.amp import custom_fwd, custom_bwd
 
-
 _CONFIG_FOR_DOC = "M2M100Config"
 _TOKENIZER_FOR_DOC = "M2M100Tokenizer"
 _CHECKPOINT_FOR_DOC = "facebook/m2m100_418M"
-
 
 M2M_100_PRETRAINED_MODEL_ARCHIVE_LIST = [
     "facebook/m2m100_418M",
     # See all M2M100 models at https://huggingface.co/models?filter=m2m_100
 ]
+
 
 #
 # # Copied from transformers.models.bart.modeling_bart.shift_tokens_right
@@ -155,7 +153,7 @@ class M2M100SinusoidalPositionalEmbedding(nn.Module):
 
     @torch.no_grad()
     def forward(
-        self, input_ids: torch.Tensor = None, inputs_embeds: torch.Tensor = None, past_key_values_length: int = 0
+            self, input_ids: torch.Tensor = None, inputs_embeds: torch.Tensor = None, past_key_values_length: int = 0
     ):
         if input_ids is not None:
             bsz, seq_len = input_ids.size()
@@ -191,10 +189,10 @@ class M2M100SinusoidalPositionalEmbedding(nn.Module):
         )
         return position_ids.unsqueeze(0).expand(input_shape).contiguous()
 
+
 from .modeling_mbart import MBartAttention as M2M100Attention
 from .modeling_mbart import MBartCrossAttention as M2M100CrossAttention
 from .modeling_mbart import index_copy
-
 
 
 # Copied from transformers.models.mbart.modeling_mbart.MBartEncoderLayer with MBart->M2M100
@@ -233,11 +231,11 @@ class M2M100EncoderLayer(nn.Module):
         self.fast_bert_mha = fast_bert_mha
 
     def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: torch.Tensor,
-        output_attentions: bool = False,
-        max_len=-1, cu_seqlens=None, **kwargs
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: torch.Tensor,
+            output_attentions: bool = False,
+            max_len=-1, cu_seqlens=None, **kwargs
     ):
         """
         :param hidden_states:
@@ -278,7 +276,7 @@ class M2M100EncoderLayer(nn.Module):
         hidden_states = residual + hidden_states
 
         if hidden_states.dtype == torch.float16 and (
-            torch.isinf(hidden_states).any() or torch.isnan(hidden_states).any()
+                torch.isinf(hidden_states).any() or torch.isnan(hidden_states).any()
         ):
             clamp_value = torch.finfo(hidden_states.dtype).max - 1000
             hidden_states = torch.clamp(hidden_states, min=-clamp_value, max=clamp_value)
@@ -465,15 +463,15 @@ class M2M100DecoderLayer(nn.Module):
         return x
 
     def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = False,
-        incremental: Optional[bool] = False,
-        incremental_cache=None,
-        lang=None, mixture=None, **kwargs
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask: Optional[torch.Tensor] = None,
+            encoder_hidden_states: Optional[torch.Tensor] = None,
+            encoder_attention_mask: Optional[torch.Tensor] = None,
+            output_attentions: Optional[bool] = False,
+            incremental: Optional[bool] = False,
+            incremental_cache=None,
+            lang=None, mixture=None, **kwargs
     ):
         """
         :param hidden_states:
@@ -575,7 +573,6 @@ class M2M100PreTrainedModel(PreTrainedModel):
             module.gradient_checkpointing = value
 
 
-
 class M2M100Encoder(M2M100PreTrainedModel):
     """
     Transformer encoder consisting of *config.encoder_layers* self attention layers. Each layer is a
@@ -623,12 +620,12 @@ class M2M100Encoder(M2M100PreTrainedModel):
         self.fast_bert_mha = fast_bert_mha
 
     def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        inputs_embeds=None,
-        output_attentions=None,
-        output_hidden_states=None,
+            self,
+            input_ids=None,
+            attention_mask=None,
+            inputs_embeds=None,
+            output_attentions=None,
+            output_hidden_states=None,
     ):
         r"""
         Args:
@@ -710,9 +707,9 @@ class M2M100Encoder(M2M100PreTrainedModel):
 
         if torch.is_autocast_enabled():
             try:
-                hidden_states =  torch.cuda.amp.autocast_mode._cast(hidden_states, torch.get_autocast_gpu_dtype())
+                hidden_states = torch.cuda.amp.autocast_mode._cast(hidden_states, torch.get_autocast_gpu_dtype())
             except AttributeError:
-                hidden_states =  torch.cuda.amp.autocast_mode._cast(hidden_states, torch.half)
+                hidden_states = torch.cuda.amp.autocast_mode._cast(hidden_states, torch.half)
 
         # only run this when seq_len <= 512 and sm = 80/86 and type = half
         # if self.fast_bert_mha is not None and (seq_len <= 512 and bsz >= 4 and sm[0] == 8 and sm[1] in [0, 6]) \
@@ -836,16 +833,16 @@ class M2M100Decoder(M2M100PreTrainedModel):
             layer.add_factorize(n_languages, rank=rank, multiplicative=multiplicative, fast=fast)
 
     def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        encoder_hidden_states=None,
-        encoder_attention_mask=None,
-        inputs_embeds=None,
-        output_attentions=None,
-        output_hidden_states=None,
-        lang=None, mixture=None,
-        **kwargs
+            self,
+            input_ids=None,
+            attention_mask=None,
+            encoder_hidden_states=None,
+            encoder_attention_mask=None,
+            inputs_embeds=None,
+            output_attentions=None,
+            output_hidden_states=None,
+            lang=None, mixture=None,
+            **kwargs
     ):
         """
         :param input_ids:
