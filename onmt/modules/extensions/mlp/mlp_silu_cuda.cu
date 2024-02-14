@@ -6,15 +6,25 @@
 #include <string.h>
 #include <torch/torch.h>
 #include <cmath>
+#include <math.h>
 
 /* Includes, cuda */
+#include <cuda.h>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
+#include <cuda_profiler_api.h>
+#include <cuda_runtime.h>
+#ifdef OLD_GENERATOR_PATH
 #include <ATen/CUDAGeneratorImpl.h>
+#else
+#include <ATen/cuda/CUDAGeneratorImpl.h>
+#endif
 #include <curand_kernel.h>
 
 // includes cublaslt
 #include <cublasLt.h>
+
 
 // constants for fused bias+relu kernel
 #define BIAS_RELU_FW_NTHREADS 256 // forward number of thread per block
