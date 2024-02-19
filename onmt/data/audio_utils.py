@@ -409,7 +409,7 @@ class WavLoader(object):
             self.cache[wav_path] = file_
             self.usage[wav_path] = 1
 
-        data = safe_readaudio_from_cache(file_, start, end, sample_rate)
+        data = safe_readaudio_from_cache(file_, wav_path, start=start, end=end, sample_rate=sample_rate)
 
         return data
 
