@@ -98,10 +98,10 @@ class WavDataset(torch.utils.data.Dataset):
                 self.cache[wav_path] = file_
                 self.usage[wav_path] = 1
 
-            data = safe_readaudio_from_cache(file_, wav_path, start, end, sample_rate)
+            data = safe_readaudio_from_cache(file_, wav_path, start=start, end=end, sample_rate=sample_rate)
         else:
             file_ = None
-            data = safe_readaudio(wav_path, start, end, sample_rate)
+            data = safe_readaudio(wav_path, start=start, end=end, sample_rate=sample_rate)
 
         if self.num_mel_bin > 0:
             data = wav_to_fmel(data, num_mel_bin=self.num_mel_bin)

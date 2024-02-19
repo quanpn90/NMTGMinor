@@ -481,7 +481,8 @@ def safe_readaudio_from_cache(file_, wav_path, start=0.0, end=0.0, sample_rate=1
         tensor = torch.from_numpy(waveform)
         tensor = tensor[:, 0].unsqueeze(1)
     else:
-
+        tensor, _ = torchaudio.load(wav_path, frame_offset=offset, num_frames=num_frames,
+                                   normalize=True, channels_first=False)
         tensor = tensor[:, 0].unsqueeze(1)
 
     # select the first channel?
