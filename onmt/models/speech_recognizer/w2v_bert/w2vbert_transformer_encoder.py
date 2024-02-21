@@ -18,7 +18,7 @@ from .layer_norm import LayerNormFactory
 from .w2vbert_multihead_attention import MultiheadAttention
 from .w2vbert_ffn import FeedForwardNetwork
 from .norm_order import TransformerNormOrder
-from .typing import DataType, Device, finaloverride
+from .typing import DataType, Device, finaloverride, CPU
 from .layer_norm import LayerNormFactory, create_standard_layer_norm
 
 

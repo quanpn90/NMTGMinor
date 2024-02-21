@@ -68,35 +68,18 @@ __device__ __inline__ float sigmoid(float a) {
   return (retf);
 }
 
-// Keep gelu in float only. When using half, cast to float before calling.
-__device__ __inline__ float gelu(float a) {
-//  float retf = 0.5f * a * (1.f + tanhf(0.79788456f * (a +  0.044715f * a * a * a)));
-  float retf = 0.5f * a * (1.f + tanhf(sqrt(M_2_PI) * (a +  0.044715f * a * a * a)));
-  return (retf);
-  // float retf = 1.f / (1.f + expf(-a));
-  // return (retf);
-}
-
-// Keep gelu in float only. When using half, cast to float before calling.
+// Keep silu in float only. When using half, cast to float before calling.
 __device__ __inline__ float silu(float a) {
   float retf = 1.f / (1.f + expf(-a));
   return (a * retf);
 }
 
-// Keep gelu in float only. When using half, cast to float before calling.
-__device__ __inline__ float gelu_back(float a) {
-  float tanh_outf = tanhf(SQRT_M2_PI * (a +  0.044715f * a * a * a));
-  float retf = 0.5f * a * (1.f - tanh_outf * tanh_outf) * (SQRT_M2_PI + 0.1070322243f * a * a) + 0.5f * (1.f + tanh_outf);
-  return (retf);
-}
-
-// Keep gelu in float only. When using half, cast to float before calling.
+// Keep silu in float only. When using half, cast to float before calling.
 __device__ __inline__ float silu_back(float dy, float x) {
   float sig = 1.f / (1.f + expf(-x));
   float retf = dy * sig * (1.0f + x * (1.0f - sig));
   return (retf);
 }
-
 
 
 // FP64 Wrapper around cublas GEMMEx
@@ -1217,6 +1200,10 @@ __global__ void biasAddSilu_bprop(
     volatile float* intermediate,
     int* semaphores,
     T* db) {
+
+  // h is input of the layer
+  // dY is the gradient of the output
+
   // The feature that this thread is responsible for
   int f = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -1341,7 +1328,6 @@ __global__ void biasAddSilu_bprop_aligned(
     T* db) {
   // The feature that this thread is responsible for
   int f = blockIdx.x * blockDim.x + threadIdx.x;
-//  float pinv = 1.0f / (1.0f - p);
 
   // Compute the span this thread is responsible for
   // For this block
@@ -1384,11 +1370,7 @@ __global__ void biasAddSilu_bprop_aligned(
     load_store(r_dy, dY, 0, flat_idx);
 #pragma unroll
     for(int ii=0;ii<ILP;ii++){
-//      if ((float)r_y[ii] <= 0.f)
-//        r_dy[ii] = 0;
-//      else {
-//        r_dy[ii] = r_dy[ii] * pinv;
-//      }
+
       r_dy[ii] = silu_back((float)r_dy[ii], (float)r_h[ii]);
       db_local[ii] += (float)r_dy[ii];
     }
@@ -1982,38 +1964,9 @@ int mlp_fp(
     float one = 1.f;
     float zero = 0.f;
 
-    // try with cublaslt first for supported case with valid handle
-    int cublaslt_status = 1;
-//    if(activation < 1 && p == 0){
-//        cublaslt_status = mlp_gemm_lt(
-//          //ltHandle,
-//          (cublasLtHandle_t)handle,
-//          CUBLAS_OP_T,
-//          CUBLAS_OP_N,
-//          ofeat,
-//          batch_size,
-//          ifeat,
-//          &one,
-//          weight,
-//          ifeat,
-//          input,
-//          ifeat,
-//          &zero,
-//          output,
-//          ofeat,
-//          lt_workspace,
-//          1 << 22,
-//          stream,
-//          use_bias == 1,
-//          activation == 1,
-//          bias);
-//    }
-
-    // if cublaslt failed or not executed, fallback to cublas
-    if (cublaslt_status != 0) {
-      cublasStatus_t cublas_status;
-      // Call GEMM: fprop is Y = W'X
-      cublas_status = mlp_gemm(
+    cublasStatus_t cublas_status;
+    // Call GEMM: fprop is Y = W'X
+    cublas_status = mlp_gemm(
         handle,
         CUBLAS_OP_T,
         CUBLAS_OP_N,
@@ -2029,28 +1982,27 @@ int mlp_fp(
         output,
         ofeat);
 
-      if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
         printf("GEMM fprop failed with %d\n", cublas_status);
         return 1;
-      }
+    }
 
-      const uint &input_size = ofeat;
-      int num_blocks = 0;
-      int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
-      // Call biasReLU
-      if (layer == (num_layers -1)) { // no activation
+    const uint &input_size = ofeat;
+    int num_blocks = 0;
+    int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
+    // Call biasReLU
+    if (layer == (num_layers -1)) { // no activation
 //          printf("NO ACTIVATION\n");
           cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAdd_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
           biasAdd_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
-      } else {  // SiLU
-//          printf("RELU\n");
+    } else {  // SiLU
           if (p == 0) {
             cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAddSilu_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
             biasAddSilu_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, hidden, bias,
                                                                                         batch_size, input_size);
           } else {
             cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAddDropoutSilu_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-            //number of times random will be generated per thread, to offset philox counter in thc random state
+            // number of times random will be generated per thread, to offset philox counter in thc random state
             int64_t counter_offset = ((input_size*batch_size-1)/(BIAS_RELU_FW_NTHREADS*num_SMs*num_blocks*ILP)+1)*ILP;
             std::pair<uint64_t, uint64_t> rng_engine_inputs;
             {
@@ -2061,8 +2013,7 @@ int mlp_fp(
                                  stream>>>(output, hidden, bias, mask, batch_size, input_size, p, rng_engine_inputs);
           }
 
-        }
-    }
+      }
 
     // Set current output (after activation) as next layer input
     reserved_space_x = reserved_space_y;

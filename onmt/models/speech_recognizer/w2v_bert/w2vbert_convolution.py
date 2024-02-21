@@ -135,7 +135,7 @@ class ConformerConvolution(Module):
             self.register_module("layer_norm", None)
 
         if depthwise_activation is None:
-            self.depthwise_activation = SiLU()  # a.k.a. swish
+            self.depthwise_activation = SiLU(inplace=True)  # a.k.a. swish
         else:
             self.depthwise_activation = depthwise_activation
 

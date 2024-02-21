@@ -348,6 +348,11 @@ class Binarizer:
                                     "The first token must be language ID, expecting %d get %d. Current language: %s" \
                                     % (vocab.convertToIdx([lang], None)[0], tensor[0], ext_tokenizer.src_lang)
 
+                    elif "nllb" in external_tokenizer_name.lower():
+                        assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID"
+                        pad_id = vocab.convertToIdx(["<pad>"], None)[0]
+                        assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
+
                         # pad_id = vocab.convertToIdx(["<pad>"], None)[0]
                         # assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
 
@@ -449,7 +454,6 @@ class Binarizer:
         elif "nllb" in external_tokenizer.lower():
 
             from transformers import NllbTokenizer
-            from pretrain_module.tokenization_deltalm import DeltaLMTokenizer
             try:  # check if this tokenizer is saved locally or not
                 ext_tokenizer = torch.load("nllb.tokenizer.pt")
                 ext_tokenizer.src_lang = lang
