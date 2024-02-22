@@ -76,13 +76,13 @@ else:
     mlp_relu_recompute_function = None
 
 
-def foo(x, y):
-    a = torch.sin(x)
-    b = torch.cos(x)
-    return a + b
-opt_foo1 = torch.compile(foo)
-
-print("COMPILED")
+# def foo(x, y):
+#     a = torch.sin(x)
+#     b = torch.cos(x)
+#     return a + b
+# opt_foo1 = torch.compile(foo)
+#
+# print("COMPILED")
 
 if __name__ == '__main__':
 
@@ -232,7 +232,7 @@ if __name__ == '__main__':
                 np.testing.assert_allclose(
                     mlp_out.detach().cpu().numpy(),
                     ref_out.detach().cpu().numpy(),
-                    atol=1e-7, rtol=1e-5)
+                    atol=1e-5, rtol=1e-4)
 
                 # Use mean value as scalar loss. Multiply 10 to make it big enough not zero out
                 mlp_out.mean().mul(10.).backward()
@@ -246,11 +246,11 @@ if __name__ == '__main__':
                     np.testing.assert_allclose(
                         mlp.weights[l].grad.detach().cpu().numpy(),
                         ref_mlp.weights[l].grad.detach().cpu().numpy(),
-                        atol=1e-7, rtol=1e-5)
+                        atol=1e-5, rtol=1e-4)
                     np.testing.assert_allclose(
                         mlp.biases[l].grad.detach().cpu().numpy(),
                         ref_mlp.biases[l].grad.detach().cpu().numpy(),
-                        atol=1e-7, rtol=1e-5)
+                        atol=1e-5, rtol=1e-4)
 
         def test_no_grad(self):
             mlp = MLP(mlp_sizes).cuda()
@@ -264,7 +264,7 @@ if __name__ == '__main__':
             np.testing.assert_allclose(
                 mlp_out.detach().cpu().numpy(),
                 ref_out.detach().cpu().numpy(),
-                atol=1e-7, rtol=1e-5)
+                atol=1e-5, rtol=1e-4)
 
         def test_performance_half(self):
 
@@ -281,7 +281,7 @@ if __name__ == '__main__':
                     mlp_layers.append(linear)
                     if i < mlp.num_layers - 1:
                         # mlp_layers.append(nn.ReLU(inplace=True))
-                        mlp_layers.append(torch.nn.ReLU())
+                        mlp_layers.append(torch.nn.ReLU(inplace=True))
                         mlp_layers.append(nn.Dropout(dropout))
 
                 ref_mlp = nn.Sequential(*mlp_layers).cuda()

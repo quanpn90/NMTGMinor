@@ -5,7 +5,7 @@
       <paths name="i13hpc1.ira.uka.de">
         <serverdata>
           <mappings>
-            <mapping local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/project/data_asr/pquan_backup/NMTGMinor" local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>

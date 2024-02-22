@@ -84,3 +84,4 @@ class ArchitectureRegistry(Generic[ModelConfigT]):
 
         return register
 
+

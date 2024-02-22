@@ -219,7 +219,11 @@ def build_tm_model(opt, dicts, constants=None):
         discrete_encoder = None
         if "wavlm" in opt.enc_pretrained_model:
             from onmt.models.speech_recognizer.wavlm import WavLMEncoder
-            encoder = WavLMEncoder(opt, opt.wav2vec2_pretrained_model) 
+            encoder = WavLMEncoder(opt, opt.wav2vec2_pretrained_model)
+
+        elif "seamless" in opt.enc_pretrained_model or "w2vbert_adapter" in opt.enc_pretrained_model:
+            from onmt.models.unity.seamless_encoder import SeamlessEncoder
+            encoder = SeamlessEncoder(opt, opt.wav2vec2_pretrained_model)
 
         elif "w2vbert" in opt.enc_pretrained_model or "w2v-bert" in opt.enc_pretrained_model:
             from onmt.models.speech_recognizer.w2vbert import W2VBert
@@ -926,3 +930,7 @@ def unfreeze_model_speciailized_weights(model):
     model.apply(unfreeze)
 
     return
+
+def compile_model(model, opt):
+
+    pass

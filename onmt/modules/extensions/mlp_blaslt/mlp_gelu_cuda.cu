@@ -666,21 +666,7 @@ int mlp_fp(
 
     int cublas_status;
     // Call GEMM: fprop is Y = W'X
-//     cublas_status = mlp_gemm(
-//                         handle,
-//                         CUBLAS_OP_T,
-//                         CUBLAS_OP_N,
-//                         ofeat,
-//                         batch_size,
-//                         ifeat,
-//                         one,
-//                         weight,
-//                         ifeat,
-//                         input,
-//                         ifeat,
-//                         zero,
-//                         output,
-//                         ofeat);
+
     bool use_gelu = (layer < (num_layers - 1) && p == 0);
 
     if (use_gelu)

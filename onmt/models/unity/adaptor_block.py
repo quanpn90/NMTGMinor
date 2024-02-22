@@ -10,7 +10,7 @@ import torch
 
 from onmt.models.speech_recognizer.w2v_bert.w2vbert_conformer import ConformerBlock
 from onmt.models.speech_recognizer.w2v_bert.w2vbert_transformer_encoder import ModuleList
-from onmt.models.speech_recognizer.w2v_bert.layer_norm import LayerNorm
+from onmt.models.speech_recognizer.w2v_bert.layer_norm import LayerNorm, LayerNormFactory, create_standard_layer_norm
 from onmt.models.speech_recognizer.w2v_bert.w2vbert_linear import Linear
 from onmt.models.speech_recognizer.w2v_bert.w2vbert_transformer_encoder import (
     FeedForwardNetwork, LayerNormFactory, MultiheadAttention, TransformerEncoderLayer, TransformerEncoder)
@@ -75,7 +75,7 @@ class UnitYEncoderAdaptor(TransformerEncoder):
             model_dim, model_dim * 4, bias=True, device=device, dtype=dtype
         )
 
-        self.activation = ReLU()
+        self.activation = ReLU(inplace=True)
 
         self.proj2 = Linear(
             model_dim * 4, model_dim, bias=True, device=device, dtype=dtype
@@ -231,9 +231,9 @@ class UnitYTransformerAdaptorLayer(TransformerEncoderLayer):
     def forward(
         self,
         seqs: Tensor,
-        padding_mask: Optional[PaddingMask],
-        self_attn_mask: Optional[AttentionMask] = None,
-    ) -> Tuple[Tensor, Optional[PaddingMask]]:
+        padding_mask,
+        self_attn_mask=None,
+    ): # -> Tuple[Tensor, Optional[PaddingMask]]:
         seqs, padding_mask = self._forward_self_attn(seqs, padding_mask, self_attn_mask)
 
         seqs = self._forward_ffn(seqs)
@@ -243,9 +243,9 @@ class UnitYTransformerAdaptorLayer(TransformerEncoderLayer):
     def _forward_self_attn(
         self,
         seqs: Tensor,
-        padding_mask: Optional[PaddingMask],
-        self_attn_mask: Optional[AttentionMask],
-    ) -> Tuple[Tensor, Optional[PaddingMask]]:
+        padding_mask,
+        self_attn_mask=None,
+    ): # -> Tuple[Tensor, Optional[PaddingMask]]:
         residual = self.residual_layer_norm(seqs)
 
         # Apply pooling to the residual to match the sequence length of the
@@ -386,9 +386,9 @@ class UnitYConformerAdaptorLayer(TransformerEncoderLayer):
     def forward(
         self,
         seqs: Tensor,
-        padding_mask: Optional[PaddingMask],
-        self_attn_mask: Optional[AttentionMask] = None,
-    ) -> Tuple[Tensor, Optional[PaddingMask]]:
+        padding_mask,
+        self_attn_mask=None,
+    ): # -> Tuple[Tensor, Optional[PaddingMask]]:
         if self.layer_norm is not None:
             seqs = self.layer_norm(seqs)
 
@@ -417,15 +417,27 @@ class UnitYConformerAdaptorLayer(TransformerEncoderLayer):
 
 
 def _compute_new_padding_mask(
-    seqs: Tensor, padding_mask: Optional[PaddingMask], kernel_size: int, stride: int
-) -> Optional[PaddingMask]:
+    seqs: Tensor, padding_mask, kernel_size: int, stride: int
+):
     if padding_mask is None:
         return padding_mask
 
+    # An array where each element represents the length of a sequence.
+    batch_size = seqs.size(0)
+    seq_lens = (1 - padding_mask.float()).sum(dim=1)
+
     pad = kernel_size // 2
 
-    seq_lens = ((padding_mask.seq_lens + 2 * pad - kernel_size) / stride) + 1
+    seq_lens = ((seq_lens + 2 * pad - kernel_size) / stride) + 1
 
     seq_lens = seq_lens.floor().to(torch.int64)
 
-    return PaddingMask(seq_lens, batch_seq_len=seqs.size(1))
+    batch_seq_len = seqs.size(1)
+
+    indices = torch.arange(batch_seq_len, device=seq_lens.device).expand(batch_size, -1)
+    lengths = seq_lens.unsqueeze(1).expand(-1, batch_seq_len)
+
+    # the masked indices are padded positions
+    new_padding_mask = indices >= lengths
+
+    return new_padding_mask

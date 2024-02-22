@@ -1195,53 +1195,31 @@ int mlp_fp(
 
     // try with cublaslt first for supported case with valid handle
     int cublaslt_status = 1;
-//    if(activation < 1 && p == 0){
-//        cublaslt_status = mlp_gemm_lt(
-//          //ltHandle,
-//          (cublasLtHandle_t)handle,
-//          CUBLAS_OP_T,
-//          CUBLAS_OP_N,
-//          ofeat,
-//          batch_size,
-//          ifeat,
-//          &one,
-//          weight,
-//          ifeat,
-//          input,
-//          ifeat,
-//          &zero,
-//          output,
-//          ofeat,
-//          lt_workspace,
-//          1 << 22,
-//          stream,
-//          use_bias == 1,
-//          activation == 1,
-//          bias);
-//    }
+
+    cublas_status = gemm_bias_lt(
+            (cublasLtHandle_t)handle,
+            CUBLAS_OP_T,
+            CUBLAS_OP_N,
+            ofeat,
+            batch_size,
+            ifeat,
+            &one, /* host pointer */
+            weight,
+            ifeat,
+            input,
+            ifeat,
+            &zero, /* host pointer */
+            output,
+            ofeat,
+            lt_workspace,
+            1 << 22,
+            stream,
+            true,
+            static_cast<const void*>(bias));
 
     // if cublaslt failed or not executed, fallback to cublas
     if (cublaslt_status != 0) {
-      cublasStatus_t cublas_status;
-      // Call GEMM: fprop is Y = W'X
-      cublas_status = mlp_gemm(
-        handle,
-        CUBLAS_OP_T,
-        CUBLAS_OP_N,
-        ofeat,
-        batch_size,
-        ifeat,
-        &one,
-        weight,
-        ifeat,
-        input,
-        ifeat,
-        &zero,
-        output,
-        ofeat);
-
-      if (cublas_status != CUBLAS_STATUS_SUCCESS) {
-        printf("GEMM fprop failed with %d\n", cublas_status);
+        printf("GEMM LT fprop failed with %d\n", cublas_status);
         return 1;
       }
 
@@ -1250,12 +1228,12 @@ int mlp_fp(
       int num_SMs = at::cuda::getCurrentDeviceProperties()->multiProcessorCount;
       // Call biasReLU
       if (layer == (num_layers -1)) { // no activation
-          cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAdd_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-          biasAdd_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
+          // do nothing here
+
       } else {
           if (p == 0) {
-            cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAddRelu_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
-            biasAddRelu_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
+            cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, Relu_fprop<T>, BIAS_RELU_FW_NTHREADS, 0);
+            Relu_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0, stream>>>(output, bias, batch_size, input_size);
           } else {
             if (store_dropout_mask)
                 cudaOccupancyMaxActiveBlocksPerMultiprocessor(&num_blocks, biasAddDropoutMaskRelu_fprop<T>,
@@ -1271,10 +1249,10 @@ int mlp_fp(
               rng_engine_inputs = at::check_generator<at::CUDAGeneratorImpl>(gen)->philox_engine_inputs(counter_offset);
             }
             if (store_dropout_mask)
-                biasAddDropoutMaskRelu_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0,
+                DropoutMaskRelu_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0,
                                      stream>>>(output, bias, mask, batch_size, input_size, p, rng_engine_inputs);
             else
-                biasAddDropoutRelu_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0,
+                DropoutRelu_fprop<<<num_SMs*num_blocks, BIAS_RELU_FW_NTHREADS, 0,
                                      stream>>>(output, bias, batch_size, input_size, p, rng_engine_inputs);
           }
 
