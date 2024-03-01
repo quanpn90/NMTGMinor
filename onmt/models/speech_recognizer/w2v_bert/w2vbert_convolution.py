@@ -10,7 +10,7 @@ from torch import Tensor
 from torch.nn import GLU, BatchNorm1d, Conv1d, Module, SiLU
 from torch.nn.functional import pad
 
-from onmt.modules.layer_norm import LayerNorm
+from .layer_norm import LayerNorm, create_standard_layer_norm
 from .typing import DataType, Device
 
 
@@ -128,7 +128,7 @@ class ConformerConvolution(Module):
             self.register_module("batch_norm", None)
 
         if norm_type == "layer_norm":
-            self.layer_norm = LayerNorm(
+            self.layer_norm = create_standard_layer_norm(
                 model_dim, bias=True, device=device, dtype=dtype
             )
         else:

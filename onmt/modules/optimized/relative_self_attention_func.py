@@ -206,17 +206,20 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             len_k = keys.size(0)
         # Relative Attention from here:
         # r_w_bias size: head * head_dim
-        rw_head_q = queries.view(len_q, bsz, heads, head_dim) + r_w_bias  #
-        rw_head_q = rw_head_q.view(len_q, bsz * heads, head_dim)
-        rr_head_q = queries.view(len_q, bsz, heads, head_dim) + r_r_bias
-        rr_head_q = rr_head_q.view(len_q, bsz * heads, head_dim)
+        if not learnable_pos:
+            rw_head_q = queries.view(len_q, bsz, heads, head_dim) + r_w_bias  #
+            rw_head_q = rw_head_q.view(len_q, bsz * heads, head_dim)
+            rr_head_q = queries.view(len_q, bsz, heads, head_dim) + r_r_bias
+            rr_head_q = rr_head_q.view(len_q, bsz * heads, head_dim)
+        else:
+            rw_head_q = queries
 
         # matmul_ac batched GEMMs
         # queries+bias: [len_q, bsz*heads, head_dim] transpose(0, 1)
         # keys: [len_k, bsz*heads, head_dim] transpose(0, 1)
         if queries.is_cuda:
             matmul_ac = torch.empty((bsz * heads, queries.size(0), keys.size(0)), dtype=queries.dtype,
-                                    device=rw_head_q.device)
+                                    device=queries.device)
             matmul_ac = torch.baddbmm(matmul_ac, rw_head_q.transpose(0, 1), keys.transpose(0, 1).transpose(1, 2),
                                       out=matmul_ac, beta=0.0, alpha=scale_t[0])
         else:
@@ -228,7 +231,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                 # queries+bias: [len_q, bsz*heads, head_dim] transpose(0, 1)
                 # rel_positions: [len_r, bsz*heads, head_dim] transpose(0, 1)
                 matmul_bd = torch.empty((bsz * heads, queries.size(0), len_r), dtype=queries.dtype,
-                                        device=rw_head_q.device)
+                                        device=queries.device)
                 matmul_bd = torch.baddbmm(matmul_bd, rr_head_q.transpose(0, 1),
                                           r_head_k.transpose(0, 1).transpose(1, 2),
                                           out=matmul_bd, beta=0.0, alpha=scale_t[0])
@@ -252,7 +255,7 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
             # add directly into matmul_ac so we don't need to
             # torch.baddbmm(matmul_ac.transpose(0, 1), rr_head_q, pos.transpose(1, 2),
             # out=matmul_ac.transpose(0, 1), beta=1.0, alpha=scale_t[0])
-            matmul_ac.transpose(0, 1).baddbmm_(rr_head_q, pos.transpose(1, 2), beta=1.0, alpha=scale_t[0])
+            matmul_ac.transpose(0, 1).baddbmm_(queries, pos.transpose(1, 2), beta=1.0, alpha=scale_t[0])
             attn_score = matmul_ac
             # no need to shift in this case
 
@@ -517,10 +520,14 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
         keys = input_lin_results[:, :, 1, :]
         values = input_lin_results[:, :, 2, :]
 
-        rw_head_q = queries.view(len_q, bsz, heads_t[0], head_dim) + r_w_bias  #
-        rw_head_q = rw_head_q.view(len_q, bsz * heads_t[0], head_dim)
-        rr_head_q = queries.view(len_q, bsz, heads_t[0], head_dim) + r_r_bias
-        rr_head_q = rr_head_q.view(len_q, bsz * heads_t[0], head_dim)
+        if not learnable_pos:
+            rw_head_q = queries.view(len_q, bsz, heads_t[0], head_dim) + r_w_bias  #
+            rw_head_q = rw_head_q.view(len_q, bsz * heads_t[0], head_dim)
+            rr_head_q = queries.view(len_q, bsz, heads_t[0], head_dim) + r_r_bias
+            rr_head_q = rr_head_q.view(len_q, bsz * heads_t[0], head_dim)
+        else:
+            rw_head_q = queries
+            rr_head_q = queries
 
         # The tensor is declared before hand to properly slice out query, key, and value grads.
         input_lin_results_grads = torch.empty_like(input_lin_results)
@@ -606,7 +613,11 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                       out=queries_grads.transpose(0, 1), beta=0.0, alpha=scale_t[0])
 
         queries_grads_ac = queries_grads
-        r_w_bias_grads = torch.sum(queries_grads_ac.view(len_q, bsz, heads_t[0], -1), dim=[0, 1])  # heads * head_dim
+
+        if learnable_pos:
+            r_w_bias_grads = None
+        else:
+            r_w_bias_grads = torch.sum(queries_grads_ac.view(len_q, bsz, heads_t[0], -1), dim=[0, 1])  # heads * head_dim
 
         matmul_bd_grads = attn_score_grads
 
@@ -638,7 +649,10 @@ class RelativeSelfAttnFunc(torch.autograd.Function):
                           out=queries_grads_bd, beta=0.0, alpha=scale_t[0])
 
         # len_q x batch*heads x d_head
-        r_r_bias_grads = torch.sum(queries_grads_bd.view(len_q, bsz, heads_t[0], -1), dim=[0, 1])
+        if learnable_pos:
+            r_r_bias_grads = None
+        else:
+            r_r_bias_grads = torch.sum(queries_grads_bd.view(len_q, bsz, heads_t[0], -1), dim=[0, 1])
         # add the gradients from bd to queries
         queries_grads.add_(queries_grads_bd)
 
@@ -897,6 +911,8 @@ if __name__ == "__main__":
     pos = torch.randn(*(len_q, len_q, opt.head_dim)).double().cuda()
     pos.requires_grad = True
     learnable_pe = True
+    r_w_bias = None
+    r_r_bias = None
 
     print("gradchecking w/ learnable position encodings start.")
 

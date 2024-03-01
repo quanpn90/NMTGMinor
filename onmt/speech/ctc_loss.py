@@ -13,8 +13,6 @@ class CTC(torch.nn.Module):
                  padding_idx=-1, blank_idx=0):
         super().__init__()
 
-        # self.vocab_size = vocab_size
-        # self.hidden_size = hidden_size
         if padding_idx == -1:
             self.padding_idx = onmt.constants.PAD
         else:
@@ -25,25 +23,13 @@ class CTC(torch.nn.Module):
         else:
             self.blank_idx = blank_idx
 
+        self.ctc_type = ctc_type
+
         # why do we need dropout at ctc ?
         self.dropout_rate = dropout_rate
 
-        # In case of Pytorch >= 1.7.0, CTC will be always builtin
-        self.ctc_type = (
-            ctc_type
-            if LooseVersion(torch.__version__) < LooseVersion("1.7.0")
-            else "builtin"
-        )
-
-
-        if self.ctc_type == "builtin":
-            reduction_type = "sum" if reduce else "none"
-            self.ctc_loss = torch.nn.CTCLoss(blank=onmt.constants.TGT_PAD, reduction=reduction_type, zero_infinity=True)
-
-        else:
-            raise ValueError(
-                'ctc_type must be "builtin" or "warpctc": {}'.format(self.ctc_type)
-            )
+        reduction_type = "sum" if reduce else "none"
+        self.ctc_loss = torch.nn.CTCLoss(blank=onmt.constants.TGT_PAD, reduction=reduction_type, zero_infinity=True)
 
         self.ignore_id = -1
         self.reduce = reduce
@@ -57,28 +43,34 @@ class CTC(torch.nn.Module):
         :return:
         """
 
-        if self.ctc_type == "builtin":
+        log_probs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
 
-            log_probs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
+        # Use the deterministic CuDNN implementation of CTC loss to avoid
+        #  [issue#17798](https://github.com/pytorch/pytorch/issues/17798)
+        with torch.backends.cudnn.flags(deterministic=True):
+            loss = self.ctc_loss(log_probs, targets, ilen, olen)
 
-            # Use the deterministic CuDNN implementation of CTC loss to avoid
-            #  [issue#17798](https://github.com/pytorch/pytorch/issues/17798)
-            with torch.backends.cudnn.flags(deterministic=True):
-                loss = self.ctc_loss(log_probs, targets, ilen, olen)
+        with torch.no_grad():
+            preds = torch.argmax(logits, dim=1)
+            total = targets.numel()
 
-            return loss
-
-        elif self.ctc_type == "warpctc":
-
-            return self.ctc_loss(logits, targets, ilen, olen)
-
-        else:
-            raise NotImplementedError
+        return loss, total
 
     def forward(self, model_outputs, targets, **kwargs):
 
         # context logits: T x B x V
         # targets: T x B
+        """
+        Args:
+            model_outputs:
+            targets:
+            **kwargs:
+
+        Returns:
+            loss: the sum of log-likelihood at each position in the sequence (summed by both batch and time dimensions)
+            total number of predicted elements in the targets
+
+        """
         logits = model_outputs['encoder_logits']
 
         if 'wav2vec_padding_mask' in model_outputs:
@@ -89,7 +81,6 @@ class CTC(torch.nn.Module):
         # target mask should be T x B
         target_mask = targets.ne(self.padding_idx)
         target_lengths = target_mask.long().sum(0)
-        # print(target_lengths)
 
         # source mask should be B x 1 x T or B x T
         if source_mask.dim() == 3:
@@ -97,17 +88,20 @@ class CTC(torch.nn.Module):
         else:
             input_lengths = (1 - source_mask).sum(1)
 
-        if self.ctc_type == 'builtin':
-            # target is batch first
-            targets = targets.transpose(0, 1).contiguous()
-            padding_mask = targets.eq(self.padding_idx)
-            targets = targets.view(-1)  # flatten [B x T]
+        # target is transposed to batch first
+        targets = targets.transpose(0, 1).contiguous()
+        padding_mask = targets.eq(self.padding_idx)
+        targets = targets.view(-1)  # flatten [B x T]
 
-            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
-            targets = targets.index_select(0, non_pad_indices)
+        # flattened the target into 1D sequence here
+        non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+        targets = targets.index_select(0, non_pad_indices)
 
-        loss = self.compute_loss(logits, targets, input_lengths, target_lengths)
+        # print(logits.size(), targets.size(), input_lengths.size(), target_lengths.size())
 
+        loss, total = self.compute_loss(logits, targets, input_lengths, target_lengths)
+
+        # the ctc loss is the sum of loss in each element?
         target_size = targets.numel()
 
         return loss, target_size

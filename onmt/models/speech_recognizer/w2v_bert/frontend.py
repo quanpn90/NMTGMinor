@@ -12,7 +12,7 @@ from torch import Tensor
 from torch.nn import Dropout, Module
 from .w2vbert_feature_extractor import SequenceFeatureExtractor
 from .w2v_position_encoder import PositionEncoder
-from onmt.modules.layer_norm import LayerNorm
+from .layer_norm import LayerNorm, StandardLayerNorm, create_standard_layer_norm
 from .w2vbert_linear import Linear
 
 from .typing import Device, DataType, final, finaloverride, override
@@ -124,7 +124,7 @@ class Wav2Vec2Frontend(TransformerFrontend):
         else:
             self.register_module("feature_extractor", None)
 
-        self.post_extract_layer_norm = LayerNorm(
+        self.post_extract_layer_norm = create_standard_layer_norm(
             feature_dim, bias=True, device=device, dtype=dtype
         )
 
@@ -151,7 +151,7 @@ class Wav2Vec2Frontend(TransformerFrontend):
             self.register_module("pos_encoder", None)
 
         if layer_norm:
-            self.layer_norm = LayerNorm(
+            self.layer_norm = create_standard_layer_norm(
                 model_dim, bias=True, device=device, dtype=dtype
             )
         else:

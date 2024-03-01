@@ -10,7 +10,7 @@ from typing import Optional, final
 from torch import Tensor
 from torch.nn import Dropout, Module, ReLU, SiLU
 
-from onmt.modules.layer_norm import LayerNorm
+from .layer_norm import LayerNorm, create_standard_layer_norm
 from .w2vbert_linear import Linear
 
 from .typing import final, finaloverride
@@ -105,7 +105,7 @@ class StandardFeedForwardNetwork(FeedForwardNetwork):
             self.register_module("inner_dropout", None)
 
         if norm_order == TransformerNormOrder.PRE_WITH_NORMFORMER:
-            self.inner_layer_norm = LayerNorm(inner_dim)
+            self.inner_layer_norm = create_standard_layer_norm(inner_dim, bias=True)
 
         else:
             self.register_module("inner_layer_norm", None)

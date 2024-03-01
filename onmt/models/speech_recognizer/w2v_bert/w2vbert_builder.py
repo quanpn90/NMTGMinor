@@ -144,7 +144,7 @@ class Wav2Vec2EncoderBuilder:
             self.config.model_dim,
             self.config.ffn_inner_dim,
             bias=True,
-            inner_activation=SiLU() if use_swish else GELU(),
+            inner_activation=SiLU(inplace=True) if use_swish else GELU(),
             norm_order=self.config.norm_order,
             device=self.device,
             dtype=self.dtype,

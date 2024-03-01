@@ -169,23 +169,10 @@ def build_tm_model(opt, dicts, constants=None):
     else:
         language_embeddings = None
 
-
     if opt.model in ['wav2vec2_bert', 'quantize_wav2vec2_bert', 'quantize_wav2vec2_mbart50']:
         from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecBERT, Wav2vecBERTMemory
 
-        # if opt.model.startswith("quantize"):
-        #     from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder
-        #     from pretrain_module.configuration_mbart import MBartConfig
-        #     enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
-        #     discrete_encoder = MBartEncoder(enc_mbart_config, opt)
-        #     # print("[INFO] Loading weights for mBART encoder from: %s ..." % opt.enc_state_dict)
-        #     # enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
-        #     # discrete_encoder.load_state_dict(enc_model_state_dict)
-        # else:
-        #     discrete_encoder = None
-
         # TODO: create a stacked encoder here
-        # if len(opt.dec_pretrained_model)
         stacked_encoder = None
         if len(opt.enc_stacked_pretrained_model) > 0:
             if "mbart" in opt.enc_stacked_pretrained_model:
@@ -219,11 +206,7 @@ def build_tm_model(opt, dicts, constants=None):
         discrete_encoder = None
         if "wavlm" in opt.enc_pretrained_model:
             from onmt.models.speech_recognizer.wavlm import WavLMEncoder
-            encoder = WavLMEncoder(opt, opt.wav2vec2_pretrained_model)
-
-        elif "seamless" in opt.enc_pretrained_model or "w2vbert_adapter" in opt.enc_pretrained_model:
-            from onmt.models.unity.seamless_encoder import SeamlessEncoder
-            encoder = SeamlessEncoder(opt, opt.wav2vec2_pretrained_model)
+            encoder = WavLMEncoder(opt, opt.wav2vec2_pretrained_model) 
 
         elif "w2vbert" in opt.enc_pretrained_model or "w2v-bert" in opt.enc_pretrained_model:
             from onmt.models.speech_recognizer.w2vbert import W2VBert
@@ -242,83 +225,92 @@ def build_tm_model(opt, dicts, constants=None):
 
         sub_encoder = None
 
-        if "mbart" in opt.dec_pretrained_model:
-            from pretrain_module.configuration_mbart import MBartConfig
-            from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder, MBartDecoderMemory
-            print("[INFO] Created MBART decoder from: %s ..." % opt.dec_config_file)
-            dec_mbart_config = MBartConfig.from_json_file(opt.dec_config_file)
+        if not opt.no_decoder:
 
-            decoder_class = MBartDecoder if not hasattr(opt, "use_memory") or not opt.use_memory else MBartDecoderMemory
-            decoder = decoder_class(dec_mbart_config, opt)
+            if "mbart" in opt.dec_pretrained_model:
+                from pretrain_module.configuration_mbart import MBartConfig
+                from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder, MBartDecoderMemory
+                print("[INFO] Created MBART decoder from: %s ..." % opt.dec_config_file)
+                dec_mbart_config = MBartConfig.from_json_file(opt.dec_config_file)
 
+                decoder_class = MBartDecoder if not hasattr(opt, "use_memory") or not opt.use_memory else MBartDecoderMemory
+                decoder = decoder_class(dec_mbart_config, opt)
+
+                if opt.freeze_embedding:
+                    decoder.embed_tokens.weight.requires_grad = False
+
+                # print(opt.enc_config_file, opt.enc_state_dict)
+                # if opt.enc_config
+
+                if opt.enc_config_file is not None and len(opt.enc_config_file) > 1:
+                    print("creating MBART sub-encoders")
+                    enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
+                    sub_encoder = MBartEncoder(enc_mbart_config, opt)
+
+                    if opt.enc_state_dict is not None and len(opt.enc_state_dict) > 1:
+                        print("[INFO] Loading weights for (sub) mBART encoder from: %s ..." % opt.enc_state_dict)
+                        enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
+                        sub_encoder.load_state_dict(enc_model_state_dict)
+                    for parameter in sub_encoder.parameters():
+                        # parameter.requires_grad = False  # don't update these guys
+                        sub_encoder.embed_tokens = decoder.embed_tokens  # and reduce memory usage
+
+            elif opt.dec_pretrained_model in ['deltalm']:
+                print("[INFO] Created DeltaLM decoder from: %s ..." % opt.dec_config_file)
+                from onmt.models.deltalm.deltalm import DeltaLMDecoder
+                deltalm_config = json_to_namespace(opt.dec_config_file)
+                embedding_tgt = nn.Embedding(dicts['tgt'].size(),
+                                             deltalm_config.decoder_embed_dim,
+                                             padding_idx=constants.TGT_PAD)
+                decoder = DeltaLMDecoder(deltalm_config, embedding_tgt, opt=opt)
+
+                # share all embeddings
+                generators[0].linear.weight = decoder.embed_tokens.weight
+
+                if opt.freeze_embedding:
+                    decoder.embed_tokens.weight.requires_grad = False
+
+            elif opt.dec_pretrained_model == "bart":
+                from pretrain_module.configuration_bart import BartConfig
+                from pretrain_module.modeling_bart import BartDecoder
+
+                dec_bart_config = BartConfig.from_json_file(opt.dec_config_file)
+
+                decoder = BartDecoder(dec_bart_config, opt)
+
+            if opt.dec_state_dict is not None and len(opt.dec_state_dict) > 1:
+                print("[INFO] Loading weights for decoder from: %s ..." % opt.dec_state_dict)
+                dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
+
+                # load parameters from state dict to model (using huggingface's approach)
+                # decoder.from_pretrained(state_dict=dec_model_state_dict,
+                #                         model=decoder,
+                #                         output_loading_info=opt.verbose,
+                #                         model_prefix=opt.dec_pretrained_model
+                #                         )
+                current_dict = decoder.state_dict()
+
+                for key in current_dict:
+                    if key not in dec_model_state_dict:
+                        dec_model_state_dict[key] = current_dict[key]
+
+                decoder.load_state_dict(dec_model_state_dict)
+                print("[INFO] ... Done")
+            else:
+                print("Not loading pretrained mbart decoder weights")
+
+            decoder.dec_pretrained_model = opt.dec_pretrained_model
             if opt.freeze_embedding:
-                decoder.embed_tokens.weight.requires_grad = False
+                generators[0].linear.bias.requires_grad = False
 
-            # print(opt.enc_config_file, opt.enc_state_dict)
-            # if opt.enc_config
-
-            if opt.enc_config_file is not None and len(opt.enc_config_file) > 1:
-                print("creating MBART sub-encoders")
-                enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
-                sub_encoder = MBartEncoder(enc_mbart_config, opt)
-
-                if opt.enc_state_dict is not None and len(opt.enc_state_dict) > 1:
-                    print("[INFO] Loading weights for (sub) mBART encoder from: %s ..." % opt.enc_state_dict)
-                    enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
-                    sub_encoder.load_state_dict(enc_model_state_dict)
-                for parameter in sub_encoder.parameters():
-                    # parameter.requires_grad = False  # don't update these guys
-                    sub_encoder.embed_tokens = decoder.embed_tokens  # and reduce memory usage
-
-        elif opt.dec_pretrained_model in ['deltalm']:
-            print("[INFO] Created DeltaLM decoder from: %s ..." % opt.dec_config_file)
-            from onmt.models.deltalm.deltalm import DeltaLMDecoder
-            deltalm_config = json_to_namespace(opt.dec_config_file)
-            embedding_tgt = nn.Embedding(dicts['tgt'].size(),
-                                         deltalm_config.decoder_embed_dim,
-                                         padding_idx=constants.TGT_PAD)
-            decoder = DeltaLMDecoder(deltalm_config, embedding_tgt, opt=opt)
-
-            # share all embeddings
-            generators[0].linear.weight = decoder.embed_tokens.weight
-
-            if opt.freeze_embedding:
-                decoder.embed_tokens.weight.requires_grad = False
-
-        elif opt.dec_pretrained_model == "bart":
-            from pretrain_module.configuration_bart import BartConfig
-            from pretrain_module.modeling_bart import BartDecoder
-
-            dec_bart_config = BartConfig.from_json_file(opt.dec_config_file)
-
-            decoder = BartDecoder(dec_bart_config, opt)
-
-        if opt.dec_state_dict is not None and len(opt.dec_state_dict) > 1:
-            print("[INFO] Loading weights for decoder from: %s ..." % opt.dec_state_dict)
-            dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
-
-            # load parameters from state dict to model (using huggingface's approach)
-            # decoder.from_pretrained(state_dict=dec_model_state_dict,
-            #                         model=decoder,
-            #                         output_loading_info=opt.verbose,
-            #                         model_prefix=opt.dec_pretrained_model
-            #                         )
-            current_dict = decoder.state_dict()
-
-            for key in current_dict:
-                if key not in dec_model_state_dict:
-                    dec_model_state_dict[key] = current_dict[key]
-
-            decoder.load_state_dict(dec_model_state_dict)
-            print("[INFO] ... Done")
         else:
-            print("Not loading pretrained mbart decoder weights")
+            decoder = nn.Module()
+            decoder.dec_pretrained_model = "none"
+            decoder.model_size = encoder.model_size
+            decoder.switchout = False
+            print('[INFO] Creating a encoder-only model ....')
 
-
-
-        decoder.dec_pretrained_model = opt.dec_pretrained_model
-        if opt.freeze_embedding:
-            generators[0].linear.bias.requires_grad = False
+            # not sure what will happen when the decoder is just empty so ....
 
         model_class = Wav2vecBERT if not hasattr(opt, "use_memory") or not opt.use_memory else Wav2vecBERTMemory
 
@@ -930,7 +922,3 @@ def unfreeze_model_speciailized_weights(model):
     model.apply(unfreeze)
 
     return
-
-def compile_model(model, opt):
-
-    pass

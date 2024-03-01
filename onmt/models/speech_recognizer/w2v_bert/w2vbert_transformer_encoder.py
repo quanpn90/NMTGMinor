@@ -13,8 +13,7 @@ from torch import Tensor
 from torch.nn import Dropout, Module
 from torch.nn.parameter import Parameter
 
-from onmt.modules.layer_norm import LayerNorm
-from .layer_norm import LayerNormFactory
+from .layer_norm import LayerNormFactory, LayerNorm
 from .w2vbert_multihead_attention import MultiheadAttention
 from .w2vbert_ffn import FeedForwardNetwork
 from .norm_order import TransformerNormOrder

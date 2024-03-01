@@ -30,6 +30,10 @@ finaloverrides = overrides.final
 class SDPA(Module, ABC):
     """Computes scaled dot-product attention."""
 
+    def __init__(self):
+        super().__init__()
+        self.name = "generic_sdpa"
+
     @abstractmethod
     def forward(
             self,
@@ -92,6 +96,7 @@ class TorchSDPA(SDPA):
         super().__init__()
 
         self._has_warned = False
+        self.name = "torch_sdpa"
 
         self.attn_dropout_p = attn_dropout_p
 
@@ -200,6 +205,7 @@ class NaiveSDPA(SDPA):
         """
         super().__init__()
 
+        self.name = "naive_sdpa"
         self.attn_dropout_p = attn_dropout_p
 
     @finaloverrides
@@ -307,6 +313,8 @@ class RelativePositionSDPA(SDPA):
             The actual :class:`SDPA` module to compute head attentions.
         """
         super().__init__()
+
+        self.name = "relative_sdpa"
 
         if model_dim % num_heads != 0:
             raise ValueError(
@@ -590,6 +598,8 @@ class ShawRelativePositionSDPA(SDPA):
         """
         super().__init__()
 
+        self.name = "relative_shaw_sdpa"
+
         if model_dim % num_heads != 0:
             raise ValueError(
                 f"`model_dim` must be a multiple of `num_heads` ({num_heads}), but is {model_dim} instead."
@@ -695,6 +705,19 @@ class ShawRelativePositionSDPA(SDPA):
     def _get_relative_indices(self, keys: Tensor) -> Tensor:
         # (S, 1)
         indices = torch.arange(keys.size(2), device=keys.device).unsqueeze(0)
+
+        # (S, S)
+        rel_indices = indices - indices.transpose(0, 1)
+
+        rel_indices = torch.clamp(
+            rel_indices, -self.max_left_rel_pos, self.max_right_rel_pos
+        )
+
+        return rel_indices + self.max_left_rel_pos
+
+    def get_relative_indices_three_dim(self, keys: Tensor) -> Tensor:
+        # (S, 1)
+        indices = torch.arange(keys.size(1), device=keys.device).unsqueeze(0)
 
         # (S, S)
         rel_indices = indices - indices.transpose(0, 1)

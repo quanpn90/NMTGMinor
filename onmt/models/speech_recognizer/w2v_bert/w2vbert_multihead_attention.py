@@ -20,8 +20,14 @@ from torch.utils.hooks import RemovableHandle
 from .w2vbert_attention import TorchSDPA, SDPA, create_default_sdpa
 from .w2v_position_encoder import PositionEncoder
 from .w2vbert_linear import Linear
+
+from onmt.modules.optimized.self_attention_func import self_attn_func, self_attn_compact_func
+from onmt.modules.optimized.relative_self_attention_func import relative_self_attn_func
+
 import overrides
+
 finaloverride = overrides.final
+
 
 
 class MultiheadAttention(Module, ABC):
@@ -357,6 +363,7 @@ class StandardMultiheadAttention(MultiheadAttention):
         # self.state_factory = state_factory
 
         self.reset_parameters()
+        self.fast = False
 
     def reset_parameters(self) -> None:
         """Reset the parameters and buffers of the module."""
@@ -366,7 +373,51 @@ class StandardMultiheadAttention(MultiheadAttention):
     def convert_fast_attention(
             self,
     ) -> None:
-        pass
+
+        if self.sdpa.name in ['nothing_works']:
+            if self.fast:
+                return
+
+            print('[INFO] Converting Shaw Attention to Fast ..')
+
+            self.fast = True
+            w_q = self.q_proj.weight.clone()
+            w_k = self.k_proj.weight.clone()
+            w_v = self.v_proj.weight.clone()
+            weights = [w_q, w_k, w_v]
+            weight_ = torch.cat(weights, dim=0).contiguous()
+
+            b_q = self.q_proj.bias.clone()
+            b_k = self.k_proj.bias.clone()
+            b_v = self.v_proj.bias.clone()
+            biases = [b_q, b_k, b_v]
+            bias_ = torch.cat(biases, dim=0).contiguous()
+
+            head_dim = self.model_dim // self.num_heads
+            heads = self.num_heads
+            input_dim = self.model_dim
+
+            # when we concatenate the weights, the output has the size 3 * D (3 -> heads -> head_dim)
+            # the fast attention module requires (heads -> 3 -> head_dim)
+            weight_ = weight_.reshape(3 * head_dim * heads, input_dim).view(3, heads, head_dim, input_dim).transpose(0,
+                                                                                                                     1). \
+                reshape(-1, input_dim)
+
+            bias_ = bias_.reshape(3 * head_dim * heads).view(3, heads, head_dim).transpose(0, 1).reshape(-1)
+
+            weight_t = torch.Tensor(3 * input_dim, input_dim).to(weight_.device)
+            bias_t = torch.Tensor(3 * input_dim).to(weight_.device)
+            weight_t.copy_(weight_)
+            bias_t.copy_(bias_)
+            self.proj_weight = Parameter(weight_t)
+            self.proj_bias = Parameter(bias_t)
+
+            self.proj_weight.requires_grad = self.q_proj.weight.requires_grad
+            self.proj_bias.requires_grad = self.q_proj.bias.requires_grad
+            del self.q_proj, self.k_proj, self.v_proj
+        else:
+            self.fast = False
+            pass
 
     @finaloverride
     def forward(
@@ -380,58 +431,87 @@ class StandardMultiheadAttention(MultiheadAttention):
             attn_mask=None
     ) -> Tensor:
 
-        state_bag = None  # Note: encoder doesn't need state bag
+        if self.fast:
+            in_proj_weight = self.proj_weight
+            out_proj_weight = self.output_proj.weight
 
-        # (N, S, M) -> (N, H, S, K_h)
-        q = self._project_q(seqs, padding_mask, state_bag)
-        # k: (N, S_kv, M) -> (N, H_kv, S_kv, K_h)
-        # v: (N, S_kv, M) -> (N, H_kv, S_kv, V_h)
-        k, v = self._project_kv(keys, key_padding_mask, values)
+            rel_indices = self.sdpa.get_relative_indices_three_dim(keys)
 
-        # With Grouped Query Attention, each key/value head is repeated.
-        if (num_query_groups := self.num_heads // self.num_key_value_heads) > 1:
-            # (N, H_kv, S_kv, K_h) -> (N, H, S_kv, K_h)
-            k = repeat_interleave(k, dim=1, repeat=num_query_groups)
-            # (N, H_kv, S_kv, K_h) -> (N, H, S_kv, V_h)
-            v = repeat_interleave(v, dim=1, repeat=num_query_groups)
+            # (S_kv, S_kv, K_h)
+            positions = self.sdpa.rel_k_embed(rel_indices)
 
-        # if self.attn_mask_factory is not None:
-        #     attn_mask = self.attn_mask_factory(
-        #         seqs, keys=keys, training=self.training, state_bag=state_bag
-        #     )
-        # TODO: check attn_mask_factory later
+            inputs = seqs.transpose(0, 1).contiguous()
+            is_training = self.training
+            recompute = False
 
-        attn_mask = None
-        needs_weights = False  # len(self._attn_weight_hooks) > 0
+            outputs, coverage = relative_self_attn_func(inputs, positions, False,
+                                                        is_training, self.num_heads,
+                                                        in_proj_weight, out_proj_weight, None,
+                                                        self.proj_bias, self.output_proj.bias, None,
+                                                        None, None,
+                                                        key_padding_mask, 0.0,
+                                                        False, None, False,
+                                                        # incremental and state and double precision
+                                                        True, True, recompute)  # learnable_pos + return-coverage
 
-        # attn:         (N, H, S, V_h)
-        # attn_weights: (N, H, S, S_kv)
-        attn, attn_weights = self.sdpa(
-            q,
-            k,
-            key_padding_mask,
-            v,
-            attn_mask=attn_mask,
-            needs_weights=needs_weights,
-        )
+            outputs = outputs.transpose(0, 1).contiguous()
 
-        # if attn_weights is not None:
-        #     for hook in self._attn_weight_hooks.values():
-        #         hook(self, attn, attn_weights)
+            return outputs
 
-        # (N, H, S, V_h) -> (N, S, H, V_h)
-        attn = attn.transpose(1, 2)
+        else:
 
-        if self.head_scale_weight is not None:
-            attn = torch.einsum("nshv,h->nshv", attn, self.head_scale_weight)
+            state_bag = None  # Note: encoder doesn't need state bag
 
-        # (N, S, H, V_h) -> (N, S, V_proj)
-        attn = attn.flatten(2, 3)
+            # (N, S, M) -> (N, H, S, K_h)
+            q = self._project_q(seqs, padding_mask, state_bag)
+            # k: (N, S_kv, M) -> (N, H_kv, S_kv, K_h)
+            # v: (N, S_kv, M) -> (N, H_kv, S_kv, V_h)
+            k, v = self._project_kv(keys, key_padding_mask, values)
 
-        # (N, S, V_proj) -> (N, S, M)
-        attn = self.output_proj(attn)
+            # With Grouped Query Attention, each key/value head is repeated.
+            if (num_query_groups := self.num_heads // self.num_key_value_heads) > 1:
+                # (N, H_kv, S_kv, K_h) -> (N, H, S_kv, K_h)
+                k = repeat_interleave(k, dim=1, repeat=num_query_groups)
+                # (N, H_kv, S_kv, K_h) -> (N, H, S_kv, V_h)
+                v = repeat_interleave(v, dim=1, repeat=num_query_groups)
 
-        return attn  # type: ignore[no-any-return]
+            # if self.attn_mask_factory is not None:
+            #     attn_mask = self.attn_mask_factory(
+            #         seqs, keys=keys, training=self.training, state_bag=state_bag
+            #     )
+            # TODO: check attn_mask_factory later
+
+            attn_mask = None
+            needs_weights = False  # len(self._attn_weight_hooks) > 0
+
+            # attn:         (N, H, S, V_h)
+            # attn_weights: (N, H, S, S_kv)
+            attn, attn_weights = self.sdpa(
+                q,
+                k,
+                key_padding_mask,
+                v,
+                attn_mask=attn_mask,
+                needs_weights=needs_weights,
+            )
+
+            # if attn_weights is not None:
+            #     for hook in self._attn_weight_hooks.values():
+            #         hook(self, attn, attn_weights)
+
+            # (N, H, S, V_h) -> (N, S, H, V_h)
+            attn = attn.transpose(1, 2)
+
+            if self.head_scale_weight is not None:
+                attn = torch.einsum("nshv,h->nshv", attn, self.head_scale_weight)
+
+            # (N, S, H, V_h) -> (N, S, V_proj)
+            attn = attn.flatten(2, 3)
+
+            # (N, S, V_proj) -> (N, S, M)
+            attn = self.output_proj(attn)
+
+            return attn  # type: ignore[no-any-return]
 
     def _project_q(
             self,

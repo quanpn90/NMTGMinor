@@ -531,6 +531,7 @@ class Wav2vecTransformer(Transformer):
         super().__init__(encoder, decoder, generator, None, None, ctc=ctc)
         self.model_size = self.decoder.model_size
         self.switchout = self.decoder.switchout
+        self.has_decoder = True
 
         if mirror:
             self.mirror_decoder = copy.deepcopy(self.decoder)
@@ -711,19 +712,44 @@ class Wav2vecBERT(Wav2vecTransformer):
         self.sub_encoder = sub_encoder
         self.model_size = encoder.model_size
 
-        if hasattr(decoder, 'dec_pretrained_model') and decoder.dec_pretrained_model:
-            try:
-                self.model_size = self.decoder.config.bert_hidden_size
-                self.tgt_vocab_size = self.decoder.config.vocab_size
-            except AttributeError:
-                self.model_size = self.decoder.model_size
-                self.tgt_vocab_size = self.generator[0].linear.weight.size(0)
+        # this model cannot use CTC
+        self.ctc = False
+        self.ctc_compress = False
 
-            self.switchout = 0
+        self.has_decoder = True
+        if hasattr(decoder, 'dec_pretrained_model') and decoder.dec_pretrained_model == "none":
+            self.has_decoder = False
+
+        if self.has_decoder:
+            if hasattr(decoder, 'dec_pretrained_model') and decoder.dec_pretrained_model:
+                try:
+                    self.model_size = self.decoder.config.bert_hidden_size
+                    self.tgt_vocab_size = self.decoder.config.vocab_size
+                except AttributeError:
+                    self.model_size = self.decoder.model_size
+                    self.tgt_vocab_size = self.generator[0].linear.weight.size(0)
+
+                self.switchout = 0
+            else:
+                self.model_size = self.decoder.model_size
+                self.tgt_vocab_size = self.decoder.word_lut.weight.size(0)
+                self.switchout = self.decoder.switchout
         else:
-            self.model_size = self.decoder.model_size
-            self.tgt_vocab_size = self.decoder.word_lut.weight.size(0)
-            self.switchout = self.decoder.switchout
+            self.ctc = True
+            # we need to make a ctc linear over here
+            self.tgt_vocab_size = self.generator[0].linear.weight.size(0)
+            self.model_size = self.generator[0].hidden_size
+            self.ctc_linear = self.generator[0].linear
+            self.ctc_compress = None
+
+            # delete the generator
+            self.generator = nn.ModuleList()
+
+            # if ctc_compress != "None":
+            #     from .ctc_compressor import CTCCompressStrategy
+            #     self.ctc_compress = getattr(CTCCompressStrategy, ctc_compress)
+            # else:
+            #     self.ctc_compress = None
 
         if mirror:
             self.mirror_decoder = copy.deepcopy(self.decoder)
@@ -731,26 +757,21 @@ class Wav2vecBERT(Wav2vecTransformer):
             self.mirror_generator = copy.deepcopy(self.generator)
             self.mirror_generator[0].linear.weight = self.decoder.word_lut.weight
 
-        # this model cannot use CTC
-        self.ctc = False
-        self.ctc_char = False
-        self.ctc_compress = False
-
-    def create_ctc_char(self, char_data, ctc_compress="None"):
-
-        id2char = char_data['id2char']
-        char_vocab_size = len(id2char)
-        self.char_vocab_size = char_vocab_size
-        self.char_ctc_linear = nn.Linear(self.model_size, char_vocab_size)
-        print(self.char_vocab_size)
-
-        if ctc_compress != "None":
-            from .ctc_compressor import CTCCompressStrategy
-            self.ctc_compress = getattr(CTCCompressStrategy, ctc_compress)
-        else:
-            self.ctc_compress = None
-
-        self.ctc_char = True
+    # def create_ctc_char(self, char_data, ctc_compress="None"):
+    #
+    #     id2char = char_data['id2char']
+    #     char_vocab_size = len(id2char)
+    #     self.char_vocab_size = char_vocab_size
+    #     self.char_ctc_linear = nn.Linear(self.model_size, char_vocab_size)
+    #     print(self.char_vocab_size)
+    #
+    #     if ctc_compress != "None":
+    #         from .ctc_compressor import CTCCompressStrategy
+    #         self.ctc_compress = getattr(CTCCompressStrategy, ctc_compress)
+    #     else:
+    #         self.ctc_compress = None
+    #
+    #     self.ctc_char = True
 
     def forward(self, batch, zero_encoder=False, factorize=False, target_mask=None, mirror=False,
                 checkpointing_ffn=False,
@@ -807,20 +828,16 @@ class Wav2vecBERT(Wav2vecTransformer):
 
         encoder_output = defaultdict(lambda: None, encoder_output)
 
-        context_org = encoder_output['context']
+        context = encoder_output['context']
         src_attention_mask = encoder_output['src']
         contrastive_loss = 0
 
-        if self.ctc_char:
+        if ctc_coeff > 0 or not self.has_decoder:
             # what is the ctc_labels here?
-            ctc_labels = batch.get("char_target").transpose(0, 1)
+            ctc_labels = batch.get("target_output")
             assert (ctc_loss_function.padding_idx == onmt.constants.TGT_PAD)
 
             # we have to perform CTC first
-            torch.cuda.synchronize()
-
-            context_detached = context_org.detach()
-            context_detached.requires_grad_()
 
             # compute the logits for each encoder step
             # run the ctcoutput via the wav2vec context (not context)
@@ -829,7 +846,7 @@ class Wav2vecBERT(Wav2vecTransformer):
             # output_dict['encoder_logits'] = self.ctc_linear(output_dict['wav2vec_context'])
             # how should we proceed from this?
 
-            encoder_logits = self.char_ctc_linear(context_detached)
+            encoder_logits = self.ctc_linear(context)
 
             ctc_loss_inputs = dict()
             ctc_loss_inputs['encoder_logits'] = encoder_logits
@@ -840,13 +857,8 @@ class Wav2vecBERT(Wav2vecTransformer):
             ctc_loss = ctc_loss * ctc_coeff
 
             # backward immediately and accumulate gradients into the context.grad
-            #
-            if self.training:
-                grad_scaler.scale(ctc_loss).backward()
 
             ctc_loss_data = ctc_loss.item()
-
-            del ctc_loss
 
             if self.ctc_compress is not None:
                 #     # TODO: Ctc compression
@@ -873,18 +885,11 @@ class Wav2vecBERT(Wav2vecTransformer):
                     _src_mask[i, l:] = 1
 
                 src_attention_mask = _src_mask
-                del encoder_logits
-
-            else:
-                del encoder_logits
-                context = context_detached
 
         else:
             ctc_loss = None
             ctc_loss_data = None
             n_ctc_targets = 0
-            context = context_org
-            context_detached = context_org
 
         # TODO2: sub_encoder (MBART Encoder)
         if self.sub_encoder is not None:
@@ -892,6 +897,29 @@ class Wav2vecBERT(Wav2vecTransformer):
                                                    attention_mask=src_attention_mask)
 
             context = sub_encoder_outputs[0]
+
+        if not self.has_decoder:
+            output_dict = defaultdict(lambda: None)
+
+            output_dict['hidden'] = None
+            output_dict['context'] = context
+            output_dict['context_origin'] = context
+            output_dict['src_mask'] = src_attention_mask
+            output_dict['src'] = src
+            output_dict['target_mask'] = target_mask
+            output_dict['target'] = batch.get('target_output')
+            output_dict['ctc_loss'] = ctc_loss
+            output_dict['n_ctc_targets'] = n_ctc_targets
+
+            output_dict['wav2vec_context'] = encoder_output['wav2vec_context']
+            output_dict['wav2vec_padding_mask'] = encoder_output['wav2vec_padding_mask']
+            output_dict['enc_pred_lang'] = encoder_output['enc_pred_lang']
+
+            if output_dict['enc_pred_lang'] is not None:
+                output_dict['dec_pred_lang'] = decoder_outputs[-1]
+
+            return output_dict
+
 
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bert", "roberta"]:
             # src: [b, src_l]  context: [b, src_l, de_model]
@@ -966,8 +994,7 @@ class Wav2vecBERT(Wav2vecTransformer):
             output = decoder_output['hidden']
 
         output_dict['hidden'] = output
-        output_dict['context'] = context_detached
-        output_dict['context_origin'] = context_org
+        output_dict['context'] = context
         output_dict['src_mask'] = src_attention_mask
         output_dict['src'] = src
         output_dict['target_mask'] = target_mask
@@ -1020,13 +1047,13 @@ class Wav2vecBERT(Wav2vecTransformer):
 
     def post_backward(self, output_dict=None, grad_scaler=None, *args, **kwargs):
 
-        if self.ctc_char:
-            org_context = output_dict['context_origin']
-            context_grad = output_dict['context'].grad
-
-            org_context.backward(gradient=context_grad)
-            del output_dict['context']
-            del output_dict
+        # if self.ctc_char:
+        #     org_context = output_dict['context_origin']
+        #     context_grad = output_dict['context'].grad
+        #
+        #     org_context.backward(gradient=context_grad)
+        #     del output_dict['context']
+        #     del output_dict
 
         return
 
@@ -1142,6 +1169,9 @@ class Wav2vecBERT(Wav2vecTransformer):
         return decoder_state
 
     def tie_weights(self):
+        if not self.has_decoder:
+            return
+
         assert self.generator is not None, "The generator needs to be created before sharing weights"
         if hasattr(self.decoder, 'dec_pretrained_model') and self.decoder.dec_pretrained_model in ["bert", "roberta"]:
             self.generator[0].linear.weight = self.decoder.embeddings.word_embeddings.weight

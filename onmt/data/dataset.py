@@ -240,6 +240,53 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
     else:
         raise NotImplementedError
 
+
+@torch.no_grad()
+def merge_ctc_data(data, align_right=False, type='text', augmenter=None, upsampling=False,
+               feature_size=40, dataname="source", src_pad=1, tgt_pad=1 ):
+    """
+    Assembling the individual sequences into one single tensor, included padding
+    :param tgt_pad:
+    :param src_pad:
+    :param dataname:
+    :param feature_size:
+    :param upsampling:
+    :param data: the list of sequences
+    :param align_right: aligning the sequences w.r.t padding
+    :param type: text or audio
+    :param augmenter: for augmentation in audio models
+    :return:
+    """
+
+    # initialize with batch_size * length
+    # TODO: rewrite this function in Cython
+    lengths = [x.size(0) - 2 for x in data]
+    max_length = max(lengths)
+
+    if dataname == "source":
+        tensor = data[0].new(len(data), max_length).fill_(src_pad)
+    elif dataname == "target":
+        tensor = data[0].new(len(data), max_length).fill_(tgt_pad)
+    else:
+        print("Warning: check the dataname")
+        raise NotImplementedError
+    pos = None
+
+    for i in range(len(data)):
+        data_length = data[i].size(0) - 2
+        offset = max_length - data_length  if align_right else 0
+
+        # cut the first and last element
+        trimmed_data = data[i][1:-1]
+        assert trimmed_data.size(0) == data_length
+
+        tensor[i].narrow(0, offset, data_length).copy_(data[i][1:-1])
+
+    return tensor, pos, lengths
+
+
+
+
 # trimming? (removing x[0] and x[-1])
 @torch.no_grad()
 def merge_char_data(data, align_right=False, type='text',
@@ -285,8 +332,6 @@ def merge_char_data(data, align_right=False, type='text',
 
     tensor = converted_data[0].new(len(converted_data), max_length).fill_(tgt_pad)
     pos = None
-
-    # print(converted_data)
 
     for i in range(len(converted_data)):
 
@@ -336,7 +381,11 @@ def collate_fn(src_data, tgt_data,
 
     if tgt_data is not None:
         target_full, target_pos, tgt_lengths = merge_data(tgt_data, align_right=tgt_align_right,
-                                                          dataname="target", tgt_pad=tgt_pad)
+                                                              dataname="target", tgt_pad=tgt_pad)
+
+        # ctc_target, _, _ = merge_ctc_data(tgt_data, align_right=tgt_align_right,
+        #                                   dataname="target", tgt_pad=tgt_pad)
+
         tensors['tgt_selfattn_mask'] = target_full.eq(tgt_pad)
         target_full = target_full.t().contiguous()  # transpose BxT to TxB
         tensors['target'] = target_full
@@ -718,7 +767,7 @@ class Dataset(torch.utils.data.Dataset):
         self.upsampling = kwargs.get('upsampling', False)
 
         self.max_src_len = kwargs.get('max_src_len', None)
-        self.max_tgt_len = kwargs.get('max_tgt_len', 256 )
+        self.max_tgt_len = kwargs.get('max_tgt_len', 320000)
         self.cleaning = int(cleaning)
         self.debug = debug
         self.num_split = num_split
@@ -854,6 +903,7 @@ class Dataset(torch.utils.data.Dataset):
             self.src_sizes = src_sizes
             self.tgt_sizes = tgt_sizes
         else:
+            print(self.max_src_len, self.max_tgt_len, self.min_src_len, self.min_tgt_len)
 
             if self._type in ['audio', 'wav']:
                 self.batches = allocate_batch_unbalanced(sorted_order, data_lengths,

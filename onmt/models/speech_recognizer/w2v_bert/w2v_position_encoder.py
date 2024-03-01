@@ -17,7 +17,7 @@ from overrides import override as override
 
 finaloverride = overrides.final
 
-from onmt.modules.layer_norm import LayerNorm
+from .layer_norm import LayerNorm, create_standard_layer_norm
 
 
 class PositionEncoder(Module, ABC):
@@ -326,7 +326,7 @@ class Wav2Vec2PositionEncoderLayer(Module):
             dtype=dtype,
         )
 
-        self.layer_norm = LayerNorm(
+        self.layer_norm = create_standard_layer_norm(
             model_dim, bias=True, elementwise_affine=False, device=device, dtype=dtype
         )
 
