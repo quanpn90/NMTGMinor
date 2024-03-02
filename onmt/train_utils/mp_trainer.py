@@ -10,6 +10,8 @@ import torch
 import copy
 import sys
 import contextlib
+import functools
+
 
 import onmt
 import onmt.markdown
@@ -311,7 +313,15 @@ class Trainer(object):
             device_id = self.rank
             torch.cuda.set_device(device_id)
 
+            from torch.distributed.fsdp.wrap import (
+                size_based_auto_wrap_policy,
+                enable_wrap,
+                wrap,
+            )
 
+            my_auto_wrap_policy = functools.partial(
+                size_based_auto_wrap_policy, min_num_params=20000
+            )
 
             self.model = FSDP(self.model,
                               mixed_precision=mp_policy,
@@ -518,19 +528,20 @@ class Trainer(object):
             'epoch': epoch,
             'itr': itr_state_dict,
             'optim': optim_state_dict,
-            'scaler': self.grad_scaler.state_dict()
+            'scaler': self.grad_scaler.state_dict() if self.grad_scaler is not None else None
         }
 
         file_name = '%s_ppl_%.6f_e%.2f.pt' % (opt.save_model, valid_ppl, epoch)
-        print('Writing to %s' % file_name)
-        torch.save(checkpoint, file_name)
+        if self.is_main():
+            print('Writing to %s' % file_name)
+            torch.save(checkpoint, file_name)
 
-        # check the save directory here
-        checkpoint_dir = os.path.dirname(opt.save_model)
-        existed_save_files = checkpoint_paths(checkpoint_dir)
-        for save_file in existed_save_files[opt.keep_save_files:]:
-            print(" * Deleting old save file %s ...." % save_file)
-            os.remove(save_file)
+            # check the save directory here
+            checkpoint_dir = os.path.dirname(opt.save_model)
+            existed_save_files = checkpoint_paths(checkpoint_dir)
+            for save_file in existed_save_files[opt.keep_save_files:]:
+                print(" * Deleting old save file %s ...." % save_file)
+                os.remove(save_file)
 
     def eval(self, data):
 
@@ -562,23 +573,24 @@ class Trainer(object):
         else:
             streaming_state = None
 
-        with torch.no_grad():
-            # while not data_iterator.end_of_epoch():
-            while i < len(epoch_iterator):
-                samples = next(epoch_iterator)
+        def maybe_no_sync():
+            if isinstance(self.model, DDP_model) or isinstance(self.model, FSDP):
+                return self.model.no_sync()
+            else:
+                return contextlib.ExitStack()  # dummy contextmanager
 
-                def maybe_no_sync():
-                    if isinstance(self.model, DDP_model):
-                        return self.model.no_sync()
-                    else:
-                        return contextlib.ExitStack()  # dummy contextmanager
+        with maybe_no_sync():
+            with torch.no_grad():
+                # while not data_iterator.end_of_epoch():
+                while i < len(epoch_iterator):
+                    samples = next(epoch_iterator)
 
-                if samples:
-                    with maybe_no_sync():
+                    if samples:
                         with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
                             batch = prepare_sample(samples, device=self.device)
                             targets = batch.get('target_output')
                             tgt_mask = targets.ne(onmt.constants.PAD)
+                            # print(targets.size())
 
                             if opt.load_pretrained_classifier:
                                 layer_states = self.classifier.encode(batch)
@@ -596,11 +608,6 @@ class Trainer(object):
 
                             ctc_only = False
                             if outputs["hidden"] != None:
-                                loss_dict = self.loss_function(outputs, targets, model=self.model)
-                                loss_data = loss_dict['data']
-                                loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-                                full_loss = loss
-
                                 outputs['tgt_mask'] = tgt_mask
                                 loss_dict = self.loss_function(outputs, targets, model=self.model, eval=True)
                                 loss_data = loss_dict['data']
@@ -620,10 +627,10 @@ class Trainer(object):
                                 n_ctc_targets = outputs['n_ctc_targets']
                                 loss_data = ctc_loss.item()
 
-                    total_loss.add_(loss_data)
-                    total_words.add_(batch.tgt_size)
-                    total_correct.add_(correct)
-                    i = i + 1
+                        total_loss.add_(loss_data)
+                        total_words.add_(batch.tgt_size)
+                        total_correct.add_(correct)
+                        i = i + 1
 
         # allreduce the total loss and total words from other processes
         self.all_reduce(total_loss, op=dist.ReduceOp.SUM, group=self.group)
@@ -741,7 +748,7 @@ class Trainer(object):
 
             try:
                 def maybe_no_sync():
-                    if not reduce and isinstance(self.model, DDP_model):
+                    if not reduce and (isinstance(self.model, DDP_model) or isinstance(self.model, FSDP)):
                         return self.model.no_sync()
                     else:
                         # when we dont reach the updating step, we do not need to synchronize the gradients
@@ -998,7 +1005,7 @@ class Trainer(object):
                     grad_denom = 1
 
                 # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
-                if grad_denom != 1:
+                if grad_denom != 1 and not self.opt.fsdp:
                     normalize_gradients(self.model.parameters(), grad_denom)
 
                 # Update the pagrameters.
@@ -1035,7 +1042,7 @@ class Trainer(object):
                     self.grad_scaler.update()
                 else:
                     self.optim.step(scaler=None)
-                self.optim.zero_grad(set_to_none=opt.true_zero_grad)
+                self.optim.zero_grad(set_to_none=True if self.opt.fsdp else opt.true_zero_grad)
                 counter = 0
                 num_accumulated_words.zero_()
                 num_accumulated_sents.zero_()
@@ -1043,24 +1050,24 @@ class Trainer(object):
                 num_updates = self.optim._step
                 if (opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every) \
                         or (num_updates >= opt.max_step):
+                    torch.cuda.synchronize()
                     valid_loss, valid_accuracy = self.eval(valid_data)
                     valid_ppl = math.exp(min(valid_loss, 100))
 
-                    if self.is_main():
-                        print('Validation perplexity: %g' % valid_ppl)
-                        print('Validation accuracy: %g percent' % (100 * valid_accuracy))
-                        ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
-                        if opt.save_metrics in ['ppl', 'perplexity']:
-                            value = valid_ppl
-                        elif opt.save_metrics == "memory":
-                            if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
-                                value = self.model.module.choose_best_epoch_by
-                            else:
-                                value = self.model.choose_best_epoch_by
+                    self.print('Validation perplexity: %g' % valid_ppl)
+                    self.print('Validation accuracy: %g percent' % (100 * valid_accuracy))
+                    ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
+                    if opt.save_metrics in ['ppl', 'perplexity']:
+                        value = valid_ppl
+                    elif opt.save_metrics == "memory":
+                        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                            value = self.model.module.choose_best_epoch_by
                         else:
-                            value = 1-valid_accuracy
-                        self.save(ep, value,
-                                  itr=data_iterator)
+                            value = self.model.choose_best_epoch_by
+                    else:
+                        value = 1-valid_accuracy
+                    self.save(ep, value,
+                              itr=data_iterator)
 
                     if num_updates >= opt.max_step:
                         print('[INFO] Max-training-step reached.')
@@ -1669,14 +1676,12 @@ class Trainer(object):
             valid_loss, valid_accuracy = self.eval(valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
 
-            if self.is_main():
-                print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
-                # percent is never used in plural :)
-                print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
+            self.print('[INFO] Validation perplexity: %g' % valid_ppl, flush=True)
+            # percent is never used in plural :)
+            self.print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
 
             if opt.max_step <= 0:
-                if self.is_main():
-                    self.save(0, valid_ppl if opt.save_metrics in ['ppl', 'perplexity'] else 1 - valid_accuracy)
+                self.save(0, valid_ppl if opt.save_metrics in ['ppl', 'perplexity'] else 1 - valid_accuracy)
 
                 return
 
@@ -1695,20 +1700,19 @@ class Trainer(object):
             valid_loss, valid_accuracy = self.eval(valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
 
-            if self.is_main():
-                print('[INFO] Validation perplexity: %g' % valid_ppl)
-                print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
+            self.print('[INFO] Validation perplexity: %g' % valid_ppl)
+            self.print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
 
-                if opt.save_metrics in ['ppl', 'perplexity']:
-                    value = valid_ppl
-                elif opt.save_metrics == "memory":
-                    if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
-                        value = self.model.module.choose_best_epoch_by
-                    else:
-                        value = self.model.choose_best_epoch_by
+            if opt.save_metrics in ['ppl', 'perplexity']:
+                value = valid_ppl
+            elif opt.save_metrics == "memory":
+                if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                    value = self.model.module.choose_best_epoch_by
                 else:
-                    value = 1 - valid_accuracy
-                self.save(epoch, value)
+                    value = self.model.choose_best_epoch_by
+            else:
+                value = 1 - valid_accuracy
+            self.save(epoch, value)
 
             itr_progress = None
             resume = False

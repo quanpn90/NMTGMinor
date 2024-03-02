@@ -759,4 +759,5 @@ if __name__ == "__main__":
         main(0, opt)
     else:
         torch.multiprocessing.spawn(main, args=(opt, ),
-                                    nprocs=len(opt.gpus))
+                                    nprocs=len(opt.gpus),
+                                    join=True)
