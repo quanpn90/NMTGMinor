@@ -277,7 +277,7 @@ class Trainer(object):
         bfSixteen = MixedPrecision(
             param_dtype=torch.bfloat16,
             # Gradient communication precision.
-            reduce_dtype=torch.bfloat16,
+            reduce_dtype=torch.float32,
             # Buffer precision.
             buffer_dtype=torch.bfloat16,
         )
@@ -304,7 +304,8 @@ class Trainer(object):
         else:
             mp_policy = None  # defaults to fp32
 
-        if not self.bf16_ready:
+        # change later
+        if True:
             self.grad_scaler = torch.cuda.amp.GradScaler()
         else:
             self.grad_scaler = None
@@ -324,7 +325,7 @@ class Trainer(object):
             )
 
             self.model = FSDP(self.model,
-                              mixed_precision=mp_policy,
+                              # mixed_precision=mp_policy,
                               device_id=torch.cuda.current_device())
 
             if setup_optimizer:
@@ -1010,7 +1011,11 @@ class Trainer(object):
 
                 # Update the pagrameters.
                 if self.opt.fsdp:
-                    grad_norm = self.model.clip_grad_norm_(self.opt.max_grad_norm)
+                    if self.opt.max_grad_norm > 0:
+
+                        grad_norm = self.model.clip_grad_norm_(self.opt.max_grad_norm)
+                    else:
+                        grad_norm = -1
                 else:
                     grad_norm = clip_grad_norm(self.model.parameters(), self.opt.max_grad_norm)
 
@@ -1319,7 +1324,7 @@ class Trainer(object):
 
             try:
                 def maybe_no_sync():
-                    if not reduce and isinstance(self.model, DDP_model):
+                    if not reduce and (isinstance(self.model, DDP_model) or isinstance(self.model, FSDP)):
                         return self.model.no_sync()
                     else:
                         # when we dont reach the updating step, we do not need to synchronize the gradients
