@@ -18,7 +18,7 @@ from onmt.modules.layer_norm import LayerNorm
 # from fairseq2.nn.padding import PaddingMask
 # from fairseq2.nn.transformer.attention_mask import AttentionMask
 from ..speech_recognizer.w2v_bert.w2vbert_ffn import FeedForwardNetwork
-from ..speech_recognizer.w2v_bert.layer_norm import LayerNormFactory, create_standard_layer_norm
+from onmt.nn.normalization import LayerNormFactory, create_standard_layer_norm
 from ..speech_recognizer.w2v_bert.w2vbert_multihead_attention import MultiheadAttention
 from ..speech_recognizer.w2v_bert.norm_order import TransformerNormOrder
 

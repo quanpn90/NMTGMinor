@@ -10,15 +10,15 @@ from typing import List, Optional, Tuple
 
 from .vocabulary_info import VocabularyInfo
 
-from ..speech_recognizer.w2v_bert.w2vbert_model_registry import ArchitectureRegistry
+from onmt.models.registry_utils import ArchitectureRegistry
 from ..speech_recognizer.w2v_bert.w2vbert_multihead_attention import MultiheadAttention, StandardMultiheadAttention
 from ..speech_recognizer.w2v_bert.w2vbert_ffn import FeedForwardNetwork, StandardFeedForwardNetwork
 from ..speech_recognizer.w2v_bert.norm_order import TransformerNormOrder
-from ..speech_recognizer.w2v_bert.w2vbert_transformer_encoder import TransformerEncoder, TransformerEncoderLayer, \
+from onmt.nn.transformer.encoder import TransformerEncoder, TransformerEncoderLayer, \
     StandardTransformerEncoder, StandardTransformerEncoderLayer
 
 from ..speech_recognizer.w2v_bert.typing import DataType, Device
-from ..speech_recognizer.w2v_bert.w2vbert_embedding import Embedding, StandardEmbedding, init_scaled_embedding
+from onmt.nn.embedding import Embedding, StandardEmbedding, init_scaled_embedding
 from .nllb_frontend import TransformerFrontend, TransformerEmbeddingFrontend
 from .position_encoder import SinusoidalPositionEncoder
 

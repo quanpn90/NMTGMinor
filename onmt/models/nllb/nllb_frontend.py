@@ -14,8 +14,8 @@ from torch.nn import Dropout, Module
 from ..speech_recognizer.w2v_bert.frontend import TransformerFrontend
 from ..speech_recognizer.w2v_bert.typing import DataType, Device, finaloverride
 from onmt.modules.layer_norm import LayerNorm
-from ..speech_recognizer.w2v_bert.w2v_position_encoder import PositionEncoder
-from ..speech_recognizer.w2v_bert.w2vbert_embedding import Embedding
+from onmt.nn.position_encoder import PositionEncoder
+from onmt.nn.embedding import Embedding
 
 
 @final

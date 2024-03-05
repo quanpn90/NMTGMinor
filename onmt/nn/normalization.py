@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Sequence, Tuple, Union, final, Protocol
 
 # from onmt.modules.layer_norm import LayerNorm
-from .typing import DataType, Device, final, finaloverride
+from onmt.models.speech_recognizer.w2v_bert.typing import DataType, Device, final, finaloverride
 
 import torch
 import torch.nn as nn
@@ -111,6 +111,33 @@ class StandardLayerNorm(LayerNorm):
     @finaloverride
     def forward(self, x: Tensor) -> Tensor:
         return layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
+
+
+@final
+class RMSNorm(LayerNorm):
+    """Applies Root Mean Square Layer Normalization to incoming data as
+    described in :cite:t:`https://doi.org/10.48550/arxiv.1910.07467`."""
+
+    @override
+    def forward(self, x: Tensor) -> Tensor:
+        # For numerical stability normalize in single precision.
+        x = self._norm(x.float()).type_as(x)
+
+        if self.weight is not None:
+            x = x * self.weight
+
+            if self.bias is not None:
+                x = x + self.bias
+
+        return x
+
+    def _norm(self, x: Tensor) -> Tensor:
+        dims = [-i for i in range(len(self.normalized_shape), 0, -1)]
+
+        # Unlike the reference implementation, we add the epsilon before square
+        # root similar to LLaMA.
+        return x * torch.rsqrt(x.pow(2).mean(dims, keepdim=True) + self.eps)
+
 
 
 class LayerNormFactory(Protocol):

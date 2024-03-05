@@ -13,12 +13,12 @@ from torch import Tensor
 from torch.nn import Dropout, Module
 from torch.nn.parameter import Parameter
 
-from .layer_norm import LayerNormFactory, LayerNorm
-from .w2vbert_multihead_attention import MultiheadAttention
-from .w2vbert_ffn import FeedForwardNetwork
-from .norm_order import TransformerNormOrder
-from .typing import DataType, Device, finaloverride, CPU
-from .layer_norm import LayerNormFactory, create_standard_layer_norm
+from onmt.nn.normalization import LayerNormFactory, LayerNorm
+from onmt.models.speech_recognizer.w2v_bert.w2vbert_multihead_attention import MultiheadAttention
+from onmt.models.speech_recognizer.w2v_bert.w2vbert_ffn import FeedForwardNetwork
+from onmt.models.speech_recognizer.w2v_bert.norm_order import TransformerNormOrder
+from onmt.models.speech_recognizer.w2v_bert.typing import DataType, Device, finaloverride, CPU
+from onmt.nn.normalization import LayerNormFactory, create_standard_layer_norm
 
 
 @final

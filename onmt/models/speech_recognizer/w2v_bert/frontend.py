@@ -11,9 +11,9 @@ from abc import ABC, abstractmethod
 from torch import Tensor
 from torch.nn import Dropout, Module
 from .w2vbert_feature_extractor import SequenceFeatureExtractor
-from .w2v_position_encoder import PositionEncoder
-from .layer_norm import LayerNorm, StandardLayerNorm, create_standard_layer_norm
-from .w2vbert_linear import Linear
+from onmt.nn.position_encoder import PositionEncoder
+from onmt.nn.normalization import LayerNorm, StandardLayerNorm, create_standard_layer_norm
+from onmt.nn.projection import Linear
 
 from .typing import Device, DataType, final, finaloverride, override
 

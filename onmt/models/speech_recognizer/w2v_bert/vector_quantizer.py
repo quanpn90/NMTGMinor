@@ -13,7 +13,7 @@ from torch import Tensor
 from torch.nn import Module, Parameter
 from torch.nn.functional import gumbel_softmax
 
-from .w2vbert_linear import Linear
+from onmt.nn.projection import Linear
 from .typing import DataType, Device, final, finaloverride
 
 

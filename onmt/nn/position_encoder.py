@@ -17,7 +17,7 @@ from overrides import override as override
 
 finaloverride = overrides.final
 
-from .layer_norm import LayerNorm, create_standard_layer_norm
+from onmt.nn.normalization import LayerNorm, create_standard_layer_norm
 
 
 class PositionEncoder(Module, ABC):

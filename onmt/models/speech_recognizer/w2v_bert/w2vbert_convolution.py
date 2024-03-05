@@ -10,7 +10,7 @@ from torch import Tensor
 from torch.nn import GLU, BatchNorm1d, Conv1d, Module, SiLU
 from torch.nn.functional import pad
 
-from .layer_norm import LayerNorm, create_standard_layer_norm
+from onmt.nn.normalization import LayerNorm, create_standard_layer_norm
 from .typing import DataType, Device
 
 

@@ -9,10 +9,10 @@ from typing import Iterable, Optional, Tuple, final
 import torch
 
 from onmt.models.speech_recognizer.w2v_bert.w2vbert_conformer import ConformerBlock
-from onmt.models.speech_recognizer.w2v_bert.w2vbert_transformer_encoder import ModuleList
-from onmt.models.speech_recognizer.w2v_bert.layer_norm import LayerNorm, LayerNormFactory, create_standard_layer_norm
-from onmt.models.speech_recognizer.w2v_bert.w2vbert_linear import Linear
-from onmt.models.speech_recognizer.w2v_bert.w2vbert_transformer_encoder import (
+from onmt.nn.transformer.encoder import ModuleList
+from onmt.nn.normalization import LayerNorm, LayerNormFactory, create_standard_layer_norm
+from onmt.nn.projection import Linear
+from onmt.nn.transformer.encoder import (
     FeedForwardNetwork, LayerNormFactory, MultiheadAttention, TransformerEncoderLayer, TransformerEncoder)
 
 from onmt.models.speech_recognizer.w2v_bert.typing import DataType, Device

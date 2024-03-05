@@ -2,7 +2,7 @@ from dataclasses import dataclass, asdict
 from typing import List, Optional, Tuple
 
 from torch.nn import GELU, SiLU
-from .w2vbert_model_registry import ArchitectureRegistry
+from onmt.models.registry_utils import ArchitectureRegistry
 from .norm_order import TransformerNormOrder
 
 

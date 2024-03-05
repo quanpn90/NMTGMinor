@@ -18,8 +18,8 @@ from torch.nn.parameter import Parameter
 from torch.utils.hooks import RemovableHandle
 
 from .w2vbert_attention import TorchSDPA, SDPA, create_default_sdpa
-from .w2v_position_encoder import PositionEncoder
-from .w2vbert_linear import Linear
+from onmt.nn.position_encoder import PositionEncoder
+from onmt.nn.projection import Linear
 
 from onmt.modules.optimized.self_attention_func import self_attn_func, self_attn_compact_func
 from onmt.modules.optimized.relative_self_attention_func import relative_self_attn_func

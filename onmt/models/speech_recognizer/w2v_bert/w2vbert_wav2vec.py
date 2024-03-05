@@ -29,8 +29,8 @@ from torch.nn.functional import cross_entropy
 # from fairseq2.typing import DataType, Device
 from .frontend import Wav2Vec2Frontend
 from .masker import Wav2Vec2Masker
-from .w2vbert_linear import Linear
-from .w2vbert_transformer_encoder import TransformerEncoder
+from onmt.nn.projection import Linear
+from onmt.nn.transformer.encoder import TransformerEncoder
 from .typing import DataType, Device
 
 

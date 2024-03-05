@@ -15,8 +15,8 @@ from torch.nn import Module
 from torch.nn.functional import cross_entropy
 
 from ..speech_recognizer.w2v_bert.frontend import Wav2Vec2Frontend
-from ..speech_recognizer.w2v_bert.w2vbert_linear import Linear
-from ..speech_recognizer.w2v_bert.w2vbert_transformer_encoder import TransformerEncoder
+from onmt.nn.projection import Linear
+from onmt.nn.transformer.encoder import TransformerEncoder
 from ..speech_recognizer.w2v_bert.typing import DataType, Device
 
 

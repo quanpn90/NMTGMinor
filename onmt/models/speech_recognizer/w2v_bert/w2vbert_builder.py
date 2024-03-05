@@ -18,8 +18,8 @@ from .typing import Device, DataType
 from .w2vbert_attention import SDPA, create_default_sdpa, ShawRelativePositionSDPA
 from .w2vbert_convolution import ConformerConvolution
 from .frontend import Wav2Vec2Frontend
-from .w2vbert_transformer_encoder import TransformerEncoderLayer, StandardTransformerEncoderLayer
-from .w2vbert_transformer_encoder import TransformerEncoder, StandardTransformerEncoder
+from onmt.nn.transformer.encoder import TransformerEncoderLayer, StandardTransformerEncoderLayer
+from onmt.nn.transformer.encoder import TransformerEncoder, StandardTransformerEncoder
 from .w2vbert_multihead_attention import MultiheadAttention
 from .w2vbert_wav2vec import Wav2Vec2Model
 from .masker import Wav2Vec2Masker

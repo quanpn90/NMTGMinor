@@ -18,7 +18,7 @@ from torch.nn.functional import dropout, softmax
 import torch.nn as nn
 from torch.nn.functional import pad
 
-from .w2vbert_embedding import StandardEmbedding
+from onmt.nn.embedding import StandardEmbedding
 
 
 from onmt.modules.linear import Linear

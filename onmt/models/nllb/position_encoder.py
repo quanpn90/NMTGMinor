@@ -16,7 +16,7 @@ from torch.nn.functional import embedding
 from torch.nn.parameter import Parameter
 
 from ..speech_recognizer.w2v_bert.typing import META, DataType, Device, finaloverride
-from ..speech_recognizer.w2v_bert.w2v_position_encoder import PositionEncoder
+from onmt.nn.position_encoder import PositionEncoder
 
 
 @final

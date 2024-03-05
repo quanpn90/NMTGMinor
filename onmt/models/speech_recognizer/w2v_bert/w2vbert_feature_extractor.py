@@ -14,7 +14,7 @@ from torch.nn import GELU, Conv1d, Dropout, GroupNorm, Module, Sequential
 from torch.nn.functional import group_norm, layer_norm
 
 from ..fairseq_wav2vec2.fairseq_modules import Fp32LayerNorm, Fp32GroupNorm
-from .layer_norm import LayerNorm, create_standard_layer_norm
+from onmt.nn.normalization import LayerNorm, create_standard_layer_norm
 from .typing import final, finaloverride, override
 
 

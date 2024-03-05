@@ -10,9 +10,9 @@ from torch import Tensor
 from torch.nn import Dropout
 
 from .w2vbert_convolution import ConformerConvolution
-from .layer_norm import LayerNorm
-from .layer_norm import LayerNormFactory, create_standard_layer_norm
-from .w2vbert_transformer_encoder import TransformerEncoderLayer
+from onmt.nn.normalization import LayerNorm
+from onmt.nn.normalization import LayerNormFactory, create_standard_layer_norm
+from onmt.nn.transformer.encoder import TransformerEncoderLayer
 from .w2vbert_ffn import FeedForwardNetwork
 from .w2vbert_multihead_attention import MultiheadAttention
 

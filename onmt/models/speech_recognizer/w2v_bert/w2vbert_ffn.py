@@ -10,8 +10,8 @@ from typing import Optional, final
 from torch import Tensor
 from torch.nn import Dropout, Module, ReLU, SiLU
 
-from .layer_norm import LayerNorm, create_standard_layer_norm
-from .w2vbert_linear import Linear
+from onmt.nn.normalization import LayerNorm, create_standard_layer_norm
+from onmt.nn.projection import Linear
 
 from .typing import final, finaloverride
 from .norm_order import TransformerNormOrder

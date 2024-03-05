@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Optional, Union
 
 from ..speech_recognizer.w2v_bert.w2vbert_conformer import ConformerBlock, ConformerConvolution
-from ..speech_recognizer.w2v_bert.w2vbert_model_registry import ArchitectureRegistry
+from onmt.models.registry_utils import ArchitectureRegistry
 from ..speech_recognizer.w2v_bert.w2vbert_config import w2vbert_archs
 from ..speech_recognizer.w2v_bert.w2vbert_builder import Wav2Vec2EncoderBuilder, Wav2Vec2EncoderConfig
 from ..speech_recognizer.w2v_bert.w2vbert_builder import (
