@@ -1110,7 +1110,7 @@ class MBartDecoderLayer(nn.Module):
         """
 
         # TODO: check type x torch.half or torch.float32
-        if fused and x.is_cuda:
+        if fused and x.is_cuda and x.dtype == torch.float16:
             dropout_p_ = dropout_p if training_ else 0.0
 
             weights = [in_weight, out_weight]

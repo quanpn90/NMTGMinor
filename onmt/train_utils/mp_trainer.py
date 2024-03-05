@@ -277,7 +277,7 @@ class Trainer(object):
         bfSixteen = MixedPrecision(
             param_dtype=torch.bfloat16,
             # Gradient communication precision.
-            reduce_dtype=torch.float32,
+            reduce_dtype=torch.bfloat16,
             # Buffer precision.
             buffer_dtype=torch.bfloat16,
         )
@@ -371,7 +371,10 @@ class Trainer(object):
 
                 self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[self.rank],
                                                                        output_device=self.rank,
-                                                                       find_unused_parameters=find_unused_parameters)
+                                                                       find_unused_parameters=find_unused_parameters,
+                                                                       )
+
+
 
         if self.is_main():
             nparams = sum(p.numel() for p in model.parameters() if p.requires_grad)

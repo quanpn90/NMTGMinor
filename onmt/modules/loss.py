@@ -75,8 +75,8 @@ class CrossEntropyLossBase(_Loss):
         go_to_slow_code = True
         if not softmaxed:
             # Try the fastest softmax + loglikelihood implementation first
-            if fast_entropy:
-                half_to_float = (logits.dtype == torch.half)
+            if fast_entropy and (logits.dtype == torch.float16 or logits.dtype == torch.float32):
+                half_to_float = (logits.dtype == torch.float16)
                 loss = self.softmax_xentropy(logits, gtruth, label_smoothing, self.padding_idx, half_to_float)
 
                 # We need to return the loss data without masking bad positions
@@ -84,9 +84,9 @@ class CrossEntropyLossBase(_Loss):
                 with torch.no_grad():
                     loss_data = loss.sum().data.item()
 
-                bad_loss = torch.logical_or(torch.isinf(loss), torch.isnan(loss))
-                if bad_loss.any():
-                    loss.masked_fill_(bad_loss, 0)
+                # bad_loss = torch.logical_or(torch.isinf(loss), torch.isnan(loss))
+                # if bad_loss.any():
+                #     loss.masked_fill_(bad_loss, 0)
 
                 loss = loss.sum()
             else:
@@ -99,9 +99,9 @@ class CrossEntropyLossBase(_Loss):
                     with torch.no_grad():
                         loss_data = loss.sum().data.item()
 
-                    bad_loss = torch.logical_or(torch.isinf(loss), torch.isnan(loss))
-                    if bad_loss.any():
-                        loss.masked_fill_(bad_loss, 0)
+                    # bad_loss = torch.logical_or(torch.isinf(loss), torch.isnan(loss))
+                    # if bad_loss.any():
+                    #     loss.masked_fill_(bad_loss, 0)
 
                     loss = loss.sum()
 

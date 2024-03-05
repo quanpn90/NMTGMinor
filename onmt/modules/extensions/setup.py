@@ -6,6 +6,7 @@ import subprocess
 import sys
 import warnings
 import os
+from datetime import datetime
 
 from torch.utils.cpp_extension import CUDAExtension
 from torch.utils.cpp_extension import BuildExtension
@@ -253,12 +254,14 @@ ext_modules.append(
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
                                       'nvcc': ['-O3'] + version_dependent_macros + generator_flag}))
 
+xentropy_ver = datetime.today().strftime("%y.%m.%d")
+print(f"`--xentropy` setting version of {xentropy_ver}")
 ext_modules.append(
     CUDAExtension(name='xentropy_cuda',
                   sources=['xentropy/interface.cpp',
                            'xentropy/xentropy_kernel.cu'],
                   include_dirs=[os.path.join(this_dir, 'include')],
-                  extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                  extra_compile_args={"cxx": ["-O3"] + version_dependent_macros + [f'-DXENTROPY_VER="{xentropy_ver}"'],
                                       'nvcc': ['-O3'] + version_dependent_macros}))
 
 if bare_metal_minor >= 5 and bare_metal_major >= 11:
@@ -266,7 +269,7 @@ if bare_metal_minor >= 5 and bare_metal_major >= 11:
         CUDAExtension(name='mlp_gelu_blaslt',
                       sources=['mlp_blaslt/mlp_gelu.cpp',
                                'mlp_blaslt/mlp_gelu_cuda.cu'],
-                      extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
+                      extra_compile_args={"cxx": ["-O3"] + version_dependent_macros,
                                           'nvcc': ['-O3'] + version_dependent_macros +
                                                   generator_flag + cc_flag}))
 
