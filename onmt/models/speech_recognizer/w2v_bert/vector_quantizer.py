@@ -5,7 +5,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from onmt.typing import Optional, Tuple, final
+from typing import Optional, Tuple, final
 
 import torch
 import torch.nn as nn

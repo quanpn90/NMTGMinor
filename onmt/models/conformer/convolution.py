@@ -4,7 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-from onmt.typing import Literal, Optional
+from typing import Literal, Optional
 
 from torch import Tensor
 from torch.nn import GLU, BatchNorm1d, Conv1d, Module, SiLU

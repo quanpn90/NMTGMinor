@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Sequence, Tuple, Union, final, Protocol
 
 # from onmt.modules.layer_norm import LayerNorm
-from onmt.typing import DataType, Device, final, finaloverride
+from onmt.typing import DataType, Device, final, finaloverride, override
 
 import torch
 import torch.nn as nn
@@ -108,7 +108,7 @@ class StandardLayerNorm(LayerNorm):
     """Applies Layer Normalization to incoming data as described in
     :cite:t:`https://doi.org/10.48550/arxiv.1607.06450`."""
 
-    @finaloverride
+    @override
     def forward(self, x: Tensor) -> Tensor:
         return layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
 

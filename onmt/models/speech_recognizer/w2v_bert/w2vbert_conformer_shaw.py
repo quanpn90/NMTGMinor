@@ -5,7 +5,7 @@
 # MIT_LICENSE file in the root directory of this source tree.
 
 from dataclasses import asdict, dataclass
-from onmt.typing import Optional
+from typing import Optional
 
 # from fairseq2.models.conformer import ConformerConvolution
 from onmt.models.conformer.block import ConformerConvolution

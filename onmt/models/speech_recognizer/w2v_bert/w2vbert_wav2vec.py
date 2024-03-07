@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from onmt.typing import Optional, Tuple
+from typing import Optional, Tuple
 
 import torch
 from torch import Tensor

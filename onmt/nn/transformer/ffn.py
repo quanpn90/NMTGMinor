@@ -13,7 +13,7 @@ from torch.nn import Dropout, Module, ReLU, SiLU
 from onmt.nn.normalization import LayerNorm, create_standard_layer_norm
 from onmt.nn.projection import Linear
 
-from onmt.typing import final, finaloverride
+from onmt.typing import final, finaloverride, DataType, Device, override
 from onmt.nn.transformer.norm_order import TransformerNormOrder
 
 
@@ -114,7 +114,7 @@ class StandardFeedForwardNetwork(FeedForwardNetwork):
             inner_dim, model_dim, bias, device=device, dtype=dtype
         )
 
-    @finaloverride
+    @override
     def forward(self, seqs: Tensor) -> Tensor:
         seqs = self.inner_proj(seqs)
 

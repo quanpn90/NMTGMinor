@@ -1,5 +1,5 @@
 from dataclasses import dataclass, asdict
-from onmt.typing import List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from torch.nn import GELU, SiLU
 from onmt.models.registry_utils import ArchitectureRegistry

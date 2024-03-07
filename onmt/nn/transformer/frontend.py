@@ -35,6 +35,7 @@ class TransformerFrontend(Module, ABC):
             self,
             seqs: Tensor,
             padding_mask=None,
+            *args, **kwargs
     ):
         """
         :param seqs:
@@ -133,10 +134,10 @@ class TransformerEmbeddingFrontend(TransformerFrontend):
     def forward(
         self,
         seqs: Tensor,
-        padding_mask: Optional[PaddingMask],
-        **kwargs
+        padding_mask: Optional[Tensor],
+        *args, **kwargs
         # state_bag: Optional[IncrementalStateBag] = None,
-    ) -> Tuple[Tensor, Optional[PaddingMask]]:
+    ) -> Tuple[Tensor, Optional[Tensor]]:
         embeds = self.embed(seqs)
 
         if self.scale != 1.0:

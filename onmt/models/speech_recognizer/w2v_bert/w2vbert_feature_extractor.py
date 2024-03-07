@@ -5,7 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from abc import ABC, abstractmethod
-from onmt.typing import List, Optional, Sequence, Tuple, final
+from typing import List, Optional, Sequence, Tuple, final
 
 import torch
 import torch.nn as nn

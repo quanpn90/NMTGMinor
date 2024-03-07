@@ -42,8 +42,9 @@ class PositionEncoder(Module, ABC):
             self,
             seqs: Tensor,
             padding_mask,
-            *,
-            state_bag=None,
+            *args, **kwargs
+            # *,
+            # state_bag=None,
     ) -> Tensor:
         """
         :param seqs:
@@ -63,10 +64,11 @@ class PositionEncoder(Module, ABC):
             Same as ``seqs``.
         """
         if self.max_seq_len is not None:
-            if self.training or state_bag is None:
-                start_step = 0
-            else:
-                start_step = state_bag.step_nr
+            # if self.training or state_bag is None:
+            #     start_step = 0
+            # else:
+            #     start_step = state_bag.step_nr
+            start_step = 0
 
             if (seq_len := start_step + seqs.size(-2)) > self.max_seq_len:
                 raise ValueError(
@@ -79,8 +81,8 @@ class PositionEncoder(Module, ABC):
     def _do_forward(
             self,
             seqs: Tensor,
-            padding_mask,
-            state_bag,
+            padding_mask
+            # state_bag,
     ) -> Tensor:
         """
         :param seqs:
@@ -159,13 +161,13 @@ class Wav2Vec2PositionEncoder(PositionEncoder):
             self,
             seqs: Tensor,
             padding_mask,
-            state_bag,
+            # state_bag,
     ) -> Tensor:
         """:meta private:"""
-        if state_bag is not None:
-            raise ValueError(
-                "`Wav2Vec2PositionEncoder` does not support incremental decoding."
-            )
+        # if state_bag is not None:
+        #     raise ValueError(
+        #         "`Wav2Vec2PositionEncoder` does not support incremental decoding."
+        #     )
 
         # We have to ensure that the padded elements are correctly set to
         # zero; otherwise, noise will leak into the feature maps.
@@ -271,14 +273,14 @@ class Wav2Vec2StackedPositionEncoder(PositionEncoder):
     def _do_forward(
             self,
             seqs: Tensor,
-            padding_mask,
-            state_bag=None,
+            padding_mask
+            # state_bag=None,
     ) -> Tensor:
         """:meta private:"""
-        if state_bag is not None:
-            raise ValueError(
-                "`Wav2Vec2StackedPositionEncoder` does not support incremental decoding."
-            )
+        # if state_bag is not None:
+        #     raise ValueError(
+        #         "`Wav2Vec2StackedPositionEncoder` does not support incremental decoding."
+        #     )
 
         # We have to ensure that the padded elements are correctly set to
         # zero; otherwise, noise will leak into the feature maps.

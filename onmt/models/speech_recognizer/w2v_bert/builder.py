@@ -6,7 +6,7 @@
 
 import torch
 from dataclasses import dataclass
-from onmt.typing import List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from torch.nn import GELU, SiLU
 
@@ -25,6 +25,8 @@ from .w2vbert_wav2vec import Wav2Vec2Model
 from .masker import Wav2Vec2Masker
 from .vector_quantizer import VectorQuantizer, GumbelVectorQuantizer
 from onmt.models.conformer.block import ConformerBlock, ConformerConvolution
+
+from onmt.typing import Device, DataType
 
 
 class Wav2Vec2EncoderBuilder:
