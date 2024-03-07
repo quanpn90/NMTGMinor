@@ -8,14 +8,14 @@ from typing import Iterable, Optional, Tuple, final
 
 import torch
 
-from onmt.models.speech_recognizer.w2v_bert.w2vbert_conformer import ConformerBlock
+from onmt.models.conformer.block import ConformerBlock
 from onmt.nn.transformer.encoder import ModuleList
 from onmt.nn.normalization import LayerNorm, LayerNormFactory, create_standard_layer_norm
 from onmt.nn.projection import Linear
 from onmt.nn.transformer.encoder import (
     FeedForwardNetwork, LayerNormFactory, MultiheadAttention, TransformerEncoderLayer, TransformerEncoder)
 
-from onmt.models.speech_recognizer.w2v_bert.typing import DataType, Device
+from onmt.typing import DataType, Device
 
 from overrides import final as finaloverride
 from torch import Tensor

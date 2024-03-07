@@ -13,8 +13,8 @@ from torch.nn import Dropout, Module, ReLU, SiLU
 from onmt.nn.normalization import LayerNorm, create_standard_layer_norm
 from onmt.nn.projection import Linear
 
-from .typing import final, finaloverride
-from .norm_order import TransformerNormOrder
+from onmt.typing import final, finaloverride
+from onmt.nn.transformer.norm_order import TransformerNormOrder
 
 
 class FeedForwardNetwork(Module, ABC):
@@ -129,3 +129,108 @@ class StandardFeedForwardNetwork(FeedForwardNetwork):
         seqs = self.output_proj(seqs)
 
         return seqs
+
+
+@final
+class GLUFeedForwardNetwork(FeedForwardNetwork):
+    """Represents a GLU-based Transformer feed-forward network as described in
+    :cite:t:`https://doi.org/10.48550/arxiv.2002.05202`"""
+
+    gate_proj: Linear
+    gate_activation: Module
+    inner_dim_scale: float
+    inner_dim_to_multiple: int
+    inner_proj: Linear
+    inner_dropout: Optional[Dropout]
+    output_proj: Linear
+
+    def __init__(
+        self,
+        model_dim: int,
+        inner_dim: int,
+        bias: bool,
+        *,
+        gate_activation: Optional[Module] = None,
+        inner_dim_scale: float = 2 / 3,
+        inner_dim_to_multiple: int = 1,
+        inner_dropout_p: float = 0.0,
+        device: Optional[Device] = None,
+        dtype: Optional[DataType] = None,
+    ) -> None:
+        """
+        :param model_dim:
+            The dimensionality of the model.
+        :param inner_dim:
+            The non-scaled dimensionality of the inner projection layer.
+        :param bias:
+            If ``True``, all projections learn an additive bias.
+        :param gate_activation:
+            The activation to apply to outputs of the gate projection. If
+            ``None``, :func:`~torch.nn.SiLU` will be used.
+        :param inner_dim_scale:
+            The scale factor for the dimensionality of the inner projection
+            layer.
+        :param inner_dim_to_multiple:
+            The dimensionality of the inner projection layer is rounded up to
+            the nearest multiple of this value.
+        :param inner_dropout_p:
+            The dropout probability on outputs of the inner projection layer.
+        """
+        super().__init__(model_dim)
+
+        self.inner_dim_scale = inner_dim_scale
+
+        if inner_dim_scale != 1.0:
+            inner_dim = int(inner_dim * inner_dim_scale)
+
+        self.inner_dim_to_multiple = inner_dim_to_multiple
+
+        if inner_dim_to_multiple != 1:
+            inner_dim = inner_dim_to_multiple * (
+                (inner_dim + inner_dim_to_multiple - 1) // inner_dim_to_multiple
+            )
+
+        self.gate_proj = Linear(model_dim, inner_dim, bias, device=device, dtype=dtype)
+
+        if gate_activation is None:
+            self.gate_activation = SiLU()
+        else:
+            self.gate_activation = gate_activation
+
+        self.inner_proj = Linear(model_dim, inner_dim, bias, device=device, dtype=dtype)
+
+        if inner_dropout_p > 0.0:
+            self.inner_dropout = Dropout(inner_dropout_p)
+        else:
+            self.register_module("inner_dropout", None)
+
+        self.output_proj = Linear(
+            inner_dim, model_dim, bias, device=device, dtype=dtype
+        )
+
+    @override
+    def forward(self, seqs: Tensor) -> Tensor:
+        gate = self.gate_proj(seqs)
+
+        gate = self.gate_activation(gate)
+
+        seqs = self.inner_proj(seqs)
+
+        seqs = seqs * gate
+
+        if self.inner_dropout is not None:
+            seqs = self.inner_dropout(seqs)
+
+        seqs = self.output_proj(seqs)
+
+        return seqs
+
+    def extra_repr(self) -> str:
+        """:meta private:"""
+        s = super().extra_repr()
+
+        return (
+            f"{s}, "
+            f"inner_dim_scale={self.inner_dim_scale}, "
+            f"inner_dim_to_multiple={self.inner_dim_to_multiple}"
+        )

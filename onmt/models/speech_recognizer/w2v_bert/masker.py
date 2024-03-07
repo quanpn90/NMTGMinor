@@ -4,7 +4,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Optional, Tuple
+from onmt.typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -13,7 +13,7 @@ from torch.nn import Module, Parameter
 
 # from fairseq2.nn.padding import PaddingMask
 # from fairseq2.nn.utils.mask import compute_row_mask
-from .typing import DataType, Device
+from onmt.typing import DataType, Device
 
 
 def repeat_interleave(x: Tensor, dim: int, repeat: int) -> Tensor:

@@ -4,8 +4,11 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple, cast, final
+from collections import OrderedDict
+from typing import Dict, Iterable, Optional, Protocol, Tuple, final, cast
 
 import torch
 import torch.nn as nn
@@ -14,17 +17,21 @@ from torch.nn import Dropout, Module
 from torch.nn.parameter import Parameter
 
 # from fairseq2.nn.normalization import LayerNorm
-from onmt.modules.layer_norm import LayerNorm
+from onmt.nn.normalization import LayerNorm, LayerNormFactory, StandardLayerNorm
 # from fairseq2.nn.padding import PaddingMask
+from onmt.nn.transformer.attention_mask import (
+    AttentionMask,
+    AttentionMaskFactory,
+    CausalAttentionMask,
+    CausalAttentionMaskFactory)
+
 # from fairseq2.nn.transformer.attention_mask import AttentionMask
-from ..speech_recognizer.w2v_bert.w2vbert_ffn import FeedForwardNetwork
+from onmt.nn.transformer.ffn import FeedForwardNetwork
 from onmt.nn.normalization import LayerNormFactory, create_standard_layer_norm
-from ..speech_recognizer.w2v_bert.w2vbert_multihead_attention import MultiheadAttention
-from ..speech_recognizer.w2v_bert.norm_order import TransformerNormOrder
+from onmt.nn.transformer.multihead_attention import MultiheadAttention
+from onmt.nn.transformer.norm_order import TransformerNormOrder
 
-from fairseq2.nn.transformer.norm_order import TransformerNormOrder
-
-from ..speech_recognizer.w2v_bert.typing import DataType, Device, finaloverride
+from onmt.typing import DataType, Device, finaloverride
 
 
 class TransformerDecoderLayer(Module, ABC):
@@ -46,7 +53,7 @@ class TransformerDecoderLayer(Module, ABC):
             self,
             seqs: Tensor,
             padding_mask=None,
-            self_attn_mask=None,
+            self_attn_mask: Optional[AttentionMask] = None,
             encoder_output: Optional[Tensor] = None,
             encoder_padding_mask=None,
             # *,
@@ -212,6 +219,7 @@ class StandardTransformerDecoderLayer(TransformerDecoderLayer):
 
         self.norm_order = norm_order
 
+        # TODO: Quan: the frontend is either here or the upper layer
         if frontend is not None:
             self.frontend = frontend
 
@@ -226,18 +234,18 @@ class StandardTransformerDecoderLayer(TransformerDecoderLayer):
     def forward(
             self,
             seqs: Tensor,
-            padding_mask: Optional[PaddingMask],
-            self_attn_mask=None,
+            padding_mask: Optional[Tensor],
+            self_attn_mask: Optional[AttentionMask] = None,
             encoder_output: Optional[Tensor] = None,
-            encoder_padding_mask=None,
+            encoder_padding_mask: Optional[Tensor] = None,
+            *args, **kwargs
             # *,
             # state_bag: Optional[IncrementalStateBag] = None,
-    ):
-        seqs = self._forward_self_attn(seqs, padding_mask, self_attn_mask, state_bag)
+    ): # -> Tuple[Tensor, Optional[PaddingMask]]:
+        seqs = self._forward_self_attn(seqs, padding_mask, self_attn_mask)
 
         seqs = self._forward_encoder_decoder_attn(
-            seqs, padding_mask, encoder_output, encoder_padding_mask, state_bag
-        )
+            seqs, padding_mask, encoder_output, encoder_padding_mask)
 
         seqs = self._forward_ffn(seqs)
 
@@ -246,8 +254,8 @@ class StandardTransformerDecoderLayer(TransformerDecoderLayer):
     def _forward_self_attn(
             self,
             seqs: Tensor,
-            padding_mask: Optional[PaddingMask],
-            self_attn_mask: Optional[AttentionMask]
+            padding_mask,
+            self_attn_mask=None
             # state_bag: Optional[IncrementalStateBag],
     ) -> Tensor:
         residual = seqs
@@ -280,9 +288,9 @@ class StandardTransformerDecoderLayer(TransformerDecoderLayer):
     def _forward_encoder_decoder_attn(
             self,
             seqs: Tensor,
-            padding_mask: Optional[PaddingMask],
+            padding_mask: Optional[Tensor],
             encoder_output: Optional[Tensor],
-            encoder_padding_mask: Optional[PaddingMask],
+            encoder_padding_mask: Optional[Tensor],
             # state_bag: Optional[IncrementalStateBag],
     ) -> Tensor:
         if self.encoder_decoder_attn is None:
@@ -309,7 +317,6 @@ class StandardTransformerDecoderLayer(TransformerDecoderLayer):
             keys=encoder_output,
             key_padding_mask=encoder_padding_mask,
             values=encoder_output,
-            # state_bag=state_bag,
         )
 
         if self.encoder_decoder_attn_dropout is not None:
@@ -346,5 +353,209 @@ class StandardTransformerDecoderLayer(TransformerDecoderLayer):
     def extra_repr(self) -> str:
         """:meta private:"""
         s = super().extra_repr()
+
+        return f"{s}, norm_order={self.norm_order}"
+
+
+class TransformerDecoder(Module, ABC):
+    """Represents a Transformer decoder."""
+
+    model_dim: int
+    layers: ModuleList
+
+    _layer_output_hooks: Dict[int, DecoderLayerOutputHook]
+
+    def __init__(self, model_dim: int) -> None:
+        """
+        :param model_dim:
+            The dimensionality of the model.
+        """
+        super().__init__()
+
+        self.model_dim = model_dim
+
+        self._layer_output_hooks = OrderedDict()
+
+    @abstractmethod
+    def forward(
+        self,
+        seqs: Tensor,
+        padding_mask: Optional[PaddingMask],
+        encoder_output: Optional[Tensor] = None,
+        encoder_padding_mask: Optional[PaddingMask] = None,
+        *,
+        state_bag: Optional[IncrementalStateBag] = None,
+    ) -> Tuple[Tensor, Optional[PaddingMask]]:
+        """
+        :param seqs:
+            The sequences to decode. *Shape:* :math:`(N,S,M)`, where :math:`N`
+            is the batch size, :math:`S` is the sequence length, and :math:`M`
+            is the dimensionality of the model.
+        :param padding_mask:
+            The padding mask of ``seqs``. *Shape:* :math:`(N,S)`, where :math:`N`
+            is the batch size and :math:`S` is the sequence length.
+        :param encoder_output:
+            The encoder output to use in encoder-decoder attention. *Shape:*
+            :math:`(N,S_{enc},M_{enc})`, where :math:`N` is the batch size,
+            :math:`S_{enc}` is the encoder output sequence length, and
+            :math:`M_{enc}` is the dimensionality of the encoder.
+        :param encoder_padding_mask:
+            The padding mask of ``encoder_output``. *Shape:* :math:`(N,S_{enc})`,
+            where :math:`N` is the batch size and :math:`S_{enc}` is the encoder
+            output sequence length.
+        :param state_bag:
+            The state bag to use for incremental decoding.
+
+        :returns:
+            - The decoder output. *Shape:* Same as ``seqs``.
+            - The padding mask of the decoder output. *Shape:* Same as
+              ``padding_mask``.
+        """
+
+    # def register_layer_output_hook(
+    #     self, hook: DecoderLayerOutputHook
+    # ) -> RemovableHandle:
+    #     """Register a layer output hook on the module.
+    #
+    #     The hook will be called every time after a layer in the decoder stack
+    #     has computed an output.
+    #
+    #     :param hook:
+    #         The hook to register.
+    #
+    #     :returns:
+    #         A handle that can be used to remove the added hook by calling
+    #         ``handle.remove()``.
+    #     """
+    #     handle = RemovableHandle(self._layer_output_hooks)
+    #
+    #     self._layer_output_hooks[handle.id] = hook
+    #
+    #     return handle
+
+    def extra_repr(self) -> str:
+        """:meta private:"""
+        return f"model_dim={self.model_dim}"
+
+
+@final
+class StandardTransformerDecoder(TransformerDecoder):
+    """Represents a Transformer decoder as described in
+    :cite:t:`https://doi.org/10.48550/arxiv.1706.03762`."""
+
+    self_attn_mask_factory: Optional[AttentionMaskFactory]
+    layer_norm: Optional[LayerNorm]
+    norm_order: TransformerNormOrder
+
+    def __init__(
+            self,
+            layers: Iterable[TransformerDecoderLayer],
+            *,
+            self_attn_mask_factory: Optional[AttentionMaskFactory] = None,
+            use_causal_attn_mask: bool = True,
+            layer_drop_p: float = 0.0,
+            norm_order: TransformerNormOrder = TransformerNormOrder.POST,
+            layer_norm_factory: Optional[LayerNormFactory] = None,
+            device: Optional[Device] = None,
+            dtype: Optional[DataType] = None,
+    ) -> None:
+        """
+        :param layers:
+            The decoder layers.
+        :param self_attn_mask_factory:
+            The self attention mask factory.
+        :param use_causal_attn_mask:
+            If ``True``, passes a full :class:`CausalAttentionMask` to the
+            decoder layers; otherwise, passes ``None``. Ignored if
+            ``self_attn_mask_factory`` is specified.
+        :param layer_drop_p:
+            If greater than zero, applies LayerDrop to the decoder layers as
+            described in :cite:t:`https://doi.org/10.48550/arxiv.1909.11556`.
+        :param norm_order:
+            The Layer Normalization order.
+        :param layer_norm_factory:
+            The factory to construct the Layer Normalization module.
+        """
+        layer_list = ModuleList(layers, drop_p=layer_drop_p)
+        if not layer_list:
+            raise ValueError("`layers` must be non-empty.")
+
+        model_dim = layer_list[0].model_dim
+
+        super().__init__(model_dim)
+
+        if layer_norm_factory is None:
+            layer_norm_factory = create_standard_layer_norm
+
+        if self_attn_mask_factory is not None:
+            self.self_attn_mask_factory = self_attn_mask_factory
+        elif use_causal_attn_mask:
+            # TODO: write custom causal attention mask factory
+            self.self_attn_mask_factory = CausalAttentionMaskFactory()
+        else:
+            self.self_attn_mask_factory = None
+
+        self.layers = layer_list
+
+        if norm_order != TransformerNormOrder.POST:
+            self.layer_norm = layer_norm_factory(model_dim, device=device, dtype=dtype)
+        else:
+            self.register_module("layer_norm", None)
+
+        self.norm_order = norm_order
+
+    @override
+    def forward(
+            self,
+            seqs: Tensor,
+            padding_mask: Optional[Tensor],
+            encoder_output: Optional[Tensor] = None,
+            encoder_padding_mask: Optional[Tensor] = None,
+            *args, **kwargs
+    ): # -> Tuple[Tensor, Optional[PaddingMask]]:
+        # if self._layer_output_hooks and self.layers.drop_p > 0.0:
+        #     raise RuntimeError(
+        #         "The layer output hooks cannot be run when LayerDrop is enabled."
+        #     )
+
+        num_layers = len(self.layers)
+
+        # generate the self attn mask (causal/alibi etc)
+        if self.self_attn_mask_factory is None:
+            self_attn_mask = None
+        else:
+            self_attn_mask = self.self_attn_mask_factory(
+                seqs, keys=seqs, training=self.training
+            )
+
+        for layer_idx, layer in enumerate(self.layers.drop_iter()):
+            seqs, padding_mask = layer(
+                seqs,
+                padding_mask,
+                self_attn_mask,
+                encoder_output,
+                encoder_padding_mask,
+                # state_bag=state_bag,
+            )
+
+            # for hook in self._layer_output_hooks.values():
+            #     if not hook(layer_idx, seqs, padding_mask, num_layers):
+            #         break
+
+        if self.layer_norm is not None:
+            seqs = self.layer_norm(seqs)
+
+        return seqs, padding_mask
+
+    def extra_repr(self) -> str:
+        """:meta private:"""
+        s = super().extra_repr()
+
+        if self.self_attn_mask_factory is not None:
+            self_attn_mask_factory = getattr(
+                self.self_attn_mask_factory, "__name__", self.self_attn_mask_factory
+            )
+
+            s = f"{s}, self_attn_mask_factory={self_attn_mask_factory}"
 
         return f"{s}, norm_order={self.norm_order}"

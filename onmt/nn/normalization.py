@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Sequence, Tuple, Union, final, Protocol
 
 # from onmt.modules.layer_norm import LayerNorm
-from onmt.models.speech_recognizer.w2v_bert.typing import DataType, Device, final, finaloverride
+from onmt.typing import DataType, Device, final, finaloverride
 
 import torch
 import torch.nn as nn

@@ -7,11 +7,11 @@
 from dataclasses import dataclass
 from typing import Optional, Union
 
-from ..speech_recognizer.w2v_bert.w2vbert_conformer import ConformerBlock, ConformerConvolution
+from onmt.models.conformer.block import ConformerBlock, ConformerConvolution
 from onmt.models.registry_utils import ArchitectureRegistry
-from ..speech_recognizer.w2v_bert.w2vbert_config import w2vbert_archs
-from ..speech_recognizer.w2v_bert.w2vbert_builder import Wav2Vec2EncoderBuilder, Wav2Vec2EncoderConfig
-from ..speech_recognizer.w2v_bert.w2vbert_builder import (
+from ..speech_recognizer.w2v_bert.config import w2vbert_archs
+from ..speech_recognizer.w2v_bert.builder import Wav2Vec2EncoderBuilder, Wav2Vec2EncoderConfig
+from ..speech_recognizer.w2v_bert.builder import (
     FeedForwardNetwork,
     MultiheadAttention,
     StandardFeedForwardNetwork,
@@ -22,7 +22,7 @@ from ..speech_recognizer.w2v_bert.w2vbert_builder import (
     StandardTransformerEncoder,
     create_default_sdpa)
 
-from ..speech_recognizer.w2v_bert.typing import DataType, Device, override
+from onmt.typing import DataType, Device, override
 from torch.nn import GELU, ReLU
 
 from .adaptor_block import UnitYEncoderAdaptor, UnitYTransformerAdaptorLayer, UnitYConformerAdaptorLayer

@@ -5,17 +5,17 @@
 # MIT_LICENSE file in the root directory of this source tree.
 
 from dataclasses import asdict, dataclass
-from typing import Optional
+from onmt.typing import Optional
 
 # from fairseq2.models.conformer import ConformerConvolution
-from .w2vbert_conformer import ConformerConvolution
+from onmt.models.conformer.block import ConformerConvolution
 from onmt.models.registry_utils import ArchitectureRegistry
-from .w2vbert_config import w2vbert_archs, w2vbert_arch, wav2vec2_arch, wav2vec2_archs
+from .config import w2vbert_archs, w2vbert_arch, wav2vec2_arch, wav2vec2_archs
 
-from .w2vbert_builder import Wav2Vec2EncoderBuilder, Wav2Vec2EncoderConfig, Wav2Vec2Config, Wav2Vec2Builder
-from .typing import DataType, Device
-from .w2vbert_attention import SDPA, ShawRelativePositionSDPA, create_default_sdpa
-from .w2vbert_config import ConformerShawEncoderConfig, conformer_shaw_archs
+from .builder import Wav2Vec2EncoderBuilder, Wav2Vec2EncoderConfig, Wav2Vec2Config, Wav2Vec2Builder
+from onmt.typing import DataType, Device
+from onmt.nn.transformer.attention import SDPA, ShawRelativePositionSDPA, create_default_sdpa
+from .config import ConformerShawEncoderConfig, conformer_shaw_archs
 
 
 

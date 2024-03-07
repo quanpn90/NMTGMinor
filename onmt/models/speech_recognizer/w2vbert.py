@@ -26,8 +26,8 @@ class W2VBert(nn.Module):
                  **kwargs):
 
         super().__init__()
-        from onmt.models.speech_recognizer.w2v_bert.w2vbert_config import conformer_shaw_600m
-        from onmt.models.speech_recognizer.w2v_bert.w2vbert_builder import create_conformer_shaw_model
+        from onmt.models.speech_recognizer.w2v_bert.config import conformer_shaw_600m
+        from onmt.models.speech_recognizer.w2v_bert.builder import create_conformer_shaw_model
         config = conformer_shaw_600m()
 
         self.wav2vec_encoder = create_conformer_shaw_model(config)

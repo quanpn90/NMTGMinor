@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from onmt.typing import Optional, Tuple
 
 import torch
 from torch import Tensor
@@ -31,7 +31,7 @@ from .frontend import Wav2Vec2Frontend
 from .masker import Wav2Vec2Masker
 from onmt.nn.projection import Linear
 from onmt.nn.transformer.encoder import TransformerEncoder
-from .typing import DataType, Device
+from onmt.typing import DataType, Device
 
 
 class Wav2Vec2Model(Module):

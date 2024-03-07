@@ -5,7 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Sequence, Tuple, final
+from onmt.typing import List, Optional, Sequence, Tuple, final
 
 import torch
 import torch.nn as nn
@@ -15,7 +15,7 @@ from torch.nn.functional import group_norm, layer_norm
 
 from ..fairseq_wav2vec2.fairseq_modules import Fp32LayerNorm, Fp32GroupNorm
 from onmt.nn.normalization import LayerNorm, create_standard_layer_norm
-from .typing import final, finaloverride, override
+from onmt.typing import final, finaloverride, override
 
 
 class SequenceFeatureExtractor(Module, ABC):

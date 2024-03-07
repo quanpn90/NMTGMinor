@@ -8,19 +8,19 @@ from dataclasses import dataclass
 from functools import partial
 from typing import List, Optional, Tuple
 
-from .vocabulary_info import VocabularyInfo
+from onmt.data.vocabulary_info import VocabularyInfo
 
 from onmt.models.registry_utils import ArchitectureRegistry
-from ..speech_recognizer.w2v_bert.w2vbert_multihead_attention import MultiheadAttention, StandardMultiheadAttention
-from ..speech_recognizer.w2v_bert.w2vbert_ffn import FeedForwardNetwork, StandardFeedForwardNetwork
-from ..speech_recognizer.w2v_bert.norm_order import TransformerNormOrder
+from onmt.nn.transformer.multihead_attention import MultiheadAttention, StandardMultiheadAttention
+from onmt.nn.transformer.ffn import FeedForwardNetwork, StandardFeedForwardNetwork
+from onmt.nn.transformer.norm_order import TransformerNormOrder
 from onmt.nn.transformer.encoder import TransformerEncoder, TransformerEncoderLayer, \
     StandardTransformerEncoder, StandardTransformerEncoderLayer
 
-from ..speech_recognizer.w2v_bert.typing import DataType, Device
+from onmt.typing import DataType, Device
 from onmt.nn.embedding import Embedding, StandardEmbedding, init_scaled_embedding
 from .nllb_frontend import TransformerFrontend, TransformerEmbeddingFrontend
-from .position_encoder import SinusoidalPositionEncoder
+from onmt.nn.position_encoder import SinusoidalPositionEncoder
 
 
 @dataclass

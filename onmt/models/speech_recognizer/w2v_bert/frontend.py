@@ -4,64 +4,22 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Optional, Tuple, final
+from onmt.typing import Optional, Tuple, final
 import math
 from abc import ABC, abstractmethod
 
 from torch import Tensor
 from torch.nn import Dropout, Module
+from onmt.nn.transformer.frontend import TransformerFrontend
 from .w2vbert_feature_extractor import SequenceFeatureExtractor
 from onmt.nn.position_encoder import PositionEncoder
 from onmt.nn.normalization import LayerNorm, StandardLayerNorm, create_standard_layer_norm
 from onmt.nn.projection import Linear
 
-from .typing import Device, DataType, final, finaloverride, override
+from onmt.typing import Device, DataType, final, finaloverride, override
 
 
-class TransformerFrontend(Module, ABC):
-    """Represents a Transformer encoder/decoder front-end."""
 
-    model_dim: int
-
-    def __init__(self, model_dim: int) -> None:
-        """
-        :param model_dim:
-            The dimensionality of the model.
-        """
-        super().__init__()
-
-        self.model_dim = model_dim
-
-    @abstractmethod
-    def forward(
-            self,
-            seqs: Tensor,
-            padding_mask=None,
-    ):
-        """
-        :param seqs:
-            The sequences to process. *Shape:* :math:`(N,S,*)`, where :math:`N`
-            is the batch size, :math:`S` is the sequence length, and :math:`*`
-            is any number of sequence-specific dimensions including none.
-        :param padding_mask:
-            The padding mask of ``seqs``. *Shape:* :math:`(N,S)`, where :math:`N`
-            is the batch size and :math:`S` is the sequence length.
-        :param state_bag:
-            The state bag to use for incremental decoding.
-
-        :returns:
-            - The processed sequences to pass to a Transformer encoder/decoder.
-              *Shape:* :math:`(N,S_{out},M)`, where :math:`N` is the batch size,
-              :math:`S_{out}` is the output sequence length, and :math:`M` is
-              the dimensionality of the model.
-            - The padding mask of the processed sequences. *Shape:*
-              :math:`(N,S_{out})`, where :math:`N` is the batch size and
-              :math:`S_{out}` is the output sequence length.
-        """
-
-    def extra_repr(self) -> str:
-        """:meta private:"""
-        return f"model_dim={self.model_dim}"
 
 
 @final

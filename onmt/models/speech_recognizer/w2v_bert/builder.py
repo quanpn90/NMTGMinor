@@ -6,25 +6,25 @@
 
 import torch
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from onmt.typing import List, Optional, Tuple
 
 from torch.nn import GELU, SiLU
 
-from .w2vbert_config import Wav2Vec2EncoderConfig, Wav2Vec2Config, W2VBertConfig
+from .config import Wav2Vec2EncoderConfig, Wav2Vec2Config, W2VBertConfig
 from .w2vbert_feature_extractor import Wav2Vec2FeatureExtractor, Wav2Vec2FbankFeatureExtractor, SequenceFeatureExtractor
-from .w2vbert_ffn import StandardFeedForwardNetwork, FeedForwardNetwork
-from .w2vbert_multihead_attention import StandardMultiheadAttention
-from .typing import Device, DataType
-from .w2vbert_attention import SDPA, create_default_sdpa, ShawRelativePositionSDPA
-from .w2vbert_convolution import ConformerConvolution
+from onmt.nn.transformer.ffn import StandardFeedForwardNetwork, FeedForwardNetwork
+from onmt.nn.transformer.multihead_attention import StandardMultiheadAttention
+from onmt.typing import Device, DataType
+from onmt.nn.transformer.attention import SDPA, create_default_sdpa, ShawRelativePositionSDPA
+from onmt.models.conformer.convolution import ConformerConvolution
 from .frontend import Wav2Vec2Frontend
 from onmt.nn.transformer.encoder import TransformerEncoderLayer, StandardTransformerEncoderLayer
 from onmt.nn.transformer.encoder import TransformerEncoder, StandardTransformerEncoder
-from .w2vbert_multihead_attention import MultiheadAttention
+from onmt.nn.transformer.multihead_attention import MultiheadAttention
 from .w2vbert_wav2vec import Wav2Vec2Model
 from .masker import Wav2Vec2Masker
 from .vector_quantizer import VectorQuantizer, GumbelVectorQuantizer
-from .w2vbert_conformer import ConformerBlock, ConformerConvolution
+from onmt.models.conformer.block import ConformerBlock, ConformerConvolution
 
 
 class Wav2Vec2EncoderBuilder:
@@ -328,7 +328,7 @@ class Wav2Vec2Builder:
         )
 
 
-from .w2vbert_config import ConformerShawEncoderConfig
+from .config import ConformerShawEncoderConfig
 
 
 class ConformerShawEncoderBuilder(Wav2Vec2EncoderBuilder):

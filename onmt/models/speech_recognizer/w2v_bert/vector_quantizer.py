@@ -5,7 +5,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional, Tuple, final
+from onmt.typing import Optional, Tuple, final
 
 import torch
 import torch.nn as nn
@@ -14,7 +14,7 @@ from torch.nn import Module, Parameter
 from torch.nn.functional import gumbel_softmax
 
 from onmt.nn.projection import Linear
-from .typing import DataType, Device, final, finaloverride
+from onmt.typing import DataType, Device, final, finaloverride
 
 
 class VectorQuantizer(Module, ABC):

@@ -14,11 +14,13 @@ from torch.nn import Dropout, Module
 from torch.nn.parameter import Parameter
 
 from onmt.nn.normalization import LayerNormFactory, LayerNorm
-from onmt.models.speech_recognizer.w2v_bert.w2vbert_multihead_attention import MultiheadAttention
-from onmt.models.speech_recognizer.w2v_bert.w2vbert_ffn import FeedForwardNetwork
-from onmt.models.speech_recognizer.w2v_bert.norm_order import TransformerNormOrder
-from onmt.models.speech_recognizer.w2v_bert.typing import DataType, Device, finaloverride, CPU
+from onmt.nn.transformer.multihead_attention import MultiheadAttention
+from onmt.nn.transformer.ffn import FeedForwardNetwork
+from onmt.nn.transformer.norm_order import TransformerNormOrder
+from onmt.typing import DataType, Device, finaloverride, CPU
 from onmt.nn.normalization import LayerNormFactory, create_standard_layer_norm
+
+from onmt.nn.transformer.attention_mask import AttentionMask
 
 
 @final
@@ -104,7 +106,7 @@ class TransformerEncoderLayer(Module, ABC):
             self,
             seqs: Tensor,
             padding_mask,
-            self_attn_mask=None,
+            self_attn_mask: Optional[AttentionMask] = None,
     ):
         """
         :param seqs:
@@ -240,7 +242,7 @@ class StandardTransformerEncoderLayer(TransformerEncoderLayer):
             self,
             seqs: Tensor,
             padding_mask=None,
-            self_attn_mask=None,
+            self_attn_mask: Optional[AttentionMask] = None,
     ):
         seqs = self._forward_self_attn(seqs, padding_mask, self_attn_mask)
 

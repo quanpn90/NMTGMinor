@@ -4,19 +4,19 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Optional, Tuple
+from onmt.typing import Optional, Tuple
 
 from torch import Tensor
 from torch.nn import Dropout
 
-from .w2vbert_convolution import ConformerConvolution
+from onmt.models.conformer.convolution import ConformerConvolution
 from onmt.nn.normalization import LayerNorm
 from onmt.nn.normalization import LayerNormFactory, create_standard_layer_norm
 from onmt.nn.transformer.encoder import TransformerEncoderLayer
-from .w2vbert_ffn import FeedForwardNetwork
-from .w2vbert_multihead_attention import MultiheadAttention
+from onmt.nn.transformer.ffn import FeedForwardNetwork
+from onmt.nn.transformer.multihead_attention import MultiheadAttention
 
-from .typing import DataType, Device, finaloverride
+from onmt.typing import DataType, Device, finaloverride
 
 
 class ConformerBlock(TransformerEncoderLayer):

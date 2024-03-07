@@ -1,9 +1,9 @@
 from dataclasses import dataclass, asdict
-from typing import List, Optional, Tuple
+from onmt.typing import List, Optional, Tuple
 
 from torch.nn import GELU, SiLU
 from onmt.models.registry_utils import ArchitectureRegistry
-from .norm_order import TransformerNormOrder
+from onmt.nn.transformer.norm_order import TransformerNormOrder
 
 
 @dataclass

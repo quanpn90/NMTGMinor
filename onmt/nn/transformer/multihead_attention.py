@@ -17,7 +17,7 @@ from torch.nn import Module
 from torch.nn.parameter import Parameter
 from torch.utils.hooks import RemovableHandle
 
-from .w2vbert_attention import TorchSDPA, SDPA, create_default_sdpa
+from onmt.nn.transformer.attention import TorchSDPA, SDPA, create_default_sdpa
 from onmt.nn.position_encoder import PositionEncoder
 from onmt.nn.projection import Linear
 

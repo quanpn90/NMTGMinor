@@ -21,7 +21,7 @@ from torch.nn.functional import pad
 from onmt.nn.embedding import StandardEmbedding
 
 
-from onmt.modules.linear import Linear
+from onmt.nn.projection import Linear
 
 import overrides
 finaloverrides = overrides.final

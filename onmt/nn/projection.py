@@ -10,7 +10,7 @@ from torch import Tensor
 from torch.nn import Module
 from torch.nn.functional import linear
 from torch.nn.parameter import Parameter
-from onmt.models.speech_recognizer.w2v_bert.typing import DataType, Device, finaloverride
+from onmt.typing import DataType, Device, finaloverride
 
 
 class Projection(Module, ABC):
