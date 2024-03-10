@@ -715,6 +715,7 @@ class Wav2vecBERT(Wav2vecTransformer):
         # this model cannot use CTC
         self.ctc = False
         self.ctc_compress = False
+        self.ctc_char = False
 
         self.has_decoder = True
         if hasattr(decoder, 'dec_pretrained_model') and decoder.dec_pretrained_model == "none":
