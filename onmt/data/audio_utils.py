@@ -445,10 +445,6 @@ def wav_to_fmel(wav: torch.Tensor, num_mel_bin=80, waveform_scale=2**15, standar
     Returns:
 
     """
-    # extract log mel filterbank features
-    # wav = wav.squeeze(1)
-    # print(wav.size())
-    # assert(wav.ndim == 1)
     wav = wav.squeeze(1).unsqueeze(0)
 
     wav_len = wav.size(1)

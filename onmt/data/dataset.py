@@ -903,7 +903,7 @@ class Dataset(torch.utils.data.Dataset):
             self.src_sizes = src_sizes
             self.tgt_sizes = tgt_sizes
         else:
-            print(self.max_src_len, self.max_tgt_len, self.min_src_len, self.min_tgt_len)
+            # print(self.max_src_len, self.max_tgt_len, self.min_src_len, self.min_tgt_len)
 
             if self._type in ['audio', 'wav']:
                 self.batches = allocate_batch_unbalanced(sorted_order, data_lengths,
@@ -941,10 +941,7 @@ class Dataset(torch.utils.data.Dataset):
         self.input_size = input_size
         self.src_sizes = src_sizes
 
-        if augment:
-            self.augmenter = Augmenter(F=sa_f, T=sa_t, input_size=input_size)
-        else:
-            self.augmenter = None
+        self.augmenter = None
 
         if use_memory:
             from transformers import MBart50TokenizerFast

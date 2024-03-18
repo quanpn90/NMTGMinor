@@ -1,22 +1,24 @@
 import torch
-import torchaudio as taudio
+import torchaudio
+import torchaudio.transforms as T
+
 from functools import lru_cache
 from .audio_utils import safe_readaudio, wav_to_fmel, safe_readaudio_from_cache
 import numpy as np
 import soundfile
 import math
-import torchaudio
 import os
 
 
 class WavDataset(torch.utils.data.Dataset):
     def __init__(self, wav_path_list, cache_size=0,
-                 wav_path_replace=None, num_mel_bin=0):
+                 wav_path_replace=None, num_mel_bin=0, specaugment=False):
         """
         param wav_path_list: list of path to the audio
         param cache_size: size of the cache to load wav files (in case multiple wavefiles are used)
         param wav_path_replace:
         param num_mel_bin: if larger than zero, convert the audio to logmel features
+        param specaugment: if true use spectrogram augmentation
         """
         self.wav_path_list = wav_path_list
         self._sizes = len(self.wav_path_list)
@@ -28,6 +30,18 @@ class WavDataset(torch.utils.data.Dataset):
             self.cache = None
         self.cache_size = cache_size
         self.num_mel_bin = num_mel_bin
+        self.specaugment = specaugment
+
+        if self.specaugment:
+            self.spectrogram = T.Spectrogram()
+            self.time_masking = T.TimeMasking(time_mask_param=self.num_mel_bin)
+            self.freq_masking = T.FrequencyMasking(freq_mask_param=self.num_mel_bin)
+            self.inv_spectrogram = T.InverseSpectrogram()
+        else:
+            self.time_masking = None
+            self.freq_masking = None
+            self.spectrogram = None
+            self.inv_spectrogram = None
 
         if wav_path_replace is not None and wav_path_replace[0] != "None":
             found = False
@@ -103,6 +117,15 @@ class WavDataset(torch.utils.data.Dataset):
             file_ = None
             data = safe_readaudio(wav_path, start=start, end=end, sample_rate=sample_rate)
 
+        #TODO: specaugment
+        if self.specaugment:
+            # the expected data is [1, T] while the model input is [T, 1]
+            spectrogram = self.spectrogram(data.transpose(0, 1).contiguous())
+            spectrogram = self.time_masking(spectrogram)
+            spectrogram = self.freq_masking(spectrogram)
+            data = self.inv_spectrogram(spectrogram.to(torch.complex64)).transpose(0, 1).contiguous()
+
+        # extract fmel features AFTER spec augmentation
         if self.num_mel_bin > 0:
             data = wav_to_fmel(data, num_mel_bin=self.num_mel_bin)
 
