@@ -34,8 +34,9 @@ class WavDataset(torch.utils.data.Dataset):
 
         if self.specaugment:
             self.spectrogram = T.Spectrogram()
-            self.time_masking = T.TimeMasking(time_mask_param=self.num_mel_bin)
-            self.freq_masking = T.FrequencyMasking(freq_mask_param=self.num_mel_bin)
+            # param from Park et al.
+            # self.time_masking = T.TimeMasking(time_mask_param=100)
+            self.freq_masking = T.FrequencyMasking(freq_mask_param=27)
             self.inv_spectrogram = T.InverseSpectrogram()
         else:
             self.time_masking = None
@@ -120,10 +121,15 @@ class WavDataset(torch.utils.data.Dataset):
         #TODO: specaugment
         if self.specaugment:
             # the expected data is [1, T] while the model input is [T, 1]
-            spectrogram = self.spectrogram(data.transpose(0, 1).contiguous())
-            spectrogram = self.time_masking(spectrogram)
-            spectrogram = self.freq_masking(spectrogram)
-            data = self.inv_spectrogram(spectrogram.to(torch.complex64)).transpose(0, 1).contiguous()
+            old_data = data
+            try:
+                spectrogram = self.spectrogram(data.transpose(0, 1).contiguous())
+                # spectrogram = self.time_masking(spectrogram)
+                spectrogram = self.freq_masking(spectrogram)
+                data = self.inv_spectrogram(spectrogram.to(torch.complex64)).transpose(0, 1).contiguous()
+            except RuntimeError as e:
+                # if the process cannot be done for some reason -> fall back
+                data = old_data
 
         # extract fmel features AFTER spec augmentation
         if self.num_mel_bin > 0:
