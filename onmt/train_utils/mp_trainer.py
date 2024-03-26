@@ -315,16 +315,27 @@ class Trainer(object):
             torch.cuda.set_device(device_id)
 
             from torch.distributed.fsdp.wrap import (
-                size_based_auto_wrap_policy,
+                transformer_auto_wrap_policy,
                 enable_wrap,
                 wrap,
             )
 
-            my_auto_wrap_policy = functools.partial(
-                size_based_auto_wrap_policy, min_num_params=20000
+            # Testing: fsdp wrap these blocks independently
+
+            from onmt.models.conformer.block import ConformerBlock
+            from pretrain_module.modeling_mbart import MBartEncoderLayer
+
+            auto_wrap_policy = functools.partial(
+                transformer_auto_wrap_policy,
+                transformer_layer_cls={
+                    ConformerBlock, MBartEncoderLayer
+                },
             )
 
+            # otherwise maybe FSDP is only applicable to either Conformer or Language Model :)
+
             self.model = FSDP(self.model,
+                              auto_wrap_policy=auto_wrap_policy,
                               # mixed_precision=mp_policy,
                               device_id=torch.cuda.current_device())
 

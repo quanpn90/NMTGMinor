@@ -52,8 +52,8 @@ class EncoderDecoderModel(Seq2SeqModel):
 
     @abstractmethod
     def encode(
-        self, seqs: Tensor, padding_mask: Optional[Tensork]
-    ) -> Tuple[Tensor, Optional[Tensor]]:
+        self, seqs: Tensor, padding_mask: Optional[Tensor]
+    ): # -> Tuple[Tensor, Optional[Tensor]]:
         """Encode the specified source sequences.
 
         :param seqs:

@@ -30,8 +30,9 @@ from onmt.nn.transformer.ffn import FeedForwardNetwork
 from onmt.nn.normalization import LayerNormFactory, create_standard_layer_norm
 from onmt.nn.transformer.multihead_attention import MultiheadAttention
 from onmt.nn.transformer.norm_order import TransformerNormOrder
+from onmt.nn.module_list import ModuleList
 
-from onmt.typing import DataType, Device, finaloverride
+from onmt.typing import DataType, Device, finaloverride, override
 
 
 class TransformerDecoderLayer(Module, ABC):

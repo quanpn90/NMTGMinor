@@ -14,6 +14,7 @@ from onmt.data.vocabulary_info import VocabularyInfo
 #     TransformerFrontend,
 #     init_final_projection,
 # )
+from onmt.nn.transformer.model import init_final_projection
 
 from onmt.models.registry_utils import ArchitectureRegistry
 from onmt.nn.embedding import StandardEmbedding
@@ -25,10 +26,13 @@ from onmt.nn.projection import Linear
 from onmt.nn.transformer.ffn import FeedForwardNetwork, GLUFeedForwardNetwork
 from onmt.nn.transformer.multihead_attention import MultiheadAttention, StandardMultiheadAttention, create_default_sdpa
 from onmt.nn.transformer.decoder import TransformerDecoderLayer, StandardTransformerDecoderLayer
+from onmt.nn.transformer.decoder import TransformerDecoder, StandardTransformerDecoder
 from onmt.nn.transformer.norm_order import TransformerNormOrder
+from onmt.nn.transformer.decoder_model import TransformerDecoderModel
 
 from onmt.typing import DataType, Device
 from onmt.nn.transformer.frontend import TransformerFrontend, TransformerEmbeddingFrontend
+
 
 @dataclass
 class LLaMAConfig:
@@ -59,7 +63,6 @@ class LLaMAConfig:
     ffn_inner_dim_to_multiple: int
     """The dimensionality of inner projection layers in Transformer feed-forward
     networks is rounded up to the nearest multiple of this value."""
-
 
     dropout_p: float
     """The dropout probability in Transformer layers."""
@@ -188,6 +191,7 @@ def _llama2_70b() -> LLaMAConfig:
         dropout_p=0.1,
     )
 
+
 class LLaMABuilder:
     """Builds modules of a LLaMA model as described in
     :cite:t:`https://doi.org/10.48550/arxiv.2302.13971` and
@@ -223,28 +227,28 @@ class LLaMABuilder:
 
         self._pos_encoder = None
 
-    # def build_model(self) -> TransformerDecoderModel:
-    #     """Build a model."""
-    #     decoder_frontend = self.build_decoder_frontend()
-    #
-    #     decoder = self.build_decoder()
-    #
-    #     final_proj = Linear(
-    #         self._config.model_dim,
-    #         self._config.vocab_info.size,
-    #         bias=False,
-    #         init_fn=init_final_projection,
-    #         device=self._device,
-    #         dtype=self._dtype,
-    #     )
-    #
-    #     return TransformerDecoderModel(
-    #         decoder_frontend,
-    #         decoder,
-    #         final_proj,
-    #         self._config.max_seq_len,
-    #         self._config.vocab_info,
-    #     )
+    def build_model(self) -> TransformerDecoderModel:
+        """Build a model."""
+        decoder_frontend = self.build_decoder_frontend()
+
+        decoder = self.build_decoder()
+
+        final_proj = Linear(
+            self._config.model_dim,
+            self._config.vocab_info.size,
+            bias=False,
+            init_fn=init_final_projection,
+            device=self._device,
+            dtype=self._dtype,
+        )
+
+        return TransformerDecoderModel(
+            decoder_frontend,
+            decoder,
+            final_proj,
+            self._config.max_seq_len,
+            self._config.vocab_info,
+        )
 
     def build_decoder_frontend(self) -> TransformerFrontend:
         """Build a Transformer decoder front-end."""
@@ -344,10 +348,10 @@ class LLaMABuilder:
 
 
 def create_llama_model(
-    config: LLaMAConfig,
-    *,
-    device: Optional[Device] = None,
-    dtype: Optional[DataType] = None,
+        config: LLaMAConfig,
+        *,
+        device: Optional[Device] = None,
+        dtype: Optional[DataType] = None,
 ) -> TransformerDecoderModel:
     """Create a LLaMA model.
 
@@ -359,3 +363,85 @@ def create_llama_model(
         The data type of module parameters and buffers.
     """
     return LLaMABuilder(config, device=device, dtype=dtype).build_model()
+
+
+
+def create_llama_7b_model(
+        device: Optional[Device] = None,
+        dtype: Optional[DataType] = None,
+):
+
+    config = _llama2_7b()
+
+    model = create_llama_model(config, device=device, dtype=dtype)
+
+    return model
+
+
+from typing import Any, Callable, Dict, Mapping, Optional, Protocol, Union
+import re
+
+def convert_model_state_dict(
+    state_dict: Dict[str, Any], key_map: Mapping[str, str]
+) -> Dict[str, Any]:
+    """Convert a model state dictionary to fairseq2.
+
+    :param state_dict:
+        The original model state dictionary.
+    :param key_map:
+        A map of regex patterns to fairseq2 model keys.
+
+    :returns:
+        A converted model state dictionary that is compatible with fairseq2.
+    """
+    new_state_dict = {}
+
+    def get_new_key(old_key: str) -> str:
+        for old_pattern, replacement in key_map.items():
+            if (new_key := re.sub(old_pattern, replacement, old_key)) != old_key:
+                return new_key
+
+        return old_key
+
+    # Convert module keys from fairseq to fairseq2.
+    for old_key in state_dict.keys():
+        new_key = get_new_key(old_key)
+
+        new_state_dict[new_key] = state_dict[old_key]
+
+    return new_state_dict
+
+
+
+def convert_llama_checkpoint(
+    checkpoint: Dict[str, Any] # , config: LLaMAConfig
+) -> Dict[str, Any]:
+    """Convert a reference LLaMA checkpoint to fairseq2 format."""
+    # Check if we have a fairseq2 checkpoint.
+    if "model" in checkpoint:
+        return checkpoint
+
+    key_map = {
+        # fmt: off
+        r"^layers\.([0-9]+)\.attention\.wq\.":    r"decoder.layers.\1.self_attn.q_proj.",
+        r"^layers\.([0-9]+)\.attention\.wk\.":    r"decoder.layers.\1.self_attn.k_proj.",
+        r"^layers\.([0-9]+)\.attention\.wv\.":    r"decoder.layers.\1.self_attn.v_proj.",
+        r"^layers\.([0-9]+)\.attention\.wo\.":    r"decoder.layers.\1.self_attn.output_proj.",
+        r"^layers\.([0-9]+)\.attention_norm\.":   r"decoder.layers.\1.self_attn_layer_norm.",
+        r"^layers\.([0-9]+)\.feed_forward\.w1\.": r"decoder.layers.\1.ffn.gate_proj.",
+        r"^layers\.([0-9]+)\.feed_forward\.w2\.": r"decoder.layers.\1.ffn.output_proj.",
+        r"^layers\.([0-9]+)\.feed_forward\.w3\.": r"decoder.layers.\1.ffn.inner_proj.",
+        r"^layers\.([0-9]+)\.ffn_norm\.":         r"decoder.layers.\1.ffn_layer_norm.",
+        r"^norm\.":                               r"decoder.layer_norm.",
+        r"^tok_embeddings\.":                     r"decoder_frontend.embed.",
+        r"^output\.":                             r"final_proj.",
+        # fmt: on
+    }
+
+    # We do not need the pre-computed 'rope.freqs' buffers.
+    checkpoint = {k: v for (k, v) in checkpoint.items() if "rope.freqs" not in k}
+
+    checkpoint = convert_model_state_dict(checkpoint, key_map)
+
+    return {"model": checkpoint}
+

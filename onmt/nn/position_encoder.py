@@ -7,6 +7,7 @@
 from typing import Optional, final
 from abc import ABC, abstractmethod
 
+import torch
 import torch.nn as nn
 from torch import Tensor
 from torch.nn import GELU, Conv1d, Module, Sequential

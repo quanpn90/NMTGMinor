@@ -9,13 +9,14 @@ from typing import Optional, Tuple, final
 import torch.nn as nn
 from torch import Tensor
 
-from onmt.data import VocabularyInfo
+from onmt.data.vocabulary_info import VocabularyInfo
 from onmt.nn.encoder_decoder import EncoderDecoderModel
 # from fairseq2.models.sequence import SequenceModelOutput
 # from fairseq2.models.transformer.frontend import TransformerFrontend
 # from fairseq2.nn.incremental_state import IncrementalStateBag
 # from fairseq2.nn.padding import PaddingMask
 
+from onmt.nn.transformer.frontend import TransformerFrontend
 from onmt.nn.projection import Linear, Projection
 from onmt.nn.transformer.decoder import TransformerDecoder
 from onmt.nn.transformer.encoder import TransformerEncoder
@@ -85,7 +86,7 @@ class TransformerModel(EncoderDecoderModel):
         encoder_padding_mask: Optional[Tensor],
         # *,
         # state_bag: Optional[IncrementalStateBag] = None,
-    ) -> Tuple[Tensor, Optional[PaddingMask]]:
+    ): # -> Tuple[Tensor, Optional[PaddingMask]]:
         seqs, padding_mask = self.decoder_frontend(
             seqs, padding_mask, state_bag=state_bag
         )
