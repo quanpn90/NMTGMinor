@@ -428,7 +428,9 @@ class StandardMultiheadAttention(MultiheadAttention):
             key_padding_mask,
             values: Tensor,
             *,
-            attn_mask=None
+            attn_mask=None,
+            incremental=False,
+            incremental_cache=None
     ) -> Tensor:
 
         if self.fast:
@@ -450,7 +452,7 @@ class StandardMultiheadAttention(MultiheadAttention):
                                                         self.proj_bias, self.output_proj.bias, None,
                                                         None, None,
                                                         key_padding_mask, 0.0,
-                                                        False, None, False,
+                                                        incremetal, incremental_cache, False,
                                                         # incremental and state and double precision
                                                         True, True, recompute)  # learnable_pos + return-coverage
 
@@ -459,14 +461,45 @@ class StandardMultiheadAttention(MultiheadAttention):
             return outputs
 
         else:
+            if not incremental:
+                state_bag = None  # Note: encoder doesn't need state bag
 
-            state_bag = None  # Note: encoder doesn't need state bag
+                # (N, S, M) -> (N, H, S, K_h)
+                q = self._project_q(seqs, padding_mask, state_bag)
 
-            # (N, S, M) -> (N, H, S, K_h)
-            q = self._project_q(seqs, padding_mask, state_bag)
-            # k: (N, S_kv, M) -> (N, H_kv, S_kv, K_h)
-            # v: (N, S_kv, M) -> (N, H_kv, S_kv, V_h)
-            k, v = self._project_kv(keys, key_padding_mask, values)
+                # k: (N, S_kv, M) -> (N, H_kv, S_kv, K_h)
+                # v: (N, S_kv, M) -> (N, H_kv, S_kv, V_h)
+                k, v = self._project_kv(keys, key_padding_mask, values)
+            else:
+                state_bag = None
+                if seqs is keys:
+                    # self attention
+                    q = self._project_q(seqs, padding_mask, state_bag)
+
+                    # k: (N, S_kv, M) -> (N, H_kv, S_kv, K_h)
+                    # v: (N, S_kv, M) -> (N, H_kv, S_kv, V_h)
+                    k, v = self._project_kv(keys, key_padding_mask, values)
+
+                    if 'k' in incremental_cache and 'v' in incremental_cache:
+                        k = torch.cat([incremental_cache['k'].transpose(0, 1), k], dim=2)  # time first
+                        incremental_cache['k'] = k.transpose(0, 1)
+                        v = torch.cat([incremental_cache['v'].transpose(0, 1), values], dim=2)  # time first
+                        incremental_cache['v'] = v.transpose(0, 1)
+                    else:
+                        incremental_cache['k'] = k.transpose(0, 1)
+                        incremental_cache['v'] = v.transpose(0, 1)
+
+                else:
+                    # cross attention
+                    q = self._project_q(seqs, padding_mask, state_bag)
+
+                    if 'c_k' in incremental_cache and 'c_v' in incremental_cache:
+                        k = incremental_cache['c_k'].transpose(0, 1)
+                        v = incremental_cache['c_v'].transpose(0, 1)
+                    else:
+                        k, v = self._project_kv(keys, key_padding_mask, values)
+                        incremental_cache['c_k'] = k.transpose(0, 1)
+                        incremental_cache['v_k'] = k.transpose(0, 1)
 
             # With Grouped Query Attention, each key/value head is repeated.
             if (num_query_groups := self.num_heads // self.num_key_value_heads) > 1:

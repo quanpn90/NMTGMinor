@@ -964,13 +964,18 @@ class TransformerDecodingState(DecoderState):
     # For the new decoder version only
     def _reorder_incremental_state(self, reorder_state):
 
+        # by default we are using T x B x H
         if self.context is not None:
             self.context = self.context.index_select(1, reorder_state)
 
+        # src mask is B x T x H
         if self.src_mask is not None:
             self.src_mask = self.src_mask.index_select(0, reorder_state)
+
+        # src is T x B
         self.src = self.src.index_select(1, reorder_state)
 
+        # attention buffers is also T x B x H 
         for l in self.attention_buffers:
             buffer_ = self.attention_buffers[l]
             if buffer_ is not None:
