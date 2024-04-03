@@ -104,23 +104,11 @@ class DeltaLMTokenizer(PreTrainedTokenizer):
         # kwargs["additional_special_tokens"] += [
         #     code for code in FAIRSEQ_LANGUAGE_CODES if code not in kwargs["additional_special_tokens"]
         # ]
-
-        super().__init__(
-            src_lang=src_lang,
-            tgt_lang=tgt_lang,
-            eos_token=eos_token,
-            unk_token=unk_token,
-            sep_token=sep_token,
-            cls_token=cls_token,
-            pad_token=pad_token,
-            mask_token=mask_token,
-            sp_model_kwargs=self.sp_model_kwargs,
-            **kwargs,
-        )
-
         self.sp_model = spm.SentencePieceProcessor(**self.sp_model_kwargs)
         self.sp_model.Load(str(vocab_file))
         self.vocab_file = vocab_file
+
+
 
         # Original fairseq vocab and spm vocab must be "aligned":
         # Vocab    |    0    |    1    |   2    |    3    |  4  |  5  |  6  |   7   |   8   |  9
@@ -147,9 +135,24 @@ class DeltaLMTokenizer(PreTrainedTokenizer):
         # self._src_lang = "</s>"  # src_lang if src_lang is not None else
         # self.cur_lang_code_id = 2 # self.lang_code_to_id[self._src_lang]
         # self.tgt_lang = tgt_lang
+        super().__init__(
+            src_lang=src_lang,
+            tgt_lang=tgt_lang,
+            eos_token=eos_token,
+            unk_token=unk_token,
+            sep_token=sep_token,
+            cls_token=cls_token,
+            pad_token=pad_token,
+            mask_token=mask_token,
+            sp_model_kwargs=self.sp_model_kwargs,
+            **kwargs,
+        )
+
         self._src_lang = src_lang
         self.tgt_lang = tgt_lang
         self.set_src_lang_special_tokens(self._src_lang)
+
+
 
     @property
     def vocab_size(self) -> int:
@@ -350,9 +353,9 @@ class MultilingualDeltaLMTokenizer(DeltaLMTokenizer):
             sp_model_kwargs: Optional[Dict[str, Any]] = None,
             **kwargs
     ) -> None:
-        self.added_tokens_decoder = None
-        self.added_tokens_encoder = None
-        self.additional_special_tokens = None
+        # self.added_tokens_decoder = dict()
+        # self.added_tokens_encoder = dict()
+        # self.additional_special_tokens = dict()
         super(MultilingualDeltaLMTokenizer, self).__init__(vocab_file, src_lang=src_lang, tgt_lang=tgt_lang,eos_token=eos_token,
                                                            sep_token=sep_token,cls_token=cls_token,unk_token=unk_token,pad_token=pad_token,
                                                            mask_token=mask_token, sp_model_kwargs=sp_model_kwargs)
