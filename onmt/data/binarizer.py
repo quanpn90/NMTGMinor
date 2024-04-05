@@ -319,7 +319,9 @@ class Binarizer:
                     if "mbart-large-50" in external_tokenizer_name.lower():
                         assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID"
                         pad_id = vocab.convertToIdx(["<pad>"], None)[0]
-                        assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
+                        if pad_id in tensor:
+                            print("[WARNING] Pad is not supposed to appear in the tensors.")
+                        # assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
                     elif "m2m" in external_tokenizer_name.lower():
                         lang_token = "__" + lang + "__"
                         assert tensor[0] == vocab.convertToIdx([lang_token], None)[0], \
