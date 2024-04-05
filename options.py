@@ -284,6 +284,8 @@ def make_parser(parser):
                         help='Use half precision training')
     parser.add_argument('-bf16', action='store_true',
                         help='Use half precision training')
+    parser.add_argument('-fsdp', action='store_true',
+                        help='Use half precision training')
     parser.add_argument('-seed', default=-1, type=int,
                         help="Seed for deterministic runs.")
 
