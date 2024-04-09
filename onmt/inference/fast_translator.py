@@ -4,7 +4,7 @@ import onmt.modules
 import torch
 import math
 from onmt.model_factory import build_model, optimize_model
-from onmt.inference.search import BeamSearch, Sampling
+from onmt.inference.search import BeamSearch, Sampling, DiverseBeamSearch
 from onmt.inference.translator import Translator
 from onmt.constants import add_tokenidx
 from options import backward_compatible
@@ -22,6 +22,7 @@ class FastTranslator(Translator):
     def __init__(self, opt):
 
         super().__init__(opt)
+        self.bf16 = opt.bf16
 
         self.src_bos = onmt.constants.SRC_BOS
         self.src_eos = onmt.constants.SRC_EOS
@@ -35,6 +36,8 @@ class FastTranslator(Translator):
 
         if opt.sampling:
             self.search = Sampling(self.tgt_dict)
+        elif opt.diverse_beamsearch:
+            self.search = DiverseBeamSearch(self.tgt_dict)
         else:
             self.search = BeamSearch(self.tgt_dict)
 
@@ -157,7 +160,9 @@ class FastTranslator(Translator):
                     #     model.decoder.renew_buffer(self.opt.max_sent_length)
                     model.renew_buffer(self.opt.max_sent_length)
 
-                if opt.fp16:
+                if opt.bf16:
+                    model = model.to(torch.bfloat16)
+                elif opt.fp16:
                     model = model.half()
 
                 if opt.cuda:
@@ -228,7 +233,9 @@ class FastTranslator(Translator):
                 optimize_model(model)
                 model.load_state_dict(checkpoint['model'])
 
-                if opt.fp16:
+                if opt.bf16:
+                    model = model.to(torch.bfloat16)
+                elif opt.fp16:
                     model = model.half()
 
                 if opt.cuda:
@@ -525,6 +532,9 @@ class FastTranslator(Translator):
         reorder_state = None
         batch_idxs = None
 
+        original_batch_idxs: Optional[Tensor] = None
+        original_batch_idxs = torch.arange(0, bsz).type_as(tokens)
+
         # initialize the decoder state, including:
         # - expanding the context over the batch dimension len_src x (B*beam) x H
         # - expanding the mask over the batch dimension    (B*beam) x len_src
@@ -571,6 +581,8 @@ class FastTranslator(Translator):
                     # update beam indices to take into account removed sentences
                     corr = batch_idxs - torch.arange(batch_idxs.numel()).type_as(batch_idxs)
                     reorder_state.view(-1, beam_size).add_(corr.unsqueeze(-1) * beam_size)
+
+                    original_batch_idxs = original_batch_idxs[batch_idxs]
                 for i, model in enumerate(self.models):
                     decoder_states[i]._reorder_incremental_state(reorder_state)
                 for i, model in enumerate(self.sub_models):
@@ -688,6 +700,8 @@ class FastTranslator(Translator):
                 step,
                 lprobs.view(bsz, -1, self.vocab_size),
                 scores.view(bsz, beam_size, -1)[:, :, :step],
+                tokens[:, : step + 1],
+                original_batch_idxs,
             )
 
             # cand_bbsz_idx contains beam indices for the top candidate
@@ -1071,8 +1085,8 @@ class FastTranslator(Translator):
                 batch = dataset.get_batch(0)
                 batches.append(batch)
 
-        # what is this?
-        elif isinstance(src_data[0], list) and isinstance(src_data[0][0], list):
+        # we check if the source data is a list of list (multiple sources for ensembling)
+        elif isinstance(src_data[0], list) and len(src_data[0]) > 0 and isinstance(src_data[0][0], list):
             src_data = src_data[0]
             dataset = self.build_data(src_data, tgt_data, type=type, past_sents=past_src_data, input_size=input_size)
             batch = dataset.get_batch(0)  # this dataset has only one mini-batch
@@ -1095,10 +1109,10 @@ class FastTranslator(Translator):
         batch_size = batches[0].size
         if self.cuda:
             for i, _ in enumerate(batches):
-                batches[i].cuda(fp16=self.fp16)
+                batches[i].cuda(bf16=self.bf16, fp16=self.fp16)
             if sub_batches:
                 for i, _ in enumerate(sub_batches):
-                    sub_batches[i].cuda(fp16=self.fp16)
+                    sub_batches[i].cuda(bf16=self.bf16, fp16=self.fp16)
 
         if prefix is not None and len(prefix)>0 and prefix[0] is not None:
             prefix_tensor = self.build_prefix(prefix, bsz=batch_size)

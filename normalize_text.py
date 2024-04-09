@@ -119,35 +119,49 @@ if __name__ == '__main__':
     input_file = sys.argv[1]
     lang = sys.argv[2]
     num_workers = int(sys.argv[3])
+    cleaning = 0 if len(sys.argv) == 4 else int(sys.argv[4])
 
     if lang == "en":
         normalizer = EnglishTextNormalizer()
     else:
         normalizer = BasicTextNormalizer()
 
-    output_file = input_file + ".norm.clean"
-    writer = open(output_file, 'w')
-
-    org_writer = open(input_file + ".clean", "w")
-
     print("Normalizing file {}".format(input_file))
 
     # problem: still need to write data into RAM
     org_data, normalized_data = Normalizer.normalize_file(input_file, normalizer, num_workers=num_workers)
 
-    print("Done. Now cleaning and writing to {}".format(output_file))
+    if cleaning != 0:
+        output_file = input_file + ".norm.clean"
+        writer = open(output_file, 'w')
+        org_writer = open(input_file + ".clean", "w")
 
-    for org_line, line in zip(org_data, normalized_data):
+        print("Done. Now cleaning and writing to {}".format(output_file))
 
-        org_parts = org_line.split()
-        parts = line.split()
+        for org_line, line in zip(org_data, normalized_data):
 
-        if len(parts) <= 0.7 * len(org_parts):
-            continue
+            org_parts = org_line.split()
+            parts = line.split()
 
-        org_writer.write(org_line + "\n")
-        writer.write(line + "\n")
+            if len(parts) <= 0.7 * len(org_parts):
+                continue
 
-    org_writer.close()
+            org_writer.write(org_line + "\n")
+            writer.write(line + "\n")
+
+        org_writer.close()
+    else:
+        output_file = input_file + ".norm"
+        writer = open(output_file, 'w')
+
+        print("Done. Now writing to {}".format(output_file))
+
+        for line in normalized_data:
+
+            parts = line.split()
+
+            writer.write(line + "\n")
+
+
     writer.close()
     print("Finished.")

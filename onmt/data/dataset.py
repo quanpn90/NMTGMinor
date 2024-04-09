@@ -604,7 +604,7 @@ class Batch(object):
         else:
             return None
 
-    def cuda(self, fp16=False, device=None):
+    def cuda(self, bf16=False, fp16=False, device=None):
         """
         Send the minibatch data into GPU.
         :param device: default = None (default CUDA device)
@@ -619,8 +619,11 @@ class Batch(object):
                         tensor[k] = v.cuda(device=device)
             elif tensor is not None:
                 if isinstance(tensor, torch.Tensor):
-                    if tensor.type() == "torch.FloatTensor" and fp16:
-                        self.tensors[key] = tensor.half()
+                    if tensor.type() == "torch.FloatTensor":
+                        if bf16:
+                            self.tensors[key] = tensor.to(torch.bfloat16)
+                        elif fp16:
+                            self.tensors[key] = tensor.half()
                     self.tensors[key] = self.tensors[key].cuda(device=device)
             else:
                 continue

@@ -100,7 +100,9 @@ class Translator(object):
                 #     model.decoder.renew_buffer(self.opt.max_sent_length)
                 model.renew_buffer(self.opt.max_sent_length)
 
-            if opt.fp16:
+            if opt.bf16:
+                model = model.to(torch.bfloat16)
+            elif opt.fp16:
                 model = model.half()
 
             if opt.cuda:

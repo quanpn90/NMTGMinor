@@ -295,7 +295,7 @@ class DeltaLMDecoderLayer(TransformerDecoderLayerBase):
         if self.normalize_before:
             x = self.ffn_layer_norm(x)
 
-        if self.fused and x.is_cuda:
+        if self.fused and x.is_cuda and self.fc3.weight.dtype != torch.bfloat16:
             dropout_p = self.activation_dropout_module.p if self.training else 0.0
 
             weights = [self.fc3.weight, self.fc4.weight]
@@ -339,7 +339,7 @@ class DeltaLMDecoderLayer(TransformerDecoderLayerBase):
         if self.normalize_before:
             x = self.final_layer_norm(x)
 
-        if self.fused and x.is_cuda:
+        if self.fused and x.is_cuda and self.fc1.weight.dtype != torch.bfloat16:
             dropout_p = self.activation_dropout_module.p if self.training else 0.0
 
             weights = [self.fc1.weight, self.fc2.weight]

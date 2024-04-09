@@ -5,9 +5,12 @@
 # the root directory of this source tree. An additional grant of patent rights
 # can be found in the PATENTS file in the same directory.
 
+import math
 import torch
 import onmt
-
+from typing import List, Optional
+import torch.nn as nn
+from torch import Tensor
 
 class Search(object):
 
@@ -60,46 +63,47 @@ class BeamSearch(Search):
 
     def __init__(self, tgt_dict):
         super().__init__(tgt_dict)
+        self.constraint_states = None
 
-    def step(self, step, lprobs, scores, initial_score=None, **kwargs):
-        super()._init_buffers(lprobs)
-
-        # batch size first, then beam size
+    def step(
+        self,
+        step: int,
+        lprobs,
+        scores: Optional[Tensor],
+        prev_output_tokens: Optional[Tensor] = None,
+        original_batch_idxs: Optional[Tensor] = None,
+        candidate_multiple: int = 2,
+        **kwargs
+    ):
         bsz, beam_size, vocab_size = lprobs.size()
 
         if step == 0:
             # at the first step all hypotheses are equally likely, so use
             # only the first beam
-            if initial_score is None or torch.sum(initial_score).item() == 0:
-                lprobs = lprobs[:, ::beam_size, :].contiguous()
-            else:
-                lprobs.add_(initial_score.unsqueeze(-1))
-            # if we don't do this, the first beam will contain top K of exactly the same thing ...
+            lprobs = lprobs[:, ::beam_size, :].contiguous()
         else:
-
             # make probs contain cumulative scores for each hypothesis
-            lprobs.add_(scores[:, :, step - 1].unsqueeze(-1))
+            assert scores is not None
+            lprobs = lprobs + scores[:, :, step - 1].unsqueeze(-1)
 
-        # here lprobs should be (bsz, beam_size, V) (in streaming, bsz should be 1)
-
-        torch.topk(
-            lprobs.view(bsz, -1),  # after view, it should be (bsz, beam_size x V)
+        top_prediction = torch.topk(
+            lprobs.view(bsz, -1),
             k=min(
-                # Take the best 2 x beam_size predictions. We'll choose the first
+                # Take the best `candidate_muliple`(default 2) x beam_size predictions. We'll choose the first
                 # beam_size of these which don't predict eos to continue with.
-                beam_size * 2,
-                lprobs.view(bsz, -1).size(1) - beam_size,  # -beam_size so we never select pad (beam_size times)
+                candidate_multiple * beam_size,
+                lprobs.view(bsz, -1).size(1) - 1,  # -1 so we never select pad
             ),
-            out=(self.scores_buf.resize_(0), self.indices_buf.resize_(0)),
         )
 
-        # torch.div(self.indices_buf, vocab_size, out=self.beams_buf)
-        # beams_buf helps us know where the origin of each
-        self.beams_buf = torch.true_divide(self.indices_buf, vocab_size).long()
+        scores_buf = top_prediction[0]
+        indices_buf = top_prediction[1]
+        # Project back into relative indices and beams
+        beams_buf = torch.div(indices_buf, vocab_size, rounding_mode="trunc")
+        indices_buf = indices_buf.fmod(vocab_size)
 
-        # indices: the word indices in the vocabulary
-        self.indices_buf.fmod_(vocab_size)
-        return self.scores_buf, self.indices_buf, self.beams_buf
+        # At this point, beams_buf and indices_buf are single-dim and contain relative indices
+        return scores_buf, indices_buf, beams_buf
 
 
 class DiverseBeamSearch(Search):
@@ -112,57 +116,111 @@ class DiverseBeamSearch(Search):
     in the original paper.
     """
 
-    def __init__(self, tgt_dict, num_groups, diversity_strength):
+    def __init__(self, tgt_dict,
+                 num_groups=4,
+                 diversity_strength=0.5,
+                 diversity_discount=1.0,
+                 candidate_multiple=2):
         super().__init__(tgt_dict)
         self.num_groups = num_groups
         self.diversity_strength = -diversity_strength
-        self.diversity_buf = None
         self.beam = BeamSearch(tgt_dict)
+        self.diversity_discount = diversity_discount
+        self.candidate_multiple = candidate_multiple
 
-    def step(self, step, lprobs, scores):
-        super()._init_buffers(lprobs)
+        # Float tensor to keep track of overlap between groups.
+        # Each token shared at the same step between two groups is counted as one.
+        # Then token counts are discounted by `diversity_discount` for every next timestep.
+        # Once initialized, dimension is batch_size * num_groups * num_groups.
+        self.group_overlap = torch.empty(0)
+
+    def step(
+            self,
+            step: int,
+            lprobs,
+            scores,
+            prev_output_tokens: Optional[Tensor] = None,
+            original_batch_idxs: Optional[Tensor] = None,
+    ):
+
         bsz, beam_size, vocab_size = lprobs.size()
-        if beam_size % self.num_groups != 0:
+        num_groups = self.num_groups if self.num_groups > 0 else beam_size
+        if beam_size % num_groups != 0:
             raise ValueError(
-                'DiverseBeamSearch requires --beam to be divisible by the number of groups'
+                "DiverseBeamSearch requires --beam to be divisible by the number of groups"
             )
-        group_size = beam_size // self.num_groups
 
         # initialize diversity penalty
-        if self.diversity_buf is None:
-            self.diversity_buf = lprobs.new()
-        torch.zeros(lprobs[:, 0, :].size(), out=self.diversity_buf)
+        diversity_buf = torch.zeros(lprobs[:, 0, :].size()).to(lprobs)
 
-        scores_G, indices_G, beams_G = [], [], []
-        for g in range(self.num_groups):
-            lprobs_g = lprobs[:, g::self.num_groups, :]
-            scores_g = scores[:, g::self.num_groups, :] if step > 0 else None
+        scores_G, beams_G = [], []
 
+        # pre-allocating tensor for indices for all groups
+        indices_G_stacked = torch.empty(
+            bsz,
+            int(beam_size / num_groups) * self.candidate_multiple,
+            num_groups,
+            dtype=torch.long,
+            device=lprobs.device,
+        )
+
+        for g in range(num_groups):
+            lprobs_g = lprobs[:, g:: num_groups, :]
+            scores_g = scores[:, g:: num_groups, :] if step > 0 else None
+
+            diversity_buf.zero_()
             # apply diversity penalty
             if g > 0:
-                lprobs_g = torch.add(lprobs_g, self.diversity_strength, self.diversity_buf.unsqueeze(1))
+                indices_ = indices_G_stacked[:, :, :g]
+                if step > 0:
+                    penalty_val = 1 + self.group_overlap[original_batch_idxs, g, :g]
+                    penalty_val = penalty_val.unsqueeze(1)
+                else:
+                    penalty_val = torch.ones(bsz, 1, 1)
+                diversity_buf.scatter_add_(
+                    1,
+                    indices_.reshape(bsz, -1),
+                    penalty_val.expand(indices_.size())
+                    .reshape(bsz, -1)
+                    .to(diversity_buf),
+                )
+
+                lprobs_g = torch.add(
+                    lprobs_g,
+                    other=diversity_buf.unsqueeze(1),
+                    alpha=self.diversity_strength,
+                )
             else:
                 lprobs_g = lprobs_g.contiguous()
 
-            scores_buf, indices_buf, beams_buf = self.beam.step(step, lprobs_g, scores_g)
-            beams_buf.mul_(self.num_groups).add_(g)
+            scores_buf, indices_buf, beams_buf = self.beam.step(
+                step, lprobs_g, scores_g, candidate_multiple=self.candidate_multiple
+            )
+            beams_buf.mul_(num_groups).add_(g)
 
             scores_G.append(scores_buf.clone())
-            indices_G.append(indices_buf.clone())
             beams_G.append(beams_buf.clone())
 
-            # update diversity penalty
-            self.diversity_buf.scatter_add_(
-                1,
-                indices_buf,
-                self.diversity_buf.new_ones(indices_buf.size())
-            )
+            indices_G_stacked[:, :, g] = indices_buf
 
         # interleave results from different groups
-        self.scores_buf = torch.stack(scores_G, dim=2, out=self.scores_buf).view(bsz, -1)
-        self.indices_buf = torch.stack(indices_G, dim=2, out=self.indices_buf).view(bsz, -1)
-        self.beams_buf = torch.stack(beams_G, dim=2, out=self.beams_buf).view(bsz, -1)
-        return self.scores_buf, self.indices_buf, self.beams_buf
+        scores_buf = torch.stack(scores_G, dim=2).view(bsz, -1)
+        indices_buf = indices_G_stacked.view(bsz, -1)
+        beams_buf = torch.stack(beams_G, dim=2).view(bsz, -1)
+        # find num of overlapped tokens for each group pair
+        # then discount it for next timestamp
+        overlap = self.diversity_discount * torch.sum(
+            indices_G_stacked.unsqueeze(2).eq(indices_G_stacked.unsqueeze(3)), dim=1
+        )
+        if step == 0:
+            self.group_overlap = overlap
+        else:
+            self.group_overlap[original_batch_idxs] = (
+                    self.group_overlap[original_batch_idxs] * self.diversity_discount
+                    + overlap
+            )
+
+        return scores_buf, indices_buf, beams_buf
 
 
 class Sampling(Search):
