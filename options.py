@@ -276,7 +276,8 @@ def make_parser(parser):
                         help='To use batch ensemble algorithm')
     parser.add_argument('-save_metrics', default='ppl',
                         help="Type of update rule to use. Options are [perplexity|ppl|accuracy|acc].")
-
+    parser.add_argument('-no_decoder', action="store_true",
+                        help="""Use Favor+ Attention for faster self-attention""")
     # GPU
     parser.add_argument('-gpus', default=[], nargs='+', type=int,
                         help="Use CUDA on the listed devices.")
@@ -612,6 +613,9 @@ def backward_compatible(opt):
     # FOR BACKWARD COMPATIBILITY
     if not hasattr(opt, 'num_mel_bin'):
         opt.num_mel_bin = 0
+
+    if not hasattr(opt, 'no_decoder'):
+        opt.no_decoder = False
 
     if not hasattr(opt, 'ctc_compress'):
         opt.ctc_compress = "None"

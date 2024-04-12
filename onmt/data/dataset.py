@@ -935,9 +935,10 @@ class Dataset(torch.utils.data.Dataset):
             for _sample_id in batch:
                 self.filtered_samples.append(_sample_id)
 
-        print("Number of sentences before cleaning and sorting: %d" % len(src_sizes) )
-        print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
-        print("Number of batches after cleaning and sorting: %d" % self.num_batches)
+        if verbose:
+            print("Number of sentences before cleaning and sorting: %d" % len(src_sizes) )
+            print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
+            print("Number of batches after cleaning and sorting: %d" % self.num_batches)
 
         self.cur_index = 0
         self.batchOrder = None
