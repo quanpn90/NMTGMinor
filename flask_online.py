@@ -14,11 +14,12 @@ import subprocess
 
 host = sys.argv[1]  # 192.168.0.72
 port = sys.argv[2]  # 5051
-if len(sys.argv)<=3:
+if len(sys.argv) <= 3:
     filename = "model.conf"
 else:
     filename = sys.argv[3]
 
+# what is going on here?
 conf_data = open(filename,"r").read().split("\n")
 model = None
 for d in conf_data:
@@ -64,6 +65,8 @@ def use_model(reqs):
 
         for req in reqs:
             audio_tensor, prefix, input_language, output_language, memory = req.get_data()
+
+            # TODO: set language with a language code plz
             model.set_language(input_language, output_language)
             audio_tensors.append(audio_tensor)
             prefixes.append(prefix)
@@ -202,4 +205,5 @@ decoding = threading.Thread(target=run_decoding)
 decoding.daemon = True
 decoding.start()
 
+host = "0.0.0.0"
 app.run(host=host, port=port)

@@ -1,3 +1,4 @@
+import os
 import onmt
 import onmt.modules
 from collections import defaultdict
@@ -8,6 +9,8 @@ except ImportError:
     MosesDetokenizer = None
     MosesTokenizer = None
 import torch
+
+from onmt.data.audio_utils import safe_readaudio, wav_to_fmel
 
 class TranslatorParameter(object):
 
@@ -34,6 +37,7 @@ class TranslatorParameter(object):
         self.alpha = 0.0
         self.start_with_bos = False
         self.fp16 = False
+        self.bf16 = False
         self.ensemble_op = 'mean'
         self.autoencoder = None
         self.encoder_type = 'text'
@@ -64,6 +68,8 @@ class TranslatorParameter(object):
         self.use_tgt_lang_as_source = False
         self.anti_prefix = ""
 
+        self.num_mel_bin = 0
+
         self.read_file(filename)
 
 
@@ -92,6 +98,8 @@ class TranslatorParameter(object):
                 self.dynamic_quantile = int(w[1])
             elif w[0] == "fp16":
                 self.fp16 = True
+            elif w[0] == "bf16":
+                self.fp16 = True
             elif w[0] == "gpu":
                 self.gpu = int(w[1])
                 self.cuda = True
@@ -111,6 +119,8 @@ class TranslatorParameter(object):
                 self.min_sent_length = int(w[1])
             elif w[0] == "anti_prefix":
                 self.anti_prefix = w[1]
+            elif w[0] == "num_mel_bin":
+                self.num_mel_bin = int(w[1])
 
             line = f.readline()
 
@@ -322,6 +332,9 @@ class ASROnlineTranslator(object):
         self.tgt_lang = "en"
         self.detokenize = opt.detokenize
         self.anti_prefix = opt.anti_prefix
+        self.num_mel_bin = opt.num_mel_bin
+
+        print(self.num_mel_bin)
 
     def set_language(self, input_language, output_language, language_code_system="mbart50"):
 
@@ -332,13 +345,46 @@ class ASROnlineTranslator(object):
         else:
             language_map_dict = defaultdict(lambda self, missing_key: missing_key)
 
-        input_lang = language_map_dict[input_language]
-        output_lang = language_map_dict[output_language]
+        # TODO:
 
-        self.translator.change_language(new_src_lang=input_lang, new_tgt_lang=output_lang)
+        output_languages = output_language.split("+")
+        input_languages = input_language.split("+")
 
-        self.src_lang = input_language
-        self.tgt_lang = output_language
+        if len(output_languages) == 1 and len(input_languages) == 1:
+            input_lang = language_map_dict[input_language]
+            output_lang = language_map_dict[output_language]
+
+            self.translator.change_language(new_src_lang=input_lang, new_tgt_lang=output_lang)
+
+            self.src_lang = input_language
+            self.tgt_lang = output_language
+
+        else:
+            # here we have to handle multiple languages
+
+            # TODO: should we set <s> or lang_map_dict["None"]
+            input_lang = "<s>"
+            output_lang = "<s>"
+
+            self.translator.change_language(new_src_lang=input_lang, new_tgt_lang=output_lang)
+
+            self.src_lang = input_language
+            self.tgt_lang = output_language
+
+            # but also we need to set the vocab ids restriction here ... based on some kind of list
+            vocab_id_files = list()
+
+            for _lang in output_languages:
+                _lang_mapped = language_map_dict[_lang]
+                vocab_id_file = os.path.join("vocabs", "%s.vocabids" % _lang_mapped)
+
+                if os.path.exists(vocab_id_file):
+                    vocab_id_files.append(vocab_id_file)
+
+            print(vocab_id_files)
+
+            self.translator.set_filter(vocab_id_files)
+
 
     def translate(self, input, prefix, memory=None):
         """
@@ -363,11 +409,12 @@ class ASROnlineTranslator(object):
             prefix = prefixes
 
         # 2 lists because the translator is designed to run with 1 audio and potentially 1 text
+        if self.num_mel_bin > 1:
+            input = wav_to_fmel(input, num_mel_bin=self.num_mel_bin)
         src_batches = [[input]]  # ... about the input
 
         tgt_batch = []
-        sub_src_batch = []
-        past_src_batches = []
+
 
         anti_prefix = self.anti_prefix if len(self.anti_prefix) > 0 else None
 
@@ -387,7 +434,7 @@ class ASROnlineTranslator(object):
         pred_batch, pred_ids, pred_score, pred_pos_scores,  pred_length, \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch, type='asr',
-            prefix=prefix, anti_prefix=anti_prefix, memory=memory)
+            prefix=prefix, anti_prefix=anti_prefix, memory=memory, input_size=self.num_mel_bin)
 
         output_sentence = get_sentence_from_tokens(pred_batch[0][0], pred_ids[0][0], "word", external_tokenizer)
 
@@ -428,6 +475,8 @@ class ASROnlineTranslator(object):
             prefixes = new_prefixes
 
         # 2 list because the translator is designed to run with 1 audio and potentially 1 text
+        if self.num_mel_bin > 0:
+            inputs = [wav_to_fmel(input, num_mel_bin=self.num_mel_bin) for input in inputs]
         src_batches = [inputs]  # ... about the input
 
         tgt_batch = []
@@ -444,7 +493,7 @@ class ASROnlineTranslator(object):
         pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length,  \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch, type='asr',
-            prefix=prefixes, anti_prefix=anti_prefix)
+            prefix=prefixes, anti_prefix=anti_prefix, input_size=self.num_mel_bin)
 
         external_tokenizer = self.translator.external_tokenizer
 

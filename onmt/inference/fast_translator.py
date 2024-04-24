@@ -69,6 +69,7 @@ class FastTranslator(Translator):
 
             print('* Using fast beam search implementation')
 
+        self.current_vocab_id_list = None
         if opt.vocab_list:
             print("[INFO] reading the list of words from %s" % opt.vocab_list)
             word_list = list()
@@ -94,7 +95,9 @@ class FastTranslator(Translator):
                 self.filter = self.filter.cuda()
 
             self.use_filter = True
+
         elif opt.vocab_id_list:
+            self.current_vocab_id_list = [opt.vocab_id_list]
             ids = torch.load(opt.vocab_id_list)
 
             print('[INFO] Loaded word list with %d ids' % len(ids))
@@ -321,6 +324,32 @@ class FastTranslator(Translator):
         self.external_tokenizer.src_lang = self.src_lang
         self.tgt_external_tokenizer.src_lang = self.tgt_lang
 
+    # this function is used for online translation, where the language
+    def set_filter(self, file_list):
+
+        from collections import Counter
+        if Counter(self.current_vocab_id_list) == Counter(file_list):
+            return
+
+        self.current_vocab_id_list = file_list
+        print("[INFO] reading vocab filter from %s", file_list)
+        self.filter = torch.Tensor(self.tgt_dict.size()).zero_()
+
+        for _vocab_id_list in file_list:
+            ids = torch.load(_vocab_id_list)
+
+            print('[INFO] Loaded word list with %d ids' % len(ids))
+
+            for id in ids:
+                self.filter[id] = 1
+
+        self.filter = self.filter.bool()
+        if self.opt.cuda:
+            self.filter = self.filter.cuda()
+
+        self.use_filter = True
+
+    # TODO: function incompleted
     def predict_language(self, batches):
 
         model = self.models[0]
@@ -1067,7 +1096,8 @@ class FastTranslator(Translator):
                     past_src_data_ = past_src_data[i]
                 else:
                     past_src_data_ = None
-                dataset = self.build_data(src_data_, tgt_data, type=type, past_sents=past_src_data_, input_size=input_size)
+                dataset = self.build_data(src_data_, tgt_data, type=type, past_sents=past_src_data_,
+                                          input_size=input_size)
                 batch = dataset.get_batch(0)
                 batches.append(batch)
 

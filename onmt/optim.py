@@ -3,13 +3,14 @@ import torch
 import torch.optim as optim
 from torch.optim.optimizer import Optimizer
 
+# Why do I need these wrappers? for fake step (in computing gradients of something?)
 class AdamWrapper(optim.Adam):
 
     def step(self, closure=None, fake=False):
 
         if fake:
             return
-        
+
         else:
             super(AdamWrapper, self).step(closure=closure)
 
@@ -292,7 +293,6 @@ def clip_grad_norm(parameters, max_norm, norm_type=2):
 
 class Optim(object):
 
-
     def set_parameters(self, params):
 
         # params_ = filter(lambda p: p.requires_grad, params)
@@ -323,19 +323,19 @@ class Optim(object):
             if not self.zeror:
                 if self.weight_decay > 0:
                     self.optimizer = AdamWWrapper(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-                                                 weight_decay=self.weight_decay, amsgrad=self.amsgrad)
+                                                  weight_decay=self.weight_decay, amsgrad=self.amsgrad)
                 else:
                     self.optimizer = AdamWrapper(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-                                                weight_decay=0.0, amsgrad=self.amsgrad)
+                                                 weight_decay=0.0, amsgrad=self.amsgrad)
             else:
                 from torch.distributed.optim import ZeroRedundancyOptimizer
                 optimizer = ZeroRedundancyOptimizer(
-                                self.params,
-                                optimizer_class=optim.AdamW if self.weight_decay > 0 else optim.Adam,
-                                lr=1e-5,
-                                betas=(self.beta1, self.beta2), eps=1e-9,
-                                weight_decay=self.weight_decay
-                            )
+                    self.params,
+                    optimizer_class=optim.AdamW if self.weight_decay > 0 else optim.Adam,
+                    lr=1e-5,
+                    betas=(self.beta1, self.beta2), eps=1e-9,
+                    weight_decay=self.weight_decay
+                )
                 self.optimizer = optimizer
 
         # elif self.method == 'adafactor':
@@ -449,7 +449,7 @@ class Optim(object):
         if not overflow:
             self._step += 1
             if 'noam' in self.update_method or 'cosine' in self.update_method:
-                    self.update_learning_rate()
+                self.update_learning_rate()
 
         if scaler is not None:
             result = scaler.step(self.optimizer)
@@ -459,6 +459,7 @@ class Optim(object):
         # return grad_norm
 
     """Reset the denom for normalization"""
+
     def normalize_grad(self, denom=None):
 
         if denom is None:

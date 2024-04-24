@@ -609,6 +609,9 @@ def backward_compatible(opt):
     if not hasattr(opt, 'num_mel_bin'):
         opt.num_mel_bin = 0
 
+    if not hasattr(opt, 'no_decoder'):
+        opt.no_decoder = False
+
     if not hasattr(opt, 'ctc_compress'):
         opt.ctc_compress = "None"
 

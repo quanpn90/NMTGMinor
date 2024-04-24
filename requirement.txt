@@ -2,9 +2,11 @@ dill
 kaldiio
 soundfile
 tqdm
-transformers==4.4.2
+transformers
 einops
 omegaconf
 iopath
 sacrebleu
 overrides
+sentencepiece
+protobuf
