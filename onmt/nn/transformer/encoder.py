@@ -332,7 +332,7 @@ class TransformerEncoder(Module, ABC):
 
     @abstractmethod
     def forward(
-            self, seqs: Tensor, padding_mask=None, self_attn_mask=None
+            self, seqs: Tensor, padding_mask=None, self_attn_mask=None, layer=-1
     ):
         """
         :param seqs:
@@ -345,6 +345,9 @@ class TransformerEncoder(Module, ABC):
 
         :param self_attn_mask:
             Specific mask for self-attention, for example causal or pattern-ed attention
+
+        :param layer:
+            Specific output at the this layer, ignore the final layer norm
 
         :returns:
             - The encoder output. *Shape:* Same as ``seqs``.
@@ -417,12 +420,9 @@ class StandardTransformerEncoder(TransformerEncoder):
 
     @finaloverride
     def forward(
-            self, seqs: Tensor, padding_mask=None, self_attn_mask=None,
+            self, seqs: Tensor, padding_mask=None, self_attn_mask=None, layer=-1
     ):
-        # if self._layer_output_hooks and self.layers.drop_p > 0.0:
-        #     raise RuntimeError(
-        #         "The layer output hooks cannot be run when LayerDrop is enabled."
-        #     )
+
         if self.frontend is not None:
             seqs, padding_mask = self.frontend(seqs, padding_mask)
 
@@ -436,9 +436,11 @@ class StandardTransformerEncoder(TransformerEncoder):
         #     )
         self_attn_mask = self_attn_mask
 
-        for layer_idx, layer in enumerate(self.layers.drop_iter()):
-            seqs, padding_mask = layer(seqs, padding_mask, self_attn_mask)
+        for layer_idx, layer_module in enumerate(self.layers.drop_iter()):
+            seqs, padding_mask = layer_module(seqs, padding_mask, self_attn_mask)
 
+            if layer_idx == layer:
+                return seqs, padding_mask
             # for hook in self._layer_output_hooks.values():
             #     if not hook(layer_idx, seqs, padding_mask, num_layers):
             #         break

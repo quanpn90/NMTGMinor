@@ -67,6 +67,7 @@ class TranslatorParameter(object):
         self.force_bos = False
         self.use_tgt_lang_as_source = False
         self.anti_prefix = ""
+        self.min_filter = 0
 
         self.num_mel_bin = 0
 
@@ -121,6 +122,8 @@ class TranslatorParameter(object):
                 self.anti_prefix = w[1]
             elif w[0] == "num_mel_bin":
                 self.num_mel_bin = int(w[1])
+            elif w[0] == "min_filter":
+                self.min_filter = int(w[1])
 
             line = f.readline()
 
@@ -333,6 +336,7 @@ class ASROnlineTranslator(object):
         self.detokenize = opt.detokenize
         self.anti_prefix = opt.anti_prefix
         self.num_mel_bin = opt.num_mel_bin
+        self.min_filter = opt.min_filter
 
         print(self.num_mel_bin)
 
@@ -340,7 +344,8 @@ class ASROnlineTranslator(object):
 
         if language_code_system == "mbart50":
             language_map_dict = {"en": "en_XX", "de": "de_DE", "fr": "fr_XX", "es": "es_XX",
-                                 "pt": "pt_XX", "it": "it_IT", "nl": "nl_XX", "None": "<s>"}
+                                 "pt": "pt_XX", "it": "it_IT", "nl": "nl_XX", "None": "<s>",
+                                 "zh": "zh_CN", "ja": "ja_XX", "uk": "uk_UA"}
 
         else:
             language_map_dict = defaultdict(lambda self, missing_key: missing_key)
@@ -358,6 +363,8 @@ class ASROnlineTranslator(object):
 
             self.src_lang = input_language
             self.tgt_lang = output_language
+
+            self.translator.set_filter([])
 
         else:
             # here we have to handle multiple languages
@@ -383,7 +390,7 @@ class ASROnlineTranslator(object):
 
             print(vocab_id_files)
 
-            self.translator.set_filter(vocab_id_files)
+            self.translator.set_filter(vocab_id_files, min_occurance=self.min_filter)
 
 
     def translate(self, input, prefix, memory=None):

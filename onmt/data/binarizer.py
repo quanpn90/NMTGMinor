@@ -320,6 +320,16 @@ class Binarizer:
                         assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID"
                         pad_id = vocab.convertToIdx(["<pad>"], None)[0]
                         assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
+
+                    elif "mbart50pre" in external_tokenizer_name.lower():
+                        assert tensor[0] == vocab.convertToIdx([lang], None)[0], "The first token must be language ID"
+                        pad_id = vocab.convertToIdx(["<pad>"], None)[0]
+                        assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
+
+                        bos_id = vocab.convertToIdx(["<s>"], None)[0].item()
+
+                        tensor = [bos_id] + tensor
+
                     elif "m2m" in external_tokenizer_name.lower():
                         lang_token = "__" + lang + "__"
                         assert tensor[0] == vocab.convertToIdx([lang_token], None)[0], \
@@ -337,6 +347,8 @@ class Binarizer:
                         if target and tensor[0] != tensor[-1]:
                             # for the target side and in the multilingual case it is <eos> <langid> X <eos>
                             tensor = [tensor[-1]] + tensor
+
+
 
                     elif "mbart50eu" in external_tokenizer_name.lower():
                         if len(tensor) > 2:
@@ -413,6 +425,25 @@ class Binarizer:
             ext_tokenizer.src_lang = lang
             if ext_tokenizer.src_lang != lang:
                 raise RuntimeError("The language %s does not exist in M2M100." % lang)
+
+        elif "mbart50pre" in external_tokenizer.lower():
+
+            from transformers import MBart50TokenizerFast
+            try:  # check if this tokenizer is saved locally or not
+                print("Looking for pre-downloaded tokenizer ...")
+                ext_tokenizer = torch.load("mbart-large-50.tokenizer.pt")
+                ext_tokenizer.src_lang = lang
+                if ext_tokenizer.src_lang != lang:
+                    raise RuntimeError("The language %s does not exist in mBART50." % lang)
+            except FileNotFoundError as e:
+                print("Expected error: ", e, "Downloading tokenizer ...")
+                ext_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50")
+                ext_tokenizer.src_lang = lang
+                # ext_tokenizer.src_lang = lang
+                if ext_tokenizer.src_lang != lang:
+                    raise RuntimeError("The language %s does not exist in mBART50." % lang)
+                torch.save(ext_tokenizer, "mbart-large-50.tokenizer.pt")
+
 
         elif "mbart50eu" in external_tokenizer.lower():
 

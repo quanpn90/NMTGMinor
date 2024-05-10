@@ -121,18 +121,24 @@ class Wav2Vec2Model(Module):
 
     # TODO: change batch into ... meaningful inputs?
     # def forward(self, batch: SequenceBatch) -> Wav2Vec2Output:
-    def forward(self, audio_input, padding_mask):
+    def forward(self, audio_input, padding_mask, layer=-1):
         """
-        :param batch:
-            The batch of sequences to process.
+        Args:
+            audio_input: Tensor with size (B x T x feat)
+            padding_mask: Tensor with size (B x T)
+            layer: if positive, we take the feature of that layer (ignore the final layer norm)
+
+        Returns:
+
         """
         # seqs, padding_mask, targets, temporal_mask = self.run_frontend(
         #     audio_input, padding_mask
         # )
+        # print(audio_input.size())
         seqs, padding_mask = self.encoder_frontend(audio_input, padding_mask)
 
         # TODO: Should pad for fp16?
-        seqs, padding_mask = self.encoder(seqs, padding_mask)
+        seqs, padding_mask = self.encoder(seqs, padding_mask, layer=layer)
 
         return seqs, padding_mask
 

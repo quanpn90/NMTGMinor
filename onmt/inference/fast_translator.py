@@ -325,7 +325,7 @@ class FastTranslator(Translator):
         self.tgt_external_tokenizer.src_lang = self.tgt_lang
 
     # this function is used for online translation, where the language
-    def set_filter(self, file_list):
+    def set_filter(self, file_list, min_occurance=1):
 
         from collections import Counter
         if Counter(self.current_vocab_id_list) == Counter(file_list):
@@ -335,19 +335,27 @@ class FastTranslator(Translator):
         print("[INFO] reading vocab filter from %s", file_list)
         self.filter = torch.Tensor(self.tgt_dict.size()).zero_()
 
-        for _vocab_id_list in file_list:
-            ids = torch.load(_vocab_id_list)
+        if len(file_list) == 0:
+            self.filter.fill_(1)
+            self.use_filter = False
 
-            print('[INFO] Loaded word list with %d ids' % len(ids))
+        else:
+            self.use_filter = True
+            for _vocab_id_list in file_list:
+                vocab_ids = torch.load(_vocab_id_list)
 
-            for id in ids:
-                self.filter[id] = 1
+                print('[INFO] Loaded word list with %d ids' % len(vocab_ids))
+
+                for id in vocab_ids:
+
+                    # it records the number of occurance in the training data
+                    if vocab_ids[id] >= min_occurance:
+
+                        self.filter[id] = 1
 
         self.filter = self.filter.bool()
         if self.opt.cuda:
             self.filter = self.filter.cuda()
-
-        self.use_filter = True
 
     # TODO: function incompleted
     def predict_language(self, batches):
@@ -617,7 +625,11 @@ class FastTranslator(Translator):
 
             if self.use_filter:
                 # the marked words are 1, so fill the reverse to inf
-                lprobs.masked_fill_(~self.filter.unsqueeze(0), -math.inf)
+
+                _mask = 1 - self.filter.int()
+                n_tokens_masked = _mask.sum().item()
+                print("number of masked tokens: ", n_tokens_masked)
+                lprobs.masked_fill_(_mask.bool().unsqueeze(0), -math.inf)
             lprobs[:, self.tgt_pad] = -math.inf  # never select pad
 
             # handle min and max length constraints
