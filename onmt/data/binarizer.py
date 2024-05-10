@@ -330,6 +330,10 @@ class Binarizer:
 
                         tensor = [bos_id] + tensor
 
+                        if pad_id in tensor:
+                            print("[WARNING] Pad is not supposed to appear in the tensors.")
+                        # assert pad_id not in tensor, "Pad is not supposed to appear in the tensors."
+
                     elif "m2m" in external_tokenizer_name.lower():
                         lang_token = "__" + lang + "__"
                         assert tensor[0] == vocab.convertToIdx([lang_token], None)[0], \
@@ -347,8 +351,6 @@ class Binarizer:
                         if target and tensor[0] != tensor[-1]:
                             # for the target side and in the multilingual case it is <eos> <langid> X <eos>
                             tensor = [tensor[-1]] + tensor
-
-
 
                     elif "mbart50eu" in external_tokenizer_name.lower():
                         if len(tensor) > 2:

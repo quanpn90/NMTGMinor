@@ -604,7 +604,7 @@ class Batch(object):
         else:
             return None
 
-    def cuda(self, fp16=False, device=None):
+    def cuda(self, bf16=False, fp16=False, device=None):
         """
         Send the minibatch data into GPU.
         :param device: default = None (default CUDA device)
@@ -619,8 +619,11 @@ class Batch(object):
                         tensor[k] = v.cuda(device=device)
             elif tensor is not None:
                 if isinstance(tensor, torch.Tensor):
-                    if tensor.type() == "torch.FloatTensor" and fp16:
-                        self.tensors[key] = tensor.half()
+                    if tensor.type() == "torch.FloatTensor":
+                        if bf16:
+                            self.tensors[key] = tensor.to(torch.bfloat16)
+                        elif fp16:
+                            self.tensors[key] = tensor.half()
                     self.tensors[key] = self.tensors[key].cuda(device=device)
             else:
                 continue
@@ -932,9 +935,10 @@ class Dataset(torch.utils.data.Dataset):
             for _sample_id in batch:
                 self.filtered_samples.append(_sample_id)
 
-        print("Number of sentences before cleaning and sorting: %d" % len(src_sizes) )
-        print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
-        print("Number of batches after cleaning and sorting: %d" % self.num_batches)
+        if verbose:
+            print("Number of sentences before cleaning and sorting: %d" % len(src_sizes) )
+            print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
+            print("Number of batches after cleaning and sorting: %d" % self.num_batches)
 
         self.cur_index = 0
         self.batchOrder = None

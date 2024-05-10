@@ -105,6 +105,8 @@ parser.add_argument('-start_with_bos', action="store_true",
 #                     tokens. See README.md for the format of this file.""")
 parser.add_argument('-verbose', action="store_true",
                     help='Print scores and predictions for each sentence')
+parser.add_argument('-diverse_beamsearch', action="store_true",
+                    help='Using multinomial sampling instead of beam search')
 parser.add_argument('-sampling', action="store_true",
                     help='Using multinomial sampling instead of beam search')
 parser.add_argument('-dump_beam', type=str, default="",
@@ -134,6 +136,8 @@ parser.add_argument('-no_buffering', action='store_true',
 parser.add_argument('-src_align_right', action='store_true',
                     help='To normalize the scores based on output length')
 parser.add_argument('-fp16', action='store_true',
+                    help='To use floating point 16 in decoding')
+parser.add_argument('-bf16', action='store_true',
                     help='To use floating point 16 in decoding')
 parser.add_argument('-dynamic_quantile', type=int, default=0,
                     help='To use int8 in decoding (for linear and LSTM layers only).')
@@ -457,8 +461,8 @@ def main():
         # catch the last batch
         if len(src_batches[0]) != 0:
             print("Batch size:", len(src_batches[0]), len(tgt_batch), len(sub_src_batch))
-            pred_batch, pred_ids, pred_score, pred_length, \
-            gold_score, num_gold_words, all_gold_scores = translator.translate(
+            pred_score, pred_pos_scores, pred_length, gold_score, \
+                num_gold_words, all_gold_scores = translator.translate(
                 src_batches,
                 tgt_batch,
                 past_src_data=past_src_batches,
@@ -707,7 +711,7 @@ def main():
             count, pred_score, pred_words, gold_score, goldWords = get_final_result(opt, tgtF, count, outF, translator,
                                                                                    src_batch, tgt_batch,
                                                                                    pred_batch, pred_ids,
-                                                                                   pred_score, pred_length,
+                                                                                   pred_score, pred_pos_scores, pred_length,
                                                                                    gold_score, num_gold_words,
                                                                                    all_gold_scores, opt.input_type,
                                                                                    external_tokenizer=external_tokenizer)

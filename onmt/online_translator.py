@@ -341,6 +341,8 @@ class ASROnlineTranslator(object):
         print(self.num_mel_bin)
 
     def set_language(self, input_language, output_language, language_code_system="mbart50"):
+        # TODO: check if the output language takes the form of "en+de"
+        # TODO: in that case, we don't change language but rather use "<s>" and set the vocabulary limit
 
         if language_code_system == "mbart50":
             language_map_dict = {"en": "en_XX", "de": "de_DE", "fr": "fr_XX", "es": "es_XX",

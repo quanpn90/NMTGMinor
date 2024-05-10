@@ -276,11 +276,16 @@ def make_parser(parser):
                         help='To use batch ensemble algorithm')
     parser.add_argument('-save_metrics', default='ppl',
                         help="Type of update rule to use. Options are [perplexity|ppl|accuracy|acc].")
-
+    parser.add_argument('-no_decoder', action="store_true",
+                        help="""Use Favor+ Attention for faster self-attention""")
     # GPU
     parser.add_argument('-gpus', default=[], nargs='+', type=int,
                         help="Use CUDA on the listed devices.")
     parser.add_argument('-fp16', action='store_true',
+                        help='Use half precision training')
+    parser.add_argument('-bf16', action='store_true',
+                        help='Use half precision training')
+    parser.add_argument('-fsdp', action='store_true',
                         help='Use half precision training')
     parser.add_argument('-seed', default=-1, type=int,
                         help="Seed for deterministic runs.")

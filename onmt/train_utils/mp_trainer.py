@@ -292,7 +292,8 @@ class Trainer(object):
 
 
         self.bf16_ready = (
-                torch.version.cuda
+                opt.bf16
+                and torch.version.cuda
                 and torch.cuda.is_bf16_supported()
                 and LooseVersion(torch.version.cuda) >= "11.0"
                 and dist.is_nccl_available()
