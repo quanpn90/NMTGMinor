@@ -10,117 +10,10 @@ import tqdm
 import torchaudio
 import gc
 import os
+import torch.multiprocessing as mp
 
 from onmt.data.audio_utils import safe_readaudio, wav_to_fmel
 
-
-
-class FeatureReader:
-    """
-    Wrapper class to run inference on HuBERT model.
-    Helps extract features for a given audio file.
-    """
-
-    def __init__(self, checkpoint_path, layer, max_chunk=1600000, use_cuda=True, fp16=False, bf16=False,
-                 model_path="w2vbert-conformer_shaw.pt", sample_rate=16000):
-
-        # first we have to load the model
-        # lets try to load the wav2vec-bert model
-        # (
-        #     model,
-        #     cfg,
-        #     task,
-        # ) = fairseq.checkpoint_utils.load_model_ensemble_and_task(
-        #     [checkpoint_path]
-        # )
-
-        from onmt.models.speech_recognizer.w2v_bert.config import conformer_shaw_600m
-        from onmt.models.speech_recognizer.w2v_bert.builder import create_conformer_shaw_model
-        config = conformer_shaw_600m()
-
-        self.model = create_conformer_shaw_model(config)
-
-        if len(model_path) > 0:
-            cpt = torch.load(model_path, map_location=torch.device('cpu'))
-            weights = cpt['model']
-            print("[INFO] Loaded pretrained-w2vbert model")
-            self.model.load_state_dict(weights)
-
-        self.model.eval()
-        self.layer = layer
-        self.max_chunk = max_chunk
-        self.use_cuda = use_cuda
-        if self.use_cuda:
-            self.model.cuda()
-
-        self.fp16 = fp16
-        self.bf16 = bf16
-
-        self.sample_rate = sample_rate
-
-    def read_audio(self, path, ref_len=None, channel_id=None):
-        # wav, sr = sf.read(path)
-        # if channel_id is not None:
-        #     assert wav.ndim == 2, \
-        #         f"Expected stereo input when channel_id is given ({path})"
-        #     assert channel_id in [1, 2], \
-        #         "channel_id is expected to be in [1, 2]"
-        #     wav = wav[:, channel_id-1]
-        # if wav.ndim == 2:
-        #     wav = wav.mean(-1)
-        # assert wav.ndim == 1, wav.ndim
-        # assert sr == self.sample_rate, sr
-        # if ref_len is not None and abs(ref_len - len(wav)) > 160:
-        #     print(f"ref {ref_len} != read {len(wav)} ({path})")
-
-        # wav = torchaudio.load(path)
-        wav = safe_readaudio(path)
-        # should be T x 1 here
-        # print(wav.size())
-        # wav = wav_to_fmel(wav, num_mel_bin=80)
-
-        return wav
-
-    def get_feats(self, file_path, ref_len=None, channel_id=None):
-        x = self.read_audio(file_path, ref_len, channel_id)
-        x = x.float()
-
-        _dtype = torch.float32
-        if self.bf16:
-            _dtype = torch.bfloat16
-        elif self.fp16:
-            _dtype = torch.float16
-        with torch.autocast(device_type="cuda", dtype=_dtype):
-            with torch.no_grad():
-
-                # TODO: use torch amp.autocast here
-
-                feat = []
-                for start in range(0, x.size(1), self.max_chunk):
-                    x_chunk = x[start: start + self.max_chunk, :]
-
-                    # for w2vbert we need to convert to fmel
-                    x_chunk = wav_to_fmel(x_chunk, num_mel_bin=80)
-
-                    if self.use_cuda:
-                        x_chunk = x_chunk.cuda()
-
-                    # batch size 1
-                    x_chunk = x_chunk.unsqueeze(0)
-
-                    feat_chunk, _ = self.model.forward(x_chunk, padding_mask=None, layer=self.layer)
-
-                    feat.append(feat_chunk)
-
-                # remove the batch dimension
-                feat = torch.concat(feat, dim=1).squeeze(0)
-
-        return feat
-
-# Copyright (c) Facebook, Inc. and its affiliates.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
 
 import argparse
 import logging
@@ -129,6 +22,122 @@ import time
 
 import numpy as np
 from sklearn.cluster import MiniBatchKMeans
+
+
+def safe_readline(f):
+    pos = f.tell()
+    while True:
+        try:
+            return f.readline()
+        except UnicodeDecodeError:
+            pos -= 1
+            f.seek(pos)  # search where this character begins
+
+class FeatureReader:
+
+    @staticmethod
+    def find_offsets(filename, num_chunks):
+        """
+        :param filename: string
+        :param num_chunks: int
+        :return: a list of offsets (positions to start and stop reading)
+        """
+        with open(filename, 'r', encoding='utf-8') as f:
+            size = os.fstat(f.fileno()).st_size
+            chunk_size = size // num_chunks
+            offsets = [0 for _ in range(num_chunks + 1)]
+            for i in range(1, num_chunks):
+                f.seek(chunk_size * i)
+                safe_readline(f)
+                offsets[i] = f.tell()
+            return offsets
+
+    @staticmethod
+    def load_feature_single_thread(filename, worker_id, offset, end):
+        """
+        This function should read in the lines, convert sentences to tensors
+        And then finalize into a dataset?
+        """
+
+        result = dict()
+        data = list()
+
+        count = 0
+
+        with open(filename, 'r', encoding='utf-8') as f:
+            f.seek(offset)
+
+            # next(f) breaks f.tell(), hence readline() must be used
+            line = safe_readline(f)
+
+
+            while line:
+                if 0 < end < f.tell():
+                    break
+
+                file_path = line.split()[1]
+                feat = np.load(file_path)['arr_0']
+                data.append(feat)
+
+                line = f.readline()
+
+                count += 1
+                if count % 10000 == 0:
+                    print("[INFO] Thread %d processed %d lines." % (worker_id, count))
+
+
+        print("[INFO] Thread %d Done." % worker_id)
+        result['data'] = data
+        result['id'] = worker_id
+
+        return result
+
+    @staticmethod
+    def load_features(filename, num_workers=1, verbose=False):
+
+        result = dict()
+
+        for i in range(num_workers):
+            result[i] = dict()
+
+        final_result = dict()
+
+        def merge_result(bin_result):
+            result[bin_result['id']]['data'] = bin_result['data']
+
+        offsets = FeatureReader.find_offsets(filename, num_workers)
+
+        if num_workers > 1:
+
+            pool = mp.Pool(processes=num_workers)
+            mp_results = []
+
+            for worker_id in range(num_workers):
+                mp_results.append(pool.apply_async(
+                    FeatureReader.load_feature_single_thread,
+                    args=(filename, worker_id,
+                          offsets[worker_id], offsets[worker_id + 1]),
+                ))
+
+            pool.close()
+            pool.join()
+
+            for r in mp_results:
+                merge_result(r.get())
+
+        else:
+            sp_result = BFeatureReader.load_feature_single_thread(filename, 0,
+                                                              offsets[0], offsets[1])
+            merge_result(sp_result)
+
+        final_result['data'] = list()
+
+        # put the data into the list according the worker indices
+        for idx in range(num_workers):
+            final_result['data'] += result[idx]['data']
+
+        return final_result['data']
+
 
 
 def get_logger():
@@ -209,6 +218,13 @@ def get_parser():
         help="Batch size for K-means training",
         default=10000,
     )
+
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        help="Number of workers to load features",
+        default=1,
+    )
     parser.add_argument("--tol", default=0.0, type=float)
     parser.add_argument("--max_no_improvement", default=100, type=int)
     parser.add_argument("--n_init", default=20, type=int)
@@ -269,18 +285,8 @@ def train_kmeans(kmeans_model, features_batch):
 
 
 def get_feature_iterator(
-    checkpoint_path, layer, manifest_path, sample_pct, channel_id,
-    fp16=False, bf16=False, model_path="w2vbert-conformer_shaw.pt", sample_rate=16000
+    manifest_path, sample_pct
 ):
-    feature_reader = FeatureReader(checkpoint_path,
-                                   layer,
-                                   max_chunk=1600000,
-                                   use_cuda=True,
-                                   fp16=fp16,
-                                   bf16=bf16,
-                                   model_path=model_path, sample_rate=sample_rate)
-
-    print("Feature extract successfully created")
 
     with open(manifest_path, "r") as fp:
         lines = fp.readlines()
@@ -295,44 +301,37 @@ def get_feature_iterator(
                 file_path_list, int(sample_pct * len(file_path_list))
             )
         num_files = len(file_path_list)
-        reader = feature_reader
 
         def iterate():
             for file_path in file_path_list:
-                feats = reader.get_feats(file_path, channel_id=channel_id)
-                yield file_path, feats.cpu().numpy()
+                # feats = reader.get_feats(file_path, channel_id=channel_id)
+                feat = np.load(file_path)['arr_0']
+
+                yield feat
 
     return iterate, num_files
 
 
-def get_features(
-        checkpoint_path, layer, manifest_path, sample_pct, channel_id,
-        fp16=False, bf16=False, model_path="w2vbert-conformer_shaw.pt", sample_rate=16000,
-        flatten=True, output_path=""
+def read_features(
+        manifest_path, num_workers=1, sample_pct=1.0,
+        flatten=True
 ):
-    generator, num_files = get_feature_iterator(checkpoint_path, layer, manifest_path, sample_pct, channel_id,
-                                                fp16=fp16, bf16=bf16, model_path=model_path, sample_rate=sample_rate
-    )
-    iterator = generator()
-
+    # generator, num_files = get_feature_iterator( manifest_path, sample_pct)
+    #
+    # iterator = generator()
+    #
     # features_list = []
-    for (file_path, features) in tqdm.tqdm(iterator, total=num_files):
+    # for features in tqdm.tqdm(iterator, total=num_files):
+    #
+    #     features_list.append(features)
 
-        basename = os.path.basename(file_path)
-        outfile = os.path.join(output_path, basename + ".npz")
-
-        np.savez_compressed(outfile, features)
-
-        # features_list.append(features)
+    feature_reader = FeatureReader()
+    features_list = FeatureReader.load_features(manifest_path, num_workers=num_workers)
 
     # Explicit clean up
-    del iterator
-    del generator
-    gc.collect()
-    torch.cuda.empty_cache()
-    #
-    # if flatten:
-    #     return np.concatenate(features_list)
+
+    if flatten:
+        return np.concatenate(features_list)
 
     return
 
@@ -371,41 +370,32 @@ def main(args, logger):
     #             f"Saved extracted features at {args.out_features_path}"
     #         )
 
-    logger.info(f"Extracting w2vbert acoustic features...")
-
-    os.makedirs(args.out_features_path, exist_ok=True)
+    logger.info(f"Reading pre-computed w2vbert acoustic features...")
 
     features_batch = (
-        get_features(
-            checkpoint_path=args.checkpoint_path,
-            layer=args.layer,
-            manifest_path=args.manifest_path,
-            channel_id=None,
+        read_features(
+            args.manifest_path,
+            num_workers=args.num_workers,
             sample_pct=args.sample_pct,
-            flatten=True,
-            fp16=args.data_type == "fp16",
-            bf16=args.data_type == "bf16",
-            model_path="w2vbert-conformer_shaw.pt",
-            sample_rate=16000,
-            output_path=args.out_features_path
+            flatten=True
         )
     )
 
-    # logger.info(f"Features shape = {features_batch.shape}\n")
+    logger.info(f"Features shape = {features_batch.shape}\n")
 
     # Learn and save K-means model
-    # kmeans_model = get_kmeans_model(
-    #     n_clusters=args.num_clusters,
-    #     init=args.init,
-    #     max_iter=args.max_iter,
-    #     batch_size=args.batch_size,
-    #     tol=args.tol,
-    #     max_no_improvement=args.max_no_improvement,
-    #     n_init=args.n_init,
-    #     reassignment_ratio=args.reassignment_ratio,
-    #     random_state=args.seed,
-    # )
-    # logger.info("Starting k-means training...")
+    kmeans_model = get_kmeans_model(
+        n_clusters=args.num_clusters,
+        init=args.init,
+        max_iter=args.max_iter,
+        batch_size=args.batch_size,
+        tol=args.tol,
+        max_no_improvement=args.max_no_improvement,
+        n_init=args.n_init,
+        reassignment_ratio=args.reassignment_ratio,
+        random_state=args.seed,
+    )
+    logger.info("Starting k-means training...")
     # kmeans_model, time_taken = train_kmeans(
     #     kmeans_model=kmeans_model, features_batch=features_batch
     # )
