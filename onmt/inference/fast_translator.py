@@ -639,8 +639,8 @@ class FastTranslator(Translator):
                 # the marked words are 1, so fill the reverse to inf
 
                 _mask = 1 - self.filter.int()
-                n_tokens_masked = _mask.sum().item()
-                print("number of masked tokens: ", n_tokens_masked)
+                # n_tokens_masked = _mask.sum().item()
+                # print("number of masked tokens: ", n_tokens_masked)
                 lprobs.masked_fill_(_mask.bool().unsqueeze(0), -math.inf)
             lprobs[:, self.tgt_pad] = -math.inf  # never select pad
 
