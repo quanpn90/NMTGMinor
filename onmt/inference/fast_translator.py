@@ -307,6 +307,23 @@ class FastTranslator(Translator):
                                                                                        lang_list=lang_list,
                                                                                        src_lang=opt.tgt_lang)
 
+        elif "mbart50pre" in opt.external_tokenizer.lower():
+            from transformers import MBart50TokenizerFast
+            try:
+                self.external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
+                                                                               src_lang=opt.src_lang)
+            except KeyError as e:
+                self.external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
+                                                                               src_lang="en_XX")
+
+            try:
+                self.tgt_external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
+                                                                                   src_lang=opt.tgt_lang)
+            except KeyError as e:
+                self.tgt_external_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50",
+                                                                                   src_lang="en_XX")
+                self.tgt_external_tokenizer.src_lang = opt.tgt_lang
+
         else:
             self.external_tokenizer = None
             self.tgt_external_tokenizer = None
