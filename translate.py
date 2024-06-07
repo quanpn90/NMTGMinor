@@ -158,7 +158,8 @@ parser.add_argument('-external_tokenizer', default="",
 
 parser.add_argument('-num_mel_bin', type=int, default=0,
                     help="The number of log mel features if positive")
-
+parser.add_argument('-language_restriction', default=[], nargs='+', type=str,
+                        help="Use CUDA on the listed devices.")
 # arguments added by Christian
 
 parser.add_argument('-new_words_file', type=str, default="new_words.txt",
@@ -209,7 +210,14 @@ def len_penalty(s, l, alpha):
     return s / l_term
 
 
-def get_sentence_from_tokens(tokens, ids, input_type, external_tokenizer=None):
+def get_sentence_from_tokens(tokens, ids, input_type, external_tokenizer=None,
+                             restriction_ids=None):
+
+    if restriction_ids is not None and len(restriction_ids) > 0 :
+        if ids[0] not in restriction_ids:
+            sent = ""
+            return sent
+
     if external_tokenizer is None:
         if input_type == 'word':
             sent = " ".join(tokens)
@@ -381,7 +389,8 @@ def main():
                     src_batches, tgt_batch,
                     sub_src_data=sub_src_batch, past_src_data=past_src_batches,
                     type='asr',
-                    prefix=prefix, anti_prefix=anti_prefix)
+                    prefix=prefix, anti_prefix=anti_prefix,
+                    language_restriction=opt.language_restriction)
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
                     get_final_result(opt, tgtF, count, outF, translator,
@@ -467,7 +476,8 @@ def main():
                 tgt_batch,
                 past_src_data=past_src_batches,
                 sub_src_data=sub_src_batch,
-                type='asr', prefix=prefix, anti_prefix=anti_prefix)
+                type='asr', prefix=prefix, anti_prefix=anti_prefix,
+                language_restriction=opt.language_restriction)
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
                 = get_final_result(opt, tgtF, count, outF, translator,
@@ -558,7 +568,9 @@ def main():
                 pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length, \
                 gold_score, num_gold_words, all_gold_scores = translator.translate(
                     src_batches, tgt_batch, sub_src_data=sub_src_batch, past_src_data=past_src_batches, type='asr',
-                    prefix=prefix, anti_prefix=anti_prefix, memory=memory, input_size=max(1, opt.num_mel_bin))
+                    prefix=prefix, anti_prefix=anti_prefix,
+                    memory=memory, input_size=max(1, opt.num_mel_bin),
+                    language_restriction=opt.language_restriction)
                 print("Result:", len(pred_batch))
                 count, pred_score, pred_words, gold_score, goldWords = \
                     get_final_result(opt, tgtF, count, outF, translator,
@@ -631,7 +643,8 @@ def main():
                 sub_src_data=sub_src_batch, type='asr',
                 prefix=prefix,
                 anti_prefix=anti_prefix, memory=memory,
-                input_size=max(1, opt.num_mel_bin))
+                input_size=max(1, opt.num_mel_bin),
+                language_restriction=opt.language_restriction)
             print("Result:", len(pred_batch))
             count, pred_score, pred_words, gold_score, goldWords \
                 = get_final_result(opt, tgtF, count, outF, translator,
@@ -653,6 +666,8 @@ def main():
                 prefix = []
 
     else:
+        # machine translation
+
         past_text_data = open(opt.past_src) if opt.past_src else None
 
         for line in addone(in_file):
@@ -744,6 +759,12 @@ def get_final_result(opt, tgtF, count, outF, translator, src_batch, tgt_batch,
                     pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length,
                     gold_score,
                     num_gold_words, all_gold_scores, input_type, external_tokenizer=None):
+
+    if len(opt.language_restriction) > 0:
+        restriction_ids = translator.get_restriction_ids(opt.language_restriction)
+    else:
+        restriction_ids = None
+
     original_pred_batch = pred_batch
     original_pred_score = pred_score
 
@@ -780,13 +801,15 @@ def get_final_result(opt, tgtF, count, outF, translator, src_batch, tgt_batch,
 
         if not opt.print_nbest:
             outF.write(
-                get_sentence_from_tokens(pred_batch[b][0], pred_ids[b][0], input_type, external_tokenizer) + '\n')
+                get_sentence_from_tokens(pred_batch[b][0], pred_ids[b][0],
+                                         input_type, external_tokenizer,
+                                         restriction_ids=restriction_ids) + '\n')
             outF.flush()
         else:
             for n in range(opt.n_best):
                 idx = n
                 output_sent = get_sentence_from_tokens(pred_batch[b][idx], pred_ids[b][idx], input_type,
-                                                       external_tokenizer)
+                                                       external_tokenizer, restriction_ids=restriction_ids)
                 out_str = "%s ||| %.4f" % (output_sent, pred_score[b][idx])
                 outF.write(out_str + '\n')
                 outF.flush()
@@ -796,7 +819,8 @@ def get_final_result(opt, tgtF, count, outF, translator, src_batch, tgt_batch,
                 src_sent = " ".join(src_batch[b])
                 print('SRC %d: %s' % (count, src_sent))
             print('PRED %d: %s' % (
-                count, get_sentence_from_tokens(pred_batch[b][0], pred_ids[b][0], input_type, external_tokenizer)))
+                count, get_sentence_from_tokens(pred_batch[b][0], pred_ids[b][0],
+                                                input_type, external_tokenizer, restriction_ids=restriction_ids)))
 
             # print('PRED BPE %d (%d): %s' % (
             #     count, len(pred_batch[b][0]), pred_batch[b][0] ))

@@ -142,6 +142,7 @@ class RecognizerParameter(TranslatorParameter):
         self.external_tokenizer = "facebook/mbart-large-50"
         self.asr_format = "wav"
         self.encoder_type = "audio"
+        self.diverse_beamsearch = False
 
 
 
@@ -309,7 +310,14 @@ class OnlineTranslator(object):
 # 3. mbart50 tokenizer
 # 4. interface to translate with
 
-def get_sentence_from_tokens(tokens, ids, input_type, external_tokenizer=None):
+def get_sentence_from_tokens(tokens, ids, input_type, external_tokenizer=None,
+                             restriction_ids=None):
+
+    if restriction_ids is not None and len(restriction_ids) > 0 :
+        if ids[0] not in restriction_ids:
+            sent = ""
+            return sent
+
     if external_tokenizer is None:
         if input_type == 'word':
             sent = " ".join(tokens)
@@ -322,7 +330,6 @@ def get_sentence_from_tokens(tokens, ids, input_type, external_tokenizer=None):
         sent = external_tokenizer.decode(ids, True, True).strip()
 
     return sent
-
 
 class ASROnlineTranslator(object):
 
@@ -337,6 +344,7 @@ class ASROnlineTranslator(object):
         self.anti_prefix = opt.anti_prefix
         self.num_mel_bin = opt.num_mel_bin
         self.min_filter = opt.min_filter
+        self.language_restriction = list()
 
         print(self.num_mel_bin)
 
@@ -366,7 +374,8 @@ class ASROnlineTranslator(object):
             self.src_lang = input_language
             self.tgt_lang = output_language
 
-            self.translator.set_filter([])
+            self.language_restriction = list()
+            # self.translator.set_filter([])
 
         else:
             # here we have to handle multiple languages
@@ -380,19 +389,29 @@ class ASROnlineTranslator(object):
             self.src_lang = input_language
             self.tgt_lang = output_language
 
-            # but also we need to set the vocab ids restriction here ... based on some kind of list
-            vocab_id_files = list()
+            # now we need to set the restriction stuff?
+
+            self.language_restriction = list()
 
             for _lang in output_languages:
                 _lang_mapped = language_map_dict[_lang]
-                vocab_id_file = os.path.join("vocabs", "%s.vocabids" % _lang_mapped)
+                self.language_restriction.append(_lang_mapped)
 
-                if os.path.exists(vocab_id_file):
-                    vocab_id_files.append(vocab_id_file)
+            # below code is removed
 
-            print(vocab_id_files)
-
-            self.translator.set_filter(vocab_id_files, min_occurance=self.min_filter)
+            # but also we need to set the vocab ids restriction here ... based on some kind of list
+            # vocab_id_files = list()
+            #
+            # for _lang in output_languages:
+            #     _lang_mapped = language_map_dict[_lang]
+            #     vocab_id_file = os.path.join("vocabs", "%s.vocabids" % _lang_mapped)
+            #
+            #     if os.path.exists(vocab_id_file):
+            #         vocab_id_files.append(vocab_id_file)
+            #
+            # print(vocab_id_files)
+            #
+            # self.translator.set_filter(vocab_id_files, min_occurance=self.min_filter)
 
 
     def translate(self, input, prefix, memory=None):
@@ -440,12 +459,22 @@ class ASROnlineTranslator(object):
                 memory[i, :len(m)] = m
 
         # perform beam search in the model
+
+        print(self.language_restriction)
+
         pred_batch, pred_ids, pred_score, pred_pos_scores,  pred_length, \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch, type='asr',
-            prefix=prefix, anti_prefix=anti_prefix, memory=memory, input_size=self.num_mel_bin)
+            prefix=prefix, anti_prefix=anti_prefix,
+            memory=memory, input_size=self.num_mel_bin, language_restriction=self.language_restriction)
 
-        output_sentence = get_sentence_from_tokens(pred_batch[0][0], pred_ids[0][0], "word", external_tokenizer)
+        if len(self.language_restriction) > 0:
+            restriction_ids = self.translator.get_restriction_ids(self.language_restriction)
+        else:
+            restriction_ids = None
+
+        output_sentence = get_sentence_from_tokens(pred_batch[0][0], pred_ids[0][0], "word",
+                                                   external_tokenizer, restriction_ids=restriction_ids)
 
         # here if we want to use mosestokenizer, probably we need to split the sentence AFTER the sentencepiece/bpe
         # model applies their de-tokenization
@@ -502,14 +531,21 @@ class ASROnlineTranslator(object):
         pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length,  \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch, type='asr',
-            prefix=prefixes, anti_prefix=anti_prefix, input_size=self.num_mel_bin)
+            prefix=prefixes, anti_prefix=anti_prefix,
+            input_size=self.num_mel_bin, language_restriction=self.language_restriction)
 
         external_tokenizer = self.translator.external_tokenizer
 
         outputs = list()
 
+        if len(self.language_restriction) > 0:
+            restriction_ids = self.translator.get_restriction_ids(self.language_restriction)
+        else:
+            restriction_ids = None
+
         for pred, pred_id in zip(pred_batch, pred_ids):
-            outputs.append(get_sentence_from_tokens(pred[0], pred_id[0], "word", external_tokenizer))
+            outputs.append(get_sentence_from_tokens(pred[0], pred_id[0], "word",
+                                                    external_tokenizer, restriction_ids=restriction_ids))
 
         if self.detokenize and MosesDetokenizer is not None:
             outputs_detok = []
@@ -531,7 +567,5 @@ class ASROnlineTranslator(object):
 
         for pred_scores in pred_pos_scores:
             score_outputs.append(pred_scores[0])
-
-        # print(pred, outputs)
 
         return outputs, bpe_outputs, score_outputs
