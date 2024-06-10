@@ -206,7 +206,11 @@ def build_tm_model(opt, dicts, constants=None):
         discrete_encoder = None
         if "wavlm" in opt.enc_pretrained_model:
             from onmt.models.speech_recognizer.wavlm import WavLMEncoder
-            encoder = WavLMEncoder(opt, opt.wav2vec2_pretrained_model) 
+            encoder = WavLMEncoder(opt, opt.wav2vec2_pretrained_model)
+
+        elif "hubert" in opt.enc_pretrained_model:
+            from onmt.models.speech_recognizer.hubert import Hubert
+            encoder = Hubert(opt, opt.wav2vec2_pretrained_model)
 
         elif "w2vbert" in opt.enc_pretrained_model or "w2v-bert" in opt.enc_pretrained_model:
             from onmt.models.speech_recognizer.w2vbert import W2VBert

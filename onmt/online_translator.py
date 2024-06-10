@@ -29,7 +29,7 @@ class TranslatorParameter(object):
         self.n_best = self.beam_size
         self.replace_unk = False
         self.gpu = -1
-        self.cuda = 0
+        self.cuda = False
         self.verbose = False
         self.normalize = True
 
@@ -103,7 +103,8 @@ class TranslatorParameter(object):
                 self.fp16 = True
             elif w[0] == "gpu":
                 self.gpu = int(w[1])
-                self.cuda = True
+                if self.gpu >= 0:
+                    self.cuda = True
             elif w[0] == "detokenize":
                 self.detokenize = True
             elif w[0] == "vocab_list":
@@ -143,6 +144,7 @@ class RecognizerParameter(TranslatorParameter):
         self.asr_format = "wav"
         self.encoder_type = "audio"
         self.diverse_beamsearch = False
+        self.explicit_multilingual = False
 
 
 
@@ -345,6 +347,7 @@ class ASROnlineTranslator(object):
         self.num_mel_bin = opt.num_mel_bin
         self.min_filter = opt.min_filter
         self.language_restriction = list()
+        self.explicit_multilingual = opt.explicit_multilingual
 
         print(self.num_mel_bin)
 
@@ -366,6 +369,11 @@ class ASROnlineTranslator(object):
         input_languages = input_language.split("+")
 
         if len(output_languages) == 1 and len(input_languages) == 1:
+
+            if self.explicit_multilingual:
+                input_language = "None"
+                output_language = "None"
+
             input_lang = language_map_dict[input_language]
             output_lang = language_map_dict[output_language]
 
@@ -375,7 +383,6 @@ class ASROnlineTranslator(object):
             self.tgt_lang = output_language
 
             self.language_restriction = list()
-            # self.translator.set_filter([])
 
         else:
             # here we have to handle multiple languages

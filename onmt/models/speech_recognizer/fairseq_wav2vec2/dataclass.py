@@ -77,6 +77,8 @@ class FairseqDataclass:
 
 EXTRACTOR_MODE_CHOICES = ChoiceEnum(["default", "layer_norm"])
 MASKING_DISTRIBUTION_CHOICES = ChoiceEnum(["static", "uniform", "normal", "poisson"])
+LAYER_TYPE_CHOICES = ChoiceEnum(["transformer", "conformer", "trf_adp"])
+
 
 
 class Wav2Vec2Config(FairseqDataclass):
@@ -277,7 +279,7 @@ class Wav2Vec2Config(FairseqDataclass):
 
 @dataclass
 class HubertConfig(FairseqDataclass):
-    label_rate: float = II("task.label_rate")
+    # label_rate: float = II("task.label_rate")
 
     extractor_mode: EXTRACTOR_MODE_CHOICES = field(
         default="default",
@@ -299,7 +301,7 @@ class HubertConfig(FairseqDataclass):
     encoder_attention_heads: int = field(
         default=12, metadata={"help": "num encoder attention heads"}
     )
-    activation_fn: ChoiceEnum(utils.get_available_activation_fns()) = field(
+    activation_fn: ChoiceEnum(get_available_activation_fns()) = field(
         default="gelu", metadata={"help": "activation function to use"}
     )
     layer_type: LAYER_TYPE_CHOICES = field(

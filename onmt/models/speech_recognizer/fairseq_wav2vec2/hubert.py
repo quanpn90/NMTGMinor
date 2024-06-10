@@ -5,7 +5,7 @@
 
 import math
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import copy
 
 import numpy as np
@@ -47,7 +47,7 @@ MASKING_DISTRIBUTION_CHOICES = ChoiceEnum(["static", "uniform", "normal", "poiss
 
 
 # @register_model("hubert", dataclass=HubertConfig)
-class HubertModel(BaseFairseqModel):
+class HubertModel(torch.nn.Module):
     def __init__(
             self,
             cfg: HubertConfig,
@@ -55,7 +55,8 @@ class HubertModel(BaseFairseqModel):
             # dictionaries: List[Dictionary],
     ) -> None:
         super().__init__()
-        logger.info(f"HubertModel Config: {cfg}")
+        print(f"HubertModel Config: {cfg}")
+        self.cfg = cfg
 
         feature_enc_layers = eval(cfg.conv_feature_layers)  # noqa
         self.embed = feature_enc_layers[-1][0]
@@ -136,6 +137,16 @@ class HubertModel(BaseFairseqModel):
     #
     #     model = HubertModel(cfg, task.cfg, task.dictionaries)
     #     return model
+    def convert_fast_attention(self):
+        model = self.encoder
+
+        def find_modules(nn_module, type):
+            return [module for module in nn_module.modules() if isinstance(module, type)]
+
+        fast_attentions = find_modules(model, MultiheadAttention)
+        for fast_attention in fast_attentions:
+            fast_attention.convert_fast_attention()
+
 
     def apply_mask(self, x, padding_mask, target_list):
         B, T, C = x.shape
@@ -187,16 +198,61 @@ class HubertModel(BaseFairseqModel):
                 features = self.feature_extractor(source)
         return features
 
+    def _get_feat_extract_output_lengths(self, input_lengths: torch.LongTensor):
+        """
+        Computes the output length of the convolutional layers
+        """
+
+        def _conv_out_length(input_length, kernel_size, stride):
+            return torch.floor((input_length - kernel_size) / stride + 1)
+
+        conv_cfg_list = eval(self.cfg.conv_feature_layers)
+
+        for i in range(len(conv_cfg_list)):
+            input_lengths = _conv_out_length(
+                input_lengths, conv_cfg_list[i][1], conv_cfg_list[i][2]
+            )
+
+        return input_lengths.to(torch.long)
+
     def forward_padding_mask(
             self,
             features: torch.Tensor,
             padding_mask: torch.Tensor,
     ) -> torch.Tensor:
-        extra = padding_mask.size(1) % features.size(1)
-        if extra > 0:
-            padding_mask = padding_mask[:, :-extra]
-        padding_mask = padding_mask.view(padding_mask.size(0), features.size(1), -1)
-        padding_mask = padding_mask.all(-1)
+        """
+
+        This function computes the padding mask after convolution
+
+        Args:
+            features:
+            padding_mask:
+
+        Returns:
+            The padding mask after downsampling with convolution
+        """
+
+        if padding_mask is not None and padding_mask.any():
+            input_lengths = (1 - padding_mask.long()).sum(-1)
+            # apply conv formula to get real output_lengths
+            output_lengths = self._get_feat_extract_output_lengths(input_lengths)
+
+            padding_mask = torch.zeros(
+                features.shape[:2], dtype=features.dtype, device=features.device
+            )
+
+            # these two operations makes sure that all values
+            # before the output lengths indices are attended to
+            padding_mask[
+                (
+                    torch.arange(padding_mask.shape[0], device=padding_mask.device),
+                    output_lengths - 1,
+                )
+            ] = 1
+            padding_mask = (1 - padding_mask.flip([-1]).cumsum(-1).flip([-1])).bool()
+        else:
+            padding_mask = None
+
         return padding_mask
 
     def forward(
@@ -207,7 +263,12 @@ class HubertModel(BaseFairseqModel):
             mask: bool = True,
             features_only: bool = False,
             output_layer: Optional[int] = None,
-    ) -> Dict[str, torch.Tensor]:
+            lang=None,
+            atb=None,
+            checkpointing_ffn=False,
+            checkpointing_self_attn=False,
+            **kwargs
+    ): # -> Dict[str, torch.Tensor]:
         """output layer is 1-based"""
         features = self.forward_features(source)
         if target_list is not None:
@@ -220,8 +281,8 @@ class HubertModel(BaseFairseqModel):
         unmasked_features = features.clone()
 
         # maybe this is unnecessary
-        # if padding_mask is not None:
-        #     padding_mask = self.forward_padding_mask(features, padding_mask)
+        if padding_mask is not None:
+            padding_mask = self.forward_padding_mask(features, padding_mask)
 
         if self.post_extract_proj is not None:
             features = self.post_extract_proj(features)
@@ -240,10 +301,13 @@ class HubertModel(BaseFairseqModel):
         # x: (B, T, D), float
         # padding_mask: (B, T), bool
         # mask_indices: (B, T), bool
-        x, _ = self.encoder(
+        x, layer_results, pred_lang = self.encoder(
             x,
             padding_mask=padding_mask,
             layer=None if output_layer is None else output_layer - 1,
+            lang=lang, atb=atb,
+            checkpointing_ffn=checkpointing_ffn,
+            checkpointing_self_attn=checkpointing_self_attn
         )
 
         assert features_only, "This HUBERT is not for Semi supervised training"
@@ -343,6 +407,6 @@ class HubertModel(BaseFairseqModel):
 
         return extra_losses, names
 
-    def remove_pretraining_modules(self):
+    def remove_pretraining_modules(self, *args, **kwargs):
         self.target_glu = None
         self.final_proj = None
