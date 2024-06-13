@@ -2,6 +2,7 @@ import os
 import onmt
 import onmt.modules
 from collections import defaultdict
+
 try:
     from mosestokenizer import MosesDetokenizer, MosesTokenizer
 except ImportError:
@@ -11,6 +12,7 @@ except ImportError:
 import torch
 
 from onmt.data.audio_utils import safe_readaudio, wav_to_fmel
+
 
 class TranslatorParameter(object):
 
@@ -70,9 +72,9 @@ class TranslatorParameter(object):
         self.min_filter = 0
 
         self.num_mel_bin = 0
+        self.predict_language = False
 
         self.read_file(filename)
-
 
     def read_file(self, filename):
 
@@ -126,6 +128,9 @@ class TranslatorParameter(object):
             elif w[0] == "min_filter":
                 self.min_filter = int(w[1])
 
+            elif w[0] == "predict_language":
+                self.predict_language = True
+
             line = f.readline()
 
 
@@ -147,7 +152,6 @@ class RecognizerParameter(TranslatorParameter):
         self.explicit_multilingual = False
 
 
-
 class OnlineTranslator(object):
     def __init__(self, model):
         opt = TranslatorParameter(model)
@@ -160,25 +164,25 @@ class OnlineTranslator(object):
         self.external_tokenizer = opt.external_tokenizer
         self.anti_prefix = opt.anti_prefix
 
-    # def translate(self, input):
-    #     predBatch, predScore, predLength, goldScore, numGoldWords, allGoldScores = \
-    #         self.translator.translate([input.split()], [])
-    #
-    #     return " ".join(predBatch[0][0])
+        # def translate(self, input):
+        #     predBatch, predScore, predLength, goldScore, numGoldWords, allGoldScores = \
+        #         self.translator.translate([input.split()], [])
+        #
+        #     return " ".join(predBatch[0][0])
 
         self.use_tgt_lang_as_source = opt.use_tgt_lang_as_source
 
-
-    def set_language(self, input_language, output_language, language_code_system="mbart50"):
+    def set_language(self, input_language, output_language, **kwargs):
 
         # override the input_language
         if self.use_tgt_lang_as_source:
             input_language = output_language
 
+        # TODO: move to init
         if language_code_system == "mbart50":
             language_map_dict = {"en": "en_XX", "de": "de_DE", "fr": "fr_XX", "es": "es_XX",
                                  "pt": "pt_XX", "it": "it_IT", "nl": "nl_XX", "None": "<s>",
-                                 "ja": "ja_XX", "zh": "zh_CN", "vn": "vi_VN"}
+                                 "zh": "zh_CN", "ja": "ja_XX", "uk": "uk_UA"}
 
         else:
             language_map_dict = defaultdict(lambda self, missing_key: missing_key)
@@ -305,6 +309,7 @@ class OnlineTranslator(object):
 
         return outputs
 
+
 # Checklist to integrate:
 
 # 1. model file (model.averaged.pt)
@@ -314,8 +319,7 @@ class OnlineTranslator(object):
 
 def get_sentence_from_tokens(tokens, ids, input_type, external_tokenizer=None,
                              restriction_ids=None):
-
-    if restriction_ids is not None and len(restriction_ids) > 0 :
+    if restriction_ids is not None and len(restriction_ids) > 0:
         if ids[0] not in restriction_ids:
             sent = ""
             return sent
@@ -333,6 +337,7 @@ def get_sentence_from_tokens(tokens, ids, input_type, external_tokenizer=None,
 
     return sent
 
+
 class ASROnlineTranslator(object):
 
     def __init__(self, model):
@@ -349,19 +354,29 @@ class ASROnlineTranslator(object):
         self.language_restriction = list()
         self.explicit_multilingual = opt.explicit_multilingual
 
+        self.predict_language = opt.predict_language
+
         print(self.num_mel_bin)
+
+        # todo: change it later
+        self.language_code_system = "mbart50"
+
+        if self.language_code_system == "mbart50":
+            self.language_map_dict = {"en": "en_XX", "de": "de_DE", "fr": "fr_XX", "es": "es_XX",
+                                      "pt": "pt_XX", "it": "it_IT", "nl": "nl_XX", "None": "<s>",
+                                      "ja": "ja_XX", "zh": "zh_CN", "vn": "vi_VN"}
+
+            self.reverse_language_map_dict = defaultdict(lambda self, x: "None")
+
+            for key in self.language_map_dict:
+                self.reverse_language_map_dict[self.language_map_dict[key]] = key
+
+        else:
+            self.language_map_dict = defaultdict(lambda self, missing_key: "None")
 
     def set_language(self, input_language, output_language, language_code_system="mbart50"):
         # TODO: check if the output language takes the form of "en+de"
         # TODO: in that case, we don't change language but rather use "<s>" and set the vocabulary limit
-
-        if language_code_system == "mbart50":
-            language_map_dict = {"en": "en_XX", "de": "de_DE", "fr": "fr_XX", "es": "es_XX",
-                                 "pt": "pt_XX", "it": "it_IT", "nl": "nl_XX", "None": "<s>",
-                                 "zh": "zh_CN", "ja": "ja_XX", "uk": "uk_UA"}
-
-        else:
-            language_map_dict = defaultdict(lambda self, missing_key: missing_key)
 
         # TODO:
 
@@ -374,8 +389,8 @@ class ASROnlineTranslator(object):
                 input_language = "None"
                 output_language = "None"
 
-            input_lang = language_map_dict[input_language]
-            output_lang = language_map_dict[output_language]
+            input_lang = self.language_map_dict[input_language]
+            output_lang = self.language_map_dict[output_language]
 
             self.translator.change_language(new_src_lang=input_lang, new_tgt_lang=output_lang)
 
@@ -401,7 +416,7 @@ class ASROnlineTranslator(object):
             self.language_restriction = list()
 
             for _lang in output_languages:
-                _lang_mapped = language_map_dict[_lang]
+                _lang_mapped = self.language_map_dict[_lang]
                 self.language_restriction.append(_lang_mapped)
 
             # below code is removed
@@ -419,7 +434,6 @@ class ASROnlineTranslator(object):
             # print(vocab_id_files)
             #
             # self.translator.set_filter(vocab_id_files, min_occurance=self.min_filter)
-
 
     def translate(self, input, prefix, memory=None):
         """
@@ -450,7 +464,6 @@ class ASROnlineTranslator(object):
 
         tgt_batch = []
 
-
         anti_prefix = self.anti_prefix if len(self.anti_prefix) > 0 else None
 
         print("prefix", prefix)
@@ -469,7 +482,7 @@ class ASROnlineTranslator(object):
 
         print(self.language_restriction)
 
-        pred_batch, pred_ids, pred_score, pred_pos_scores,  pred_length, \
+        pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length, \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch, type='asr',
             prefix=prefix, anti_prefix=anti_prefix,
@@ -495,7 +508,13 @@ class ASROnlineTranslator(object):
         bpe_output = pred_batch[0][0]
         scores = pred_pos_scores[0][0]
 
-        return output_sentence, bpe_output, scores
+        if self.predict_language:
+            lang = bpe_output[0]
+            lang = self.reverse_language_map_dict[lang]
+        else:
+            lang = "None"
+
+        return output_sentence, bpe_output, scores, lang
 
     def translate_batch(self, inputs, prefixes, memory=None):
         """
@@ -535,7 +554,7 @@ class ASROnlineTranslator(object):
 
         anti_prefix = self.anti_prefix if len(self.anti_prefix) > 0 else None
 
-        pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length,  \
+        pred_batch, pred_ids, pred_score, pred_pos_scores, pred_length, \
         gold_score, num_gold_words, all_gold_scores = self.translator.translate(
             src_batches, tgt_batch, type='asr',
             prefix=prefixes, anti_prefix=anti_prefix,
@@ -571,8 +590,16 @@ class ASROnlineTranslator(object):
             bpe_outputs.append(pred[0])
 
         score_outputs = list()
+        langs = list()
 
         for pred_scores in pred_pos_scores:
             score_outputs.append(pred_scores[0])
 
-        return outputs, bpe_outputs, score_outputs
+        if self.predict_language:
+            for bpe_output in bpe_outputs:
+                langs.append(bpe_output[0])
+
+        else:
+            langs.append("None")
+
+        return outputs, bpe_outputs, score_outputs, langs

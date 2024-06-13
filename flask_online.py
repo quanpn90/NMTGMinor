@@ -50,8 +50,8 @@ def use_model(reqs):
         req = reqs[0]
         audio_tensor, prefix, input_language, output_language, memory = req.get_data()
         model.set_language(input_language, output_language)
-        hypo, bpe_output, scores = model.translate(audio_tensor, [prefix], memory=memory)
-        result = {"hypo": hypo, "bpe_hypo": bpe_output, "log_probs": scores}
+        hypo, bpe_output, scores, lang = model.translate(audio_tensor, [prefix], memory=memory)
+        result = {"hypo": hypo, "bpe_hypo": bpe_output, "log_probs": scores, "lid": lang}
         req.publish(result)
 
     else:
@@ -85,18 +85,18 @@ def use_model(reqs):
 
         if batch_runnable:
             model.set_language(input_languages[0], output_languages[0])
-            hypos, bpe_outputs, all_scores = model.translate_batch(audio_tensors, prefixes, memory=memories[0])
+            hypos, bpe_outputs, all_scores, langs = model.translate_batch(audio_tensors, prefixes, memory=memories[0])
 
-            for req, hypo, bpe_output, scores in zip(reqs, hypos, bpe_outputs, all_scores):
-                result = {"hypo": hypo, "bpe_hypo": bpe_output, "log_probs": scores}
+            for req, hypo, bpe_output, scores, lang in zip(reqs, hypos, bpe_outputs, all_scores, langs):
+                result = {"hypo": hypo, "bpe_hypo": bpe_output, "log_probs": scores, "lid": lang}
                 req.publish(result)
         else:
             for req, audio_tensor, prefix, input_language, output_language, memory \
                     in zip(reqs, audio_tensors, prefixes, input_languages, output_languages, memories):
                 model.set_language(input_language, output_language)
 
-                hypo, bpe_output, scores = model.translate(audio_tensor, [prefix], memory=memory)
-                result = {"hypo": hypo, "bpe_hypo": bpe_output, "log_probs": scores}
+                hypo, bpe_output, scores, lang = model.translate(audio_tensor, [prefix], memory=memory)
+                result = {"hypo": hypo, "bpe_hypo": bpe_output, "log_probs": scores, "lid": lang}
                 req.publish(result)
 
 def run_decoding():
