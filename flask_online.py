@@ -196,6 +196,11 @@ def version():
     # return dict or string (as first argument)
     return conf_data, 200
 
+@app.route("/asr/available_languages", methods=["GET","POST"])
+def languages():
+    langs = ['en', 'de', 'fr', 'it', 'nl', 'pt', 'zh', 'ja', 'es']
+    return langs
+
 model, max_batch_size = initialize_model()
 
 queue_in = queue.PriorityQueue()
@@ -207,3 +212,4 @@ decoding.start()
 
 host = "0.0.0.0"
 app.run(host=host, port=port)
+

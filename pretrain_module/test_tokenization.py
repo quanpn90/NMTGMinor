@@ -15,7 +15,7 @@ tokenizer = MBart50ClusterTokenizer(vocab_file=vocab_file,
                                     pad_token="<pad>",
                                     mask_token="<mask>", )
 
-# print(tokenizer)
+print(tokenizer)
 
 src_text = "<s> UN Chief Says <s> en_XX There Is No Military Solution in Syria"
 

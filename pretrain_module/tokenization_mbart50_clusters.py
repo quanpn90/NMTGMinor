@@ -40,7 +40,7 @@ class MBart50ClusterTokenizer(MBart50TokenizerFast):
             unk_token="<unk>",
             pad_token="<pad>",
             mask_token="<mask>",
-            num_clusters=4096,
+            num_clusters=5946, # so that the final number is 256000
             **kwargs,
     ):
         self.num_clusters = num_clusters

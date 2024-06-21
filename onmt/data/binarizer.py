@@ -399,7 +399,28 @@ class Binarizer:
                       data_type='int64', num_workers=1, verbose=False, external_tokenizer="",
                       lang=None, lang_list=[], target=False):
 
-        if "mbart-large-50" in external_tokenizer.lower():
+        if "mbart50cluster" in external_tokenizer.lower():
+
+            print("Loading a mbart50 tokenizer yet extended for housing clusters")
+            from pretrain_module.tokenization_mbart50_clusters import MBart50ClusterTokenizer
+            vocab_file = "sentencepiece/sentencepiece.bpe.model"
+
+            tokenizer = MBart50ClusterTokenizer(vocab_file=vocab_file,
+                                                src_lang=None,
+                                                tgt_lang=None,
+                                                tokenizer_file=None,
+                                                eos_token="</s>",
+                                                sep_token="</s>",
+                                                cls_token="<s>",
+                                                unk_token="<unk>",
+                                                pad_token="<pad>",
+                                                mask_token="<mask>", )
+
+            ext_tokenizer = tokenizer
+            src_lang = "<s>" if lang is None else lang
+            ext_tokenizer.src_lang = src_lang
+
+        elif "mbart-large-50" in external_tokenizer.lower():
 
             print("[INFO] Using the external %s tokenizer..." % external_tokenizer)
 
@@ -477,6 +498,7 @@ class Binarizer:
             #     ext_tokenizer.src_lang = lang
             # except FileNotFoundError:
             #     ext_tokenizer = DeltaLMTokenizer.from_pretrained("facebook/mbart-large-50", src_lang=lang)
+
         elif "nllb" in external_tokenizer.lower():
 
             from transformers import NllbTokenizer
