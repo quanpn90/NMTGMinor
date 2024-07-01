@@ -104,7 +104,8 @@ class Hubert(nn.Module):
         # from fairseq.models.wav2vec.wav2vec2 import Wav2Vec2Model
         from .fairseq_wav2vec2.hubert import HubertModel
         state = load_checkpoint_to_cpu(model_path)
-        self.cfg = state['cfg']['model']
+        # self.cfg = state['cfg']['model']
+        self.cfg = state['args']
 
         # don't override the options for wav2vec yet (some of them can create NaN)
         self.cfg.dropout = self.opt.enc_pretrain_emb_dropout

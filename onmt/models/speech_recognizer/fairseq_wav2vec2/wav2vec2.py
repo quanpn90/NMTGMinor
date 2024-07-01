@@ -988,7 +988,8 @@ class TransformerEncoder(nn.Module):
         bsz = x.size(0)
         total_bsz = 0
 
-        # fast attention refers to using fused QKV matrix multiplication and T-B-H matrix layout to reduce reshaping cost
+        # fast attention refers to using fused QKV matrix multiplication
+        # and T-B-H matrix layout to reduce reshaping cost
         if self.using_s4:
             fast_attention = False
         else:
@@ -1618,25 +1619,32 @@ class TransformerSentenceEncoderLayer(nn.Module):
 
         else:
             # THE BELOW CODE HAS NEVER BEEN RUN AND TESTED
-
-            x, attn = self.self_attn(
-                query=x,
-                key=x,
-                value=x,
-                key_padding_mask=self_attn_padding_mask,
+            x, attn = self.call_self_attn(
+                x,
+                self_attn_padding_mask=self_attn_padding_mask,
+                positions=positions,
+                attn_mask=self_attn_mask,
+                max_len=max_len, cu_seqlens=cu_seqlens,
+                lang=lang, atb=atb
             )
 
-            # x = self.dropout1(x)
+            x = self.dropout1(x)
             x = residual + x
 
             x = self.self_attn_layer_norm(x)
 
             residual = x
 
-            in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
-            x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
-                         self.dropout2.p, self.training,
-                         self.fused, self.fused_function)
+            if self.flex_factorize:
+                x = self.call_factorize_mlp(x, lang, self.activation_fn,
+                                            self.dropout2.p,
+                                            self.training)
+            else:
+                in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
+
+                x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
+                             self.dropout2.p, self.training,
+                             self.fused, self.fused_function)
 
             x = self.dropout3(x)
             x = residual + x

@@ -95,8 +95,13 @@ class HubertModel(torch.nn.Module):
 
         self.feature_grad_mult = cfg.feature_grad_mult
         self.logit_temp = cfg.logit_temp
-        self.skip_masked = cfg.skip_masked
-        self.skip_nomask = cfg.skip_nomask
+
+        try:
+            self.skip_masked = cfg.skip_masked
+            self.skip_nomask = cfg.skip_nomask
+        except AttributeError as e:
+            self.skip_masked = False
+            self.skip_nomask = False
 
         final_dim = cfg.final_dim if cfg.final_dim > 0 else cfg.encoder_embed_dim
 
