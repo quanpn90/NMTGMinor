@@ -1265,13 +1265,13 @@ class FastTranslator(Translator):
 
         if prefix is not None and len(prefix) > 0 and prefix[0] is not None:
             prefix_tensor = self.build_prefix(prefix, bsz=batch_size)
-            print("PREFIX:", prefix_tensor)
+            # print("PREFIX:", prefix_tensor)
         else:
             prefix_tensor = None
 
         if anti_prefix is not None:
             anti_prefix = self.build_anti_prefix(anti_prefix)
-            print("ANTI PREFIX:", anti_prefix)
+            # print("ANTI PREFIX:", anti_prefix)
 
         if language_restriction is not None and len(language_restriction) > 0:
 

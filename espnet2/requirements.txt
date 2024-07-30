@@ -1,0 +1,8 @@
+g2p_en
+h5py
+humanfriendly
+torch-complex
+typeguard
+librosa
+jamo
+espnet_tts_frontend

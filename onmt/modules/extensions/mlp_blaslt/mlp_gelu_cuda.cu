@@ -667,6 +667,7 @@ int mlp_fp(
     int cublas_status;
     // Call GEMM: fprop is Y = W'X
 
+    // gelu is only applied in the middle layers and without dropout
     bool use_gelu = (layer < (num_layers - 1) && p == 0);
 
     if (use_gelu)

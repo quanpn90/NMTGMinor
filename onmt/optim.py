@@ -364,14 +364,14 @@ class Optim(object):
             if not fast_adam:
                 self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
                                             weight_decay=self.weight_decay, amsgrad=self.amsgrad)
-        # elif self.method in ['fused_lamb', 'fused_nvlamb']:
-        #
-        #     from onmt.modules.optimized.fused_lamb import FusedLAMB
-        #     self.optimizer = FusedLAMB(self.params, lr=self.lr,
-        #                                betas=(self.beta1, self.beta2), eps=1e-6,
-        #                                   weight_decay=self.weight_decay, amsgrad=self.amsgrad,
-        #                                set_grad_none=False, max_grad_norm=self.max_grad_norm,
-        #                                use_nvlamb=(self.method == 'fused_nvlamb'))
+        elif self.method in ['fused_lion', 'lion']:
+
+            from lion_pytorch import Lion
+
+            self.optimizer = Lion(self.params, lr=self.lr,
+                                  betas=(self.beta1, self.beta2),
+                                  weight_decay=self.weight_decay, use_triton=True,
+                                  decoupled_weight_decay=False)
 
         # elif self.method in ['novograd']:
         #     try:

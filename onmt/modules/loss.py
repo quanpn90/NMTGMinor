@@ -75,8 +75,9 @@ class CrossEntropyLossBase(_Loss):
         go_to_slow_code = True
         if not softmaxed:
             # Try the fastest softmax + loglikelihood implementation first
-            if fast_entropy and (logits.dtype == torch.float16 or logits.dtype == torch.float32):
-                half_to_float = (logits.dtype == torch.float16)
+            if fast_entropy and (logits.dtype == torch.float16 or logits.dtype == torch.float32
+                                 or logits.dtype == torch.bfloat16):
+                half_to_float = (logits.dtype == torch.float16 or logits.dtype == torch.bfloat16)
                 loss = self.softmax_xentropy(logits, gtruth, label_smoothing, self.padding_idx, half_to_float)
 
                 # We need to return the loss data without masking bad positions
