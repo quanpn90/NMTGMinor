@@ -216,6 +216,10 @@ def build_tm_model(opt, dicts, constants=None):
             from onmt.models.speech_recognizer.w2vbert import W2VBert
             encoder = W2VBert(opt, opt.wav2vec2_pretrained_model)
 
+        elif "xeus" in opt.enc_pretrained_model:
+            from onmt.models.speech_recognizer.xeus import Xeus
+            encoder = Xeus(opt, opt.wav2vec2_pretrained_model)
+
         else:
             from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec
 
@@ -332,7 +336,27 @@ def build_tm_model(opt, dicts, constants=None):
         from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec, Wav2vecTransformer
         from onmt.models.speech_recognizer.relative_transformer import SpeechTransformerDecoder
 
-        encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model)
+        # encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model)
+        if "wavlm" in opt.enc_pretrained_model:
+            from onmt.models.speech_recognizer.wavlm import WavLMEncoder
+            encoder = WavLMEncoder(opt, opt.wav2vec2_pretrained_model)
+
+        elif "hubert" in opt.enc_pretrained_model:
+            from onmt.models.speech_recognizer.hubert import Hubert
+            encoder = Hubert(opt, opt.wav2vec2_pretrained_model)
+
+        elif "w2vbert" in opt.enc_pretrained_model or "w2v-bert" in opt.enc_pretrained_model:
+            from onmt.models.speech_recognizer.w2vbert import W2VBert
+            encoder = W2VBert(opt, opt.wav2vec2_pretrained_model)
+
+        elif "xeus" in opt.enc_pretrained_model:
+            from onmt.models.speech_recognizer.xeus import Xeus
+            encoder = Xeus(opt, opt.wav2vec2_pretrained_model)
+
+        else:
+            from onmt.models.speech_recognizer.wav2vec2 import FairseqWav2Vec
+
+            encoder = FairseqWav2Vec(opt, model_path=opt.wav2vec2_pretrained_model)
 
         decoder = SpeechTransformerDecoder(opt, embedding_tgt, positional_encoder,
                                            language_embeddings=language_embeddings)

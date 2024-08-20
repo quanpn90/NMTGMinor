@@ -79,14 +79,19 @@ def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
 
     """
 
-    from onmt.train_utils.mp_trainer import Trainer
+    if opt.ocl_training:
+        from onmt.train_utils.ocl_trainer import OCLTrainer
+        trainer = OCLTrainer(gpu, dicts, opt, constants)
+    else:
+        from onmt.train_utils.mp_trainer import Trainer
+        trainer = Trainer(gpu, dicts, opt, constants)
     # from onmt.train_utils.clip_trainer import ClipTrainer
 
     # if opt.clip_learning:
     #     trainer = ClipTrainer(gpu, dicts, opt, constants)
     #     trainer.run(checkpoint=checkpoint, train_data=train_data, valid_data=valid_data)
     # else:
-    trainer = Trainer(gpu, dicts, opt, constants)
+
     trainer.run(checkpoint=checkpoint, train_data=train_data, valid_data=valid_data)
 
 
@@ -114,11 +119,16 @@ def run_gem_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constan
 
 def main(gpu, opt):
 
+    def is_main():
+        return gpu == 0
+
+    def print_main(*args, **kwargs):
+        if is_main():
+            print(*args, **kwargs)
+
     def lprint(*args, **kwargs):
         if gpu == 0:
             print(*args, **kwargs, flush=True)
-    # manager = MyManager()
-    # manager.start()
 
     if opt.char_ctc:
         lprint("Loading char data ...")
@@ -490,7 +500,7 @@ def main(gpu, opt):
     else:
         if opt.dataset_factors is not None:
             dataset_factors = {int(df.split(":")[0]): int(df.split(":")[1]) for df in opt.dataset_factors.split(",")}
-            print("Dataset factors:", dataset_factors)
+            lprint("Dataset factors:", dataset_factors)
         else:
             dataset_factors = {}
 

@@ -157,17 +157,18 @@ class ESPnetSSLModel(AbsESPnetModel):
         # 5. Forward encoder
         # feats: (Batch, Length, Dim)
         # -> encoder_out: (Batch, Length2, Dim2)
-        encoder_out, out_lens, _ = self.encoder(
-            feats, feats_lengths, masks=pad_masks, return_all_hs=True
+        encoder_out, encoder_mask, _ = self.encoder(
+            feats, feats_lengths, masks=pad_masks, return_all_hs=False,
         )
 
-        if use_final_output:
-            encoder_out = encoder_out[1][:-1] + [encoder_out[0]]
-        else:
-            encoder_out = encoder_out[1]
+        # if use_final_output:
+        #     encoder_out = encoder_out[1][:-1] + [encoder_out[0]]
+        # else:
+        #     encoder_out = encoder_out[1]
+
         del feats, feats_lengths, pad_masks
 
-        return encoder_out, mask_info, features_pen
+        return encoder_out, encoder_mask, mask_info, features_pen
 
     def _extract_feats(
         self, speech: torch.Tensor, speech_lengths: torch.Tensor

@@ -373,6 +373,7 @@ class EBranchformerEncoder(AbsEncoder):
 
         activation = get_activation(ffn_activation_type)
         if positionwise_layer_type == "linear":
+            print("linear", activation, dropout_rate)
             positionwise_layer = PositionwiseFeedForward
             positionwise_layer_args = (
                 output_size,
@@ -560,4 +561,5 @@ class EBranchformerEncoder(AbsEncoder):
         olens = masks.squeeze(1).sum(1)
         if len(intermediate_outs) > 0:
             return (xs_pad, intermediate_outs), olens, None
-        return xs_pad, olens, None
+
+        return xs_pad, masks, None

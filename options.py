@@ -18,6 +18,8 @@ def make_parser(parser):
                         help='The dictionary will be overidden from checkpoint instead of reading from data.')
     parser.add_argument('-gem_training', action='store_true',
                         help='Gradient Episodic Memory training')
+    parser.add_argument('-ocl_training', action='store_true',
+                        help='Online Continual Learning training')
     parser.add_argument('-train_sets', default=[], nargs='+', type=int,
                         help="Sets of training data. For example 0 1 2")
     parser.add_argument('-valid_sets', default=[], nargs='+', type=int,

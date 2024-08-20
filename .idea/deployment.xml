@@ -4,6 +4,13 @@
     <option name="confirmBeforeDeletion" value="false" />
     <option name="confirmBeforeUploading" value="false" />
     <serverData>
+      <paths name="bridges2.psc.edu">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/jet/home/npham2/code/NMTGMinor" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="i13hpc1.ira.uka.de">
         <serverdata>
           <mappings>

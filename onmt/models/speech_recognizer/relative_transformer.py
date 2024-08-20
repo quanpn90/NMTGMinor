@@ -253,7 +253,9 @@ class SpeechTransformerEncoder(TransformerEncoder):
 
 class SpeechTransformerDecoder(TransformerDecoder):
 
-    def __init__(self, opt, dicts, positional_encoder, language_embeddings=None, ignore_source=False):
+    def __init__(self, opt, dicts, positional_encoder,
+                 language_embeddings=None, ignore_source=False,
+                 ):
 
         self.death_rate = opt.death_rate
         self.max_memory_size = opt.max_memory_size
@@ -279,6 +281,7 @@ class SpeechTransformerDecoder(TransformerDecoder):
         # self.r_r_bias = nn.Parameter(torch.Tensor(self.n_heads, self.d_head))
 
         self.mln = opt.multilingual_layer_norm
+
         if not opt.rezero:
             self.postprocess_layer = PrePostProcessing(opt.model_size, opt.dropout, sequence='n', multilingual=self.mln,
                                                        n_languages=opt.n_languages)

@@ -106,6 +106,8 @@ class Hubert(nn.Module):
         state = load_checkpoint_to_cpu(model_path)
         # self.cfg = state['cfg']['model']
         self.cfg = state['args']
+        if self.cfg is None:
+            self.cfg = state['cfg']['model']
 
         # don't override the options for wav2vec yet (some of them can create NaN)
         self.cfg.dropout = self.opt.enc_pretrain_emb_dropout

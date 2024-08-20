@@ -9,6 +9,13 @@
           </advancedOptions>
         </fileTransfer>
       </webServer>
+      <webServer id="68508acc-bb91-4bd0-bcf8-e6fa97bbb9a0" name="bridges2.psc.edu">
+        <fileTransfer accessType="SFTP" host="bridges2.psc.edu" port="22" sshConfigId="2777a602-d130-4c13-a06f-c8c38c878f3a" sshConfig="npham2@bridges2.psc.edu:22 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
     </option>
   </component>
 </project>

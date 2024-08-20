@@ -632,7 +632,6 @@ class Wav2vecTransformer(Transformer):
 
         # compute the logits for each encoder step
         if self.ctc:
-            # raise NotImplementedError
             output_dict['encoder_logits'] = self.ctc_linear(output_dict['context'])
 
         return output_dict

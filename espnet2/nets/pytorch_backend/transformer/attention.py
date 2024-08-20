@@ -45,6 +45,17 @@ class MultiHeadedAttention(nn.Module):
     ):
         """Construct an MultiHeadedAttention object."""
         super(MultiHeadedAttention, self).__init__()
+
+        self.use_flash_attn = use_flash_attn
+        try:
+            from flash_attn import flash_attn_func, flash_attn_varlen_func
+            from flash_attn.bert_padding import pad_input, unpad_input
+            # print("XEUS model with Flash Attention")
+            self.use_flash_attn = True
+        except Exception:
+            logging.info("Failed to import Flash Attention, using ESPnet default.")
+            self.use_flash_attn = False
+
         assert n_feat % n_head == 0
         # We assume d_v always equals d_k
         self.d_k = n_feat // n_head
@@ -55,7 +66,7 @@ class MultiHeadedAttention(nn.Module):
         self.linear_out = nn.Linear(n_feat, n_feat)
         self.attn = None
         self.dropout = (
-            nn.Dropout(p=dropout_rate) if not use_flash_attn else nn.Identity()
+            nn.Dropout(p=dropout_rate) if not self.use_flash_attn else nn.Identity()
         )
         self.dropout_rate = dropout_rate
 
