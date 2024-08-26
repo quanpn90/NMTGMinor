@@ -162,8 +162,10 @@ class LayerNorm(torch.nn.Module):
                 and input.size(-1) in [768, 1024, 2048, 3072, 4096] and self.bias is not None:
             return fast_layer_norm_affine(input, self.weight, self.bias, self.normalized_shape, eps)
 
-        return F.layer_norm(
-            input, self.normalized_shape, self.weight, self.bias, eps)
+        output = F.layer_norm(
+            input, self.normalized_shape, self.weight, self.bias, eps).type_as(input)
+
+        return output
 
     def extra_repr(self):
         return '{normalized_shape}, eps={eps}, ' \

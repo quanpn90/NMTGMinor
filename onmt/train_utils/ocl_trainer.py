@@ -25,6 +25,10 @@ from onmt.modules.loss import NMTLossFunc, NMTAndCTCLossFunc
 from onmt.train_utils.stats import Logger
 from onmt.utils import checkpoint_paths, normalize_gradients, clip_grad_norm
 from onmt.model_factory import build_model, optimize_model, init_model_parameters
+
+from .reservoir import Reservoir
+from onmt.data.dataset import get_batch_from_multidataset
+
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP_model
 from torch.distributed.fsdp import (
@@ -56,16 +60,28 @@ def human_format(num):
                          ['', 'K', 'M', 'B', 'T'][magnitude])
 
 
-def prepare_sample(batch, device=None):
+def prepare_sample(batch, device=None, reservoir=None, dataset_id=None):
     """
     Put minibatch on the corresponding GPU
     :param batch:
     :param device:
+    :param reservoir:
+    :param dataset_id:
     :return:
     """
+
     if isinstance(batch, list):
         batch = batch[0]
     batch = rewrap(batch)
+
+    if reservoir is not None:
+
+        assert dataset_id is not None
+        indices = batch.get('indices')
+        src_lengths = batch.get('src_lengths')
+        tgt_lengths = batch.get('tgt_lengths')
+        reservoir.add_sample((dataset_id, indices, src_lengths, tgt_lengths))
+
     batch.cuda(fp16=False, device=device)
 
     return batch
@@ -411,7 +427,7 @@ class OCLTrainer(object):
 
         if opt.load_fisher:
             if self.is_main():
-                print("[INFO] Loading fisher information from: %s" % opt.load_fisher)
+                self.print("[INFO] Loading fisher information from: %s" % opt.load_fisher)
             self.fisher_info = torch.load(opt.load_fisher, map_location=lambda storage, loc: storage)
             if self.cuda:
                 for n in self.fisher_info['mean']:
@@ -420,6 +436,18 @@ class OCLTrainer(object):
                     self.fisher_info['fisher_diag'][n] = self.fisher_info['fisher_diag'][n].cuda()
         else:
             self.fisher_info = None
+
+        self.print("Creating Reservoir ...")
+
+        # TODO: add option for reservoir size
+
+        reservoir_size = opt.reservoir_size // self.world_size
+        if reservoir_size > 0:
+            self.reservoir = Reservoir(max_samples=reservoir_size,
+                                       update_method="reservoir_sampling",
+                                       unit="sample")
+        else:
+            self.reservoir = None
 
         print("[INFO] Process %d ready." % self.rank, flush=True)
 
@@ -736,7 +764,6 @@ class OCLTrainer(object):
         report_dec_lid_count = 0
 
         start = time.time()
-        n_samples = len(data_iterator)
 
         counter = 0
         num_accumulated_words = zero_tensor()
@@ -763,18 +790,49 @@ class OCLTrainer(object):
                 if n in self.fisher_info['mean'] and p.requires_grad:
                     parameters[n] = p
 
+        assert len(data_iterators) == len(epoch_iterators)
+        assert len(data_iterators) == len(train_data)
+
         for dataset_id, (_data_iterator, _epoch_iterator) in enumerate(zip(data_iterators, epoch_iterators)):
 
+            # maybe clean up everything from the last round?
+            gc.collect()
+
+            n_samples = len(_data_iterator) * 2 - 1 if dataset_id > 0 else len(_data_iterator)
             i = _data_iterator.iterations_in_epoch
             i = i * self.world_size
             self.print("Training Epoch %d - Round (dataset) %d" % (epoch, dataset_id))
 
+            rehearse = False
+
+            update_frequency = 2 * opt.update_frequency if dataset_id > 0 else opt.update_frequency
+
             while not _data_iterator.end_of_epoch():
 
-                samples = next(_epoch_iterator)
+                if not rehearse or opt.reservoir_size <= 0:
+                    samples = next(_epoch_iterator)
 
-                # TODO: add RESERVOIR
-                batch = prepare_sample(samples, device=self.device)
+                    # sample is also added to the reservoir here
+                    batch = prepare_sample(samples, device=self.device, dataset_id=dataset_id,
+                                                                        reservoir=self.reservoir)
+                    rehearse = False
+                    rehearsing = False
+
+                    # start to sample
+                    if dataset_id > 0 and self.reservoir is not None:
+                        # print("rehearsing ....", flush=True)
+                        rehearse = True  # so that the next one is to rehearse
+                else:
+                    # print("rehearsing from memory....", flush=True)
+                    rehearsed_dataset_ids, rehearsed_indices = self.reservoir.sample()
+                    # samples = train_data[rehearsed_dataset_id].get_batch_from_indices(rehearsed_indices)
+                    samples = get_batch_from_multidataset(train_data, rehearsed_dataset_ids, rehearsed_indices)
+
+                    batch = prepare_sample(samples, device=self.device)
+
+                    rehearsing = True
+                    rehearse = False
+
                 targets = batch.get('target_output')
 
                 # DEPRECATE streaming state
@@ -783,7 +841,7 @@ class OCLTrainer(object):
                 # TODO: dealing with oom during distributed training
                 oom = zero_tensor()
                 counter = counter + 1
-                reduce = True if counter >= opt.update_frequency or i == (n_samples - 1) else False
+                reduce = True if counter >= update_frequency or i == (n_samples - 1) else False
 
                 try:
                     def maybe_no_sync():
@@ -840,7 +898,7 @@ class OCLTrainer(object):
                                 n_ctc_targets = outputs['n_ctc_targets']
                                 # TODO: add CTC loss to models
                                 ctc_loss_data = ctc_loss.item()
-                                full_loss = full_loss + ctc_loss
+                                full_loss = (1 - opt.ctc_loss) * full_loss + opt.ctc_loss * ctc_loss
                             else:
                                 n_ctc_targets = 0
                                 ctc_loss_data = 0
@@ -1137,7 +1195,7 @@ class OCLTrainer(object):
                     report_ctc_targets.add_(n_ctc_targets)
 
                 # control the index a little bit to ensure the log is always printed
-                if i == 0 or ((i + 1) % opt.log_interval < self.world_size):
+                if i == 0 or ((i + 1) % opt.log_interval < self.world_size) and not rehearsing:
 
                     self.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
                     # self.all_reduce(report_ewc_loss, op=dist.ReduceOp.SUM, group=self.group)
@@ -1206,7 +1264,7 @@ class OCLTrainer(object):
                         log_string += ("%s src tok/s; %s tgt tok/s; " %
                                        (src_speed, tgt_speed))
 
-                        log_string += ("%s elapsed" %
+                        log_string += ("%s" %
                                        str(datetime.timedelta(seconds=int(time.time() - self.start_time))))
 
                         self.print(log_string, flush=True)
@@ -1227,7 +1285,8 @@ class OCLTrainer(object):
                     start = time.time()
 
                 # increase i by world size
-                i = i + self.world_size
+                if not rehearsing:
+                    i = i + self.world_size
 
             # end of round -> run validation and save
             # we run validation on all valid datasets

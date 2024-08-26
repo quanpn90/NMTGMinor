@@ -539,6 +539,8 @@ class Wav2vecTransformer(Transformer):
             self.mirror_generator = copy.deepcopy(self.generator)
             self.mirror_generator[0].linear.weight = self.decoder.word_lut.weight
 
+        self.ctc_compress = None
+        self.ctc_char = False
         if self.ctc:
             self.ctc_linear = Linear(encoder.model_size, self.tgt_vocab_size)
 
@@ -546,7 +548,12 @@ class Wav2vecTransformer(Transformer):
         return
 
     def forward(self, batch, adv_ptb_grad=False, input_ptb=None, factorize=False,
-                mirror=False, target_mask=None, **kwargs):
+                mirror=False, target_mask=None,
+                ctc_loss_function=None,
+                ctc_labels=None,
+                grad_scaler=None,
+                ctc_coeff=None,
+                **kwargs):
         """
         :param factorize:
         :param mirror:
@@ -571,11 +578,71 @@ class Wav2vecTransformer(Transformer):
         src = src.transpose(0, 1)  # transpose to have batch first
         tgt = tgt.transpose(0, 1)
 
+        # the encoder just needs the src
         encoder_output = self.encoder(src, adv_ptb_grad=adv_ptb_grad, input_ptb=input_ptb)
 
         encoder_output = defaultdict(lambda: None, encoder_output)
         context = encoder_output['context']
         src = encoder_output['src']
+
+        if ctc_coeff > 0 or not self.has_decoder:
+            # what is the ctc_labels here?
+            ctc_labels = batch.get("target_output")
+            assert (ctc_loss_function.padding_idx == onmt.constants.TGT_PAD)
+
+            # we have to perform CTC first
+
+            # compute the logits for each encoder step
+            # run the ctcoutput via the wav2vec context (not context)
+            # ctc output should have the mbart vocabulary
+            # encoder_hidden = output_dict['wav2vec_context'].
+            # output_dict['encoder_logits'] = self.ctc_linear(output_dict['wav2vec_context'])
+            # how should we proceed from this?
+
+            encoder_logits = self.ctc_linear(context)
+
+            ctc_loss_inputs = dict()
+            ctc_loss_inputs['encoder_logits'] = encoder_logits
+            ctc_loss_inputs['wav2vec_padding_mask'] = encoder_output['wav2vec_padding_mask']
+            ctc_loss_inputs['src_mask'] = encoder_output['src']
+
+            ctc_loss, n_ctc_targets = ctc_loss_function(ctc_loss_inputs, ctc_labels)
+            # ctc_loss = ctc_loss * ctc_coeff
+
+            # backward immediately and accumulate gradients into the context.grad
+
+            ctc_loss_data = ctc_loss.item()
+
+            if self.ctc_compress is not None:
+                #     # TODO: Ctc compression
+                with torch.no_grad():
+                    x_ctc = encoder_logits
+                    batch_predicted = []
+                    prob_ctc = F.softmax(x_ctc, dim=-1).transpose(0, 1)  # from T x B x D to B x T x D
+                    for b in range(prob_ctc.shape[0]):
+                        predicted = prob_ctc[b][: src_lengths[b]].argmax(-1).tolist()
+                        batch_predicted.append([(p[0], len(list(p[1]))) for p in groupby(predicted)])
+
+                    new_lengths = [len(p) for p in batch_predicted]
+
+                    # TODO: compress_method
+                    weights_matrix = self.ctc_compress(prob_ctc, batch_predicted, new_lengths, x_ctc.dtype,
+                                                       x_ctc.device)
+
+                context = context_detached.permute(1, 2, 0).bmm(weights_matrix).permute(2, 0, 1)
+
+                # creating a new padding mask
+                max_len = max(new_lengths)
+                _src_mask = context.new_zeros(len(new_lengths), max_len).bool()
+                for i, l in enumerate(new_lengths):
+                    _src_mask[i, l:] = 1
+
+                src_attention_mask = _src_mask
+
+        else:
+            ctc_loss = None
+            ctc_loss_data = None
+            n_ctc_targets = 0
 
         # pass the mask ('src') from the encoder output the decoder as the attention mask
         decoder_output = self.decoder(tgt, context, src,
@@ -595,6 +662,8 @@ class Wav2vecTransformer(Transformer):
         output_dict['target_mask'] = target_mask
         output_dict['target'] = batch.get('target_output')
         output_dict['source'] = encoder_output['source']
+        output_dict['ctc_loss'] = ctc_loss
+        output_dict['n_ctc_targets'] = n_ctc_targets
 
         # final layer: computing softmax
         logprobs = self.generator[0](output_dict)['logits']
@@ -854,7 +923,7 @@ class Wav2vecBERT(Wav2vecTransformer):
             ctc_loss_inputs['src_mask'] = encoder_output['src']
 
             ctc_loss, n_ctc_targets = ctc_loss_function(ctc_loss_inputs, ctc_labels)
-            ctc_loss = ctc_loss * ctc_coeff
+            # ctc_loss = ctc_loss * ctc_coeff
 
             # backward immediately and accumulate gradients into the context.grad
 
@@ -999,7 +1068,7 @@ class Wav2vecBERT(Wav2vecTransformer):
         output_dict['src'] = src
         output_dict['target_mask'] = target_mask
         output_dict['target'] = batch.get('target_output')
-        output_dict['ctc_loss'] = ctc_loss_data
+        output_dict['ctc_loss'] = ctc_loss
         output_dict['n_ctc_targets'] = n_ctc_targets
 
         output_dict['wav2vec_context'] = encoder_output['wav2vec_context']

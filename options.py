@@ -20,6 +20,11 @@ def make_parser(parser):
                         help='Gradient Episodic Memory training')
     parser.add_argument('-ocl_training', action='store_true',
                         help='Online Continual Learning training')
+    parser.add_argument('-reservoir_size', type=int, default=0,
+                        help='The size of reservoir used in Online Continual Learning training')
+    # parser.add_argument('-mirror_loss', action='store_true',
+    #                     help='Using mirror loss')
+
     parser.add_argument('-train_sets', default=[], nargs='+', type=int,
                         help="Sets of training data. For example 0 1 2")
     parser.add_argument('-valid_sets', default=[], nargs='+', type=int,
@@ -53,6 +58,7 @@ def make_parser(parser):
     parser.add_argument('-pin_memory', action="store_true",
                         help='The data loader pins memory into the GPU to reduce the bottleneck between GPU-CPU')
 
+    # TO BE USED for continual learning
     parser.add_argument('-bayes_by_backprop', action='store_true',
                         help="""Using Bayes-By-Backprop models in training""")
     parser.add_argument('-neg_log_sigma1', type=float, default=0,
@@ -111,8 +117,7 @@ def make_parser(parser):
     #                     help="""Unidirectional encoder""")
     parser.add_argument('-reconstruct', action='store_true',
                         help='Apply reconstruction with an additional decoder')
-    parser.add_argument('-mirror_loss', action='store_true',
-                        help='Using mirror loss')
+
 
     # parser.add_argument('-universal', action='store_true',
     #                     help='Using one layer universally (recurrent)')

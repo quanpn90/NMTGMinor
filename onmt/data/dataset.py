@@ -364,7 +364,9 @@ def collate_fn(src_data, tgt_data,
                past_src_data=None, src_pad="<blank>", tgt_pad="<blank>",
                feature_size=40, use_memory=None,
                src_features=None, deterministic=False,
-               use_char_level=False, char_data=None):
+               use_char_level=False, char_data=None,
+               index_data=None):
+
     tensors = dict()
     if src_data is not None:
         tensors['source'], tensors['source_pos'], src_lengths = merge_data(src_data, align_right=src_align_right,
@@ -456,6 +458,9 @@ def collate_fn(src_data, tgt_data,
     else:
         target_char = None
         tensors['char_target'] = None
+
+    # store the indices of the samples
+    tensors['indices'] = torch.LongTensor(index_data) if index_data is not None else None
 
     # ONE-SHOT LEARNING MEMORY IMPLEMENTATION
     if use_memory:
@@ -1044,7 +1049,8 @@ class Dataset(torch.utils.data.Dataset):
             'tgt_lang': tgt_lang,
             'src_atb': src_atb,
             'tgt_atb': tgt_atb,
-            'past_src': past_src
+            'past_src': past_src,
+            'index': index
         }
 
         return sample
@@ -1112,6 +1118,68 @@ class Dataset(torch.utils.data.Dataset):
                        )
         return batch
 
+    def get_batch_from_indices(self, indices):
+        """
+        This function is only used in when we need to access a batch directly from the dataset
+        (Without an external loader)
+        :param indices: the indices of the samples in the mini-batch
+        :return: Batch
+        """
+
+        if self.src:
+            src_data = [self.src[i] for i in indices]
+        else:
+            src_data = None
+
+        if self.tgt:
+            tgt_data = [self.tgt[i] for i in indices]
+        else:
+            tgt_data = None
+
+        src_lang_data = None
+        tgt_lang_data = None
+        src_atbs_data = None
+        tgt_atbs_data = None
+
+        if self.bilingual:
+            if self.src_langs is not None:
+                src_lang_data = [self.src_langs[0]]  # should be a tensor [0]
+            if self.tgt_langs is not None:
+                tgt_lang_data = [self.tgt_langs[0]]  # should be a tensor [1]
+            if self.src_atbs is not None:
+                src_atbs_data = [self.src_atbs[0]]
+            if self.tgt_atbs is not None:
+                tgt_atbs_data = [self.tgt_atbs[0]]
+        else:
+            if self.src_langs is not None:
+                src_lang_data = [self.src_langs[i] for i in indices]
+            if self.tgt_langs is not None:
+                tgt_lang_data = [self.tgt_langs[i] for i in indices]
+            src_atbs_data = None
+            tgt_atbs_data = None
+
+        if self.use_past_src:
+            past_src = [self.past_src[i] for i in indices]
+        else:
+            past_src = None
+
+        batch = rewrap(collate_fn(src_data, tgt_data=tgt_data,
+                                  src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
+                                  src_atbs_data=src_atbs_data, tgt_atbs_data=tgt_atbs_data,
+                                  src_align_right=self.src_align_right, tgt_align_right=self.tgt_align_right,
+                                  src_type=self._type,
+                                  augmenter=self.augmenter, upsampling=self.upsampling, vocab_mask=self.vocab_mask,
+                                  past_src_data=past_src,
+                                  src_pad=self.src_pad,
+                                  tgt_pad=self.tgt_pad,
+                                  feature_size=self.input_size,
+                                  use_char_level=self.use_char_level,
+                                  char_data=self.char_data,
+                                  index_data=indices
+                                  ),
+                       )
+        return batch
+
     def collater(self, collected_samples):
         """
         Merge a list of samples into a Batch
@@ -1137,6 +1205,8 @@ class Dataset(torch.utils.data.Dataset):
 
             if self.tgt:
                 tgt_data = [sample['tgt'] for sample in samples]
+
+            index_data = [sample['index'] for sample in samples]
 
             if self.bilingual:
                 if self.src_langs is not None:
@@ -1171,7 +1241,8 @@ class Dataset(torch.utils.data.Dataset):
                                past_src_data=past_src_data, src_pad=self.src_pad, tgt_pad=self.tgt_pad,
                                feature_size=self.input_size,
                                use_char_level=self.use_char_level,
-                               char_data=self.char_data
+                               char_data=self.char_data,
+                               index_data=index_data
                                )
 
             batches.append(batch)
@@ -1239,3 +1310,79 @@ class Dataset(torch.utils.data.Dataset):
                                   src_pad=self.src_pad, tgt_pad=self.tgt_pad, feature_size=self.input_size)
 
         return [batch]
+
+
+# this function is used to get data samples from a list of indices and a list of dataset ids
+def get_batch_from_multidataset(datasets, dataset_ids, indices):
+        """
+        This function is only used in when we need to access a batch directly from MULTI datasets
+        each sample has a dataset ID and an index
+        (Without an external loader)
+        :param datasets
+        :param dataset_ids
+        :param indices: the indices of the samples in the mini-batch
+        :return: Batch
+        """
+
+        _dataset = datasets[0]
+
+        src_data = list() # [self.src[i] for i in indices]
+        for (_dataset_id, index) in zip(dataset_ids, indices):
+            src_data.append(datasets[_dataset_id].src[index])
+
+        if _dataset.tgt:
+            tgt_data = list()
+            for (_dataset_id, index) in zip(dataset_ids, indices):
+                tgt_data.append(datasets[_dataset_id].tgt[index])
+        else:
+            tgt_data = None
+
+        src_lang_data = None
+        tgt_lang_data = None
+        src_atbs_data = None
+        tgt_atbs_data = None
+
+        if _dataset.bilingual:
+            if _dataset.src_langs is not None:
+                src_lang_data = [_dataset.src_langs[0]]  # should be a tensor [0]
+            if _dataset.tgt_langs is not None:
+                tgt_lang_data = [_dataset.tgt_langs[0]]  # should be a tensor [1]
+            if _dataset.src_atbs is not None:
+                src_atbs_data = [_dataset.src_atbs[0]]
+            if _dataset.tgt_atbs is not None:
+                tgt_atbs_data = [_dataset.tgt_atbs[0]]
+        else:
+            if _dataset.src_langs is not None:
+                src_lang_data = list()
+                for (_dataset_id, index) in zip(dataset_ids, indices):
+                    src_lang_data.append(datasets[_dataset_id].src_langs[index])
+            if _dataset.tgt_langs is not None:
+                tgt_lang_data = list()
+                for (_dataset_id, index) in zip(dataset_ids, indices):
+                    tgt_lang_data.append(datasets[_dataset_id].tgt_langs[index])
+            src_atbs_data = None
+            tgt_atbs_data = None
+
+        if _dataset.use_past_src:
+            past_src = list()
+            for (_dataset_id, index) in zip(dataset_ids, indices):
+                past_src.append(datasets[_dataset_id].past_src[index])
+        else:
+            past_src = None
+
+        batch = rewrap(collate_fn(src_data, tgt_data=tgt_data,
+                                  src_lang_data=src_lang_data, tgt_lang_data=tgt_lang_data,
+                                  src_atbs_data=src_atbs_data, tgt_atbs_data=tgt_atbs_data,
+                                  src_align_right=_dataset.src_align_right, tgt_align_right=_dataset.tgt_align_right,
+                                  src_type=_dataset._type,
+                                  augmenter=_dataset.augmenter, upsampling=_dataset.upsampling, vocab_mask=_dataset.vocab_mask,
+                                  past_src_data=past_src,
+                                  src_pad=_dataset.src_pad,
+                                  tgt_pad=_dataset.tgt_pad,
+                                  feature_size=_dataset.input_size,
+                                  use_char_level=_dataset.use_char_level,
+                                  char_data=_dataset.char_data,
+                                  index_data=indices
+                                  ),
+                       )
+        return batch
