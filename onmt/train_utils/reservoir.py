@@ -95,7 +95,7 @@ class Reservoir:
                         r = random.randint(0, self.num_observed)
                         if r < self.max_samples:
                             del self.data[r]
-                            self.data[j] = (dataset_id, index, src_lengths[j],  tgt_lengths[j])
+                            self.data[r] = (dataset_id, index, src_lengths[j],  tgt_lengths[j])
 
                 # if len(self.data) < self.max_samples:
                 #
