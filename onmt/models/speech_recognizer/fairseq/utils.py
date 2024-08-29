@@ -281,7 +281,7 @@ def index_put(tensor, indices, value):
 
 def get_activation_fn(activation: str) -> Callable:
     """Returns the activation function corresponding to `activation`"""
-    from .fairseq_modules import gelu, gelu_accurate
+    from ..fairseq_wav2vec2.fairseq_modules import gelu, gelu_accurate
 
     if activation == "relu":
         return F.relu

@@ -10,7 +10,7 @@ from onmt.modules.optimized.linear import Linear
 import math
 from .fairseq_wav2vec2.file_io import PathManager
 from omegaconf import DictConfig, open_dict, OmegaConf
-from .fairseq_wav2vec2.utils import overwrite_args_by_name
+from onmt.models.speech_recognizer.fairseq.utils import overwrite_args_by_name
 
 import copy
 import numpy as np

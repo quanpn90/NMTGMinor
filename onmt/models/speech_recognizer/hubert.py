@@ -10,7 +10,7 @@ from onmt.modules.optimized.linear import Linear
 import math
 from .fairseq_wav2vec2.file_io import PathManager
 from omegaconf import DictConfig, open_dict, OmegaConf
-from .fairseq_wav2vec2.utils import overwrite_args_by_name
+from onmt.models.speech_recognizer.fairseq.utils import overwrite_args_by_name
 
 import copy
 import numpy as np
@@ -99,10 +99,12 @@ class Hubert(nn.Module):
         # do we need opt for this?
         self.opt = opt
         self.model_path = model_path
-        # import fairseq
-        # from fairseq.checkpoint_utils import load_model_ensemble_and_task, load_checkpoint_to_cpu
-        # from fairseq.models.wav2vec.wav2vec2 import Wav2Vec2Model
-        from .fairseq_wav2vec2.hubert import HubertModel
+
+        if opt.enc_pretrained_model == "hubert_org":
+            print("Using pytorch original code for HUBERT ...")
+            from .fairseq.hubert import HubertModel
+        else:
+            from .fairseq_wav2vec2.hubert import HubertModel
         state = load_checkpoint_to_cpu(model_path)
         # self.cfg = state['cfg']['model']
         self.cfg = state['args']
@@ -155,51 +157,49 @@ class Hubert(nn.Module):
         self.wav2vec_encoder.feature_grad_mult = 0.0
         self.time = None # backward compatibility
 
-
         # freezing the parameters of the Convolutional feature extractors (by default)
         for param in self.wav2vec_encoder.feature_extractor.parameters():
             param.requires_grad = False
 
-        # TODO:
         # add relative attention
-        if (hasattr(opt, 'wav2vec2_relative_attention') and opt.wav2vec2_relative_attention) or \
-                (hasattr(opt, 'add_relative_attention') and opt.add_relative_attention):
-            print("[INFO] Add relative attention for wav2vec")
-            self.wav2vec_encoder.add_relative_attention()
-
-        self.rotary_position_encoding = opt.rotary_position_encoding
-        if self.rotary_position_encoding:
-            assert not (hasattr(opt, 'wav2vec2_relative_attention') and opt.wav2vec2_relative_attention)
-            self.wav2vec_encoder.add_rotary_attention()
-
-        # freeze the whole encoder. needs to do this first before adding customized parameters
-        if opt.freeze_encoder:
-            print("[INFO] Freezing encoder parameters")
-            for p in self.wav2vec_encoder.parameters():
-                p.requires_grad = False
-
-        if opt.freeze_encoder_ffn:
-            self.freeze_ffn_params()
-
-        # then add factorize
-        if opt.multilingual_factorized_weights:
-            print("[INFO] Factorizing Wav2vec model into %d languages and %d factors"
-                  % (opt.n_languages, opt.n_attributes))
-            self.wav2vec_encoder.encoder.add_factorize(opt.n_languages, rank=opt.mfw_rank,
-                                                       multiplicative=opt.mfw_multiplicative,
-                                                       flexible=opt.flex_factorize,
-                                                       fast=opt.fast_factorize)
-
-        self.predict_language = False # self.wav2vec_encoder.predict_language
-
-        # or adapter
-        if opt.wav2vec_adapter > 0:
-            print("[INFO] Adding adapters for Wav2vec model with %d languages" % opt.n_languages)
-            self.wav2vec_encoder.encoder.add_adapters(opt.n_languages, adapter_location=opt.wav2vec_adapter)
-
-        else:
-            self.stacked_encoder = None
-            self.conv_downsampler = None
+        # if (hasattr(opt, 'wav2vec2_relative_attention') and opt.wav2vec2_relative_attention) or \
+        #         (hasattr(opt, 'add_relative_attention') and opt.add_relative_attention):
+        #     print("[INFO] Add relative attention for wav2vec")
+        #     self.wav2vec_encoder.add_relative_attention()
+        #
+        # self.rotary_position_encoding = opt.rotary_position_encoding
+        # if self.rotary_position_encoding:
+        #     assert not (hasattr(opt, 'wav2vec2_relative_attention') and opt.wav2vec2_relative_attention)
+        #     self.wav2vec_encoder.add_rotary_attention()
+        #
+        # # freeze the whole encoder. needs to do this first before adding customized parameters
+        # if opt.freeze_encoder:
+        #     print("[INFO] Freezing encoder parameters")
+        #     for p in self.wav2vec_encoder.parameters():
+        #         p.requires_grad = False
+        #
+        # if opt.freeze_encoder_ffn:
+        #     self.freeze_ffn_params()
+        #
+        # # then add factorize
+        # if opt.multilingual_factorized_weights:
+        #     print("[INFO] Factorizing Wav2vec model into %d languages and %d factors"
+        #           % (opt.n_languages, opt.n_attributes))
+        #     self.wav2vec_encoder.encoder.add_factorize(opt.n_languages, rank=opt.mfw_rank,
+        #                                                multiplicative=opt.mfw_multiplicative,
+        #                                                flexible=opt.flex_factorize,
+        #                                                fast=opt.fast_factorize)
+        #
+        # self.predict_language = False # self.wav2vec_encoder.predict_language
+        #
+        # # or adapter
+        # if opt.wav2vec_adapter > 0:
+        #     print("[INFO] Adding adapters for Wav2vec model with %d languages" % opt.n_languages)
+        #     self.wav2vec_encoder.encoder.add_adapters(opt.n_languages, adapter_location=opt.wav2vec_adapter)
+        #
+        # else:
+        #     self.stacked_encoder = None
+        #     self.conv_downsampler = None
 
     def convert_fast_attention(self):
         self.wav2vec_encoder.convert_fast_attention()
@@ -279,7 +279,8 @@ class Hubert(nn.Module):
         # don't mask when precomputed tdnn is used, because spec augmentation is used in the dataset
 
         wav2vec_output = self.wav2vec_encoder(input, padding_mask=attn_mask,
-                                              mask=self.training, features_only=True, output_layer=None,
+                                              mask=self.training,
+                                              features_only=True, output_layer=None,
                                               lang=lang, atb=atb,
                                               checkpointing_ffn=checkpointing_ffn,
                                               checkpointing_self_attn=checkpointing_self_attn)

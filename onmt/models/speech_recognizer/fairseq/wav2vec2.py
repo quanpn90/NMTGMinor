@@ -12,11 +12,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from onmt.models.speech_recognizer.fairseq.utils import compute_mask_indices, get_activation_fn, get_available_activation_fns
-from .enum import ChoiceEnum
+from .utils import compute_mask_indices, get_activation_fn, get_available_activation_fns
+from ..fairseq_wav2vec2.enum import ChoiceEnum
 from torch.cuda.amp import autocast
 
-from .fairseq_modules import (
+from .modules import (
     Fp32GroupNorm,
     Fp32LayerNorm,
     GradMultiply,
@@ -31,22 +31,17 @@ from onmt.modules.layer_norm import LayerNorm
 from onmt.modules.optimized.dropout_add import fused_dropout_add
 from onmt.modules.optimized.linear import factorize_linear
 
-from onmt.models.speech_recognizer.fairseq.utils import buffered_arange, index_put, is_xla_tensor
+from .utils import buffered_arange, index_put, is_xla_tensor
 
 # from fairseq.dataclass import FairseqDataclass
 # from fairseq.models.wav2vec import Wav2Vec2Config
-from .dataclass import Wav2Vec2Config
+from ..fairseq_wav2vec2.dataclass import Wav2Vec2Config
 from onmt.modules.sinusoidal_positional_encoding import SinusoidalPositionalEmbedding
 
 EXTRACTOR_MODE_CHOICES = ChoiceEnum(["default", "layer_norm"])
 MASKING_DISTRIBUTION_CHOICES = ChoiceEnum(["static", "uniform", "normal", "poisson"])
 
 
-def dropout_residual_connection(x, residual, dropout_module, is_training):
-    if fused_dropout_add is not None and dropout_module.p > 0 and is_training:
-        return fused_dropout_add(x, residual, dropout_module.p, is_training)
-
-    return dropout_module(x) + residual
 
 
 def init_bert_params(module):
@@ -87,11 +82,9 @@ def init_bert_params(module):
             normal_(module.proj_weight.data)
 
 
-# @register_model("wav2vec2", dataclass=Wav2Vec2Config)
 class Wav2Vec2Model(torch.nn.Module):
     def __init__(self, cfg: Wav2Vec2Config,
-                 favor=False, feature_redraw_interval=1000, auto_check_redraw=True,
-                 weight_drop=0.0, predict_language=0, n_languages=1, branchformer=False):
+                 weight_drop=0.0, **kwargs):
         super().__init__()
         self.rotary_attention = False
         self.relative_attention = False
@@ -185,9 +178,7 @@ class Wav2Vec2Model(torch.nn.Module):
             torch.FloatTensor(cfg.encoder_embed_dim).uniform_()
         )
 
-        self.predict_language = predict_language
-        self.encoder = TransformerEncoder(cfg, favor=favor, weight_drop=weight_drop,
-                                          predict_language=predict_language, n_languages=n_languages, branchformer=branchformer)
+        self.encoder = TransformerEncoder(cfg)
         self.layer_norm = LayerNorm(self.embed)
 
         self.target_glu = None
@@ -197,10 +188,9 @@ class Wav2Vec2Model(torch.nn.Module):
             )
 
         self.final_proj = nn.Linear(cfg.encoder_embed_dim, final_dim)
-        self.favor = favor
 
     def replace_attn_with_s4(self, cfg):
-        self.encoder.replace_attn_with_s4(cfg)
+        return
 
     def upgrade_state_dict_named(self, state_dict, name):
         super().upgrade_state_dict_named(state_dict, name)
@@ -402,10 +392,6 @@ class Wav2Vec2Model(torch.nn.Module):
             padding_count=None,
             precomputed_tdnn=False,
             quantize=False, quantize_only=False,
-            lang=None,
-            atb=None,
-            checkpointing_ffn=False,
-            checkpointing_self_attn=False,
             **kwargs
     ):
         # if the tdnn features are precomputed then skip them
@@ -515,17 +501,14 @@ class Wav2Vec2Model(torch.nn.Module):
             y = unmasked_features
             mask_indices = None
 
-        x, layer_results, pred_lang = self.encoder(x, padding_mask=padding_mask, layer=layer, lang=lang, atb=atb,
-                                                   checkpointing_ffn=checkpointing_ffn,
-                                                   checkpointing_self_attn=checkpointing_self_attn)
+        x, layer_results = self.encoder(x, padding_mask=padding_mask, layer=layer)
 
         if features_only:
             output_dict = {
                 "x": x,
                 "padding_mask": padding_mask,
                 "features": unmasked_features,
-                "layer_results": layer_results,
-                "pred_lang": pred_lang
+                "layer_results": layer_results
             }
 
             if quantize:
@@ -706,28 +689,23 @@ class Wav2Vec2Model(torch.nn.Module):
         self.final_proj = None
 
     def add_stacked_encoder(self, stacked_encoder):
-        self.encoder.add_stacked_encoder(stacked_encoder)
+
+        return
+        # self.encoder.add_stacked_encoder(stacked_encoder)
 
     def add_relative_attention(self):
 
-        self.relative_attention = True
-        self.encoder.add_relative_attention()
+        return
+        # self.relative_attention = True
+        # self.encoder.add_relative_attention()
 
     def add_rotary_attention(self):
-
-        self.rotary_attention = True
-        self.encoder.add_rotary_attention()
+        return
+        # self.rotary_attention = True
+        # self.encoder.add_rotary_attention()
 
     def convert_fast_attention(self):
-
-        model = self.encoder
-
-        def find_modules(nn_module, type):
-            return [module for module in nn_module.modules() if isinstance(module, type)]
-
-        fast_attentions = find_modules(model, MultiheadAttention)
-        for fast_attention in fast_attentions:
-            fast_attention.convert_fast_attention()
+        return
 
 
 class ConvFeatureExtractionModel(nn.Module):
@@ -812,26 +790,21 @@ class ConvFeatureExtractionModel(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, args, favor=False, weight_drop=0.0, predict_language=0, n_languages=1, branchformer=False):
-        """
-        :param args:
-        :param favor: Performer Attention
-        """
+    def __init__(self, args, weight_drop=0.0, **kwargs):
+
         super().__init__()
 
         self.rotary_attention = False
         self.positional_encoder = None
         self.relative_attention = False
+
         self.dropout = args.dropout
         self.embedding_dim = args.encoder_embed_dim
-        self.favor = favor
         self.weight_drop = weight_drop
         self.num_heads = args.encoder_attention_heads
         self.num_layers = args.encoder_layers
         self.attention_dropout = args.attention_dropout
         self.activation_dropout = args.activation_dropout
-        self.deepspeed = False
-        self.branchformer = branchformer
 
         self.pos_conv = nn.Conv1d(
             self.embedding_dim,
@@ -860,8 +833,6 @@ class TransformerEncoder(nn.Module):
                     activation_dropout=args.activation_dropout,
                     activation_fn=args.activation_fn,
                     layer_norm_first=args.layer_norm_first,
-                    favor=favor,
-                    branchformer=self.branchformer
                 )
                 for _ in range(args.encoder_layers)
             ]
@@ -873,91 +844,76 @@ class TransformerEncoder(nn.Module):
         self.args = args
 
         self.apply(init_bert_params)
-        self.predict_language = predict_language
-
-        if self.predict_language > 0:
-            self.layer_norm_cls = LayerNorm(self.embedding_dim)
-            self.linear_cls = torch.nn.Linear(self.embedding_dim, n_languages)
-        else:
-            self.linear_cls = None
-            self.layer_norm_cls = None
-
-        # from onmt.modules.optimized.fast_mha import fast_bert_mha
-        # self.fast_bert_mha = fast_bert_mha
-        from onmt.modules.optimized.flash_mha import flash_bert_mha
-        self.fast_bert_mha = flash_bert_mha
-        self.using_s4 = False
 
     def replace_attn_with_s4(self, cfg):
 
-        self.using_s4 = True
-        for layer in self.layers:
-            layer.replace_attn_with_s4(cfg)
+        return
 
     # add stacked encoder from mbart encoder (purely parameter increase)
     def add_stacked_encoder(self, stacked_encoder):
-        stacked_layers = stacked_encoder.layers
-        args = self.args
 
-        for old_layer in stacked_layers:
-            new_layer = TransformerSentenceEncoderLayer(
-                embedding_dim=self.embedding_dim,
-                ffn_embedding_dim=args.encoder_ffn_embed_dim,
-                num_attention_heads=args.encoder_attention_heads,
-                dropout=self.dropout,
-                weight_drop=self.weight_drop,
-                attention_dropout=args.attention_dropout,
-                activation_dropout=args.activation_dropout,
-                activation_fn=args.activation_fn,
-                layer_norm_first=args.layer_norm_first,
-                favor=self.favor
-            )
-
-            # TODO: check layer norm first between new and old layer
-            new_layer.load_state_dict(old_layer.state_dict())
-            self.layers.append(new_layer)
+        return
+        # stacked_layers = stacked_encoder.layers
+        # args = self.args
+        #
+        # for old_layer in stacked_layers:
+        #     new_layer = TransformerSentenceEncoderLayer(
+        #         embedding_dim=self.embedding_dim,
+        #         ffn_embedding_dim=args.encoder_ffn_embed_dim,
+        #         num_attention_heads=args.encoder_attention_heads,
+        #         dropout=self.dropout,
+        #         weight_drop=self.weight_drop,
+        #         attention_dropout=args.attention_dropout,
+        #         activation_dropout=args.activation_dropout,
+        #         activation_fn=args.activation_fn,
+        #         layer_norm_first=args.layer_norm_first,
+        #         favor=self.favor
+        #     )
+        #
+        #     # TODO: check layer norm first between new and old layer
+        #     new_layer.load_state_dict(old_layer.state_dict())
+        #     self.layers.append(new_layer)
 
     def add_relative_attention(self):
 
-        self.relative_attention = True
-
-        def convert(m_):
-            classname = m_.__class__.__name__
-            if classname.find('MultiheadAttention') != -1:
-                m_.add_relative_attention()
-
-        self.layers.apply(convert)
-
-        self.positional_encoder = SinusoidalPositionalEmbedding(self.embedding_dim)
+        return
+        # self.relative_attention = True
+        #
+        # def convert(m_):
+        #     classname = m_.__class__.__name__
+        #     if classname.find('MultiheadAttention') != -1:
+        #         m_.add_relative_attention()
+        #
+        # self.layers.apply(convert)
+        #
+        # self.positional_encoder = SinusoidalPositionalEmbedding(self.embedding_dim)
 
     def add_rotary_attention(self):
 
-        self.rotary_attention = True
+        return
 
-        def convert(m_):
-            classname = m_.__class__.__name__
-            if classname.find('MultiheadAttention') != -1:
-                m_.add_rotary_attention()
+        # self.rotary_attention = True
+        #
+        # def convert(m_):
+        #     classname = m_.__class__.__name__
+        #     if classname.find('MultiheadAttention') != -1:
+        #         m_.add_rotary_attention()
+        #
+        # self.layers.apply(convert)
+        #
+        # from onmt.modules.rotary_postional_encodings import SinusoidalEmbeddings
+        # self.positional_encoder = SinusoidalEmbeddings(self.embedding_dim // self.num_heads)
 
-        self.layers.apply(convert)
+    def forward(self, x, padding_mask=None, positions=None, layer=None, **kwargs):
 
-        from onmt.modules.rotary_postional_encodings import SinusoidalEmbeddings
-        self.positional_encoder = SinusoidalEmbeddings(self.embedding_dim // self.num_heads)
-
-    def forward(self, x, padding_mask=None, positions=None, layer=None, lang=None, atb=None, checkpointing_ffn=False,
-                checkpointing_self_attn=False, **kwargs):
-
-        x, layer_results, pred_lang = self.extract_features(x, padding_mask, positions, layer, lang=lang, atb=atb,
-                                                 checkpointing_ffn=checkpointing_ffn,
-                                                 checkpointing_self_attn=checkpointing_self_attn)
+        x, layer_results = self.extract_features(x, padding_mask, positions, layer)
 
         if self.layer_norm_first and layer is None:
             x = self.layer_norm(x)
 
-        return x, layer_results, pred_lang
+        return x, layer_results
 
-    def extract_features(self, x, padding_mask=None, positions=None, tgt_layer=None, lang=None, atb=None,
-                         checkpointing_ffn=False, checkpointing_self_attn=False):
+    def extract_features(self, x, padding_mask=None, positions=None, tgt_layer=None):
         if padding_mask is not None:
             x = index_put(x, padding_mask, 0)
 
@@ -967,6 +923,7 @@ class TransformerEncoder(nn.Module):
 
         if not self.relative_attention and not self.rotary_attention:
             positions = None
+
         elif self.relative_attention:
             klen = x.size(1)
             bsz = x.size(0)
@@ -983,63 +940,12 @@ class TransformerEncoder(nn.Module):
         x = F.dropout(x, p=self.dropout, training=self.training)
 
         # check if flash attention can be run
-        can_run_fast_bert_mha = False
         seq_len = x.size(1)
         bsz = x.size(0)
         total_bsz = 0
 
-        # fast attention refers to using fused QKV matrix multiplication
-        # and T-B-H matrix layout to reduce reshaping cost
-        if self.using_s4:
-            fast_attention = False
-        else:
-            fast_attention = self.layers[0].self_attn.fast_attention
-
-        if self.fast_bert_mha and not self.relative_attention and \
-                fast_attention and x.dtype == torch.half and not self.using_s4:
-            can_run_fast_bert_mha = True
-            org_x = x
-
-            # masked positions = 1 so to compute length we need the (1 -)
-            if padding_mask is None:
-                padding_mask = x.new_zeros(bsz, seq_len)
-            padding_mask = padding_mask.long()
-            lengths = (1 - padding_mask).sum(dim=1)
-            lengths = lengths.cpu().tolist()  # list of lengths for B seqs
-
-            # packed_x = torch.nn.utils.rnn.pack_padded_sequence(org_x, lengths, enforce_sorted=False)
-
-            # remove paddings from x
-            x = x.view(-1, x.size(-1)) # flatten [B x T]
-            non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
-            x = x.index_select(0, non_pad_indices)
-
-            # maybe pad it so the first dim % 8 = 0?
-            total_bsz = x.size(0)
-
-            max_len = max(lengths)
-            # cumulative sequence lengths (required input for fmha)
-            a = torch.tensor(np.array([0] + lengths), dtype=torch.int32)
-            cu_seqlens = torch.cumsum(a, 0).to(dtype=torch.int32, device=x.device)
-
-            if lang is not None:
-                if lang.ndim == 1 and lang.size(0) == bsz and lang.size(0) > 1:
-                    lang = lang.unsqueeze(1).repeat(1, seq_len).view(-1)
-                    lang = lang.index_select(0, non_pad_indices)
-
-        else:
-            # print("[INFO] CanNOT run FAST MHA with seq_len", seq_len)
-            max_len = -1
-            cu_seqlens = None
-            non_pad_indices = None
-
-        pred_lang = None
-        _lang = lang
-
-        if not self.favor and not can_run_fast_bert_mha:
-            # B x T x C -> T x B x C  (only for vanilla self-attention and s4)
-            x = x.transpose(0, 1)
-        x = x.contiguous()
+        # [B x T x H] -> [T x B x H]
+        x = x.transpose(0, 1).contiguous()
 
         # forward pass through layers
         layer_results = []
@@ -1048,27 +954,10 @@ class TransformerEncoder(nn.Module):
             dropout_probability = np.random.random()
             if not self.training or (dropout_probability > self.layerdrop):
 
-
-                x, z = layer(x, self_attn_padding_mask=padding_mask, positions=positions,
-                             max_len=max_len, cu_seqlens=cu_seqlens,
-                             lang=_lang, atb=atb,
-                             checkpointing_ffn=checkpointing_ffn,
-                             checkpointing_self_attn=checkpointing_self_attn,
-                             non_pad_indices=non_pad_indices)
+                x, z = layer(x, self_attn_padding_mask=padding_mask, positions=positions)
 
                 if tgt_layer is not None:
                     layer_results.append((x, z))
-
-            # TODO: add classification layer here.
-            if self.predict_language > 0 and (i == len(self.layers) // 2):
-                # B x T x H ->
-                pred_lang = self.linear_cls(self.layer_norm_cls(x))
-
-                if self.predict_language == 1:
-                    # use the
-                    _lang = lang
-                else:
-                    _lang = torch.nn.functional.softmax(pred_lang, dim=-1, dtype=torch.float32).type_as(pred_lang)
 
             if i == tgt_layer:
                 r = x
@@ -1077,29 +966,7 @@ class TransformerEncoder(nn.Module):
         if r is not None:
             x = r
 
-        # if we remove padding before (for fast bert MHA) then remember to put padding back
-        # to restore the form B x T X H
-        if can_run_fast_bert_mha and x.ndim == 2:
-            # remove the patch
-            if x.size(0) > total_bsz:
-                x = x[:total_bsz, :]
-
-            from onmt.utils import pad_input
-            x = index_copy(x, non_pad_indices, bsz * seq_len)
-            # transpose [B x T x H] to [T x B x H]
-            x = x.view(bsz, seq_len, -1)
-
-            if self.predict_language > 0 and pred_lang is not None:
-                pred_lang = index_copy(pred_lang, non_pad_indices, bsz * seq_len)
-                pred_lang = pred_lang.view(bsz, seq_len, -1).transpose(0, 1).contiguous()
-
-        if pred_lang is not None:
-            pred_lang = pred_lang.transpose(0, 1).contiguous()
-
-        if can_run_fast_bert_mha and x.ndim == 3:
-            x = x.transpose(0, 1).contiguous()
-
-        return x, layer_results, pred_lang
+        return x, layer_results
 
     def max_positions(self):
         """Maximum output length supported by the encoder."""
@@ -1117,19 +984,21 @@ class TransformerEncoder(nn.Module):
     def add_factorize(self, n_languages, rank=4, multiplicative=False,
                       flexible=False, fast=False, dyrank=False, *kwargs):
 
-        # use only N/2 layers for factorization when predict_language is used
-        if self.predict_language > 0:
+        return
 
-            for i, layer in enumerate(self.layers):
-                if (i > len(self.layers) // 2):
-
-                    layer.add_factorized(n_languages, rank=rank, flexible=flexible,
-                                         multiplicative=multiplicative, fast=fast, dyrank=dyrank)
-
-        else:
-            for i, layer in enumerate(self.layers):
-                layer.add_factorized(n_languages, rank=rank, flexible=flexible,
-                                     multiplicative=multiplicative, fast=fast, dyrank=dyrank)
+        # # use only N/2 layers for factorization when predict_language is used
+        # if self.predict_language > 0:
+        #
+        #     for i, layer in enumerate(self.layers):
+        #         if (i > len(self.layers) // 2):
+        #
+        #             layer.add_factorized(n_languages, rank=rank, flexible=flexible,
+        #                                  multiplicative=multiplicative, fast=fast, dyrank=dyrank)
+        #
+        # else:
+        #     for i, layer in enumerate(self.layers):
+        #         layer.add_factorized(n_languages, rank=rank, flexible=flexible,
+        #                              multiplicative=multiplicative, fast=fast, dyrank=dyrank)
 
     def freeze_ffn_params(self):
 
@@ -1140,8 +1009,6 @@ class TransformerEncoder(nn.Module):
                 p.requires_grad = False
 
 
-
-# noinspection PyAttributeOutsideInit
 class TransformerSentenceEncoderLayer(nn.Module):
     """
     Implements a Transformer Encoder Layer used in BERT/XLM style pre-trained
@@ -1159,11 +1026,6 @@ class TransformerSentenceEncoderLayer(nn.Module):
             activation_dropout: float = 0.1,
             activation_fn: str = "relu",
             layer_norm_first: bool = False,
-            favor=False,
-            branchformer=False,
-            branchformer_merge_conv_kernel=3,
-            cgmlp_conv_kernel=31,
-            cgmlp_linear_after_conv=False,
             **kargs,
     ) -> None:
 
@@ -1173,14 +1035,12 @@ class TransformerSentenceEncoderLayer(nn.Module):
         self.ffn_embedding_dim = ffn_embedding_dim
         self.dropout = dropout
         self.activation_dropout = activation_dropout
-        self.favor = favor
+
         self.has_adapter = False
         self.is_factorized = False
         self.fast_factorize = False
         self.flex_factorize = False
         self.multiplicative_factorize = False
-        self.using_s4 = False
-        self.branchformer = branchformer
 
         # Initialize blocks
         self.activation_fn = get_activation_fn(activation_fn)
@@ -1190,8 +1050,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
             num_attention_heads,
             dropout=attention_dropout,
             weight_drop=weight_drop,
-            self_attention=True,
-            favor=favor
+            self_attention=True
         )
 
         self.residual_dropout = dropout
@@ -1209,6 +1068,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
         # layer norm associated with the position wise feed-forward NN
         self.final_layer_norm = LayerNorm(self.embedding_dim)
 
+        # lets keep these codes for now
         self.fused = False
         self.fused_function = None
         if self.activation_fn_name == 'relu':
@@ -1223,40 +1083,9 @@ class TransformerSentenceEncoderLayer(nn.Module):
                 self.fused_function = mlp_gelu_function
                 self.fused = True
 
-        if self.branchformer:
-            from .cgmlp import ConvolutionalGatingMLP
-
-            self.dropout = nn.Dropout(dropout, inplace=False)
-            size = self.embedding_dim
-            cgmlp_linear_units = size * 2
-            self.cgmlp_norm = LayerNorm(size)
-            self.cgmlp = ConvolutionalGatingMLP(size, cgmlp_linear_units, cgmlp_conv_kernel, dropout_rate=dropout,
-                                                use_linear_after_conv=False)
-
-            self.depthwise_conv_fusion = torch.nn.Conv1d(
-                size + size,
-                size + size,
-                kernel_size=branchformer_merge_conv_kernel,
-                stride=1,
-                padding=(branchformer_merge_conv_kernel - 1) // 2,
-                groups=size + size,
-                bias=True,
-            )
-
-            self.merge_proj = torch.nn.Linear(size + size, size)
-
-        else:
-            self.cgmlp, self.depthwise_conv_fusion, self.merge_proj = None, None, None
-
     def replace_attn_with_s4(self, s4_cfg):
 
-        from ..mssm.mhs4 import MHBiS4EncoderLayer
-
-        self.using_s4 = True
-        s4_layer = MHBiS4EncoderLayer(s4_cfg, s4_only=True)
-
-        del self.self_attn
-        self.self_attn = s4_layer
+        return
 
 
     def add_adapters(self, n_languages, downsampling_factor=4, adapter_location=1):
@@ -1266,16 +1095,17 @@ class TransformerSentenceEncoderLayer(nn.Module):
         :param adapter_location:
         :return:
         """
+        return
 
-        self.n_languages = n_languages
-        self.has_adapter = True
-        self.adapter_location = adapter_location
-        from .adapter import MultilingualAdapter
-        self.adapter = MultilingualAdapter(n_languages, self.embedding_dim, downsample_factor=downsampling_factor)
-
-        if adapter_location == 2:
-            self.mid_adapter = MultilingualAdapter(n_languages, self.embedding_dim,
-                                                   downsample_factor=downsampling_factor)
+        # self.n_languages = n_languages
+        # self.has_adapter = True
+        # self.adapter_location = adapter_location
+        # from .adapter import MultilingualAdapter
+        # self.adapter = MultilingualAdapter(n_languages, self.embedding_dim, downsample_factor=downsampling_factor)
+        #
+        # if adapter_location == 2:
+        #     self.mid_adapter = MultilingualAdapter(n_languages, self.embedding_dim,
+        #                                            downsample_factor=downsampling_factor)
 
     def add_factorized(self, n_languages, rank=4, multiplicative=True, fast=False,
                        flexible=False, dyrank=False,
@@ -1291,175 +1121,13 @@ class TransformerSentenceEncoderLayer(nn.Module):
         :return:
         """
 
-        # first, tell the attention modules to add factorize
-        self.self_attn.add_factorized_weights(n_languages, rank=rank,
-                                              multiplicative=multiplicative, dyrank=dyrank, fast=fast, flexible=flexible)
-
-        # add factorized for the sub-factors
-        self.multiplicative_factorize = multiplicative
-        self.is_factorized = True
-        self.fast_factorize = fast
-        self.flex_factorize = flexible
-        self.dyrank = dyrank
-
-        embed_dim = self.embedding_dim
-        ffn_dim = self.ffn_embedding_dim
-
-        if multiplicative or flexible:
-            _rank = rank if fast or flexible else 1
-            self.rm_i = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.ffn_embedding_dim))
-            self.sm_i = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.embedding_dim))
-            self.rm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.embedding_dim))
-            self.sm_o = torch.nn.Parameter(torch.Tensor(n_languages, _rank, self.ffn_embedding_dim))
-
-            constant = 1
-            nn.init.constant_(self.rm_i, constant)
-            nn.init.constant_(self.sm_i, constant)
-            nn.init.constant_(self.rm_o, constant)
-            nn.init.constant_(self.sm_o, constant)
-
-        if not flexible:
-
-            self.r_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
-            self.s_i = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
-            self.r_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.embedding_dim))
-            self.s_o = torch.nn.Parameter(torch.Tensor(n_languages, rank, self.ffn_embedding_dim))
-
-            if self.dyrank:
-                nn.init.zeros_(self.r_i)
-                nn.init.normal_(self.s_i, 0.0, 0.02)
-                nn.init.zeros_(self.r_o)
-                nn.init.normal_(self.s_o, 0.0, 0.02)
-
-            else:
-                nn.init.normal_(self.r_i, 0.0, 0.02)
-                nn.init.normal_(self.s_i, 0.0, 0.02)
-                nn.init.normal_(self.r_o, 0.0, 0.02)
-                nn.init.normal_(self.s_o, 0.0, 0.02)
-
-    def get_mlp_weights(self, lang=None, atb=None):
-
-        in_weight = self.fc1.weight
-        out_weight = self.fc2.weight
-        in_bias = self.fc1.bias
-        out_bias = self.fc2.bias
-
-        if lang is not None:
-            if self.is_factorized:
-
-                # First check if we use multiplicative
-                if self.multiplicative_factorize:
-                    rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
-                    sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
-                    rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
-                    sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
-
-                    if self.fast_factorize:
-                        mul_factor_in = torch.mm(rm_i.t(), sm_i)
-                        mul_factor_out = torch.mm(rm_o.t(), sm_o)
-                    else:
-                        mul_factor_in = torch.bmm(rm_i.unsqueeze(-1), sm_i.unsqueeze(1)).sum(dim=0)
-                        mul_factor_out = torch.bmm(rm_o.unsqueeze(-1), sm_o.unsqueeze(1)).sum(dim=0)
-
-                    in_weight = in_weight * mul_factor_in
-                    out_weight = out_weight * mul_factor_out
-
-                # For addictive
-                r_i = torch.index_select(self.r_i, 0, lang).squeeze(0)
-                s_i = torch.index_select(self.s_i, 0, lang).squeeze(0)
-                r_o = torch.index_select(self.r_o, 0, lang).squeeze(0)
-                s_o = torch.index_select(self.s_o, 0, lang).squeeze(0)
-
-                if self.fast_factorize or self.dyrank:
-                    add_factor_in = torch.mm(r_i.t(), s_i)
-                    add_factor_out = torch.mm(r_o.t(), s_o)
-                else:
-                    add_factor_in = torch.bmm(r_i.unsqueeze(-1), s_i.unsqueeze(1)).sum(dim=0)
-                    add_factor_out = torch.bmm(r_o.unsqueeze(-1), s_o.unsqueeze(1)).sum(dim=0)
-
-                in_weight = in_weight + add_factor_in
-                out_weight = out_weight + add_factor_out
-
-        return in_weight, out_weight, in_bias, out_bias
-
-    def call_self_attn(self, x, self_attn_padding_mask=None, positions=None, attn_mask=None,
-                       max_len=None, cu_seqlens=None, lang=None, atb=None, checkpointing=False):
-
-        if not self.using_s4:
-
-            x, attn = self.self_attn(
-                query=x,
-                key=x,
-                value=x,
-                key_padding_mask=self_attn_padding_mask,
-                positions=positions,
-                attn_mask=attn_mask, # this probably doesn't do anything
-                max_len=max_len, cu_seqlens=cu_seqlens,
-                lang=lang, atb=atb,
-                checkpointing=checkpointing
-            )
-
-            return x, attn
-
-        # In s4 case:
-        x = self.self_attn(x, self_attn_padding_mask)
-
-        return x, None
-
-    def call_factorize_mlp(self, x, lang, activation_fn, dropout_p, training_):
-
-        in_weight = self.fc1.weight
-        out_weight = self.fc2.weight
-        in_bias = self.fc1.bias
-        out_bias = self.fc2.bias
-
-        n_languages, _rank = self.rm_i.size(0), self.rm_i.size(1)
-
-        # TODO: mm instead of index select for multiple code
-        if lang.ndim == 1:
-            rm_i = torch.index_select(self.rm_i, 0, lang).squeeze(0)  # squeeze possible because only 1
-            sm_i = torch.index_select(self.sm_i, 0, lang).squeeze(0)
-            rm_o = torch.index_select(self.rm_o, 0, lang).squeeze(0)
-            sm_o = torch.index_select(self.sm_o, 0, lang).squeeze(0)
-        elif lang.ndim == 2:  # for flash attention
-            rm_i = torch.mm(lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(lang.size(0), _rank,
-                                                                                                self.rm_i.size(-1))
-            sm_i = torch.mm(lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(lang.size(0), _rank,
-                                                                                                self.sm_i.size(-1))
-            rm_o = torch.mm(lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(lang.size(0), _rank,
-                                                                                                self.rm_o.size(-1))
-            sm_o = torch.mm(lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(lang.size(0), _rank,
-                                                                                                self.sm_o.size(-1))
-        elif lang.ndim == 3:
-            _len, _bsz = lang.size(0), lang.size(1)
-            _lang = lang.view(_len * _bsz, lang.size(-1))
-            rm_i = torch.mm(_lang, self.rm_i.view(n_languages, _rank * self.rm_i.size(-1))).view(
-                _len, _bsz, _rank, self.rm_i.size(-1))
-            sm_i = torch.mm(_lang, self.sm_i.view(n_languages, _rank * self.sm_i.size(-1))).view(
-                _len, _bsz, _rank, self.sm_i.size(-1))
-            rm_o = torch.mm(_lang, self.rm_o.view(n_languages, _rank * self.rm_o.size(-1))).view(
-                _len, _bsz, _rank, self.rm_o.size(-1))
-            sm_o = torch.mm(_lang, self.sm_o.view(n_languages, _rank * self.sm_o.size(-1))).view(
-                _len, _bsz, _rank, self.sm_o.size(-1))
-
-
-        x = factorize_linear(x, in_weight, in_bias, rm_i, sm_i)
-        x = activation_fn(x)
-        x = F.dropout(x, dropout_p, training=training_)
-
-        x = factorize_linear(x, out_weight, out_bias, rm_o, sm_o)
-
-        return x
+        return
 
     def forward(
             self,
             x: torch.Tensor,
             self_attn_mask: torch.Tensor = None,
             self_attn_padding_mask: torch.Tensor = None,
-            positions=None,
-            max_len=-1, cu_seqlens=None,
-            lang=None, atb=None,
-            non_pad_indices=None,
             **kwargs
     ):
         """
@@ -1467,165 +1135,35 @@ class TransformerSentenceEncoderLayer(nn.Module):
         modules similar to the original Transformer imlementation.
         """
         residual = x
-        # is_fast = self.self_attn.fast_attention
-        is_fast = False
-
-        def call_mlp(x, in_weight, out_weight, in_bias, out_bias, activation_fn, dropout_p, training_,
-                     fused, fused_function):
-
-            # TODO: check type x torch.half or torch.float32
-            if fused and x.is_cuda:
-                dropout_p_ = dropout_p if training_ else 0.0
-
-                weights = [in_weight, out_weight]
-                biases = [in_bias, out_bias]
-
-                # checkpointing = False
-                x = fused_function(dropout_p_, False, x, *weights, *biases)
-
-            else:
-                x = F.linear(x, in_weight, in_bias)
-                x = activation_fn(x)
-                x = F.dropout(x, dropout_p, training=training_)
-                x = F.linear(x, out_weight, out_bias)
-
-            return x
-
-        if self.has_adapter:
-            if self.adapter_location == 1:
-                assert lang is not None
-                x = self.adapter(x, lang=lang)
-
-            x.add_(residual)  # residual is before the big FFN
-            residual = x
 
         if self.layer_norm_first:
-
-            if self.branchformer:
-                x2 = x
-                residual = x
-
-                using_nested_tensor = (x.ndim == 2)
-
-                x = self.self_attn_layer_norm(x)
-
-                # SELF ATTENTION
-                x, attn = self.call_self_attn(
-                    x,
-                    self_attn_padding_mask=self_attn_padding_mask,
-                    positions=positions,
-                    attn_mask=self_attn_mask,
-                    max_len=max_len, cu_seqlens=cu_seqlens,
-                    lang=lang, atb=atb
-                )
-
-                x = self.dropout1(x)
-
-                # here x should have dimension [T x B x H] or nested [BT x H]
-
-                # cgmlp works with [B x T x H] instead of [T x B x H]
-                if not using_nested_tensor:
-                    x2 = x2.transpose(0, 1).contiguous()
-                else:
-                    bsz, seq_len = len(cu_seqlens) - 1, max_len
-                    x2 = index_copy(x2, non_pad_indices, bsz * seq_len)
-                    x2 = x2.view(bsz, seq_len, -1)
-
-                x2 = self.cgmlp_norm(x2)
-                x2 = self.cgmlp(x2, None)
-                if isinstance(x2, tuple):
-                    x2 = x2[0]
-
-                x2 = self.dropout(x2)
-
-                # Merge two branches
-                if not using_nested_tensor:
-                    x = x.transpose(0, 1).contiguous()
-                else:
-                    bsz, seq_len = len(cu_seqlens) - 1, max_len
-                    x = index_copy(x, non_pad_indices, bsz * seq_len)
-                    x = x.view(bsz, seq_len, -1)
-
-                x_concat = torch.cat([x, x2], dim=-1)
-                x_tmp = x_concat.transpose(1, 2)
-                x_tmp = self.depthwise_conv_fusion(x_tmp)
-                x_tmp = x_tmp.transpose(1, 2)
-                x = self.dropout(self.merge_proj(x_concat + x_tmp))
-
-                # Residual MLP Block
-
-                if using_nested_tensor:
-                    x = x.contiguous().view(-1, x.size(-1))  # flatten [B x T]
-                    x = x.index_select(0, non_pad_indices)
-                else:
-                    # transpose to T x B x H
-                    x = x.transpose(0, 1).contiguous()
-
-                x = residual + x
-
-                residual = x
-
-                # MLP
-                x = self.final_layer_norm(x)
-
-                # if self.fast_factorize:
-                #     x = self.call_factorize_mlp(x, lang, self.activation_fn,
-                #                                 self.dropout2.p,
-                #                                 self.training)
-                # else:
-                in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
-
-                x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
-                             self.dropout2.p, self.training,
-                             self.fused, self.fused_function)
-
-                x = self.dropout3(x) + residual
-
-            else:
-
-                x = self.self_attn_layer_norm(x)
-
-                # SELF ATTENTION
-                x, attn = self.call_self_attn(
-                    x,
-                    self_attn_padding_mask=self_attn_padding_mask,
-                    positions=positions,
-                    attn_mask=self_attn_mask,
-                    max_len=max_len, cu_seqlens=cu_seqlens,
-                    lang=lang, atb=atb
-                )
-
-                x = self.dropout1(x) + residual
-
-                residual = x
-
-                # MLP
-                x = self.final_layer_norm(x)
-
-                if self.flex_factorize:
-                    x = self.call_factorize_mlp(x, lang, self.activation_fn,
-                                                self.dropout2.p,
-                                                self.training)
-                else:
-                    in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
-
-                    x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
-                                 self.dropout2.p, self.training,
-                                 self.fused, self.fused_function)
-
-                x = self.dropout3(x) + residual
-
-                return x, attn
-
-        else:
-            # THE BELOW CODE HAS NEVER BEEN RUN AND TESTED
-            x, attn = self.call_self_attn(
-                x,
-                self_attn_padding_mask=self_attn_padding_mask,
-                positions=positions,
+            x = self.self_attn_layer_norm(x)
+            x, attn = self.self_attn(
+                query=x,
+                key=x,
+                value=x,
+                key_padding_mask=self_attn_padding_mask,
                 attn_mask=self_attn_mask,
-                max_len=max_len, cu_seqlens=cu_seqlens,
-                lang=lang, atb=atb
+                need_weights=False,
+            )
+            x = self.dropout1(x)
+            x = residual + x
+
+            residual = x
+            x = self.final_layer_norm(x)
+            x = self.activation_fn(self.fc1(x))
+            x = self.dropout2(x)
+            x = self.fc2(x)
+
+            x = self.dropout3(x)
+            x = residual + x
+        else:
+            x, attn = self.self_attn(
+                query=x,
+                key=x,
+                value=x,
+                key_padding_mask=self_attn_padding_mask,
+                need_weights=False,
             )
 
             x = self.dropout1(x)
@@ -1634,17 +1172,9 @@ class TransformerSentenceEncoderLayer(nn.Module):
             x = self.self_attn_layer_norm(x)
 
             residual = x
-
-            if self.flex_factorize:
-                x = self.call_factorize_mlp(x, lang, self.activation_fn,
-                                            self.dropout2.p,
-                                            self.training)
-            else:
-                in_weight, out_weight, in_bias, out_bias = self.get_mlp_weights(lang=lang, atb=atb)
-
-                x = call_mlp(x, in_weight, out_weight, in_bias, out_bias, self.activation_fn,
-                             self.dropout2.p, self.training,
-                             self.fused, self.fused_function)
+            x = self.activation_fn(self.fc1(x))
+            x = self.dropout2(x)
+            x = self.fc2(x)
 
             x = self.dropout3(x)
             x = residual + x

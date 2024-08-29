@@ -13,10 +13,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from onmt.models.speech_recognizer.fairseq.utils import compute_mask_indices, get_activation_fn, get_available_activation_fns
-from .enum import ChoiceEnum
 from torch.cuda.amp import autocast
 
-from .fairseq_modules import (
+from .modules import (
     Fp32GroupNorm,
     Fp32LayerNorm,
     GradMultiply,
@@ -27,20 +26,19 @@ from .fairseq_modules import (
     index_copy
 )
 
-from .dataclass import HubertConfig
 
 from onmt.modules.layer_norm import LayerNorm
-from onmt.modules.optimized.dropout_add import fused_dropout_add
-from onmt.modules.optimized.linear import factorize_linear
-
 from onmt.models.speech_recognizer.fairseq.utils import buffered_arange, index_put, is_xla_tensor
 
-from .dataclass import HubertConfig
+from ..fairseq_wav2vec2.dataclass import HubertConfig
+
 from onmt.modules.sinusoidal_positional_encoding import SinusoidalPositionalEmbedding
 
 from .wav2vec2 import ConvFeatureExtractionModel
 from .wav2vec2 import TransformerEncoder
-from .wav2vec2 import dropout_residual_connection
+
+from ..fairseq_wav2vec2.enum import ChoiceEnum
+
 
 EXTRACTOR_MODE_CHOICES = ChoiceEnum(["default", "layer_norm"])
 MASKING_DISTRIBUTION_CHOICES = ChoiceEnum(["static", "uniform", "normal", "poisson"])
@@ -306,7 +304,7 @@ class HubertModel(torch.nn.Module):
         # x: (B, T, D), float
         # padding_mask: (B, T), bool
         # mask_indices: (B, T), bool
-        x, layer_results, pred_lang = self.encoder(
+        x, layer_results = self.encoder(
             x,
             padding_mask=padding_mask,
             layer=None if output_layer is None else output_layer - 1,

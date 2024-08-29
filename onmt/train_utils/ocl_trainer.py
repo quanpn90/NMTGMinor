@@ -1265,11 +1265,11 @@ class OCLTrainer(object):
 
                         if opt.ctc_loss > 0.0:
                             ctc_loss_string = report_ctc_loss.item() / report_ctc_targets.item()
-                            log_string += (" ctc_ppl: %5.2f ; " % math.exp(max(ctc_loss_string, 100)))
+                            log_string += (" ctc_ppl: %5.2f ; " % math.exp(ctc_loss_string))
 
                         if opt.transducer_loss > 0.0:
                             transducer_loss_string = report_transducer_loss.item() / report_transducer_targets.item()
-                            log_string += (" trc_ppl: %5.2f ; " % math.exp(max(transducer_loss_string, 100)))
+                            log_string += (" trc_ppl: %5.2f ; " % math.exp(transducer_loss_string))
 
                         if opt.contrastive_loss_coeff > 0.0:
                             #

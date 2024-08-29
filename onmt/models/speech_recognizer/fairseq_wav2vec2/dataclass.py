@@ -2,7 +2,7 @@ import sys
 from dataclasses import _MISSING_TYPE, dataclass, field
 from typing import Any, List, Optional, Tuple
 from .enum import ChoiceEnum
-from .utils import get_activation_fn, get_available_activation_fns
+from onmt.models.speech_recognizer.fairseq.utils import get_activation_fn, get_available_activation_fns
 
 
 class FairseqDataclass:

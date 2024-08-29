@@ -3,19 +3,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from onmt.models.transformers import Transformer, TransformerDecodingState, TransformerDecodingStateMemory
-from typing import List, Optional, Union
 from collections import defaultdict
 import onmt
 from onmt.modules.optimized.linear import Linear
 import math
 from .fairseq_wav2vec2.file_io import PathManager
-from omegaconf import DictConfig, open_dict, OmegaConf
-from .fairseq_wav2vec2.utils import overwrite_args_by_name
+from omegaconf import OmegaConf
+from onmt.models.speech_recognizer.fairseq.utils import overwrite_args_by_name
 
 import copy
 import numpy as np
-from onmt.modules.loss import CrossEntropyLossBase
-from onmt.modules.layer_norm import LayerNorm
 
 from itertools import groupby
 
@@ -95,7 +92,6 @@ class FairseqWav2VecExtractor(nn.Module):
 
     def __init__(self, model_path="wav2vec_vox_new.pt"):
         self.model_path = model_path
-        import fairseq
         # from fairseq.checkpoint_utils import load_model_ensemble_and_task, load_checkpoint_to_cpu
         from .fairseq_wav2vec2.wav2vec2 import Wav2Vec2Model
 
