@@ -247,7 +247,7 @@ class OCLTrainer(object):
                                                   blank_idx=tgt_pad)
 
         else:
-            self.ctc_loss_function = None
+            self.transducer_loss_function = None
 
         if opt.predict_language > 0:
             from onmt.models.speech_recognizer.lid_loss import CrossEntropyLIDLoss
@@ -1265,11 +1265,11 @@ class OCLTrainer(object):
 
                         if opt.ctc_loss > 0.0:
                             ctc_loss_string = report_ctc_loss.item() / report_ctc_targets.item()
-                            log_string += (" ctcloss: %5.2f ; " % ctc_loss_string)
+                            log_string += (" ctc_ppl: %5.2f ; " % math.exp(max(ctc_loss_string, 100)))
 
                         if opt.transducer_loss > 0.0:
                             transducer_loss_string = report_transducer_loss.item() / report_transducer_targets.item()
-                            log_string += (" transducer: %5.2f ; " % transducer_loss_string)
+                            log_string += (" trc_ppl: %5.2f ; " % math.exp(max(transducer_loss_string, 100)))
 
                         if opt.contrastive_loss_coeff > 0.0:
                             #

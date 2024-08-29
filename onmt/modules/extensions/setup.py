@@ -15,6 +15,8 @@ from torch.utils.cpp_extension import CUDA_HOME
 # ninja build does not work unless include_dirs are abs path
 this_dir = os.path.dirname(os.path.abspath(__file__))
 
+def append_nvcc_threads(nvcc_extra_args):
+    return nvcc_extra_args + ["--threads", "4"]
 
 def get_cuda_bare_metal_version(cuda_dir):
     raw_output = subprocess.check_output([cuda_dir + "/bin/nvcc", "-V"], universal_newlines=True)
@@ -136,7 +138,7 @@ ext_modules.append(
                                                '--expt-relaxed-constexpr',
                                                '--expt-extended-lambda',
                                                '--use_fast_math'] + version_dependent_macros +
-                                              generator_flag}))
+                                              generator_flag + ["--threads", "4"]}))
 #
 ext_modules.append(
     CUDAExtension(name='encdec_multihead_attn_bias_cuda',
@@ -149,7 +151,7 @@ ext_modules.append(
                                                '--expt-relaxed-constexpr',
                                                '--expt-extended-lambda',
                                                '--use_fast_math'] + version_dependent_macros +
-                                                                    generator_flag}))
+                                                                    generator_flag + ["--threads", "4"]}))
 #
 ext_modules.append(
     CUDAExtension(name='fused_dropout_add_cuda',
@@ -161,7 +163,7 @@ ext_modules.append(
                                                '-U__CUDA_NO_HALF_CONVERSIONS__',
                                                '--expt-relaxed-constexpr',
                                                '--expt-extended-lambda',
-                                               '--use_fast_math'] + cc_flag + generator_flag}))
+                                               '--use_fast_math'] + cc_flag + generator_flag + ["--threads", "4"]}))
 
 
 # ext_modules.append(
@@ -208,7 +210,9 @@ ext_modules.append(
                                                '-U__CUDA_NO_BFLOAT162_CONVERSIONS__',
                                                '--expt-relaxed-constexpr',
                                                '--expt-extended-lambda',
-                                               '--use_fast_math'] + cc_flag + version_dependent_macros + generator_flag}))
+                                               '--use_fast_math']
+                                              + cc_flag + version_dependent_macros
+                                              + generator_flag+ ["--threads", "4"]}))
 #
 #
 # ext_modules.append(
@@ -234,7 +238,7 @@ ext_modules.append(
                   sources=['mlp/mlp_relu.cpp',
                            'mlp/mlp_relu_cuda.cu'],
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                      'nvcc': ['-O3'] + version_dependent_macros + generator_flag}))
+                                      'nvcc': ['-O3'] + version_dependent_macros + generator_flag + ["--threads", "4"]}))
 
 # ext_modules.append(
 #     CUDAExtension(name='fused_mlp_silu',
@@ -256,7 +260,7 @@ ext_modules.append(
                   sources=['mlp/mlp_gelu.cpp',
                            'mlp/mlp_gelu_cuda.cu'],
                   extra_compile_args={'cxx': ['-O3'] + version_dependent_macros,
-                                      'nvcc': ['-O3'] + version_dependent_macros + generator_flag}))
+                                      'nvcc': ['-O3'] + version_dependent_macros + generator_flag + ["--threads", "4"]}))
 
 xentropy_ver = datetime.today().strftime("%y.%m.%d")
 print(f"`--xentropy` setting version of {xentropy_ver}")
@@ -266,7 +270,7 @@ ext_modules.append(
                            'xentropy/xentropy_kernel.cu'],
                   include_dirs=[os.path.join(this_dir, 'include')],
                   extra_compile_args={"cxx": ["-O3"] + version_dependent_macros + [f'-DXENTROPY_VER="{xentropy_ver}"'],
-                                      'nvcc': ['-O3'] + version_dependent_macros}))
+                                      'nvcc': ['-O3'] + version_dependent_macros + ["--threads", "4"]}))
 
 ext_modules.append(
         CUDAExtension(
@@ -277,7 +281,7 @@ ext_modules.append(
             ],
             extra_compile_args={
                 "cxx": ["-O3"] + version_dependent_macros + generator_flag,
-                "nvcc": ["-O3"] + version_dependent_macros + generator_flag,
+                "nvcc": ["-O3"] + version_dependent_macros + generator_flag + ["--threads", "4"],
             },
             include_dirs=[os.path.join(this_dir, "csrc"),
                           os.path.join(this_dir, "/multihead_attn")],
@@ -294,7 +298,7 @@ ext_modules.append(
         include_dirs=[os.path.join(this_dir, "csrc")],
         extra_compile_args={
             "cxx": ["-O3"] + version_dependent_macros,
-            "nvcc": ["-O3"] + version_dependent_macros,
+            "nvcc": ["-O3"] + version_dependent_macros + ["--threads", "4"],
         },
     )
 )
