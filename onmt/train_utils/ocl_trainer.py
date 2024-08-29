@@ -236,7 +236,18 @@ class OCLTrainer(object):
                                          padding_idx=tgt_pad, blank_idx=0)
 
         else:
-            self.ctc_loss_function = None 
+            self.ctc_loss_function = None
+
+        if opt.transducer_loss > 0.0:
+            from onmt.modules.transducer import TransducerLoss
+            # self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True,
+            #                              padding_idx=tgt_pad, blank_idx=0)
+            self.transducer_loss_function = TransducerLoss(fuse_softmax_backward=True,
+                                                  opt=1, packed_input=False,
+                                                  blank_idx=tgt_pad)
+
+        else:
+            self.ctc_loss_function = None
 
         if opt.predict_language > 0:
             from onmt.models.speech_recognizer.lid_loss import CrossEntropyLIDLoss
@@ -247,6 +258,7 @@ class OCLTrainer(object):
             loss_function = NCELoss(opt.model_size, dicts['tgt'].size(), noise_ratio=opt.nce_noise,
                                     logz=9, label_smoothing=opt.label_smoothing)
         else:
+            self.print("Target pad idx:", tgt_pad)
             loss_function = NMTLossFunc(opt.model_size, dicts['tgt'].size(),
                                         label_smoothing=opt.label_smoothing,
                                         mirror=opt.mirror_loss,
@@ -271,7 +283,6 @@ class OCLTrainer(object):
         init_model_parameters(model, opt)
         self.model = model
         self.loss_function = loss_function
-
 
         if opt.load_from:
             checkpoint = torch.load(opt.load_from, map_location=lambda storage, loc: storage)
@@ -315,7 +326,6 @@ class OCLTrainer(object):
             # Buffer precision.
             buffer_dtype=torch.float32,
         )
-
 
         self.bf16_ready = (
                 opt.bf16
@@ -586,7 +596,7 @@ class OCLTrainer(object):
             'scaler': self.grad_scaler.state_dict() if self.grad_scaler is not None else None
         }
 
-        file_name = '%s_ppl_%.6f_epoch%.2f.round%d' % (opt.save_model, valid_ppl, epoch, round)
+        file_name = '%s_epoch%.2f.round%d' % (opt.save_model, epoch, round)
         if self.is_main():
             print('Writing to %s' % file_name)
             torch.save(checkpoint, file_name)
@@ -751,8 +761,10 @@ class OCLTrainer(object):
         total_non_pads = zero_tensor()
         report_loss, report_tgt_words = zero_tensor(), zero_tensor()
         report_ctc_loss = zero_tensor()
+        report_transducer_loss = zero_tensor()
         report_ewc_loss = zero_tensor()
         report_ctc_targets = zero_tensor()
+        report_transducer_targets = zero_tensor()
         report_ewc_count = 0
         report_src_words = zero_tensor()
         report_sents = zero_tensor()
@@ -798,14 +810,15 @@ class OCLTrainer(object):
             # maybe clean up everything from the last round?
             gc.collect()
 
-            n_samples = len(_data_iterator) * 2 - 1 if dataset_id > 0 else len(_data_iterator)
+            n_samples = len(_data_iterator) * 2 - 1 if (epoch > 1 or dataset_id > 0) else len(_data_iterator)
             i = _data_iterator.iterations_in_epoch
             i = i * self.world_size
             self.print("Training Epoch %d - Round (dataset) %d" % (epoch, dataset_id))
 
             rehearse = False
 
-            update_frequency = 2 * opt.update_frequency if dataset_id > 0 else opt.update_frequency
+            update_frequency = 2 * opt.update_frequency if (epoch > 1 or dataset_id > 0)\
+                else opt.update_frequency
 
             while not _data_iterator.end_of_epoch():
 
@@ -813,13 +826,18 @@ class OCLTrainer(object):
                     samples = next(_epoch_iterator)
 
                     # sample is also added to the reservoir here
-                    batch = prepare_sample(samples, device=self.device, dataset_id=dataset_id,
-                                                                        reservoir=self.reservoir)
+
+                    if epoch > 1 or dataset_id > 0:
+
+                        batch = prepare_sample(samples, device=self.device, dataset_id=dataset_id,
+                                                                            reservoir=self.reservoir)
+                    else:
+                        batch = prepare_sample(samples, device=self.device)
+
                     rehearse = False
                     rehearsing = False
 
-                    # start to sample
-                    if dataset_id > 0 and self.reservoir is not None:
+                    if (epoch > 1 or dataset_id > 0) and self.reservoir is not None:
                         # print("rehearsing ....", flush=True)
                         rehearse = True  # so that the next one is to rehearse
                 else:
@@ -873,7 +891,9 @@ class OCLTrainer(object):
                                                  ctc_loss_function = self.ctc_loss_function,
                                                  ctc_labels = targets,
                                                  grad_scaler = self.grad_scaler,
-                                                 ctc_coeff = opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0
+                                                 ctc_coeff = opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
+                                                 transducer_loss_function = self.transducer_loss_function,
+                                                 transducer_coeff = opt.transducer_loss
                                                  )
 
                             batch_size = batch.size
@@ -898,10 +918,20 @@ class OCLTrainer(object):
                                 n_ctc_targets = outputs['n_ctc_targets']
                                 # TODO: add CTC loss to models
                                 ctc_loss_data = ctc_loss.item()
-                                full_loss = (1 - opt.ctc_loss) * full_loss + opt.ctc_loss * ctc_loss
+                                full_loss = full_loss + opt.ctc_loss * ctc_loss
                             else:
                                 n_ctc_targets = 0
                                 ctc_loss_data = 0
+
+                            if opt.transducer_loss > 0.0:
+                                transducer_loss = outputs['transducer_loss']
+                                n_transducer_targets = outputs['transducer_numel']
+                                # TODO: add CTC loss to models
+                                transducer_loss_data = transducer_loss.item()
+                                full_loss = full_loss + opt.transducer_loss * transducer_loss
+                            else:
+                                n_transducer_targets = 0
+                                transducer_loss_data = 0
 
                             if opt.mirror_loss:
                                 rev_loss = loss_dict['rev_loss']
@@ -1194,6 +1224,10 @@ class OCLTrainer(object):
                     report_ctc_loss.add_(ctc_loss_data)
                     report_ctc_targets.add_(n_ctc_targets)
 
+                if opt.transducer_loss > 0.0:
+                    report_transducer_loss.add_(transducer_loss_data)
+                    report_transducer_targets.add_(n_transducer_targets)
+
                 # control the index a little bit to ensure the log is always printed
                 if i == 0 or ((i + 1) % opt.log_interval < self.world_size) and not rehearsing:
 
@@ -1206,6 +1240,10 @@ class OCLTrainer(object):
                     if opt.ctc_loss > 0.0:
                         self.all_reduce(report_ctc_loss, op=dist.ReduceOp.SUM, group=self.group)
                         self.all_reduce(report_ctc_targets, op=dist.ReduceOp.SUM, group=self.group)
+
+                    if opt.transducer_loss > 0.0:
+                        self.all_reduce(report_transducer_loss, op=dist.ReduceOp.SUM, group=self.group)
+                        self.all_reduce(report_transducer_targets, op=dist.ReduceOp.SUM, group=self.group)
 
                     if self.is_main():
 
@@ -1226,8 +1264,12 @@ class OCLTrainer(object):
                             log_string += (" mir_loss: %6.2f ; " % (report_mirror_loss / report_tgt_words))
 
                         if opt.ctc_loss > 0.0:
-                            ctc_loss = report_ctc_loss.item() / report_ctc_targets.item()
-                            log_string += (" ctcloss: %8.2f ; " % ctc_loss)
+                            ctc_loss_string = report_ctc_loss.item() / report_ctc_targets.item()
+                            log_string += (" ctcloss: %5.2f ; " % ctc_loss_string)
+
+                        if opt.transducer_loss > 0.0:
+                            transducer_loss_string = report_transducer_loss.item() / report_transducer_targets.item()
+                            log_string += (" transducer: %5.2f ; " % transducer_loss_string)
 
                         if opt.contrastive_loss_coeff > 0.0:
                             #

@@ -76,11 +76,15 @@ print(cpp_extension.CUDA_HOME)
 _, bare_metal_major, _ = get_cuda_bare_metal_version(cpp_extension.CUDA_HOME)
 
 cc_flag.append('-gencode')
+cc_flag.append('arch=compute_70,code=sm_70')
+cc_flag.append('-gencode')
 cc_flag.append('arch=compute_75,code=sm_75')
 cc_flag.append('-gencode')
 cc_flag.append('arch=compute_80,code=sm_80')
 cc_flag.append('-gencode')
 cc_flag.append('arch=compute_86,code=sm_86')
+cc_flag.append('-gencode')
+cc_flag.append('arch=compute_90,code=sm_90')
 
 print("\n\ntorch.__version__  = {}\n\n".format(torch.__version__))
 TORCH_MAJOR = int(torch.__version__.split('.')[0])
@@ -264,7 +268,38 @@ ext_modules.append(
                   extra_compile_args={"cxx": ["-O3"] + version_dependent_macros + [f'-DXENTROPY_VER="{xentropy_ver}"'],
                                       'nvcc': ['-O3'] + version_dependent_macros}))
 
-if bare_metal_minor >= 5 and bare_metal_major >= 11:
+ext_modules.append(
+        CUDAExtension(
+            name="transducer_joint_cuda",
+            sources=[
+                "transducer/transducer_joint.cpp",
+                "transducer/transducer_joint_kernel.cu",
+            ],
+            extra_compile_args={
+                "cxx": ["-O3"] + version_dependent_macros + generator_flag,
+                "nvcc": ["-O3"] + version_dependent_macros + generator_flag,
+            },
+            include_dirs=[os.path.join(this_dir, "csrc"),
+                          os.path.join(this_dir, "/multihead_attn")],
+        )
+    )
+
+ext_modules.append(
+    CUDAExtension(
+        name="transducer_loss_cuda",
+        sources=[
+            "transducer/transducer_loss.cpp",
+            "transducer/transducer_loss_kernel.cu",
+        ],
+        include_dirs=[os.path.join(this_dir, "csrc")],
+        extra_compile_args={
+            "cxx": ["-O3"] + version_dependent_macros,
+            "nvcc": ["-O3"] + version_dependent_macros,
+        },
+    )
+)
+
+if bare_metal_major > 11 or (bare_metal_minor >= 5 and bare_metal_major == 11):
     ext_modules.append(
         CUDAExtension(name='mlp_gelu_blaslt',
                       sources=['mlp_blaslt/mlp_gelu.cpp',
@@ -326,6 +361,8 @@ if bare_metal_minor >= 5 and bare_metal_major >= 11:
                                                    '--expt-extended-lambda',
                                                    '--use_fast_math'] + version_dependent_macros +
                                                   generator_flag}))
+
+
 
 
 setup(

@@ -4,6 +4,7 @@
     <configs>
       <sshConfig authType="PASSWORD" host="141.3.25.137" id="7555318a-f6cb-4b79-8b73-16083af49b61" port="22" nameFormat="DESCRIPTIVE" username="pquan" useOpenSSHConfig="true" />
       <sshConfig authType="PASSWORD" host="bridges2.psc.edu" id="2777a602-d130-4c13-a06f-c8c38c878f3a" port="22" nameFormat="DESCRIPTIVE" username="npham2" useOpenSSHConfig="true" />
+      <sshConfig authType="PASSWORD" host="horeka.scc.kit.edu" id="8c116524-6fe6-4350-b22a-85b660899562" port="22" nameFormat="DESCRIPTIVE" username="gw1254" useOpenSSHConfig="true" />
     </configs>
   </component>
 </project>

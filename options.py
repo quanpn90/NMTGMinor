@@ -352,6 +352,8 @@ def make_parser(parser):
                         help='Zero-out encoders during training')
     parser.add_argument('-ctc_loss', type=float, default=0.0,
                         help='CTC Loss as additional loss function with this weight')
+    parser.add_argument('-transducer_loss', type=float, default=0.0,
+                        help='CTC Loss as additional loss function with this weight')
     parser.add_argument('-ctc_loss_delay', type=int, default=-1,
                         help="Ctc loss delay - only start ctc after this step.")
     # parser.add_argument('-lfv_multilingual', action='store_true',
@@ -618,6 +620,9 @@ def make_parser(parser):
 
 def backward_compatible(opt):
     # FOR BACKWARD COMPATIBILITY
+    if not hasattr(opt, 'transducer_loss'):
+        opt.transducer_loss = 0
+
     if not hasattr(opt, 'num_mel_bin'):
         opt.num_mel_bin = 0
 

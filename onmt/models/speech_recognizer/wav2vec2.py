@@ -527,7 +527,8 @@ class Wav2vecTransformer(Transformer):
     """Main model in 'Attention is all you need' """
 
     def __init__(self, encoder, decoder, generator=None,
-                 mirror=False, ctc=False, **kwargs):
+                 mirror=False, ctc=False,
+                 transducer=False, **kwargs):
         super().__init__(encoder, decoder, generator, None, None, ctc=ctc)
         self.model_size = self.decoder.model_size
         self.switchout = self.decoder.switchout
@@ -544,15 +545,26 @@ class Wav2vecTransformer(Transformer):
         if self.ctc:
             self.ctc_linear = Linear(encoder.model_size, self.tgt_vocab_size)
 
+        self.transducer = transducer
+        if self.transducer:
+            from onmt.modules.transducer import TransducerJoint
+
+            self.transducer_linear = Linear(self.model_size, self.tgt_vocab_size)
+
+            if self.tgt_vocab_size % 4 == 0:
+                self.transducer_joint = TransducerJoint(relu=True, dropout=0.0)
+            else:
+                self.transducer_joint = TransducerJoint(relu=False, opt=0)
+
     def reset_states(self):
         return
 
     def forward(self, batch, adv_ptb_grad=False, input_ptb=None, factorize=False,
                 mirror=False, target_mask=None,
                 ctc_loss_function=None,
-                ctc_labels=None,
-                grad_scaler=None,
-                ctc_coeff=None,
+                ctc_coeff=0.0,
+                transducer_coeff=0.0,
+                transducer_loss_function=None,
                 **kwargs):
         """
         :param factorize:
@@ -560,6 +572,11 @@ class Wav2vecTransformer(Transformer):
         :param adv_ptb_grad: If we need to tell the model to set input.requires_grad=True (1st step)
         :param input_ptb: 2nd step of adversarial: add the perturbation to input
         :param batch: data object sent from the dataset
+        :param target_mask
+        :param ctc_loss_function
+        :param ctc_coeff
+        :param transducer_loss_function
+        :param transducer_coeff
         :return:
         """
         if self.switchout > 0 and self.training:
@@ -587,7 +604,7 @@ class Wav2vecTransformer(Transformer):
 
         if ctc_coeff > 0 or not self.has_decoder:
             # what is the ctc_labels here?
-            ctc_labels = batch.get("target_output")
+            ctc_labels = batch.get("target") # including <s> and </s>
             assert (ctc_loss_function.padding_idx == onmt.constants.TGT_PAD)
 
             # we have to perform CTC first
@@ -629,7 +646,7 @@ class Wav2vecTransformer(Transformer):
                     weights_matrix = self.ctc_compress(prob_ctc, batch_predicted, new_lengths, x_ctc.dtype,
                                                        x_ctc.device)
 
-                context = context_detached.permute(1, 2, 0).bmm(weights_matrix).permute(2, 0, 1)
+                context = context.permute(1, 2, 0).bmm(weights_matrix).permute(2, 0, 1)
 
                 # creating a new padding mask
                 max_len = max(new_lengths)
@@ -668,6 +685,43 @@ class Wav2vecTransformer(Transformer):
         # final layer: computing softmax
         logprobs = self.generator[0](output_dict)['logits']
         output_dict['logprobs'] = logprobs
+
+        if transducer_coeff > 0:
+            assert self.ctc_compress is None
+
+            f = context.transpose(0, 1).contiguous()
+            g = output.transpose(0, 1).contiguous()
+            f_len = (1 - output_dict['src_mask'].long()).sum(dim=1).int()
+            g_len = (target_mask.long()).sum(dim=0).int()
+
+            assert f_len.size(0) == f.size(0)
+            transducer_joint = self.transducer_joint(f, g, f_len, g_len).contiguous()
+            transducer_logits = self.transducer_linear(transducer_joint)
+
+            output_dict['transducer_logits'] = transducer_logits
+
+            _tgt_lengths = batch.get("tgt_lengths")
+            if isinstance(_tgt_lengths, list):
+                _tgt_lengths = torch.LongTensor(_tgt_lengths).to(transducer_logits.device)
+            y_len = _tgt_lengths.int() - 2 # minus <s> and </s> but I am not too sure
+            assert y_len.size(0) == g_len.size(0)
+            # print(y_len, g_len)
+
+            assert torch.equal(y_len, g_len - 1) == True
+
+            transducer_targets = batch.get("target")[1:-1].transpose(0, 1).contiguous().int()
+            assert transducer_targets.size(0) == transducer_logits.size(0)
+            # print(transducer_targets.size(), transducer_logits.size())
+            assert transducer_targets.size(1) == transducer_logits.size(2) - 1
+            transducer_loss = transducer_loss_function(transducer_logits, transducer_targets,
+                                                       f_len, y_len)
+
+            output_dict['transducer_loss'] = transducer_loss.sum()
+            output_dict['transducer_numel'] = y_len.sum().item()
+        else:
+            output_dict['transducer_logits'] = None
+            output_dict['transducer_loss'] = None
+            output_dict['transducer_numel'] = None
 
         # Mirror network: reverse the target sequence and perform backward language model
         if mirror:

@@ -16,6 +16,13 @@
           </advancedOptions>
         </fileTransfer>
       </webServer>
+      <webServer id="5f46d1bc-f312-4ff8-a890-db4a1fc19753" name="horeka">
+        <fileTransfer accessType="SFTP" host="horeka.scc.kit.edu" port="22" sshConfigId="8c116524-6fe6-4350-b22a-85b660899562" sshConfig="gw1254@horeka.scc.kit.edu:22 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
     </option>
   </component>
 </project>
