@@ -1319,6 +1319,10 @@ class OCLTrainer(object):
                     report_mirror_loss.zero_()
                     report_ctc_loss.zero_()
                     report_ctc_targets.zero_()
+
+                    report_transducer_loss.zero_()
+                    report_transducer_targets.zero_()
+
                     report_ewc_loss.zero_()
                     report_ewc_count = 0
                     # report_sents.zero_()
