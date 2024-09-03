@@ -711,6 +711,11 @@ class Dataset(torch.utils.data.Dataset):
     def get_size(self):
         return self.num_batches
 
+    def print(self, *args, **kwargs):
+
+        if self.device == 0:
+            print(*args, **kwargs)
+
     def __init__(self, src_data, tgt_data,
                  src_sizes=None, tgt_sizes=None,
                  src_langs=None, tgt_langs=None,
@@ -733,6 +738,7 @@ class Dataset(torch.utils.data.Dataset):
                  validation=True,
                  use_char_level=False,
                  char_data=None,
+                 device=0,
                  **kwargs):
         """
         :param src_data: List of tensors for the source side (1D for text, 2 or 3Ds for other modalities)
@@ -757,6 +763,8 @@ class Dataset(torch.utils.data.Dataset):
         For models with absolute positional encoding, src and tgt should be aligned left (This is default)
         For models with relative positional encoding, src should be right and tgt should be left
         """
+        self.device = device
+
         if constants is not None:
             constants = dill.loads(constants)
             self.tgt_pad = constants.TGT_PAD
@@ -812,11 +820,11 @@ class Dataset(torch.utils.data.Dataset):
         if self.src is not None:
             if src_sizes is not None:
                 if verbose:
-                    print("Loading source size from binarized data ...")
+                    self.print("Loading source size from binarized data ...")
                 src_sizes = np.asarray(src_sizes)
             else:
                 if verbose:
-                    print("Source size not available. Computing source size from data...")
+                    self.print("Source size not available. Computing source size from data...")
                 src_sizes = np.asarray([data.size(0) for data in self.src])
         else:
             src_sizes = None
@@ -830,10 +838,10 @@ class Dataset(torch.utils.data.Dataset):
 
         if self.tgt is not None:
             if tgt_sizes is not None:
-                print("Loading target size from binarized data ...")
+                self.print("Loading target size from binarized data ...")
                 tgt_sizes = np.asarray(tgt_sizes)
             else:
-                print("Target size not available. Computing target size from data...")
+                self.print("Target size not available. Computing target size from data...")
                 tgt_sizes = np.asarray([data.size(0) for data in self.tgt])
         else:
             tgt_sizes = None
@@ -941,9 +949,9 @@ class Dataset(torch.utils.data.Dataset):
                 self.filtered_samples.append(_sample_id)
 
         if verbose:
-            print("Number of sentences before cleaning and sorting: %d" % len(src_sizes) )
-            print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
-            print("Number of batches after cleaning and sorting: %d" % self.num_batches)
+            self.print("Number of sentences before cleaning and sorting: %d" % len(src_sizes) )
+            self.print("Number of sentences after cleaning and sorting: %d" % sum(self.batch_sizes) )
+            self.print("Number of batches after cleaning and sorting: %d" % self.num_batches)
 
         self.cur_index = 0
         self.batchOrder = None

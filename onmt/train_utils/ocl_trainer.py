@@ -593,7 +593,8 @@ class OCLTrainer(object):
             'epoch': epoch,
             'itr': itr_state_dict,
             'optim': optim_state_dict,
-            'scaler': self.grad_scaler.state_dict() if self.grad_scaler is not None else None
+            'scaler': self.grad_scaler.state_dict() if self.grad_scaler is not None else None,
+            'reservoir': self.reservoir.state_dict()
         }
 
         file_name = '%s_epoch%.2f.round%d' % (opt.save_model, epoch, round)
@@ -826,13 +827,8 @@ class OCLTrainer(object):
                     samples = next(_epoch_iterator)
 
                     # sample is also added to the reservoir here
-
-                    if epoch > 1 or dataset_id > 0:
-
-                        batch = prepare_sample(samples, device=self.device, dataset_id=dataset_id,
+                    batch = prepare_sample(samples, device=self.device, dataset_id=dataset_id,
                                                                             reservoir=self.reservoir)
-                    else:
-                        batch = prepare_sample(samples, device=self.device)
 
                     rehearse = False
                     rehearsing = False
@@ -1334,7 +1330,7 @@ class OCLTrainer(object):
                 if not rehearsing:
                     i = i + self.world_size
 
-            # end of round -> run validation and save
+            # END OF ROUND -> run validation and save
             # we run validation on all valid datasets
             valid_loss, valid_accuracy = self.eval(valid_data)
             valid_ppl = math.exp(min(valid_loss, 100))
@@ -1350,6 +1346,25 @@ class OCLTrainer(object):
             else:
                 value = 1 - valid_accuracy
             self.save(epoch, dataset_id, value)
+
+            total_per_dataset = self.reservoir.get_stats()
+
+            # some stupid code to grab the memory statistics
+            n_dataset = len(train_data)
+            _tensor = torch.zeros((n_dataset, )).cuda()
+            for _dataset_id in total_per_dataset:
+                _tensor[_dataset_id] = total_per_dataset[dataset_id]
+
+            if self.world_size > 1:
+                self.all_reduce(_tensor, op=dist.ReduceOp.SUM, group=self.group)
+
+            self.print("Memory statistics:")
+            _sum = torch.sum(_tensor).item()
+            for dataset_id in total_per_dataset:
+                prob = _tensor[dataset_id].item() / _sum
+                self.print("Dataset ", dataset_id, _tensor[dataset_id].item(),
+                           "samples", f"{prob:.0%}")
+                self.print("")
 
         return total_loss / total_words
 

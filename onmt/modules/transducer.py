@@ -61,7 +61,7 @@ class TransducerJoint(torch.nn.Module):
         if self.pack_output and (batch_offset is None or packed_batch == 0):
             raise Exception("Please specify batch_offset and packed_batch when packing is enabled")
         dropout =  self.dropout and self.training    # only dropout for training
-        return TransducerJointFunc.apply(f, g, f_len, g_len, self.pack_output, self.relu, dropout,
+        return fused_transducer_joint(f, g, f_len, g_len, self.pack_output, self.relu, dropout,
                                             my_batch_offset, packed_batch, self.opt,
                                             self.fwd_tile_size, self.dropout_prob, self.mask_probe)
 
@@ -245,3 +245,20 @@ class TransducerLossTorch(torch.nn.Module):
         # return TransducerLossFunc.apply(x, label, f_len, y_len, my_batch_offset, my_max_f_len,
         #                                     blank_idx, self.fuse_softmax_backward, debug_list,
         #                                     self.opt, self.packed_input)
+
+
+def _cast_if_autocast_enabled(*args):
+    if not torch.is_autocast_enabled():
+        return args
+    else:
+        try:
+            return torch.cuda.amp.autocast_mode._cast(args, torch.get_autocast_gpu_dtype())
+        except AttributeError:
+            return torch.cuda.amp.autocast_mode._cast(args, torch.half)
+
+
+def fused_transducer_joint(*args):
+    args = _cast_if_autocast_enabled(*args)
+    with torch.cuda.amp.autocast(enabled=False):
+        return TransducerJointFunc.apply(*args)
+

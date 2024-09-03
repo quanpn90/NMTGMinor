@@ -1,6 +1,7 @@
 import torch
 import random
 import pickle
+from collections import defaultdict
 
 from onmt.data.batch_utils import _is_oversized
 
@@ -21,6 +22,26 @@ def uncompress(z):
 
 class Reservoir:
 
+    def get_stats(self):
+
+        return self.total_per_dataset
+
+    def state_dict(self):
+
+        state_dict = {'data': self.data,
+                      'num_observed': self.num_observed,
+                      'unit': self.unit,
+                      'update_method': self.update_method}
+
+        return state_dict
+
+    def load_state_dict(self, state_dict):
+
+        self.data = state_dict['data']
+        self.num_observed = state_dict['num_observed']
+        self.unit = state_dict['unit']
+        self.update_method = state_dict['update_method']
+
     # note: samples here are measured by minibatches
     def __init__(self, max_samples=40000, update_method="reservoir_sampling",
                  unit="minibatch",
@@ -28,6 +49,8 @@ class Reservoir:
                  batch_size_words=1,
                  batch_size_sents=1):
 
+        # default as 0
+        self.total_per_dataset = defaultdict(int)
         self.max_samples = max_samples
 
         self.data = dict()
@@ -59,6 +82,8 @@ class Reservoir:
                     self.data[len(self.data)] = sample
                     self.num_observed += 1
 
+                    self.total_per_dataset[dataset_id] += len(indices)
+
                 else:
 
                     # random from i to len(self.data) + 1
@@ -66,8 +91,15 @@ class Reservoir:
 
                     j = random.randint(0, self.num_observed)
                     if j < self.max_samples:
+
+                        to_delete = self.data[j]
+                        _dataset_id, _indices = to_delete
+                        self.total_per_dataset[_dataset_id] -= len(_indices)
+
                         del self.data[j]
                         self.data[j] = sample
+
+                        self.total_per_dataset[dataset_id] += len(indices)
             else:
                 raise NotImplementedError
 
@@ -88,14 +120,22 @@ class Reservoir:
                         self.data[len(self.data)] = (dataset_id, index, src_lengths[j],  tgt_lengths[j])
                         self.num_observed += 1
 
+                        self.total_per_dataset[dataset_id] += 1
+
                     else:
 
                         # random from i to len(self.data) + 1
                         self.num_observed += 1
                         r = random.randint(0, self.num_observed)
                         if r < self.max_samples:
+
+                            to_delete = self.data[r]
+                            _dataset_id, _, _, _ = to_delete
+                            self.total_per_dataset[_dataset_id] -= 1
                             del self.data[r]
+
                             self.data[r] = (dataset_id, index, src_lengths[j],  tgt_lengths[j])
+                            self.total_per_dataset[dataset_id] += 1
 
                 # if len(self.data) < self.max_samples:
                 #
