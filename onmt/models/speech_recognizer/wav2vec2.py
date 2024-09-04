@@ -524,6 +524,7 @@ class Wav2vecTransformer(Transformer):
 
     def __init__(self, encoder, decoder, generator=None,
                  mirror=False, ctc=False,
+                 ctc_compress=None,
                  transducer=False, **kwargs):
         super().__init__(encoder, decoder, generator, None, None, ctc=ctc)
         self.model_size = self.decoder.model_size
@@ -536,10 +537,20 @@ class Wav2vecTransformer(Transformer):
             self.mirror_generator = copy.deepcopy(self.generator)
             self.mirror_generator[0].linear.weight = self.decoder.word_lut.weight
 
-        self.ctc_compress = None
+        self.ctc_compress = ctc_compress
         self.ctc_char = False
         if self.ctc:
             self.ctc_linear = Linear(encoder.model_size, self.tgt_vocab_size)
+
+            stdv = 1. / math.sqrt(self.ctc_linear.weight.size(1))
+
+            torch.nn.init.uniform_(self.ctc_linear.weight, -stdv, stdv)
+            # torch.nn.init.normal_(self.ctc_linear.weight, std=0.001)
+
+            if ctc_compress is not None and ctc_compress != "None":
+                print("Creating CTC Compress layer ...")
+                from .ctc_compressor import CTCCompressStrategy
+                self.ctc_compress = getattr(CTCCompressStrategy, ctc_compress)
 
         self.transducer = transducer
         if self.transducer:
@@ -620,14 +631,9 @@ class Wav2vecTransformer(Transformer):
             ctc_loss_inputs['src_mask'] = encoder_output['src']
 
             ctc_loss, n_ctc_targets = ctc_loss_function(ctc_loss_inputs, ctc_labels)
-            # ctc_loss = ctc_loss * ctc_coeff
-
-            # backward immediately and accumulate gradients into the context.grad
-
-            ctc_loss_data = ctc_loss.item()
 
             if self.ctc_compress is not None:
-                #     # TODO: Ctc compression
+                # TODO: Ctc compression
                 with torch.no_grad():
                     x_ctc = encoder_logits
                     batch_predicted = []
@@ -651,10 +657,10 @@ class Wav2vecTransformer(Transformer):
                     _src_mask[i, l:] = 1
 
                 src_attention_mask = _src_mask
+                src = _src_mask
 
         else:
             ctc_loss = None
-            ctc_loss_data = None
             n_ctc_targets = 0
 
         # pass the mask ('src') from the encoder output the decoder as the attention mask

@@ -67,7 +67,15 @@ class Reservoir:
         self.batch_size_sents = batch_size_sents
 
     # def add_sample(self, sample):
-    def add_sample(self, batch):
+    def add_sample(self, batch, recurring=False):
+        """
+        Args:
+            batch: a list of data samples
+            recurring: if recurring: don't increase the observed (not sure)
+
+        Returns:
+
+        """
 
         # we store the dataset id and the samples
         (dataset_id, indices, src_lengths, tgt_lengths) = batch
@@ -137,20 +145,8 @@ class Reservoir:
                             self.data[r] = (dataset_id, index, src_lengths[j],  tgt_lengths[j])
                             self.total_per_dataset[dataset_id] += 1
 
-                # if len(self.data) < self.max_samples:
-                #
-                #     self.data[len(self.data)] = sample
-                #     self.num_observed += 1
-                #
-                # else:
-                #
-                #     # random from i to len(self.data) + 1
-                #     self.num_observed += 1
-                #
-                #     j = random.randint(0, self.num_observed)
-                #     if j < self.max_samples:
-                #         del self.data[j]
-                #         self.data[j] = sample
+                            assert len(self.data) == self.max_samples
+
             else:
                 raise NotImplementedError
 
@@ -191,11 +187,8 @@ class Reservoir:
                     dataset_id, index, src_length, tgt_length = self.data[j]
                     randomized_sample = (dataset_id, index)
 
-                    # _is_oversized(cur_batch, new_sent_size, cur_batch_sizes, batch_size_words, batch_size_sents):
-
-                    # since we are working with audio
-                    # batch by source
-                    # its going to be inefficient but alright
+                    # try to add more in current minibatch: if its full then break
+                    # less efficient than the dataset minibatch sorting and grouping
                     if _is_oversized(current_batch, src_length, current_batch_sizes,
                                      self.batch_size_frames, self.batch_size_sents):
 

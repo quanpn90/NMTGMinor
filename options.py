@@ -611,7 +611,7 @@ def make_parser(parser):
     parser.add_argument('-char_ctc', action="store_true",
                         help="Whether to use an additional ctc on character level")
     parser.add_argument('-ctc_compress', type=str, default="None",
-                        help='Strategy to compress the ctc. Default is None.')
+                        help='Strategy to compress the ctc avg/weighted/softmax. Default is None.')
 
     parser.add_argument('-num_mel_bin', type=int, default=0,
                         help='Number of log mel bins for feature extraction. 0 = use waveforms ')

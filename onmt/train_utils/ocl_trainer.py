@@ -1353,7 +1353,7 @@ class OCLTrainer(object):
             n_dataset = len(train_data)
             _tensor = torch.zeros((n_dataset, )).cuda()
             for _dataset_id in total_per_dataset:
-                _tensor[_dataset_id] = total_per_dataset[dataset_id]
+                _tensor[_dataset_id] = total_per_dataset[_dataset_id]
 
             if self.world_size > 1:
                 self.all_reduce(_tensor, op=dist.ReduceOp.SUM, group=self.group)

@@ -241,7 +241,8 @@ def build_tm_model(opt, dicts, constants=None):
                 print("[INFO] Created MBART decoder from: %s ..." % opt.dec_config_file)
                 dec_mbart_config = MBartConfig.from_json_file(opt.dec_config_file)
 
-                decoder_class = MBartDecoder if not hasattr(opt, "use_memory") or not opt.use_memory else MBartDecoderMemory
+                decoder_class = MBartDecoder if not hasattr(opt,
+                                                            "use_memory") or not opt.use_memory else MBartDecoderMemory
                 decoder = decoder_class(dec_mbart_config, opt)
 
                 if opt.freeze_embedding:
@@ -364,6 +365,7 @@ def build_tm_model(opt, dicts, constants=None):
         model = Wav2vecTransformer(encoder, decoder, nn.ModuleList(generators),
                                    mirror=opt.mirror_loss,
                                    ctc=opt.ctc_loss > 0.0,
+                                   ctc_compress=opt.ctc_compress,
                                    transducer=opt.transducer_loss > 0.0)
 
     elif opt.model in ['discourse_speech_transformer']:

@@ -14,7 +14,7 @@ class CTC(torch.nn.Module):
         super().__init__()
 
         if padding_idx == -1:
-            self.padding_idx = onmt.constants.PAD
+            self.padding_idx = onmt.constants.TGT_PAD
         else:
             self.padding_idx = padding_idx
 
@@ -29,7 +29,9 @@ class CTC(torch.nn.Module):
         self.dropout_rate = dropout_rate
 
         reduction_type = "sum" if reduce else "none"
-        self.ctc_loss = torch.nn.CTCLoss(blank=onmt.constants.TGT_PAD, reduction=reduction_type, zero_infinity=True)
+        # print("CTC loss with blank id", self.padding_idx)
+        self.ctc_loss = torch.nn.CTCLoss(self.padding_idx,
+                                         reduction=reduction_type)
 
         self.ignore_id = -1
         self.reduce = reduce
@@ -48,6 +50,7 @@ class CTC(torch.nn.Module):
         # Use the deterministic CuDNN implementation of CTC loss to avoid
         #  [issue#17798](https://github.com/pytorch/pytorch/issues/17798)
         with torch.backends.cudnn.flags(deterministic=True):
+            # print(ilen, olen)
             loss = self.ctc_loss(log_probs, targets, ilen, olen)
 
         with torch.no_grad():
@@ -90,18 +93,22 @@ class CTC(torch.nn.Module):
 
         # target is transposed to batch first
         targets = targets.transpose(0, 1).contiguous()
-        padding_mask = targets.eq(self.padding_idx)
-        targets = targets.view(-1)  # flatten [B x T]
+        # padding_mask = targets.eq(self.padding_idx)
+        # targets = targets.view(-1)  # flatten [B x T]
+        #
+        # # flattened the target into 1D sequence here
+        # non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
+        # targets = targets.index_select(0, non_pad_indices)
 
-        # flattened the target into 1D sequence here
-        non_pad_indices = torch.nonzero(padding_mask.view(-1).ne(1)).squeeze(1)
-        targets = targets.index_select(0, non_pad_indices)
-
-        # print(logits.size(), targets.size(), input_lengths.size(), target_lengths.size())
+        # print(logits.size(), targets.size(), input_lengths, target_lengths)
 
         loss, total = self.compute_loss(logits, targets, input_lengths, target_lengths)
 
         # the ctc loss is the sum of loss in each element?
-        target_size = targets.numel()
+
+        target_size_ = targets.ne(self.padding_idx).long().sum()
+        target_size = torch.sum(target_lengths)
+
+        assert target_size_.item() == target_size.item()
 
         return loss, target_size
