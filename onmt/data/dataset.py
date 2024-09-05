@@ -128,7 +128,7 @@ def merge_concat_data(data, type="text", src_pad=0, tgt_pad=0,
 
 @torch.no_grad()
 def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=False,
-               feature_size=40, dataname="source", src_pad=1, tgt_pad=1 ):
+               feature_size=40, dataname="source", src_pad=1, tgt_pad=1, reverse=True):
     """
     Assembling the individual sequences into one single tensor, included padding
     :param tgt_pad:
@@ -140,6 +140,7 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
     :param align_right: aligning the sequences w.r.t padding
     :param type: text or audio
     :param augmenter: for augmentation in audio models
+    :param reverse: reverse the order of data
     :return:
     """
 
@@ -365,6 +366,7 @@ def collate_fn(src_data, tgt_data,
                feature_size=40, use_memory=None,
                src_features=None, deterministic=False,
                use_char_level=False, char_data=None,
+               create_reverse=False,
                index_data=None):
 
     tensors = dict()
@@ -385,9 +387,6 @@ def collate_fn(src_data, tgt_data,
         target_full, target_pos, tgt_lengths = merge_data(tgt_data, align_right=tgt_align_right,
                                                               dataname="target", tgt_pad=tgt_pad)
 
-        # ctc_target, _, _ = merge_ctc_data(tgt_data, align_right=tgt_align_right,
-        #                                   dataname="target", tgt_pad=tgt_pad)
-
         tensors['tgt_selfattn_mask'] = target_full.eq(tgt_pad)
         target_full = target_full.t().contiguous()  # transpose BxT to TxB
         tensors['target'] = target_full
@@ -398,6 +397,11 @@ def collate_fn(src_data, tgt_data,
             tensors['target_pos'] = target_pos.t().contiguous()[:-1]
         tgt_size = sum([len(x) - 1 for x in tgt_data])
         tensors['tgt_lengths'] = tgt_lengths
+
+        if create_reverse:
+            target_full, target_pos, tgt_lengths = merge_data(tgt_data, align_right=tgt_align_right,
+                                                              dataname="target", tgt_pad=tgt_pad,
+                                                              reverse=True)
 
     else:
         tgt_size = 0
@@ -738,6 +742,7 @@ class Dataset(torch.utils.data.Dataset):
                  validation=True,
                  use_char_level=False,
                  char_data=None,
+                 create_reverse=False,
                  device=0,
                  **kwargs):
         """
@@ -796,6 +801,7 @@ class Dataset(torch.utils.data.Dataset):
         self.multiplier = multiplier
         self.use_char_level = use_char_level
         self.char_data = char_data
+        self.create_reverse = create_reverse
 
         cut_off_size = kwargs.get('cut_off_size', 200000)
         smallest_batch_size = kwargs.get('smallest_batch_size', 4)
@@ -1121,7 +1127,8 @@ class Dataset(torch.utils.data.Dataset):
                                   tgt_pad=self.tgt_pad,
                                   feature_size=self.input_size,
                                   use_char_level=self.use_char_level,
-                                  char_data=self.char_data
+                                  char_data=self.char_data,
+                                  create_reverse=self.create_reverse
                                   ),
                        )
         return batch
@@ -1183,6 +1190,7 @@ class Dataset(torch.utils.data.Dataset):
                                   feature_size=self.input_size,
                                   use_char_level=self.use_char_level,
                                   char_data=self.char_data,
+                                  create_reverse=self.create_reverse,
                                   index_data=indices
                                   ),
                        )

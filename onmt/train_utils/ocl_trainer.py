@@ -1545,8 +1545,8 @@ class OCLTrainer(object):
             # because after 1 real sample -> 1 memory sample
             update_frequency = 2 * opt.update_frequency
 
-            stop_condition = (_data_iterator.end_of_epoch() and rehearse)
-            while not stop_condition:
+            # stop_condition = (_data_iterator.end_of_epoch() and not rehearse)
+            while not  (_data_iterator.end_of_epoch() and not rehearse):
 
                 if not rehearse or opt.reservoir_size <= 0:
                     samples = next(_epoch_iterator)
