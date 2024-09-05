@@ -31,10 +31,10 @@ def remove_pretrain_weights(opt):
     return opt
 
 
-def build_model(opt, dicts, remove_pretrain=False, constants=None):
+def build_model(opt, dicts, remove_pretrain=False, constants=None, verbose=True):
     # adding missing options if the opt was built before. (for loading old models)
     opt = backward_compatible(opt)
-    if remove_pretrain:
+    if remove_pretrain and verbose:
         print("[INFO] Removing pretrained weights from opt")
         opt = remove_pretrain_weights(opt)
 
@@ -62,7 +62,7 @@ def build_model(opt, dicts, remove_pretrain=False, constants=None):
         return model
 
     if not opt.fusion:
-        model = build_tm_model(opt, dicts, constants=constants)
+        model = build_tm_model(opt, dicts, constants=constants, verbose=verbose)
     else:
         raise NotImplementedError
         model = build_fusion(opt, dicts)
@@ -104,8 +104,12 @@ def build_classifier(opt, dicts):
     return model
 
 
-def build_tm_model(opt, dicts, constants=None):
+def build_tm_model(opt, dicts, constants=None, verbose=True):
     # onmt.constants = add_tokenidx(opt, onmt.constants, dicts)
+    def print_v(*args, **kwargs):
+        if verbose:
+            print(*args, **kwargs)
+
     if constants is None:
         constants = onmt.constants
 
@@ -123,7 +127,7 @@ def build_tm_model(opt, dicts, constants=None):
     # BUILD GENERATOR
     if opt.copy_generator:
         if opt.nce_noise > 0:
-            print("[INFO] Copy generator overrides NCE.")
+            print_v("[INFO] Copy generator overrides NCE.")
             opt.nce = False
             opt.nce_noise = 0
         generators = [CopyGenerator(opt.model_size, dicts['tgt'].size(),
@@ -151,7 +155,7 @@ def build_tm_model(opt, dicts, constants=None):
 
     if opt.join_embedding and embedding_src is not None:
         embedding_tgt = embedding_src
-        print("* Joining the weights of encoder and decoder word embeddings")
+        print_v("* Joining the weights of encoder and decoder word embeddings")
     elif not opt.dec_pretrained_model:
         embedding_tgt = nn.Embedding(dicts['tgt'].size(),
                                      opt.model_size,
@@ -164,7 +168,7 @@ def build_tm_model(opt, dicts, constants=None):
         embedding_tgt = None
 
     if opt.use_language_embedding:
-        print("* Create language embeddings with %d languages" % len(dicts['langs']))
+        print_v("* Create language embeddings with %d languages" % len(dicts['langs']))
         language_embeddings = nn.Embedding(len(dicts['langs']), opt.model_size)
     else:
         language_embeddings = None
@@ -176,7 +180,7 @@ def build_tm_model(opt, dicts, constants=None):
         stacked_encoder = None
         if len(opt.enc_stacked_pretrained_model) > 0:
             if "mbart" in opt.enc_stacked_pretrained_model:
-                print("[INFO] Created a stacked encoder MBART-50")
+                print_v("[INFO] Created a stacked encoder MBART-50")
                 from pretrain_module.modeling_mbart import MBartEncoder
                 from pretrain_module.configuration_mbart import MBartConfig
                 enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
@@ -185,7 +189,7 @@ def build_tm_model(opt, dicts, constants=None):
                 raise NotImplementedError
 
             if opt.enc_state_dict is not None and len(opt.enc_state_dict) > 1:
-                print("[INFO] Loading weights for stacked encoder from: %s ..." % opt.enc_state_dict)
+                print_v("[INFO] Loading weights for stacked encoder from: %s ..." % opt.enc_state_dict)
                 enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
 
                 # load parameters from state dict to model (using huggingface's approach)
@@ -201,7 +205,7 @@ def build_tm_model(opt, dicts, constants=None):
                 #         dec_model_state_dict[key] = current_dict[key]
 
                 stacked_encoder.load_state_dict(enc_model_state_dict)
-                print("[INFO] ... Done")
+                print_v("[INFO] ... Done")
 
         discrete_encoder = None
         if "wavlm" in opt.enc_pretrained_model:
@@ -228,7 +232,7 @@ def build_tm_model(opt, dicts, constants=None):
 
             if "s4" in opt.enc_pretrained_model:  # wav2vec_s4
                 s4_config = json_to_namespace(opt.s4_config_file)
-                print("[INFO] Replacing self attn in encoder with s4")
+                print_v("[INFO] Replacing self attn in encoder with s4")
                 encoder.wav2vec_encoder.replace_attn_with_s4(s4_config)
 
         sub_encoder = None
@@ -238,7 +242,7 @@ def build_tm_model(opt, dicts, constants=None):
             if "mbart" in opt.dec_pretrained_model:
                 from pretrain_module.configuration_mbart import MBartConfig
                 from pretrain_module.modeling_mbart import MBartDecoder, MBartEncoder, MBartDecoderMemory
-                print("[INFO] Created MBART decoder from: %s ..." % opt.dec_config_file)
+                print_v("[INFO] Created MBART decoder from: %s ..." % opt.dec_config_file)
                 dec_mbart_config = MBartConfig.from_json_file(opt.dec_config_file)
 
                 decoder_class = MBartDecoder if not hasattr(opt,
@@ -252,12 +256,12 @@ def build_tm_model(opt, dicts, constants=None):
                 # if opt.enc_config
 
                 if opt.enc_config_file is not None and len(opt.enc_config_file) > 1:
-                    print("creating MBART sub-encoders")
+                    print_v("creating MBART sub-encoders")
                     enc_mbart_config = MBartConfig.from_json_file(opt.enc_config_file)
                     sub_encoder = MBartEncoder(enc_mbart_config, opt)
 
                     if opt.enc_state_dict is not None and len(opt.enc_state_dict) > 1:
-                        print("[INFO] Loading weights for (sub) mBART encoder from: %s ..." % opt.enc_state_dict)
+                        print_v("[INFO] Loading weights for (sub) mBART encoder from: %s ..." % opt.enc_state_dict)
                         enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
                         sub_encoder.load_state_dict(enc_model_state_dict)
                     for parameter in sub_encoder.parameters():
@@ -265,7 +269,7 @@ def build_tm_model(opt, dicts, constants=None):
                         sub_encoder.embed_tokens = decoder.embed_tokens  # and reduce memory usage
 
             elif opt.dec_pretrained_model in ['deltalm']:
-                print("[INFO] Created DeltaLM decoder from: %s ..." % opt.dec_config_file)
+                print_v("[INFO] Created DeltaLM decoder from: %s ..." % opt.dec_config_file)
                 from onmt.models.deltalm.deltalm import DeltaLMDecoder
                 deltalm_config = json_to_namespace(opt.dec_config_file)
                 embedding_tgt = nn.Embedding(dicts['tgt'].size(),
@@ -288,7 +292,7 @@ def build_tm_model(opt, dicts, constants=None):
                 decoder = BartDecoder(dec_bart_config, opt)
 
             if opt.dec_state_dict is not None and len(opt.dec_state_dict) > 1:
-                print("[INFO] Loading weights for decoder from: %s ..." % opt.dec_state_dict)
+                print_v("[INFO] Loading weights for decoder from: %s ..." % opt.dec_state_dict)
                 dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
 
                 # load parameters from state dict to model (using huggingface's approach)
@@ -304,9 +308,9 @@ def build_tm_model(opt, dicts, constants=None):
                         dec_model_state_dict[key] = current_dict[key]
 
                 decoder.load_state_dict(dec_model_state_dict)
-                print("[INFO] ... Done")
+                print_v("[INFO] ... Done")
             else:
-                print("Not loading pretrained mbart decoder weights")
+                print_v("Not loading pretrained mbart decoder weights")
 
             decoder.dec_pretrained_model = opt.dec_pretrained_model
             if opt.freeze_embedding:
@@ -317,7 +321,7 @@ def build_tm_model(opt, dicts, constants=None):
             decoder.dec_pretrained_model = "none"
             decoder.model_size = encoder.model_size
             decoder.switchout = False
-            print('[INFO] Creating a encoder-only model ....')
+            print_v('[INFO] Creating a encoder-only model ....')
 
             # not sure what will happen when the decoder is just empty so ....
 
@@ -328,7 +332,7 @@ def build_tm_model(opt, dicts, constants=None):
                             sub_encoder=sub_encoder, opt=opt)
 
         if opt.char_ctc and opt.ctc_loss > 0.0:
-            print("creating CTC output layer")
+            print_v("creating CTC output layer")
             model.create_ctc_char(dicts['char_data'], ctc_compress=opt.ctc_compress)
 
         # TODO: share the ctc_loss weight with the decoder weights
@@ -440,7 +444,7 @@ def build_tm_model(opt, dicts, constants=None):
             decoder.factor_embeddings = factor_embeddings
 
     elif opt.model in ["LSTM", 'lstm']:
-        # print("LSTM")
+        # print_v("LSTM")
         onmt.constants.init_value = opt.param_init
         from onmt.models.speech_recognizer.lstm import SpeechLSTMDecoder, SpeechLSTMEncoder, SpeechLSTMSeq2Seq
 
@@ -476,7 +480,7 @@ def build_tm_model(opt, dicts, constants=None):
             audio_encoder = TransformerEncoder(opt, None, positional_encoder, "audio")
             encoder = MixedEncoder(text_encoder, audio_encoder)
         else:
-            print("Unknown encoder type:", opt.encoder_type)
+            print_v("Unknown encoder type:", opt.encoder_type)
             exit(-1)
 
         decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, language_embeddings=language_embeddings)
@@ -554,24 +558,24 @@ def build_tm_model(opt, dicts, constants=None):
             encoder = DeltaLMEncoder(deltalm_config, embedding_src)
 
         elif not opt.enc_pretrained_model:
-            print(" Encoder is not from pretrained model")
+            print_v(" Encoder is not from pretrained model")
             encoder = TransformerEncoder(opt, embedding_src, positional_encoder,
                                          opt.encoder_type, language_embeddings=language_embeddings)
         else:
-            print("Pretrained Encoder type not supported")
+            print_v("Pretrained Encoder type not supported")
             exit(-1)
 
         if opt.load_from or not opt.enc_state_dict:
             if opt.verbose:
-                print("  No weights loading from {} for encoder".format(opt.enc_pretrained_model))
+                print_v("  No weights loading from {} for encoder".format(opt.enc_pretrained_model))
         elif opt.enc_pretrained_model:
-            print("[INFO] Loading weights for encoder from: \n", opt.enc_state_dict)
+            print_v("[INFO] Loading weights for encoder from: \n", opt.enc_state_dict)
 
             enc_model_state_dict = torch.load(opt.enc_state_dict, map_location="cpu")
             if opt.enc_pretrained_model in ["m2m"]:
                 enc_model_state_dict["embed_positions.weights"] = encoder.embed_positions.weights
                 encoder.load_state_dict(enc_model_state_dict)
-                print("Done")
+                print_v("Done")
 
             elif opt.enc_pretrained_model not in ["deltalm"]:
                 encoder.from_pretrained(state_dict=enc_model_state_dict,
@@ -581,7 +585,7 @@ def build_tm_model(opt, dicts, constants=None):
                                         )
 
         if opt.dec_pretrained_model:
-            print("* Build decoder with dec_pretrained_model: {}".format(opt.dec_pretrained_model))
+            print_v("* Build decoder with dec_pretrained_model: {}".format(opt.dec_pretrained_model))
 
         if opt.dec_pretrained_model == "bert":
             if opt.enc_pretrained_model != "bert":
@@ -644,23 +648,23 @@ def build_tm_model(opt, dicts, constants=None):
             # generators[0].linear.bias.requires_grad = False
 
         elif not opt.dec_pretrained_model:
-            print(" Decoder is not from pretrained model")
+            print_v(" Decoder is not from pretrained model")
             decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder,
                                          language_embeddings=language_embeddings)
         else:
-            print("Warning: only bert and roberta are implemented for decoder")
+            print_v("Warning: only bert and roberta are implemented for decoder")
             exit(-1)
 
         if opt.load_from or not opt.dec_state_dict:
             if opt.verbose:
-                print("  No weights loading from {} for decoder".format(opt.dec_pretrained_model))
+                print_v("  No weights loading from {} for decoder".format(opt.dec_pretrained_model))
         elif opt.dec_pretrained_model:
-            print("  Loading weights for decoder from: \n", opt.dec_state_dict)
+            print_v("  Loading weights for decoder from: \n", opt.dec_state_dict)
             dec_model_state_dict = torch.load(opt.dec_state_dict, map_location="cpu")
             if opt.dec_pretrained_model in ["m2m"]:
                 dec_model_state_dict["embed_positions.weights"] = decoder.embed_positions.weights
                 decoder.load_state_dict(dec_model_state_dict)
-                print("Done")
+                print_v("Done")
             elif opt.dec_pretrained_model not in ["deltalm"]:
                 decoder.from_pretrained(state_dict=dec_model_state_dict,
                                         model=decoder,
@@ -670,7 +674,7 @@ def build_tm_model(opt, dicts, constants=None):
 
         encoder.enc_pretrained_model = opt.enc_pretrained_model
         decoder.dec_pretrained_model = opt.dec_pretrained_model
-        print(encoder.enc_pretrained_model, decoder.dec_pretrained_model)
+        print_v(encoder.enc_pretrained_model, decoder.dec_pretrained_model)
 
         encoder.input_type = opt.encoder_type
 
@@ -679,13 +683,17 @@ def build_tm_model(opt, dicts, constants=None):
         raise NotImplementedError
 
     if opt.tie_weights:
-        print("* Joining the weights of decoder input and output embeddings")
+        print_v("* Joining the weights of decoder input and output embeddings")
         model.tie_weights()
 
     return model
 
 
-def init_model_parameters(model, opt):
+def init_model_parameters(model, opt, verbose=True):
+    def print_v(*args, **kwargs):
+        if verbose:
+            print(*args, **kwargs)
+
     """
     Initializing model parameters. Mostly using normal distribution (0, std)
     """
@@ -786,20 +794,20 @@ def init_model_parameters(model, opt):
             m.reset_parameters(init=opt.init)
 
     if opt.model not in ["pretrain_transformer", "wav2vec2_transformer", "wav2vec2_bert", "wav2vec2"]:
-        print('[INFO] Initializing entire model parameters')
+        print_v('[INFO] Initializing entire model parameters')
         model.apply(weights_init)
     elif opt.model in ['wav2vec2_transformer']:
-        print('[INFO] Initializing only decoder parameters')
+        print_v('[INFO] Initializing only decoder parameters')
         model.decoder.apply(weights_init)
     elif opt.model in ['wav2vec2_bert']:
-        print("[INFO] Both encoder and decoder are using pretrained weights")
+        print_v("[INFO] Both encoder and decoder are using pretrained weights")
         # freeze the embedding parameters?
     else:
         if opt.enc_pretrained_model and not opt.dec_pretrained_model:
-            print('[INFO] Initializing only decoder parameters')
+            print_v('[INFO] Initializing only decoder parameters')
             model.decoder.apply(weights_init)
         if not opt.enc_pretrained_model and opt.dec_pretrained_model:
-            print('[INFO] Initializing only encoder parameters')
+            print_v('[INFO] Initializing only encoder parameters')
             model.encoder.apply(weights_init)
 
     if hasattr(model, 'decoder'):
@@ -820,7 +828,11 @@ def init_model_parameters(model, opt):
     return
 
 
-def build_language_model(opt, dicts):
+def build_language_model(opt, dicts, verbose=True):
+    def print_v(*args, **kwargs):
+        if verbose:
+            print(*args, **kwargs)
+
     opt = backward_compatible(opt)
 
     onmt.constants.layer_norm = opt.layer_norm
@@ -837,7 +849,7 @@ def build_language_model(opt, dicts):
                                  padding_idx=onmt.constants.TGT_PAD)
 
     if opt.use_language_embedding:
-        print("* Create language embeddings with %d languages" % len(dicts['langs']))
+        print_v("* Create language embeddings with %d languages" % len(dicts['langs']))
         language_embeddings = nn.Embedding(len(dicts['langs']), opt.model_size)
     else:
         language_embeddings = None
@@ -849,15 +861,18 @@ def build_language_model(opt, dicts):
     model.tgt_dict = dicts['tgt']
 
     if opt.tie_weights:
-        print("* Joining the weights of decoder input and output embeddings")
+        print_v("* Joining the weights of decoder input and output embeddings")
         model.tie_weights()
 
     return model
 
 
-def build_fusion(opt, dicts):
+def build_fusion(opt, dicts, verbose=True):
+    def print_v(*args, **kwargs):
+        if verbose:
+            print(*args, **kwargs)
     # the fusion model requires a pretrained language model
-    print("Loading pre-trained language model from %s" % opt.lm_checkpoint)
+    print_v("Loading pre-trained language model from %s" % opt.lm_checkpoint)
     lm_checkpoint = torch.load(opt.lm_checkpoint, map_location=lambda storage, loc: storage)
 
     # first we build the lm model and lm checkpoint

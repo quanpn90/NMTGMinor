@@ -18,6 +18,8 @@ def make_parser(parser):
                         help='The dictionary will be overidden from checkpoint instead of reading from data.')
     parser.add_argument('-gem_training', action='store_true',
                         help='Gradient Episodic Memory training')
+    parser.add_argument('-agem_training', action='store_true',
+                        help='Averaged Gradient Episodic Memory training. Only effect with ocl_training')
     parser.add_argument('-ocl_training', action='store_true',
                         help='Online Continual Learning training')
     parser.add_argument('-reservoir_size', type=int, default=0,
