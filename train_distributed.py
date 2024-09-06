@@ -85,9 +85,9 @@ def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
     else:
         from onmt.train_utils.mp_trainer import Trainer
         trainer = Trainer(gpu, dicts, opt, constants)
-    # from onmt.train_utils.clip_trainer import ClipTrainer
 
     # if opt.clip_learning:
+    #     from onmt.train_utils.clip_trainer import ClipTrainer
     #     trainer = ClipTrainer(gpu, dicts, opt, constants)
     #     trainer.run(checkpoint=checkpoint, train_data=train_data, valid_data=valid_data)
     # else:
@@ -206,6 +206,7 @@ def main(gpu, opt):
                                           concat=opt.concat_dataset,
                                           char_data=char_data,
                                           use_char_level=opt.char_ctc,
+                                          create_reverse=(opt.mirror_loss > 0),
                                           device=gpu)
             else:
                 train_data = onmt.StreamDataset(train_dict['src'], train_dict['tgt'],
@@ -264,6 +265,7 @@ def main(gpu, opt):
                                           use_memory=hasattr(opt, "use_memory") and opt.use_memory,
                                           char_data=char_data,
                                           use_char_level=opt.char_ctc,
+                                          create_reverse=(opt.mirror_loss > 0),
                                           device=gpu)
             else:
                 valid_data = onmt.StreamDataset(numpy_to_torch(valid_dict['src']), numpy_to_torch(valid_dict['tgt']),
@@ -392,6 +394,7 @@ def main(gpu, opt):
                                           concat=opt.concat_dataset,
                                           char_data=char_data,
                                           use_char_level=opt.char_ctc,
+                                          create_reverse=(opt.mirror_loss > 0),
                                           device=gpu)
             else:
                 train_data = onmt.StreamDataset(train_src,
@@ -482,6 +485,7 @@ def main(gpu, opt):
                                           use_memory=hasattr(opt, "use_memory") and opt.use_memory,
                                           char_data=char_data,
                                           use_char_level=opt.char_ctc,
+                                          create_reverse=(opt.mirror_loss > 0),
                                           device=gpu)
             else:
                 # for validation data, we have to go through sentences (very slow but to ensure correctness)
@@ -614,6 +618,7 @@ def main(gpu, opt):
                                               concat=opt.concat_dataset,
                                               char_data=char_data,
                                               use_char_level=opt.char_ctc,
+                                              create_reverse=(opt.mirror_loss > 0),
                                               device=gpu)
 
                     if c == 1:
@@ -696,6 +701,7 @@ def main(gpu, opt):
                                               use_memory=hasattr(opt, "use_memory") and opt.use_memory,
                                               char_data=char_data,
                                               use_char_level=opt.char_ctc,
+                                              create_reverse=(opt.mirror_loss > 0),
                                               device=gpu)
 
                     valid_sets.append(valid_data)
@@ -736,19 +742,10 @@ def main(gpu, opt):
     constants = dill.dumps(onmt.constants)
 
     if opt.gem_training:
-        # if len(opt.gpus) > 1:
-        #     # torch.multiprocessing.spawn(run_gem_process, nprocs=len(opt.gpus),
-        #     #                             args=(train_data, valid_data, dicts, opt, checkpoint, constants))
-        #
-        #     torch.multiprocessing.spawn(run_gem_process, nprocs=len(opt.gpus),
-        #                                 args=(train_data, valid_data, dicts, opt, checkpoint, constants))
-        # else:
         run_gem_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants)
     else:
         run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants)
-        # torch.multiprocessing.spawn(run_process, nprocs=len(opt.gpus),
-        #                             args=(train_data, valid_data, dicts, opt, checkpoint, constants),
-        #                             start_method='fork')
+
 
 
 if __name__ == "__main__":

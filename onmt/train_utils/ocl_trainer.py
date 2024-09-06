@@ -261,7 +261,7 @@ class OCLTrainer(object):
             self.print("Target pad idx:", tgt_pad)
             loss_function = NMTLossFunc(opt.model_size, dicts['tgt'].size(),
                                         label_smoothing=opt.label_smoothing,
-                                        mirror=opt.mirror_loss,
+                                        mirror=opt.mirror_loss > 0.0,
                                         padding_idx=tgt_pad)
 
         # This function replaces modules with the more optimized counterparts so that it can run faster
@@ -312,6 +312,11 @@ class OCLTrainer(object):
 
             if self.agem_training:
                 self.mem_model = self.mem_model.cuda(device=self.device)
+
+        # if self.opt.flatten_parameters:
+        #     self.optim.flatten_parameters()
+        #     if self.agem_training:
+        #         self.mem_optim.flatten_parameters()
 
         fpSixteen = MixedPrecision(
             param_dtype=torch.float16,
@@ -392,7 +397,7 @@ class OCLTrainer(object):
             if setup_optimizer:
 
                 self.optim = onmt.Optim(opt)
-                self.optim.set_parameters(self.model.parameters())
+                self.optim.set_parameters(self.model.parameters(), flattened=opt.flatten_parameters)
 
                 if self.is_main():
                     print("[INFO] Optimizer: ", self.optim.optimizer)
@@ -414,14 +419,13 @@ class OCLTrainer(object):
             if setup_optimizer:
 
                 self.optim = onmt.Optim(opt)
-                self.optim.set_parameters(self.model.parameters())
+                self.optim.set_parameters(self.model.parameters(), flattened=opt.flatten_parameters)
 
                 if self.agem_training:
                     # probably adam is fine, we don't have to ever call update
                     # so the memory clones are never required
-                    pass
                     self.mem_optim = onmt.Optim(opt)
-                    self.mem_optim.set_parameters(self.mem_model.parameters())
+                    self.mem_optim.set_parameters(self.mem_model.parameters(), flattened=opt.flatten_parameters)
 
                 if self.is_main():
                     print("[INFO] Optimizer: ", self.optim.optimizer)
@@ -471,7 +475,7 @@ class OCLTrainer(object):
         else:
             self.fisher_info = None
 
-        self.print("Creating Reservoir ...")
+        self.print("[INFO] Creating Reservoir ...")
 
         # TODO: add option for reservoir size
 
@@ -745,7 +749,7 @@ class OCLTrainer(object):
         grad_norm = -1
 
         # Clear the gradients of the model
-        self.optim.zero_grad(set_to_none=opt.true_zero_grad)
+        self.optim.zero_grad(set_to_none=not opt.true_zero_grad)
         # self.model.module.reset_states()
 
         # note: for Training split_even=True
@@ -797,11 +801,6 @@ class OCLTrainer(object):
         num_accumulated_sents = zero_tensor()
         report_contrastive_loss = zero_tensor()
 
-        if opt.streaming:
-            streaming_state = self.model.init_stream()
-        else:
-            streaming_state = None
-
         ewc_importance = opt.ewc_importance
 
         if ewc_importance > 0:
@@ -832,10 +831,9 @@ class OCLTrainer(object):
 
             rehearse = False
 
-            update_frequency = 2 * opt.update_frequency if (epoch > 1 or dataset_id > 0)\
-                else opt.update_frequency
+            update_frequency = 2 * opt.update_frequency
 
-            while not _data_iterator.end_of_epoch():
+            while not (_data_iterator.end_of_epoch() and not rehearse) :
 
                 if not rehearse or opt.reservoir_size <= 0:
                     samples = next(_epoch_iterator)
@@ -895,8 +893,7 @@ class OCLTrainer(object):
 
                             outputs = self.model(batch, streaming=False, target_mask=tgt_mask,
                                                  zero_encoder=opt.zero_encoder,
-                                                 mirror=opt.mirror_loss, streaming_state=streaming_state,
-                                                 nce=opt.nce, pretrained_layer_states=layer_states,
+                                                 mirror=opt.mirror_loss > 0,
                                                  adv_ptb_grad=opt.virtual_adversarial_training_mode > 0,
                                                  checkpointing_ffn=opt.checkpointing_ffn,
                                                  checkpointing_cross_attn=opt.checkpointing_cross_attn,
@@ -946,11 +943,11 @@ class OCLTrainer(object):
                                 n_transducer_targets = 0
                                 transducer_loss_data = 0
 
-                            if opt.mirror_loss:
+                            if opt.mirror_loss > 0.0:
                                 rev_loss = loss_dict['rev_loss']
                                 rev_loss_data = loss_dict['rev_loss_data']
                                 mirror_loss = loss_dict['mirror_loss']
-                                full_loss = full_loss + rev_loss + mirror_loss
+                                full_loss = full_loss + rev_loss + mirror_loss * opt.mirror_loss
                                 mirror_loss_data = loss_dict['mirror_loss'].item()
                             else:
                                 rev_loss_data = None
@@ -1021,10 +1018,6 @@ class OCLTrainer(object):
                             self.grad_scaler.scale(full_loss).backward()
                         else:
                             full_loss.backward()
-                        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
-                            self.model.module.post_backward(output_dict=outputs)
-                        else:
-                            self.model.post_backward(output_dict=outputs)
 
                         # del outputs
                         if opt.virtual_adversarial_training_mode > 0:
@@ -1142,19 +1135,19 @@ class OCLTrainer(object):
                     else:
                         grad_denom = 1
 
+                    params = self.optim.get_params()
                     # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
                     if grad_denom != 1 and not self.opt.fsdp:
-                        normalize_gradients(self.model.parameters(), grad_denom)
+                        normalize_gradients(params, grad_denom)
 
                     # Update the pagrameters.
                     if self.opt.fsdp:
                         if self.opt.max_grad_norm > 0:
-
                             grad_norm = self.model.clip_grad_norm_(self.opt.max_grad_norm)
                         else:
                             grad_norm = -1
                     else:
-                        grad_norm = clip_grad_norm(self.model.parameters(), self.opt.max_grad_norm)
+                        grad_norm = clip_grad_norm(params, self.opt.max_grad_norm)
 
                     if ewc_importance > 0:
                         ewc_penalty = 0
@@ -1184,7 +1177,7 @@ class OCLTrainer(object):
                         self.grad_scaler.update()
                     else:
                         self.optim.step(scaler=None)
-                    self.optim.zero_grad(set_to_none=True if self.opt.fsdp else opt.true_zero_grad)
+                    self.optim.zero_grad(set_to_none=True if self.opt.fsdp else not opt.true_zero_grad)
                     counter = 0
                     num_accumulated_words.zero_()
                     num_accumulated_sents.zero_()
@@ -1387,60 +1380,82 @@ class OCLTrainer(object):
 
     def compute_gradient_agem(self):
 
-        ref_params = list(self.model.parameters())
-        mem_params = list(self.mem_model.parameters())
-
         # in this code, ref is actually g in the paper
         # and mem is the g_ref in the paper
         nom = 0
         denom = 0
 
-        with torch.no_grad():
+        if self.opt.flatten_parameters:
+            ref_param = self.optim.flattened_params
+            mem_param = self.mem_optim.flattened_params
 
-            projection_term = 0
+            g_ref = ref_param.grad.data
+            g_mem = mem_param.grad.data
 
-            # g_ref = torch.cat([torch.flatten(p.grad.data) for p in ref_params if p.requires_grad]).view(1, -1)
-            # g_mem = torch.cat([torch.flatten(p.grad.data) for p in mem_params if p.requires_grad]).view(1, -1)
+            nom += torch.dot(g_ref, g_mem)
 
-            # self.print("computing projection term ...")
-            for ref_param, mem_param in zip(ref_params, mem_params):
-                if ref_param.grad is None or mem_param.grad is None:
-                    continue
+            if nom >= 0:
+                return
 
-                if mem_param.grad is not None:
+            denom += torch.dot(g_mem, g_mem)
+            projection_term = nom / denom
+            ref_param.grad.data.sub_(mem_param.grad.data, alpha=projection_term)
+
+        else:
+            ref_params = list(self.model.parameters())
+            mem_params = list(self.mem_model.parameters())
+
+            with torch.no_grad():
+
+                projection_term = 0
+
+                # g_ref = torch.cat([torch.flatten(p.grad.data) for p in ref_params if p.requires_grad]).view(1, -1)
+                # g_mem = torch.cat([torch.flatten(p.grad.data) for p in mem_params if p.requires_grad]).view(1, -1)
+
+                # self.print("computing projection term ...")
+                for ref_param, mem_param in zip(ref_params, mem_params):
+                    if ref_param.grad is None or mem_param.grad is None:
+                        continue
+
+                    if mem_param.grad is not None:
+                        g_mem = torch.flatten(mem_param.grad.data)
+                        denom += torch.dot(g_mem, g_mem)
+
+                    assert (ref_param.numel() == mem_param.numel())
+
+                    g_ref = torch.flatten(ref_param.grad.data)
                     g_mem = torch.flatten(mem_param.grad.data)
+
+                    nom += torch.dot(g_ref, g_mem)
                     denom += torch.dot(g_mem, g_mem)
 
-                assert (ref_param.numel() == mem_param.numel())
+                # constraint satisfied
+                if nom >= 0:
+                    return
 
-                g_ref = torch.flatten(ref_param.grad.data)
-                g_mem = torch.flatten(mem_param.grad.data)
+                # constraint violated
+                projection_term = nom/denom
 
-                nom += torch.dot(g_ref, g_mem)
-                denom += torch.dot(g_mem, g_mem)
+                if torch.isnan(projection_term):
+                    projection_term.fill_(1.0)
+                # self.print("done", projection_term, flush=True)
+                # self.print("computing agem grads ...")
 
-            projection_term = nom/denom
+                # probably we only need 1 extra model
+                for ref_param, mem_param in zip(ref_params, mem_params):
+                    if mem_param.grad is None:
+                        continue
 
-            if torch.isnan(projection_term):
-                projection_term.fill_(1.0)
-            # self.print("done", projection_term, flush=True)
-            # self.print("computing agem grads ...")
+                    # if the new model doesn't have any gradient for some reason -> continue
+                    if ref_param.grad is None and mem_param.grad is None:
+                        continue
 
-            # probably we only need 1 extra model
-            for ref_param, mem_param in zip(ref_params, mem_params):
-                if mem_param.grad is None:
-                    continue
+                    if ref_param.grad is None:
+                        ref_param.grad = mem_param.grad * projection_term
+                        continue
 
-                # if the new model doesn't have any gradient for some reason -> continue
-                if ref_param.grad is None and mem_params.grad is None:
-                    continue
-
-                if ref_param.grad is None:
-                    ref_param.grad = mem_param.grad * projection_term
-                    continue
-
-                # g = g - projection_term * g_mem
-                ref_param.grad.data.sub_(mem_param.grad.data, alpha=projection_term)
+                    # g = g - projection_term * g_mem
+                    ref_param.grad.data.sub_(mem_param.grad.data, alpha=projection_term)
 
             # self.print("done")
 
@@ -1455,8 +1470,8 @@ class OCLTrainer(object):
         grad_norm = -1
 
         # Clear the gradients of the model
-        self.optim.zero_grad(set_to_none=opt.true_zero_grad)
-        # self.model.module.reset_states()
+        self.optim.zero_grad(set_to_none=not opt.true_zero_grad)
+        self.mem_optim.zero_grad(set_to_none=not opt.true_zero_grad)
 
         # note: for Training split_even=True
         dataset = train_data
@@ -1506,11 +1521,6 @@ class OCLTrainer(object):
         num_accumulated_words = zero_tensor()
         num_accumulated_sents = zero_tensor()
         report_contrastive_loss = zero_tensor()
-
-        if opt.streaming:
-            streaming_state = self.model.init_stream()
-        else:
-            streaming_state = None
 
         ewc_importance = opt.ewc_importance
 
@@ -1601,7 +1611,7 @@ class OCLTrainer(object):
                             tgt_mask = targets.ne(onmt.constants.PAD)
                             outputs = current_model( batch, streaming=False, target_mask=tgt_mask,
                                                      zero_encoder=opt.zero_encoder,
-                                                     mirror=opt.mirror_loss, streaming_state=streaming_state,
+                                                     mirror=opt.mirror_loss > 0.0,
                                                      adv_ptb_grad=opt.virtual_adversarial_training_mode > 0,
                                                      checkpointing_ffn=opt.checkpointing_ffn,
                                                      checkpointing_cross_attn=opt.checkpointing_cross_attn,
@@ -1844,9 +1854,10 @@ class OCLTrainer(object):
                     else:
                         grad_denom = 1
 
+                    params = self.optim.get_params()
                     # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
                     if grad_denom != 1 and not self.opt.fsdp:
-                        normalize_gradients(self.model.parameters(), grad_denom)
+                        normalize_gradients(params, grad_denom)
 
                     # Update the pagrameters.
                     if self.opt.fsdp:
@@ -1856,7 +1867,7 @@ class OCLTrainer(object):
                         else:
                             grad_norm = -1
                     else:
-                        grad_norm = clip_grad_norm(self.model.parameters(), self.opt.max_grad_norm)
+                        grad_norm = clip_grad_norm(params, self.opt.max_grad_norm)
                         # _ = clip_grad_norm(self.mem_model.parameters(), self.opt.max_grad_norm)
 
                     if ewc_importance > 0:
@@ -1895,8 +1906,8 @@ class OCLTrainer(object):
                     # syncrhonize between 2 models
                     self.mem_model.load_state_dict(self.model.state_dict())
 
-                    self.optim.zero_grad(set_to_none=True if self.opt.fsdp else opt.true_zero_grad)
-                    self.mem_optim.zero_grad(set_to_none=True if self.opt.fsdp else opt.true_zero_grad)
+                    self.optim.zero_grad(set_to_none=True if self.opt.fsdp else not opt.true_zero_grad)
+                    self.mem_optim.zero_grad(set_to_none=True if self.opt.fsdp else not opt.true_zero_grad)
                     counter = 0
                     num_accumulated_words.zero_()
                     num_accumulated_sents.zero_()
@@ -2161,7 +2172,7 @@ class OCLTrainer(object):
         assert len(opt.load_from) > 0
 
         # Clear the gradients of the model
-        self.optim.zero_grad(set_to_none=False)
+        self.optim.zero_grad(set_to_none=not opt.true_zero_grad)
         if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
             model = self.model.module
         else:
@@ -2320,8 +2331,6 @@ class OCLTrainer(object):
                         self.grad_scaler.scale(full_loss).backward()
                     else:
                         full_loss.backward()
-                    # handles the 2nd backward at the encoder before ctc (because gradient is cut-off)
-                    self.model.post_backward(output_dict=outputs)
 
             except RuntimeError as e:
                 if 'out of memory' in str(e):
@@ -2356,7 +2365,7 @@ class OCLTrainer(object):
 
                     precision_matrices[n].add_(torch.square(p.grad.data))
 
-            self.optim.zero_grad(set_to_none=opt.true_zero_grad)
+            self.optim.zero_grad(set_to_none=not opt.true_zero_grad)
             counter = 0
 
             num_words = tgt_size

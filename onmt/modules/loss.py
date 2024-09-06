@@ -196,51 +196,66 @@ class NMTLossFunc(CrossEntropyLossBase):
             correct = (preds == labels).sum().item()
             total = labels.numel()
 
-        if mirror:
-            reverse_outputs = model_outputs['reverse_hidden']
-            reverse_logits = model_outputs['reverse_logprobs']
-
-            # reverse_targets = torch.flip(targets, (0, ))  # reverse the targets in time dimension
-            reverse_targets = model_outputs['reverse_target']
-            alpha = 1.0
-
         loss, loss_data = self._compute_loss(logits, labels, vocab_mask=vocab_mask, softmaxed=softmaxed)
 
         total_loss = loss
 
         if mirror:
-            reverse_loss, rev_loss_data = self._compute_loss(reverse_logits, reverse_targets, softmaxed=softmaxed)
+            reverse_outputs = model_outputs['reverse_hidden']
+            reverse_logits = model_outputs['reverse_logprobs']
+            reverse_targets = model_outputs['reverse_target']
 
-            # flip the reverse outputs so they have the same thing
-            reverse_outputs = torch.flip(reverse_outputs, (0,))
+            reverse_loss, rev_loss_data = self._compute_loss(reverse_logits, reverse_targets,
+                                                             softmaxed=softmaxed)
 
             lengths = model_outputs['target_lengths']
+            with torch.no_grad():
 
-            mirror_loss = 0
+                for (b, length) in enumerate(lengths):
 
-            # forward: 1 2 3 4 5 6 7 8
-            # backward: 9 8 7 6 5 4 3 2 > 2 3 4 5 6 7 8 9
-            # we want 1 == 3, 2 == 4, 5 == 7 etc because they predict the same output word
+                    hidden_states = reverse_outputs[:, b, :].narrow(0, 0, length)
+                    flipped_states = torch.flip(hidden_states, [0])
+                    hidden_states.copy_(flipped_states)
 
-            fwd_mask = model_outputs['tgt_mask'].new(outputs.size(0), outputs.size(1)).fill_(0)
-            bwd_mask = model_outputs['tgt_mask'].new(outputs.size(0), outputs.size(1)).fill_(0)
+                non_pad_mask = model_outputs['target_input'].ne(self.padding_idx).view(-1)
+                non_pad_mask = torch.nonzero(non_pad_mask).squeeze(1)
 
-            for (b, length) in enumerate(lengths):
-                L = length - 1
-                fwd_mask[:L - 1, b].fill_(1)
-                bwd_mask[1:L, b].fill_(1)
+                bwd_hiddens = reverse_outputs.contiguous().view(-1, reverse_outputs.size(-1))
 
-            fwd_mask = fwd_mask.view(-1)
-            fwd_mask = torch.nonzero(fwd_mask).squeeze(1)
             fwd_hiddens = outputs.contiguous().view(-1, outputs.size(-1))
-            fwd_hiddens = fwd_hiddens.index_select(0, fwd_mask)
+            fwd_hiddens = fwd_hiddens.index_select(0, non_pad_mask)
 
-            bwd_mask = bwd_mask.view(-1)
-            bwd_mask = torch.nonzero(bwd_mask).squeeze(1)
-            bwd_hiddens = reverse_outputs.contiguous().view(-1, reverse_outputs.size(-1))
-            bwd_hiddens = bwd_hiddens.index_select(0, bwd_mask)
 
-            mirror_loss_2 = F.mse_loss(fwd_hiddens, bwd_hiddens, reduction='sum')
+            # # flip the reverse outputs so they have the same thing
+            # reverse_outputs = torch.flip(reverse_outputs, (0,))
+            #
+            # lengths = model_outputs['target_lengths']
+            #
+            # mirror_loss = 0
+            #
+            # # forward: 1 2 3 4 5 6 7 8
+            # # backward: 9 8 7 6 5 4 3 2 > 2 3 4 5 6 7 8 9
+            # # we want 1 == 3, 2 == 4, 5 == 7 etc because they predict the same output word
+            #
+            # fwd_mask = model_outputs['tgt_mask'].new(outputs.size(0), outputs.size(1)).fill_(0)
+            # bwd_mask = model_outputs['tgt_mask'].new(outputs.size(0), outputs.size(1)).fill_(0)
+            #
+            # for (b, length) in enumerate(lengths):
+            #     L = length - 1
+            #     fwd_mask[:L - 1, b].fill_(1)
+            #     bwd_mask[1:L, b].fill_(1)
+            #
+            # fwd_mask = fwd_mask.view(-1)
+            # fwd_mask = torch.nonzero(fwd_mask).squeeze(1)
+            # fwd_hiddens = outputs.contiguous().view(-1, outputs.size(-1))
+            # fwd_hiddens = fwd_hiddens.index_select(0, fwd_mask)
+            #
+            # bwd_mask = bwd_mask.view(-1)
+            # bwd_mask = torch.nonzero(bwd_mask).squeeze(1)
+            # bwd_hiddens = reverse_outputs.contiguous().view(-1, reverse_outputs.size(-1))
+            # bwd_hiddens = bwd_hiddens.index_select(0, bwd_mask)
+            #
+            # mirror_loss_2 = F.mse_loss(fwd_hiddens, bwd_hiddens, reduction='sum')
 
             mirror_loss = mirror_loss_2.div(outputs.size(-1))
 

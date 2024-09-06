@@ -293,15 +293,52 @@ def clip_grad_norm(parameters, max_norm, norm_type=2):
 
 class Optim(object):
 
-    def set_parameters(self, params):
+    def set_parameters(self, params, flattened=False):
 
-        # params_ = filter(lambda p: p.requires_grad, params)
         params_ = params  # not sure about this
         self.params = list(params_)  # careful: params may be a generator
+
+        self.flattened = flattened
+        if flattened:
+            print("Flattening the parameters ...")
+            total_num_params = sum([param.numel() for param in self.params])
+
+            # allocate the gradients
+            self.flattened_params = torch.nn.Parameter(self.params[0].new_zeros(total_num_params))
+            self.flattened_params.grad = self.params[0].data.new_zeros(total_num_params)
+
+            offset = 0
+            for param in self.params:
+                numel = param.numel()
+                flattened_chunk = self.flattened_params.data[offset:offset + numel]
+
+                # copy the data from param to flattened
+                flattened_chunk.view_as(param.data).copy_(param.data)
+                param.data = flattened_chunk.view_as(param.data)
+
+                # so that part above works and set the param storage to the flattened chunk
+                # now we need to find out why the lower part doesn't work
+
+                param.grad = param.data.new_zeros(param.data.size())
+                param.grad.data = self.flattened_params.grad.data[offset:offset + numel].view_as(param.data)
+                # param.grad = self.flattened_params.grad[offset:offset + numel].view_as(param)
+
+                # grad and data should have the same size, shouldn't they?
+                offset += numel
+
+            # for flattened_parameters, we will tie param for the first time of update
+            self._setup = True
+            self.tie_param_to_optimizer([self.flattened_params])
+        else:
+            self._setup = True
+            self.tie_param_to_optimizer(self.params)
+
+    def tie_param_to_optimizer(self, list_of_params, optimizer_state=None):
+
         if self.method == 'sgd':
 
             if not self.zeror:
-                self.optimizer = optim.SGD(self.params, lr=self.lr, weight_decay=self.weight_decay, momentum=0.0)
+                self.optimizer = optim.SGD(list_of_params, lr=self.lr, weight_decay=self.weight_decay, momentum=0.0)
             else:
                 from torch.distributed.optim import ZeroRedundancyOptimizer
                 optimizer = ZeroRedundancyOptimizer(
@@ -310,22 +347,15 @@ class Optim(object):
                     lr=self.lr, weight_decay=self.weight_decay, momentum=0.0
                 )
                 self.optimizer = optimizer
-        # elif self.method == 'multi_adam':
-        #     from torch.optim._multi_tensor import Adam, AdamW
-        #     if self.weight_decay > 0:
-        #         self.optimizer = AdamW(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-        #                                      weight_decay=self.weight_decay, amsgrad=self.amsgrad)
-        #     else:
-        #         self.optimizer = Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-        #                                     weight_decay=0.0, amsgrad=self.amsgrad)
-        elif self.method == 'adam':
+
+        elif self.method in ['adam', 'fused_adam']:
 
             if not self.zeror:
                 if self.weight_decay > 0:
-                    self.optimizer = AdamWWrapper(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                    self.optimizer = AdamWWrapper(list_of_params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
                                                   weight_decay=self.weight_decay, amsgrad=self.amsgrad)
                 else:
-                    self.optimizer = AdamWrapper(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
+                    self.optimizer = AdamWrapper(list_of_params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
                                                  weight_decay=0.0, amsgrad=self.amsgrad)
             else:
                 from torch.distributed.optim import ZeroRedundancyOptimizer
@@ -338,52 +368,15 @@ class Optim(object):
                 )
                 self.optimizer = optimizer
 
-        # elif self.method == 'adafactor':
-        #     relative_step = False if self.lr > 0 else True
-        #     self.optimizer = Adafactor(self.params, lr=self.lr if self.lr > 0 else None,
-        #                                eps=(1e-30, 1e-3), beta1=None,
-        #                                weight_decay=self.weight_decay,
-        #                                relative_step=relative_step,
-        #                                scale_parameter=False if self.lr > 0 else True,
-        #                                warmup_init=relative_step)
-        elif self.method in ['fused_adam']:
-
-            fast_adam = True
-            try:
-                import fused_optim
-                if self.amsgrad:
-                    print("Note: AMSGRAD is not compatible with Fused Adam")
-                from onmt.modules.optimized.fused_adam import FusedAdam
-                self.optimizer = FusedAdam(self.params, lr=self.lr,
-                                           betas=(self.beta1, self.beta2), eps=1e-9,
-                                           weight_decay=self.weight_decay, amsgrad=False,
-                                           set_grad_none=False)
-            except (RuntimeError, ModuleNotFoundError):
-                fast_adam = False
-
-            if not fast_adam:
-                self.optimizer = optim.Adam(self.params, lr=self.lr, betas=(self.beta1, self.beta2), eps=1e-9,
-                                            weight_decay=self.weight_decay, amsgrad=self.amsgrad)
         elif self.method in ['fused_lion', 'lion']:
 
             from lion_pytorch import Lion
 
-            self.optimizer = Lion(self.params, lr=self.lr,
+            self.optimizer = Lion(list_of_params, lr=self.lr,
                                   betas=(self.beta1, self.beta2),
                                   weight_decay=self.weight_decay, use_triton=True,
                                   decoupled_weight_decay=False)
 
-        # elif self.method in ['novograd']:
-        #     try:
-        #         import apex
-        #         if self.amsgrad:
-        #             print("Note: AMSGRAD is not compatible with Fused Novograd")
-        #         self.optimizer = apex.optimizers.FusedNovoGrad(self.params, lr=self.lr,
-        #                                                        betas=(self.beta1, self.beta2), eps=1e-9,
-        #                                                        weight_decay=self.weight_decay, amsgrad=False,
-        #                                                        set_grad_none=False)
-        #     except RuntimeError as e:
-        #         raise e
         else:
             raise RuntimeError("Invalid optim method: " + self.method)
 
@@ -391,6 +384,8 @@ class Optim(object):
             self._optim = self.optimizer.optim
         else:
             self._optim = self.optimizer
+
+        # TODO: load the optimizer_state
 
     def __init__(self, opt):
         self.optimizer = None
@@ -429,15 +424,38 @@ class Optim(object):
         self.amsgrad = opt.amsgrad
         self.max_steps = opt.max_steps
 
+    @torch.no_grad
+    def flatten_gradients(self):
+
+        # this function has to be called somehow ...
+        total_num_params = sum([param.numel() for param in self.params])
+        self.flattened_params.grad = self.flattened_params.data.new_zeros(total_num_params)
+        offset = 0
+        for param in self.params:
+            numel = param.numel()
+
+            # be careful if we use stochastic layers ...
+            if param.requires_grad:
+                assert param.grad.data.numel() == numel
+                self.flattened_params.grad.data[offset:offset + numel].view_as(param.grad.data).copy_(param.grad.data)
+
+            grad_chunk = self.flattened_params.grad.data[offset:offset + numel].view_as(param)
+            param.grad.data = grad_chunk
+            # print(param.grad.data.data_ptr() == grad_chunk.data_ptr())
+            # grad and data should have the same size, shouldn't they?
+            offset += numel
+
+        # self._setup = True
+
+    def get_params(self):
+        if self.flattened:
+            return self.flattened_params
+        else:
+            return self.params
+
     def step(self, scaler=None, grad_denom=None, warmup=False):
 
-        "Normalize gradients by batch size"
-
-        "Compute gradients norm."
-        # grad_norm = clip_grad_norm(self.params, self.max_grad_norm).item()
-
         overflow = False
-
         # if gradients have NaN/inf: return (which will be zeroed afterwards)
         # only do that if the scaler is None, i.e no mechanism to detect inf/nan implicitly
         # for apex amp, only skip if overflow is not detected
@@ -456,11 +474,8 @@ class Optim(object):
         else:
             self.optimizer.step()
 
-        # return grad_norm
-
-    """Reset the denom for normalization"""
-
     def normalize_grad(self, denom=None):
+        """Reset the denom for normalization"""
 
         if denom is None:
             denom = 1
@@ -535,6 +550,12 @@ class Optim(object):
         self.optimizer.load_state_dict(state_dict)
 
     def zero_grad(self, set_to_none=False):
+
+        # if not self._setup:
+        #     return
+        if self.flatten_gradients:
+            assert set_to_none is False
+
         self.optimizer.zero_grad(set_to_none=set_to_none)
 
     def set_starting_step(self, step):

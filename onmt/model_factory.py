@@ -367,7 +367,7 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
                                            language_embeddings=language_embeddings)
 
         model = Wav2vecTransformer(encoder, decoder, nn.ModuleList(generators),
-                                   mirror=opt.mirror_loss,
+                                   mirror=opt.mirror_loss > 0.0,
                                    ctc=opt.ctc_loss > 0.0,
                                    ctc_compress=opt.ctc_compress,
                                    transducer=opt.transducer_loss > 0.0)
@@ -385,7 +385,8 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
         encoder = DiscourseTransformerEncoder(opt, encoder=encoder)
 
         model = DiscourseTransformer(encoder, decoder, nn.ModuleList(generators),
-                                     None, None, mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
+                                     None, None,
+                                     mirror=opt.mirror_loss > 0.0, ctc=opt.ctc_loss > 0.0)
 
     elif opt.model in ['discourse_translator']:
         from onmt.models.discourse.discourse_transformer import DiscourseTransformerEncoder, DiscourseTransformer
@@ -400,7 +401,7 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
         encoder = DiscourseTransformerEncoder(opt, encoder=encoder)
 
         model = DiscourseTransformer(encoder, decoder, nn.ModuleList(generators),
-                                     None, None, mirror=opt.mirror_loss)
+                                     None, None, mirror=opt.mirror_loss > 0.0)
 
     elif opt.model in ['conformer', 'speech_transformer', 'hybrid_transformer']:
         onmt.constants.init_value = opt.param_init
@@ -419,7 +420,8 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
 
             # model = Conformer(encoder, decoder, nn.ModuleList(generators), ctc=opt.ctc_loss > 0.0)
             model = RelativeTransformer(encoder, decoder, nn.ModuleList(generators),
-                                        None, None, mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
+                                        None, None, mirror=opt.mirror_loss > 0.0
+                                        , ctc=opt.ctc_loss > 0.0)
         elif opt.model == 'hybrid_transformer':
             from onmt.models.speech_recognizer.lstm import SpeechLSTMDecoder, SpeechLSTMEncoder, SpeechLSTMSeq2Seq
             encoder = SpeechTransformerEncoder(opt, None, positional_encoder, opt.encoder_type)
@@ -433,7 +435,7 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
             decoder = SpeechTransformerDecoder(opt, embedding_tgt, positional_encoder,
                                                language_embeddings=language_embeddings)
             model = RelativeTransformer(encoder, decoder, nn.ModuleList(generators),
-                                        None, None, mirror=opt.mirror_loss, ctc=opt.ctc_loss > 0.0)
+                                        None, None, mirror=opt.mirror_loss > 0.0, ctc=opt.ctc_loss > 0.0)
 
         # If we use the multilingual model and weights are partitioned:
         if opt.multilingual_partitioned_weights:
@@ -464,7 +466,7 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
         decoder = RelativeTransformerDecoder(opt, embedding_tgt, None, language_embeddings=language_embeddings)
 
         model = RelativeTransformer(encoder, decoder, nn.ModuleList(generators),
-                                    None, None, mirror=opt.mirror_loss)
+                                    None, None, mirror=opt.mirror_loss > 0.0)
 
     elif opt.model in ['transformer', 'stochastic_transformer']:
         onmt.constants.init_value = opt.param_init
@@ -485,7 +487,7 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
 
         decoder = TransformerDecoder(opt, embedding_tgt, positional_encoder, language_embeddings=language_embeddings)
 
-        model = Transformer(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss)
+        model = Transformer(encoder, decoder, nn.ModuleList(generators), mirror=opt.mirror_loss > 0.0)
 
     elif opt.model == 'relative_transformer':
         from onmt.models.relative_transformer import \
@@ -511,7 +513,8 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
             rev_decoder = None
             rev_generator = None
 
-        model = RelativeTransformer(encoder, decoder, generator, rev_decoder, rev_generator, mirror=opt.mirror_loss)
+        model = RelativeTransformer(encoder, decoder, generator, rev_decoder, rev_generator,
+                                    mirror=opt.mirror_loss > 0.0)
 
     elif opt.model == 'universal_transformer':
         from onmt.legacy.old_models.universal_transformer import UniversalTransformerDecoder, \
@@ -528,7 +531,7 @@ def build_tm_model(opt, dicts, constants=None, verbose=True):
         decoder = UniversalTransformerDecoder(opt, embedding_tgt, positional_encoder,
                                               language_embeddings=language_embeddings)
 
-        model = Transformer(encoder, decoder, generator, mirror=opt.mirror_loss)
+        model = Transformer(encoder, decoder, generator, mirror=opt.mirror_loss > 0.0)
 
     elif opt.model == 'pretrain_transformer':
         assert (opt.enc_pretrained_model or opt.dec_pretrained_model)

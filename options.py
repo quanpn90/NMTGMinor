@@ -24,8 +24,8 @@ def make_parser(parser):
                         help='Online Continual Learning training')
     parser.add_argument('-reservoir_size', type=int, default=0,
                         help='The size of reservoir used in Online Continual Learning training')
-    # parser.add_argument('-mirror_loss', action='store_true',
-    #                     help='Using mirror loss')
+    parser.add_argument('-mirror_loss', type=float, default=0.0,
+                        help='Use mirror loss from a 2nd decoder')
 
     parser.add_argument('-train_sets', default=[], nargs='+', type=int,
                         help="Sets of training data. For example 0 1 2")
@@ -222,6 +222,8 @@ def make_parser(parser):
                         help='Label smoothing value for loss functions.')
     parser.add_argument('-true_zero_grad', action="store_true",
                         help='truly set grad to zero instead of None.')
+    parser.add_argument('-flatten_parameters', action="store_true",
+                        help='Flatten all parameters into one single tensor.')
 
     # parser.add_argument('-curriculum', type=int, default=-1,
     #                     help="""For this many epochs, order the minibatches based
@@ -716,8 +718,8 @@ def backward_compatible(opt):
     if not hasattr(opt, 'fix_norm_output_embedding'):
         opt.fix_norm_output_embedding = False
 
-    if not hasattr(opt, 'mirror_loss'):
-        opt.mirror_loss = False
+    if not hasattr(opt, 'mirror_loss') or opt.mirror_loss == False:
+        opt.mirror_loss = 0.0
 
     if not hasattr(opt, 'max_memory_size'):
         opt.max_memory_size = 0

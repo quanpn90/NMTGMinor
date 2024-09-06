@@ -674,6 +674,7 @@ class Wav2vecTransformer(Transformer):
 
         # build the output dict based on decoder output
         output_dict = defaultdict(lambda: None, decoder_output)
+        output_dict['target_input'] = tgt
         output_dict['hidden'] = output
         output_dict['context'] = context
         output_dict['src_mask'] = encoder_output['src']
@@ -728,10 +729,9 @@ class Wav2vecTransformer(Transformer):
         # Mirror network: reverse the target sequence and perform backward language model
         if mirror:
             # tgt_reverse = torch.flip(batch.get('target_input'), (0, ))
-            tgt_pos = torch.flip(batch.get('target_pos'), (0,))
-            tgt_reverse = torch.flip(batch.get('target'), (0,))
-            tgt_reverse_input = tgt_reverse[:-1]
-            tgt_reverse_output = tgt_reverse[1:]
+            # tgt_pos = torch.flip(batch.get('target_pos'), (0,))
+            tgt_reverse_input = batch.get('target_input_rev')
+            tgt_reverse_output = batch.get('target_output_rev')
 
             tgt_reverse_input = tgt_reverse_input.transpose(0, 1)
             # perform an additional backward pass

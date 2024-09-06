@@ -128,7 +128,7 @@ def merge_concat_data(data, type="text", src_pad=0, tgt_pad=0,
 
 @torch.no_grad()
 def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=False,
-               feature_size=40, dataname="source", src_pad=1, tgt_pad=1, reverse=True):
+               feature_size=40, dataname="source", src_pad=1, tgt_pad=1, reverse=False):
     """
     Assembling the individual sequences into one single tensor, included padding
     :param tgt_pad:
@@ -164,8 +164,10 @@ def merge_data(data, align_right=False, type='text', augmenter=None, upsampling=
 
         for i in range(len(data)):
             data_length = data[i].size(0)
+            _data = torch.flip(data[i], [0]) if reverse else data[i]
+
             offset = max_length - data_length if align_right else 0
-            tensor[i].narrow(0, offset, data_length).copy_(data[i])
+            tensor[i].narrow(0, offset, data_length).copy_(_data)
 
         return tensor, pos, lengths
 
@@ -362,7 +364,7 @@ def collate_fn(src_data, tgt_data,
                src_type='text',
                augmenter=None, upsampling=False,
                bilingual=False, vocab_mask=None,
-               past_src_data=None, src_pad="<blank>", tgt_pad="<blank>",
+               past_src_data=None, src_pad=0, tgt_pad=0,
                feature_size=40, use_memory=None,
                src_features=None, deterministic=False,
                use_char_level=False, char_data=None,
@@ -399,10 +401,14 @@ def collate_fn(src_data, tgt_data,
         tensors['tgt_lengths'] = tgt_lengths
 
         if create_reverse:
-            target_full, target_pos, tgt_lengths = merge_data(tgt_data, align_right=tgt_align_right,
-                                                              dataname="target", tgt_pad=tgt_pad,
-                                                              reverse=True)
+            rev_target_full, _, _ = merge_data(tgt_data, align_right=tgt_align_right,
+                                                         dataname="target", tgt_pad=tgt_pad,
+                                                         reverse=True)
 
+            tensors['target_rev'] = rev_target_full
+            rev_target_full = rev_target_full.t().contiguous()
+            tensors['target_input_rev'] = rev_target_full[:-1]
+            tensors['target_output_rev'] = rev_target_full[1:]
     else:
         tgt_size = 0
         tensors['tgt_lengths'] = None
