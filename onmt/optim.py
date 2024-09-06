@@ -445,8 +445,6 @@ class Optim(object):
             # grad and data should have the same size, shouldn't they?
             offset += numel
 
-        # self._setup = True
-
     def get_params(self):
         if self.flattened:
             return self.flattened_params
@@ -551,8 +549,6 @@ class Optim(object):
 
     def zero_grad(self, set_to_none=False):
 
-        # if not self._setup:
-        #     return
         if self.flatten_gradients:
             assert set_to_none is False
 
