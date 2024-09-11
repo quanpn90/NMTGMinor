@@ -20,6 +20,8 @@ def make_parser(parser):
                         help='Gradient Episodic Memory training')
     parser.add_argument('-agem_training', action='store_true',
                         help='Averaged Gradient Episodic Memory training. Only effect with ocl_training')
+    parser.add_argument('-agem_summation', action='store_true',
+                        help='Averaged Gradient Episodic Memory training. Only effect with ocl_training')
     parser.add_argument('-ocl_training', action='store_true',
                         help='Online Continual Learning training')
     parser.add_argument('-reservoir_size', type=int, default=0,

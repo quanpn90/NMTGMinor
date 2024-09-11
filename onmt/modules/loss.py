@@ -221,9 +221,14 @@ class NMTLossFunc(CrossEntropyLossBase):
                 non_pad_mask = torch.nonzero(non_pad_mask).squeeze(1)
 
                 bwd_hiddens = reverse_outputs.contiguous().view(-1, reverse_outputs.size(-1))
+                bwd_hiddens = bwd_hiddens.index_select(0, non_pad_mask)
+                bwd_hiddens = bwd_hiddens.detach()
 
+            # note: we will treat bwd_hiddens as the target, and only backprop through fwd_hiddens
+            # for the mirror loss
             fwd_hiddens = outputs.contiguous().view(-1, outputs.size(-1))
             fwd_hiddens = fwd_hiddens.index_select(0, non_pad_mask)
+            mirror_loss_2 = F.mse_loss(fwd_hiddens, bwd_hiddens, reduction='sum')
 
 
             # # flip the reverse outputs so they have the same thing

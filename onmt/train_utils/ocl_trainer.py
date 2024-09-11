@@ -1378,12 +1378,20 @@ class OCLTrainer(object):
 
         return total_loss / total_words
 
-    def compute_gradient_agem(self):
+    def compute_gradient_agem(self, summation=False):
+        """
 
+        Args:
+            summation: we add the gradients when the gradients don't conflict
+
+        Returns:
+
+        """
         # in this code, ref is actually g in the paper
         # and mem is the g_ref in the paper
         nom = 0
         denom = 0
+        clash = False
 
         if self.opt.flatten_parameters:
             ref_param = self.optim.flattened_params
@@ -1395,11 +1403,18 @@ class OCLTrainer(object):
             nom += torch.dot(g_ref, g_mem)
 
             if nom >= 0:
-                return
+                if summation:
+                    ref_param.grad.data.add_(mem_param.grad.data)
+
+                return clash
 
             denom += torch.dot(g_mem, g_mem)
             projection_term = nom / denom
             ref_param.grad.data.sub_(mem_param.grad.data, alpha=projection_term)
+
+            clash = True
+
+            return clash
 
         else:
             ref_params = list(self.model.parameters())
@@ -1431,7 +1446,22 @@ class OCLTrainer(object):
 
                 # constraint satisfied
                 if nom >= 0:
-                    return
+                    if summation:
+                        for ref_param, mem_param in zip(ref_params, mem_params):
+                            if mem_param.grad is None:
+                                continue
+
+                            # if the new model doesn't have any gradient for some reason -> continue
+                            if ref_param.grad is None and mem_param.grad is None:
+                                continue
+
+                            if ref_param.grad is None:
+                                ref_param.grad = mem_param.grad
+                                continue
+
+                            # g = g - projection_term * g_mem
+                            ref_param.grad.data.add_(mem_param.grad.data)
+                    return clash
 
                 # constraint violated
                 projection_term = nom/denom
@@ -1457,6 +1487,9 @@ class OCLTrainer(object):
                     # g = g - projection_term * g_mem
                     ref_param.grad.data.sub_(mem_param.grad.data, alpha=projection_term)
 
+                clash = True
+
+                return clash
             # self.print("done")
 
     def update_agem(self):
@@ -1514,6 +1547,8 @@ class OCLTrainer(object):
         report_enc_lid_count = 0
         report_dec_lid_loss = zero_tensor()
         report_dec_lid_count = 0
+
+        report_clash = 0
 
         start = time.time()
 
@@ -1835,7 +1870,7 @@ class OCLTrainer(object):
                 num_accumulated_sents.add_(batch_size)
 
                 # We only update the parameters after getting gradients from n mini-batches
-                update_flag = counter >= (update_frequency)
+                update_flag = counter >= update_frequency
 
                 if update_flag:
                     # accumulated gradient case, in this case the update frequency
@@ -1847,7 +1882,8 @@ class OCLTrainer(object):
                         self.grad_scaler.unscale_(self.optim.optimizer)
                         self.mem_grad_scaler.unscale_(self.mem_optim.optimizer)
 
-                    self.compute_gradient_agem()
+                    clash = self.compute_gradient_agem(summation=opt.agem_summation)
+                    if clash: report_clash += 1
 
                     if self.opt.normalize_gradient:
                         grad_denom = num_accumulated_words.item() * grad_denom
@@ -1984,14 +2020,14 @@ class OCLTrainer(object):
                     if self.is_main():
 
                         if ctc_only:
-                            log_string = ("Epoch %2d, Rd %d, %5d/%5d; ; grad_norm: %6.4f " %
+                            log_string = ("Epoch %2d, Rd %d, %5d/%5d; ; grad_norm: %6.4f ; clash: %d" %
                                           (epoch, dataset_id, i + 1, len(_data_iterator),
-                                           grad_norm))
+                                           grad_norm, report_clash))
                         else:
-                            log_string = ("Ep %2d, Rd %d, %5d/%5d; ; ppl: %6.2f ; grad_norm: %6.4f " %
+                            log_string = ("Ep %2d, Rd %d, %5d/%5d; ; ppl: %6.2f ; grad_norm: %6.4f ; clash: %d " %
                                           (epoch, dataset_id, i + 1, len(_data_iterator),
                                            math.exp(report_loss.item() / report_tgt_words.item()),
-                                           grad_norm))
+                                           grad_norm, report_clash))
 
                         if opt.mirror_loss:
                             self.all_reduce(report_rev_loss, op=dist.ReduceOp.SUM, group=self.group)
