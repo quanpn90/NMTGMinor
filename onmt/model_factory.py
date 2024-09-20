@@ -56,11 +56,6 @@ def build_model(opt, dicts, remove_pretrain=False, constants=None, verbose=True)
     if 'atbs' in dicts and 'nothingness' in dicts['atbs'] and len(dicts['atbs']) == 1:
         opt.n_attributes = 0
 
-    if opt.bayes_by_backprop:
-        from onmt.bayesian_factory import build_model as build_bayesian_model
-        model = build_bayesian_model(opt, dicts)
-        return model
-
     if not opt.fusion:
         model = build_tm_model(opt, dicts, constants=constants, verbose=verbose)
     else:

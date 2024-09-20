@@ -80,8 +80,15 @@ def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
     """
 
     if opt.ocl_training:
-        from onmt.train_utils.ocl_trainer import OCLTrainer
-        trainer = OCLTrainer(gpu, dicts, opt, constants)
+        if opt.bayes_by_backprop:
+            from onmt.train_utils.bayes_by_backprop_trainer import BayesianOCLTrainer
+            trainer = BayesianOCLTrainer(gpu, dicts, opt, constants)
+        elif opt.vat_training > 0:
+            from onmt.train_utils.vat_trainer import VAT_OCLTrainer
+            trainer = VAT_OCLTrainer(gpu, dicts, opt, constants)
+        else:
+            from onmt.train_utils.ocl_trainer import OCLTrainer
+            trainer = OCLTrainer(gpu, dicts, opt, constants)
     else:
         from onmt.train_utils.mp_trainer import Trainer
         trainer = Trainer(gpu, dicts, opt, constants)

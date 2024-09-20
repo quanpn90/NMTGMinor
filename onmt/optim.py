@@ -549,7 +549,7 @@ class Optim(object):
 
     def zero_grad(self, set_to_none=False):
 
-        if self.flatten_gradients:
+        if self.flattened:
             assert set_to_none is False
 
         self.optimizer.zero_grad(set_to_none=set_to_none)

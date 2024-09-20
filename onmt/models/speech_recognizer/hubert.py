@@ -157,9 +157,9 @@ class Hubert(nn.Module):
         self.wav2vec_encoder.feature_grad_mult = 0.0
         self.time = None # backward compatibility
 
-        # freezing the parameters of the Convolutional feature extractors (by default)
-        for param in self.wav2vec_encoder.feature_extractor.parameters():
-            param.requires_grad = False
+        # dont freeze the parameters of the Convolutional feature extractors (by default)
+        # for param in self.wav2vec_encoder.feature_extractor.parameters():
+        #     param.requires_grad = False
 
         # add relative attention
         # if (hasattr(opt, 'wav2vec2_relative_attention') and opt.wav2vec2_relative_attention) or \
@@ -231,21 +231,21 @@ class Hubert(nn.Module):
         context = wav2vec_output['x']
         return context
 
-    def forward(self, input, batch_first_output=False, adv_ptb_grad=False, input_ptb=None,
+    def forward(self, input, batch_first_output=False,
                 lang=None, atb=None,
-                checkpointing_ffn=False, checkpointing_self_attn=False, **kwargs):
+                vat_step=0, vat_perturb=None, vat_eps=0.001, **kwargs):
         """
-        :param checkpointing_self_attn:
-        :param checkpointing_ffn:
+        :param vat_step
+        :param vat_perturb
+        :param vat_eps
         :param atb:
         :param lang:
-        :param input_ptb: perturbation added to the input itself
-        :param adv_ptb_grad: adversarial perturbation step which we need the gradients w.r.t the input (wavs)
         :param batch_first_output: [bsz, seq_len, hidden_size] as output size, else transpose(0, 1)
         :param input: torch.Tensor [batch_size, sequence_length, 2]
         :param kwargs:
         :return:
         """
+        # print("[INFO] VAT Step:", vat_step)
 
         # The data has been constructed that the first dimension is padding mask
         # 0 for tokens that are not masked, 1 for tokens that are masked
@@ -253,19 +253,30 @@ class Hubert(nn.Module):
             long_mask = input.narrow(2, 0, 1).squeeze(2).eq(0).long()
             input = input.narrow(2, 1, input.size(2) - 1)
 
-        if adv_ptb_grad:
-            input.requires_grad = True
+        # vat_step = 0: normal training
+        # vat_step = 1: add Gaussian noise to input, and then get the input grad to get r_vat
+        # vat_step = 2: add the
+        r = None
+        if vat_step == 1:
+            with torch.no_grad():
+                r = torch.rand_like(input).normal_() * (vat_eps * 100)
+            r.requires_grad_(True)
+            input = input.float() + r.float()
 
-        if input_ptb is not None:
-            assert not adv_ptb_grad
+        if vat_step == 2:
+            assert vat_perturb is not None
             with torch.no_grad():
                 # normalize and add to input / maybe scale over input length?
                 # do this under fp32
                 with torch.cuda.amp.autocast(enabled=False):
-                    epsilon = 1.0
-                    input_ptb = input_ptb.float()
-                    input_ptb = input_ptb / F.normalize(input_ptb, p=2.0, dim=2)
-                    input = input.float() + input_ptb * epsilon
+                    vat_perturb = vat_perturb.float()
+                    _mask = long_mask.bool()
+                    vat_perturb.masked_fill_(_mask.unsqueeze(2), 0)
+                    vat_perturb = vat_perturb / (F.normalize(vat_perturb, p=2.0, dim=2) + 1e-8)
+
+                    r = vat_perturb * vat_eps
+
+            input = input.float() + r
 
         if input.size(-1) == 1:
             precomputed_tdnn = False
@@ -281,9 +292,7 @@ class Hubert(nn.Module):
         wav2vec_output = self.wav2vec_encoder(input, padding_mask=attn_mask,
                                               mask=self.training,
                                               features_only=True, output_layer=None,
-                                              lang=lang, atb=atb,
-                                              checkpointing_ffn=checkpointing_ffn,
-                                              checkpointing_self_attn=checkpointing_self_attn)
+                                              lang=lang, atb=atb)
 
         # output size is always T x B x C
         continuous_output = wav2vec_output['x']
@@ -306,7 +315,8 @@ class Hubert(nn.Module):
                                                  'src': dec_attn_mask, 'pos_emb': None,
                                                  'wav2vec_context': wav2vec_context,
                                                  'wav2vec_padding_mask': wav2vec_padding_mask,
-                                                 'enc_pred_lang': None})
+                                                 'enc_pred_lang': None,
+                                                 'input_noise': r})
 
         return output_dict
 

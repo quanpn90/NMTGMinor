@@ -12,7 +12,6 @@ import sys
 import contextlib
 import functools
 
-
 import onmt
 import onmt.markdown
 import onmt.modules
@@ -29,6 +28,7 @@ from onmt.model_factory import build_model, optimize_model, init_model_parameter
 from .reservoir import Reservoir
 from onmt.data.dataset import get_batch_from_multidataset
 
+import torch.nn.functional as F
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP_model
 from torch.distributed.fsdp import (
@@ -46,10 +46,9 @@ import dill
 from multiprocessing.managers import ListProxy as ListProxy
 
 from distutils.version import LooseVersion
+
 # ignore the pytorch -> numpy conversion warnings
 warnings.filterwarnings("ignore", category=UserWarning)
-
-from ..bayesian_weight_generator import BayesianWeight
 
 
 def human_format(num):
@@ -77,7 +76,6 @@ def prepare_sample(batch, device=None, reservoir=None, dataset_id=None):
     batch = rewrap(batch)
 
     if reservoir is not None:
-
         assert dataset_id is not None
         indices = batch.get('indices')
         src_lengths = batch.get('src_lengths')
@@ -87,6 +85,7 @@ def prepare_sample(batch, device=None, reservoir=None, dataset_id=None):
     batch.cuda(fp16=False, device=device)
 
     return batch
+
 
 def is_list(object):
     if isinstance(object, list):
@@ -177,8 +176,8 @@ def all_reduce_and_rescale_tensors(tensors, rescale_denom=1,
             all_reduce_buffer()
 
 
-class BayesianOCLTrainer(object):
-    # Bayesian Online Continual Learning Trainer
+class VAT_OCLTrainer(object):
+    # online continual learning with Virtual Adversarial Training
 
     def __init__(self, device, dicts, opt, constants=None, setup_optimizer=True):
         """
@@ -246,8 +245,8 @@ class BayesianOCLTrainer(object):
             # self.ctc_loss_function = CTC(dicts['tgt'].size(), opt.model_size, 0.0, reduce=True,
             #                              padding_idx=tgt_pad, blank_idx=0)
             self.transducer_loss_function = TransducerLoss(fuse_softmax_backward=True,
-                                                  opt=1, packed_input=False,
-                                                  blank_idx=tgt_pad)
+                                                           opt=1, packed_input=False,
+                                                           blank_idx=tgt_pad)
 
         else:
             self.transducer_loss_function = None
@@ -304,6 +303,10 @@ class BayesianOCLTrainer(object):
 
             self.mem_model = mem_model
             self.mem_model.load_state_dict(self.model.state_dict())
+
+        self.vat_training = opt.vat_training
+        self.print("[INFO] Virtual Adversarial Training Mode:", self.vat_training)
+        # 0 1 2 3
 
         if self.cuda:
             self.loss_function = self.loss_function.cuda(device=self.device)
@@ -369,69 +372,59 @@ class BayesianOCLTrainer(object):
             self.mem_grad_scaler = None
 
         if opt.fsdp and self.world_size > 1:
-            # device_id = self.rank
-            # torch.cuda.set_device(device_id)
-            #
-            # from torch.distributed.fsdp.wrap import (
-            #     transformer_auto_wrap_policy,
-            #     enable_wrap,
-            #     wrap,
-            # )
-            #
-            # # Testing: fsdp wrap these blocks independently
-            #
-            # from onmt.models.conformer.block import ConformerBlock
-            # from pretrain_module.modeling_mbart import MBartEncoderLayer
-            #
-            # auto_wrap_policy = functools.partial(
-            #     transformer_auto_wrap_policy,
-            #     transformer_layer_cls={
-            #         ConformerBlock, MBartEncoderLayer
-            #     },
-            # )
-            #
-            # # otherwise maybe FSDP is only applicable to either Conformer or Language Model :)
-            #
-            # self.model = FSDP(self.model,
-            #                   auto_wrap_policy=auto_wrap_policy,
-            #                   # mixed_precision=mp_policy,
-            #                   device_id=torch.cuda.current_device())
-            #
-            # if setup_optimizer:
-            #
-            #     self.optim = onmt.Optim(opt)
-            #     self.optim.set_parameters(self.model.parameters(), flattened=opt.flatten_parameters)
-            #
-            #     if self.is_main():
-            #         print("[INFO] Optimizer: ", self.optim.optimizer)
-            #
-            #     if opt.load_from and not opt.reset_optim:
-            #         if 'optim' in checkpoint and checkpoint['optim'] is not None and not opt.reset_optim:
-            #
-            #             # TODO: load state dict after optim ...
-            #             # optim_state_dict = FSDP.optim_state_dict_to_load(
-            #             #                    >> > optim_state_dict, model, optim
-            #             #                    >> > )
-            #             # >> > optim.load_state_dict(optim_state_dict)
-            #             self.optim.load_state_dict(checkpoint['optim'])
-            #
-            #     if opt.starting_step > 0:
-            #         print("[INFO] Optimizer starting from state %d " % opt.starting_step)
-            #         self.optim.set_starting_step(opt.starting_step)
+            device_id = self.rank
+            torch.cuda.set_device(device_id)
 
-            raise NotImplementedError("FSDP cannot be used for Bayesian model")
-        else:
+            from torch.distributed.fsdp.wrap import (
+                transformer_auto_wrap_policy,
+                enable_wrap,
+                wrap,
+            )
 
-            # the optimizer will have to operate on the mean and std of the bayesian controller ....
-            # before saving the model, we will synchronize the mean with the flatten parameters
-            self.bayesian_model = BayesianWeight(self.model.parameters(), prior="standard_normal")
+            # Testing: fsdp wrap these blocks independently
+
+            from onmt.models.conformer.block import ConformerBlock
+            from pretrain_module.modeling_mbart import MBartEncoderLayer
+
+            auto_wrap_policy = functools.partial(
+                transformer_auto_wrap_policy,
+                transformer_layer_cls={
+                    ConformerBlock, MBartEncoderLayer
+                },
+            )
+
+            # otherwise maybe FSDP is only applicable to either Conformer or Language Model :)
+
+            self.model = FSDP(self.model,
+                              auto_wrap_policy=auto_wrap_policy,
+                              # mixed_precision=mp_policy,
+                              device_id=torch.cuda.current_device())
 
             if setup_optimizer:
 
-                # this return the variational parameters of the Bayesian model
-                parameters = self.bayesian_model.parameters()
                 self.optim = onmt.Optim(opt)
-                self.optim.set_parameters(parameters, flattened=False)
+                self.optim.set_parameters(self.model.parameters(), flattened=opt.flatten_parameters)
+
+                if self.is_main():
+                    print("[INFO] Optimizer: ", self.optim.optimizer)
+
+                if opt.load_from and not opt.reset_optim:
+                    if 'optim' in checkpoint and checkpoint['optim'] is not None and not opt.reset_optim:
+                        # TODO: load state dict after optim ...
+                        # optim_state_dict = FSDP.optim_state_dict_to_load(
+                        #                    >> > optim_state_dict, model, optim
+                        #                    >> > )
+                        # >> > optim.load_state_dict(optim_state_dict)
+                        self.optim.load_state_dict(checkpoint['optim'])
+
+                if opt.starting_step > 0:
+                    print("[INFO] Optimizer starting from state %d " % opt.starting_step)
+                    self.optim.set_starting_step(opt.starting_step)
+        else:
+            if setup_optimizer:
+
+                self.optim = onmt.Optim(opt)
+                self.optim.set_parameters(self.model.parameters(), flattened=opt.flatten_parameters)
 
                 if self.agem_training:
                     # probably adam is fine, we don't have to ever call update
@@ -461,8 +454,7 @@ class BayesianOCLTrainer(object):
                 if self.agem_training:
                     self.mem_model = torch.nn.parallel.DistributedDataParallel(self.mem_model, device_ids=[self.rank],
                                                                                output_device=self.rank,
-                                                                               find_unused_parameters=find_unused_parameters,)
-
+                                                                               find_unused_parameters=find_unused_parameters, )
 
         if self.is_main():
             nparams = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -603,9 +595,6 @@ class BayesianOCLTrainer(object):
         model = self.model
         dicts = self.dicts
 
-        # finalize the weights from mean to w
-        self.bayesian_model.forward(training=False)
-
         if self.opt.fsdp:
             save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
             with FSDP.state_dict_type(
@@ -627,7 +616,7 @@ class BayesianOCLTrainer(object):
         else:
             itr_state_dict = None
 
-        #  drop a checkpoint (should we also save the bayesian?)
+        #  drop a checkpoint
         checkpoint = {
             'model': model_state_dict,
             'dicts': dicts,
@@ -637,7 +626,7 @@ class BayesianOCLTrainer(object):
             'itr': itr_state_dict,
             'optim': optim_state_dict,
             'scaler': self.grad_scaler.state_dict() if self.grad_scaler is not None else None,
-            'reservoir': self.reservoir.state_dict() if self.reservoir is not None else None
+            'reservoir': self.reservoir.state_dict()
         }
 
         file_name = '%s_epoch%.2f.round%d' % (opt.save_model, epoch, round)
@@ -687,8 +676,6 @@ class BayesianOCLTrainer(object):
                 return self.model.no_sync()
             else:
                 return contextlib.ExitStack()  # dummy contextmanager
-
-        self.bayesian_model.forward(training=False)
 
         with maybe_no_sync():
             with torch.no_grad():
@@ -766,15 +753,16 @@ class BayesianOCLTrainer(object):
         grad_norm = -1
 
         # Clear the gradients of the model
-        self.optim.zero_grad(set_to_none=False)
+        self.optim.zero_grad(set_to_none=not opt.true_zero_grad)
+        # self.model.module.reset_states()
 
+        # note: for Training split_even=True
         dataset = train_data
 
         assert is_list(dataset)
 
         data_iterators = list()
 
-        # note: for Training split_even=True (each model copy receives the same amount of data)
         for _dataset in dataset:
             data_iterator = generate_data_iterator(_dataset, self.rank, self.world_size,
                                                    seed=self.opt.seed, num_workers=opt.num_workers,
@@ -809,8 +797,6 @@ class BayesianOCLTrainer(object):
         report_enc_lid_count = 0
         report_dec_lid_loss = zero_tensor()
         report_dec_lid_count = 0
-
-        kl_loss_data = float('inf')
 
         start = time.time()
 
@@ -851,21 +837,20 @@ class BayesianOCLTrainer(object):
 
             update_frequency = 2 * opt.update_frequency
 
-            while not (_data_iterator.end_of_epoch() and not rehearse) :
+            while not (_data_iterator.end_of_epoch() and not rehearse):
 
                 if not rehearse or opt.reservoir_size <= 0:
                     samples = next(_epoch_iterator)
 
                     # sample is also added to the reservoir here
                     batch = prepare_sample(samples, device=self.device, dataset_id=dataset_id,
-                                                                            reservoir=self.reservoir)
+                                           reservoir=self.reservoir)
 
                     rehearse = False
                     rehearsing = False
 
                     # if (epoch > 1 or dataset_id > 0) and self.reservoir is not None:
                     if self.reservoir is not None:
-
                         # we start to rehearse immediately
 
                         rehearse = True  # so that the next one is to rehearse
@@ -889,248 +874,201 @@ class BayesianOCLTrainer(object):
                 oom = zero_tensor()
                 counter = counter + 1
                 reduce = True if counter >= update_frequency or i == (n_samples - 1) else False
-                current_model = self.model
+
+                # we will conduct 3 different vat step
+                # vat step == 0: compute loss normally
+                # vat step == 1: add gaussian noise (but we should use the fake model)
+                # vat step == 2: add input.grad
+
+                max_vat_step = 3
+                vat_perturb = None
+                noiseless_output = None
 
                 try:
-                    def maybe_no_sync():
-                        if isinstance(current_model, DDP_model) or isinstance(current_model, FSDP):
-                            return current_model.no_sync()
-                        else:
-                            # when we dont reach the updating step, we do not need to synchronize the gradients
-                            # thus disabling the backward grad sync to improve speed
-                            return contextlib.ExitStack()  # dummy contextmanager
-
-                    self.bayesian_model.forward(training=True)
-
-                    with maybe_no_sync():
-                        with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
-
-                            tgt_mask = targets.ne(onmt.constants.PAD)
-
-                            # first we sample the parameters from the bayesian posterior
-
-                            outputs = self.model(batch, streaming=False, target_mask=tgt_mask,
-                                                 zero_encoder=opt.zero_encoder,
-                                                 mirror=opt.mirror_loss > 0,
-                                                 adv_ptb_grad=opt.virtual_adversarial_training_mode > 0,
-                                                 checkpointing_ffn=opt.checkpointing_ffn,
-                                                 checkpointing_cross_attn=opt.checkpointing_cross_attn,
-                                                 checkpointing_self_attn=opt.checkpointing_self_attn,
-                                                 ctc_loss_function = self.ctc_loss_function,
-                                                 ctc_labels = targets,
-                                                 grad_scaler = self.grad_scaler,
-                                                 ctc_coeff = opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
-                                                 transducer_loss_function = self.transducer_loss_function,
-                                                 transducer_coeff = opt.transducer_loss
-                                                 )
-
-                            batch_size = batch.size
-                            # outputs is a dictionary containing keys/values necessary for loss function
-                            # can be flexibly controlled within models for easier extensibility
-                            outputs['tgt_mask'] = tgt_mask
-
-                            ctc_only = False
-                            if outputs["hidden"] != None:
-                                loss_dict = self.loss_function(outputs, targets, model=self.model)
-                                loss_data = loss_dict['data']
-                                loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-                                full_loss = loss
+                    for current_vat_step in range(max_vat_step):
+                        def maybe_no_sync():
+                            if not (isinstance(self.model, DDP_model) or isinstance(self.model, FSDP)):
+                                return contextlib.ExitStack()
+                            # we only synchronize at the final stage of the vat step
+                            elif current_vat_step < (max_vat_step - 1):
+                                return self.model.no_sync()
+                            elif not reduce:
+                                return self.model.no_sync()
                             else:
-                                ctc_only = True
-                                loss_data = 0
-                                loss = None
-                                full_loss = 0
+                                return contextlib.ExitStack()  # dummy contextmanager
 
-                            if opt.ctc_loss > 0.0:
-                                ctc_loss = outputs['ctc_loss']
-                                n_ctc_targets = outputs['n_ctc_targets']
-                                # TODO: add CTC loss to models
-                                ctc_loss_data = ctc_loss.item()
-                                full_loss = full_loss + opt.ctc_loss * ctc_loss
-                            else:
-                                n_ctc_targets = 0
-                                ctc_loss_data = 0
-
-                            if opt.transducer_loss > 0.0:
-                                transducer_loss = outputs['transducer_loss']
-                                n_transducer_targets = outputs['transducer_numel']
-                                # TODO: add CTC loss to models
-                                transducer_loss_data = transducer_loss.item()
-                                full_loss = full_loss + opt.transducer_loss * transducer_loss
-                            else:
-                                n_transducer_targets = 0
-                                transducer_loss_data = 0
-
-                            if opt.mirror_loss > 0.0:
-                                rev_loss = loss_dict['rev_loss']
-                                rev_loss_data = loss_dict['rev_loss_data']
-                                mirror_loss = loss_dict['mirror_loss']
-                                full_loss = full_loss + rev_loss + mirror_loss * opt.mirror_loss
-                                mirror_loss_data = loss_dict['mirror_loss'].item()
-                            else:
-                                rev_loss_data = None
-                                mirror_loss_data = 0
-
-                            if opt.predict_language > 0:
-                                enc_pred_lang = outputs['enc_pred_lang']
-                                enc_mask = outputs['src_mask']
-                                enc_lid_loss = self.lid_loss_function(enc_pred_lang,
-                                                                      batch.get("source_lang"), enc_mask)
-
-                                dec_pred_lang = outputs['dec_pred_lang']
-                                # dec_mask = outputs['target_mask']
-                                # dec_mask = targets.eq(onmt.constants.PAD)
-                                dec_mask = batch.get('target_input_selfattn_mask')
-                                dec_lid_loss = self.lid_loss_function(dec_pred_lang,
-                                                                      batch.get("target_lang"), dec_mask)
-
-                                full_loss = full_loss + 0.01 * (enc_lid_loss + dec_lid_loss)
-
-                                report_enc_lid_loss.add_(enc_lid_loss.item())
-                                report_enc_lid_count += enc_mask.ne(1).int().sum().item()
-
-                                report_dec_lid_loss.add_(dec_lid_loss.item())
-                                report_dec_lid_count += dec_mask.ne(1).int().sum().item()
-
-                            else:
-                                enc_lid_loss = None
-                                enc_lid_loss_data = None
-                                dec_lid_loss = None
-                                dec_lid_loss_data = None
-
-                            # reconstruction loss
-                            if opt.reconstruct:
-                                rec_loss = loss_dict['rec_loss']
-                                rec_loss = rec_loss
-                                full_loss = full_loss + rec_loss
-                                rec_loss_data = loss_dict['rec_loss_data']
-                            else:
-                                rec_loss_data = None
-
-                            if hasattr(opt, "use_memory") and opt.use_memory and "loss_memory" in outputs:
-                                loss_memory = outputs['loss_memory']
-                                #full_loss = full_loss + loss_memory
-                                full_loss = loss_memory
-
-                            if opt.contrastive_loss_coeff > 0 and 'contrastive_loss' in outputs:
-                                contrastive_loss = outputs['contrastive_loss']
-                                full_loss = full_loss + opt.contrastive_loss_coeff * contrastive_loss
-                                report_contrastive_loss.add_(contrastive_loss.item())
-
-                            # correct, total = loss_dict['correct'], loss_dict['total']
-                            # optimizer = self.optim.optimizer
-
-                        # TODO for adversarial:
-                        grad_list = [p for p in self.model.parameters() if p.requires_grad]
-                        if opt.virtual_adversarial_training_mode > 0:
-                            # if we use virtual adversarial training: add the input to the list of gradient to take
-                            model_input = outputs['source']
-                            vanilla_logits = outputs['logprobs']
-                            grad_list += [model_input]
-                        else:
-                            model_input = None
-                            vanilla_logits = None
-
-                        # grad scaler has to be done outside of the autocast
-                        if self.grad_scaler is not None:
-                            self.grad_scaler.scale(full_loss).backward()
-                        else:
-                            full_loss.backward()
-
-                        # del outputs
-                        if opt.virtual_adversarial_training_mode > 0:
-                            # run forward pass one more time
-                            # the perturbation is the gradient of the model w.r.t the input
-                            perturb = model_input.grad.data.new(*model_input.size()).copy_(model_input.grad.data)
-
+                        with maybe_no_sync():
                             with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
-                                assert model_input.grad is not None
-                                outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                                     pretrained_layer_states=layer_states,
-                                                     input_ptb=perturb)
 
-                                full_loss = None
-                                # compute loss for mode 2 3
-                                # In this mode, we add noise to the input and minimise the loss given the noisy inputs
-                                if opt.virtual_adversarial_training_mode in [2, 3]:
-                                    loss_dict = self.loss_function(outputs, targets, model=self.model)
-                                    full_loss = loss_dict['loss']
+                                tgt_mask = targets.ne(onmt.constants.PAD)
 
-                                # for mode 1, 3 compute kl divergence
-                                # In this mode, we minimise the kl divergence between the model output with and without noise
-                                if opt.virtual_adversarial_training_mode in [1, 3]:
-                                    logits = outputs['logprobs']
+                                # lets simplify the code a bit
+                                outputs = self.model(batch, target_mask=tgt_mask,
+                                                     mirror=opt.mirror_loss > 0,
+                                                     ctc_loss_function=self.ctc_loss_function,
+                                                     ctc_labels=targets,
+                                                     grad_scaler=self.grad_scaler,
+                                                     ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
+                                                     transducer_loss_function=self.transducer_loss_function,
+                                                     transducer_coeff=opt.transducer_loss,
+                                                     vat_step=current_vat_step,
+                                                     vat_perturb=vat_perturb
+                                                     )
 
-                                    with torch.no_grad():
-                                        vanilla_probs = \
-                                            F.softmax(vanilla_logits.float().view(-1, vanilla_logits.size(-1)), dim=-1)
-                                        vanilla_probs.detach_()
-                                    noisy_probs = F.softmax(logits.float().view(-1, logits.view(-1, logits.size(-1))),
-                                                            dim=-1)
+                                batch_size = batch.size
+                                # outputs is a dictionary containing keys/values necessary for loss function
+                                # can be flexibly controlled within models for easier extensibility
+                                outputs['tgt_mask'] = tgt_mask
 
-                                    # Note: with the kl_div_loss we don't backward w.r.t the vanilla probs
-                                    kl_div_loss = F.kl_div(noisy_probs, vanilla_probs, reduction='sum')
-                                    if full_loss is None:
-                                        full_loss = kl_div_loss
+                                if current_vat_step == 0:
+                                    # record the output from a noise-less model to use later for the KL div loss
+                                    noiseless_output = outputs['logprobs'].detach()
+
+                                # if vat_step == 1: we compute the kldiv between f(x) and f(x+r)
+                                # todo: add decoder embedding perturbation and Adv training
+                                if current_vat_step == 2 and self.vat_training == 3:
+
+                                    # adversarial training: matches output with label
+                                    adv_loss_dict = self.loss_function(outputs, targets, model=self.model,
+                                                                       target_probs=None,
+                                                                       kl_divergence=False)
+
+                                    loss_dict = self.loss_function(outputs, targets, model=self.model,
+                                                                   target_probs=noiseless_output,
+                                                                   kl_divergence=True)
+
+                                    loss = loss_dict['loss'] + adv_loss_dict['loss']
+                                    full_loss = loss
+                                else:
+                                    loss_dict = self.loss_function(outputs, targets, model=self.model,
+                                                                   target_probs=noiseless_output,
+                                                                   kl_divergence=(current_vat_step >= 1))
+
+                                    loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
+                                    full_loss = loss
+
+                                if current_vat_step == 0:
+                                    # we will only record
+                                    loss_data = loss_dict['data']
+
+                                    if opt.ctc_loss > 0.0:
+                                        ctc_loss = outputs['ctc_loss']
+                                        n_ctc_targets = outputs['n_ctc_targets']
+                                        # TODO: add CTC loss to models
+                                        ctc_loss_data = ctc_loss.item()
+                                        full_loss = full_loss + opt.ctc_loss * ctc_loss
                                     else:
-                                        full_loss += kl_div_loss
+                                        n_ctc_targets = 0
+                                        ctc_loss_data = 0
 
-                            # Now we only get the gradients for the weights of the network
-                            grad_list = [p for p in self.model.parameters() if p.requires_grad]
-                            if self.grad_scaler is not None:
-                                self.grad_scaler.scale(full_loss).backward()
+                                    if opt.transducer_loss > 0.0:
+                                        transducer_loss = outputs['transducer_loss']
+                                        n_transducer_targets = outputs['transducer_numel']
+                                        # TODO: add CTC loss to models
+                                        transducer_loss_data = transducer_loss.item()
+                                        full_loss = full_loss + opt.transducer_loss * transducer_loss
+                                    else:
+                                        n_transducer_targets = 0
+                                        transducer_loss_data = 0
+
+                                    if opt.mirror_loss > 0.0:
+                                        rev_loss = loss_dict['rev_loss']
+                                        rev_loss_data = loss_dict['rev_loss_data']
+                                        mirror_loss = loss_dict['mirror_loss']
+                                        full_loss = full_loss + rev_loss + mirror_loss * opt.mirror_loss
+                                        mirror_loss_data = loss_dict['mirror_loss'].item()
+                                    else:
+                                        rev_loss_data = None
+                                        mirror_loss_data = 0
+
+                                    if hasattr(opt, "use_memory") and opt.use_memory and "loss_memory" in outputs:
+                                        loss_memory = outputs['loss_memory']
+                                        full_loss = loss_memory
+
+                                    if opt.contrastive_loss_coeff > 0 and 'contrastive_loss' in outputs:
+                                        contrastive_loss = outputs['contrastive_loss']
+                                        full_loss = full_loss + opt.contrastive_loss_coeff * contrastive_loss
+                                        report_contrastive_loss.add_(contrastive_loss.item())
+
+                            # grad scaler has to be done outside of the autocast
+                            if current_vat_step == 1:
+                                # for this step, we only need the gradient w.r.t the noise r
+                                if self.grad_scaler is not None:
+                                    self.grad_scaler.scale(full_loss).backward(inputs=[outputs['input_noise']])
+                                else:
+                                    full_loss.backward(inputs=[outputs['input_noise']])
+                                vat_perturb = outputs['input_noise'].grad.data.detach()
                             else:
-                                full_loss.backward()
+                                if self.grad_scaler is not None:
+                                    self.grad_scaler.scale(full_loss).backward()
+                                else:
+                                    full_loss.backward()
+
                             del outputs
 
-                        # EWC training: no need for autograd here?
-                        if self.optim._step % opt.ewc_decay_every == 0:
+                            # # del outputs
+                            # if opt.virtual_adversarial_training_mode > 0:
+                            #     # run forward pass one more time
+                            #     # the perturbation is the gradient of the model w.r.t the input
+                            #     perturb = model_input.grad.data.new(*model_input.size()).copy_(model_input.grad.data)
+                            #
+                            #     with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
+                            #         assert model_input.grad is not None
+                            #         outputs = self.model(batch, target_mask=tgt_mask,
+                            #                              pretrained_layer_states=layer_states,
+                            #                              input_ptb=perturb)
+                            #
+                            #         full_loss = None
+                            #         # compute loss for mode 2 3
+                            #         # In this mode, we add noise to the input and minimise the loss given the noisy inputs
+                            #         if opt.virtual_adversarial_training_mode in [2, 3]:
+                            #             loss_dict = self.loss_function(outputs, targets, model=self.model)
+                            #             full_loss = loss_dict['loss']
+                            #
+                            #         # for mode 1, 3 compute kl divergence
+                            #         # In this mode, we minimise the kl divergence between the model output with and without noise
+                            #         if opt.virtual_adversarial_training_mode in [1, 3]:
+                            #             logits = outputs['logprobs']
+                            #
+                            #             with torch.no_grad():
+                            #                 vanilla_probs = \
+                            #                     F.softmax(vanilla_logits.float().view(-1, vanilla_logits.size(-1)), dim=-1)
+                            #                 vanilla_probs.detach_()
+                            #             noisy_probs = F.softmax(logits.float().view(-1, logits.view(-1, logits.size(-1))),
+                            #                                     dim=-1)
+                            #
+                            #             # Note: with the kl_div_loss we don't backward w.r.t the vanilla probs
+                            #             kl_div_loss = F.kl_div(noisy_probs, vanilla_probs, reduction='sum')
+                            #             if full_loss is None:
+                            #                 full_loss = kl_div_loss
+                            #             else:
+                            #                 full_loss += kl_div_loss
+                            #
+                            #     # Now we only get the gradients for the weights of the network
+                            #     grad_list = [p for p in self.model.parameters() if p.requires_grad]
+                            #     if self.grad_scaler is not None:
+                            #         self.grad_scaler.scale(full_loss).backward()
+                            #     else:
+                            #         full_loss.backward()
+                            #     del outputs
+                            #
+                            # # EWC training: no need for autograd here?
+                            # if self.optim._step % opt.ewc_decay_every == 0:
+                            #
+                            #     ewc_importance = ewc_importance / opt.ewc_decay_scale
 
-                            ewc_importance = ewc_importance / opt.ewc_decay_scale
-
-                        # only run this ewc everytime we reduce
-
-                    # after backward- from the model, we call backward once more to accumulate gradients
-                    # to the mean and std parameters
-                    self.bayesian_model.backward()
+                            # only run this ewc everytime we reduce
 
                 except RuntimeError as e:
                     if 'out of memory' in str(e):
                         print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
-                        print('Input size at OOM position:', batch.get('source').size() if batch.get('source') is not None else None,
+                        print('Input size at OOM position:',
+                              batch.get('source').size() if batch.get('source') is not None else None,
                               batch.get('target').size() if batch.get('target') is not None else None)
 
-                        # continue
                         raise e
-                        # recovering mechanism doesn't work at the moment
-                        # loss = 0
-                        # for p in self.model.parameters():
-                        #     if p.grad is not None:
-                        #         del p.grad  # free some memory
-                        #     loss = loss + p.sum() * 0
-
-                        # torch.cuda.empty_cache()
-                        #
-                        # if opt.streaming:  # reset stream in this case ...
-                        #     streaming_state = self.model.init_stream()
-                        #
-                        #
-                        # # backward to actually free the graph
-                        # # self.grad_scaler.scale(loss).backward()
-                        # oom.add_(1)
 
                     raise e
-
-                # connecting the oom signal from different gpus
-                # self.all_reduce(oom, op=dist.ReduceOp.SUM, group=self.group)
-                # # if OOM: all gpus reset grad and reset counter
-                # # or maybe all-reduce grad?
-                # if oom.item() > 0:
-                #     # reset counter
-                #     self.model.zero_grad()
-                #     self.optim.zero_grad()
-                #     counter = 0
-                #     oom.zero_()
 
                 batch_size = batch.size
 
@@ -1147,22 +1085,6 @@ class BayesianOCLTrainer(object):
                     # accumulated gradient case, in this case the update frequency
                     self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
 
-                    params = self.optim.get_params()
-
-                    # if self.optim._step > 50:
-                    with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
-                        # TODO: perform the KL div loss
-                        kl_div_loss = self.bayesian_model.kl_divergence(n_samples=1)
-
-                    # this will accumulate the gradients to the variational parameters
-                    kl_div_loss.mul(0.001).backward()
-                    kl_loss_data = kl_div_loss.data
-
-                    # lets synchronize the gradients for the variational parameters now
-                    for param in params:
-                        # self.print("REDUCING for param with %d elements ..." % param.grad.data.numel())
-                        self.all_reduce(param.grad.data, op=dist.ReduceOp.SUM, group=self.group)
-
                     grad_denom = 1.0
 
                     if self.grad_scaler is not None:
@@ -1173,6 +1095,7 @@ class BayesianOCLTrainer(object):
                     else:
                         grad_denom = 1
 
+                    params = self.optim.get_params()
                     # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
                     if grad_denom != 1 and not self.opt.fsdp:
                         normalize_gradients(params, grad_denom)
@@ -1214,9 +1137,7 @@ class BayesianOCLTrainer(object):
                         self.grad_scaler.update()
                     else:
                         self.optim.step(scaler=None)
-
-                    # for bayesian we must use true zero grad
-                    self.optim.zero_grad(set_to_none=False)
+                    self.optim.zero_grad(set_to_none=True if self.opt.fsdp else not opt.true_zero_grad)
                     counter = 0
                     num_accumulated_words.zero_()
                     num_accumulated_sents.zero_()
@@ -1239,7 +1160,7 @@ class BayesianOCLTrainer(object):
                             else:
                                 value = self.model.choose_best_epoch_by
                         else:
-                            value = 1-valid_accuracy
+                            value = 1 - valid_accuracy
                         self.save(ep, value,
                                   itr=data_iterator)
 
@@ -1290,71 +1211,64 @@ class BayesianOCLTrainer(object):
                         self.all_reduce(report_transducer_loss, op=dist.ReduceOp.SUM, group=self.group)
                         self.all_reduce(report_transducer_targets, op=dist.ReduceOp.SUM, group=self.group)
 
-                    if self.is_main():
+                    log_string = ("Ep %2d, Rd %d, %5d/%5d; ; ppl: %6.2f ; grad_norm: %6.4f " %
+                                  (epoch, dataset_id, i + 1, len(_data_iterator),
+                                   math.exp(report_loss.item() / report_tgt_words.item()),
+                                   grad_norm))
 
-                        if ctc_only:
-                            log_string = ("Epoch %2d, Rd %d, %5d/%5d; ; grad_norm: %6.4f " %
-                                          (epoch, dataset_id, i + 1, len(_data_iterator),
-                                           grad_norm))
-                        else:
-                            log_string = ("Ep %2d, Rd %d, %5d/%5d; ; ppl: %6.2f ; grad_norm: %6.4f; kl_div: %2.3f  " %
-                                          (epoch, dataset_id, i + 1, len(_data_iterator),
-                                           math.exp(report_loss.item() / report_tgt_words.item()),
-                                           grad_norm, kl_loss_data))
+                    if opt.mirror_loss:
+                        self.all_reduce(report_rev_loss, op=dist.ReduceOp.SUM, group=self.group)
+                        rev_ppl = math.exp(report_rev_loss.item() / report_tgt_words.item())
+                        log_string += (" rev_ppl: %6.2f ; " % rev_ppl)
+                        log_string += (" mir_loss: %6.2f ; " % (report_mirror_loss / report_tgt_words))
 
-                        if opt.mirror_loss:
-                            self.all_reduce(report_rev_loss, op=dist.ReduceOp.SUM, group=self.group)
-                            rev_ppl = math.exp(report_rev_loss.item() / report_tgt_words.item())
-                            log_string += (" rev_ppl: %6.2f ; " % rev_ppl)
-                            log_string += (" mir_loss: %6.2f ; " % (report_mirror_loss / report_tgt_words))
+                    if opt.ctc_loss > 0.0:
+                        ctc_loss_string = report_ctc_loss.item() / report_ctc_targets.item()
+                        log_string += (" ctc_ppl: %5.2f ; " % math.exp(ctc_loss_string))
 
-                        if opt.ctc_loss > 0.0:
-                            ctc_loss_string = report_ctc_loss.item() / report_ctc_targets.item()
-                            log_string += (" ctc_ppl: %5.2f ; " % math.exp(ctc_loss_string))
+                    if opt.transducer_loss > 0.0:
+                        transducer_loss_string = report_transducer_loss.item() / report_transducer_targets.item()
+                        log_string += (" trc_ppl: %5.2f ; " % math.exp(transducer_loss_string))
 
-                        if opt.transducer_loss > 0.0:
-                            transducer_loss_string = report_transducer_loss.item() / report_transducer_targets.item()
-                            log_string += (" trc_ppl: %5.2f ; " % math.exp(transducer_loss_string))
+                    if opt.contrastive_loss_coeff > 0.0:
+                        #
+                        ctv_loss = report_contrastive_loss.item() / report_tgt_words.item()
+                        log_string += (" ctv_loss: %8.2f ; " % ctv_loss)
 
-                        if opt.contrastive_loss_coeff > 0.0:
-                            #
-                            ctv_loss = report_contrastive_loss.item() / report_tgt_words.item()
-                            log_string += (" ctv_loss: %8.2f ; " % ctv_loss)
+                    if ewc_importance > 0.0:
+                        try:
+                            _ewc_loss = report_ewc_loss.item() / report_ewc_count
+                        except ZeroDivisionError:
+                            _ewc_loss = float('nan')
+                        log_string += (" ewcloss: %8.8f ; " % _ewc_loss)
 
-                        if ewc_importance > 0.0:
-                            try:
-                                _ewc_loss = report_ewc_loss.item() / report_ewc_count
-                            except ZeroDivisionError:
-                                _ewc_loss =  float('nan')
-                            log_string += (" ewcloss: %8.8f ; " % _ewc_loss)
+                    if opt.predict_language > 0:
+                        try:
+                            _enc_lid_loss = report_enc_lid_loss.item() / report_enc_lid_count
+                            _dec_lid_loss = report_dec_lid_loss.item() / report_dec_lid_count
+                        except ZeroDivisionError:
+                            _enc_lid_loss = float('nan')
+                            _dec_lid_loss = float('nan')
+                        log_string += (" enc_lidloss: %8.8f ; " % _enc_lid_loss)
+                        log_string += (" dec_lidloss: %8.8f ; " % _dec_lid_loss)
 
-                        if opt.predict_language > 0:
-                            try:
-                                _enc_lid_loss = report_enc_lid_loss.item() / report_enc_lid_count
-                                _dec_lid_loss = report_dec_lid_loss.item() / report_dec_lid_count
-                            except ZeroDivisionError:
-                                _enc_lid_loss =  float('nan')
-                                _dec_lid_loss = float('nan')
-                            log_string += (" enc_lidloss: %8.8f ; " % _enc_lid_loss)
-                            log_string += (" dec_lidloss: %8.8f ; " % _dec_lid_loss)
+                    log_string += ("lr: %.7f ; updates: %7d; " %
+                                   (self.optim.get_learning_rate(),
+                                    self.optim._step))
 
-                        log_string += ("lr: %.7f ; updates: %7d; " %
-                                       (self.optim.get_learning_rate(),
-                                        self.optim._step))
+                    src_speed = report_src_words.item() / (time.time() - start)
+                    src_speed = human_format(src_speed)
 
-                        src_speed = report_src_words.item() / (time.time() - start)
-                        src_speed = human_format(src_speed)
+                    tgt_speed = report_tgt_words.item() / (time.time() - start)
+                    tgt_speed = human_format(tgt_speed)
 
-                        tgt_speed = report_tgt_words.item() / (time.time() - start)
-                        tgt_speed = human_format(tgt_speed)
+                    log_string += ("%s src tok/s; %s tgt tok/s; " %
+                                   (src_speed, tgt_speed))
 
-                        log_string += ("%s src tok/s; %s tgt tok/s; " %
-                                       (src_speed, tgt_speed))
+                    log_string += ("%s" %
+                                   str(datetime.timedelta(seconds=int(time.time() - self.start_time))))
 
-                        log_string += ("%s" %
-                                       str(datetime.timedelta(seconds=int(time.time() - self.start_time))))
-
-                        self.print(log_string, flush=True)
+                    self.print(log_string, flush=True)
 
                     report_loss.zero_()
                     report_tgt_words.zero_()
@@ -1396,25 +1310,24 @@ class BayesianOCLTrainer(object):
                 value = 1 - valid_accuracy
             self.save(epoch, dataset_id, value)
 
-            if self.reservoir is not None:
-                total_per_dataset = self.reservoir.get_stats()
+            total_per_dataset = self.reservoir.get_stats()
 
-                # some stupid code to grab the memory statistics
-                n_dataset = len(train_data)
-                _tensor = torch.zeros((n_dataset, )).cuda()
-                for _dataset_id in total_per_dataset:
-                    _tensor[_dataset_id] = total_per_dataset[_dataset_id]
+            # some stupid code to grab the memory statistics
+            n_dataset = len(train_data)
+            _tensor = torch.zeros((n_dataset,)).cuda()
+            for _dataset_id in total_per_dataset:
+                _tensor[_dataset_id] = total_per_dataset[_dataset_id]
 
-                if self.world_size > 1:
-                    self.all_reduce(_tensor, op=dist.ReduceOp.SUM, group=self.group)
+            if self.world_size > 1:
+                self.all_reduce(_tensor, op=dist.ReduceOp.SUM, group=self.group)
 
-                self.print("Memory statistics:")
-                _sum = torch.sum(_tensor).item()
-                for dataset_id in total_per_dataset:
-                    prob = _tensor[dataset_id].item() / _sum
-                    self.print("Dataset ", dataset_id, _tensor[dataset_id].item(),
-                               "samples", f"{prob:.0%}")
-                    self.print("")
+            self.print("Memory statistics:")
+            _sum = torch.sum(_tensor).item()
+            for dataset_id in total_per_dataset:
+                prob = _tensor[dataset_id].item() / _sum
+                self.print("Dataset ", dataset_id, _tensor[dataset_id].item(),
+                           "samples", f"{prob:.0%}")
+                self.print("")
 
         return total_loss / total_words
 
@@ -1504,7 +1417,7 @@ class BayesianOCLTrainer(object):
                     return clash
 
                 # constraint violated
-                projection_term = nom/denom
+                projection_term = nom / denom
 
                 if torch.isnan(projection_term):
                     projection_term.fill_(1.0)
@@ -1631,7 +1544,7 @@ class BayesianOCLTrainer(object):
             update_frequency = 2 * opt.update_frequency
 
             # stop_condition = (_data_iterator.end_of_epoch() and not rehearse)
-            while not  (_data_iterator.end_of_epoch() and not rehearse):
+            while not (_data_iterator.end_of_epoch() and not rehearse):
 
                 if not rehearse or opt.reservoir_size <= 0:
                     samples = next(_epoch_iterator)
@@ -1684,20 +1597,20 @@ class BayesianOCLTrainer(object):
                         with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
 
                             tgt_mask = targets.ne(onmt.constants.PAD)
-                            outputs = current_model( batch, streaming=False, target_mask=tgt_mask,
-                                                     zero_encoder=opt.zero_encoder,
-                                                     mirror=opt.mirror_loss > 0.0,
-                                                     adv_ptb_grad=opt.virtual_adversarial_training_mode > 0,
-                                                     checkpointing_ffn=opt.checkpointing_ffn,
-                                                     checkpointing_cross_attn=opt.checkpointing_cross_attn,
-                                                     checkpointing_self_attn=opt.checkpointing_self_attn,
-                                                     ctc_loss_function=self.ctc_loss_function,
-                                                     ctc_labels=targets,
-                                                     grad_scaler=self.grad_scaler,
-                                                     ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
-                                                     transducer_loss_function=self.transducer_loss_function,
-                                                     transducer_coeff=opt.transducer_loss
-                                                 )
+                            outputs = current_model(batch, streaming=False, target_mask=tgt_mask,
+                                                    zero_encoder=opt.zero_encoder,
+                                                    mirror=opt.mirror_loss > 0.0,
+                                                    adv_ptb_grad=opt.virtual_adversarial_training_mode > 0,
+                                                    checkpointing_ffn=opt.checkpointing_ffn,
+                                                    checkpointing_cross_attn=opt.checkpointing_cross_attn,
+                                                    checkpointing_self_attn=opt.checkpointing_self_attn,
+                                                    ctc_loss_function=self.ctc_loss_function,
+                                                    ctc_labels=targets,
+                                                    grad_scaler=self.grad_scaler,
+                                                    ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
+                                                    transducer_loss_function=self.transducer_loss_function,
+                                                    transducer_coeff=opt.transducer_loss
+                                                    )
 
                             batch_size = batch.size
                             # outputs is a dictionary containing keys/values necessary for loss function
@@ -1821,7 +1734,7 @@ class BayesianOCLTrainer(object):
                             with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
                                 assert model_input.grad is not None
                                 outputs = current_model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                                     input_ptb=perturb)
+                                                        input_ptb=perturb)
 
                                 full_loss = None
                                 # compute loss for mode 2 3
@@ -1969,7 +1882,6 @@ class BayesianOCLTrainer(object):
                                 report_ewc_loss.add_(ewc_loss)
                                 report_ewc_count += 1
 
-
                     if self.grad_scaler is not None:
                         self.optim.step(scaler=self.grad_scaler)
                         self.grad_scaler.update()
@@ -1982,8 +1894,8 @@ class BayesianOCLTrainer(object):
                     # syncrhonize between 2 models
                     self.mem_model.load_state_dict(self.model.state_dict())
 
-                    self.optim.zero_grad(set_to_none=False)
-                    self.mem_optim.zero_grad(set_to_none=False)
+                    self.optim.zero_grad(set_to_none=True if self.opt.fsdp else not opt.true_zero_grad)
+                    self.mem_optim.zero_grad(set_to_none=True if self.opt.fsdp else not opt.true_zero_grad)
                     counter = 0
                     num_accumulated_words.zero_()
                     num_accumulated_sents.zero_()
@@ -2248,7 +2160,7 @@ class BayesianOCLTrainer(object):
         assert len(opt.load_from) > 0
 
         # Clear the gradients of the model
-        self.optim.zero_grad(set_to_none=False)
+        self.optim.zero_grad(set_to_none=not opt.true_zero_grad)
         if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
             model = self.model.module
         else:
@@ -2343,9 +2255,9 @@ class BayesianOCLTrainer(object):
                                              checkpointing_ffn=opt.checkpointing_ffn,
                                              checkpointing_cross_attn=opt.checkpointing_cross_attn,
                                              checkpointing_self_attn=opt.checkpointing_self_attn,
-                                             ctc_loss_function = self.ctc_loss_function,
-                                             ctc_labels = targets,
-                                             grad_scaler = self.grad_scaler
+                                             ctc_loss_function=self.ctc_loss_function,
+                                             ctc_labels=targets,
+                                             grad_scaler=self.grad_scaler
                                              )
 
                         batch_size = batch.size
@@ -2441,7 +2353,7 @@ class BayesianOCLTrainer(object):
 
                     precision_matrices[n].add_(torch.square(p.grad.data))
 
-            self.optim.zero_grad(set_to_none=False)
+            self.optim.zero_grad(set_to_none=not opt.true_zero_grad)
             counter = 0
 
             num_words = tgt_size
@@ -2690,10 +2602,10 @@ class BayesianOCLTrainer(object):
             #  (1) train for one epoch on the training set
             if self.opt.agem_training:
                 train_loss = self.train_epoch_agem(train_data, valid_data, epoch,
-                                          resume=resume, itr_progress=itr_progress)
+                                                   resume=resume, itr_progress=itr_progress)
             else:
                 train_loss = self.train_epoch(train_data, valid_data, epoch,
-                                            resume=resume, itr_progress=itr_progress)
+                                              resume=resume, itr_progress=itr_progress)
             train_ppl = math.exp(min(train_loss, 100))
             self.print('[INFO] Train perplexity: %g' % train_ppl)
 
@@ -2719,5 +2631,3 @@ class BayesianOCLTrainer(object):
 
             itr_progress = None
             resume = False
-
-

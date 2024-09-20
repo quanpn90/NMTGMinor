@@ -566,12 +566,14 @@ class Wav2vecTransformer(Transformer):
     def reset_states(self):
         return
 
-    def forward(self, batch, adv_ptb_grad=False, input_ptb=None, factorize=False,
+    def forward(self, batch, factorize=False,
                 mirror=False, target_mask=None,
                 ctc_loss_function=None,
                 ctc_coeff=0.0,
                 transducer_coeff=0.0,
                 transducer_loss_function=None,
+                vat_step=0,
+                vat_perturb=None,
                 **kwargs):
         """
         :param factorize:
@@ -603,7 +605,7 @@ class Wav2vecTransformer(Transformer):
         tgt = tgt.transpose(0, 1)
 
         # the encoder just needs the src
-        encoder_output = self.encoder(src, adv_ptb_grad=adv_ptb_grad, input_ptb=input_ptb)
+        encoder_output = self.encoder(src, vat_step=vat_step, vat_perturb=vat_perturb)
 
         encoder_output = defaultdict(lambda: None, encoder_output)
         context = encoder_output['context']
@@ -684,6 +686,7 @@ class Wav2vecTransformer(Transformer):
         output_dict['source'] = encoder_output['source']
         output_dict['ctc_loss'] = ctc_loss
         output_dict['n_ctc_targets'] = n_ctc_targets
+        output_dict['input_noise'] = encoder_output['input_noise']
 
         # final layer: computing softmax
         logprobs = self.generator[0](output_dict)['logits']

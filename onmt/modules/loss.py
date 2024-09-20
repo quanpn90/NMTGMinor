@@ -167,7 +167,34 @@ class NMTLossFunc(CrossEntropyLossBase):
     def get_loss_function(self, name):
         return self.extra_modules[name] if name in self.extra_modules else None
 
-    def forward(self, model_outputs, targets, model=None, vocab_mask=None, **kwargs):
+    def kl_divergence_loss(self, model_outputs, targets, target_logits):
+
+        softmaxed = model_outputs['softmaxed']
+        logits = model_outputs['logprobs']
+
+        targets_ = targets.view(-1)
+        non_pad_mask = torch.nonzero(targets_.ne(self.padding_idx)).squeeze(1)
+
+        logits = logits.view(-1, logits.size(-1)).index_select(0, non_pad_mask)
+        target_logits = target_logits.view(-1, target_logits.size(-1)).index_select(0, non_pad_mask)
+
+        if not softmaxed:
+            log_probs = F.log_softmax(logits, dim=-1, dtype=torch.float32)
+        else:
+            log_probs = logits
+        target_probs = F.softmax(target_logits, dim=-1, dtype=torch.float32)
+
+        # print("[INFO] KL Divergence loss")
+
+        kl_loss = F.kl_div(log_probs, target_probs, reduction='none').sum()
+
+        output_dict = {"loss": kl_loss, "data": kl_loss.data}
+
+        return output_dict
+
+
+    def forward(self, model_outputs, targets,
+                model=None, vocab_mask=None, kl_divergence=False, target_probs=None, **kwargs):
         """
         Compute the loss. Subclass must define this method.
         Args:
@@ -178,6 +205,9 @@ class NMTLossFunc(CrossEntropyLossBase):
             :param targets: the validate target to compare output with. time x batch
             :param model: passing the model in for necessary components
         """
+
+        if kl_divergence:
+            return self.kl_divergence_loss(model_outputs, targets, target_probs)
 
         softmaxed = model_outputs['softmaxed']
         outputs = model_outputs['hidden']

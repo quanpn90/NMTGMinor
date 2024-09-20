@@ -575,7 +575,7 @@ def make_parser(parser):
     parser.add_argument('-freeze_embedding', action='store_true',
                         help='Freeze the embedding.')
 
-    parser.add_argument('-virtual_adversarial_training_mode', type=int, default=0,
+    parser.add_argument('-vat_training', type=int, default=0,
                         help='Virtual Adversarial Training. 0=disabled. 1=kl_loss. 2=ce. 3=kl_loss + ce.')
     parser.add_argument('-wav2vec_adapter', type=int, default=0,
                         help='Adapter for wav2vec model')

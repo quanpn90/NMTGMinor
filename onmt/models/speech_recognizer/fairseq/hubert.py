@@ -197,8 +197,8 @@ class HubertModel(torch.nn.Module):
             if self.feature_grad_mult != 1.0:
                 features = GradMultiply.apply(features, self.feature_grad_mult)
         else:
-            with torch.no_grad():
-                features = self.feature_extractor(source)
+            # with torch.no_grad():
+            features = self.feature_extractor(source)
         return features
 
     def _get_feat_extract_output_lengths(self, input_lengths: torch.LongTensor):
