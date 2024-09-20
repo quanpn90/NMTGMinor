@@ -626,7 +626,7 @@ class VAT_OCLTrainer(object):
             'itr': itr_state_dict,
             'optim': optim_state_dict,
             'scaler': self.grad_scaler.state_dict() if self.grad_scaler is not None else None,
-            'reservoir': self.reservoir.state_dict()
+            'reservoir': self.reservoir.state_dict() if self.reservoir is not None else None
         }
 
         file_name = '%s_epoch%.2f.round%d' % (opt.save_model, epoch, round)
@@ -926,19 +926,21 @@ class VAT_OCLTrainer(object):
 
                                 # if vat_step == 1: we compute the kldiv between f(x) and f(x+r)
                                 # todo: add decoder embedding perturbation and Adv training
-                                if current_vat_step == 2 and self.vat_training == 3:
-
-                                    # adversarial training: matches output with label
-                                    adv_loss_dict = self.loss_function(outputs, targets, model=self.model,
-                                                                       target_probs=None,
-                                                                       kl_divergence=False)
+                                if current_vat_step == 2:
 
                                     loss_dict = self.loss_function(outputs, targets, model=self.model,
                                                                    target_probs=noiseless_output,
                                                                    kl_divergence=True)
 
-                                    loss = loss_dict['loss'] + adv_loss_dict['loss']
-                                    full_loss = loss
+                                    full_loss = loss_dict['loss']
+                                    if self.vat_training == 3:
+
+                                        # adversarial training: matches output with label
+                                        adv_loss_dict = self.loss_function(outputs, targets, model=self.model,
+                                                                           target_probs=None,
+                                                                           kl_divergence=False)
+
+                                        full_loss += adv_loss_dict['loss']
                                 else:
                                     loss_dict = self.loss_function(outputs, targets, model=self.model,
                                                                    target_probs=noiseless_output,
@@ -997,6 +999,8 @@ class VAT_OCLTrainer(object):
                                     self.grad_scaler.scale(full_loss).backward(inputs=[outputs['input_noise']])
                                 else:
                                     full_loss.backward(inputs=[outputs['input_noise']])
+                                    
+                                # found the approximated r_vadv, save it!
                                 vat_perturb = outputs['input_noise'].grad.data.detach()
                             else:
                                 if self.grad_scaler is not None:
@@ -1006,43 +1010,6 @@ class VAT_OCLTrainer(object):
 
                             del outputs
 
-                            # # del outputs
-                            # if opt.virtual_adversarial_training_mode > 0:
-                            #     # run forward pass one more time
-                            #     # the perturbation is the gradient of the model w.r.t the input
-                            #     perturb = model_input.grad.data.new(*model_input.size()).copy_(model_input.grad.data)
-                            #
-                            #     with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
-                            #         assert model_input.grad is not None
-                            #         outputs = self.model(batch, target_mask=tgt_mask,
-                            #                              pretrained_layer_states=layer_states,
-                            #                              input_ptb=perturb)
-                            #
-                            #         full_loss = None
-                            #         # compute loss for mode 2 3
-                            #         # In this mode, we add noise to the input and minimise the loss given the noisy inputs
-                            #         if opt.virtual_adversarial_training_mode in [2, 3]:
-                            #             loss_dict = self.loss_function(outputs, targets, model=self.model)
-                            #             full_loss = loss_dict['loss']
-                            #
-                            #         # for mode 1, 3 compute kl divergence
-                            #         # In this mode, we minimise the kl divergence between the model output with and without noise
-                            #         if opt.virtual_adversarial_training_mode in [1, 3]:
-                            #             logits = outputs['logprobs']
-                            #
-                            #             with torch.no_grad():
-                            #                 vanilla_probs = \
-                            #                     F.softmax(vanilla_logits.float().view(-1, vanilla_logits.size(-1)), dim=-1)
-                            #                 vanilla_probs.detach_()
-                            #             noisy_probs = F.softmax(logits.float().view(-1, logits.view(-1, logits.size(-1))),
-                            #                                     dim=-1)
-                            #
-                            #             # Note: with the kl_div_loss we don't backward w.r.t the vanilla probs
-                            #             kl_div_loss = F.kl_div(noisy_probs, vanilla_probs, reduction='sum')
-                            #             if full_loss is None:
-                            #                 full_loss = kl_div_loss
-                            #             else:
-                            #                 full_loss += kl_div_loss
                             #
                             #     # Now we only get the gradients for the weights of the network
                             #     grad_list = [p for p in self.model.parameters() if p.requires_grad]
@@ -1211,6 +1178,7 @@ class VAT_OCLTrainer(object):
                         self.all_reduce(report_transducer_loss, op=dist.ReduceOp.SUM, group=self.group)
                         self.all_reduce(report_transducer_targets, op=dist.ReduceOp.SUM, group=self.group)
 
+                    # TODO: add stats for adv_ppl and vat_kldiv
                     log_string = ("Ep %2d, Rd %d, %5d/%5d; ; ppl: %6.2f ; grad_norm: %6.4f " %
                                   (epoch, dataset_id, i + 1, len(_data_iterator),
                                    math.exp(report_loss.item() / report_tgt_words.item()),
@@ -1241,16 +1209,6 @@ class VAT_OCLTrainer(object):
                         except ZeroDivisionError:
                             _ewc_loss = float('nan')
                         log_string += (" ewcloss: %8.8f ; " % _ewc_loss)
-
-                    if opt.predict_language > 0:
-                        try:
-                            _enc_lid_loss = report_enc_lid_loss.item() / report_enc_lid_count
-                            _dec_lid_loss = report_dec_lid_loss.item() / report_dec_lid_count
-                        except ZeroDivisionError:
-                            _enc_lid_loss = float('nan')
-                            _dec_lid_loss = float('nan')
-                        log_string += (" enc_lidloss: %8.8f ; " % _enc_lid_loss)
-                        log_string += (" dec_lidloss: %8.8f ; " % _dec_lid_loss)
 
                     log_string += ("lr: %.7f ; updates: %7d; " %
                                    (self.optim.get_learning_rate(),
@@ -1310,24 +1268,25 @@ class VAT_OCLTrainer(object):
                 value = 1 - valid_accuracy
             self.save(epoch, dataset_id, value)
 
-            total_per_dataset = self.reservoir.get_stats()
+            if self.reservoir is not None:
+                total_per_dataset = self.reservoir.get_stats()
 
-            # some stupid code to grab the memory statistics
-            n_dataset = len(train_data)
-            _tensor = torch.zeros((n_dataset,)).cuda()
-            for _dataset_id in total_per_dataset:
-                _tensor[_dataset_id] = total_per_dataset[_dataset_id]
+                # some stupid code to grab the memory statistics
+                n_dataset = len(train_data)
+                _tensor = torch.zeros((n_dataset,)).cuda()
+                for _dataset_id in total_per_dataset:
+                    _tensor[_dataset_id] = total_per_dataset[_dataset_id]
 
-            if self.world_size > 1:
-                self.all_reduce(_tensor, op=dist.ReduceOp.SUM, group=self.group)
+                if self.world_size > 1:
+                    self.all_reduce(_tensor, op=dist.ReduceOp.SUM, group=self.group)
 
-            self.print("Memory statistics:")
-            _sum = torch.sum(_tensor).item()
-            for dataset_id in total_per_dataset:
-                prob = _tensor[dataset_id].item() / _sum
-                self.print("Dataset ", dataset_id, _tensor[dataset_id].item(),
-                           "samples", f"{prob:.0%}")
-                self.print("")
+                self.print("Memory statistics:")
+                _sum = torch.sum(_tensor).item()
+                for dataset_id in total_per_dataset:
+                    prob = _tensor[dataset_id].item() / _sum
+                    self.print("Dataset ", dataset_id, _tensor[dataset_id].item(),
+                               "samples", f"{prob:.0%}")
+                    self.print("")
 
         return total_loss / total_words
 
