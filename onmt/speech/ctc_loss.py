@@ -57,6 +57,8 @@ class CTC(torch.nn.Module):
             preds = torch.argmax(logits, dim=1)
             total = targets.numel()
 
+            #TODO: also return the alignment based on forced alignment
+
         return loss, total
 
     def forward(self, model_outputs, targets, **kwargs):

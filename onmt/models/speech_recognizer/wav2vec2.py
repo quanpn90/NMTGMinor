@@ -551,6 +551,8 @@ class Wav2vecTransformer(Transformer):
                 print("Creating CTC Compress layer ...")
                 from .ctc_compressor import CTCCompressStrategy
                 self.ctc_compress = getattr(CTCCompressStrategy, ctc_compress)
+            else:
+                self.ctc_compress = None
 
         self.transducer = transducer
         if self.transducer:

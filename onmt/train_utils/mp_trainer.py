@@ -785,7 +785,7 @@ class Trainer(object):
                                              zero_encoder=opt.zero_encoder,
                                              mirror=opt.mirror_loss, streaming_state=streaming_state,
                                              nce=opt.nce, pretrained_layer_states=layer_states,
-                                             adv_ptb_grad=opt.virtual_adversarial_training_mode > 0,
+                                             adv_ptb_grad=False,
                                              checkpointing_ffn=opt.checkpointing_ffn,
                                              checkpointing_cross_attn=opt.checkpointing_cross_attn,
                                              checkpointing_self_attn=opt.checkpointing_self_attn,
@@ -881,15 +881,15 @@ class Trainer(object):
                         # optimizer = self.optim.optimizer 
 
                     # TODO for adversarial:
-                    grad_list = [p for p in self.model.parameters() if p.requires_grad]
-                    if opt.virtual_adversarial_training_mode > 0:
-                        # if we use virtual adversarial training: add the input to the list of gradient to take
-                        model_input = outputs['source']
-                        vanilla_logits = outputs['logprobs']
-                        grad_list += [model_input]
-                    else:
-                        model_input = None
-                        vanilla_logits = None
+                    # grad_list = [p for p in self.model.parameters() if p.requires_grad]
+                    # if opt.virtual_adversarial_training_mode > 0:
+                    #     # if we use virtual adversarial training: add the input to the list of gradient to take
+                    #     model_input = outputs['source']
+                    #     vanilla_logits = outputs['logprobs']
+                    #     grad_list += [model_input]
+                    # else:
+                    #     model_input = None
+                    #     vanilla_logits = None
 
                     # grad scaler has to be done outside of the autocast
                     if self.grad_scaler is not None:
@@ -900,52 +900,6 @@ class Trainer(object):
                         self.model.module.post_backward(output_dict=outputs)
                     else:
                         self.model.post_backward(output_dict=outputs)
-
-                    # del outputs
-                    if opt.virtual_adversarial_training_mode > 0:
-                        # run forward pass one more time
-                        # the perturbation is the gradient of the model w.r.t the input
-                        perturb = model_input.grad.data.new(*model_input.size()).copy_(model_input.grad.data)
-
-                        with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
-                            assert model_input.grad is not None
-                            outputs = self.model(batch, streaming=opt.streaming, target_mask=tgt_mask,
-                                                 pretrained_layer_states=layer_states,
-                                                 input_ptb=perturb)
-
-                            full_loss = None
-                            # compute loss for mode 2 3
-                            # In this mode, we add noise to the input and minimise the loss given the noisy inputs
-                            if opt.virtual_adversarial_training_mode in [2, 3]:
-                                loss_dict = self.loss_function(outputs, targets, model=self.model)
-                                full_loss = loss_dict['loss']
-
-                            # for mode 1, 3 compute kl divergence
-                            # In this mode, we minimise the kl divergence between the model output with and without noise
-                            if opt.virtual_adversarial_training_mode in [1, 3]:
-                                logits = outputs['logprobs']
-
-                                with torch.no_grad():
-                                    vanilla_probs = \
-                                        F.softmax(vanilla_logits.float().view(-1, vanilla_logits.size(-1)), dim=-1)
-                                    vanilla_probs.detach_()
-                                noisy_probs = F.softmax(logits.float().view(-1, logits.view(-1, logits.size(-1))),
-                                                        dim=-1)
-
-                                # Note: with the kl_div_loss we don't backward w.r.t the vanilla probs
-                                kl_div_loss = F.kl_div(noisy_probs, vanilla_probs, reduction='sum')
-                                if full_loss is None:
-                                    full_loss = kl_div_loss
-                                else:
-                                    full_loss += kl_div_loss
-
-                        # Now we only get the gradients for the weights of the network
-                        grad_list = [p for p in self.model.parameters() if p.requires_grad]
-                        if self.grad_scaler is not None:
-                            self.grad_scaler.scale(full_loss).backward()
-                        else:
-                            full_loss.backward()
-                        del outputs
 
                     # EWC training: no need for autograd here?
                     if self.optim._step % opt.ewc_decay_every == 0:
@@ -1360,7 +1314,7 @@ class Trainer(object):
                                              zero_encoder=opt.zero_encoder,
                                              mirror=opt.mirror_loss, streaming_state=streaming_state,
                                              nce=opt.nce, pretrained_layer_states=layer_states,
-                                             adv_ptb_grad=opt.virtual_adversarial_training_mode > 0,
+                                             adv_ptb_grad=False,
                                              checkpointing_ffn=opt.checkpointing_ffn,
                                              checkpointing_cross_attn=opt.checkpointing_cross_attn,
                                              checkpointing_self_attn=opt.checkpointing_self_attn,
@@ -1412,17 +1366,15 @@ class Trainer(object):
 
                     # grad scaler has to be done outside of the autocast
 
-                    # TODO for adversarial:
-
-                    grad_list = [p for p in self.model.parameters() if p.requires_grad]
-                    if opt.virtual_adversarial_training_mode > 0:
-                        # if we use virtual adversarial training: add the input to the list of gradient to take
-                        model_input = outputs['source']
-                        vanilla_logits = outputs['logprobs']
-                        grad_list += [model_input]
-                    else:
-                        model_input = None
-                        vanilla_logits = None
+                    # grad_list = [p for p in self.model.parameters() if p.requires_grad]
+                    # if opt.virtual_adversarial_training_mode > 0:
+                    #     # if we use virtual adversarial training: add the input to the list of gradient to take
+                    #     model_input = outputs['source']
+                    #     vanilla_logits = outputs['logprobs']
+                    #     grad_list += [model_input]
+                    # else:
+                    #     model_input = None
+                    #     vanilla_logits = None
 
                     if self.grad_scaler is not None:
                         self.grad_scaler.scale(full_loss).backward()
