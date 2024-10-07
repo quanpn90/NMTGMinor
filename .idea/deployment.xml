@@ -7,14 +7,14 @@
       <paths name="bridges2.psc.edu">
         <serverdata>
           <mappings>
-            <mapping deploy="/jet/home/npham2/code/NMTGMinor" local="$PROJECT_DIR$" web="/" />
+            <mapping local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>
       <paths name="horeka">
         <serverdata>
           <mappings>
-            <mapping deploy="/home/hk-project-pai00008/gw1254/NMTGMinor/" local="$PROJECT_DIR$" web="/" />
+            <mapping local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>

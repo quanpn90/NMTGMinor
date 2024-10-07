@@ -24,6 +24,10 @@ def make_parser(parser):
                         help='Averaged Gradient Episodic Memory training. Only effect with ocl_training')
     parser.add_argument('-ocl_training', action='store_true',
                         help='Online Continual Learning training')
+    parser.add_argument('-offline_cl_training', action='store_true',
+                        help='Online Continual Learning training')
+    parser.add_argument('-dataset_index', type=int, default=0,
+                        help='Index of the dataset used in OFFLINE continual learning')
     parser.add_argument('-reservoir_size', type=int, default=0,
                         help='The size of reservoir used in Online Continual Learning training')
     parser.add_argument('-mirror_loss', type=float, default=0.0,
@@ -621,6 +625,8 @@ def make_parser(parser):
 
     parser.add_argument('-num_mel_bin', type=int, default=0,
                         help='Number of log mel bins for feature extraction. 0 = use waveforms ')
+
+
     return parser
 
 

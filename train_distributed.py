@@ -78,7 +78,7 @@ def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
     Returns:
 
     """
-
+    # Online Continual Learning - each example is visited once
     if opt.ocl_training:
         if opt.bayes_by_backprop:
             from onmt.train_utils.bayes_by_backprop_trainer import BayesianOCLTrainer
@@ -89,6 +89,15 @@ def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
         else:
             from onmt.train_utils.ocl_trainer import OCLTrainer
             trainer = OCLTrainer(gpu, dicts, opt, constants)
+    # Continual Learning, but Offline. When we want to add more data into the current system
+    # There are more algorithms we can try:
+    # - EWC
+    # - Reservoir
+    # - combined with VAT training?
+    elif opt.offline_cl_training:
+
+        from onmt.train_utils.offline_cl_trainer import OfflineCLTrainer
+        trainer = OfflineCLTrainer(gpu, dicts, opt, constants)
     else:
         from onmt.train_utils.mp_trainer import Trainer
         trainer = Trainer(gpu, dicts, opt, constants)
