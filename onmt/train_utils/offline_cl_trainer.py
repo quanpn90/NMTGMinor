@@ -12,6 +12,7 @@ import sys
 import contextlib
 import functools
 import glob
+import sys
 
 
 import onmt
@@ -61,13 +62,15 @@ def human_format(num):
                          ['', 'K', 'M', 'B', 'T'][magnitude])
 
 
-def prepare_sample(batch, device=None, reservoir=None, dataset_id=None):
+def prepare_sample(batch, device=None,
+                   reservoir=None, dataset_id=None, cuda=True):
     """
     Put minibatch on the corresponding GPU
     :param batch:
     :param device:
     :param reservoir:
     :param dataset_id:
+    :param cuda:
     :return:
     """
 
@@ -83,7 +86,8 @@ def prepare_sample(batch, device=None, reservoir=None, dataset_id=None):
         tgt_lengths = batch.get('tgt_lengths')
         reservoir.add_sample((dataset_id, indices, src_lengths, tgt_lengths))
 
-    batch.cuda(fp16=False, device=device)
+    if cuda:
+        batch.cuda(fp16=False, device=device)
 
     return batch
 
@@ -2395,21 +2399,27 @@ class OfflineCLTrainer(object):
             }
 
             file_name = opt.load_from + ".fisher"
-            print("[INFO] Saving means and fisher information to %s" % file_name)
+            print("[INFO] Saving means and fisher information to %s" % file_name, flush=True)
             torch.save(checkpoint, file_name)
 
         return total_loss / total_words
 
     def populate_reservoir(self, train_data=None, dataset_id=None):
 
+        opt = self.opt
+        assert dataset_id is not None
+        assert train_data is not None
+
+        self.print("[INFO] Populating the reservoir after training ...", flush=True)
+
         # this function is called at the end of training
-        dataset = train_data[dataset_id]
-        assert is_list(dataset)
+        _dataset = train_data[dataset_id]
+        # assert is_list(dataset)
 
-
-        data_iterator = generate_data_iterator(_dataset, self.rank, self.world_size,
+        # we have to use world size 1 here
+        data_iterator = generate_data_iterator(_dataset, 0, 1,
                                                seed=self.opt.seed, num_workers=opt.num_workers,
-                                               epoch=epoch, buffer_size=opt.buffer_size, split_even=True,
+                                               epoch=0, buffer_size=opt.buffer_size, split_even=False,
                                                dataset_ids=None)
 
         streaming = False
@@ -2420,16 +2430,20 @@ class OfflineCLTrainer(object):
 
             # add the samples to the reservoir ....
             prepare_sample(samples, device=self.device, dataset_id=dataset_id,
-                           reservoir=self.reservoir)
+                           reservoir=self.reservoir, cuda=False)
 
 
     def average_checkpoints(self):
 
+        self.print("[INFO] Average the parameters for the current round after training ...", flush=True)
+
+        saved_stdout, saved_stderr = sys.stdout, sys.stderr
+        sys.stdout = sys.stderr = open(os.devnull, "w")
         def custom_build_model(opt, dict, lm=False, type='seq2seq', constants=None):
 
             if type == 'seq2seq':
                 if not lm:
-                    model = build_model(opt, dict, False, constants)
+                    model = build_model(opt, dict, False, constants, verbose=False)
                 else:
                     model = build_language_model(opt, dict)
             elif type == 'classifier':
@@ -2443,8 +2457,9 @@ class OfflineCLTrainer(object):
         # extract the paths
         path = os.path.dirname(opt.save_model)
 
-        # find the
-        existed_save_files = glob.glob(path + "/" + "*.pt")
+        # find
+        dataset_id = opt.dataset_index
+        existed_save_files = glob.glob(path + "/" + str(dataset_id) + "/" + "*.pt")
 
         models = existed_save_files
         n_models = len(models)
@@ -2464,7 +2479,7 @@ class OfflineCLTrainer(object):
         model_opt.enc_state_dict = None
         model_opt.dec_state_dict = None
 
-        main_model = custom_build_model(model_opt, checkpoint['dicts'], lm=opt.lm, type=opt.type, constants=constants)
+        main_model = custom_build_model(model_opt, checkpoint['dicts'], lm=False, type='seq2seq', constants=constants)
         # onmt.constants = add_tokenidx(model_opt, onmt.constants, dicts)
 
         try:
@@ -2492,7 +2507,8 @@ class OfflineCLTrainer(object):
             if 'optim' in checkpoint:
                 del checkpoint['optim']
 
-            current_model = custom_build_model(model_opt, checkpoint['dicts'], lm=opt.lm, type=opt.type)
+            current_model = custom_build_model(model_opt, checkpoint['dicts'], lm=False,
+                                               type='seq2seq', constants=constants)
             current_model.eval()
 
             print("Loading model from %s ..." % models[i])
@@ -2500,9 +2516,6 @@ class OfflineCLTrainer(object):
                 current_model.load_state_dict(checkpoint['model'])
             except RuntimeError as e:
                 current_model.load_state_dict(checkpoint['model'], strict=True)
-
-            # if opt.cuda:
-            #     current_model = current_model.cuda()
 
             if _method == 'mean':
                 # Sum the parameter values
@@ -2531,22 +2544,25 @@ class OfflineCLTrainer(object):
         else:
             self.model.load_state_dict(model_state_dict)
 
-        save_checkpoint = {
-            'model': model_state_dict,
-            'dicts': dicts,
-            'opt': model_opt,
-            'epoch': -1,
-            'iteration': -1,
-            'batchOrder': None,
-            'optim': None
-        }
+        # save_checkpoint = {
+        #     'model': model_state_dict,
+        #     'dicts': dicts,
+        #     'opt': model_opt,
+        #     'epoch': -1,
+        #     'iteration': -1,
+        #     'batchOrder': None,
+        #     'optim': None
+        # }
 
-        output_file = os.path.join(path, "model.average.pt")
+        # output_file = os.path.join(path + "/" + str(dataset_id) + "/" , "model.average.pt")
+        #
+        # sys.stdout, sys.stderr = saved_stdout, saved_stderr
+        #
+        # self.print("[INFO] Saving averaged model to %s" % output_file)
+        # if self.is_main():
+        #     torch.save(save_checkpoint, output_file)
 
-        print("Saving averaged model to %s" % output_file)
-        torch.save(save_checkpoint, output_file)
-
-        pass
+        return
 
     def run(self, train_data=None, valid_data=None, checkpoint=None):
         opt = self.opt
@@ -2707,26 +2723,26 @@ class OfflineCLTrainer(object):
             train_ppl = math.exp(min(train_loss, 100))
             self.print('[INFO] Train perplexity: %g' % train_ppl)
 
-            self.average_checkpoints()
-            self.populate_reservoir()
-
-            # evaluate the last time
-            valid_loss, valid_accuracy = self.eval(valid_data, dataset_id)
-            valid_ppl = math.exp(min(valid_loss, 100))
-            self.print('[INFO] Validation perplexity: %g' % valid_ppl)
-            self.print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
-            if opt.save_metrics in ['ppl', 'perplexity']:
-                value = valid_ppl
-            elif opt.save_metrics == "memory":
-                if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
-                    value = self.model.module.choose_best_epoch_by
-                else:
-                    value = self.model.choose_best_epoch_by
-            else:
-                value = 1 - valid_accuracy
-            self.save(-1, dataset_id, value)
-
             itr_progress = None
             resume = False
+
+        self.average_checkpoints()
+        self.populate_reservoir(train_data, dataset_id)
+
+        # evaluate the last time
+        valid_loss, valid_accuracy = self.eval(valid_data, dataset_id)
+        valid_ppl = math.exp(min(valid_loss, 100))
+        self.print('[INFO] Validation perplexity: %g' % valid_ppl)
+        self.print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
+        if opt.save_metrics in ['ppl', 'perplexity']:
+            value = valid_ppl
+        elif opt.save_metrics == "memory":
+            if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                value = self.model.module.choose_best_epoch_by
+            else:
+                value = self.model.choose_best_epoch_by
+        else:
+            value = 1 - valid_accuracy
+        self.save(-1, dataset_id, value)
 
 
