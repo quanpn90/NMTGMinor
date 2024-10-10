@@ -285,6 +285,8 @@ class OCLTrainer(object):
                 self.model.load_state_dict(checkpoint['model'])
             except RuntimeError as e:
                 self.model.load_state_dict(checkpoint['model'], strict=True)
+        else:
+            checkpoint = None
 
         self.agem_training = False
         # we can also try to combine agem with meta learning. why not!
@@ -367,7 +369,7 @@ class OCLTrainer(object):
 
             # for meta learning we also need an "inner" optimizer
             self.inner_optim = onmt.Optim(opt)
-            self.optim.set_parameters(self.proto_model.parameters(), flattened=opt.flatten_parameters)
+            self.inner_optim.set_parameters(self.proto_model.parameters(), flattened=opt.flatten_parameters)
 
             if self.agem_training:
                 # probably adam is fine, we don't have to ever call update
@@ -695,6 +697,19 @@ class OCLTrainer(object):
 
         return total_loss.item() / total_words.item(), total_correct.item() / total_words.item()
 
+    def compute_meta_gradient(self):
+
+        # compute the meta gradient based on the Reptile algorithm
+        # requirement: both of these models have to flatten parameters
+
+        ref_param = self.optim.flattened_params
+        proto_param = self.inner_optim.flattened_params
+
+
+
+        return
+
+
     def train_epoch(self, train_data, valid_data, epoch, resume=False, itr_progress=None):
 
         opt = self.opt
@@ -844,147 +859,78 @@ class OCLTrainer(object):
                 reduce = True if counter >= update_frequency or i == (n_samples - 1) else False
 
                 try:
-                    def maybe_no_sync():
-                        if not reduce and (isinstance(self.model, DDP_model) or isinstance(self.model, FSDP)):
-                            return self.model.no_sync()
+                    # def maybe_no_sync():
+                    #     if not reduce and (isinstance(self.model, DDP_model) or isinstance(self.model, FSDP)):
+                    #         return self.model.no_sync()
+                    #     else:
+                    #         # when we dont reach the updating step, we do not need to synchronize the gradients
+                    #         # thus disabling the backward grad sync to improve speed
+                    #         return contextlib.ExitStack()  # dummy contextmanager
+
+                    # we always synchronize the inner model here
+                    # with maybe_no_sync():
+                    with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
+
+                        tgt_mask = targets.ne(onmt.constants.PAD)
+
+                        # inner forward
+                        outputs = self.proto_model(batch, streaming=False, target_mask=tgt_mask,
+                                             zero_encoder=opt.zero_encoder,
+                                             mirror=opt.mirror_loss > 0,
+                                             adv_ptb_grad=False,
+                                             ctc_loss_function = self.ctc_loss_function,
+                                             ctc_labels = targets,
+                                             grad_scaler = self.grad_scaler,
+                                             ctc_coeff = opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
+                                             transducer_loss_function = self.transducer_loss_function,
+                                             transducer_coeff = opt.transducer_loss
+                                             )
+
+                        batch_size = batch.size
+                        # outputs is a dictionary containing keys/values necessary for loss function
+                        # can be flexibly controlled within models for easier extensibility
+                        outputs['tgt_mask'] = tgt_mask
+
+                        ctc_only = False
+                        loss_dict = self.loss_function(outputs, targets, model=self.model)
+                        loss_data = loss_dict['data']
+                        loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
+                        full_loss = loss
+
+                        if opt.ctc_loss > 0.0:
+                            ctc_loss = outputs['ctc_loss']
+                            n_ctc_targets = outputs['n_ctc_targets']
+                            # TODO: add CTC loss to models
+                            ctc_loss_data = ctc_loss.item()
+                            full_loss = full_loss + opt.ctc_loss * ctc_loss
                         else:
-                            # when we dont reach the updating step, we do not need to synchronize the gradients
-                            # thus disabling the backward grad sync to improve speed
-                            return contextlib.ExitStack()  # dummy contextmanager
+                            n_ctc_targets = 0
+                            ctc_loss_data = 0
 
-                    with maybe_no_sync():
-                        with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
-
-                            tgt_mask = targets.ne(onmt.constants.PAD)
-                            if opt.load_pretrained_classifier:
-                                with torch.no_grad():
-                                    layer_states = self.classifier.encode(batch)
-                            else:
-                                layer_states = None
-
-                            outputs = self.model(batch, streaming=False, target_mask=tgt_mask,
-                                                 zero_encoder=opt.zero_encoder,
-                                                 mirror=opt.mirror_loss > 0,
-                                                 adv_ptb_grad=False,
-                                                 checkpointing_ffn=opt.checkpointing_ffn,
-                                                 checkpointing_cross_attn=opt.checkpointing_cross_attn,
-                                                 checkpointing_self_attn=opt.checkpointing_self_attn,
-                                                 ctc_loss_function = self.ctc_loss_function,
-                                                 ctc_labels = targets,
-                                                 grad_scaler = self.grad_scaler,
-                                                 ctc_coeff = opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
-                                                 transducer_loss_function = self.transducer_loss_function,
-                                                 transducer_coeff = opt.transducer_loss
-                                                 )
-
-                            batch_size = batch.size
-                            # outputs is a dictionary containing keys/values necessary for loss function
-                            # can be flexibly controlled within models for easier extensibility
-                            outputs['tgt_mask'] = tgt_mask
-
-                            ctc_only = False
-                            if outputs["hidden"] != None:
-                                loss_dict = self.loss_function(outputs, targets, model=self.model)
-                                loss_data = loss_dict['data']
-                                loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-                                full_loss = loss
-                            else:
-                                ctc_only = True
-                                loss_data = 0
-                                loss = None
-                                full_loss = 0
-
-                            if opt.ctc_loss > 0.0:
-                                ctc_loss = outputs['ctc_loss']
-                                n_ctc_targets = outputs['n_ctc_targets']
-                                # TODO: add CTC loss to models
-                                ctc_loss_data = ctc_loss.item()
-                                full_loss = full_loss + opt.ctc_loss * ctc_loss
-                            else:
-                                n_ctc_targets = 0
-                                ctc_loss_data = 0
-
-                            if opt.transducer_loss > 0.0:
-                                transducer_loss = outputs['transducer_loss']
-                                n_transducer_targets = outputs['transducer_numel']
-                                # TODO: add CTC loss to models
-                                transducer_loss_data = transducer_loss.item()
-                                full_loss = full_loss + opt.transducer_loss * transducer_loss
-                            else:
-                                n_transducer_targets = 0
-                                transducer_loss_data = 0
-
-                            if opt.mirror_loss > 0.0:
-                                rev_loss = loss_dict['rev_loss']
-                                rev_loss_data = loss_dict['rev_loss_data']
-                                mirror_loss = loss_dict['mirror_loss']
-                                full_loss = full_loss + rev_loss + mirror_loss * opt.mirror_loss
-                                mirror_loss_data = loss_dict['mirror_loss'].item()
-                            else:
-                                rev_loss_data = None
-                                mirror_loss_data = 0
-
-                            if opt.predict_language > 0:
-                                enc_pred_lang = outputs['enc_pred_lang']
-                                enc_mask = outputs['src_mask']
-                                enc_lid_loss = self.lid_loss_function(enc_pred_lang,
-                                                                      batch.get("source_lang"), enc_mask)
-
-                                dec_pred_lang = outputs['dec_pred_lang']
-                                # dec_mask = outputs['target_mask']
-                                # dec_mask = targets.eq(onmt.constants.PAD)
-                                dec_mask = batch.get('target_input_selfattn_mask')
-                                dec_lid_loss = self.lid_loss_function(dec_pred_lang,
-                                                                      batch.get("target_lang"), dec_mask)
-
-                                full_loss = full_loss + 0.01 * (enc_lid_loss + dec_lid_loss)
-
-                                report_enc_lid_loss.add_(enc_lid_loss.item())
-                                report_enc_lid_count += enc_mask.ne(1).int().sum().item()
-
-                                report_dec_lid_loss.add_(dec_lid_loss.item())
-                                report_dec_lid_count += dec_mask.ne(1).int().sum().item()
-
-                            else:
-                                enc_lid_loss = None
-                                enc_lid_loss_data = None
-                                dec_lid_loss = None
-                                dec_lid_loss_data = None
-
-                            # reconstruction loss
-                            if opt.reconstruct:
-                                rec_loss = loss_dict['rec_loss']
-                                rec_loss = rec_loss
-                                full_loss = full_loss + rec_loss
-                                rec_loss_data = loss_dict['rec_loss_data']
-                            else:
-                                rec_loss_data = None
-
-                            if hasattr(opt, "use_memory") and opt.use_memory and "loss_memory" in outputs:
-                                loss_memory = outputs['loss_memory']
-                                #full_loss = full_loss + loss_memory
-                                full_loss = loss_memory
-
-                            if opt.contrastive_loss_coeff > 0 and 'contrastive_loss' in outputs:
-                                contrastive_loss = outputs['contrastive_loss']
-                                full_loss = full_loss + opt.contrastive_loss_coeff * contrastive_loss
-                                report_contrastive_loss.add_(contrastive_loss.item())
-
-                            # correct, total = loss_dict['correct'], loss_dict['total']
-                            # optimizer = self.optim.optimizer
-
-                        # grad scaler has to be done outside of the autocast
-                        if self.grad_scaler is not None:
-                            self.grad_scaler.scale(full_loss).backward()
+                        if opt.transducer_loss > 0.0:
+                            transducer_loss = outputs['transducer_loss']
+                            n_transducer_targets = outputs['transducer_numel']
+                            # TODO: add CTC loss to models
+                            transducer_loss_data = transducer_loss.item()
+                            full_loss = full_loss + opt.transducer_loss * transducer_loss
                         else:
-                            full_loss.backward()
+                            n_transducer_targets = 0
+                            transducer_loss_data = 0
 
-                        # EWC training: no need for autograd here?
-                        if self.optim._step % opt.ewc_decay_every == 0:
+                        enc_lid_loss = None
+                        enc_lid_loss_data = None
+                        dec_lid_loss = None
+                        dec_lid_loss_data = None
 
-                            ewc_importance = ewc_importance / opt.ewc_decay_scale
+                        # correct, total = loss_dict['correct'], loss_dict['total']
+                        # optimizer = self.optim.optimizer
 
-                        # only run this ewc everytime we reduce
+                    # inner backward
+                    # grad scaler has to be done outside of the autocast
+                    if self.grad_scaler is not None:
+                        self.grad_scaler.scale(full_loss).backward()
+                    else:
+                        full_loss.backward()
 
                 except RuntimeError as e:
                     if 'out of memory' in str(e):
@@ -994,35 +940,8 @@ class OCLTrainer(object):
 
                         # continue
                         raise e
-                        # recovering mechanism doesn't work at the moment
-                        # loss = 0
-                        # for p in self.model.parameters():
-                        #     if p.grad is not None:
-                        #         del p.grad  # free some memory
-                        #     loss = loss + p.sum() * 0
-
-                        # torch.cuda.empty_cache()
-                        #
-                        # if opt.streaming:  # reset stream in this case ...
-                        #     streaming_state = self.model.init_stream()
-                        #
-                        #
-                        # # backward to actually free the graph
-                        # # self.grad_scaler.scale(loss).backward()
-                        # oom.add_(1)
 
                     raise e
-
-                # connecting the oom signal from different gpus
-                # self.all_reduce(oom, op=dist.ReduceOp.SUM, group=self.group)
-                # # if OOM: all gpus reset grad and reset counter
-                # # or maybe all-reduce grad?
-                # if oom.item() > 0:
-                #     # reset counter
-                #     self.model.zero_grad()
-                #     self.optim.zero_grad()
-                #     counter = 0
-                #     oom.zero_()
 
                 batch_size = batch.size
 
@@ -1031,9 +950,18 @@ class OCLTrainer(object):
                 num_accumulated_words.add_(tgt_size)
                 num_accumulated_sents.add_(batch_size)
 
+                # after inner forward/backward
+                # perform one inner update
+                if self.grad_scaler is not None:
+                    self.inner_optim.step(scaler=self.grad_scaler)
+                    self.grad_scaler.update()
+                else:
+                    self.inner_optim.step(scaler=None)
+
                 # We only update the parameters after getting gradients from n mini-batches
                 update_flag = reduce
 
+                # the number of steps we are willing
                 if update_flag:
 
                     # accumulated gradient case, in this case the update frequency
@@ -1086,11 +1014,13 @@ class OCLTrainer(object):
                                 report_ewc_loss.add_(ewc_loss)
                                 report_ewc_count += 1
 
-                    if self.grad_scaler is not None:
-                        self.optim.step(scaler=self.grad_scaler)
-                        self.grad_scaler.update()
-                    else:
-                        self.optim.step(scaler=None)
+                    # if self.grad_scaler is not None:
+                    #     self.optim.step(scaler=self.grad_scaler)
+                    #     self.grad_scaler.update()
+                    # else:
+                    #     self.optim.step(scaler=None)
+                    self.compute_meta_gradient()
+
                     self.optim.zero_grad(set_to_none=True if self.opt.fsdp else not opt.true_zero_grad)
                     counter = 0
                     num_accumulated_words.zero_()

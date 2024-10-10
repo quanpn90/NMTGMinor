@@ -30,6 +30,8 @@ def make_parser(parser):
                         help='Index of the dataset used in OFFLINE continual learning')
     parser.add_argument('-reservoir_size', type=int, default=0,
                         help='The size of reservoir used in Online Continual Learning training')
+    parser.add_argument('-max_examples_seen', type=int, default=0,
+                        help='The maximum number of examples seen in Offline Continual Learning training (counted by minibatches)')
     parser.add_argument('-mirror_loss', type=float, default=0.0,
                         help='Use mirror loss from a 2nd decoder')
 

@@ -489,6 +489,11 @@ class OfflineCLTrainer(object):
             self.reservoir = Reservoir(max_samples=reservoir_size,
                                        update_method="reservoir_sampling",
                                        unit="sample")
+
+            if opt.load_from.endswith("final.pt"):
+                reservoir_data = checkpoint['reservoir']
+                self.reservoir.load_state_dict(reservoir_data)
+                self.print("[INFO] Load reservoir data from checkpoint")
         else:
             self.reservoir = None
 
@@ -590,7 +595,7 @@ class OfflineCLTrainer(object):
 
         self.model.decoder.language_embeddings = untrained_lang_emb
 
-    def save(self, epoch, round, valid_ppl, itr=None):
+    def save(self, epoch, round, valid_ppl, itr=None, final=False):
 
         opt = self.opt
         model = self.model
@@ -635,15 +640,17 @@ class OfflineCLTrainer(object):
         save_dir = os.path.join(save_path, str(round))
         os.makedirs(save_dir, exist_ok=True)
 
-        file_name = '%s_ppl_%.6f_e%.2f.pt' % (prefix, valid_ppl, epoch)
+        if final:
+            file_name = '%s.final.pt' % prefix
+        else:
+            file_name = '%s_ppl_%.6f_e%.2f.pt' % (prefix, valid_ppl, epoch)
         file_name = os.path.join(save_dir, file_name)
         if self.is_main():
             print('Writing to %s' % file_name)
             torch.save(checkpoint, file_name)
 
             # check the save directory here
-            checkpoint_dir = os.path.dirname(opt.save_model)
-            existed_save_files = checkpoint_paths(checkpoint_dir)
+            existed_save_files = checkpoint_paths(save_dir)
             for save_file in existed_save_files[opt.keep_save_files:]:
                 print(" * Deleting old save file %s ...." % save_file)
                 os.remove(save_file)
@@ -2424,6 +2431,8 @@ class OfflineCLTrainer(object):
 
         streaming = False
         epoch_iterator = data_iterator.next_epoch_itr(not streaming, pin_memory=opt.pin_memory)
+        i = 0
+        log_interval = 1000
 
         while not data_iterator.end_of_epoch():
             samples = next(epoch_iterator)
@@ -2432,10 +2441,57 @@ class OfflineCLTrainer(object):
             prepare_sample(samples, device=self.device, dataset_id=dataset_id,
                            reservoir=self.reservoir, cuda=False)
 
+            # lets try to log it for now ...
+            if i == 0 or ((i + 1) % log_interval < 1):
+
+                log_string = ("Dataset %d, %5d/%5d;" %
+                              (dataset_id, i + 1, len(data_iterator)))
+
+
+                self.print(log_string, flush=True)
+
+            # increase i by world size
+            i = i + 1
+
+    def estimate_max_epoch(self, train_data=None, dataset_id=None):
+
+        opt = self.opt
+        assert dataset_id is not None
+        assert train_data is not None
+
+        # TODO: apply early stopping
+        self.print("[INFO] Estimating the number of epochs automatically  ...", flush=True)
+
+        # this function is called at the end of training
+        _dataset = train_data[dataset_id]
+        # assert is_list(dataset)
+
+        # we have to use world size 1 here
+        data_iterator = generate_data_iterator(_dataset, 0, 1,
+                                               seed=self.opt.seed, num_workers=opt.num_workers,
+                                               epoch=0, buffer_size=opt.buffer_size, split_even=False,
+                                               dataset_ids=None)
+
+        streaming = False
+        epoch_iterator = data_iterator.next_epoch_itr(not streaming, pin_memory=opt.pin_memory)
+
+        n_minibatches = len(data_iterator)
+
+        max_epoch = math.floor(opt.max_examples_seen / n_minibatches)
+
+        return max_epoch
+
+        # while not data_iterator.end_of_epoch():
+        #     samples = next(epoch_iterator)
+        #
+        #     # add the samples to the reservoir ....
+        #     prepare_sample(samples, device=self.device, dataset_id=dataset_id,
+        #                    reservoir=self.reservoir, cuda=False)
+
 
     def average_checkpoints(self):
 
-        self.print("[INFO] Average the parameters for the current round after training ...", flush=True)
+        self.print("[INFO] Averaging the parameters for the current round after training ...", flush=True)
 
         saved_stdout, saved_stderr = sys.stdout, sys.stderr
         sys.stdout = sys.stderr = open(os.devnull, "w")
@@ -2556,9 +2612,9 @@ class OfflineCLTrainer(object):
 
         # output_file = os.path.join(path + "/" + str(dataset_id) + "/" , "model.average.pt")
         #
-        # sys.stdout, sys.stderr = saved_stdout, saved_stderr
-        #
-        # self.print("[INFO] Saving averaged model to %s" % output_file)
+        sys.stdout, sys.stderr = saved_stdout, saved_stderr
+
+        self.print("[INFO] Finished averaging model.")
         # if self.is_main():
         #     torch.save(save_checkpoint, output_file)
 
@@ -2708,9 +2764,15 @@ class OfflineCLTrainer(object):
         self.start_time = time.time()
 
         dataset_id = opt.dataset_index
+
+        if opt.max_examples_seen > 0:
+            max_epoch = self.estimate_max_epoch(train_data, dataset_id)
+            self.print('[INFO] Max epoch: %d' % max_epoch, flush=True)
+        else:
+            max_epoch = opt.epochs
         # self.print('[INFO] Training with dataset id: ', dataset_id)
 
-        for epoch in range(start_epoch, start_epoch + opt.epochs):
+        for epoch in range(start_epoch, start_epoch + max_epoch):
             self.print('')
 
             #  (1) train for one epoch on the training set
@@ -2743,6 +2805,6 @@ class OfflineCLTrainer(object):
                 value = self.model.choose_best_epoch_by
         else:
             value = 1 - valid_accuracy
-        self.save(-1, dataset_id, value)
+        self.save(-1, dataset_id, value, final=True)
 
 
