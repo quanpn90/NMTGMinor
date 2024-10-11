@@ -484,7 +484,7 @@ class OfflineCLTrainer(object):
 
         # TODO: add option for reservoir size
 
-        reservoir_size = opt.reservoir_size // self.world_size
+        reservoir_size = opt.reservoir_size
         if reservoir_size > 0:
             self.reservoir = Reservoir(max_samples=reservoir_size,
                                        update_method="reservoir_sampling",
@@ -494,6 +494,20 @@ class OfflineCLTrainer(object):
                 reservoir_data = checkpoint['reservoir']
                 self.reservoir.load_state_dict(reservoir_data)
                 self.print("[INFO] Load reservoir data from checkpoint")
+
+                total = len(self.reservoir.data)
+                self.print(len(self.reservoir.data))
+
+                self.print("[INFO] Memory Statistics")
+                for _d in self.reservoir.stats:
+
+                    n_samples = len(self.reservoir.stats[_d])
+                    prob = n_samples / total
+                    self.print("Dataset ", _d, ":", n_samples,
+                               "samples", f"{prob:.0%}")
+                    self.print("")
+
+
         else:
             self.reservoir = None
 
@@ -1322,24 +1336,8 @@ class OfflineCLTrainer(object):
             value = 1 - valid_accuracy
         self.save(epoch, dataset_id, value)
 
-        total_per_dataset = self.reservoir.get_stats()
-
-        # some stupid code to grab the memory statistics
-        n_dataset = len(train_data)
-        _tensor = torch.zeros((n_dataset, )).cuda()
-        for _dataset_id in total_per_dataset:
-            _tensor[_dataset_id] = total_per_dataset[_dataset_id]
-
-        if self.world_size > 1:
-            self.all_reduce(_tensor, op=dist.ReduceOp.SUM, group=self.group)
-
-        self.print("Memory statistics:")
-        _sum = torch.sum(_tensor).item()
-        for did in total_per_dataset:
-            prob = _tensor[did].item() / _sum
-            self.print("Dataset ", did, _tensor[did].item(),
-                       "samples", f"{prob:.0%}")
-            self.print("")
+        # note: in offline learning we know the dataset boundaries so
+        # we add samples at the end of learning each dataset
 
         return total_loss / total_words
 

@@ -35,12 +35,32 @@ class Reservoir:
 
         return state_dict
 
+    def get_stats_per_dataset(self):
+
+        print(len(self.data))
+        for j in self.data:
+
+            sample = self.data[j]
+            if self.unit in ['batch', 'minibatch']:
+                dataset_id, index = sample
+            else:
+                dataset_id, index, _, _ = sample
+
+            if dataset_id not in self.stats:
+                self.stats[dataset_id] = list()
+
+            self.stats[dataset_id].append(index)
+            # print(dataset_id, index, len(self.stats[dataset_id]))
+
+
     def load_state_dict(self, state_dict):
 
         self.data = state_dict['data']
         self.num_observed = state_dict['num_observed']
         self.unit = state_dict['unit']
         self.update_method = state_dict['update_method']
+
+        self.get_stats_per_dataset()
 
     # note: samples here are measured by minibatches
     def __init__(self, max_samples=40000, update_method="reservoir_sampling",
@@ -65,6 +85,7 @@ class Reservoir:
         self.batch_size_frames = batch_size_frames
         self.batch_size_words = batch_size_words
         self.batch_size_sents = batch_size_sents
+        self.stats = dict()
 
     # def add_sample(self, sample):
     def add_sample(self, batch, recurring=False):

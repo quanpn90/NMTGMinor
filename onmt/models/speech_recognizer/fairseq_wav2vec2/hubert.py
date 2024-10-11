@@ -47,7 +47,7 @@ MASKING_DISTRIBUTION_CHOICES = ChoiceEnum(["static", "uniform", "normal", "poiss
 
 
 # @register_model("hubert", dataclass=HubertConfig)
-class HubertModel(torch.nn.Module):
+class HubertModel(torch.nn.Module):n
     def __init__(
             self,
             cfg: HubertConfig,
