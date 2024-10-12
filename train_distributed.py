@@ -86,6 +86,9 @@ def run_process(gpu, train_data, valid_data, dicts, opt, checkpoint, constants):
         elif opt.vat_training > 0:
             from onmt.train_utils.vat_trainer import VAT_OCLTrainer
             trainer = VAT_OCLTrainer(gpu, dicts, opt, constants)
+        elif opt.meta_learning:
+            from onmt.train_utils.meta_trainer import MetaOCLTrainer
+            trainer = MetaOCLTrainer(gpu, dicts, opt, constants)
         else:
             from onmt.train_utils.ocl_trainer import OCLTrainer
             trainer = OCLTrainer(gpu, dicts, opt, constants)

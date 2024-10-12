@@ -21,9 +21,11 @@ def make_parser(parser):
     parser.add_argument('-agem_training', action='store_true',
                         help='Averaged Gradient Episodic Memory training. Only effect with ocl_training')
     parser.add_argument('-agem_summation', action='store_true',
-                        help='Averaged Gradient Episodic Memory training. Only effect with ocl_training')
+                        help='When the previous gradient does not conflict with the current one, sum them up.')
     parser.add_argument('-ocl_training', action='store_true',
                         help='Online Continual Learning training')
+    parser.add_argument('-meta_learning', action='store_true',
+                        help='Using meta learning approach (for either online or offline training)')
     parser.add_argument('-offline_cl_training', action='store_true',
                         help='Online Continual Learning training')
     parser.add_argument('-dataset_index', type=int, default=0,

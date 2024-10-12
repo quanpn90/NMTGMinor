@@ -175,7 +175,7 @@ def all_reduce_and_rescale_tensors(tensors, rescale_denom=1,
             all_reduce_buffer()
 
 
-class OCLTrainer(object):
+class MetaOCLTrainer(object):
 
     def __init__(self, device, dicts, opt, constants=None, setup_optimizer=True):
         """
@@ -200,7 +200,7 @@ class OCLTrainer(object):
         # make a group to later use with self.all_reduce
         self.group = dist.group.WORLD
 
-        self.print("[INFO] Training Options:", opt)
+        self.print("[INFO] Meta Training Options:", opt)
         if self.world_size > 1:
             dist.init_process_group(backend='nccl', init_method='env://', world_size=self.world_size, rank=self.rank)
 
@@ -302,6 +302,7 @@ class OCLTrainer(object):
         if self.cuda:
             self.loss_function = self.loss_function.cuda(device=self.device)
             self.model = self.model.cuda(device=self.device)
+            self.proto_model = self.proto_model.cuda(device=self.device)
             if opt.ctc_loss > 0.0:
                 self.ctc_loss_function = self.ctc_loss_function.cuda(device=self.device)
 
@@ -705,19 +706,32 @@ class OCLTrainer(object):
         ref_param = self.optim.flattened_params
         proto_param = self.inner_optim.flattened_params
 
+        ref_param.grad.data.zero_()
 
+        # the reptile gradient is the difference between the proto parameter and the ref param
+        # notice the sign: we treat (\phi - \phi_update) as a gradient and use gradient descent
+        ref_param.grad.data.sub_(proto_param.data).add_(ref_param.data)
 
         return
 
+    def sync_proto_model(self):
+
+        # synchronize the proto model with the main model
+        ref_param = self.optim.flattened_params
+        proto_param = self.inner_optim.flattened_params
+
+        proto_param.data.copy_(ref_param.data)
+        return
 
     def train_epoch(self, train_data, valid_data, epoch, resume=False, itr_progress=None):
 
+        self.sync_proto_model()
         opt = self.opt
         streaming = False
         grad_norm = -1
 
         # Clear the gradients of the model
-        self.optim.zero_grad(set_to_none=not opt.true_zero_grad)
+        self.optim.zero_grad(set_to_none=False)
         # self.model.module.reset_states()
 
         # note: for Training split_even=True
@@ -818,7 +832,7 @@ class OCLTrainer(object):
 
             while not (_data_iterator.end_of_epoch() and not rehearse) :
 
-                self.inner_optim.zero_grad(set_to_none=opt.true_zero_grad)
+                self.inner_optim.zero_grad(set_to_none=False)
 
                 if not rehearse or opt.reservoir_size <= 0:
 
@@ -967,29 +981,12 @@ class OCLTrainer(object):
                     # accumulated gradient case, in this case the update frequency
                     self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
 
-                    grad_denom = 1.0
-
-                    if self.grad_scaler is not None:
-                        self.grad_scaler.unscale_(self.optim.optimizer)
-
-                    if self.opt.normalize_gradient:
-                        grad_denom = num_accumulated_words.item() * grad_denom
-                    else:
-                        grad_denom = 1
+                    self.compute_meta_gradient()
 
                     params = self.optim.get_params()
-                    # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
-                    if grad_denom != 1 and not self.opt.fsdp:
-                        normalize_gradients(params, grad_denom)
+                    grad_norm = clip_grad_norm(params, self.opt.max_grad_norm)
 
-                    # Update the pagrameters.
-                    if self.opt.fsdp:
-                        if self.opt.max_grad_norm > 0:
-                            grad_norm = self.model.clip_grad_norm_(self.opt.max_grad_norm)
-                        else:
-                            grad_norm = -1
-                    else:
-                        grad_norm = clip_grad_norm(params, self.opt.max_grad_norm)
+                    self.optim.step()
 
                     if ewc_importance > 0:
                         ewc_penalty = 0
@@ -1014,14 +1011,9 @@ class OCLTrainer(object):
                                 report_ewc_loss.add_(ewc_loss)
                                 report_ewc_count += 1
 
-                    # if self.grad_scaler is not None:
-                    #     self.optim.step(scaler=self.grad_scaler)
-                    #     self.grad_scaler.update()
-                    # else:
-                    #     self.optim.step(scaler=None)
-                    self.compute_meta_gradient()
+                    self.sync_proto_model()
 
-                    self.optim.zero_grad(set_to_none=True if self.opt.fsdp else not opt.true_zero_grad)
+                    self.optim.zero_grad(set_to_none=False)
                     counter = 0
                     num_accumulated_words.zero_()
                     num_accumulated_sents.zero_()
@@ -1132,16 +1124,6 @@ class OCLTrainer(object):
                             except ZeroDivisionError:
                                 _ewc_loss =  float('nan')
                             log_string += (" ewcloss: %8.8f ; " % _ewc_loss)
-
-                        if opt.predict_language > 0:
-                            try:
-                                _enc_lid_loss = report_enc_lid_loss.item() / report_enc_lid_count
-                                _dec_lid_loss = report_dec_lid_loss.item() / report_dec_lid_count
-                            except ZeroDivisionError:
-                                _enc_lid_loss =  float('nan')
-                                _dec_lid_loss = float('nan')
-                            log_string += (" enc_lidloss: %8.8f ; " % _enc_lid_loss)
-                            log_string += (" dec_lidloss: %8.8f ; " % _dec_lid_loss)
 
                         log_string += ("lr: %.7f ; updates: %7d; " %
                                        (self.optim.get_learning_rate(),
