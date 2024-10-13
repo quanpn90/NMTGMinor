@@ -491,21 +491,22 @@ class OfflineCLTrainer(object):
                                        unit="sample")
 
             if opt.load_from.endswith("final.pt"):
-                reservoir_data = checkpoint['reservoir']
-                self.reservoir.load_state_dict(reservoir_data)
-                self.print("[INFO] Load reservoir data from checkpoint")
+                reservoir_data = checkpoint['reservoir'] if 'reservoir' in checkpoint else None
+                if self.reservoir is not None and reservoir_data is not None:
+                    self.reservoir.load_state_dict(reservoir_data)
+                    self.print("[INFO] Load reservoir data from checkpoint")
 
-                total = len(self.reservoir.data)
-                self.print(len(self.reservoir.data))
+                    total = len(self.reservoir.data)
+                    self.print(len(self.reservoir.data))
 
-                self.print("[INFO] Memory Statistics")
-                for _d in self.reservoir.stats:
+                    self.print("[INFO] Memory Statistics")
+                    for _d in self.reservoir.stats:
 
-                    n_samples = len(self.reservoir.stats[_d])
-                    prob = n_samples / total
-                    self.print("Dataset ", _d, ":", n_samples,
-                               "samples", f"{prob:.0%}")
-                    self.print("")
+                        n_samples = len(self.reservoir.stats[_d])
+                        prob = n_samples / total
+                        self.print("Dataset ", _d, ":", n_samples,
+                                   "samples", f"{prob:.0%}")
+                        self.print("")
 
 
         else:
@@ -646,7 +647,7 @@ class OfflineCLTrainer(object):
             'itr': itr_state_dict,
             'optim': optim_state_dict,
             'scaler': self.grad_scaler.state_dict() if self.grad_scaler is not None else None,
-            'reservoir': self.reservoir.state_dict()
+            'reservoir': self.reservoir.state_dict() if self.reservoir is not None else None
         }
 
         save_path = os.path.dirname(opt.save_model)
