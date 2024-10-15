@@ -1420,28 +1420,22 @@ class OfflineCLTrainer(object):
         grad_norm = -1
 
         # Clear the gradients of the model
-        self.optim.zero_grad(set_to_none=not opt.true_zero_grad)
-        self.mem_optim.zero_grad(set_to_none=not opt.true_zero_grad)
+        self.optim.zero_grad(set_to_none=False)
+        self.mem_optim.zero_grad(set_to_none=False)
 
         # note: for Training split_even=True
         dataset = train_data
 
         assert is_list(dataset)
 
-        data_iterators = list()
+        _dataset = dataset[dataset_id]
 
-        for _dataset in dataset:
-            data_iterator = generate_data_iterator(_dataset, self.rank, self.world_size,
-                                                   seed=self.opt.seed, num_workers=opt.num_workers,
-                                                   epoch=epoch, buffer_size=opt.buffer_size, split_even=True,
-                                                   dataset_ids=None)
+        data_iterator = generate_data_iterator(_dataset, self.rank, self.world_size,
+                                               seed=self.opt.seed, num_workers=opt.num_workers,
+                                               epoch=epoch, buffer_size=opt.buffer_size, split_even=True,
+                                               dataset_ids=None)
 
-            data_iterators.append(data_iterator)
-
-        epoch_iterators = list()
-
-        for _data_iterator in data_iterators:
-            epoch_iterators.append(_data_iterator.next_epoch_itr(not streaming, pin_memory=opt.pin_memory))
+        epoch_iterator = data_iterator.next_epoch_itr(not streaming, pin_memory=opt.pin_memory)
 
         total_tokens, total_loss, total_words = zero_tensor(), zero_tensor(), zero_tensor()
         total_non_pads = zero_tensor()
@@ -1485,530 +1479,466 @@ class OfflineCLTrainer(object):
                 if n in self.fisher_info['mean'] and p.requires_grad:
                     parameters[n] = p
 
-        assert len(data_iterators) == len(epoch_iterators)
-        assert len(data_iterators) == len(train_data)
+        _data_iterator = data_iterator
+        _epoch_iterator = epoch_iterator
 
-        for dataset_id, (_data_iterator, _epoch_iterator) in enumerate(zip(data_iterators, epoch_iterators)):
+        # maybe clean up everything from the last round?
+        gc.collect()
 
-            # maybe clean up everything from the last round?
-            gc.collect()
+        n_samples = len(_data_iterator) * 2 - 1 if (dataset_id > 0) else len(_data_iterator)
+        i = _data_iterator.iterations_in_epoch
+        i = i * self.world_size
+        self.print("Training AGEM Round (dataset) %d - Epoch %d" % (dataset_id, epoch))
 
-            n_samples = len(_data_iterator) * 2 - 1 if (epoch > 1 or dataset_id > 0) else len(_data_iterator)
-            i = _data_iterator.iterations_in_epoch
-            i = i * self.world_size
-            self.print("Training Epoch %d with AGEM - Round (dataset) %d" % (epoch, dataset_id))
+        rehearse = False
 
-            rehearse = False
+        # because after 1 real sample -> 1 memory sample
+        update_frequency = 2 * opt.update_frequency if dataset_id > 0 else opt.update_frequency
 
-            # because after 1 real sample -> 1 memory sample
-            update_frequency = 2 * opt.update_frequency
+        # stop_condition = (_data_iterator.end_of_epoch() and not rehearse)
+        while not  (_data_iterator.end_of_epoch() and not rehearse):
 
-            # stop_condition = (_data_iterator.end_of_epoch() and not rehearse)
-            while not  (_data_iterator.end_of_epoch() and not rehearse):
+            if not rehearse or opt.reservoir_size <= 0:
+                samples = next(_epoch_iterator)
 
-                if not rehearse or opt.reservoir_size <= 0:
-                    samples = next(_epoch_iterator)
+                # don't add samples to reservoir
+                batch = prepare_sample(samples, device=self.device)
 
-                    # sample is also added to the reservoir here
-                    batch = prepare_sample(samples, device=self.device, dataset_id=dataset_id,
-                                           reservoir=self.reservoir)
+                rehearse = False
+                rehearsing = False
 
-                    rehearse = False
-                    rehearsing = False
+                if self.reservoir is not None and dataset_id > 0:
+                    rehearse = True  # so that the next one is to rehearse
+            else:
+                # print("rehearsing from memory....", flush=True)
+                rehearsed_dataset_ids, rehearsed_indices = self.reservoir.sample()
+                # samples = train_data[rehearsed_dataset_id].get_batch_from_indices(rehearsed_indices)
+                samples = get_batch_from_multidataset(train_data, rehearsed_dataset_ids, rehearsed_indices)
 
-                    # if (epoch > 1 or dataset_id > 0) and self.reservoir is not None:
-                    if self.reservoir is not None:
-                        # we start to rehearse immediately
-                        rehearse = True  # so that the next one is to rehearse
-                else:
-                    # print("rehearsing from memory....", flush=True)
-                    rehearsed_dataset_ids, rehearsed_indices = self.reservoir.sample()
-                    # samples = train_data[rehearsed_dataset_id].get_batch_from_indices(rehearsed_indices)
-                    samples = get_batch_from_multidataset(train_data, rehearsed_dataset_ids, rehearsed_indices)
+                batch = prepare_sample(samples, device=self.device)
 
-                    batch = prepare_sample(samples, device=self.device)
+                rehearsing = True
+                rehearse = False
 
-                    rehearsing = True
-                    rehearse = False
+            targets = batch.get('target_output')
 
-                targets = batch.get('target_output')
+            # TODO: dealing with oom during distributed training
+            oom = zero_tensor()
+            counter = counter + 1
+            reduce = True if counter >= (update_frequency - 1) else False
 
-                # TODO: dealing with oom during distributed training
-                oom = zero_tensor()
-                counter = counter + 1
-                reduce = True if counter >= (update_frequency - 1) else False
+            current_model = self.model if not rehearsing else self.mem_model
+            grad_scaler = self.grad_scaler if not rehearsing else self.mem_grad_scaler
 
-                current_model = self.model if not rehearsing else self.mem_model
-                grad_scaler = self.grad_scaler if not rehearsing else self.mem_grad_scaler
-
-                try:
-                    def maybe_no_sync():
-                        if not reduce and (isinstance(current_model, DDP_model) or isinstance(current_model, FSDP)):
-                            return current_model.no_sync()
-                        else:
-                            # when we dont reach the updating step, we do not need to synchronize the gradients
-                            # thus disabling the backward grad sync to improve speed
-                            return contextlib.ExitStack()  # dummy contextmanager
-
-                    with maybe_no_sync():
-
-                        # self.print(counter, "rehearsing:", rehearsing, "syncing:", reduce, flush=True)
-
-                        with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
-
-                            tgt_mask = targets.ne(onmt.constants.PAD)
-                            outputs = current_model( batch, streaming=False, target_mask=tgt_mask,
-                                                     zero_encoder=opt.zero_encoder,
-                                                     mirror=opt.mirror_loss > 0.0,
-                                                     adv_ptb_grad=False,
-                                                     checkpointing_ffn=opt.checkpointing_ffn,
-                                                     checkpointing_cross_attn=opt.checkpointing_cross_attn,
-                                                     checkpointing_self_attn=opt.checkpointing_self_attn,
-                                                     ctc_loss_function=self.ctc_loss_function,
-                                                     ctc_labels=targets,
-                                                     grad_scaler=self.grad_scaler,
-                                                     ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
-                                                     transducer_loss_function=self.transducer_loss_function,
-                                                     transducer_coeff=opt.transducer_loss
-                                                 )
-
-                            batch_size = batch.size
-                            # outputs is a dictionary containing keys/values necessary for loss function
-                            # can be flexibly controlled within models for easier extensibility
-                            outputs['tgt_mask'] = tgt_mask
-
-                            ctc_only = False
-                            if outputs["hidden"] != None:
-                                loss_dict = self.loss_function(outputs, targets, model=self.model)
-                                loss_data = loss_dict['data']
-                                loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
-                                full_loss = loss
-                            else:
-                                ctc_only = True
-                                loss_data = 0
-                                loss = None
-                                full_loss = 0
-
-                            if opt.ctc_loss > 0.0:
-                                ctc_loss = outputs['ctc_loss']
-                                n_ctc_targets = outputs['n_ctc_targets']
-                                # TODO: add CTC loss to models
-                                ctc_loss_data = ctc_loss.item()
-                                full_loss = full_loss + opt.ctc_loss * ctc_loss
-                            else:
-                                n_ctc_targets = 0
-                                ctc_loss_data = 0
-
-                            if opt.transducer_loss > 0.0:
-                                transducer_loss = outputs['transducer_loss']
-                                n_transducer_targets = outputs['transducer_numel']
-                                # TODO: add CTC loss to models
-                                transducer_loss_data = transducer_loss.item()
-                                full_loss = full_loss + opt.transducer_loss * transducer_loss
-                            else:
-                                n_transducer_targets = 0
-                                transducer_loss_data = 0
-
-                            if opt.mirror_loss:
-                                rev_loss = loss_dict['rev_loss']
-                                rev_loss_data = loss_dict['rev_loss_data']
-                                mirror_loss = loss_dict['mirror_loss']
-                                full_loss = full_loss + rev_loss + mirror_loss
-                                mirror_loss_data = loss_dict['mirror_loss'].item()
-                            else:
-                                rev_loss_data = None
-                                mirror_loss_data = 0
-
-                            if opt.predict_language > 0:
-                                enc_pred_lang = outputs['enc_pred_lang']
-                                enc_mask = outputs['src_mask']
-                                enc_lid_loss = self.lid_loss_function(enc_pred_lang,
-                                                                      batch.get("source_lang"), enc_mask)
-
-                                dec_pred_lang = outputs['dec_pred_lang']
-                                # dec_mask = outputs['target_mask']
-                                # dec_mask = targets.eq(onmt.constants.PAD)
-                                dec_mask = batch.get('target_input_selfattn_mask')
-                                dec_lid_loss = self.lid_loss_function(dec_pred_lang,
-                                                                      batch.get("target_lang"), dec_mask)
-
-                                full_loss = full_loss + 0.01 * (enc_lid_loss + dec_lid_loss)
-
-                                report_enc_lid_loss.add_(enc_lid_loss.item())
-                                report_enc_lid_count += enc_mask.ne(1).int().sum().item()
-
-                                report_dec_lid_loss.add_(dec_lid_loss.item())
-                                report_dec_lid_count += dec_mask.ne(1).int().sum().item()
-
-                            else:
-                                enc_lid_loss = None
-                                enc_lid_loss_data = None
-                                dec_lid_loss = None
-                                dec_lid_loss_data = None
-
-                            # reconstruction loss
-                            if opt.reconstruct:
-                                rec_loss = loss_dict['rec_loss']
-                                rec_loss = rec_loss
-                                full_loss = full_loss + rec_loss
-                                rec_loss_data = loss_dict['rec_loss_data']
-                            else:
-                                rec_loss_data = None
-
-                            if hasattr(opt, "use_memory") and opt.use_memory and "loss_memory" in outputs:
-                                loss_memory = outputs['loss_memory']
-                                # full_loss = full_loss + loss_memory
-                                full_loss = loss_memory
-
-                            if opt.contrastive_loss_coeff > 0 and 'contrastive_loss' in outputs:
-                                contrastive_loss = outputs['contrastive_loss']
-                                full_loss = full_loss + opt.contrastive_loss_coeff * contrastive_loss
-                                report_contrastive_loss.add_(contrastive_loss.item())
-
-                            # correct, total = loss_dict['correct'], loss_dict['total']
-                            # optimizer = self.optim.optimizer
-
-                        # TODO for adversarial:
-                        # grad_list = [p for p in self.model.parameters() if p.requires_grad]
-                        # if opt.virtual_adversarial_training_mode > 0:
-                        #     # if we use virtual adversarial training: add the input to the list of gradient to take
-                        #     model_input = outputs['source']
-                        #     vanilla_logits = outputs['logprobs']
-                        #     grad_list += [model_input]
-                        # else:
-                        #     model_input = None
-                        #     vanilla_logits = None
-
-                        # grad scaler has to be done outside of the autocast
-                        if self.grad_scaler is not None:
-                            grad_scaler.scale(full_loss).backward()
-                        else:
-                            full_loss.backward()
-
-                        # EWC training: no need for autograd here?
-                        if self.optim._step % opt.ewc_decay_every == 0:
-                            ewc_importance = ewc_importance / opt.ewc_decay_scale
-
-                        # only run this ewc everytime we reduce
-
-                except RuntimeError as e:
-                    if 'out of memory' in str(e):
-                        print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
-                        print('Input size at OOM position:',
-                              batch.get('source').size() if batch.get('source') is not None else None,
-                              batch.get('target').size() if batch.get('target') is not None else None)
-
-                        # continue
-                        raise e
-                        # recovering mechanism doesn't work at the moment
-                        # loss = 0
-                        # for p in self.model.parameters():
-                        #     if p.grad is not None:
-                        #         del p.grad  # free some memory
-                        #     loss = loss + p.sum() * 0
-
-                        # torch.cuda.empty_cache()
-                        #
-                        # if opt.streaming:  # reset stream in this case ...
-                        #     streaming_state = self.model.init_stream()
-                        #
-                        #
-                        # # backward to actually free the graph
-                        # # self.grad_scaler.scale(loss).backward()
-                        # oom.add_(1)
-
-                    raise e
-
-                # connecting the oom signal from different gpus
-                # self.all_reduce(oom, op=dist.ReduceOp.SUM, group=self.group)
-                # # if OOM: all gpus reset grad and reset counter
-                # # or maybe all-reduce grad?
-                # if oom.item() > 0:
-                #     # reset counter
-                #     self.model.zero_grad()
-                #     self.optim.zero_grad()
-                #     counter = 0
-                #     oom.zero_()
-
-                batch_size = batch.size
-
-                src_size = batch.src_size
-                tgt_size = batch.tgt_size
-                num_accumulated_words.add_(tgt_size)
-                num_accumulated_sents.add_(batch_size)
-
-                # We only update the parameters after getting gradients from n mini-batches
-                update_flag = counter >= update_frequency
-
-                if update_flag:
-                    # accumulated gradient case, in this case the update frequency
-                    self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
-
-                    grad_denom = 1.0
-
-                    if self.grad_scaler is not None:
-                        self.grad_scaler.unscale_(self.optim.optimizer)
-                        self.mem_grad_scaler.unscale_(self.mem_optim.optimizer)
-
-                    clash = self.compute_gradient_agem(summation=opt.agem_summation)
-                    if clash: report_clash += 1
-
-                    if self.opt.normalize_gradient:
-                        grad_denom = num_accumulated_words.item() * grad_denom
+            try:
+                def maybe_no_sync():
+                    if not reduce and (isinstance(current_model, DDP_model) or isinstance(current_model, FSDP)):
+                        return current_model.no_sync()
                     else:
-                        grad_denom = 1
+                        # when we dont reach the updating step, we do not need to synchronize the gradients
+                        # thus disabling the backward grad sync to improve speed
+                        return contextlib.ExitStack()  # dummy contextmanager
 
-                    params = self.optim.get_params()
-                    # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
-                    if grad_denom != 1 and not self.opt.fsdp:
-                        normalize_gradients(params, grad_denom)
+                with maybe_no_sync():
 
-                    # Update the pagrameters.
-                    if self.opt.fsdp:
-                        if self.opt.max_grad_norm > 0:
+                    # self.print(counter, "rehearsing:", rehearsing, "syncing:", reduce, flush=True)
 
-                            grad_norm = self.model.clip_grad_norm_(self.opt.max_grad_norm)
+                    with autocast(enabled=opt.fp16, dtype=torch.bfloat16 if self.bf16_ready else torch.float16):
+
+                        tgt_mask = targets.ne(onmt.constants.PAD)
+                        outputs = current_model( batch, streaming=False, target_mask=tgt_mask,
+                                                 zero_encoder=opt.zero_encoder,
+                                                 mirror=opt.mirror_loss > 0.0,
+                                                 adv_ptb_grad=False,
+                                                 checkpointing_ffn=opt.checkpointing_ffn,
+                                                 checkpointing_cross_attn=opt.checkpointing_cross_attn,
+                                                 checkpointing_self_attn=opt.checkpointing_self_attn,
+                                                 ctc_loss_function=self.ctc_loss_function,
+                                                 ctc_labels=targets,
+                                                 grad_scaler=self.grad_scaler,
+                                                 ctc_coeff=opt.ctc_loss if self.optim._step > opt.ctc_loss_delay else 0.0,
+                                                 transducer_loss_function=self.transducer_loss_function,
+                                                 transducer_coeff=opt.transducer_loss
+                                             )
+
+                        batch_size = batch.size
+                        # outputs is a dictionary containing keys/values necessary for loss function
+                        # can be flexibly controlled within models for easier extensibility
+                        outputs['tgt_mask'] = tgt_mask
+
+                        ctc_only = False
+                        if outputs["hidden"] != None:
+                            loss_dict = self.loss_function(outputs, targets, model=self.model)
+                            loss_data = loss_dict['data']
+                            loss = loss_dict['loss']  # a little trick to avoid gradient overflow with fp16
+                            full_loss = loss
                         else:
-                            grad_norm = -1
-                    else:
-                        grad_norm = clip_grad_norm(params, self.opt.max_grad_norm)
-                        # _ = clip_grad_norm(self.mem_model.parameters(), self.opt.max_grad_norm)
-
-                    if ewc_importance > 0:
-                        ewc_penalty = 0
-
-                        if self.optim._step >= opt.ewc_delay:
-                            # if at the moment weights/gradients/mean and fisher_diag are all the same and unscaled
-                            # then we don't need to synchronize the gradients
-                            with self.model.no_sync():
-                                for n, p in self.model.named_parameters():
-                                    if isinstance(self.model, DDP_model):
-                                        n = n[len("module."):]
-                                    if n in self.fisher_info['mean']:
-                                        penalty = self.fisher_info['fisher_diag'][n] * \
-                                                  torch.square(p - self.fisher_info['mean'][n].data)
-
-                                        ewc_penalty = ewc_penalty + penalty.sum()
-
-                                loss = ewc_penalty * ewc_importance
-                                ewc_loss = ewc_penalty.item()
-                                # accumulate the gradients from EWC loss
-                                loss.backward()
-                                report_ewc_loss.add_(ewc_loss)
-                                report_ewc_count += 1
-
-
-                    if self.grad_scaler is not None:
-                        self.optim.step(scaler=self.grad_scaler)
-                        self.grad_scaler.update()
-
-                        # self.mem_optim.step(scaler=self.grad_scaler)
-                        self.mem_grad_scaler.update()
-                    else:
-                        self.optim.step(scaler=None)
-
-                    # syncrhonize between 2 models
-                    self.mem_model.load_state_dict(self.model.state_dict())
-
-                    self.optim.zero_grad(set_to_none=True if self.opt.fsdp else not opt.true_zero_grad)
-                    self.mem_optim.zero_grad(set_to_none=True if self.opt.fsdp else not opt.true_zero_grad)
-                    counter = 0
-                    num_accumulated_words.zero_()
-                    num_accumulated_sents.zero_()
-
-                    num_updates = self.optim._step
-                    if (opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every) \
-                            or (num_updates >= opt.max_step):
-                        torch.cuda.synchronize()
-                        valid_loss, valid_accuracy = self.eval(valid_data, dataset_id)
-                        valid_ppl = math.exp(min(valid_loss, 100))
-
-                        self.print('Validation perplexity: %g' % valid_ppl)
-                        self.print('Validation accuracy: %g percent' % (100 * valid_accuracy))
-                        ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
-                        if opt.save_metrics in ['ppl', 'perplexity']:
-                            value = valid_ppl
-                        elif opt.save_metrics == "memory":
-                            if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
-                                value = self.model.module.choose_best_epoch_by
-                            else:
-                                value = self.model.choose_best_epoch_by
-                        else:
-                            value = 1 - valid_accuracy
-                        self.save(ep, dataset_id, value,
-                                  itr=data_iterator)
-
-                        if num_updates >= opt.max_step:
-                            print('[INFO] Max-training-step reached.')
-                            exit(0)
-
-                num_words = tgt_size
-                report_loss.add_(loss_data)
-                report_tgt_words.add_(num_words)
-                report_src_words.add_(src_size)
-                total_loss.add_(loss_data)
-                total_words.add_(num_words)
-                report_sents.add_(1)
-                # total_tokens += batch.get('target_output').nelement()
-                # total_non_pads += batch.get('target_output').ne(onmt.constants.PAD).sum().item()
-                # batch_efficiency = total_non_pads / total_tokens
-
-                if opt.reconstruct:
-                    report_rec_loss.add_(rec_loss_data)
-
-                if opt.mirror_loss:
-                    report_rev_loss.add_(rev_loss_data)
-                    report_mirror_loss.add_(mirror_loss_data)
-
-                if opt.ctc_loss > 0.0:
-                    report_ctc_loss.add_(ctc_loss_data)
-                    report_ctc_targets.add_(n_ctc_targets)
-
-                if opt.transducer_loss > 0.0:
-                    report_transducer_loss.add_(transducer_loss_data)
-                    report_transducer_targets.add_(n_transducer_targets)
-
-                # control the index a little bit to ensure the log is always printed
-                if i == 0 or ((i + 1) % opt.log_interval < self.world_size) and not rehearsing:
-
-                    self.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
-                    # self.all_reduce(report_ewc_loss, op=dist.ReduceOp.SUM, group=self.group)
-                    self.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
-                    self.all_reduce(report_src_words, op=dist.ReduceOp.SUM, group=self.group)
-                    # self.all_reduce(report_sents, op=dist.ReduceOp.SUM, group=self.group)
-                    # self.all_reduce(report_contrastive_loss, op=dist.ReduceOp.SUM, group=self.group)
-                    if opt.ctc_loss > 0.0:
-                        self.all_reduce(report_ctc_loss, op=dist.ReduceOp.SUM, group=self.group)
-                        self.all_reduce(report_ctc_targets, op=dist.ReduceOp.SUM, group=self.group)
-
-                    if opt.transducer_loss > 0.0:
-                        self.all_reduce(report_transducer_loss, op=dist.ReduceOp.SUM, group=self.group)
-                        self.all_reduce(report_transducer_targets, op=dist.ReduceOp.SUM, group=self.group)
-
-                    if self.is_main():
-
-                        if ctc_only:
-                            log_string = ("Epoch %2d, Rd %d, %5d/%5d; ; grad_norm: %6.4f ; clash: %d" %
-                                          (epoch, dataset_id, i + 1, len(_data_iterator),
-                                           grad_norm, report_clash))
-                        else:
-                            log_string = ("Ep %2d, Rd %d, %5d/%5d; ; ppl: %6.2f ; grad_norm: %6.4f ; clash: %d " %
-                                          (epoch, dataset_id, i + 1, len(_data_iterator),
-                                           math.exp(report_loss.item() / report_tgt_words.item()),
-                                           grad_norm, report_clash))
-
-                        if opt.mirror_loss:
-                            self.all_reduce(report_rev_loss, op=dist.ReduceOp.SUM, group=self.group)
-                            rev_ppl = math.exp(report_rev_loss.item() / report_tgt_words.item())
-                            log_string += (" rev_ppl: %6.2f ; " % rev_ppl)
-                            log_string += (" mir_loss: %6.2f ; " % (report_mirror_loss / report_tgt_words))
+                            ctc_only = True
+                            loss_data = 0
+                            loss = None
+                            full_loss = 0
 
                         if opt.ctc_loss > 0.0:
-                            ctc_loss_string = report_ctc_loss.item() / report_ctc_targets.item()
-                            log_string += (" ctc_ppl: %5.2f ; " % math.exp(ctc_loss_string))
+                            ctc_loss = outputs['ctc_loss']
+                            n_ctc_targets = outputs['n_ctc_targets']
+                            # TODO: add CTC loss to models
+                            ctc_loss_data = ctc_loss.item()
+                            full_loss = full_loss + opt.ctc_loss * ctc_loss
+                        else:
+                            n_ctc_targets = 0
+                            ctc_loss_data = 0
 
                         if opt.transducer_loss > 0.0:
-                            transducer_loss_string = report_transducer_loss.item() / report_transducer_targets.item()
-                            log_string += (" trc_ppl: %5.2f ; " % math.exp(transducer_loss_string))
+                            transducer_loss = outputs['transducer_loss']
+                            n_transducer_targets = outputs['transducer_numel']
+                            # TODO: add CTC loss to models
+                            transducer_loss_data = transducer_loss.item()
+                            full_loss = full_loss + opt.transducer_loss * transducer_loss
+                        else:
+                            n_transducer_targets = 0
+                            transducer_loss_data = 0
 
-                        if opt.contrastive_loss_coeff > 0.0:
-                            #
-                            ctv_loss = report_contrastive_loss.item() / report_tgt_words.item()
-                            log_string += (" ctv_loss: %8.2f ; " % ctv_loss)
-
-                        if ewc_importance > 0.0:
-                            try:
-                                _ewc_loss = report_ewc_loss.item() / report_ewc_count
-                            except ZeroDivisionError:
-                                _ewc_loss = float('nan')
-                            log_string += (" ewcloss: %8.8f ; " % _ewc_loss)
+                        if opt.mirror_loss:
+                            rev_loss = loss_dict['rev_loss']
+                            rev_loss_data = loss_dict['rev_loss_data']
+                            mirror_loss = loss_dict['mirror_loss']
+                            full_loss = full_loss + rev_loss + mirror_loss
+                            mirror_loss_data = loss_dict['mirror_loss'].item()
+                        else:
+                            rev_loss_data = None
+                            mirror_loss_data = 0
 
                         if opt.predict_language > 0:
-                            try:
-                                _enc_lid_loss = report_enc_lid_loss.item() / report_enc_lid_count
-                                _dec_lid_loss = report_dec_lid_loss.item() / report_dec_lid_count
-                            except ZeroDivisionError:
-                                _enc_lid_loss = float('nan')
-                                _dec_lid_loss = float('nan')
-                            log_string += (" enc_lidloss: %8.8f ; " % _enc_lid_loss)
-                            log_string += (" dec_lidloss: %8.8f ; " % _dec_lid_loss)
+                            enc_pred_lang = outputs['enc_pred_lang']
+                            enc_mask = outputs['src_mask']
+                            enc_lid_loss = self.lid_loss_function(enc_pred_lang,
+                                                                  batch.get("source_lang"), enc_mask)
 
-                        log_string += ("lr: %.7f ; updates: %7d; " %
-                                       (self.optim.get_learning_rate(),
-                                        self.optim._step))
+                            dec_pred_lang = outputs['dec_pred_lang']
+                            # dec_mask = outputs['target_mask']
+                            # dec_mask = targets.eq(onmt.constants.PAD)
+                            dec_mask = batch.get('target_input_selfattn_mask')
+                            dec_lid_loss = self.lid_loss_function(dec_pred_lang,
+                                                                  batch.get("target_lang"), dec_mask)
 
-                        src_speed = report_src_words.item() / (time.time() - start)
-                        src_speed = human_format(src_speed)
+                            full_loss = full_loss + 0.01 * (enc_lid_loss + dec_lid_loss)
 
-                        tgt_speed = report_tgt_words.item() / (time.time() - start)
-                        tgt_speed = human_format(tgt_speed)
+                            report_enc_lid_loss.add_(enc_lid_loss.item())
+                            report_enc_lid_count += enc_mask.ne(1).int().sum().item()
 
-                        log_string += ("%s src tok/s; %s tgt tok/s; " %
-                                       (src_speed, tgt_speed))
+                            report_dec_lid_loss.add_(dec_lid_loss.item())
+                            report_dec_lid_count += dec_mask.ne(1).int().sum().item()
 
-                        log_string += ("%s" %
-                                       str(datetime.timedelta(seconds=int(time.time() - self.start_time))))
+                        else:
+                            enc_lid_loss = None
+                            enc_lid_loss_data = None
+                            dec_lid_loss = None
+                            dec_lid_loss_data = None
 
-                        self.print(log_string, flush=True)
+                        # reconstruction loss
+                        if opt.reconstruct:
+                            rec_loss = loss_dict['rec_loss']
+                            rec_loss = rec_loss
+                            full_loss = full_loss + rec_loss
+                            rec_loss_data = loss_dict['rec_loss_data']
+                        else:
+                            rec_loss_data = None
 
-                    report_loss.zero_()
-                    report_tgt_words.zero_()
-                    report_src_words.zero_()
-                    report_rec_loss.zero_()
-                    report_rev_loss.zero_()
-                    report_mirror_loss.zero_()
-                    report_ctc_loss.zero_()
-                    report_ctc_targets.zero_()
+                        if hasattr(opt, "use_memory") and opt.use_memory and "loss_memory" in outputs:
+                            loss_memory = outputs['loss_memory']
+                            # full_loss = full_loss + loss_memory
+                            full_loss = loss_memory
 
-                    report_transducer_loss.zero_()
-                    report_transducer_targets.zero_()
+                        if opt.contrastive_loss_coeff > 0 and 'contrastive_loss' in outputs:
+                            contrastive_loss = outputs['contrastive_loss']
+                            full_loss = full_loss + opt.contrastive_loss_coeff * contrastive_loss
+                            report_contrastive_loss.add_(contrastive_loss.item())
 
-                    report_ewc_loss.zero_()
-                    report_ewc_count = 0
-                    # report_sents.zero_()
-                    if report_contrastive_loss is not None:
-                        report_contrastive_loss.zero_()
-                    start = time.time()
+                        # correct, total = loss_dict['correct'], loss_dict['total']
+                        # optimizer = self.optim.optimizer
 
-                # increase i by world size
-                if not rehearsing:
-                    i = i + self.world_size
+                    # TODO for adversarial:
+                    # grad_list = [p for p in self.model.parameters() if p.requires_grad]
+                    # if opt.virtual_adversarial_training_mode > 0:
+                    #     # if we use virtual adversarial training: add the input to the list of gradient to take
+                    #     model_input = outputs['source']
+                    #     vanilla_logits = outputs['logprobs']
+                    #     grad_list += [model_input]
+                    # else:
+                    #     model_input = None
+                    #     vanilla_logits = None
 
-            # END OF ROUND -> run validation and save
-            # we run validation on all valid datasets
-            valid_loss, valid_accuracy = self.eval(valid_data, dataset_id)
-            valid_ppl = math.exp(min(valid_loss, 100))
-            self.print('[INFO] Validation perplexity: %g' % valid_ppl)
-            self.print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
-            if opt.save_metrics in ['ppl', 'perplexity']:
-                value = valid_ppl
-            elif opt.save_metrics == "memory":
-                if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
-                    value = self.model.module.choose_best_epoch_by
+                    # grad scaler has to be done outside of the autocast
+                    if self.grad_scaler is not None:
+                        grad_scaler.scale(full_loss).backward()
+                    else:
+                        full_loss.backward()
+
+                    # EWC training: no need for autograd here?
+                    if self.optim._step % opt.ewc_decay_every == 0:
+                        ewc_importance = ewc_importance / opt.ewc_decay_scale
+
+                    # only run this ewc everytime we reduce
+
+            except RuntimeError as e:
+                if 'out of memory' in str(e):
+                    print('[WARNING]: ran out of memory on GPU %d' % self.rank, flush=True)
+                    print('Input size at OOM position:',
+                          batch.get('source').size() if batch.get('source') is not None else None,
+                          batch.get('target').size() if batch.get('target') is not None else None)
+
+                raise e
+
+            batch_size = batch.size
+
+            src_size = batch.src_size
+            tgt_size = batch.tgt_size
+            num_accumulated_words.add_(tgt_size)
+            num_accumulated_sents.add_(batch_size)
+
+            # We only update the parameters after getting gradients from n mini-batches
+            update_flag = counter >= update_frequency
+
+            if update_flag:
+                # accumulated gradient case, in this case the update frequency
+                self.all_reduce(num_accumulated_words, op=dist.ReduceOp.SUM, group=self.group)
+
+                grad_denom = 1.0
+
+                if self.grad_scaler is not None:
+                    self.grad_scaler.unscale_(self.optim.optimizer)
+                    self.mem_grad_scaler.unscale_(self.mem_optim.optimizer)
+
+                clash = self.compute_gradient_agem(summation=opt.agem_summation)
+                if clash: report_clash += 1
+
+                if self.opt.normalize_gradient:
+                    grad_denom = num_accumulated_words.item() * grad_denom
                 else:
-                    value = self.model.choose_best_epoch_by
+                    grad_denom = 1
+
+                params = self.optim.get_params()
+                # When we accumulate the gradients, each gradient is already normalized by a constant grad_scaler
+                if grad_denom != 1 and not self.opt.fsdp:
+                    normalize_gradients(params, grad_denom)
+
+                # Update the pagrameters.
+                if self.opt.fsdp:
+                    if self.opt.max_grad_norm > 0:
+
+                        grad_norm = self.model.clip_grad_norm_(self.opt.max_grad_norm)
+                    else:
+                        grad_norm = -1
+                else:
+                    grad_norm = clip_grad_norm(params, self.opt.max_grad_norm)
+                    # _ = clip_grad_norm(self.mem_model.parameters(), self.opt.max_grad_norm)
+
+                if ewc_importance > 0:
+                    ewc_penalty = 0
+
+                    if self.optim._step >= opt.ewc_delay:
+                        # if at the moment weights/gradients/mean and fisher_diag are all the same and unscaled
+                        # then we don't need to synchronize the gradients
+                        with self.model.no_sync():
+                            for n, p in self.model.named_parameters():
+                                if isinstance(self.model, DDP_model):
+                                    n = n[len("module."):]
+                                if n in self.fisher_info['mean']:
+                                    penalty = self.fisher_info['fisher_diag'][n] * \
+                                              torch.square(p - self.fisher_info['mean'][n].data)
+
+                                    ewc_penalty = ewc_penalty + penalty.sum()
+
+                            loss = ewc_penalty * ewc_importance
+                            ewc_loss = ewc_penalty.item()
+                            # accumulate the gradients from EWC loss
+                            loss.backward()
+                            report_ewc_loss.add_(ewc_loss)
+                            report_ewc_count += 1
+
+
+                if self.grad_scaler is not None:
+                    self.optim.step(scaler=self.grad_scaler)
+                    self.grad_scaler.update()
+
+                    # self.mem_optim.step(scaler=self.grad_scaler)
+                    self.mem_grad_scaler.update()
+                else:
+                    self.optim.step(scaler=None)
+
+                # syncrhonize between 2 models
+                self.mem_model.load_state_dict(self.model.state_dict())
+
+                self.optim.zero_grad(set_to_none=False)
+                self.mem_optim.zero_grad(set_to_none=False)
+                counter = 0
+                num_accumulated_words.zero_()
+                num_accumulated_sents.zero_()
+
+                num_updates = self.optim._step
+                if (opt.save_every > 0 and num_updates % opt.save_every == -1 % opt.save_every) \
+                        or (num_updates >= opt.max_step):
+                    torch.cuda.synchronize()
+                    valid_loss, valid_accuracy = self.eval(valid_data, dataset_id)
+                    valid_ppl = math.exp(min(valid_loss, 100))
+
+                    self.print('Validation perplexity: %g' % valid_ppl)
+                    self.print('Validation accuracy: %g percent' % (100 * valid_accuracy))
+                    ep = float(epoch) - 1. + ((float(i) + 1.) / n_samples)
+                    if opt.save_metrics in ['ppl', 'perplexity']:
+                        value = valid_ppl
+                    elif opt.save_metrics == "memory":
+                        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                            value = self.model.module.choose_best_epoch_by
+                        else:
+                            value = self.model.choose_best_epoch_by
+                    else:
+                        value = 1 - valid_accuracy
+                    self.save(ep, dataset_id, value,
+                              itr=data_iterator)
+
+                    if num_updates >= opt.max_step:
+                        print('[INFO] Max-training-step reached.')
+                        exit(0)
+
+            num_words = tgt_size
+            report_loss.add_(loss_data)
+            report_tgt_words.add_(num_words)
+            report_src_words.add_(src_size)
+            total_loss.add_(loss_data)
+            total_words.add_(num_words)
+            report_sents.add_(1)
+            # total_tokens += batch.get('target_output').nelement()
+            # total_non_pads += batch.get('target_output').ne(onmt.constants.PAD).sum().item()
+            # batch_efficiency = total_non_pads / total_tokens
+
+            if opt.reconstruct:
+                report_rec_loss.add_(rec_loss_data)
+
+            if opt.mirror_loss:
+                report_rev_loss.add_(rev_loss_data)
+                report_mirror_loss.add_(mirror_loss_data)
+
+            if opt.ctc_loss > 0.0:
+                report_ctc_loss.add_(ctc_loss_data)
+                report_ctc_targets.add_(n_ctc_targets)
+
+            if opt.transducer_loss > 0.0:
+                report_transducer_loss.add_(transducer_loss_data)
+                report_transducer_targets.add_(n_transducer_targets)
+
+            # control the index a little bit to ensure the log is always printed
+            if i == 0 or ((i + 1) % opt.log_interval < self.world_size) and not rehearsing:
+
+                self.all_reduce(report_loss, op=dist.ReduceOp.SUM, group=self.group)
+                # self.all_reduce(report_ewc_loss, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(report_tgt_words, op=dist.ReduceOp.SUM, group=self.group)
+                self.all_reduce(report_src_words, op=dist.ReduceOp.SUM, group=self.group)
+                # self.all_reduce(report_sents, op=dist.ReduceOp.SUM, group=self.group)
+                # self.all_reduce(report_contrastive_loss, op=dist.ReduceOp.SUM, group=self.group)
+                if opt.ctc_loss > 0.0:
+                    self.all_reduce(report_ctc_loss, op=dist.ReduceOp.SUM, group=self.group)
+                    self.all_reduce(report_ctc_targets, op=dist.ReduceOp.SUM, group=self.group)
+
+                if opt.transducer_loss > 0.0:
+                    self.all_reduce(report_transducer_loss, op=dist.ReduceOp.SUM, group=self.group)
+                    self.all_reduce(report_transducer_targets, op=dist.ReduceOp.SUM, group=self.group)
+
+                if self.is_main():
+
+                    if ctc_only:
+                        log_string = ("Epoch %2d, Rd %d, %5d/%5d; ; grad_norm: %6.4f ; clash: %d" %
+                                      (epoch, dataset_id, i + 1, len(_data_iterator),
+                                       grad_norm, report_clash))
+                    else:
+                        log_string = ("Ep %2d, Rd %d, %5d/%5d; ; ppl: %6.2f ; grad_norm: %6.4f ; clash: %d " %
+                                      (epoch, dataset_id, i + 1, len(_data_iterator),
+                                       math.exp(report_loss.item() / report_tgt_words.item()),
+                                       grad_norm, report_clash))
+
+                    if opt.mirror_loss:
+                        self.all_reduce(report_rev_loss, op=dist.ReduceOp.SUM, group=self.group)
+                        rev_ppl = math.exp(report_rev_loss.item() / report_tgt_words.item())
+                        log_string += (" rev_ppl: %6.2f ; " % rev_ppl)
+                        log_string += (" mir_loss: %6.2f ; " % (report_mirror_loss / report_tgt_words))
+
+                    if opt.ctc_loss > 0.0:
+                        ctc_loss_string = report_ctc_loss.item() / report_ctc_targets.item()
+                        log_string += (" ctc_ppl: %5.2f ; " % math.exp(ctc_loss_string))
+
+                    if opt.transducer_loss > 0.0:
+                        transducer_loss_string = report_transducer_loss.item() / report_transducer_targets.item()
+                        log_string += (" trc_ppl: %5.2f ; " % math.exp(transducer_loss_string))
+
+                    if opt.contrastive_loss_coeff > 0.0:
+                        #
+                        ctv_loss = report_contrastive_loss.item() / report_tgt_words.item()
+                        log_string += (" ctv_loss: %8.2f ; " % ctv_loss)
+
+                    if ewc_importance > 0.0:
+                        try:
+                            _ewc_loss = report_ewc_loss.item() / report_ewc_count
+                        except ZeroDivisionError:
+                            _ewc_loss = float('nan')
+                        log_string += (" ewcloss: %8.8f ; " % _ewc_loss)
+
+                    log_string += ("lr: %.7f ; updates: %7d; " %
+                                   (self.optim.get_learning_rate(),
+                                    self.optim._step))
+
+                    src_speed = report_src_words.item() / (time.time() - start)
+                    src_speed = human_format(src_speed)
+
+                    tgt_speed = report_tgt_words.item() / (time.time() - start)
+                    tgt_speed = human_format(tgt_speed)
+
+                    log_string += ("%s src tok/s; %s tgt tok/s; " %
+                                   (src_speed, tgt_speed))
+
+                    log_string += ("%s" %
+                                   str(datetime.timedelta(seconds=int(time.time() - self.start_time))))
+
+                    self.print(log_string, flush=True)
+
+                report_loss.zero_()
+                report_tgt_words.zero_()
+                report_src_words.zero_()
+                report_rec_loss.zero_()
+                report_rev_loss.zero_()
+                report_mirror_loss.zero_()
+                report_ctc_loss.zero_()
+                report_ctc_targets.zero_()
+
+                report_transducer_loss.zero_()
+                report_transducer_targets.zero_()
+
+                report_ewc_loss.zero_()
+                report_ewc_count = 0
+                # report_sents.zero_()
+                if report_contrastive_loss is not None:
+                    report_contrastive_loss.zero_()
+                start = time.time()
+
+            # increase i by world size
+            if not rehearsing:
+                i = i + self.world_size
+
+        # END OF ROUND -> run validation and save
+        # we run validation on all valid datasets
+        valid_loss, valid_accuracy = self.eval(valid_data, dataset_id)
+        valid_ppl = math.exp(min(valid_loss, 100))
+        self.print('[INFO] Validation perplexity: %g' % valid_ppl)
+        self.print('[INFO] Validation accuracy: %g percent' % (100 * valid_accuracy))
+        if opt.save_metrics in ['ppl', 'perplexity']:
+            value = valid_ppl
+        elif opt.save_metrics == "memory":
+            if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                value = self.model.module.choose_best_epoch_by
             else:
-                value = 1 - valid_accuracy
-            self.save(epoch, dataset_id, value)
-
-            total_per_dataset = self.reservoir.get_stats()
-
-            # some stupid code to grab the memory statistics
-            n_dataset = len(train_data)
-            _tensor = torch.zeros((n_dataset,)).cuda()
-            for _dataset_id in total_per_dataset:
-                _tensor[_dataset_id] = total_per_dataset[_dataset_id]
-
-            if self.world_size > 1:
-                self.all_reduce(_tensor, op=dist.ReduceOp.SUM, group=self.group)
-
-            self.print("Memory statistics:")
-            _sum = torch.sum(_tensor).item()
-            for dataset_id in total_per_dataset:
-                prob = _tensor[dataset_id].item() / _sum
-                self.print("Dataset ", dataset_id, _tensor[dataset_id].item(),
-                           "samples", f"{prob:.0%}")
-                self.print("")
+                value = self.model.choose_best_epoch_by
+        else:
+            value = 1 - valid_accuracy
+        self.save(epoch, dataset_id, value)
 
         return total_loss / total_words
 
