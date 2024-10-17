@@ -3092,7 +3092,11 @@ class OfflineCLTrainer(object):
 
         dataset_id = opt.dataset_index
 
-        if opt.max_examples_seen > 0:
+        if opt.finalize_only:
+            self.print("[INFO] Skipping the training and validation part. Only finalizing the models")
+            max_epoch = 0
+
+        elif opt.max_examples_seen > 0:
             max_epoch = self.estimate_max_epoch(train_data, dataset_id)
             self.print('[INFO] Max epoch: %d' % max_epoch, flush=True)
         else:

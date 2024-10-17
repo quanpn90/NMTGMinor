@@ -28,6 +28,9 @@ def make_parser(parser):
                         help='Using meta learning approach (for either online or offline training)')
     parser.add_argument('-offline_cl_training', action='store_true',
                         help='Online Continual Learning training')
+    parser.add_argument('-finalize only', action='store_true',
+                        help='A debugging option: skip the training part and go directly to the finalizing steps')
+
     parser.add_argument('-dataset_index', type=int, default=0,
                         help='Index of the dataset used in OFFLINE continual learning')
     parser.add_argument('-reservoir_size', type=int, default=0,
