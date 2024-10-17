@@ -2375,8 +2375,8 @@ class OfflineCLTrainer(object):
 
         self.print("[INFO] Averaging the parameters for the current round after training ...", flush=True)
 
-        saved_stdout, saved_stderr = sys.stdout, sys.stderr
-        sys.stdout = sys.stderr = open(os.devnull, "w")
+        # saved_stdout, saved_stderr = sys.stdout, sys.stderr
+        # sys.stdout = sys.stderr = open(os.devnull, "w")
         def custom_build_model(opt, dict, lm=False, type='seq2seq', constants=None):
 
             if type == 'seq2seq':
@@ -2494,7 +2494,7 @@ class OfflineCLTrainer(object):
 
         # output_file = os.path.join(path + "/" + str(dataset_id) + "/" , "model.average.pt")
         #
-        sys.stdout, sys.stderr = saved_stdout, saved_stderr
+        # sys.stdout, sys.stderr = saved_stdout, saved_stderr
 
         self.print("[INFO] Finished averaging model.")
         # if self.is_main():
