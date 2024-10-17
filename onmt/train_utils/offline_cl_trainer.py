@@ -2403,9 +2403,9 @@ class OfflineCLTrainer(object):
             existed_save_files = glob.glob(path + "/" + str(dataset_id) + "/" + "*.pt")
 
             models = existed_save_files
-            models = models[5:]
+            models = models
             n_models = len(models)
-
+            i = 0
             # checkpoint for main model
             checkpoint = torch.load(models[0], map_location=lambda storage, loc: storage)
 
@@ -2488,8 +2488,9 @@ class OfflineCLTrainer(object):
 
         except Exception as e:
 
-            sys.stdout, sys.stderr = saved_stdout, saved_stderr
-            raise e
+            # sys.stdout, sys.stderr = saved_stdout, saved_stderr
+            self.print("Error when processing the checkpoint", models[i])
+            exit()
 
         # save_checkpoint = {
         #     'model': model_state_dict,
