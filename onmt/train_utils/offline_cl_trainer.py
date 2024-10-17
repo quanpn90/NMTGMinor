@@ -2375,8 +2375,9 @@ class OfflineCLTrainer(object):
 
         self.print("[INFO] Averaging the parameters for the current round after training ...", flush=True)
 
-        # saved_stdout, saved_stderr = sys.stdout, sys.stderr
-        # sys.stdout = sys.stderr = open(os.devnull, "w")
+        saved_stdout, saved_stderr = sys.stdout, sys.stderr
+        sys.stdout = sys.stderr = open(os.devnull, "w")
+
         def custom_build_model(opt, dict, lm=False, type='seq2seq', constants=None):
 
             if type == 'seq2seq':
@@ -2391,96 +2392,104 @@ class OfflineCLTrainer(object):
 
             return model
 
-        opt = self.opt
-        # extract the paths
-        path = os.path.dirname(opt.save_model)
-
-        # find
-        dataset_id = opt.dataset_index
-        existed_save_files = glob.glob(path + "/" + str(dataset_id) + "/" + "*.pt")
-
-        models = existed_save_files
-        n_models = len(models)
-
-        # checkpoint for main model
-        checkpoint = torch.load(models[0], map_location=lambda storage, loc: storage)
-
-        if 'optim' in checkpoint:
-            del checkpoint['optim']
-
-        main_checkpoint = checkpoint
-
-        model_opt = checkpoint['opt']
-
-        dicts = checkpoint['dicts']
-        constants = onmt.constants # lol
-        model_opt.enc_state_dict = None
-        model_opt.dec_state_dict = None
-
-        main_model = custom_build_model(model_opt, checkpoint['dicts'], lm=False, type='seq2seq', constants=constants)
-        # onmt.constants = add_tokenidx(model_opt, onmt.constants, dicts)
-
         try:
-            main_model.load_state_dict(checkpoint['model'])
-        except RuntimeError as e:
-            main_model.load_state_dict(checkpoint['model'], strict=True)
 
-        # lets average out the parameters (safely)
-        _method = 'mean'
+            opt = self.opt
+            # extract the paths
+            path = os.path.dirname(opt.save_model)
 
-        for i in range(1, len(models)):
+            # find
+            dataset_id = opt.dataset_index
+            existed_save_files = glob.glob(path + "/" + str(dataset_id) + "/" + "*.pt")
 
-            model = models[i]
-            # checkpoint for  models[i])
-            checkpoint = torch.load(model, map_location=lambda storage, loc: storage)
+            models = existed_save_files
+            models = models[5:]
+            n_models = len(models)
 
-            model_opt = checkpoint['opt']
+            # checkpoint for main model
+            checkpoint = torch.load(models[0], map_location=lambda storage, loc: storage)
 
-            # model_opt.enc_not_load_state = True
-            # model_opt.dec_not_load_state = True
-            model_opt.enc_state_dict = None
-            model_opt.dec_state_dict = None
-
-            # delete optim information to save GPU memory
             if 'optim' in checkpoint:
                 del checkpoint['optim']
 
-            current_model = custom_build_model(model_opt, checkpoint['dicts'], lm=False,
-                                               type='seq2seq', constants=constants)
-            current_model.eval()
+            main_checkpoint = checkpoint
 
-            print("Loading model from %s ..." % models[i])
+            model_opt = checkpoint['opt']
+
+            dicts = checkpoint['dicts']
+            constants = onmt.constants # lol
+            model_opt.enc_state_dict = None
+            model_opt.dec_state_dict = None
+
+            main_model = custom_build_model(model_opt, checkpoint['dicts'], lm=False, type='seq2seq', constants=constants)
+            # onmt.constants = add_tokenidx(model_opt, onmt.constants, dicts)
+
             try:
-                current_model.load_state_dict(checkpoint['model'])
+                main_model.load_state_dict(checkpoint['model'])
             except RuntimeError as e:
-                current_model.load_state_dict(checkpoint['model'], strict=True)
+                main_model.load_state_dict(checkpoint['model'], strict=True)
 
+            # lets average out the parameters (safely)
+            _method = 'mean'
+
+            for i in range(1, len(models)):
+
+                model = models[i]
+                # checkpoint for  models[i])
+                checkpoint = torch.load(model, map_location=lambda storage, loc: storage)
+
+                model_opt = checkpoint['opt']
+
+                # model_opt.enc_not_load_state = True
+                # model_opt.dec_not_load_state = True
+                model_opt.enc_state_dict = None
+                model_opt.dec_state_dict = None
+
+                # delete optim information to save GPU memory
+                if 'optim' in checkpoint:
+                    del checkpoint['optim']
+
+                current_model = custom_build_model(model_opt, checkpoint['dicts'], lm=False,
+                                                   type='seq2seq', constants=constants)
+                current_model.eval()
+
+                print("Loading model from %s ..." % models[i])
+                try:
+                    current_model.load_state_dict(checkpoint['model'])
+                except RuntimeError as e:
+                    current_model.load_state_dict(checkpoint['model'], strict=True)
+
+                if _method == 'mean':
+                    # Sum the parameter values
+                    for (main_param, param) in zip(main_model.parameters(), current_model.parameters()):
+                        main_param.data.add_(param.data)
+                elif _method == 'gmean':
+                    # Take the geometric mean of parameter values
+                    for (main_param, param) in zip(main_model.parameters(), current_model.parameters()):
+                        main_param.data.mul_(param.data)
+                else:
+                    raise NotImplementedError
+
+            # Normalizing
             if _method == 'mean':
-                # Sum the parameter values
-                for (main_param, param) in zip(main_model.parameters(), current_model.parameters()):
-                    main_param.data.add_(param.data)
+                for main_param in main_model.parameters():
+                    main_param.data.div_(n_models)
             elif _method == 'gmean':
-                # Take the geometric mean of parameter values
-                for (main_param, param) in zip(main_model.parameters(), current_model.parameters()):
-                    main_param.data.mul_(param.data)
+                for main_param in main_model.parameters():
+                    main_param.data.pow_(1. / n_models)
+
+            model_state_dict = main_model.state_dict()
+
+            # todo: check if model is DDP or not
+            if isinstance(self.model, DDP_model) or isinstance(self.model, FSDP):
+                self.model.module.load_state_dict(model_state_dict)
             else:
-                raise NotImplementedError
+                self.model.load_state_dict(model_state_dict)
 
-        # Normalizing
-        if _method == 'mean':
-            for main_param in main_model.parameters():
-                main_param.data.div_(n_models)
-        elif _method == 'gmean':
-            for main_param in main_model.parameters():
-                main_param.data.pow_(1. / n_models)
+        except Exception as e:
 
-        model_state_dict = main_model.state_dict()
-
-        # todo: check if model is DDP or not
-        if isinstance(self.model, DDP_model) or isinstance(self.model, FSDP):
-            self.model.module.load_state_dict(model_state_dict)
-        else:
-            self.model.load_state_dict(model_state_dict)
+            sys.stdout, sys.stderr = saved_stdout, saved_stderr
+            raise e
 
         # save_checkpoint = {
         #     'model': model_state_dict,
@@ -2494,7 +2503,7 @@ class OfflineCLTrainer(object):
 
         # output_file = os.path.join(path + "/" + str(dataset_id) + "/" , "model.average.pt")
         #
-        # sys.stdout, sys.stderr = saved_stdout, saved_stderr
+        sys.stdout, sys.stderr = saved_stdout, saved_stderr
 
         self.print("[INFO] Finished averaging model.")
         # if self.is_main():

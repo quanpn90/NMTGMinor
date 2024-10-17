@@ -793,7 +793,7 @@ if __name__ == "__main__":
 
     if len(opt.gpus) == 1 or opt.finalize_only:
         gpu_list = opt.gpus
-        opt.gpus = [gpu_list[0]]
+        opt.gpus = [0]
         main(0, opt)
     else:
         torch.multiprocessing.spawn(main, args=(opt, ),
